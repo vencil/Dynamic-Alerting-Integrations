@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+  namespace: db-b
+  labels:
+    app: mariadb
+    instance: db-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+      instance: db-b
+  template:
+    metadata:
+      labels:
+        app: mariadb
+        instance: db-b
+    spec:
+      containers:
+        - name: mariadb
+          image: mariadb:11
+          ports:
+            - containerPort: 3306
+              name: mysql
+          envFrom:
+            - secretRef:
+                name: mariadb-credentials
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: config
+              mountPath: /etc/mysql/conf.d
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - "mariadb -u root -p$MARIADB_ROOT_PASSWORD -e 'SELECT 1'"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - "mariadb -u root -p$MARIADB_ROOT_PASSWORD -e 'SELECT 1'"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+
+        - name: mysqld-exporter
+          image: prom/mysqld-exporter:v0.15.1
+          ports:
+            - containerPort: 9104
+              name: metrics
+          env:
+            - name: MYSQLD_EXPORTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-credentials
+                  key: MARIADB_PASSWORD
+          args:
+            - "--mysqld.address=127.0.0.1:3306"
+            - "--mysqld.username=exporter"
+            - "--collect.global_status"
+            - "--collect.global_variables"
+            - "--collect.info_schema.tables"
+            - "--collect.slave_status"
+            - "--collect.auto_increment.columns"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 9104
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 9104
+            initialDelaySeconds: 25
+            periodSeconds: 15
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mariadb-data
+        - name: config
+          configMap:
+            name: mariadb-config
+        - name: initdb
+          configMap:
+            name: mariadb-init

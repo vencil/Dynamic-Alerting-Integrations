@@ -1,0 +1,35 @@
+{
+  "name": "Vibe K8s Lab",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  "features": {
+    // 1. 啟用 Docker-in-Docker (這是跑 Kind 的核心)
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "enableNonRootDocker": "true",
+      "moby": "true"
+    },
+    // 2. 自動安裝 K8s 工具
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "minikube": "none",
+      "kubectl": "latest",
+      "helm": "latest"
+    }
+  },
+  
+  // 3. 環境建立後的自動化指令 (自動安裝 Kind)
+  "postCreateCommand": "curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && kind create cluster --name vibe-cluster",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml"
+      ]
+    }
+  },
+  
+  // 4. 給予容器特權以運行 K8s
+  "runArgs": ["--privileged"]
+}

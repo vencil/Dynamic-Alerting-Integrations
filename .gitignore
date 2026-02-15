@@ -1,0 +1,15 @@
+# 環境變數（含密碼）
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Kind cluster state (generated)
+kubeconfig.yaml

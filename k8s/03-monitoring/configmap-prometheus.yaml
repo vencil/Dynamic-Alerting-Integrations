@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - "alertmanager.monitoring.svc.cluster.local:9093"
+
+    rule_files:
+      - "/etc/prometheus/rules/*.yml"
+
+    scrape_configs:
+      - job_name: "prometheus"
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      - job_name: "mysqld-exporter-db-a"
+        scrape_interval: 10s
+        static_configs:
+          - targets: ["mariadb.db-a.svc.cluster.local:9104"]
+            labels:
+              instance: "db-a"
+              env: "test"
+
+      - job_name: "mysqld-exporter-db-b"
+        scrape_interval: 10s
+        static_configs:
+          - targets: ["mariadb.db-b.svc.cluster.local:9104"]
+            labels:
+              instance: "db-b"
+              env: "test"
+
+  alert-rules.yml: |
+    groups:
+      - name: mariadb-alerts
+        rules:
+          # DB 完全掛掉（exporter 回報 mysql_up=0）
+          - alert: MariaDBDown
+            expr: mysql_up == 0
+            for: 15s
+            labels:
+              severity: critical
+            annotations:
+              summary: "MariaDB instance {{ $labels.instance }} is DOWN"
+              description: "mysql_up=0 for 15s on {{ $labels.instance }}"
+
+          # Exporter 本身也消失（target 被 scrape 不到）
+          - alert: MariaDBExporterAbsent
+            expr: absent(mysql_up{job=~"mysqld-exporter.*"})
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "mysqld-exporter target missing"
+              description: "No mysql_up metric found for 30s — exporter may have crashed."
+
+          # 連線數過高
+          - alert: MariaDBHighConnections
+            expr: mysql_global_status_threads_connected > 80
+            for: 30s
+            labels:
+              severity: warning
+            annotations:
+              summary: "High connections on {{ $labels.instance }}"
+              description: "{{ $value }} threads connected (threshold: 80)"
+
+          # Uptime 太短（可能剛重啟）
+          - alert: MariaDBRecentRestart
+            expr: mysql_global_status_uptime < 300
+            for: 0s
+            labels:
+              severity: info
+            annotations:
+              summary: "{{ $labels.instance }} restarted recently"
+              description: "Uptime is only {{ $value }}s (< 5 min)"

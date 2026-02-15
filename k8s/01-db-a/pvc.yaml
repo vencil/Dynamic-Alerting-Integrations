@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-data
+  namespace: db-a
+  labels:
+    app: mariadb
+    instance: db-a
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Kind 內建 standard StorageClass (local-path-provisioner)
+  # 資料存在 Docker VM 內部，不經過 Windows 檔案系統
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi

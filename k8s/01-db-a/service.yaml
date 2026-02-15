@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: db-a
+  labels:
+    app: mariadb
+    instance: db-a
+spec:
+  selector:
+    app: mariadb
+    instance: db-a
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+    - name: metrics
+      port: 9104
+      targetPort: 9104
+  type: ClusterIP
