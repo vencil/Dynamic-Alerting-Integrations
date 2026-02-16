@@ -1,0 +1,14 @@
+# values-db-b.yaml — Instance B overrides (different seed data)
+instance: db-b
+
+initSQL:
+  seed: |
+    USE vibe_db;
+    INSERT IGNORE INTO users (username, email, password_hash) VALUES
+      ('charlie', 'charlie@example.com', SHA2('password789', 256)),
+      ('diana', 'diana@example.com', SHA2('passwordabc', 256));
+    INSERT IGNORE INTO posts (user_id, title, content, published) VALUES
+      (1, 'Charlie''s First', 'Hello from instance B!', TRUE),
+      (1, 'Dev Notes', 'Building something cool', FALSE),
+      (2, 'Diana Writes', 'Post from Diana', TRUE),
+      (2, 'Weekend Update', 'Enjoying the weekend', TRUE);

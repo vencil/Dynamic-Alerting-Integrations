@@ -7,19 +7,7 @@
 #   ./scripts/setup.sh --reset  # 清掉舊資源再重新部署
 # ============================================================
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-K8S_DIR="${SCRIPT_DIR}/../k8s"
-CLUSTER_NAME="vibe-cluster"
-
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-log()  { echo -e "${GREEN}[✓]${NC} $*"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-err()  { echo -e "${RED}[✗]${NC} $*" >&2; }
+source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 
 echo "=================================================="
 echo "  Vibe K8s Lab — Environment Setup"
@@ -32,8 +20,9 @@ echo ""
 if [ "${1:-}" = "--reset" ]; then
   warn "Reset mode: deleting existing resources..."
   kubectl delete -f "${K8S_DIR}/03-monitoring/" --ignore-not-found 2>/dev/null || true
-  kubectl delete -f "${K8S_DIR}/02-db-b/" --ignore-not-found 2>/dev/null || true
-  kubectl delete -f "${K8S_DIR}/01-db-a/" --ignore-not-found 2>/dev/null || true
+  for inst in db-a db-b; do
+    helm uninstall "mariadb-${inst}" -n "${inst}" 2>/dev/null || true
+  done
   # 不刪 namespace 以免 PVC finalizer 卡住
   sleep 5
   log "Old resources deleted"
@@ -45,7 +34,13 @@ fi
 # ----------------------------------------------------------
 if ! command -v kind &>/dev/null; then
   warn "Installing Kind..."
-  curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+  ARCH=$(uname -m)
+  case "${ARCH}" in
+    x86_64)  KIND_ARCH="amd64" ;;
+    aarch64) KIND_ARCH="arm64" ;;
+    *)       err "Unsupported architecture: ${ARCH}"; exit 1 ;;
+  esac
+  curl -Lo /tmp/kind "https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-${KIND_ARCH}"
   chmod +x /tmp/kind
   sudo mv /tmp/kind /usr/local/bin/kind
 fi
@@ -58,6 +53,7 @@ else
   log "Kind cluster created"
 fi
 
+ensure_kubeconfig
 kubectl cluster-info --context "kind-${CLUSTER_NAME}" 2>/dev/null || true
 echo ""
 
@@ -81,34 +77,39 @@ kubectl apply -f "${K8S_DIR}/00-namespaces/"
 sleep 2
 
 # ----------------------------------------------------------
-# 4. 部署 MariaDB (db-a + db-b)
+# 4. 部署 MariaDB (db-a + db-b) via Helm
 # ----------------------------------------------------------
-log "Deploying MariaDB instance A (db-a)..."
-kubectl apply -f "${K8S_DIR}/01-db-a/"
+HELM_DIR="${PROJECT_ROOT}/helm/mariadb-instance"
+if ! command -v helm &>/dev/null; then
+  err "helm is required but not found. Install helm first."
+  exit 1
+fi
 
-log "Deploying MariaDB instance B (db-b)..."
-kubectl apply -f "${K8S_DIR}/02-db-b/"
+log "Deploying MariaDB via Helm chart..."
+for inst in db-a db-b; do
+  VALUES_FILE="${PROJECT_ROOT}/helm/values-${inst}.yaml"
+  if [ -f "${VALUES_FILE}" ]; then
+    helm upgrade --install "mariadb-${inst}" "${HELM_DIR}" \
+      -n "${inst}" -f "${VALUES_FILE}" --wait --timeout 180s
+    log "${inst} MariaDB deployed (Helm)"
+  else
+    err "Missing ${VALUES_FILE}"; exit 1
+  fi
+done
 
 # ----------------------------------------------------------
 # 5. 等待 MariaDB 就緒
 # ----------------------------------------------------------
 warn "Waiting for MariaDB pods to be ready (timeout 180s)..."
-kubectl wait --for=condition=ready pod -l app=mariadb -n db-a --timeout=180s || {
-  err "db-a pod not ready"
-  echo "--- db-a pod logs ---"
-  kubectl logs -l app=mariadb -n db-a -c mariadb --tail=30 2>/dev/null || true
-  echo "--- db-a pod events ---"
-  kubectl describe pod -l app=mariadb -n db-a 2>/dev/null | grep -A 20 "Events:" || true
-  exit 1
-}
-log "db-a MariaDB ready"
-
-kubectl wait --for=condition=ready pod -l app=mariadb -n db-b --timeout=180s || {
-  err "db-b pod not ready"
-  kubectl logs -l app=mariadb -n db-b -c mariadb --tail=30 2>/dev/null || true
-  exit 1
-}
-log "db-b MariaDB ready"
+for ns in db-a db-b; do
+  kubectl wait --for=condition=ready pod -l app=mariadb -n "${ns}" --timeout=180s || {
+    err "${ns} pod not ready"
+    kubectl logs -l app=mariadb -n "${ns}" -c mariadb --tail=30 2>/dev/null || true
+    kubectl describe pod -l app=mariadb -n "${ns}" 2>/dev/null | tail -20 || true
+    exit 1
+  }
+  log "${ns} MariaDB ready"
+done
 
 # ----------------------------------------------------------
 # 6. 部署 Monitoring Stack
@@ -117,22 +118,14 @@ log "Deploying monitoring stack (Prometheus, Grafana, Alertmanager)..."
 kubectl apply -f "${K8S_DIR}/03-monitoring/"
 
 warn "Waiting for monitoring pods to be ready (timeout 120s)..."
-kubectl wait --for=condition=ready pod -l app=prometheus -n monitoring --timeout=120s || {
-  err "Prometheus not ready"
-  kubectl logs -l app=prometheus -n monitoring --tail=20 2>/dev/null || true
-  exit 1
-}
-log "Prometheus ready"
-
-kubectl wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=120s || {
-  err "Grafana not ready"; exit 1;
-}
-log "Grafana ready"
-
-kubectl wait --for=condition=ready pod -l app=alertmanager -n monitoring --timeout=120s || {
-  err "Alertmanager not ready"; exit 1;
-}
-log "Alertmanager ready"
+for app in prometheus grafana alertmanager; do
+  kubectl wait --for=condition=ready pod -l "app=${app}" -n monitoring --timeout=120s || {
+    err "${app} not ready"
+    kubectl logs -l "app=${app}" -n monitoring --tail=20 2>/dev/null || true
+    exit 1
+  }
+  log "${app} ready"
+done
 
 # ----------------------------------------------------------
 # 7. 顯示狀態摘要
@@ -142,12 +135,11 @@ echo "=================================================="
 echo "  Deployment Complete!"
 echo "=================================================="
 echo ""
-echo "Namespace: db-a"
-kubectl get pods,svc,pvc -n db-a
-echo ""
-echo "Namespace: db-b"
-kubectl get pods,svc,pvc -n db-b
-echo ""
+for ns in db-a db-b; do
+  echo "Namespace: ${ns}"
+  kubectl get pods,svc,pvc -n "${ns}"
+  echo ""
+done
 echo "Namespace: monitoring"
 kubectl get pods,svc -n monitoring
 echo ""

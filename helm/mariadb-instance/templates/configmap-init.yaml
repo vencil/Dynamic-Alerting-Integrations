@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-init
+  namespace: {{ .Values.instance }}
+  labels:
+    app: mariadb
+    instance: {{ .Values.instance }}
+data:
+  01-schema.sql: |
+{{ .Values.initSQL.schema | indent 4 }}
+  02-seed.sql: |
+{{ .Values.initSQL.seed | indent 4 }}
+  03-exporter-user.sql: |
+    CREATE USER IF NOT EXISTS '{{ .Values.mariadb.exporterUser }}'@'localhost'
+      IDENTIFIED BY '{{ .Values.mariadb.exporterPassword }}';
+    CREATE USER IF NOT EXISTS '{{ .Values.mariadb.exporterUser }}'@'127.0.0.1'
+      IDENTIFIED BY '{{ .Values.mariadb.exporterPassword }}';
+    GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO '{{ .Values.mariadb.exporterUser }}'@'localhost';
+    GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO '{{ .Values.mariadb.exporterUser }}'@'127.0.0.1';
+    FLUSH PRIVILEGES;

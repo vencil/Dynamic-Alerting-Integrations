@@ -1,0 +1,14 @@
+# values-db-a.yaml — Instance A overrides
+instance: db-a
+
+initSQL:
+  seed: |
+    USE vibe_db;
+    INSERT IGNORE INTO users (username, email, password_hash) VALUES
+      ('alice', 'alice@example.com', SHA2('password123', 256)),
+      ('bob', 'bob@example.com', SHA2('password456', 256));
+    INSERT IGNORE INTO posts (user_id, title, content, published) VALUES
+      (1, 'Hello World', 'First post from Alice', TRUE),
+      (1, 'Draft Post', 'Work in progress', FALSE),
+      (2, 'Bob''s Post', 'Hello from Bob', TRUE),
+      (2, 'Another Day', 'Just another post', TRUE);

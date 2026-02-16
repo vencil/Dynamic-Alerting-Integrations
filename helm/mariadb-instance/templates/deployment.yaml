@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+  namespace: {{ .Values.instance }}
+  labels:
+    app: mariadb
+    instance: {{ .Values.instance }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+      instance: {{ .Values.instance }}
+  template:
+    metadata:
+      labels:
+        app: mariadb
+        instance: {{ .Values.instance }}
+    spec:
+      containers:
+        # --- MariaDB ---
+        - name: mariadb
+          image: {{ .Values.mariadb.image }}
+          ports:
+            - containerPort: 3306
+              name: mysql
+          envFrom:
+            - secretRef:
+                name: mariadb-credentials
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: config
+              mountPath: /etc/mysql/conf.d/custom.cnf
+              subPath: my.cnf
+              readOnly: true
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          livenessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - mariadb -u root -p"${MARIADB_ROOT_PASSWORD}" -e "SELECT 1"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - mariadb -u root -p"${MARIADB_ROOT_PASSWORD}" -e "SELECT 1"
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: {{ .Values.mariadb.resources.requests.cpu }}
+              memory: {{ .Values.mariadb.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.mariadb.resources.limits.cpu }}
+              memory: {{ .Values.mariadb.resources.limits.memory }}
+
+        # --- mysqld_exporter sidecar ---
+        - name: mysqld-exporter
+          image: {{ .Values.exporter.image }}
+          args:
+            - --mysqld.address=127.0.0.1:3306
+            - --mysqld.username={{ .Values.mariadb.exporterUser }}
+            {{- range .Values.exporter.collectors }}
+            - --collect.{{ . }}
+            {{- end }}
+          env:
+            - name: MYSQLD_EXPORTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-credentials
+                  key: MARIADB_PASSWORD
+          ports:
+            - containerPort: 9104
+              name: metrics
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: {{ .Values.exporter.resources.requests.cpu }}
+              memory: {{ .Values.exporter.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.exporter.resources.limits.cpu }}
+              memory: {{ .Values.exporter.resources.limits.memory }}
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mariadb-data
+        - name: config
+          configMap:
+            name: mariadb-config
+        - name: initdb
+          configMap:
+            name: mariadb-init

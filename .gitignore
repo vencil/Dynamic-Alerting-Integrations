@@ -1,6 +1,3 @@
-# 環境變數（含密碼）
-.env
-
 # OS
 .DS_Store
 Thumbs.db

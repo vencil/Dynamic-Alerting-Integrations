@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-config
+  namespace: {{ .Values.instance }}
+  labels:
+    app: mariadb
+    instance: {{ .Values.instance }}
+data:
+  my.cnf: |
+{{ .Values.mariadb.config | indent 4 }}

@@ -13,12 +13,12 @@
 Kind Cluster: vibe-cluster (K8s v1.27.3, 單 control-plane node)
 │
 ├─ namespace: db-a
-│  └─ Deployment: mariadb (2 containers)
+│  └─ Deployment: mariadb (2 containers, via Helm)
 │     ├─ mariadb:11 — port 3306, PVC 1Gi (local-path)
 │     └─ prom/mysqld-exporter:v0.15.1 — port 9104 (sidecar)
 │
 ├─ namespace: db-b
-│  └─ Deployment: mariadb (同上結構，不同 seed data)
+│  └─ Deployment: mariadb (同上結構，不同 seed data, via Helm)
 │
 └─ namespace: monitoring
    ├─ Deployment: prometheus (prom/prometheus:v2.53.0) — port 9090
@@ -49,24 +49,34 @@ Kind Cluster: vibe-cluster (K8s v1.27.3, 單 control-plane node)
 2. 容器內已有：kubectl, helm, kind, docker (Docker-in-Docker)
 3. Kind cluster `vibe-cluster` 由 `postCreateCommand` 自動建立
 
-### 操作指令
+### 操作指令 (Makefile)
 
 ```bash
-./scripts/setup.sh          # 部署所有資源
-./scripts/setup.sh --reset  # 清除重建
-./scripts/verify.sh         # 驗證 Prometheus 指標
-./scripts/test-alert.sh db-a  # 觸發故障測試
-./scripts/cleanup.sh        # 清除所有 K8s 資源
+make setup          # 部署所有資源 (Helm + Monitoring)
+make reset          # 清除重建
+make verify         # 驗證 Prometheus 指標
+make test-alert     # 觸發 db-a 故障測試 (NS=db-b 可指定)
+make status         # 顯示所有 Pod 狀態
+make port-forward   # 啟動所有 port-forward
+make shell-db-a     # 進入 db-a MariaDB CLI
+make clean          # 清除 K8s 資源
+make destroy        # 清除 + 刪除 cluster
+make helm-template  # 預覽 Helm YAML
+make help           # 顯示所有 targets
 ```
 
 ### 存取 UI
 
 ```bash
-kubectl port-forward -n monitoring svc/prometheus 9090:9090
-kubectl port-forward -n monitoring svc/grafana 3000:3000
-kubectl port-forward -n monitoring svc/alertmanager 9093:9093
-# Grafana login: admin / admin
+make port-forward
+# Prometheus:   http://localhost:9090
+# Grafana:      http://localhost:3000 (admin / admin)
+# Alertmanager: http://localhost:9093
 ```
+
+## 部署架構
+
+MariaDB 透過 Helm chart 部署：`helm/mariadb-instance/` chart + `helm/values-db-{a,b}.yaml`。兩個 DB instance 共用 template，僅 seed data 不同。Monitoring stack 使用純 YAML（`k8s/03-monitoring/`）。
 
 ## Spec 核心需求（待實作）
 
@@ -109,7 +119,7 @@ kubectl port-forward -n monitoring svc/alertmanager 9093:9093
 
 - Kind 是單 node cluster，不支援真實的 node affinity / pod anti-affinity 測試
 - PVC 使用 `local-path-provisioner`（Kind 預設），無需額外安裝 CSI driver
-- MariaDB 密碼目前寫在 Secret 的 `stringData`（明文 YAML），正式環境應改用 sealed-secrets 或 external-secrets
+- MariaDB 密碼目前寫在 Helm values 的 `stringData`（明文），正式環境應改用 sealed-secrets 或 external-secrets
 - Alertmanager 的 webhook receiver 指向 `http://localhost:5001/alerts`（不存在），僅用於測試 routing；正式環境需替換為實際通知端點
 - Windows 環境下 Docker Desktop 的記憶體限制可能影響所有 Pod 同時運行，建議分配 ≥ 4GB 給 Docker Desktop
 
@@ -118,17 +128,23 @@ kubectl port-forward -n monitoring svc/alertmanager 9093:9093
 ```
 .
 ├── .devcontainer/devcontainer.json   # Dev Container 配置
+├── helm/
+│   ├── mariadb-instance/             # Helm chart (MariaDB + exporter)
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml               # 預設值
+│   │   └── templates/                # deployment, service, pvc, secret, configmaps
+│   ├── values-db-a.yaml              # Instance A overrides
+│   └── values-db-b.yaml              # Instance B overrides (不同 seed)
 ├── k8s/
 │   ├── 00-namespaces/                # Namespace 定義
-│   ├── 01-db-a/                      # MariaDB A (Secret, ConfigMap, Deployment, PVC, Service)
-│   ├── 02-db-b/                      # MariaDB B (同上)
 │   └── 03-monitoring/                # Prometheus + Grafana + Alertmanager
 ├── scripts/
+│   ├── _lib.sh                       # 共用函式庫 (顏色/路徑/跨平台工具)
 │   ├── setup.sh                      # 一鍵部署
 │   ├── verify.sh                     # 指標驗證
 │   ├── test-alert.sh                 # 故障測試
 │   └── cleanup.sh                    # 清除資源
-├── .env.example                      # 環境變數範本
+├── Makefile                          # 操作入口 (make help 查看)
 ├── .gitignore
 ├── CLAUDE.md                         # ← 你正在讀的這份
 ├── README.md
@@ -137,7 +153,9 @@ kubectl port-forward -n monitoring svc/alertmanager 9093:9093
 
 ## Coding Style
 
-- K8s manifests 使用純 YAML（不用 Helm），每個資源獨立一個檔案
-- Shell scripts 使用 `set -euo pipefail`，帶顏色 log 函式
-- 所有 MariaDB 相關的 ConfigMap / Secret 依 namespace 隔離，同名但內容獨立
+- MariaDB 透過 Helm chart（helm/ 目錄）部署，每個資源獨立一個 template
+- Monitoring 使用純 YAML（k8s/03-monitoring/），每個資源獨立一個檔案
+- Shell scripts 使用 `set -euo pipefail`，source `_lib.sh` 取得共用函式
+- `_lib.sh` 提供跨平台函式：`kill_port`（lsof→fuser→ss fallback）、`url_encode`（python3→sed fallback）、`preflight_check`
 - Prometheus scrape config 使用 static_configs + relabel，不依賴 ServiceMonitor CRD
+- Makefile targets 對應每個常用操作，`make help` 查看完整列表
