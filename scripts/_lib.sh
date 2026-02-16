@@ -19,7 +19,7 @@ info() { echo -e "${CYAN}[i]${NC} $*"; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 K8S_DIR="${PROJECT_ROOT}/k8s"
-CLUSTER_NAME="vibe-cluster"
+CLUSTER_NAME="dynamic-alerting-cluster"
 
 # 確保 kubeconfig 存在（Kind 環境）
 ensure_kubeconfig() {

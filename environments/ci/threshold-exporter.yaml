@@ -1,0 +1,50 @@
+# CI/CD environment configuration for threshold-exporter
+
+image:
+  repository: ghcr.io/vencil/threshold-exporter
+  tag: v0.1.0
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+
+config:
+  logLevel: info
+  storage:
+    type: redis  # Production 用 Redis
+    redis:
+      host: redis.monitoring.svc.cluster.local
+      port: 6379
+  server:
+    port: 8080
+    host: "0.0.0.0"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+replicaCount: 2  # High availability
+
+# Health checks
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5

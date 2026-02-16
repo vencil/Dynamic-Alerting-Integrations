@@ -1,11 +1,15 @@
 # ============================================================
-# Makefile — Vibe K8s Lab 操作入口
+# Makefile — Dynamic Alerting Integrations 操作入口
 # ============================================================
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-CLUSTER  := vibe-cluster
+CLUSTER  := dynamic-alerting-cluster
 HELM_DIR := helm/mariadb-instance
+
+# Component 管理變數
+COMP ?= threshold-exporter
+ENV  ?= local
 
 # ----------------------------------------------------------
 # 部署
@@ -92,12 +96,74 @@ shell-db-b: ## 進入 db-b MariaDB CLI
 	@kubectl exec -it -n db-b deploy/mariadb -c mariadb -- mariadb -u root -pchangeme_root_pw
 
 # ----------------------------------------------------------
+# Component 管理 (用於 sub-components 開發)
+# ----------------------------------------------------------
+.PHONY: component-build
+component-build: ## Build component image and load into Kind (COMP=threshold-exporter)
+	@echo "Building $(COMP)..."
+	@if [ ! -d "../$(COMP)" ]; then \
+		echo "Error: ../$(COMP) not found"; \
+		echo "Hint: git clone your component repo to ../$(COMP)"; \
+		exit 1; \
+	fi
+	cd ../$(COMP) && docker build -t $(COMP):dev .
+	kind load docker-image $(COMP):dev --name $(CLUSTER)
+	@echo "✓ $(COMP):dev loaded into Kind cluster"
+
+.PHONY: component-deploy
+component-deploy: ## Deploy component to cluster (COMP=threshold-exporter ENV=local)
+	@if [ ! -d "components/$(COMP)" ]; then \
+		echo "Error: Component $(COMP) not found in components/"; \
+		echo "Available components:"; \
+		ls -1 components/; \
+		exit 1; \
+	fi
+	@if [ -f "components/$(COMP)/Chart.yaml" ]; then \
+		echo "Deploying $(COMP) via Helm..."; \
+		helm upgrade --install $(COMP) ./components/$(COMP) \
+			-n monitoring --create-namespace \
+			-f environments/$(ENV)/$(COMP).yaml; \
+	else \
+		echo "Deploying $(COMP) via kubectl..."; \
+		kubectl apply -f components/$(COMP)/; \
+	fi
+	@echo "Waiting for $(COMP) to be ready..."
+	@kubectl wait --for=condition=ready pod -l app=$(COMP) -n monitoring --timeout=60s 2>/dev/null || echo "Note: $(COMP) may not have ready condition"
+	@echo "✓ $(COMP) deployed ($(ENV) environment)"
+
+.PHONY: component-test
+component-test: ## Run integration test for component (COMP=threshold-exporter)
+	@if [ ! -f "tests/verify-$(COMP).sh" ]; then \
+		echo "Error: Test script tests/verify-$(COMP).sh not found"; \
+		exit 1; \
+	fi
+	@./tests/verify-$(COMP).sh
+
+.PHONY: component-logs
+component-logs: ## View component logs (COMP=threshold-exporter)
+	@kubectl logs -n monitoring -l app=$(COMP) -f
+
+.PHONY: component-list
+component-list: ## List all available components
+	@echo "Available components:"
+	@ls -1 components/
+	@echo ""
+	@echo "Usage: make component-build COMP=<name>"
+
+# ----------------------------------------------------------
+# Skills (AI Agent 輔助工具)
+# ----------------------------------------------------------
+.PHONY: inspect-tenant
+inspect-tenant: ## 檢查 tenant 健康狀態 (TENANT=db-a)
+	@./.claude/skills/inspect-tenant/scripts/inspect.sh $(or $(TENANT),db-a)
+
+# ----------------------------------------------------------
 # Help
 # ----------------------------------------------------------
 .PHONY: help
 help: ## 顯示此說明
 	@echo ""
-	@echo "Vibe K8s Lab — Available targets:"
+	@echo "Dynamic Alerting Integrations — Available targets:"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

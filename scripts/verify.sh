@@ -12,7 +12,7 @@ cleanup() { [ -n "${PF_PID}" ] && kill ${PF_PID} 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo "=================================================="
-echo "  Vibe K8s Lab — Metric Verification"
+echo "  Dynamic Alerting Integrations — Metric Verification"
 echo "=================================================="
 echo ""
 

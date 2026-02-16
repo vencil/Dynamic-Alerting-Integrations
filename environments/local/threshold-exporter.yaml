@@ -1,0 +1,36 @@
+# Local development environment configuration for threshold-exporter
+
+image:
+  repository: threshold-exporter
+  tag: dev
+  pullPolicy: Never  # Use local image loaded via 'kind load'
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+
+# Application config (for local testing)
+config:
+  logLevel: debug
+  storage:
+    type: memory  # 不需要 persistent storage
+  server:
+    port: 8080
+    host: "0.0.0.0"
+
+# Resource limits (輕量配置)
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Replicas (local 環境只需要 1 個)
+replicaCount: 1

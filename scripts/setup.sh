@@ -10,7 +10,7 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 
 echo "=================================================="
-echo "  Vibe K8s Lab — Environment Setup"
+echo "  Dynamic Alerting Integrations — Environment Setup"
 echo "=================================================="
 echo ""
 

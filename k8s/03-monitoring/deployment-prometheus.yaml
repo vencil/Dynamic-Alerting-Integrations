@@ -15,6 +15,7 @@ spec:
       labels:
         app: prometheus
     spec:
+      serviceAccountName: prometheus
       containers:
         - name: prometheus
           image: prom/prometheus:v2.53.0
@@ -30,6 +31,9 @@ spec:
             - name: config
               mountPath: /etc/prometheus/prometheus.yml
               subPath: prometheus.yml
+            - name: config
+              mountPath: /etc/prometheus/rules/recording-rules.yml
+              subPath: recording-rules.yml
             - name: config
               mountPath: /etc/prometheus/rules/alert-rules.yml
               subPath: alert-rules.yml

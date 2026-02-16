@@ -6,6 +6,10 @@ metadata:
   labels:
     app: mariadb
     instance: {{ .Values.instance }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9104"
+    prometheus.io/path: "/metrics"
 spec:
   selector:
     app: mariadb

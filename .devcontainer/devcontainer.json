@@ -1,5 +1,5 @@
 {
-  "name": "Vibe K8s Lab",
+  "name": "Dynamic Alerting Integrations",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
   "features": {
     // 1. 啟用 Docker-in-Docker (這是跑 Kind 的核心)
@@ -18,7 +18,7 @@
   },
   
   // 3. 環境建立後的自動化指令 (自動安裝 Kind)
-  "postCreateCommand": "curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && kind create cluster --name vibe-cluster",
+  "postCreateCommand": "curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && kind create cluster --name dynamic-alerting-cluster",
 
   "customizations": {
     "vscode": {

@@ -1,4 +1,4 @@
-# Vibe K8s Lab
+# Dynamic Alerting Integrations
 
 Kubernetes 本地測試環境，用於驗證 **Multi-Tenant Dynamic Alerting** 架構（參見 [spec.md](https://github.com/vencil/FunctionPlan/blob/main/AP_Alerts/spec.md)）。
 
@@ -7,7 +7,7 @@ Kubernetes 本地測試環境，用於驗證 **Multi-Tenant Dynamic Alerting** �
 ## Architecture
 
 ```
-Kind Cluster (vibe-cluster)
+Kind Cluster (dynamic-alerting-cluster)
 │
 ├─ namespace: db-a
 │  └─ Pod: mariadb:11 + prom/mysqld-exporter (sidecar)
@@ -32,7 +32,7 @@ Kind Cluster (vibe-cluster)
 
 ```bash
 # 1. Open in VS Code → "Reopen in Container"
-#    (自動安裝 kubectl, helm, kind 並建立 vibe-cluster)
+#    (自動安裝 kubectl, helm, kind 並建立 dynamic-alerting-cluster)
 
 # 2. 一鍵部署
 make setup

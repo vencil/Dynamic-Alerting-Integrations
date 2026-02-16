@@ -22,7 +22,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=================================================="
-echo "  Vibe K8s Lab — Alert Test"
+echo "  Dynamic Alerting Integrations — Alert Test"
 echo "  Target: ${TARGET_NS}"
 echo "=================================================="
 echo ""

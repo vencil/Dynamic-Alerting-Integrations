@@ -19,26 +19,132 @@ data:
       - "/etc/prometheus/rules/*.yml"
 
     scrape_configs:
+      # -------------------------------------------------------
+      # Self-monitoring (static)
+      # -------------------------------------------------------
       - job_name: "prometheus"
         static_configs:
           - targets: ["localhost:9090"]
 
-      - job_name: "mysqld-exporter-db-a"
-        scrape_interval: 10s
-        static_configs:
-          - targets: ["mariadb.db-a.svc.cluster.local:9104"]
-            labels:
-              instance: "db-a"
-              env: "test"
+      # -------------------------------------------------------
+      # Annotation-based Service Discovery
+      # Any Service with prometheus.io/scrape: "true" is auto-discovered.
+      # New tenants or components no longer require Prometheus config changes.
+      # -------------------------------------------------------
 
-      - job_name: "mysqld-exporter-db-b"
+      # Tenant DB exporters (db-a, db-b, db-c, ...)
+      # Discovers services in db-* namespaces.
+      # 'tenant' label is derived from the namespace.
+      - job_name: "tenant-exporters"
         scrape_interval: 10s
-        static_configs:
-          - targets: ["mariadb.db-b.svc.cluster.local:9104"]
-            labels:
-              instance: "db-b"
-              env: "test"
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          # Only keep services with prometheus.io/scrape annotation
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          # Only keep services in db-* namespaces
+          - source_labels: [__meta_kubernetes_namespace]
+            action: keep
+            regex: "db-.+"
+          # Use the annotated port
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          # Use annotated metrics path
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Set tenant label from namespace
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: tenant
+          # Set instance label from namespace (backward compat)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: instance
+          # Add env label
+          - target_label: env
+            replacement: "test"
 
+      # Monitoring namespace services
+      # Auto-discovers: kube-state-metrics, threshold-exporter,
+      # and any future component with the annotation.
+      - job_name: "monitoring-components"
+        scrape_interval: 15s
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names: ["monitoring"]
+        relabel_configs:
+          # Only keep annotated services
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          # Use the annotated port
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          # Use annotated metrics path
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Set job label from service name for clarity
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: job
+
+  # Recording Rules (Normalization Layer)
+  recording-rules.yml: |
+    groups:
+      - name: mysql-normalization
+        interval: 15s
+        rules:
+          # 標準化 CPU 使用率 (使用 threads_running 作為代理指標)
+          # 聚合到 tenant 維度，移除 job/instance 等多餘 label
+          - record: tenant:mysql_cpu_usage:rate5m
+            expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
+
+          # 標準化連線數 (聚合到 tenant 維度)
+          - record: tenant:mysql_threads_connected:sum
+            expr: sum by(tenant) (mysql_global_status_threads_connected)
+
+          # 標準化連線使用率
+          - record: tenant:mysql_connection_usage:ratio
+            expr: |
+              sum by(tenant) (mysql_global_status_threads_connected)
+              / sum by(tenant) (mysql_global_variables_max_connections)
+
+          # 標準化 uptime (小時)
+          - record: tenant:mysql_uptime:hours
+            expr: min by(tenant) (mysql_global_status_uptime) / 3600
+
+      - name: threshold-normalization
+        interval: 15s
+        rules:
+          # 統一 metric 名稱: user_threshold{tenant, metric, severity}
+          # threshold-exporter 暴露 user_threshold gauge
+          # fallback: 若尚未設定，使用預設值 80
+
+          # CPU 閾值 (預設 80)
+          - record: tenant:alert_threshold:cpu
+            expr: |
+              sum by(tenant) (user_threshold{metric="cpu"})
+              or
+              (max by(tenant) (mysql_up) * 80)
+
+          # 連線數閾值 (預設 80)
+          - record: tenant:alert_threshold:connections
+            expr: |
+              sum by(tenant) (user_threshold{metric="connections"})
+              or
+              (max by(tenant) (mysql_up) * 80)
+
+  # Alert Rules (使用 normalized metrics)
   alert-rules.yml: |
     groups:
       - name: mariadb-alerts
@@ -55,7 +161,7 @@ data:
 
           # Exporter 本身也消失（target 被 scrape 不到）
           - alert: MariaDBExporterAbsent
-            expr: absent(mysql_up{job=~"mysqld-exporter.*"})
+            expr: absent(mysql_up{job="tenant-exporters"})
             for: 30s
             labels:
               severity: critical
@@ -63,15 +169,18 @@ data:
               summary: "mysqld-exporter target missing"
               description: "No mysql_up metric found for 30s — exporter may have crashed."
 
-          # 連線數過高
+          # 連線數過高 (使用動態閾值 + normalized metrics)
           - alert: MariaDBHighConnections
-            expr: mysql_global_status_threads_connected > 80
+            expr: |
+              tenant:mysql_threads_connected:sum
+              > on(tenant) group_left
+              tenant:alert_threshold:connections
             for: 30s
             labels:
               severity: warning
             annotations:
-              summary: "High connections on {{ $labels.instance }}"
-              description: "{{ $value }} threads connected (threshold: 80)"
+              summary: "High connections on {{ $labels.tenant }}"
+              description: "{{ $value }} threads connected (threshold exceeded)"
 
           # Uptime 太短（可能剛重啟）
           - alert: MariaDBRecentRestart
