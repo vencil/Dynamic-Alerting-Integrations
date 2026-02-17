@@ -1,18 +1,16 @@
 # ============================================================
-# Makefile — Dynamic Alerting Integrations 操作入口
+# Makefile — Dynamic Alerting Integrations
 # ============================================================
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 CLUSTER  := dynamic-alerting-cluster
-HELM_DIR := helm/mariadb-instance
-
-# Component 管理變數
-COMP ?= threshold-exporter
-ENV  ?= local
+TENANT   ?= db-a
+COMP     ?= threshold-exporter
+ENV      ?= local
 
 # ----------------------------------------------------------
-# 部署
+# 部署與環境
 # ----------------------------------------------------------
 .PHONY: setup
 setup: ## 部署全部資源 (Kind cluster + DB + Monitoring)
@@ -22,6 +20,14 @@ setup: ## 部署全部資源 (Kind cluster + DB + Monitoring)
 reset: ## 清除後重新部署
 	@./scripts/setup.sh --reset
 
+.PHONY: clean
+clean: ## 清除所有 K8s 資源（保留 cluster）
+	@./scripts/cleanup.sh
+
+.PHONY: destroy
+destroy: clean ## 清除資源 + 刪除 Kind cluster
+	@kind delete cluster --name $(CLUSTER)
+
 # ----------------------------------------------------------
 # 驗證 & 測試
 # ----------------------------------------------------------
@@ -30,160 +36,76 @@ verify: ## 驗證 Prometheus 指標抓取
 	@./scripts/verify.sh
 
 .PHONY: test-alert
-test-alert: ## 觸發 db-a 故障並驗證 Alert (可用 NS=db-b 指定)
-	@./scripts/test-alert.sh $(or $(NS),db-a)
+test-alert: ## 觸發故障測試 (使用: make test-alert TENANT=db-b)
+	@./scripts/test-alert.sh $(TENANT)
 
 .PHONY: test-scenario-a
-test-scenario-a: ## Scenario A 端到端測試: 動態閾值觸發/解除 (TENANT=db-a)
-	@./tests/scenario-a.sh $(or $(TENANT),db-a)
+test-scenario-a: ## Scenario A 測試: 動態閾值 (使用: make test-scenario-a TENANT=db-a)
+	@./tests/scenario-a.sh $(TENANT)
 
 .PHONY: test-scenario-b
-test-scenario-b: ## Scenario B 端到端測試: 弱環節檢測 (TENANT=db-a)
-	@./tests/scenario-b.sh $(or $(TENANT),db-a)
+test-scenario-b: ## Scenario B 測試: 弱環節檢測
+	@./tests/scenario-b.sh $(TENANT)
 
 .PHONY: test-scenario-c
-test-scenario-c: ## Scenario C 端到端測試: 狀態字串比對 (TENANT=db-a)
-	@./tests/scenario-c.sh $(or $(TENANT),db-a)
+test-scenario-c: ## Scenario C 測試: 狀態字串比對
+	@./tests/scenario-c.sh $(TENANT)
 
 # ----------------------------------------------------------
-# Helm 工具
+# Component 管理
 # ----------------------------------------------------------
-.PHONY: helm-template
-helm-template: ## 預覽 Helm 產生的 YAML（不實際部署）
-	@for inst in db-a db-b; do \
-		echo "=== $$inst ==="; \
-		helm template mariadb-$$inst $(HELM_DIR) \
-			-n $$inst -f helm/values-$$inst.yaml; \
-		echo ""; \
-	done
+.PHONY: component-build
+component-build: ## Build component image (使用: make component-build COMP=threshold-exporter)
+	@echo "Building $(COMP)..."
+	@if [ -d "components/$(COMP)/app" ]; then \
+		cd components/$(COMP)/app && docker build -t $(COMP):dev .; \
+	else \
+		echo "Error: components/$(COMP)/app not found"; exit 1; \
+	fi
+	kind load docker-image $(COMP):dev --name $(CLUSTER)
+	@echo "✓ $(COMP):dev loaded"
 
-# ----------------------------------------------------------
-# 清除
-# ----------------------------------------------------------
-.PHONY: clean
-clean: ## 清除所有 K8s 資源（保留 cluster）
-	@./scripts/cleanup.sh
+.PHONY: component-deploy
+component-deploy: ## Deploy component (使用: make component-deploy COMP=threshold-exporter ENV=local)
+	@helm upgrade --install $(COMP) ./components/$(COMP) \
+		-n monitoring --create-namespace \
+		-f environments/$(ENV)/$(COMP).yaml
+	@kubectl wait --for=condition=ready pod -l app=$(COMP) -n monitoring --timeout=60s 2>/dev/null || echo "Wait timed out"
+	@echo "✓ $(COMP) deployed"
 
-.PHONY: destroy
-destroy: clean ## 清除資源 + 刪除 Kind cluster
-	@kind delete cluster --name $(CLUSTER)
-	@echo "✓ Cluster $(CLUSTER) destroyed"
+.PHONY: component-logs
+component-logs: ## View component logs
+	@kubectl logs -n monitoring -l app=$(COMP) -f
 
 # ----------------------------------------------------------
 # 快捷操作
 # ----------------------------------------------------------
 .PHONY: status
 status: ## 顯示所有 Pod 狀態
-	@echo "=== db-a ===" && kubectl get pods,svc,pvc -n db-a 2>/dev/null || true
-	@echo "" && echo "=== db-b ===" && kubectl get pods,svc,pvc -n db-b 2>/dev/null || true
-	@echo "" && echo "=== monitoring ===" && kubectl get pods,svc -n monitoring 2>/dev/null || true
+	@kubectl get pods,svc -A | grep -v "kube-system" | grep -v "local-path-storage"
 
-.PHONY: logs-db-a
-logs-db-a: ## 查看 db-a MariaDB 日誌
-	@kubectl logs -n db-a -l app=mariadb -c mariadb --tail=50 -f
+.PHONY: logs
+logs: ## 查看 DB 日誌 (使用: make logs TENANT=db-b)
+	@kubectl logs -n $(TENANT) -l app=mariadb -c mariadb --tail=50 -f
 
-.PHONY: logs-db-b
-logs-db-b: ## 查看 db-b MariaDB 日誌
-	@kubectl logs -n db-b -l app=mariadb -c mariadb --tail=50 -f
+.PHONY: shell
+shell: ## 進入 DB CLI (使用: make shell TENANT=db-a)
+	@kubectl exec -it -n $(TENANT) deploy/mariadb -c mariadb -- mariadb -u root -pchangeme_root_pw
+
+.PHONY: inspect-tenant
+inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant TENANT=db-a)
+	@./.claude/skills/inspect-tenant/scripts/inspect.sh $(TENANT)
 
 .PHONY: port-forward
-port-forward: ## 啟動所有 port-forward (Prometheus:9090, Grafana:3000, Alertmanager:9093)
-	@echo "Starting port-forward (Ctrl+C to stop)..."
-	@kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-	@kubectl port-forward -n monitoring svc/grafana 3000:3000 &
-	@kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
-	@kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 2>/dev/null &
-	@echo ""
-	@echo "  Prometheus:          http://localhost:9090"
-	@echo "  Grafana:             http://localhost:3000  (admin/admin)"
-	@echo "  Alertmanager:        http://localhost:9093"
-	@echo "  Threshold-Exporter:  http://localhost:8080/metrics"
-	@echo ""
-	@wait
+port-forward: ## 啟動 Port-Forward (9090, 3000, 9093, 8080)
+	@echo "Prometheus:9090 | Grafana:3000 | Alertmanager:9093 | Exporter:8080"
+	@(trap 'kill 0' SIGINT; \
+	  kubectl port-forward -n monitoring svc/prometheus 9090:9090 & \
+	  kubectl port-forward -n monitoring svc/grafana 3000:3000 & \
+	  kubectl port-forward -n monitoring svc/alertmanager 9093:9093 & \
+	  kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 & \
+	  wait)
 
-.PHONY: shell-db-a
-shell-db-a: ## 進入 db-a MariaDB CLI
-	@kubectl exec -it -n db-a deploy/mariadb -c mariadb -- mariadb -u root -pchangeme_root_pw
-
-.PHONY: shell-db-b
-shell-db-b: ## 進入 db-b MariaDB CLI
-	@kubectl exec -it -n db-b deploy/mariadb -c mariadb -- mariadb -u root -pchangeme_root_pw
-
-# ----------------------------------------------------------
-# Component 管理 (用於 sub-components 開發)
-# ----------------------------------------------------------
-.PHONY: component-build
-component-build: ## Build component image and load into Kind (COMP=threshold-exporter)
-	@echo "Building $(COMP)..."
-	@if [ -d "components/$(COMP)/app" ]; then \
-		echo "Building from components/$(COMP)/app/ (in-repo)"; \
-		cd components/$(COMP)/app && docker build -t $(COMP):dev .; \
-	elif [ -d "../$(COMP)" ]; then \
-		echo "Building from ../$(COMP)/ (external repo)"; \
-		cd ../$(COMP) && docker build -t $(COMP):dev .; \
-	else \
-		echo "Error: No source found for $(COMP)"; \
-		echo "Expected: components/$(COMP)/app/ or ../$(COMP)/"; \
-		exit 1; \
-	fi
-	kind load docker-image $(COMP):dev --name $(CLUSTER)
-	@echo "✓ $(COMP):dev loaded into Kind cluster"
-
-.PHONY: component-deploy
-component-deploy: ## Deploy component to cluster (COMP=threshold-exporter ENV=local)
-	@if [ ! -d "components/$(COMP)" ]; then \
-		echo "Error: Component $(COMP) not found in components/"; \
-		echo "Available components:"; \
-		ls -1 components/; \
-		exit 1; \
-	fi
-	@if [ -f "components/$(COMP)/Chart.yaml" ]; then \
-		echo "Deploying $(COMP) via Helm..."; \
-		helm upgrade --install $(COMP) ./components/$(COMP) \
-			-n monitoring --create-namespace \
-			-f environments/$(ENV)/$(COMP).yaml; \
-	else \
-		echo "Deploying $(COMP) via kubectl..."; \
-		kubectl apply -f components/$(COMP)/; \
-	fi
-	@echo "Waiting for $(COMP) to be ready..."
-	@kubectl wait --for=condition=ready pod -l app=$(COMP) -n monitoring --timeout=60s 2>/dev/null || echo "Note: $(COMP) may not have ready condition"
-	@echo "✓ $(COMP) deployed ($(ENV) environment)"
-
-.PHONY: component-test
-component-test: ## Run integration test for component (COMP=threshold-exporter)
-	@if [ ! -f "tests/verify-$(COMP).sh" ]; then \
-		echo "Error: Test script tests/verify-$(COMP).sh not found"; \
-		exit 1; \
-	fi
-	@./tests/verify-$(COMP).sh
-
-.PHONY: component-logs
-component-logs: ## View component logs (COMP=threshold-exporter)
-	@kubectl logs -n monitoring -l app=$(COMP) -f
-
-.PHONY: component-list
-component-list: ## List all available components
-	@echo "Available components:"
-	@ls -1 components/
-	@echo ""
-	@echo "Usage: make component-build COMP=<name>"
-
-# ----------------------------------------------------------
-# Skills (AI Agent 輔助工具)
-# ----------------------------------------------------------
-.PHONY: inspect-tenant
-inspect-tenant: ## 檢查 tenant 健康狀態 (TENANT=db-a)
-	@./.claude/skills/inspect-tenant/scripts/inspect.sh $(or $(TENANT),db-a)
-
-# ----------------------------------------------------------
-# Help
-# ----------------------------------------------------------
 .PHONY: help
-help: ## 顯示此說明
-	@echo ""
-	@echo "Dynamic Alerting Integrations — Available targets:"
-	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
-	@echo ""
+help: ## 顯示說明
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'

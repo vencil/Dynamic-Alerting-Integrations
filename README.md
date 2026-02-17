@@ -93,14 +93,16 @@ make help           # 顯示所有可用 targets
 └── README.md
 ```
 
-## Alert Rules
+## Alert Rules & Thresholds
 
-| Alert | Condition | Severity | For |
-|---|---|---|---|
-| `MariaDBDown` | `mysql_up == 0` | critical | 15s |
-| `MariaDBExporterAbsent` | `absent(mysql_up)` | critical | 30s |
-| `MariaDBHighConnections` | `threads_connected > 80` | warning | 30s |
-| `MariaDBRecentRestart` | `uptime < 300s` | info | 0s |
+Alert rules are now **dynamically managed** via the `threshold-exporter`.
+Instead of static values, rules are configured via ConfigMap and support:
+
+1.  **Dynamic Updates**: Hot-reload without restarting pods.
+2.  **Three-State Logic**: Custom value / Default / Disable.
+3.  **Per-Tenant Isolation**: Different thresholds for `db-a` vs `db-b`.
+
+See [components/threshold-exporter/README.md](components/threshold-exporter/README.md) for configuration details.
 
 ## Key Design Decisions
 

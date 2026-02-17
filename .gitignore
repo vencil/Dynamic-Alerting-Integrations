@@ -8,17 +8,21 @@ Thumbs.db
 *~
 .fuse_hidden*
 
-# --- Project Specific ---
-# 忽略所有 build 出來的執行檔
-components/*/app/threshold-exporter
+# --- Go Build Artifacts ---
+# 忽略所有編譯出來的二進制檔
+*.exe
 *.test
-*.out
+components/*/app/threshold-exporter
 
-# --- Docker & K8s ---
+# --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔
 *.log
 tmp/
+kubeconfig
+
+# --- Helm ---
+# 忽略 helm package 產生的壓縮檔
+*.tgz
 
 # --- AI & Tools ---
-# 忽略 Claude 的對話紀錄或暫存 (如果有的話)
 .claude/history/
