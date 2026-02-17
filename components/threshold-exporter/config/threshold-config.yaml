@@ -3,8 +3,11 @@
 # ============================================================
 #
 # This file defines alerting thresholds for all tenants.
-# The threshold-exporter reads this file and exposes the resolved
-# values as Prometheus metrics: user_threshold{tenant, metric, component, severity}
+# The threshold-exporter reads this file and exposes resolved values as:
+#   - user_threshold{tenant, metric, component, severity}  (Scenario A/B)
+#   - user_state_filter{tenant, filter, severity}           (Scenario C)
+#
+# === Numeric Thresholds (Scenario A & B) ===
 #
 # Three-State Design (per tenant, per metric):
 #   1. Custom value  — set a number (e.g., "70")
@@ -18,6 +21,13 @@
 # Metric key convention:
 #   <component>_<metric>  e.g., "mysql_connections" → component="mysql", metric="connections"
 #
+# === State Filters (Scenario C) ===
+#
+# state_filters define which K8s container states to monitor.
+# Each filter maps to kube_pod_container_status_waiting_reason values.
+# Enabled by default for all tenants.
+# Per-tenant disable: add _state_<filter_name>: "disable" in tenant overrides.
+#
 # ============================================================
 
 # Global defaults — applied to all tenants unless overridden
@@ -26,16 +36,28 @@ defaults:
   mysql_connections: 80     # max thread connections before alert
   mysql_cpu: 80             # threads_running rate threshold
 
-  # Scenario B: Container resource thresholds (Week 3)
-  # container_cpu_percent: 90
-  # container_memory_percent: 85
+  # Scenario B: Container resource thresholds (% of limit)
+  container_cpu: 80         # max container CPU usage % before alert
+  container_memory: 85      # max container memory usage % before alert
+
+# Scenario C: State-based monitoring filters
+state_filters:
+  container_crashloop:
+    reasons: ["CrashLoopBackOff"]
+    severity: "critical"
+  container_imagepull:
+    reasons: ["ImagePullBackOff", "InvalidImageName"]
+    severity: "warning"
 
 # Per-tenant overrides
 tenants:
   db-a:
     mysql_connections: "70"       # custom: alert at 70 connections
     # mysql_cpu: omitted          # → uses default (80)
+    container_cpu: "70"           # stricter container CPU for db-a
 
   db-b:
     mysql_connections: "100"      # custom: more relaxed threshold
     mysql_cpu: "60"               # custom: stricter CPU threshold
+    container_memory: "90"        # relaxed container memory for db-b
+    _state_container_crashloop: "disable"  # don't monitor crashloops in db-b

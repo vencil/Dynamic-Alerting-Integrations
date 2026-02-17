@@ -98,53 +98,154 @@ data:
           - source_labels: [__meta_kubernetes_service_name]
             target_label: job
 
+      # -------------------------------------------------------
+      # Scenario B: kubelet cAdvisor metrics (container-level CPU/memory)
+      # Uses K8s API proxy to avoid direct kubelet TLS issues in Kind.
+      # Provides: container_cpu_usage_seconds_total, container_memory_working_set_bytes
+      # -------------------------------------------------------
+      - job_name: "kubelet-cadvisor"
+        scrape_interval: 15s
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          # Only keep container metrics from tenant namespaces
+          - source_labels: [namespace]
+            action: keep
+            regex: "db-.+"
+          # Drop high-cardinality metrics we don't need
+          - source_labels: [__name__]
+            action: keep
+            regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes"
+
   # Recording Rules (Normalization Layer)
   recording-rules.yml: |
     groups:
+      # -------------------------------------------------------
+      # Scenario A: MySQL metric normalization
+      # -------------------------------------------------------
       - name: mysql-normalization
         interval: 15s
         rules:
-          # 標準化 CPU 使用率 (使用 threads_running 作為代理指標)
-          # 聚合到 tenant 維度，移除 job/instance 等多餘 label
           - record: tenant:mysql_cpu_usage:rate5m
             expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
 
-          # 標準化連線數 (聚合到 tenant 維度)
           - record: tenant:mysql_threads_connected:sum
             expr: sum by(tenant) (mysql_global_status_threads_connected)
 
-          # 標準化連線使用率
           - record: tenant:mysql_connection_usage:ratio
             expr: |
               sum by(tenant) (mysql_global_status_threads_connected)
               / sum by(tenant) (mysql_global_variables_max_connections)
 
-          # 標準化 uptime (小時)
           - record: tenant:mysql_uptime:hours
             expr: min by(tenant) (mysql_global_status_uptime) / 3600
 
+      # -------------------------------------------------------
+      # Threshold normalization (Scenario A + B)
+      # threshold-exporter resolves defaults; here we just pass through.
+      # -------------------------------------------------------
       - name: threshold-normalization
         interval: 15s
         rules:
-          # threshold-exporter 暴露 user_threshold gauge (config-driven)
-          # 三態設計: custom value / default / disable
-          # Default resolution 在 exporter 層完成，此處不需要 fallback 邏輯。
-          # Disabled metrics 不會被暴露，group_left join 自然產生空結果 = 不觸發 alert。
-
-          # CPU 閾值 (直接透傳 exporter 的 resolved value)
+          # Scenario A: MySQL thresholds
           - record: tenant:alert_threshold:cpu
             expr: sum by(tenant) (user_threshold{metric="cpu"})
 
-          # 連線數閾值 (直接透傳 exporter 的 resolved value)
           - record: tenant:alert_threshold:connections
             expr: sum by(tenant) (user_threshold{metric="connections"})
+
+          # Scenario B: Container resource thresholds
+          - record: tenant:alert_threshold:container_cpu
+            expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
+
+          - record: tenant:alert_threshold:container_memory
+            expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
+
+      # -------------------------------------------------------
+      # Scenario B: Container resource normalization (Weakest Link)
+      # Computes per-container CPU/memory as % of limits,
+      # then takes MAX across containers per pod (weakest link).
+      # -------------------------------------------------------
+      - name: container-normalization
+        interval: 15s
+        rules:
+          # Container CPU usage as % of limit
+          - record: tenant:container_cpu_percent:by_container
+            expr: |
+              label_replace(
+                sum by(namespace, pod, container) (
+                  rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+                )
+                /
+                sum by(namespace, pod, container) (
+                  kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
+                )
+                * 100,
+                "tenant", "$1", "namespace", "(.*)"
+              )
+
+          # Container memory usage as % of limit
+          - record: tenant:container_memory_percent:by_container
+            expr: |
+              label_replace(
+                sum by(namespace, pod, container) (
+                  container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"}
+                )
+                /
+                sum by(namespace, pod, container) (
+                  kube_pod_container_resource_limits{resource="memory", namespace=~"db-.+"}
+                )
+                * 100,
+                "tenant", "$1", "namespace", "(.*)"
+              )
+
+          # Weakest link: MAX across containers per pod
+          - record: tenant:pod_weakest_cpu_percent:max
+            expr: max by(tenant, pod) (tenant:container_cpu_percent:by_container)
+
+          - record: tenant:pod_weakest_memory_percent:max
+            expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
+
+      # -------------------------------------------------------
+      # Scenario C: State matching normalization
+      # Counts pods in bad states per tenant namespace.
+      # Uses kube-state-metrics kube_pod_container_status_waiting_reason.
+      # -------------------------------------------------------
+      - name: state-matching
+        interval: 15s
+        rules:
+          # Count containers in each waiting reason per tenant
+          - record: tenant:container_waiting_reason:count
+            expr: |
+              label_replace(
+                count by(namespace, reason) (
+                  kube_pod_container_status_waiting_reason{namespace=~"db-.+"} > 0
+                ),
+                "tenant", "$1", "namespace", "(.*)"
+              )
 
   # Alert Rules (使用 normalized metrics)
   alert-rules.yml: |
     groups:
+      # -------------------------------------------------------
+      # Scenario A: MariaDB alerts
+      # -------------------------------------------------------
       - name: mariadb-alerts
         rules:
-          # DB 完全掛掉（exporter 回報 mysql_up=0）
           - alert: MariaDBDown
             expr: mysql_up == 0
             for: 15s
@@ -154,7 +255,6 @@ data:
               summary: "MariaDB instance {{ $labels.instance }} is DOWN"
               description: "mysql_up=0 for 15s on {{ $labels.instance }}"
 
-          # Exporter 本身也消失（target 被 scrape 不到）
           - alert: MariaDBExporterAbsent
             expr: absent(mysql_up{job="tenant-exporters"})
             for: 30s
@@ -164,7 +264,6 @@ data:
               summary: "mysqld-exporter target missing"
               description: "No mysql_up metric found for 30s — exporter may have crashed."
 
-          # 連線數過高 (使用動態閾值 + normalized metrics)
           - alert: MariaDBHighConnections
             expr: |
               tenant:mysql_threads_connected:sum
@@ -177,7 +276,6 @@ data:
               summary: "High connections on {{ $labels.tenant }}"
               description: "{{ $value }} threads connected (threshold exceeded)"
 
-          # Uptime 太短（可能剛重啟）
           - alert: MariaDBRecentRestart
             expr: mysql_global_status_uptime < 300
             for: 0s
@@ -186,3 +284,70 @@ data:
             annotations:
               summary: "{{ $labels.instance }} restarted recently"
               description: "Uptime is only {{ $value }}s (< 5 min)"
+
+      # -------------------------------------------------------
+      # Scenario B: Container resource alerts (Weakest Link)
+      # Fires when ANY container in a pod exceeds threshold.
+      # -------------------------------------------------------
+      - name: container-resource-alerts
+        rules:
+          - alert: PodContainerHighCPU
+            expr: |
+              max by(tenant) (tenant:pod_weakest_cpu_percent:max)
+              > on(tenant) group_left
+              tenant:alert_threshold:container_cpu
+            for: 60s
+            labels:
+              severity: warning
+            annotations:
+              summary: "High container CPU in {{ $labels.tenant }}"
+              description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+
+          - alert: PodContainerHighMemory
+            expr: |
+              max by(tenant) (tenant:pod_weakest_memory_percent:max)
+              > on(tenant) group_left
+              tenant:alert_threshold:container_memory
+            for: 60s
+            labels:
+              severity: warning
+            annotations:
+              summary: "High container memory in {{ $labels.tenant }}"
+              description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+
+      # -------------------------------------------------------
+      # Scenario C: Pod state alerts (State/String Matching)
+      # Uses multiplication pattern: count * flag > 0
+      # If flag absent (disabled), result = empty = no alert.
+      # -------------------------------------------------------
+      - name: pod-state-alerts
+        rules:
+          # CrashLoopBackOff detected AND monitoring enabled
+          - alert: ContainerCrashLoop
+            expr: |
+              (
+                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                * on(tenant) group_left
+                user_state_filter{filter="container_crashloop"}
+              ) > 0
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Container crash loop detected in {{ $labels.tenant }}"
+              description: "{{ $value }} container(s) in CrashLoopBackOff state"
+
+          # ImagePullBackOff detected AND monitoring enabled
+          - alert: ContainerImagePullFailure
+            expr: |
+              (
+                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                * on(tenant) group_left
+                user_state_filter{filter="container_imagepull"}
+              ) > 0
+            for: 30s
+            labels:
+              severity: warning
+            annotations:
+              summary: "Image pull failure detected in {{ $labels.tenant }}"
+              description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"

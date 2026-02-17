@@ -24,14 +24,37 @@ exporter:
 # See config/threshold-config.yaml for the reference format.
 thresholdConfig:
   defaults:
+    # Scenario A: MySQL thresholds
     mysql_connections: 80
     mysql_cpu: 80
+    # Scenario B: Container resource thresholds (% of limit)
+    container_cpu: 80
+    container_memory: 85
+
+  # Scenario C: State-based monitoring filters
+  # Each filter maps to kube_pod_container_status_waiting_reason values.
+  # Enabled by default for all tenants; per-tenant disable via _state_<name>: "disable"
+  state_filters:
+    container_crashloop:
+      reasons: ["CrashLoopBackOff"]
+      severity: "critical"
+    container_imagepull:
+      reasons: ["ImagePullBackOff", "InvalidImageName"]
+      severity: "warning"
+
   tenants:
     db-a:
       mysql_connections: "70"
+      # Scenario B: stricter container CPU for db-a
+      container_cpu: "70"
+      # All state filters enabled (default)
     db-b:
       mysql_connections: "100"
       mysql_cpu: "60"
+      # Scenario B: relaxed container memory for db-b
+      container_memory: "90"
+      # Scenario C: disable crashloop monitoring for db-b
+      _state_container_crashloop: "disable"
 
 resources:
   requests:

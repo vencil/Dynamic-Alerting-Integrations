@@ -37,6 +37,14 @@ test-alert: ## 觸發 db-a 故障並驗證 Alert (可用 NS=db-b 指定)
 test-scenario-a: ## Scenario A 端到端測試: 動態閾值觸發/解除 (TENANT=db-a)
 	@./tests/scenario-a.sh $(or $(TENANT),db-a)
 
+.PHONY: test-scenario-b
+test-scenario-b: ## Scenario B 端到端測試: 弱環節檢測 (TENANT=db-a)
+	@./tests/scenario-b.sh $(or $(TENANT),db-a)
+
+.PHONY: test-scenario-c
+test-scenario-c: ## Scenario C 端到端測試: 狀態字串比對 (TENANT=db-a)
+	@./tests/scenario-c.sh $(or $(TENANT),db-a)
+
 # ----------------------------------------------------------
 # Helm 工具
 # ----------------------------------------------------------

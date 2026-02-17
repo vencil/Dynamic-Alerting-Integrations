@@ -58,6 +58,8 @@ make reset              # 清除重建
 make verify             # 驗證 Prometheus 指標
 make test-alert         # 觸發 db-a 故障測試 (NS=db-b 可指定)
 make test-scenario-a    # Scenario A 端到端測試 (TENANT=db-a)
+make test-scenario-b    # Scenario B 端到端測試 (TENANT=db-a)
+make test-scenario-c    # Scenario C 端到端測試 (TENANT=db-a)
 make status             # 顯示所有 Pod 狀態
 make port-forward       # 啟動所有 port-forward (含 threshold-exporter)
 make shell-db-a         # 進入 db-a MariaDB CLI
@@ -152,20 +154,25 @@ tenants:
 - Alert rules 使用 `group_left on(tenant)` join normalized metrics 與 thresholds
 - **目前狀態**：Go 實作完成，Helm chart + ConfigMap + tests 就緒
 
-### Scenario B: Weakest Link Detection（最弱環節偵測）
+### Scenario B: Weakest Link Detection（最弱環節偵測）✅ Week 3 實作完成
 
-- 監控 Pod 內個別 container 的資源使用
-- 保留 container dimension 做聚合
-- 當任一 container 超標即觸發
-- 閾值可透過同一個 threshold-exporter 管理（新增 `container_cpu_percent` 等 key 到 config）
-- **目前狀態**：尚未實作
+- 監控 Pod 內個別 container 的資源使用（cAdvisor metrics via kubelet API proxy）
+- Container CPU/memory 計算為 limit 的百分比
+- `max by(tenant, pod)` 取最弱環節 — 任一 container 超標即觸發
+- 閾值透過同一個 threshold-exporter 管理（`container_cpu` / `container_memory` keys）
+- Recording rules: `tenant:container_cpu_percent:by_container` → `tenant:pod_weakest_cpu_percent:max`
+- Alert rules: `PodContainerHighCPU` / `PodContainerHighMemory`
+- **目前狀態**：Prometheus rules 完成，kubelet-cadvisor scrape job 已配置，需 deploy 後驗證
 
-### Scenario C: State/String Matching（狀態字串比對）
+### Scenario C: State/String Matching（狀態字串比對）✅ Week 3 實作完成
 
-- 比對 K8s pod phase（CrashLoopBackOff, ImagePullBackOff 等）
-- 用乘法運算做交集邏輯
-- Config 需要支援非 numeric 的 state filter（設計方向：獨立 `state_filters:` section）
-- **目前狀態**：kube-state-metrics 已部署，提供 pod phase / container status 指標
+- 比對 K8s container waiting reason（CrashLoopBackOff, ImagePullBackOff 等）
+- 乘法運算做交集邏輯：`count * flag > 0`（flag absent = disabled = no alert）
+- Config 新增 `state_filters:` section + per-tenant `_state_<filter>: "disable"` 覆蓋
+- 新 metric: `user_state_filter{tenant, filter, severity}` = 1.0（flag gauge）
+- Recording rule: `tenant:container_waiting_reason:count` (uses kube-state-metrics)
+- Alert rules: `ContainerCrashLoop` / `ContainerImagePullFailure`
+- **目前狀態**：Go 實作完成（config.go + collector.go + unit tests），Prometheus rules 就緒
 
 ### Scenario D: Composite Priority Logic（組合優先級邏輯）
 
@@ -175,7 +182,6 @@ tenants:
 
 ## 下一步
 
-- **Week 3**: Scenario B (Weakest Link) alert rules + Scenario C (State Matching) alert rules
 - **Week 4**: Scenario D (Composite Priority) + 整合測試自動化 + Tilt 引入
 
 ## 技術限制與注意事項
@@ -226,6 +232,8 @@ tenants:
 │   └── cleanup.sh                   # 清除資源
 ├── tests/                            # 整合測試
 │   ├── scenario-a.sh                # Dynamic Thresholds 端到端測試
+│   ├── scenario-b.sh                # Weakest Link Detection 端到端測試
+│   ├── scenario-c.sh                # State/String Matching 端到端測試
 │   └── verify-threshold-exporter.sh # Exporter 功能驗證
 ├── docs/                             # 文檔
 ├── Makefile                          # 操作入口 (make help 查看)
@@ -315,7 +323,77 @@ tenants:
 
 ### 下一步
 
-- **Week 3**: Scenario B (Weakest Link) + Scenario C (State Matching) alert rules
+- **Week 3**: Scenario B (Weakest Link) + Scenario C (State Matching) ← 已完成
+
+## Week 3 更新 (完成)
+
+### Scenario C: State/String Matching 實作
+
+1. **Config 擴充** (`config.go`)
+   - 新增 `StateFilter` struct：`Reasons []string` + `Severity string`
+   - `ThresholdConfig` 新增 `StateFilters map[string]StateFilter` 欄位
+   - 新方法 `ResolveStateFilters()` — 為每個 tenant × filter 產生 flag
+   - Per-tenant disable: tenants map 中 `_state_<filter_name>: "disable"`
+   - 共用 `isDisabled()` 函式（提取原有的 disable 判斷邏輯）
+
+2. **Collector 擴充** (`collector.go`)
+   - 新增 `user_state_filter{tenant, filter, severity}` metric descriptor
+   - `Collect()` 同時呼叫 `cfg.Resolve()` 和 `cfg.ResolveStateFilters()`
+   - Disabled filters → no metric exposed（與 numeric disable 相同模式）
+
+3. **Config 格式**
+   ```yaml
+   state_filters:
+     container_crashloop:
+       reasons: ["CrashLoopBackOff"]
+       severity: "critical"
+     container_imagepull:
+       reasons: ["ImagePullBackOff", "InvalidImageName"]
+       severity: "warning"
+   tenants:
+     db-b:
+       _state_container_crashloop: "disable"
+   ```
+
+4. **Prometheus Rules**
+   - Recording rule: `tenant:container_waiting_reason:count` (uses `label_replace` for namespace→tenant)
+   - Alert: `ContainerCrashLoop` — `count * user_state_filter > 0`（乘法模式）
+   - Alert: `ContainerImagePullFailure` — 同上
+
+5. **測試**
+   - 7 個新 unit tests 覆蓋 state filter 解析、disable variants、backward compat
+   - `tests/scenario-c.sh` — E2E 測試（觸發 ImagePullBackOff → alert fires → disable filter → alert resolves）
+
+### Scenario B: Weakest Link Detection 實作
+
+1. **kubelet cAdvisor 整合**
+   - 新增 `kubelet-cadvisor` scrape job（使用 K8s API proxy 避免 Kind TLS 問題）
+   - `metric_relabel_configs` 過濾只保留 tenant namespace 的 container metrics
+   - RBAC 新增 `nodes/proxy` 權限
+
+2. **Container 閾值**
+   - `defaults` 新增 `container_cpu: 80` / `container_memory: 85`
+   - Per-tenant override: `container_cpu: "70"` 等
+   - `parseMetricKey("container_cpu")` → `component="container"`, `metric="cpu"`
+
+3. **Prometheus Rules**
+   - Recording: `tenant:container_cpu_percent:by_container` — 每 container CPU 使用率（% of limit）
+   - Recording: `tenant:container_memory_percent:by_container` — 同上 memory
+   - Recording: `tenant:pod_weakest_cpu_percent:max` — `max by(tenant, pod)` 取最弱環節
+   - Threshold: `tenant:alert_threshold:container_cpu` / `container_memory`（pass-through exporter）
+   - Alert: `PodContainerHighCPU` / `PodContainerHighMemory` — 用 `group_left` join
+
+4. **測試**
+   - `tests/scenario-b.sh` — E2E 測試（驗證 cAdvisor metrics → 設定低閾值 → alert fires → 恢復）
+   - 支援 partial test mode（cAdvisor 不可用時只驗證 threshold metrics）
+
+### Makefile 更新
+
+- `make test-scenario-b` — Scenario B 端到端測試
+- `make test-scenario-c` — Scenario C 端到端測試
+
+### 下一步
+
 - **Week 4**: Scenario D (Composite Priority) + 整合測試自動化 + Tilt 引入
 
 詳細說明請參考：[docs/deployment-guide.md](docs/deployment-guide.md)

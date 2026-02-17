@@ -93,12 +93,24 @@ data:
     defaults:
       mysql_connections: 80
       mysql_cpu: 80
+      container_cpu: 80
+      container_memory: 85
+    state_filters:
+      container_crashloop:
+        reasons: ["CrashLoopBackOff"]
+        severity: "critical"
+      container_imagepull:
+        reasons: ["ImagePullBackOff", "InvalidImageName"]
+        severity: "warning"
     tenants:
       ${TENANT}:
         mysql_connections: "5"
+        container_cpu: "70"
       db-b:
         mysql_connections: "100"
         mysql_cpu: "60"
+        container_memory: "90"
+        _state_container_crashloop: "disable"
 EOF
 
 log "✓ ConfigMap updated (connections = 5)"
@@ -208,12 +220,24 @@ data:
     defaults:
       mysql_connections: 80
       mysql_cpu: 80
+      container_cpu: 80
+      container_memory: 85
+    state_filters:
+      container_crashloop:
+        reasons: ["CrashLoopBackOff"]
+        severity: "critical"
+      container_imagepull:
+        reasons: ["ImagePullBackOff", "InvalidImageName"]
+        severity: "warning"
     tenants:
       ${TENANT}:
         mysql_connections: "200"
+        container_cpu: "70"
       db-b:
         mysql_connections: "100"
         mysql_cpu: "60"
+        container_memory: "90"
+        _state_container_crashloop: "disable"
 EOF
 
 log "✓ ConfigMap updated (connections = 200)"
@@ -294,12 +318,24 @@ data:
     defaults:
       mysql_connections: 80
       mysql_cpu: 80
+      container_cpu: 80
+      container_memory: 85
+    state_filters:
+      container_crashloop:
+        reasons: ["CrashLoopBackOff"]
+        severity: "critical"
+      container_imagepull:
+        reasons: ["ImagePullBackOff", "InvalidImageName"]
+        severity: "warning"
     tenants:
       db-a:
         mysql_connections: "70"
+        container_cpu: "70"
       db-b:
         mysql_connections: "100"
         mysql_cpu: "60"
+        container_memory: "90"
+        _state_container_crashloop: "disable"
 EOF
 
 log "✓ Original config restored"
