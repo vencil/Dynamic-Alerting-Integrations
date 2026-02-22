@@ -30,6 +30,8 @@
 - `update-config`: `python3 .claude/skills/update-config/scripts/patch_cm.py <tenant> <metric_key> <value>`
   - 支援三態: 自訂數值 / `"default"` (刪除 key，恢復預設) / `"disable"`
   - 所有測試腳本 (scenario-a/b/c.sh) 均已改用此工具，禁止 `cat <<EOF` 覆寫。
+- `verify-alert`: `python3 .claude/skills/verify-alert/scripts/check_alert.py <alert_name> <tenant>`
+  - 回傳 JSON: `{alert, tenant, state: "firing"|"pending"|"inactive"}`。需 port-forward 9090。
 
 ## AI Agent 環境 (MCP Connectivity)
 - **Kubernetes MCP Server**: 可用。Context: `kind-dynamic-alerting-cluster`。

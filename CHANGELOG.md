@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased] - Week 4: Composite Priority Logic
-- **Goal**: Implement Scenario D (Composite Priority).
-- **Plan**: Support condition-specific rules + fallback using `unless` / `or` logic.
+- **Goal**: Implement Scenario D — 解決 Alert Fatigue，透過 PromQL 集合運算子實作進階警報邏輯。
+- **Phase 1**: 維護模式 (`unless`) — ConfigMap 加 `maintenance` state_filter，PromQL 攔截所有常規警報。不改 Go。
+- **Phase 2**: 複合警報 (`and`) — `MariaDBSystemBottleneck` = 高 CPU **且**高連線數同時觸發。閾值皆來自 ConfigMap。
+- **Phase 3**: 多層級嚴重度 — 同一指標支援 warning/critical 雙閾值（租戶指定確切數值），Go 新增 `_critical` 後綴解析。`unless` 降級排他。
 
 ### Pre-Scenario D Refactoring (2026-02-22)
 #### Test Scripts — ConfigMap 覆寫技術債清理

@@ -41,6 +41,12 @@ thresholdConfig:
     container_imagepull:
       reasons: ["ImagePullBackOff", "InvalidImageName"]
       severity: "warning"
+    # Scenario D: Maintenance mode — unless 攔截所有常規警報
+    # default_state: disable → 預設不啟用; 租戶透過 _state_maintenance: "enable" 開啟
+    maintenance:
+      reasons: []
+      severity: "info"
+      default_state: "disable"
 
   tenants:
     db-a:

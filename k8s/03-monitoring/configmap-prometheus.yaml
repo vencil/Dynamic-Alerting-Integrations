@@ -266,9 +266,13 @@ data:
 
           - alert: MariaDBHighConnections
             expr: |
-              tenant:mysql_threads_connected:sum
-              > on(tenant) group_left
-              tenant:alert_threshold:connections
+              (
+                tenant:mysql_threads_connected:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             for: 30s
             labels:
               severity: warning
@@ -293,9 +297,13 @@ data:
         rules:
           - alert: PodContainerHighCPU
             expr: |
-              max by(tenant) (tenant:pod_weakest_cpu_percent:max)
-              > on(tenant) group_left
-              tenant:alert_threshold:container_cpu
+              (
+                max by(tenant) (tenant:pod_weakest_cpu_percent:max)
+                > on(tenant) group_left
+                tenant:alert_threshold:container_cpu
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             for: 60s
             labels:
               severity: warning
@@ -305,9 +313,13 @@ data:
 
           - alert: PodContainerHighMemory
             expr: |
-              max by(tenant) (tenant:pod_weakest_memory_percent:max)
-              > on(tenant) group_left
-              tenant:alert_threshold:container_memory
+              (
+                max by(tenant) (tenant:pod_weakest_memory_percent:max)
+                > on(tenant) group_left
+                tenant:alert_threshold:container_memory
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             for: 60s
             labels:
               severity: warning
@@ -326,10 +338,14 @@ data:
           - alert: ContainerCrashLoop
             expr: |
               (
-                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
-                * on(tenant) group_left
-                user_state_filter{filter="container_crashloop"}
-              ) > 0
+                (
+                  tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_crashloop"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             for: 30s
             labels:
               severity: critical
@@ -341,10 +357,14 @@ data:
           - alert: ContainerImagePullFailure
             expr: |
               (
-                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
-                * on(tenant) group_left
-                user_state_filter{filter="container_imagepull"}
-              ) > 0
+                (
+                  tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_imagepull"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
             for: 30s
             labels:
               severity: warning

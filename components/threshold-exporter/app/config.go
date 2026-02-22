@@ -16,8 +16,9 @@ import (
 // Each filter maps to kube_pod_container_status_waiting_reason or similar K8s state metrics.
 // Per-tenant enable/disable is controlled via _state_<filter_name> in the tenants map.
 type StateFilter struct {
-	Reasons  []string `yaml:"reasons"`  // K8s waiting/terminated reasons to match
-	Severity string   `yaml:"severity"` // Alert severity (default: "warning")
+	Reasons      []string `yaml:"reasons"`       // K8s waiting/terminated reasons to match
+	Severity     string   `yaml:"severity"`      // Alert severity (default: "warning")
+	DefaultState string   `yaml:"default_state"` // "enable" (default) or "disable" — 控制未設定 _state_ 時的預設行為
 }
 
 // ResolvedStateFilter is the resolved state for one tenant+filter pair.
@@ -149,17 +150,22 @@ func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
 			severity = "warning"
 		}
 
+		// default_state: "disable" → 預設關閉，需明確 enable
+		// default_state: "" 或 "enable" → 預設開啟 (向後相容)
+		defaultEnabled := !isDisabled(strings.TrimSpace(strings.ToLower(filter.DefaultState)))
+
 		for tenant, overrides := range c.Tenants {
-			// Check if tenant has explicitly disabled this filter
 			stateKey := "_state_" + filterName
 			if override, exists := overrides[stateKey]; exists {
 				lower := strings.TrimSpace(strings.ToLower(override))
 				if isDisabled(lower) {
-					continue
+					continue // 明確停用
 				}
+				// 明確啟用 (任何非 disable 的值，如 "enable")
+			} else if !defaultEnabled {
+				continue // 無覆寫 + 預設關閉 = 跳過
 			}
 
-			// Filter is enabled for this tenant
 			result = append(result, ResolvedStateFilter{
 				Tenant:     tenant,
 				FilterName: filterName,
