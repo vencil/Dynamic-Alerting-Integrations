@@ -18,6 +18,14 @@ info "Scenario A: Dynamic Thresholds Test"
 info "=========================================="
 
 TENANT=${1:-db-a}
+PATCH_CMD="python3 ${SCRIPT_DIR}/../.claude/skills/update-config/scripts/patch_cm.py"
+
+# Helper: 讀取 ConfigMap 中某 tenant 的某 metric 當前值
+get_cm_value() {
+  local t=$1 key=$2
+  kubectl get configmap threshold-config -n monitoring -o jsonpath='{.data.config\.yaml}' | \
+    python3 -c "import sys,yaml; c=yaml.safe_load(sys.stdin); print(c.get('tenants',{}).get('$t',{}).get('$key','default'))"
+}
 
 # ============================================================
 # Phase 1: 環境準備
@@ -71,6 +79,10 @@ CURRENT_THRESHOLD=$(curl -sf http://localhost:9090/api/v1/query \
 
 log "Current threshold for ${TENANT}: ${CURRENT_THRESHOLD}"
 
+# 保存原始 ConfigMap 值，用於測試結束後恢復
+ORIG_CONNECTIONS=$(get_cm_value "${TENANT}" "mysql_connections")
+log "Original ConfigMap value for ${TENANT}.mysql_connections: ${ORIG_CONNECTIONS}"
+
 # ============================================================
 # Phase 3: 設定低閾值 — 觸發 alert
 # ============================================================
@@ -78,40 +90,8 @@ log ""
 log "Phase 3: Set LOW threshold (connections = 5) via ConfigMap"
 log "This should trigger MariaDBHighConnections alert"
 
-# 透過 Helm upgrade 修改 threshold（最乾淨的方式）
-# 或者直接 patch ConfigMap
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      ${TENANT}:
-        mysql_connections: "5"
-        container_cpu: "70"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-EOF
+# 透過 patch_cm.py 局部更新 ConfigMap（不影響其他 tenant 設定）
+${PATCH_CMD} "${TENANT}" mysql_connections 5
 
 log "✓ ConfigMap updated (connections = 5)"
 
@@ -207,38 +187,7 @@ log ""
 log "Phase 7: Set HIGH threshold (connections = 200) via ConfigMap"
 log "This should resolve the alert"
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      ${TENANT}:
-        mysql_connections: "200"
-        container_cpu: "70"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-EOF
+${PATCH_CMD} "${TENANT}" mysql_connections 200
 
 log "✓ ConfigMap updated (connections = 200)"
 
@@ -305,40 +254,9 @@ fi
 log ""
 log "Phase 10: Restore original threshold config"
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      db-a:
-        mysql_connections: "70"
-        container_cpu: "70"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-EOF
+${PATCH_CMD} "${TENANT}" mysql_connections "${ORIG_CONNECTIONS}"
 
-log "✓ Original config restored"
+log "✓ Original config restored (mysql_connections = ${ORIG_CONNECTIONS})"
 
 # ============================================================
 # Summary

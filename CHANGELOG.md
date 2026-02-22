@@ -4,6 +4,23 @@
 - **Goal**: Implement Scenario D (Composite Priority).
 - **Plan**: Support condition-specific rules + fallback using `unless` / `or` logic.
 
+### Pre-Scenario D Refactoring (2026-02-22)
+#### Test Scripts — ConfigMap 覆寫技術債清理
+- **scenario-a/b/c.sh**: 移除所有 `cat <<EOF` 整包覆寫 `threshold-config` 的寫法，全部改用 `patch_cm.py` 局部更新。
+- **scenario-b/a.sh**: 新增 `get_cm_value()` helper，測試前保存原始值、結束後精確恢復，真正做到 tenant-agnostic。
+- **scenario-c.sh**: cleanup 改用 `patch_cm.py default` 刪除 `_state_container_imagepull` key（三態恢復）。
+
+#### patch_cm.py 增強
+- 新增 `"default"` 值支援：傳入 `default` 時刪除 key（恢復三態中的 Default 狀態），若 tenant 無自訂值則移除整個 tenant 區塊。
+
+#### 錯誤修正 & 過時內容清理
+- **configmap-alertmanager.yaml**: 移除 `localhost:5001` dead webhook receiver，消除 Alertmanager `Connection refused` 噪音日誌。
+- **scenario-c.sh**: 將 kube-state-metrics 部署提示從 `./scripts/deploy-kube-state-metrics.sh` 更新為 `make setup`。
+- **README.md**: 更新 Project Structure，標註 kube-state-metrics 已整合至 `k8s/03-monitoring/`。
+
+#### Token 優化
+- 新增 `.claudeignore`：排除 `.git/`、`go.sum`、`vendor/`、`__pycache__/`、`charts/`、`*.tgz` 等非必要檔案，減少 AI Agent token 消耗。
+
 ## [Week 3] - State Matching & Weakest Link (2025-02-23)
 ### Features
 - **Scenario C (State Matching)**:

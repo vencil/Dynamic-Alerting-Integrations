@@ -76,7 +76,7 @@ make help               # 顯示所有可用 targets
 .
 ├── components/
 │   ├── threshold-exporter/     # 動態閾值 exporter (Helm chart + Go app)
-│   └── kube-state-metrics/     # K8s 狀態 metrics 說明
+│   └── (kube-state-metrics 已整合至 k8s/03-monitoring/)
 ├── environments/
 │   ├── local/                  # 本地開發 Helm values
 │   └── ci/                     # CI/CD Helm values

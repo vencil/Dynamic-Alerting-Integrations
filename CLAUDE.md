@@ -16,13 +16,20 @@
 1. **ConfigMap 修改規範 (重要)**：絕對**禁止**在測試腳本或指令中使用 `cat <<EOF` 整包覆寫 `threshold-config`。必須使用 `kubectl patch`、`helm upgrade`，或呼叫 `update-config` skill 進行局部更新，以免洗掉其他設定。
 2. **多租戶隔離 (Tenant-agnostic)**：Go 程式碼與 PromQL Recording Rules 中禁止 Hardcode Tenant ID。
 3. **三態邏輯**: Custom 數值 / Default (省略 Key) / Disable (設定為 `"disable"`)。
-4. **Makefile 操作**:
+4. **文件同步規範 (Doc-as-Code)**：每次完成功能開發或重構後，**必須**同步更新以下文件再回報完成：
+   - `CHANGELOG.md`: 記錄變更摘要 (放在對應的 Week/Unreleased 區塊)。
+   - `CLAUDE.md`: 若涉及新 Skill、新規範、架構變動，更新對應區段。
+   - `README.md`: 若涉及 Project Structure 或使用方式變動。
+5. **Makefile 操作**:
    - `make setup`: 一鍵部署 (包含 Kind, DB, Monitoring, Exporter)。
    - `make port-forward`: 開啟 9090 (Prometheus), 3000 (Grafana), 8080 (Exporter)。
 
 ## AI Skills (MCP 工具箱)
 我們提供了專屬腳本來節省 Token 與驗證時間：
-- `diagnose-tenant`: `python3 .claude/skills/diagnose-tenant/scripts/diagnose.py
+- `diagnose-tenant`: `python3 .claude/skills/diagnose-tenant/scripts/diagnose.py`
+- `update-config`: `python3 .claude/skills/update-config/scripts/patch_cm.py <tenant> <metric_key> <value>`
+  - 支援三態: 自訂數值 / `"default"` (刪除 key，恢復預設) / `"disable"`
+  - 所有測試腳本 (scenario-a/b/c.sh) 均已改用此工具，禁止 `cat <<EOF` 覆寫。
 
 ## AI Agent 環境 (MCP Connectivity)
 - **Kubernetes MCP Server**: 可用。Context: `kind-dynamic-alerting-cluster`。

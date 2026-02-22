@@ -29,8 +29,15 @@ def main(tenant, metric_key, value):
     if tenant not in config["tenants"]:
         config["tenants"][tenant] = {}
 
-    # 3. 更新特定值
-    config["tenants"][tenant][metric_key] = str(value)
+    # 3. 更新特定值 (支援三態: custom value / "default" 刪除 key / "disable")
+    if str(value).lower() == "default":
+        # 刪除 key → 恢復使用 defaults 區塊的值
+        config["tenants"][tenant].pop(metric_key, None)
+        # 若該 tenant 已無任何自訂值，移除整個 tenant 區塊
+        if not config["tenants"][tenant]:
+            del config["tenants"][tenant]
+    else:
+        config["tenants"][tenant][metric_key] = str(value)
 
     # 4. 轉換回 YAML
     updated_yaml_str = yaml.dump(config, sort_keys=False)

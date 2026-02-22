@@ -20,6 +20,17 @@ info "Scenario B: Weakest Link Detection Test"
 info "=========================================="
 
 TENANT=${1:-db-a}
+PATCH_CMD="python3 ${SCRIPT_DIR}/../.claude/skills/update-config/scripts/patch_cm.py"
+
+# Helper: 讀取 ConfigMap 中某 tenant 的某 metric 當前值
+get_cm_value() {
+  local t=$1 key=$2
+  kubectl get configmap threshold-config -n monitoring -o jsonpath='{.data.config\.yaml}' | \
+    python3 -c "import sys,yaml; c=yaml.safe_load(sys.stdin); print(c.get('tenants',{}).get('$t',{}).get('$key','default'))"
+}
+
+# 保存原始值，用於 cleanup 恢復
+ORIG_CONTAINER_CPU=$(get_cm_value "${TENANT}" "container_cpu")
 
 # ============================================================
 # Phase 1: 環境準備
@@ -47,39 +58,8 @@ sleep 5
 
 cleanup() {
   log "Cleaning up..."
-  # Restore original ConfigMap
-  cat <<RESTORE_EOF | kubectl apply -f - 2>/dev/null || true
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      db-a:
-        mysql_connections: "70"
-        container_cpu: "70"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-RESTORE_EOF
+  # Restore original ConfigMap value (局部更新，不影響其他設定)
+  ${PATCH_CMD} "${TENANT}" container_cpu "${ORIG_CONTAINER_CPU}" 2>/dev/null || true
   kill ${PROM_PF_PID} 2>/dev/null || true
   kill ${EXPORTER_PF_PID} 2>/dev/null || true
 }
@@ -192,38 +172,7 @@ log ""
 log "Phase 5: Set LOW container CPU threshold (1%) via ConfigMap"
 log "Current CPU%: ${CPU_PERCENT} — should exceed 1% threshold"
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      ${TENANT}:
-        mysql_connections: "70"
-        container_cpu: "1"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-EOF
+${PATCH_CMD} "${TENANT}" container_cpu 1
 
 log "✓ ConfigMap updated (container_cpu = 1)"
 
@@ -272,38 +221,7 @@ fi
 log ""
 log "Phase 7: Set HIGH container CPU threshold (99%) via ConfigMap"
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      ${TENANT}:
-        mysql_connections: "70"
-        container_cpu: "99"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-EOF
+${PATCH_CMD} "${TENANT}" container_cpu 99
 
 log "✓ ConfigMap updated (container_cpu = 99)"
 log "Waiting for propagation + alert resolve (120s)..."

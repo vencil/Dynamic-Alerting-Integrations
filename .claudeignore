@@ -1,0 +1,26 @@
+# ==========================================
+# .claudeignore - AI Agent Exclusion List
+# ==========================================
+
+# 1. Git & IDE
+.git/
+.vscode/
+.idea/
+
+# 2. Go Dependencies & Build Artifacts
+components/threshold-exporter/app/go.sum
+components/threshold-exporter/app/vendor/
+**/threshold-exporter  # 排除編譯出來的二進位檔
+
+# 3. Python Cache (from MCP skills)
+**/__pycache__/
+**/*.pyc
+
+# 4. Kubernetes & Helm local caches
+**/.helm/
+**/charts/
+*.tgz
+
+# 5. Logs & Temp files
+*.log
+*.tmp

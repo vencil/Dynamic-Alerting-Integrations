@@ -20,6 +20,7 @@ info "Scenario C: State/String Matching Test"
 info "=========================================="
 
 TENANT=${1:-db-a}
+PATCH_CMD="python3 ${SCRIPT_DIR}/../.claude/skills/update-config/scripts/patch_cm.py"
 
 # ============================================================
 # Phase 1: 環境準備
@@ -41,7 +42,7 @@ fi
 if ! kubectl get pods -n monitoring -l app.kubernetes.io/name=kube-state-metrics 2>/dev/null | grep -q Running; then
   warn "kube-state-metrics may not be running (trying alternative label)"
   if ! kubectl get pods -n monitoring 2>/dev/null | grep -q kube-state-metrics; then
-    err "kube-state-metrics is not running. Deploy it: ./scripts/deploy-kube-state-metrics.sh"
+    err "kube-state-metrics is not running. Please run 'make setup' to deploy the full infrastructure."
     exit 1
   fi
 fi
@@ -62,39 +63,8 @@ cleanup() {
   log "Cleaning up..."
   # Restore original image (in case test was interrupted)
   kubectl set image deployment/mariadb mariadb="${ORIGINAL_IMAGE}" -n "${TENANT}" 2>/dev/null || true
-  # Restore original ConfigMap
-  cat <<RESTORE_EOF | kubectl apply -f - 2>/dev/null || true
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      db-a:
-        mysql_connections: "70"
-        container_cpu: "70"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-RESTORE_EOF
+  # Restore ConfigMap: 刪除 _state_container_imagepull key (恢復為 default = enabled)
+  ${PATCH_CMD} "${TENANT}" _state_container_imagepull default 2>/dev/null || true
   kill ${PROM_PF_PID} 2>/dev/null || true
   kill ${EXPORTER_PF_PID} 2>/dev/null || true
 }
@@ -221,39 +191,7 @@ fi
 log ""
 log "Phase 6: Disable imagepull filter for ${TENANT} via ConfigMap"
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: threshold-config
-  namespace: monitoring
-  labels:
-    app: threshold-exporter
-data:
-  config.yaml: |
-    defaults:
-      mysql_connections: 80
-      mysql_cpu: 80
-      container_cpu: 80
-      container_memory: 85
-    state_filters:
-      container_crashloop:
-        reasons: ["CrashLoopBackOff"]
-        severity: "critical"
-      container_imagepull:
-        reasons: ["ImagePullBackOff", "InvalidImageName"]
-        severity: "warning"
-    tenants:
-      ${TENANT}:
-        mysql_connections: "70"
-        container_cpu: "70"
-        _state_container_imagepull: "disable"
-      db-b:
-        mysql_connections: "100"
-        mysql_cpu: "60"
-        container_memory: "90"
-        _state_container_crashloop: "disable"
-EOF
+${PATCH_CMD} "${TENANT}" _state_container_imagepull disable
 
 log "✓ ConfigMap updated (imagepull filter disabled for ${TENANT})"
 

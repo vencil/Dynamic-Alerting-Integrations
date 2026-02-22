@@ -17,10 +17,8 @@ data:
 
     receivers:
       - name: "default"
-        # 測試環境 — 只記 log，不實際發通知
-        webhook_configs:
-          - url: "http://localhost:5001/alerts"
-            send_resolved: true
+        # 測試環境 — 空 receiver，只記 log 不發通知
+        # (移除 localhost:5001 webhook 避免 Connection refused 噪音)
 
     inhibit_rules:
       - source_matchers:
