@@ -11,5 +11,5 @@
 ## Interface
 ```bash
 python3 scripts/tools/patch_config.py <tenant> <metric_key> <value>
-# 範例: python3 patch_cm.py db-a mysql_connections 5
-# 範例: python3 patch_cm.py db-b _state_container_crashloop disable
+# 範例: python3 scripts/tools/patch_config.py db-a mysql_connections 5
+# 範例: python3 scripts/tools/patch_config.py db-b _state_container_crashloop disable

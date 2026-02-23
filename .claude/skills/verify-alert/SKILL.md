@@ -11,4 +11,4 @@
 ## Interface
 ```bash
 python3 scripts/tools/check_alert.py <alert_name> <tenant>
-# 範例: python3 check_alert.py MariaDBHighConnections db-a
+# 範例: python3 scripts/tools/check_alert.py MariaDBHighConnections db-a
