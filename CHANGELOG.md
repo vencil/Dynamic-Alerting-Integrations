@@ -1,5 +1,16 @@
 # Changelog
 
+## [Phase 2] - Migration & Extensibility (2026-02-24)
+### Migration Guide (`docs/migration-guide.md`)
+- 完整遷移指南：從傳統 Prometheus 警報遷移至動態閾值架構。
+- 五種 Percona MariaDB 場景範例：基本數值比較、多層嚴重度、Slave Lag、Slow Queries (rate)、Buffer Pool (百分比)。
+- 遷移前評估 Checklist、Alertmanager routing 遷移 (instance → tenant)、三態操作範例。
+- 遷移後驗證流程：整合 `check_alert.py` / `diagnose.py` 工具鏈。
+- LLM 輔助批量轉換 System Prompt，支援小型模型自動抽取閾值。
+
+### CLAUDE.md 重構
+- 簡化 Week 1-4 為 Phase 1 摘要，新增 Phase 2 Roadmap (2B 多 DB 支援、2C GitOps、2D Migration Tooling)。
+
 ## [Week 4 — Final Polish] - Tech Debt Cleanup (2026-02-23)
 ### Dependencies & Dockerfile
 - **Go 1.23**: `go.mod` 升級至 `go 1.23.0`，`client_golang` 升級至 `v1.20.0`，執行 `go mod tidy` 更新所有間接依賴。
