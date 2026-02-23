@@ -1,0 +1,46 @@
+name: Publish Threshold Exporter Image
+
+on:
+  push:
+    tags:
+      - 'v*' # 當推送如 v0.1.0 的 Tag 時觸發
+
+env:
+  REGISTRY: ghcr.io
+  # 將轉為 ghcr.io/vencil/threshold-exporter
+  IMAGE_NAME: ${{ github.repository_owner }}/threshold-exporter
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # 允許推送到 GHCR
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # GitHub 自動提供的 Token，免設定
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # 會自動依據 git tag 產生對應的 docker tag (例如 v0.1.0)
+          tags: |
+            type=semver,pattern={{version}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./components/threshold-exporter/app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
