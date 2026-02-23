@@ -18,8 +18,8 @@ info "Scenario D: Composite Priority Logic Test"
 info "=========================================="
 
 TENANT=${1:-db-a}
-PATCH_CMD="python3 ${SCRIPT_DIR}/../.claude/skills/update-config/scripts/patch_cm.py"
-CHECK_ALERT="python3 ${SCRIPT_DIR}/../.claude/skills/verify-alert/scripts/check_alert.py"
+PATCH_CMD="python3 ${SCRIPT_DIR}/../scripts/tools/patch_config.py"
+CHECK_ALERT="python3 ${SCRIPT_DIR}/../scripts/tools/check_alert.py"
 
 # Helper: 讀取 ConfigMap 中某 tenant 的某 metric 當前值
 get_cm_value() {

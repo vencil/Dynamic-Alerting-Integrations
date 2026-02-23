@@ -10,6 +10,6 @@
 
 ## Interface
 ```bash
-python3 .claude/skills/update-config/scripts/patch_cm.py <tenant> <metric_key> <value>
+python3 scripts/tools/patch_config.py <tenant> <metric_key> <value>
 # 範例: python3 patch_cm.py db-a mysql_connections 5
 # 範例: python3 patch_cm.py db-b _state_container_crashloop disable

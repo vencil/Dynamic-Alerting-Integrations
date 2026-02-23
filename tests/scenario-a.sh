@@ -18,7 +18,7 @@ info "Scenario A: Dynamic Thresholds Test"
 info "=========================================="
 
 TENANT=${1:-db-a}
-PATCH_CMD="python3 ${SCRIPT_DIR}/../.claude/skills/update-config/scripts/patch_cm.py"
+PATCH_CMD="python3 ${SCRIPT_DIR}/../scripts/tools/patch_config.py"
 
 # Helper: 讀取 ConfigMap 中某 tenant 的某 metric 當前值
 get_cm_value() {

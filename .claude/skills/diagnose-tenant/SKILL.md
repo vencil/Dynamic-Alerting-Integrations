@@ -11,4 +11,4 @@
 
 ## Command
 ```bash
-python3 .claude/skills/diagnose-tenant/scripts/diagnose.py <tenant>
+python3 scripts/tools/diagnose.py <tenant>

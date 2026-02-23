@@ -1,5 +1,22 @@
 # Changelog
 
+## [Week 4 — Final Polish] - Tech Debt Cleanup (2026-02-23)
+### Dependencies & Dockerfile
+- **Go 1.23**: `go.mod` 升級至 `go 1.23.0`，`client_golang` 升級至 `v1.20.0`，執行 `go mod tidy` 更新所有間接依賴。
+- **Dockerfile 精簡**: Builder `golang:1.23-alpine`，Runtime `alpine:3.21`。移除冗餘 `CMD` 指令（由 K8s `deployment.yaml` 的 `args` 控制）。
+- **devcontainer.json**: Go feature 升級至 `1.23`。
+
+### Setup Optimization
+- **devcontainer.json**: 移除 `postCreateCommand` 中的 `kind create cluster` 迴圈（與 `setup.sh` 職責重疊），僅保留工具安裝。
+- **setup.sh**: 消除 `/tmp/threshold-exporter.tar` 的 Disk I/O 浪費，改用 `kind load docker-image` 直接 memory stream 載入。
+
+### Tools Promotion
+- **scripts/tools/**: 將 `.claude/skills/` 中的 `patch_cm.py`、`check_alert.py`、`diagnose.py` 轉正為標準專案工具 (`patch_config.py`、`check_alert.py`、`diagnose.py`)。
+- 更新 `tests/scenario-a/b/c/d.sh`、`Makefile`、`.claude/skills/*/SKILL.md` 中的路徑引用。
+
+### Cleanup
+- **移除 `docs/architecture-review.md`**: Week 0 架構評估快照，所有 Critical/High 項目 (threshold-exporter、kube-state-metrics、Recording Rules、Skills) 已於 Week 1-4 全部完成，文件已完成歷史使命。
+
 ## [Week 4] - Composite Priority Logic (2026-02-22)
 ### Scenario D: Alert Fatigue 解法
 - **Phase 1 — 維護模式**: Go `StateFilter` 新增 `default_state` 欄位 (opt-in model)。`maintenance` filter 預設停用，租戶設 `_state_maintenance: enable` 啟用。PromQL 5 條 alert rules 加 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 抑制。Hot-reload 驗證通過。

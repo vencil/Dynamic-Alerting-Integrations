@@ -10,5 +10,5 @@
 
 ## Interface
 ```bash
-python3 .claude/skills/verify-alert/scripts/check_alert.py <alert_name> <tenant>
+python3 scripts/tools/check_alert.py <alert_name> <tenant>
 # 範例: python3 check_alert.py MariaDBHighConnections db-a

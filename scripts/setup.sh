@@ -55,10 +55,6 @@ log "Building and Deploying Threshold Exporter..."
 log "Building image: threshold-exporter:dev..."
 docker build -t threshold-exporter:dev "${PROJECT_ROOT}/components/threshold-exporter/app"
 
-# [新增] 5.1.5 將映像檔存成純 tar 檔
-log "Exporting image to archive..."
-docker save -o /tmp/threshold-exporter.tar threshold-exporter:dev
-
-# 5.2 從 tar 檔載入到 Kind (這樣 Kind 就不會去比對 Docker 的清單了)
-log "Loading image archive into Kind cluster..."
-kind load image-archive /tmp/threshold-exporter.tar --name "${CLUSTER_NAME}"
+# 5.2 載入到 Kind 節點 (直接 memory stream，避免 tar disk I/O)
+log "Loading image into Kind cluster..."
+kind load docker-image threshold-exporter:dev --name "${CLUSTER_NAME}"

@@ -94,7 +94,7 @@ shell: ## 進入 DB CLI (使用: make shell TENANT=db-a)
 
 .PHONY: inspect-tenant
 inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant TENANT=db-a)
-	@python3 ./.claude/skills/diagnose-tenant/scripts/diagnose.py $(TENANT)
+	@python3 ./scripts/tools/diagnose.py $(TENANT)
 
 .PHONY: port-forward
 port-forward: ## 啟動 Port-Forward (9090, 3000, 9093, 8080)

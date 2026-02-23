@@ -28,14 +28,15 @@
    - `make setup`: 一鍵部署 (包含 Kind, DB, Monitoring, Exporter)。
    - `make port-forward`: 開啟 9090 (Prometheus), 3000 (Grafana), 8080 (Exporter)。
 
-## AI Skills (MCP 工具箱)
-我們提供了專屬腳本來節省 Token 與驗證時間：
-- `diagnose-tenant`: `python3 .claude/skills/diagnose-tenant/scripts/diagnose.py`
-- `update-config`: `python3 .claude/skills/update-config/scripts/patch_cm.py <tenant> <metric_key> <value>`
-  - 支援三態: 自訂數值 / `"default"` (刪除 key，恢復預設) / `"disable"`
-  - 所有測試腳本 (scenario-a/b/c.sh) 均已改用此工具，禁止 `cat <<EOF` 覆寫。
-- `verify-alert`: `python3 .claude/skills/verify-alert/scripts/check_alert.py <alert_name> <tenant>`
+## 專案工具 (scripts/tools/)
+標準化的自動化工具，供測試腳本與 AI Agent 共用：
+- `patch_config.py`: `python3 scripts/tools/patch_config.py <tenant> <metric_key> <value>`
+  - 安全局部更新 `threshold-config` ConfigMap。支援三態: 自訂數值 / `"default"` (刪除 key，恢復預設) / `"disable"`。
+  - 所有測試腳本 (scenario-a/b/c/d.sh) 均使用此工具，禁止 `cat <<EOF` 覆寫。
+- `check_alert.py`: `python3 scripts/tools/check_alert.py <alert_name> <tenant>`
   - 回傳 JSON: `{alert, tenant, state: "firing"|"pending"|"inactive"}`。需 port-forward 9090。
+- `diagnose.py`: `python3 scripts/tools/diagnose.py <tenant>`
+  - Exception-based reporting：正常回傳 `{"status":"healthy"}`，異常時附帶錯誤與日誌。
 
 ## AI Agent 環境 (MCP Connectivity)
 - **Kubernetes MCP Server**: 可用。Context: `kind-dynamic-alerting-cluster`。

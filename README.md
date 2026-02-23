@@ -86,9 +86,9 @@ make help               # 顯示所有可用 targets
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
 ├── scripts/                    # 操作腳本 (_lib.sh, setup, verify, cleanup...)
-├── tests/                      # 整合測試 (scenario-a/b/c.sh)
-├── docs/                       # 架構評估文件
-├── .claude/skills/             # AI Agent skills (diagnose-tenant, update-config)
+│   └── tools/                  # 自動化工具 (patch_config, check_alert, diagnose)
+├── tests/                      # 整合測試 (scenario-a/b/c/d.sh)
+├── .claude/skills/             # AI Agent skill 說明 (SKILL.md)
 ├── .devcontainer/              # Dev Container 配置
 ├── Makefile                    # 操作入口 (make help 查看所有 targets)
 ├── CLAUDE.md                   # AI Agent 開發上下文指引
