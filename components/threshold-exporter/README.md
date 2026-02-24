@@ -94,6 +94,9 @@ tenants:
 user_threshold{tenant="db-a",component="mysql",metric="connections",severity="warning"} 70
 user_threshold{tenant="db-a",component="mysql",metric="cpu",severity="warning"} 80
 user_threshold{tenant="db-b",component="mysql",metric="cpu",severity="critical"} 40
+# Phase 2B: 維度標籤 — 額外 label 自動附加在標準 label 之後
+user_threshold{tenant="redis-prod",component="redis",metric="queue_length",severity="critical",queue="tasks"} 500
+user_threshold{tenant="es-prod",component="es",metric="index_store_size_bytes",severity="warning",index="logs-prod"} 107374182400
 ```
 
 ## Prometheus 整合

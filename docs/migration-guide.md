@@ -565,6 +565,60 @@ tenants:
    "redis_queue_length{queue="order-processing"}": "500"
 ```
 
+### 平台團隊的 PromQL 適配 (重要)
+
+當租戶使用維度標籤時，平台團隊的 Recording Rule 與 Alert Rule **必須**將維度 label 納入分組，否則 Prometheus 的 `group_left` 匹配會失敗或產生錯誤的聚合結果。
+
+**Recording Rule — 必須 `by(tenant, <dim>)`**：
+
+```yaml
+# ❌ 錯誤: 不同 queue 的值會被 max 壓扁成一個數字
+- record: tenant:redis_queue_length:max
+  expr: max by(tenant) (redis_queue_length)
+
+# ✅ 正確: 保留 queue 維度，每個 (tenant, queue) 組合各自聚合
+- record: tenant:redis_queue_length:max
+  expr: max by(tenant, queue) (redis_queue_length)
+```
+
+**Alert Rule — 必須 `on(tenant, <dim>) group_left`**：
+
+```yaml
+# ❌ 錯誤: on(tenant) 無法區分不同 queue 的閾值
+- alert: RedisQueueTooLong
+  expr: |
+    tenant:redis_queue_length:max
+    > on(tenant) group_left
+    tenant:alert_threshold:redis_queue_length
+
+# ✅ 正確: on(tenant, queue) 讓每個 queue 比對自己的閾值
+- alert: RedisQueueTooLong
+  expr: |
+    (
+      tenant:redis_queue_length:max
+      > on(tenant, queue) group_left
+      tenant:alert_threshold:redis_queue_length
+    )
+    unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+```
+
+**threshold-exporter 的角色**：exporter 的 `user_threshold` 輸出已自動包含維度 label（如 `queue="tasks"`），所以 `tenant:alert_threshold:*` 的 Recording Rule 也需要保留維度：
+
+```yaml
+- record: tenant:alert_threshold:redis_queue_length
+  expr: sum by(tenant, queue) (user_threshold{metric="redis_queue_length"})
+```
+
+**多重維度場景** (如 MongoDB `database` + `collection`)：所有維度 label 都需出現在 `by()` 和 `on()` 中：
+
+```yaml
+- record: tenant:mongodb_collection_count:max
+  expr: max by(tenant, database, collection) (mongodb_collection_count)
+
+- record: tenant:alert_threshold:mongodb_collection_count
+  expr: sum by(tenant, database, collection) (user_threshold{metric="mongodb_collection_count"})
+```
+
 ### 參考範本
 
 `components/threshold-exporter/config/conf.d/examples/` 目錄包含三種 DB 類型的權威範本：
