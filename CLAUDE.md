@@ -2,47 +2,14 @@
 
 ## 專案概述 (Current Status)
 **Multi-Tenant Dynamic Alerting** 平台。
-**當前進度**: Phase 2B 完成 — Go 核心 + 工具鏈支援 Dimensional Metrics (多 DB 類型)。
+**當前版本**: v0.3.0 — 全功能 Multi-Tenant Dynamic Alerting 平台。
 **核心機制**: Config-driven (ConfigMap 掛載), Hot-reload (SHA-256 hash 比對), 支援單檔與目錄兩種模式。
 
-## Phase 1 完成摘要 (Week 1-4)
-- **Week 1-2**: Kind 叢集、MariaDB sidecar、Prometheus Recording Rules 正規化層、threshold-exporter (Go) 三態邏輯 + Helm chart。
-- **Week 3**: Scenario B (Weakest Link — cAdvisor 容器資源)、Scenario C (State Matching — kube-state-metrics 狀態乘法)。
-- **Week 4**: Scenario D (維護模式 `unless`、複合警報 `and`、多層嚴重度 `_critical` 後綴降級)、Tech Debt 清理、工具轉正 (`patch_config.py`, `check_alert.py`, `diagnose.py`)。
-
-## Phase 2 規劃 (Roadmap)
-### 2A — Migration Guide ✅
-- `docs/migration-guide.md`: 完整遷移指南，含 Percona MariaDB 五種場景範例、Alertmanager routing 遷移、驗證流程、LLM 輔助批量轉換 Prompt。
-
-### 2B — 多 DB 支援擴展 ✅
-- **Task 1 ✅ Go 核心升級**: `ResolvedThreshold` 新增 `CustomLabels map[string]string`。
-  - ConfigMap key 支援 `"metric{label=\"value\"}"` 語法（YAML 需加引號）。
-  - `parseKeyWithLabels()` + `parseLabelsString()` 解析維度標籤。
-  - `Resolve()` 新增 dimensional pass，支援三態 + `value:severity`。
-  - `collector.go` 改為 unchecked collector（空 Describe），Collect() 動態建立 Desc。
-  - 25 單元測試全部通過（含 5 個新 dimensional 測試）。
-- **Task 2 ✅ 工具升級 + 權威範本**:
-  - `migrate_rule.py` 新增 `extract_label_matchers()` — 自動偵測 PromQL 維度標籤並輸出配置建議。
-  - `patch_config.py` docstring 更新維度用法範例（PyYAML 原生支援，無需改碼）。
-  - 權威範本 `config/conf.d/examples/`: Redis (queue/db)、ES (index/node)、MongoDB (database/collection)。
-  - 測試: `tests/legacy-multidb.yml` (8 rules) + `tests/test-migrate-multidb.sh` (18 assertions PASS)。
-  - `migration-guide.md` 新增 §10 維度標籤章節 + FAQ。
+## 專案里程碑 (Milestones)
+- **v0.1.0 (Phase 1)**: 動態閾值 threshold-exporter (Go)、三態邏輯、cAdvisor/KSM 整合 (Scenario B/C)、Scenario D (維護模式 `unless`、複合警報 `and`、多層嚴重度 `_critical` 降級)。
+- **v0.2.0 (Phase 2A/C/D)**: GitOps 目錄掃描模式 (`-config-dir`、SHA-256 hash)、`migrate_rule.py` 80/20 自動轉換工具 (三種情境)、`docs/migration-guide.md` 完整遷移指南。
+- **v0.3.0 (Phase 2B - Current)**: Dimensional Metrics — `"metric{label=\"value\"}"` 維度標籤 (Redis/ES/MongoDB)、Unchecked Collector 動態 Descriptor、`extract_label_matchers()` PromQL 維度偵測、權威範本 (`conf.d/examples/`)。
 - **設計約束**: 維度 key 不支援 `_critical` 後綴（改用 `"value:critical"`）；維度 key 為 tenant-only，不繼承 defaults。
-
-### 2C — GitOps Self-Service ✅
-- **Directory Scanner**: ConfigMap 拆分為 `_defaults.yaml` + 每租戶 `<tenant>.yaml`，排序合併。
-- **邊界規則**: `state_filters` / `defaults` 僅允許在 `_` 前綴檔案，租戶檔僅含 `tenants` 區塊，違規自動忽略 + WARN log。
-- **雙模式**: `-config` (單檔) / `-config-dir` (目錄)，自動偵測，向下相容。
-- **Hot-reload**: SHA-256 hash 比對 (取代 ModTime，K8s symlink rotation 更可靠)。
-- **工具適配**: `patch_config.py` 雙模式自動偵測；`_lib.sh` 共用 `get_cm_value()`。
-- **測試**: 20 單元測試通過 + `tests/integration-2c.sh` 整合驗證 (15/16 PASS，1 個 K8s timing)。
-- **待擴展**: GitOps Repo + CI/CD pipeline。
-
-### 2D — Migration Tooling ✅
-- **`migrate_rule.py`**: 80/20 自動轉換工具，三種情境 (完美解析 / 複雜表達式+TODO / LLM Fallback)。
-- **Bug Fix**: `base_key` 提取跳過 PromQL 函式名 (`rate`→metric)；`absent()` 等語義不同函式歸入 LLM Fallback。
-- **測試**: `tests/legacy-dummy.yml` (4 條規則覆蓋 3 種情境) + `tests/test-migrate-tool.sh` (13 assertions PASS)。
-- **Migration Guide 重寫**: 以正規化層、聚合模式選擇 (max vs sum)、工具核心流程為骨架，保留五種場景範例。
 
 ## 核心組件與架構 (Architecture)
 - **Cluster**: Kind (`dynamic-alerting-cluster`)

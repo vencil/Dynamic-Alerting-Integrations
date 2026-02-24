@@ -5,14 +5,15 @@
 1. [為什麼要遷移？](#1-為什麼要遷移)
 2. [Step 0 — 建立正規化層](#2-step-0--建立正規化層)
 3. [Step 1 — 使用 migrate_rule.py 自動轉換](#3-step-1--使用-migrate_rulepy-自動轉換)
-4. [Step 2 — 選擇聚合模式 (Max vs. Sum)](#4-step-2--選擇聚合模式-max-vs-sum)
-5. [實戰範例：五種遷移場景](#5-實戰範例五種遷移場景)
-6. [Alertmanager 路由遷移](#6-alertmanager-路由遷移)
-7. [遷移後驗證](#7-遷移後驗證)
-8. [LLM 輔助手動轉換](#8-llm-輔助手動轉換)
-9. [目錄模式 (Directory Mode)](#9-目錄模式-directory-mode)
-10. [維度標籤 — 多 DB 類型支援 (Phase 2B)](#10-維度標籤--多-db-類型支援-phase-2b)
-11. [FAQ](#11-faq)
+4. [Step 1.5 — 部署 threshold-exporter](#4-step-15--部署-threshold-exporter)
+5. [Step 2 — 選擇聚合模式 (Max vs. Sum)](#5-step-2--選擇聚合模式-max-vs-sum)
+6. [實戰範例：五種遷移場景](#6-實戰範例五種遷移場景)
+7. [Alertmanager 路由遷移](#7-alertmanager-路由遷移)
+8. [遷移後驗證](#8-遷移後驗證)
+9. [LLM 輔助手動轉換](#9-llm-輔助手動轉換)
+10. [目錄模式 (Directory Mode)](#10-目錄模式-directory-mode)
+11. [維度標籤 — 多 DB 類型支援 (Phase 2B)](#11-維度標籤--多-db-類型支援-phase-2b)
+12. [FAQ](#12-faq)
 
 ---
 
@@ -149,7 +150,54 @@ mysql_global_status_threads_connected: "150"
 
 ---
 
-## 4. Step 2 — 選擇聚合模式 (Max vs. Sum)
+## 4. Step 1.5 — 部署 threshold-exporter
+
+在套用遷移產出的設定之前，需要先部署 threshold-exporter。以下提供兩種方式：
+
+### 選項 A (推薦): 官方 Image
+
+直接從 Container Registry 拉取預建映像檔，無需本地編譯：
+
+```bash
+helm upgrade --install threshold-exporter ./components/threshold-exporter \
+  -n monitoring --create-namespace \
+  --set image.repository=ghcr.io/vencil/threshold-exporter \
+  --set image.tag=v0.3.0 \
+  -f environments/local/threshold-exporter.yaml
+```
+
+### 選項 B: 本地建置
+
+適合需要客製化原始碼或在離線環境中開發的團隊：
+
+```bash
+# 1. 建置 Docker image
+cd components/threshold-exporter/app
+docker build -t threshold-exporter:dev .
+
+# 2. 載入至 Kind cluster
+kind load docker-image threshold-exporter:dev --name dynamic-alerting-cluster
+
+# 3. 部署 (使用本地 image)
+make component-deploy COMP=threshold-exporter ENV=local
+```
+
+### 驗證部署
+
+```bash
+# 確認 Pod 正常運行
+kubectl get pods -n monitoring -l app=threshold-exporter
+
+# 確認 metrics 輸出
+curl -s http://localhost:8080/metrics | grep user_threshold
+
+# 查看 resolved config
+curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
+```
+
+---
+
+## 5. Step 2 — 選擇聚合模式 (Max vs. Sum)
 
 這是遷移過程中最關鍵的架構決策。每個指標都必須明確選擇聚合模式。
 
@@ -197,7 +245,7 @@ mysql_global_status_threads_connected: "150"
 
 ---
 
-## 5. 實戰範例：五種遷移場景
+## 6. 實戰範例：五種遷移場景
 
 以下以 Percona MariaDB Alert Rules 為範本，示範從傳統寫法到新架構的完整遷移路徑。
 
@@ -370,7 +418,7 @@ tenants:
 
 ---
 
-## 6. Alertmanager 路由遷移
+## 7. Alertmanager 路由遷移
 
 ### 傳統 Routing (基於 instance)
 
@@ -403,7 +451,7 @@ route:
 
 ---
 
-## 7. 遷移後驗證
+## 8. 遷移後驗證
 
 ### 7.1 確認閾值正確輸出
 
@@ -436,7 +484,7 @@ python3 scripts/tools/diagnose.py db-a
 
 ---
 
-## 8. LLM 輔助手動轉換
+## 9. LLM 輔助手動轉換
 
 當 `migrate_rule.py` 遇到無法解析的規則（情境 3），它會自動產出一段可直接交給 LLM 的 Prompt。你也可以用以下 System Prompt 進行批量轉換。
 
@@ -487,7 +535,7 @@ tenants:
 
 ---
 
-## 9. 目錄模式 (Directory Mode)
+## 10. 目錄模式 (Directory Mode)
 
 自 Phase 2C 起，threshold-exporter 支援目錄掃描模式。ConfigMap 從單一 `config.yaml` 拆分為多個 YAML 檔案，更適合 GitOps 工作流。
 
@@ -514,7 +562,7 @@ Exporter 同時支援 `-config`（單檔）和 `-config-dir`（目錄）模式�
 
 ---
 
-## 10. 維度標籤 — 多 DB 類型支援 (Phase 2B)
+## 11. 維度標籤 — 多 DB 類型支援
 
 當平台支援 Redis、Elasticsearch、MongoDB 等多種 DB 類型時，同一個指標可能需要依「維度」設定不同閾值。例如：Redis 的不同 queue、ES 的不同 index、MongoDB 的不同 database。
 
@@ -632,7 +680,7 @@ tenants:
 
 ---
 
-## 11. FAQ
+## 12. FAQ
 
 ### Q: 修改 threshold-config 後多久生效？
 

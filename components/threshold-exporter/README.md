@@ -1,6 +1,6 @@
-# Threshold Exporter
+# Threshold Exporter (v0.3.0)
 
-**核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D。
+**核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤 (Phase 2B)。
 
 ## 架構
 
@@ -104,9 +104,16 @@ user_threshold{tenant="es-prod",component="es",metric="index_store_size_bytes",s
 Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯）：
 
 ```yaml
+# 基本閾值 — 僅按 tenant 聚合
 - record: tenant:alert_threshold:connections
   expr: sum by(tenant) (user_threshold{metric="connections"})
+
+# 維度閾值 — 必須包含維度 label，否則 group_left 匹配會失敗
+- record: tenant:alert_threshold:redis_queue_length
+  expr: sum by(tenant, queue) (user_threshold{metric="redis_queue_length"})
 ```
+
+> **重要**: 當租戶使用維度標籤時，對應的 Recording Rule 與 Alert Rule 都必須在 `by()` / `on()` 中包含該維度 label。詳見 [migration-guide.md §11 平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
 
 Service Discovery 透過 `prometheus.io/scrape: "true"` annotation 自動發現。
 
@@ -134,11 +141,26 @@ curl http://localhost:8080/api/v1/config
 **強烈建議使用專案標準工具**，它會自動偵測單檔/多檔模式並安全更新：
 
 ```bash
-# 修改 db-a 的 mysql_connections 閾值為 50
+# 基本閾值
 python3 scripts/tools/patch_config.py db-a mysql_connections 50
 
-# 停用 db-b 的 container_cpu 監控
+# 停用指標
 python3 scripts/tools/patch_config.py db-b container_cpu disable
+
+# 維度閾值 (key 需加引號)
+python3 scripts/tools/patch_config.py redis-prod 'redis_queue_length{queue="tasks"}' 500
+python3 scripts/tools/patch_config.py redis-prod 'redis_queue_length{queue="temp"}' disable
 ```
 
 Exporter 會在 reload-interval 內自動載入新設定 (SHA-256 hash 變更觸發)。
+
+## 權威範本 (Multi-DB Examples)
+
+`config/conf.d/examples/` 目錄提供三種 DB 類型的維度閾值配置範本：
+
+| 檔案 | DB 類型 | 維度範例 |
+|------|---------|----------|
+| `redis-tenant.yaml` | Redis | queue, db |
+| `elasticsearch-tenant.yaml` | Elasticsearch | index, node |
+| `mongodb-tenant.yaml` | MongoDB | database, collection |
+| `_defaults-multidb.yaml` | 多 DB 全域預設 | (維度 key 不支援 defaults) |

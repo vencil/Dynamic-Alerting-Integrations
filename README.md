@@ -94,6 +94,17 @@ make help               # 顯示所有可用 targets
 └── README.md
 ```
 
+## Migration & Adoption (快速導入指南)
+
+已經有傳統 Prometheus 警報想遷移？或者是新租戶想快速接入？
+
+**[docs/migration-guide.md](docs/migration-guide.md)** 提供完整的遷移路徑，包含：自動轉換工具 (`migrate_rule.py`)、五種 Percona MariaDB 實戰場景、Recording Rule 聚合模式選擇指南、多 DB 維度標籤 (Redis/ES/MongoDB) 配置範例，以及 threshold-exporter 部署教學。
+
+```bash
+# 快速開始: 用工具自動轉換既有 alert rules
+python3 scripts/tools/migrate_rule.py <your-legacy-rules.yml>
+```
+
 ## Alert Rules & Thresholds
 
 Alert rules are now **dynamically managed** via the `threshold-exporter`.

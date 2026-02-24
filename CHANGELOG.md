@@ -1,5 +1,38 @@
 # Changelog
 
+## [v0.3.0] - Dimensional Metrics Milestone (2026-02-25)
+
+### Go 核心 — Dimensional Labels (Phase 2B Task 1)
+- **`config.go`**: `ResolvedThreshold` 新增 `CustomLabels map[string]string`，支援 `"metric{label=\"value\"}"` ConfigMap key 語法。
+- **`parseKeyWithLabels()` + `parseLabelsString()`**: 解析維度標籤，支援多重 label (如 `{database="orders",collection="txn"}`)。
+- **`Resolve()` dimensional pass**: 掃描租戶 overrides 中含 `{` 的 key，支援三態 + `"value:severity"` 格式。
+- **`collector.go` Unchecked Collector**: 改為空 `Describe()` + 動態 `prometheus.NewDesc()` in `Collect()`，支援任意維度 label 組合。
+- **25 單元測試通過** (含 5 個新 dimensional 測試)。
+
+### 工具鏈升級 (Phase 2B Task 2)
+- **`migrate_rule.py`**: 新增 `extract_label_matchers()` — 自動偵測 PromQL label matchers 並輸出維度配置建議。LLM Fallback prompt 新增維度提示。
+- **`patch_config.py`**: Docstring 更新維度用法範例 (PyYAML 原生支援，無需改碼)。
+
+### 權威範本 (`config/conf.d/examples/`)
+- `redis-tenant.yaml`: Redis queue/db 維度範例。
+- `elasticsearch-tenant.yaml`: ES index/node 維度範例。
+- `mongodb-tenant.yaml`: MongoDB database/collection 維度範例。
+- `_defaults-multidb.yaml`: 多 DB 類型全域預設值範例。
+
+### 文件強化
+- **`migration-guide.md`**: 新增部署教學 (GHCR vs 本地建置)、維度標籤章節 (語法/約束/PromQL 適配)、`group_left` 維度匹配對比範例、維度 FAQ。
+- **`README.md`**: 新增 Migration & Adoption 導流區塊。
+- **Exporter `README.md`**: Metrics 輸出格式補上維度標籤範例。
+- **`CLAUDE.md`**: Phase 1+2 壓縮為精簡里程碑格式 (token 優化)。
+
+### 測試
+- `tests/legacy-multidb.yml`: 8 條多 DB 規則 (Redis/ES/MongoDB)。
+- `tests/test-migrate-multidb.sh`: 18 assertions 全部通過。
+
+### 清理
+- 刪除 `tests/test-yaml-dimensional.py` 臨時測試腳本。
+- 確認 Makefile、README 無 `.claude/skills/` 殘留路徑。
+
 ## [Phase 2D] - Migration Tooling (2026-02-24)
 
 ### migrate_rule.py 驗證與修復
