@@ -88,7 +88,6 @@ make help               # 顯示所有可用 targets
 ├── scripts/                    # 操作腳本 (_lib.sh, setup, verify, cleanup...)
 │   └── tools/                  # 自動化工具 (patch_config, check_alert, diagnose)
 ├── tests/                      # 整合測試 (scenario-a/b/c/d.sh)
-├── .claude/skills/             # AI Agent skill 說明 (SKILL.md)
 ├── .devcontainer/              # Dev Container 配置
 ├── Makefile                    # 操作入口 (make help 查看所有 targets)
 ├── CLAUDE.md                   # AI Agent 開發上下文指引
