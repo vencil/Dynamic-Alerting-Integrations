@@ -56,21 +56,10 @@
 - `diagnose.py <tenant>`: Exception-based 健康檢查。
 - `migrate_rule.py <legacy-rules.yml>`: 傳統 alert rules → 動態多租戶三件套 (Tenant Config + Recording Rule + Alert Rule)。
 
-## AI Agent 環境 (MCP Connectivity)
-
-### Kubernetes MCP Server
-- Context: `kind-dynamic-alerting-cluster`。全功能 kubectl 操作。
-- Prometheus 查詢: `exec_in_pod` → `wget -qO- "http://localhost:9090/api/v1/query?query=<PromQL>"`
-- Exporter 查詢: `exec_in_pod` → `wget -qO- "http://threshold-exporter.monitoring.svc:8080/metrics"`
-- **注意**: Kubernetes MCP 直接連 Kind 叢集，若 Kind 未啟動會 timeout。先確認叢集存在再操作。
-
-### Windows-MCP (Dev Container)
-- **注意**: kubectl/kind/go 僅在 Dev Container 內可用，Windows Shell 無法直接執行。
-- **執行指令**: 必須透過 `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`。
-- **PowerShell 陷阱**: 切勿使用管線 (`|`) 直接抓 docker 輸出。請使用 `Start-Process` 將輸出 Redirect 到檔案再讀取。
-- **詳細排錯與語法**: 若遇 timeout、無輸出或執行錯誤，請務必先讀取 `docs/windows-mcp-playbook.md` 參考最佳實踐。
-
-## 測試注意事項 (Testing Caveats)
-- **前置準備**: 確保 Dev Container、Kind 叢集、kubeconfig 狀態正常，並隨時用 `pkill -f port-forward` 清理殘留。
-- **已知雷區**: K8s ConfigMap volume 傳播有 30-90s 延遲；注意 grep metrics 時的 label 順序；留意中斷測試可能造成的 ConfigMap 髒資料殘留。
-- **詳細排錯**: 若遇測試腳本失敗、環境異常或狀態不同步，**請務必優先查閱 `docs/testing-playbook.md`** 獲取完整的已知問題 (Known Issues) 與修復指令。
+## AI Agent 環境與排錯指南 (MCP & Troubleshooting)
+- **Kubernetes MCP**: Context `kind-dynamic-alerting-cluster`。
+- **Windows-MCP (Dev Container)**: 必須透過 `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>` 執行指令。切勿使用管線 (`|`) 抓輸出，請用 `Start-Process` 重定向檔案。
+- 🚨 **重要排錯手冊 (Playbooks)**:
+  為了節省 Token，詳細的踩坑紀錄與最佳實踐已抽離。當你遇到以下情況時，**必須先讀取對應文件**：
+  1. 遇到 Windows/PowerShell 指令卡住、無輸出：請讀取 `docs/windows-mcp-playbook.md`。
+  2. 遇到 K8s ConfigMap 延遲、測試腳本報錯、環境不乾淨：請讀取 `docs/testing-playbook.md`。
