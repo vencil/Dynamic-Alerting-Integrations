@@ -42,7 +42,25 @@ tenants:
   db-a:
     mysql_connections: "70"
     container_cpu: "70"
+    # Phase 2B: 維度標籤 (YAML key 需加引號)
+    "redis_queue_length{queue='tasks'}": "500"
+    "redis_queue_length{queue='events', priority='high'}": "1000:critical"
+    "redis_db_keys{db='db0'}": "disable"
 ```
+
+### 維度標籤 (Dimensional Labels, Phase 2B)
+
+支援在 metric key 中指定額外的 Prometheus 標籤，用於 Redis DB、ES Index 等多維度場景：
+
+```yaml
+"metric_name{label1='value1', label2='value2'}": "threshold_value"
+```
+
+**重要規則**：
+- YAML key 包含 `{` 時**必須加引號**
+- 維度 key 為 tenant-only，**不繼承** defaults 預設值
+- 不支援 `_critical` 後綴，改用 `"value:critical"` 語法覆寫 severity
+- Prometheus 輸出會包含額外標籤：`user_threshold{..., queue="tasks", priority="high"} 500`
 
 ### 邊界規則
 

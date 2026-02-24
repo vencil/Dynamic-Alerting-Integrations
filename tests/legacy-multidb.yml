@@ -1,0 +1,70 @@
+# 測試用傳統 Prometheus Alert Rules — 多 DB 類型 + 維度標籤情境
+# 用於驗證 migrate_rule.py Phase 2B 的維度偵測能力
+groups:
+  - name: redis-alerts-legacy
+    rules:
+      # 情境 1: Redis 簡單閾值 — 完美解析
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes > 8589934592
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage too high on {{ $labels.instance }}"
+
+      # 情境 2+dim: Redis 含 label matcher 的閾值 — 維度提示
+      - alert: RedisQueueTooLong
+        expr: redis_queue_length{queue="order-processing"} > 500
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis queue {{ $labels.queue }} is too long"
+
+      # 情境 2: Redis rate 複雜表達式
+      - alert: RedisHighKeyEvictions
+        expr: rate(redis_evicted_keys_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+
+  - name: elasticsearch-alerts-legacy
+    rules:
+      # 情境 2+dim: ES 含 index label matcher — 維度提示
+      - alert: ESIndexTooLarge
+        expr: elasticsearch_indices_store_size_bytes_total{index="logs-prod"} > 107374182400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ES index {{ $labels.index }} exceeds size limit"
+
+      # 情境 2+dim: 多重 label matcher (index + type)
+      - alert: ESIndexDocCountHigh
+        expr: elasticsearch_indices_docs_total{index="metrics", type="gauge"} > 500000000
+        for: 15m
+        labels:
+          severity: warning
+
+  - name: mongodb-alerts-legacy
+    rules:
+      # 情境 1: MongoDB 簡單閾值 — 完美解析
+      - alert: MongoDBHighConnections
+        expr: mongodb_connections_current > 500
+        for: 5m
+        labels:
+          severity: warning
+
+      # 情境 2+dim: MongoDB 含 database label — 維度提示
+      - alert: MongoDBStorageTooLarge
+        expr: mongodb_dbstats_storage_size{database="orders"} > 53687091200
+        for: 10m
+        labels:
+          severity: warning
+
+      # 情境 3: MongoDB absent — LLM fallback
+      - alert: MongoDBDown
+        expr: absent(mongodb_up) == 1
+        for: 1m
+        labels:
+          severity: critical

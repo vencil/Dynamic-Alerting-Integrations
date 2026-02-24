@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,12 +58,14 @@ type ThresholdConfig struct {
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
+// Phase 2B: CustomLabels supports dimensional metrics (e.g., queue="tasks").
 type ResolvedThreshold struct {
-	Tenant    string
-	Metric    string
-	Value     float64
-	Severity  string
-	Component string
+	Tenant       string
+	Metric       string
+	Value        float64
+	Severity     string
+	Component    string
+	CustomLabels map[string]string // dimensional labels from {key="value"} syntax
 }
 
 // Resolve applies three-state logic:
@@ -165,6 +168,53 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 				log.Printf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
 			}
 		}
+
+		// Phase 2B: dimensional keys — tenant overrides with {label="value"} syntax.
+		// These are tenant-only (no default inheritance) and don't support _critical suffix.
+		// Severity override uses the "value:severity" syntax (e.g., "500:critical").
+		for key, valStr := range overrides {
+			if !strings.Contains(key, "{") {
+				continue // not a dimensional key
+			}
+			if strings.HasPrefix(key, "_state_") {
+				continue
+			}
+
+			baseKey, customLabels := parseKeyWithLabels(key)
+			if len(customLabels) == 0 {
+				log.Printf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
+				continue
+			}
+
+			lower := strings.TrimSpace(strings.ToLower(valStr))
+			if isDisabled(lower) {
+				continue
+			}
+
+			component, metric := parseMetricKey(baseKey)
+			severity := "warning"
+
+			parts := strings.SplitN(valStr, ":", 2)
+			valueStr := strings.TrimSpace(parts[0])
+			if len(parts) == 2 {
+				severity = strings.TrimSpace(parts[1])
+			}
+
+			v, err := strconv.ParseFloat(valueStr, 64)
+			if err != nil {
+				log.Printf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
+				continue
+			}
+
+			result = append(result, ResolvedThreshold{
+				Tenant:       tenant,
+				Metric:       metric,
+				Value:        v,
+				Severity:     severity,
+				Component:    component,
+				CustomLabels: customLabels,
+			})
+		}
 	}
 
 	return result
@@ -228,6 +278,50 @@ func parseMetricKey(key string) (component, metric string) {
 		return "default", key
 	}
 	return key[:idx], key[idx+1:]
+}
+
+// keyWithLabelsRe matches "metric_name{label1=\"val1\", label2=\"val2\"}"
+var keyWithLabelsRe = regexp.MustCompile(`^([a-zA-Z0-9_]+)\{(.+)\}$`)
+
+// parseKeyWithLabels splits a metric key that may contain dimensional labels.
+//
+// Examples:
+//
+//	"redis_queue_length"                                  → ("redis_queue_length", nil)
+//	"redis_queue_length{queue=\"tasks\", priority=\"high\"}" → ("redis_queue_length", {"queue": "tasks", "priority": "high"})
+func parseKeyWithLabels(key string) (string, map[string]string) {
+	m := keyWithLabelsRe.FindStringSubmatch(key)
+	if m == nil {
+		return key, nil
+	}
+	baseKey := m[1]
+	labels := parseLabelsString(m[2])
+	if len(labels) == 0 {
+		return baseKey, nil
+	}
+	return baseKey, labels
+}
+
+// parseLabelsString parses a comma-separated label string into a map.
+// Input: `queue="tasks", priority="high"` or `queue='tasks'`
+func parseLabelsString(s string) map[string]string {
+	result := make(map[string]string)
+	pairs := strings.Split(s, ",")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		eqIdx := strings.Index(pair, "=")
+		if eqIdx < 0 {
+			continue
+		}
+		k := strings.TrimSpace(pair[:eqIdx])
+		v := strings.TrimSpace(pair[eqIdx+1:])
+		// Strip surrounding quotes (single or double)
+		v = strings.Trim(v, `"'`)
+		if k != "" {
+			result[k] = v
+		}
+	}
+	return result
 }
 
 // ============================================================

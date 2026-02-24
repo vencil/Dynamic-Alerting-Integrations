@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -158,8 +160,23 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 		fmt.Fprintf(w, "\nResolved thresholds:\n")
 		resolved := cfg.Resolve()
 		for _, t := range resolved {
-			fmt.Fprintf(w, "  tenant=%s metric=%s value=%.0f severity=%s component=%s\n",
-				t.Tenant, t.Metric, t.Value, t.Severity, t.Component)
+			if len(t.CustomLabels) > 0 {
+				// Format custom labels as {key="value", ...}
+				keys := make([]string, 0, len(t.CustomLabels))
+				for k := range t.CustomLabels {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				var pairs []string
+				for _, k := range keys {
+					pairs = append(pairs, fmt.Sprintf("%s=%q", k, t.CustomLabels[k]))
+				}
+				fmt.Fprintf(w, "  tenant=%s metric=%s{%s} value=%.0f severity=%s component=%s\n",
+					t.Tenant, t.Metric, strings.Join(pairs, ", "), t.Value, t.Severity, t.Component)
+			} else {
+				fmt.Fprintf(w, "  tenant=%s metric=%s value=%.0f severity=%s component=%s\n",
+					t.Tenant, t.Metric, t.Value, t.Severity, t.Component)
+			}
 		}
 	}
 }

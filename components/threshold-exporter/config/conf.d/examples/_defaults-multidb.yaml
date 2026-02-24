@@ -1,0 +1,36 @@
+# _defaults-multidb.yaml — 範例: 多 DB 類型的全域預設值
+# 注意: 維度 key (含 {}) 不支援 defaults，僅限 tenant 層級使用。
+# 這是設計約束 — 維度閾值天生是 per-tenant 的客製化需求。
+defaults:
+  # --- MySQL/MariaDB ---
+  mysql_connections: 80
+  mysql_cpu: 80
+  mysql_slave_lag: 30
+
+  # --- Redis ---
+  redis_memory_used_bytes: 4294967296    # 4GB
+  redis_connected_clients: 200
+
+  # --- Elasticsearch ---
+  es_jvm_memory_used_percent: 85
+  es_filesystem_free_percent: 15
+
+  # --- MongoDB ---
+  mongodb_connections_current: 300
+  mongodb_repl_lag_seconds: 10
+
+  # --- 通用容器 ---
+  container_cpu: 80
+  container_memory: 85
+
+state_filters:
+  container_crashloop:
+    reasons: ["CrashLoopBackOff"]
+    severity: "critical"
+  container_imagepull:
+    reasons: ["ImagePullBackOff", "InvalidImageName"]
+    severity: "warning"
+  maintenance:
+    reasons: []
+    severity: "info"
+    default_state: "disable"

@@ -587,6 +587,212 @@ tenants:
 	}
 }
 
+// ============================================================
+// Phase 2B: Dimensional Metrics Tests
+// ============================================================
+
+func TestParseKeyWithLabels(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantBase   string
+		wantLabels map[string]string
+	}{
+		// No labels
+		{"redis_memory", "redis_memory", nil},
+		{"standalone", "standalone", nil},
+		// Single label (double quotes)
+		{`redis_db_keys{db="db0"}`, "redis_db_keys", map[string]string{"db": "db0"}},
+		// Single label (single quotes)
+		{`redis_db_keys{db='db0'}`, "redis_db_keys", map[string]string{"db": "db0"}},
+		// Multiple labels
+		{`redis_queue_length{queue="tasks", priority="high"}`, "redis_queue_length", map[string]string{"queue": "tasks", "priority": "high"}},
+		// Spaces around equals and commas
+		{`es_index_size{index = "logstash-*" , tier = "hot"}`, "es_index_size", map[string]string{"index": "logstash-*", "tier": "hot"}},
+	}
+
+	for _, tt := range tests {
+		base, labels := parseKeyWithLabels(tt.input)
+		if base != tt.wantBase {
+			t.Errorf("parseKeyWithLabels(%q): base = %q, want %q", tt.input, base, tt.wantBase)
+		}
+		if tt.wantLabels == nil {
+			if labels != nil {
+				t.Errorf("parseKeyWithLabels(%q): labels = %v, want nil", tt.input, labels)
+			}
+		} else {
+			if len(labels) != len(tt.wantLabels) {
+				t.Errorf("parseKeyWithLabels(%q): labels count = %d, want %d", tt.input, len(labels), len(tt.wantLabels))
+				continue
+			}
+			for k, v := range tt.wantLabels {
+				if labels[k] != v {
+					t.Errorf("parseKeyWithLabels(%q): labels[%q] = %q, want %q", tt.input, k, labels[k], v)
+				}
+			}
+		}
+	}
+}
+
+func TestResolve_DimensionalBasic(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{
+			"redis_memory": 80,
+		},
+		Tenants: map[string]map[string]string{
+			"db-a": {
+				"redis_memory": "75",
+				`redis_queue_length{queue="tasks"}`:                   "500",
+				`redis_queue_length{queue="events", priority="high"}`: "1000:critical",
+			},
+		},
+	}
+
+	resolved := cfg.Resolve()
+	sort.Slice(resolved, func(i, j int) bool {
+		if resolved[i].Metric != resolved[j].Metric {
+			return resolved[i].Metric < resolved[j].Metric
+		}
+		return resolved[i].Value < resolved[j].Value
+	})
+
+	// Expected: 1 base metric (redis_memory=75) + 2 dimensional (queue_length 500 + 1000)
+	if len(resolved) != 3 {
+		t.Fatalf("expected 3 resolved, got %d: %+v", len(resolved), resolved)
+	}
+
+	// Find the base metric
+	var base *ResolvedThreshold
+	var dims []ResolvedThreshold
+	for i := range resolved {
+		if len(resolved[i].CustomLabels) == 0 {
+			base = &resolved[i]
+		} else {
+			dims = append(dims, resolved[i])
+		}
+	}
+
+	if base == nil {
+		t.Fatal("expected a base metric without custom labels")
+	}
+	if base.Metric != "memory" || base.Value != 75 || base.Component != "redis" {
+		t.Errorf("base metric: got metric=%s value=%.0f component=%s", base.Metric, base.Value, base.Component)
+	}
+
+	if len(dims) != 2 {
+		t.Fatalf("expected 2 dimensional metrics, got %d", len(dims))
+	}
+
+	sort.Slice(dims, func(i, j int) bool { return dims[i].Value < dims[j].Value })
+
+	// queue_length 500 (warning)
+	if dims[0].Metric != "queue_length" || dims[0].Value != 500 || dims[0].Severity != "warning" {
+		t.Errorf("dim[0]: got metric=%s value=%.0f severity=%s", dims[0].Metric, dims[0].Value, dims[0].Severity)
+	}
+	if dims[0].CustomLabels["queue"] != "tasks" {
+		t.Errorf("dim[0]: expected queue=tasks, got %v", dims[0].CustomLabels)
+	}
+
+	// queue_length 1000 (critical)
+	if dims[1].Metric != "queue_length" || dims[1].Value != 1000 || dims[1].Severity != "critical" {
+		t.Errorf("dim[1]: got metric=%s value=%.0f severity=%s", dims[1].Metric, dims[1].Value, dims[1].Severity)
+	}
+	if dims[1].CustomLabels["queue"] != "events" || dims[1].CustomLabels["priority"] != "high" {
+		t.Errorf("dim[1]: expected queue=events priority=high, got %v", dims[1].CustomLabels)
+	}
+}
+
+func TestResolve_DimensionalDisable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{},
+		Tenants: map[string]map[string]string{
+			"db-a": {
+				`redis_queue_length{queue="tasks"}`:  "500",
+				`redis_queue_length{queue="events"}`: "disable",
+			},
+		},
+	}
+
+	resolved := cfg.Resolve()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 (disabled one skipped), got %d: %+v", len(resolved), resolved)
+	}
+	if resolved[0].CustomLabels["queue"] != "tasks" {
+		t.Errorf("expected queue=tasks, got %v", resolved[0].CustomLabels)
+	}
+}
+
+func TestResolve_DimensionalBackwardCompat(t *testing.T) {
+	// Non-dimensional config should still work identically
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{
+			"mysql_connections": 80,
+			"mysql_cpu":         80,
+		},
+		Tenants: map[string]map[string]string{
+			"db-a": {"mysql_connections": "70"},
+			"db-b": {"mysql_connections": "disable", "mysql_cpu": "40"},
+		},
+	}
+
+	resolved := cfg.Resolve()
+	for _, r := range resolved {
+		if len(r.CustomLabels) > 0 {
+			t.Errorf("non-dimensional config should have no CustomLabels, got %v", r.CustomLabels)
+		}
+	}
+
+	sort.Slice(resolved, func(i, j int) bool {
+		if resolved[i].Tenant != resolved[j].Tenant {
+			return resolved[i].Tenant < resolved[j].Tenant
+		}
+		return resolved[i].Metric < resolved[j].Metric
+	})
+
+	if len(resolved) != 3 {
+		t.Fatalf("expected 3, got %d", len(resolved))
+	}
+}
+
+func TestResolve_DimensionalWithDirMode(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  redis_memory: 80
+`)
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    redis_memory: "75"
+    "redis_db_keys{db=\"db0\"}": "1000"
+    "redis_db_keys{db=\"db1\"}": "disable"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	resolved := mgr.GetConfig().Resolve()
+	// Expected: redis_memory=75 + redis_db_keys{db=db0}=1000 = 2 (db1 disabled)
+	if len(resolved) != 2 {
+		t.Fatalf("expected 2, got %d: %+v", len(resolved), resolved)
+	}
+
+	var hasDimensional bool
+	for _, r := range resolved {
+		if len(r.CustomLabels) > 0 {
+			hasDimensional = true
+			if r.CustomLabels["db"] != "db0" || r.Value != 1000 {
+				t.Errorf("expected db=db0 value=1000, got %v value=%.0f", r.CustomLabels, r.Value)
+			}
+		}
+	}
+	if !hasDimensional {
+		t.Error("expected at least one dimensional metric")
+	}
+}
+
 // writeTestFile is a helper to create YAML files in test directories.
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()

@@ -1,0 +1,31 @@
+# redis-tenant.yaml — 範例: Redis 租戶閾值設定 (Phase 2B 維度標籤)
+# 來源參考: Oliver006/redis_exporter + Prometheus Community redis rules
+#
+# 📌 基本閾值: 適用所有維度 (全域)
+# 📐 維度閾值: 針對特定 queue/db 設定不同水位
+#
+# 三態: 數值=Custom, 省略=Default, "disable"=停用
+# 維度 severity 語法: "value:severity" (如 "1000:critical")
+tenants:
+  redis-prod:
+    # --- 基本閾值 (全域) ---
+    redis_memory_used_bytes: "8589934592"                  # 8GB warning
+    redis_memory_used_bytes_critical: "10737418240"        # 10GB critical
+    redis_connected_clients: "500"
+    redis_rejected_connections: "10"
+    redis_keyspace_misses_ratio: "0.3"                     # 30% miss rate
+
+    # --- 維度閾值: 按 queue 分設 ---
+    # 語法: "metric{label=\"value\"}": "threshold" 或 "threshold:severity"
+    "redis_queue_length{queue=\"order-processing\"}": "100"
+    "redis_queue_length{queue=\"order-processing\"}": "500:critical"
+    "redis_queue_length{queue=\"email-notifications\"}": "1000"
+    "redis_queue_length{queue=\"analytics\"}": "5000"
+
+    # --- 維度閾值: 按 db 分設 ---
+    "redis_db_keys{db=\"db0\"}": "1000000"                 # db0 主庫 100 萬 keys
+    "redis_db_keys{db=\"db1\"}": "500000"                  # db1 快取庫 50 萬 keys
+    "redis_db_keys{db=\"db2\"}": "disable"                 # db2 暫不監控
+
+    # --- 狀態控制 ---
+    _state_maintenance: "enable"                            # 維護模式關閉

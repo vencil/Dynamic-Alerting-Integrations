@@ -13,6 +13,34 @@ import sys
 import re
 import yaml
 
+def extract_label_matchers(expr_str):
+    """
+    從 PromQL 表達式中提取 label matchers (如 {queue="tasks", db="0"})。
+    回傳: list of dict，每個 dict = {"metric": str, "labels": dict}
+    用於 Phase 2B 維度標籤提示。
+    """
+    results = []
+    # 匹配 metric_name{label="value", ...} 模式
+    pattern = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\{([^}]+)\}')
+    for m in pattern.finditer(expr_str):
+        metric = m.group(1)
+        labels_str = m.group(2)
+        labels = {}
+        # 解析 key="value" 或 key=~"regex" 或 key!="value"
+        for pair in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(!?=~?)\s*"([^"]*)"', labels_str):
+            lk, op, lv = pair.group(1), pair.group(2), pair.group(3)
+            # 跳過 Prometheus 標準 label (job, instance, __name__)
+            if lk in ('job', 'instance', '__name__', 'namespace', 'pod', 'container'):
+                continue
+            # 跳過 regex 或 negation — 僅保留精確匹配作為維度提示
+            if op != '=':
+                continue
+            labels[lk] = lv
+        if labels:
+            results.append({"metric": metric, "labels": labels})
+    return results
+
+
 def parse_expr(expr_str):
     """
     解析 PromQL 表達式，嘗試切分為 LHS (左值), Operator (運算子), RHS (閾值數值)。
@@ -91,7 +119,8 @@ def process_rule(rule):
               f"要求：\n"
               f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
               f"2. 提供包含 sum/max by(tenant) 的 Recording Rule。\n"
-              f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n\n"
+              f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n"
+              f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" 語法提供範例。\n\n"
               f"原始規則：\n{yaml.dump([rule], sort_keys=False)}")
         print("-" * 40)
         return
@@ -105,11 +134,22 @@ def process_rule(rule):
 
     # 🟡 情境 2: 複雜表達式 (部分降級)
     if parsed["is_complex"]:
-        print("⚠️ 狀態: [複雜表達式 - 需人工確認 Recording Rule聚合方式]")
+        print("⚠️ 狀態: [複雜表達式 - 需人工確認 Recording Rule聯合方式]")
     else:
         print("✅ 狀態: [完美解析]")
 
     print(f"提取閾值: {parsed['val']} (Severity: {severity})")
+
+    # Phase 2B: 維度標籤提示 — 偵測 PromQL 中的 label matchers
+    dim_hints = extract_label_matchers(expr)
+    if dim_hints:
+        print("\n📐 偵測到維度標籤 (Dimensional Labels):")
+        print("   若需為不同維度設定不同閾值，可使用以下 ConfigMap 語法：")
+        for hint in dim_hints:
+            label_pairs = ', '.join(f'{k}="{v}"' for k, v in hint["labels"].items())
+            dim_key = f'{metric_key}{{{label_pairs}}}'
+            print(f'   "{dim_key}": "{parsed["val"]}"')
+        print("   提示: 維度 key 需用引號包裹 (YAML 語法)，支援 value:severity 格式。")
     
     # === 產出 1. Tenant Config ===
     print("\n--- 1. Tenant Config (交給租戶填寫至 db-*.yaml) ---")

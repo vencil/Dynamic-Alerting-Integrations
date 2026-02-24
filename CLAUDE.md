@@ -2,7 +2,7 @@
 
 ## 專案概述 (Current Status)
 **Multi-Tenant Dynamic Alerting** 平台。
-**當前進度**: Phase 2D 完成 — Migration Tooling 驗證 + Migration Guide 全面重寫。
+**當前進度**: Phase 2B 完成 — Go 核心 + 工具鏈支援 Dimensional Metrics (多 DB 類型)。
 **核心機制**: Config-driven (ConfigMap 掛載), Hot-reload (SHA-256 hash 比對), 支援單檔與目錄兩種模式。
 
 ## Phase 1 完成摘要 (Week 1-4)
@@ -14,11 +14,20 @@
 ### 2A — Migration Guide ✅
 - `docs/migration-guide.md`: 完整遷移指南，含 Percona MariaDB 五種場景範例、Alertmanager routing 遷移、驗證流程、LLM 輔助批量轉換 Prompt。
 
-### 2B — 多 DB 支援擴展 (待開發)
-- 目標: 支援 MongoDB, Redis, Elasticsearch 等 DB 類型。
-- 挑戰: 多維度指標 (Index/Queue 級別閾值)、字串狀態 (cluster health green/yellow/red)。
-- 設計方向: 擴充 ConfigMap 語法支援標籤選擇器；沿用 Scenario C state_filter 處理狀態型指標。
-- 需修改: threshold-exporter Go 程式碼 (config parser)。
+### 2B — 多 DB 支援擴展 ✅
+- **Task 1 ✅ Go 核心升級**: `ResolvedThreshold` 新增 `CustomLabels map[string]string`。
+  - ConfigMap key 支援 `"metric{label=\"value\"}"` 語法（YAML 需加引號）。
+  - `parseKeyWithLabels()` + `parseLabelsString()` 解析維度標籤。
+  - `Resolve()` 新增 dimensional pass，支援三態 + `value:severity`。
+  - `collector.go` 改為 unchecked collector（空 Describe），Collect() 動態建立 Desc。
+  - 25 單元測試全部通過（含 5 個新 dimensional 測試）。
+- **Task 2 ✅ 工具升級 + 權威範本**:
+  - `migrate_rule.py` 新增 `extract_label_matchers()` — 自動偵測 PromQL 維度標籤並輸出配置建議。
+  - `patch_config.py` docstring 更新維度用法範例（PyYAML 原生支援，無需改碼）。
+  - 權威範本 `config/conf.d/examples/`: Redis (queue/db)、ES (index/node)、MongoDB (database/collection)。
+  - 測試: `tests/legacy-multidb.yml` (8 rules) + `tests/test-migrate-multidb.sh` (18 assertions PASS)。
+  - `migration-guide.md` 新增 §10 維度標籤章節 + FAQ。
+- **設計約束**: 維度 key 不支援 `_critical` 後綴（改用 `"value:critical"`）；維度 key 為 tenant-only，不繼承 defaults。
 
 ### 2C — GitOps Self-Service ✅
 - **Directory Scanner**: ConfigMap 拆分為 `_defaults.yaml` + 每租戶 `<tenant>.yaml`，排序合併。

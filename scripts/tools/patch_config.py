@@ -10,6 +10,11 @@ Three-state logic:
   - Custom value:  patch_config.py db-a mysql_connections 50
   - Default (delete key): patch_config.py db-a mysql_connections default
   - Disable:       patch_config.py db-a mysql_connections disable
+
+Dimensional metrics (Phase 2B):
+  - patch_config.py db-a 'redis_queue_length{queue="tasks"}' 500
+  - patch_config.py db-a 'redis_db_keys{db="db0"}' disable
+  Note: Shell quoting is important — wrap the metric key in single quotes.
 """
 import subprocess
 import yaml

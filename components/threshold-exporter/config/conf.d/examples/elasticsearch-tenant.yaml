@@ -1,0 +1,24 @@
+# elasticsearch-tenant.yaml — 範例: Elasticsearch 租戶閾值設定 (Phase 2B 維度標籤)
+# 來源參考: prometheus-community/elasticsearch_exporter
+#
+# ES 典型維度: index (索引), node (節點)
+# 三態: 數值=Custom, 省略=Default, "disable"=停用
+tenants:
+  es-prod:
+    # --- 基本閾值 (全域) ---
+    es_cluster_health_status: "1"                           # 1=yellow warning
+    es_cluster_health_status_critical: "2"                  # 2=red critical
+    es_jvm_memory_used_percent: "85"
+    es_jvm_memory_used_percent_critical: "95"
+    es_filesystem_free_percent: "15"                        # 低於 15% 警告
+    es_pending_tasks: "50"
+
+    # --- 維度閾值: 按 index 分設 ---
+    "es_index_doc_count{index=\"logs-prod\"}": "100000000"             # 1 億文件
+    "es_index_store_size_bytes{index=\"logs-prod\"}": "107374182400"   # 100GB
+    "es_index_doc_count{index=\"metrics-prod\"}": "500000000"          # 5 億文件
+    "es_index_store_size_bytes{index=\"audit-trail\"}": "53687091200"  # 50GB
+
+    # --- 維度閾值: 按 node 分設 (特定節點可能硬體不同) ---
+    "es_jvm_memory_used_percent{node=\"es-hot-01\"}": "90"
+    "es_jvm_memory_used_percent{node=\"es-warm-01\"}": "80"

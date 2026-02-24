@@ -11,7 +11,8 @@
 7. [遷移後驗證](#7-遷移後驗證)
 8. [LLM 輔助手動轉換](#8-llm-輔助手動轉換)
 9. [目錄模式 (Directory Mode)](#9-目錄模式-directory-mode)
-10. [FAQ](#10-faq)
+10. [維度標籤 — 多 DB 類型支援 (Phase 2B)](#10-維度標籤--多-db-類型支援-phase-2b)
+11. [FAQ](#11-faq)
 
 ---
 
@@ -513,7 +514,71 @@ Exporter 同時支援 `-config`（單檔）和 `-config-dir`（目錄）模式�
 
 ---
 
-## 10. FAQ
+## 10. 維度標籤 — 多 DB 類型支援 (Phase 2B)
+
+當平台支援 Redis、Elasticsearch、MongoDB 等多種 DB 類型時，同一個指標可能需要依「維度」設定不同閾值。例如：Redis 的不同 queue、ES 的不同 index、MongoDB 的不同 database。
+
+### 語法
+
+在 ConfigMap 中，使用 `"metric{label=\"value\"}"` 格式的 key：
+
+```yaml
+tenants:
+  redis-prod:
+    redis_queue_length: "1000"                              # 全域預設
+    "redis_queue_length{queue=\"order-processing\"}": "100"  # order queue 較嚴格
+    "redis_queue_length{queue=\"analytics\"}": "5000"        # analytics 容許較長
+    "redis_queue_length{queue=\"temp\"}": "disable"          # 停用 temp queue 監控
+```
+
+支援多重 label：
+
+```yaml
+    "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
+```
+
+### 設計約束
+
+| 約束 | 說明 |
+|------|------|
+| **YAML 需加引號** | 含 `{` 的 key 必須用雙引號包裹 |
+| **不支援 `_critical` 後綴** | 維度 key 改用 `"value:severity"` 語法，如 `"500:critical"` |
+| **Tenant-only** | 維度 key 不繼承 `defaults`，僅允許在租戶設定中使用 |
+| **三態仍適用** | 數值=Custom, 省略=Default (僅基本 key), `"disable"`=停用 |
+
+### Severity 指定
+
+維度 key 使用 `"value:severity"` 格式指定嚴重度：
+
+```yaml
+    "redis_queue_length{queue=\"orders\"}": "100"           # 預設 warning
+    "redis_queue_length{queue=\"orders\"}": "500:critical"  # 明確指定 critical
+```
+
+### migrate_rule.py 維度偵測
+
+`migrate_rule.py` 會自動偵測 PromQL 中的 label matcher，並在輸出中提供維度配置建議：
+
+```
+📐 偵測到維度標籤 (Dimensional Labels):
+   若需為不同維度設定不同閾值，可使用以下 ConfigMap 語法：
+   "redis_queue_length{queue="order-processing"}": "500"
+```
+
+### 參考範本
+
+`components/threshold-exporter/config/conf.d/examples/` 目錄包含三種 DB 類型的權威範本：
+
+| 檔案 | DB 類型 | 維度範例 |
+|------|---------|----------|
+| `redis-tenant.yaml` | Redis | queue, db |
+| `elasticsearch-tenant.yaml` | Elasticsearch | index, node |
+| `mongodb-tenant.yaml` | MongoDB | database, collection |
+| `_defaults-multidb.yaml` | 多 DB 全域預設 | (無維度 — defaults 不支援) |
+
+---
+
+## 11. FAQ
 
 ### Q: 修改 threshold-config 後多久生效？
 
@@ -533,6 +598,14 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 ### Q: 遷移過渡期可以新舊並存嗎？
 
 可以。新架構的 alert 使用不同 alertname（如 `MariaDBHighConnections` vs 傳統的 `MySQLTooManyConnections`），不會衝突。建議先部署新 alert 觀察，確認行為一致後再移除舊 rules。
+
+### Q: 維度 key 可以設定在 defaults 裡嗎？
+
+不行。維度 key (含 `{}`) 是設計上 tenant-only 的功能。`_defaults.yaml` 只接受基本 key。這是因為維度閾值本質上是高度客製化的 (每個租戶的 queue/index/database 都不同)，全域預設沒有意義。
+
+### Q: 維度 key 怎麼指定 critical？
+
+不使用 `_critical` 後綴 (因為 `metric{label="value"}_critical` 語法會很混亂)。改用 `"value:severity"` 語法：`"redis_queue_length{queue=\"orders\"}": "500:critical"`。
 
 ### Q: 如何確認 hot-reload 成功？
 

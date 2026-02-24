@@ -1,0 +1,27 @@
+# mongodb-tenant.yaml — 範例: MongoDB 租戶閾值設定 (Phase 2B 維度標籤)
+# 來源參考: percona/mongodb_exporter
+#
+# MongoDB 典型維度: database (庫), collection (集合), rs (replica set)
+# 三態: 數值=Custom, 省略=Default, "disable"=停用
+tenants:
+  mongo-prod:
+    # --- 基本閾值 (全域) ---
+    mongodb_connections_current: "500"
+    mongodb_connections_current_critical: "800"
+    mongodb_repl_lag_seconds: "10"
+    mongodb_repl_lag_seconds_critical: "30"
+    mongodb_cursors_open: "1000"
+    mongodb_globallock_active_clients: "100"
+
+    # --- 維度閾值: 按 database 分設 ---
+    "mongodb_dbstats_storage_size{database=\"orders\"}": "53687091200"    # 50GB
+    "mongodb_dbstats_storage_size{database=\"analytics\"}": "214748364800" # 200GB
+    "mongodb_dbstats_storage_size{database=\"sessions\"}": "10737418240"   # 10GB
+    "mongodb_dbstats_objects{database=\"orders\"}": "50000000"             # 5 千萬文件
+
+    # --- 維度閾值: 按 collection 分設 ---
+    "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
+    "mongodb_collection_avg_obj_size{database=\"orders\",collection=\"transactions\"}": "4096"
+
+    # --- 停用特定維度 ---
+    "mongodb_dbstats_storage_size{database=\"test\"}": "disable"
