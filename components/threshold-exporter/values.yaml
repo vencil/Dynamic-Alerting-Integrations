@@ -21,7 +21,7 @@ exporter:
 
 # Threshold config (embedded in ConfigMap)
 # This is the actual alerting threshold configuration.
-# See config/threshold-config.yaml for the reference format.
+# See config/conf.d/ directory for the reference multi-file format.
 thresholdConfig:
   defaults:
     # Scenario A: MySQL thresholds

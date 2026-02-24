@@ -1,29 +1,55 @@
 # Threshold Exporter
 
-**核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A (Dynamic Thresholds)。
+**核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D。
 
 ## 架構
 
 - **單一 Pod** 在 monitoring namespace，服務所有 tenant
-- **YAML config** 透過 ConfigMap 掛載，定義 defaults + per-tenant overrides
+- **Directory Scanner 模式** (`-config-dir`): ConfigMap 拆分為多檔，掛載至 `/etc/threshold-exporter/conf.d/`，按檔名排序合併
 - **三態設計**: custom value / default / disable
-- **Hot-reload**: 定期檢查 config 變更，不需重啟 Pod
+- **多層嚴重度**: `"40:critical"` 後綴覆寫 severity
+- **Hot-reload**: SHA-256 hash 比對，自動偵測 K8s ConfigMap symlink rotation
 
-## Config 格式
+> 也支援舊版單檔模式 (`-config`)，但新部署請使用 `-config-dir`。
+
+## Config 格式 (Directory Mode)
+
+ConfigMap 拆分為 `_defaults.yaml` + 每租戶 `<tenant>.yaml`：
+
+**`_defaults.yaml`** — 平台管理的全域設定 (`defaults` 與 `state_filters` 僅允許出現在 `_` 前綴檔案)：
 
 ```yaml
 defaults:
-  mysql_connections: 80     # 所有 tenant 的預設值
+  mysql_connections: 80
   mysql_cpu: 80
+  container_cpu: 80
+  container_memory: 85
 
+state_filters:
+  container_crashloop:
+    reasons: ["CrashLoopBackOff"]
+    severity: "critical"
+  maintenance:
+    reasons: []
+    severity: "info"
+    default_state: "disable"
+```
+
+**`db-a.yaml`** — 租戶覆寫 (僅允許 `tenants` 區塊)：
+
+```yaml
 tenants:
   db-a:
-    mysql_connections: "70"       # custom → 暴露 70
-    # mysql_cpu 省略               # → 使用 default 80
-  db-b:
-    mysql_connections: "disable"  # disabled → 不暴露，不觸發 alert
-    mysql_cpu: "40:critical"      # custom + severity override
+    mysql_connections: "70"
+    container_cpu: "70"
 ```
+
+### 邊界規則
+
+| 檔案類型 | 允許的區塊 | 違規行為 |
+|----------|-----------|---------|
+| `_` 前綴 (`_defaults.yaml`) | `defaults`, `state_filters`, `tenants` | — |
+| 租戶檔 (`db-a.yaml`) | 僅 `tenants` | 其他區塊自動忽略 + WARN log |
 
 ### 三態行為
 
@@ -75,9 +101,6 @@ make component-deploy COMP=threshold-exporter ENV=local
 # Verify
 make component-test COMP=threshold-exporter
 
-# Scenario A end-to-end test
-make test-scenario-a
-
 # View metrics
 curl http://localhost:8080/metrics | grep user_threshold
 
@@ -87,13 +110,14 @@ curl http://localhost:8080/api/v1/config
 
 ## 修改閾值
 
-```bash
-# 方法 1: Helm upgrade (推薦)
-helm upgrade threshold-exporter ./components/threshold-exporter \
-  -n monitoring --set thresholdConfig.tenants.db-a.mysql_connections=50
+**強烈建議使用專案標準工具**，它會自動偵測單檔/多檔模式並安全更新：
 
-# 方法 2: 直接 patch ConfigMap
-kubectl edit configmap threshold-config -n monitoring
+```bash
+# 修改 db-a 的 mysql_connections 閾值為 50
+python3 scripts/tools/patch_config.py db-a mysql_connections 50
+
+# 停用 db-b 的 container_cpu 監控
+python3 scripts/tools/patch_config.py db-b container_cpu disable
 ```
 
-Exporter 會在 reload-interval 內自動載入新設定。
+Exporter 會在 reload-interval 內自動載入新設定 (SHA-256 hash 變更觸發)。
