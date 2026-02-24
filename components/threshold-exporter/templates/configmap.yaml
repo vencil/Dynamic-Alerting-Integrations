@@ -6,5 +6,19 @@ metadata:
   labels:
     app: threshold-exporter
 data:
-  config.yaml: |
-    {{- .Values.thresholdConfig | toYaml | nindent 4 }}
+  # _defaults.yaml — loaded first (underscore prefix sorts before letters)
+  # Contains global defaults and state_filters (platform-managed)
+  _defaults.yaml: |
+    defaults:
+      {{- .Values.thresholdConfig.defaults | toYaml | nindent 6 }}
+    {{- if .Values.thresholdConfig.state_filters }}
+    state_filters:
+      {{- .Values.thresholdConfig.state_filters | toYaml | nindent 6 }}
+    {{- end }}
+  # Per-tenant YAML files — one key per tenant
+  {{- range $tenant, $overrides := .Values.thresholdConfig.tenants }}
+  {{ $tenant }}.yaml: |
+    tenants:
+      {{ $tenant }}:
+        {{- $overrides | toYaml | nindent 8 }}
+  {{- end }}

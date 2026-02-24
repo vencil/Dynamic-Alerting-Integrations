@@ -12,13 +12,15 @@ import (
 )
 
 var (
-	configPath  string
-	listenAddr  string
+	configPath     string
+	configDir      string
+	listenAddr     string
 	reloadInterval time.Duration
 )
 
 func init() {
-	flag.StringVar(&configPath, "config", "/etc/threshold-exporter/config.yaml", "Path to threshold config file")
+	flag.StringVar(&configPath, "config", "", "Path to single threshold config file (legacy mode)")
+	flag.StringVar(&configDir, "config-dir", "", "Path to threshold config directory (multi-file mode)")
 	flag.StringVar(&listenAddr, "listen", ":8080", "HTTP listen address")
 	flag.DurationVar(&reloadInterval, "reload-interval", 30*time.Second, "Config reload interval")
 }
@@ -30,17 +32,23 @@ func main() {
 	if v := os.Getenv("CONFIG_PATH"); v != "" {
 		configPath = v
 	}
+	if v := os.Getenv("CONFIG_DIR"); v != "" {
+		configDir = v
+	}
 	if v := os.Getenv("LISTEN_ADDR"); v != "" {
 		listenAddr = v
 	}
 
+	// Auto-detect mode: -config-dir takes precedence, then -config, then default
+	resolvedPath := resolveConfigPath()
+
 	log.Printf("threshold-exporter starting")
-	log.Printf("  config:   %s", configPath)
+	log.Printf("  config:   %s", resolvedPath)
 	log.Printf("  listen:   %s", listenAddr)
 	log.Printf("  reload:   %s", reloadInterval)
 
 	// Load initial config
-	manager := NewConfigManager(configPath)
+	manager := NewConfigManager(resolvedPath)
 	if err := manager.Load(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -81,6 +89,28 @@ func main() {
 	server.Close()
 }
 
+// resolveConfigPath determines the config path based on flags and auto-detection.
+// Priority: -config-dir > -config > auto-detect default paths.
+func resolveConfigPath() string {
+	if configDir != "" {
+		return configDir
+	}
+	if configPath != "" {
+		return configPath
+	}
+
+	// Auto-detect: check if default directory exists, otherwise fall back to file
+	defaultDir := "/etc/threshold-exporter/conf.d"
+	defaultFile := "/etc/threshold-exporter/config.yaml"
+
+	if info, err := os.Stat(defaultDir); err == nil && info.IsDir() {
+		log.Printf("Auto-detected config directory: %s", defaultDir)
+		return defaultDir
+	}
+	log.Printf("Using legacy single-file config: %s", defaultFile)
+	return defaultFile
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "ok")
@@ -103,6 +133,7 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintf(w, "Config loaded: %v\n", manager.IsLoaded())
 		fmt.Fprintf(w, "Last reload:   %s\n", manager.LastReload().Format(time.RFC3339))
+		fmt.Fprintf(w, "Config mode:   %s\n", manager.Mode())
 
 		cfg := manager.GetConfig()
 		if cfg == nil {

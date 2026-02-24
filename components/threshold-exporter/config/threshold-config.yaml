@@ -2,8 +2,19 @@
 # Threshold Configuration — Dynamic Alerting Integrations
 # ============================================================
 #
-# This file defines alerting thresholds for all tenants.
-# The threshold-exporter reads this file and exposes resolved values as:
+# LEGACY SINGLE-FILE FORMAT (backward compatible)
+#
+# The threshold-exporter supports two modes:
+#   1. Single-file mode (-config): reads this file as-is
+#   2. Directory mode (-config-dir): scans conf.d/ for *.yaml files
+#
+# In directory mode, this file is split into:
+#   - _defaults.yaml: defaults + state_filters (platform-managed)
+#   - <tenant>.yaml: per-tenant overrides (tenant-managed)
+#
+# See conf.d/ directory for the multi-file example.
+#
+# This file exposes resolved values as:
 #   - user_threshold{tenant, metric, component, severity}  (Scenario A/B)
 #   - user_state_filter{tenant, filter, severity}           (Scenario C)
 #
@@ -27,6 +38,12 @@
 # Each filter maps to kube_pod_container_status_waiting_reason values.
 # Enabled by default for all tenants.
 # Per-tenant disable: add _state_<filter_name>: "disable" in tenant overrides.
+#
+# === Boundary Rule (Directory Mode) ===
+#
+# In directory mode, state_filters and defaults should ONLY be in _defaults.yaml.
+# Tenant files should ONLY contain a 'tenants' block.
+# Violations are logged as warnings and the offending sections are ignored.
 #
 # ============================================================
 

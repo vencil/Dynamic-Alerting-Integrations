@@ -26,8 +26,8 @@ spec:
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args:
-          - "-config"
-          - "/etc/threshold-exporter/config.yaml"
+          - "-config-dir"
+          - "/etc/threshold-exporter/conf.d"
           - "-listen"
           - "{{ .Values.exporter.listenAddr }}"
           - "-reload-interval"
@@ -38,7 +38,7 @@ spec:
           protocol: TCP
         volumeMounts:
         - name: config
-          mountPath: /etc/threshold-exporter
+          mountPath: /etc/threshold-exporter/conf.d
           readOnly: true
         livenessProbe:
           {{- toYaml .Values.livenessProbe | nindent 10 }}

@@ -1,6 +1,32 @@
 # Changelog
 
-## [Phase 2] - Migration & Extensibility (2026-02-24)
+## [Phase 2C] - GitOps Directory Scanner (2026-02-24)
+
+### 整合測試與修復 (Integration Test Fixes)
+- **_lib.sh `get_cm_value()`**: 修復 JSON 嵌入問題 — 改用 `json.load(sys.stdin)` 管道取代 `'''${var}'''` 字串嵌入，避免多行 YAML 值破壞 Python string。
+- **integration-2c.sh**: 新增測試前置清理 (port-forward 殘留、ConfigMap 值恢復)；修正 metrics label 順序 grep (`metric.*tenant` 而非 `tenant.*metric`)；hot-reload 等待從 20s 調至 45s。
+- **Helm ConfigMap 遷移**: 記錄 `helm upgrade` 不會清理舊 `config.yaml` key 問題，需 `kubectl delete cm` + 重新 deploy。
+- **CLAUDE.md**: 新增 AI Agent MCP 操作最佳實踐 (Windows-MCP Start-Process 模式、7 個常見陷阱)、測試前置準備 Checklist、5 個已知問題與修復方案。
+
+### threshold-exporter 目錄模式
+- **config.go**: `loadDir()` 目錄掃描器 — 排序合併 `_defaults.yaml` + 租戶檔。邊界規則強制 (`state_filters`/`defaults` 僅 `_` 前綴檔)。SHA-256 hash 取代 ModTime 偵測變更。
+- **main.go**: 新增 `-config-dir` flag，`resolveConfigPath()` 自動偵測單檔/目錄，向下相容 `-config`。
+- **config_test.go**: 新增 6 組目錄模式測試 (BasicMerge, BoundaryEnforcement, HashChange, EmptyDir, SkipsHidden, CriticalSuffix)。
+
+### Helm Chart
+- **configmap.yaml**: 單 key → 多 key (`_defaults.yaml` + `<tenant>.yaml`)，由 `values.yaml` range 生成。
+- **deployment.yaml**: args 改用 `-config-dir`，mount path `/etc/threshold-exporter/conf.d`。
+- **config/conf.d/**: 新增範例目錄 (`_defaults.yaml`, `db-a.yaml`, `db-b.yaml`)。
+
+### 工具與測試
+- **patch_config.py**: 重寫，`detect_mode()` 自動偵測 ConfigMap 格式，雙模式 patching。
+- **_lib.sh**: 新增共用 `get_cm_value()` 支援雙模式。
+- **Makefile**: 補 `test-scenario-d` target。
+
+### 文件
+- **migration-guide.md**: 新增 Section 8「目錄模式架構注意事項」(邊界規則表、相容性、hot-reload)。
+
+## [Phase 2A] - Migration Guide (2026-02-24)
 ### Migration Guide (`docs/migration-guide.md`)
 - 完整遷移指南：從傳統 Prometheus 警報遷移至動態閾值架構。
 - 五種 Percona MariaDB 場景範例：基本數值比較、多層嚴重度、Slave Lag、Slow Queries (rate)、Buffer Pool (百分比)。

@@ -20,12 +20,7 @@ info "=========================================="
 TENANT=${1:-db-a}
 PATCH_CMD="python3 ${SCRIPT_DIR}/../scripts/tools/patch_config.py"
 
-# Helper: 讀取 ConfigMap 中某 tenant 的某 metric 當前值
-get_cm_value() {
-  local t=$1 key=$2
-  kubectl get configmap threshold-config -n monitoring -o jsonpath='{.data.config\.yaml}' | \
-    python3 -c "import sys,yaml; c=yaml.safe_load(sys.stdin); print(c.get('tenants',{}).get('$t',{}).get('$key','default'))"
-}
+# get_cm_value() is provided by _lib.sh (supports both multi-file and legacy ConfigMap)
 
 # ============================================================
 # Phase 1: 環境準備

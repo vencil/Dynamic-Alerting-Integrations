@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,20 +44,16 @@ type ResolvedStateFilter struct {
 //	  container_crashloop:
 //	    reasons: ["CrashLoopBackOff"]
 //	    severity: "critical"
-//	  container_imagepull:
-//	    reasons: ["ImagePullBackOff", "InvalidImageName"]
-//	    severity: "warning"
 //	tenants:
 //	  db-a:
 //	    mysql_connections: "70"
-//	    # all state filters enabled (default)
 //	  db-b:
 //	    mysql_connections: "disable"
-//	    _state_container_crashloop: "disable"  # disable crashloop monitoring
+//	    _state_container_crashloop: "disable"
 type ThresholdConfig struct {
-	Defaults     map[string]float64            `yaml:"defaults"`
-	StateFilters map[string]StateFilter        `yaml:"state_filters"`
-	Tenants      map[string]map[string]string  `yaml:"tenants"`
+	Defaults     map[string]float64           `yaml:"defaults"`
+	StateFilters map[string]StateFilter       `yaml:"state_filters"`
+	Tenants      map[string]map[string]string `yaml:"tenants"`
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
@@ -231,32 +230,58 @@ func parseMetricKey(key string) (component, metric string) {
 	return key[:idx], key[idx+1:]
 }
 
-// ConfigManager handles loading and hot-reloading the config file.
+// ============================================================
+// ConfigManager — supports both single-file and directory mode
+// ============================================================
+
+// ConfigManager handles loading and hot-reloading the config.
+// Supports two modes:
+//   - Single-file mode (legacy): reads one YAML file
+//   - Directory mode: scans all *.yaml files in a directory and deep-merges
 type ConfigManager struct {
-	path       string
-	mu         sync.RWMutex
-	config     *ThresholdConfig
-	loaded     bool
+	path     string // file path or directory path
+	isDir    bool   // true = directory mode
+	mu       sync.RWMutex
+	config   *ThresholdConfig
+	loaded   bool
 	lastReload time.Time
-	lastMod    time.Time
+	lastHash   string // SHA-256 hash for change detection
 }
 
 func NewConfigManager(path string) *ConfigManager {
-	return &ConfigManager{path: path}
+	info, err := os.Stat(path)
+	isDir := err == nil && info.IsDir()
+
+	return &ConfigManager{
+		path:  path,
+		isDir: isDir,
+	}
 }
 
+// Mode returns "directory" or "single-file" for diagnostics.
+func (m *ConfigManager) Mode() string {
+	if m.isDir {
+		return "directory"
+	}
+	return "single-file"
+}
+
+// Load loads config from either a single file or a directory.
 func (m *ConfigManager) Load() error {
-	data, err := os.ReadFile(m.path)
-	if err != nil {
-		return fmt.Errorf("read config %s: %w", m.path, err)
-	}
-
 	var cfg ThresholdConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse config %s: %w", m.path, err)
+	var hash string
+	var err error
+
+	if m.isDir {
+		cfg, hash, err = loadDir(m.path)
+	} else {
+		cfg, hash, err = loadFile(m.path)
+	}
+	if err != nil {
+		return err
 	}
 
-	// Validate
+	// Ensure maps are initialized
 	if cfg.Defaults == nil {
 		cfg.Defaults = make(map[string]float64)
 	}
@@ -271,40 +296,166 @@ func (m *ConfigManager) Load() error {
 	m.config = &cfg
 	m.loaded = true
 	m.lastReload = time.Now()
+	m.lastHash = hash
 	m.mu.Unlock()
 
 	resolved := cfg.Resolve()
 	resolvedState := cfg.ResolveStateFilters()
-	log.Printf("Config loaded: %d defaults, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters",
-		len(cfg.Defaults), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState))
+	log.Printf("Config loaded (%s): %d defaults, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters",
+		m.Mode(), len(cfg.Defaults), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState))
 
 	return nil
 }
 
-// WatchLoop periodically checks for config file changes and reloads.
+// loadFile reads a single YAML config file and returns the parsed config + content hash.
+func loadFile(path string) (ThresholdConfig, string, error) {
+	var cfg ThresholdConfig
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, "", fmt.Errorf("read config %s: %w", path, err)
+	}
+
+	hash := fmt.Sprintf("%x", sha256.Sum256(data))
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, "", fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	return cfg, hash, nil
+}
+
+// loadDir scans a directory for *.yaml files, parses and deep-merges them.
+//
+// File naming convention:
+//   - _defaults.yaml: contains 'defaults' and 'state_filters' (loaded first due to underscore prefix)
+//   - <tenant-name>.yaml: contains tenant-specific overrides under 'tenants' key
+//
+// Merge rules:
+//   - Files are processed in sorted order (underscore prefix sorts first)
+//   - defaults: later values overwrite earlier ones for the same key
+//   - state_filters: later values overwrite earlier ones for the same filter name
+//   - tenants: deep merge per tenant (later key-values overwrite)
+//
+// Boundary rule: state_filters should only be defined in _defaults.yaml.
+// Tenant files should only contain a 'tenants' block. This is enforced with warnings.
+func loadDir(dir string) (ThresholdConfig, string, error) {
+	merged := ThresholdConfig{
+		Defaults:     make(map[string]float64),
+		StateFilters: make(map[string]StateFilter),
+		Tenants:      make(map[string]map[string]string),
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return merged, "", fmt.Errorf("read config dir %s: %w", dir, err)
+	}
+
+	// Collect *.yaml files, sorted (underscore prefix sorts first)
+	var files []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || strings.HasPrefix(name, ".") {
+			continue
+		}
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			files = append(files, name)
+		}
+	}
+	sort.Strings(files)
+
+	if len(files) == 0 {
+		return merged, "", fmt.Errorf("no .yaml files found in %s", dir)
+	}
+
+	// Hash all file contents for change detection
+	hasher := sha256.New()
+
+	for _, name := range files {
+		path := filepath.Join(dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("WARN: skip unreadable file %s: %v", path, err)
+			continue
+		}
+		hasher.Write(data)
+
+		var partial ThresholdConfig
+		if err := yaml.Unmarshal(data, &partial); err != nil {
+			log.Printf("WARN: skip unparseable file %s: %v", path, err)
+			continue
+		}
+
+		isDefaultsFile := strings.HasPrefix(name, "_")
+
+		// Boundary enforcement: warn if tenant file contains state_filters or defaults
+		if !isDefaultsFile {
+			if len(partial.StateFilters) > 0 {
+				log.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
+				partial.StateFilters = nil
+			}
+			if len(partial.Defaults) > 0 {
+				log.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
+				partial.Defaults = nil
+			}
+		}
+
+		// Merge defaults
+		for k, v := range partial.Defaults {
+			merged.Defaults[k] = v
+		}
+
+		// Merge state_filters
+		for k, v := range partial.StateFilters {
+			merged.StateFilters[k] = v
+		}
+
+		// Merge tenants (deep merge per tenant)
+		for tenant, overrides := range partial.Tenants {
+			if merged.Tenants[tenant] == nil {
+				merged.Tenants[tenant] = make(map[string]string)
+			}
+			for k, v := range overrides {
+				merged.Tenants[tenant][k] = v
+			}
+		}
+	}
+
+	hash := fmt.Sprintf("%x", hasher.Sum(nil))
+	return merged, hash, nil
+}
+
+// WatchLoop periodically checks for config changes and reloads.
+// Uses content hash comparison for reliable change detection.
+// K8s ConfigMap volumes update via symlink rotation (..data), so hash-based
+// detection is more reliable than ModTime for both modes.
 func (m *ConfigManager) WatchLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		info, err := os.Stat(m.path)
+		var hash string
+		var err error
+
+		if m.isDir {
+			_, hash, err = loadDir(m.path)
+		} else {
+			_, hash, err = loadFile(m.path)
+		}
+
 		if err != nil {
-			log.Printf("WARN: cannot stat config %s: %v", m.path, err)
+			log.Printf("WARN: cannot check config %s: %v", m.path, err)
 			continue
 		}
 
 		m.mu.RLock()
-		changed := info.ModTime().After(m.lastMod)
+		changed := hash != m.lastHash
 		m.mu.RUnlock()
 
 		if changed {
-			log.Printf("Config file changed, reloading...")
+			log.Printf("Config changed, reloading...")
 			if err := m.Load(); err != nil {
 				log.Printf("ERROR: failed to reload config: %v", err)
-			} else {
-				m.mu.Lock()
-				m.lastMod = info.ModTime()
-				m.mu.Unlock()
 			}
 		}
 	}

@@ -51,6 +51,10 @@ test-scenario-b: ## Scenario B 測試: 弱環節檢測
 test-scenario-c: ## Scenario C 測試: 狀態字串比對
 	@./tests/scenario-c.sh $(TENANT)
 
+.PHONY: test-scenario-d
+test-scenario-d: ## Scenario D 測試: 維護模式 / 複合警報 / 多層嚴重度
+	@./tests/scenario-d.sh $(TENANT)
+
 # ----------------------------------------------------------
 # Component 管理
 # ----------------------------------------------------------

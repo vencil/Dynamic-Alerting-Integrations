@@ -53,6 +53,31 @@ url_encode() {
   fi
 }
 
+# 讀取 ConfigMap 中某 tenant 的某 metric 當前值
+# 自動偵測 multi-file 或 legacy 格式
+# Usage: get_cm_value <tenant> <metric_key>
+get_cm_value() {
+  local t=$1 key=$2
+  kubectl get configmap threshold-config -n monitoring -o json | python3 -c "
+import sys, json, yaml
+cm = json.load(sys.stdin)
+data = cm.get('data', {})
+
+# Multi-file mode: check for <tenant>.yaml key
+tenant_key = '${t}.yaml'
+if '_defaults.yaml' in data and tenant_key in data:
+    tc = yaml.safe_load(data[tenant_key]) or {}
+    val = tc.get('tenants', {}).get('${t}', {}).get('${key}', 'default')
+elif 'config.yaml' in data:
+    # Legacy single-file mode
+    c = yaml.safe_load(data['config.yaml']) or {}
+    val = c.get('tenants', {}).get('${t}', {}).get('${key}', 'default')
+else:
+    val = 'default'
+print(val)
+"
+}
+
 # 前置檢查
 preflight_check() {
   local missing=()

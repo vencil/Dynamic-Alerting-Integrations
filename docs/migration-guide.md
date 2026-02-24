@@ -538,7 +538,43 @@ tenants:
 
 ---
 
-## 8. FAQ 與疑難排解
+## 8. 目錄模式架構注意事項 (Directory Mode)
+
+自 Phase 2C 起，threshold-exporter 支援**目錄掃描模式**，ConfigMap 從單一 `config.yaml` 拆分為多個 YAML 檔案。遷移至此架構時需注意以下規則：
+
+### 8.1 檔案結構與命名
+
+```
+conf.d/
+  _defaults.yaml     ← 平台團隊管理（底線前綴確保最先載入）
+  db-a.yaml           ← 租戶 db-a 的閾值
+  db-b.yaml           ← 租戶 db-b 的閾值
+```
+
+### 8.2 邊界規則（重要）
+
+| 內容 | 允許位置 | 違規處理 |
+|------|----------|----------|
+| `defaults` | 僅 `_defaults.yaml` | 租戶檔案中的 defaults 會被忽略並記錄 WARN |
+| `state_filters` | 僅 `_defaults.yaml` | 租戶檔案中的 state_filters 會被忽略並記錄 WARN |
+| `tenants` | 任何檔案 | 深度合併，後讀檔案的值覆蓋先讀的 |
+
+**設計原因**：`state_filters` 定義的是全域監控策略（如 CrashLoopBackOff 的 reasons 清單），讓租戶自行定義可能破壞平台一致性。租戶應透過 `_state_<filter>: "enable"/"disable"` 來控制開關，而非修改 filter 定義本身。
+
+### 8.3 向後相容
+
+- Exporter 同時支援 `-config`（單檔）和 `-config-dir`（目錄）模式
+- 如果兩者都未指定，自動偵測：若 `/etc/threshold-exporter/conf.d/` 存在則用目錄模式，否則回退至 `/etc/threshold-exporter/config.yaml`
+- `patch_config.py` 自動偵測 ConfigMap 格式，無需手動指定模式
+- 測試腳本中的 `get_cm_value()` 也已支援雙模式
+
+### 8.4 Hot-reload 機制
+
+目錄模式下，Exporter 使用**內容 hash 比對**（而非 ModTime）偵測變更。K8s 更新 ConfigMap 掛載目錄時會替換 `..data` symlink，hash 比對能可靠偵測此變化。
+
+---
+
+## 9. FAQ 與疑難排解
 
 ### Q: 修改 threshold-config 後多久生效？
 

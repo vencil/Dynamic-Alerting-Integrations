@@ -26,7 +26,6 @@ func TestResolve_ThreeState(t *testing.T) {
 	}
 
 	resolved := cfg.Resolve()
-	// Sort for deterministic comparison
 	sort.Slice(resolved, func(i, j int) bool {
 		if resolved[i].Tenant != resolved[j].Tenant {
 			return resolved[i].Tenant < resolved[j].Tenant
@@ -34,9 +33,6 @@ func TestResolve_ThreeState(t *testing.T) {
 		return resolved[i].Metric < resolved[j].Metric
 	})
 
-	// Expected:
-	// db-a: connections=70 (custom), cpu=80 (default)
-	// db-b: connections=SKIP (disabled), cpu=40 (custom)
 	expected := []struct {
 		tenant, metric, component string
 		value                     float64
@@ -114,7 +110,7 @@ func TestResolve_TenantWithNoOverrides(t *testing.T) {
 			"mysql_cpu":         90,
 		},
 		Tenants: map[string]map[string]string{
-			"db-a": {}, // no overrides → all defaults
+			"db-a": {},
 		},
 	}
 
@@ -176,6 +172,9 @@ tenants:
 	if !mgr.IsLoaded() {
 		t.Error("expected IsLoaded() = true")
 	}
+	if mgr.Mode() != "single-file" {
+		t.Errorf("expected single-file mode, got %s", mgr.Mode())
+	}
 
 	cfg := mgr.GetConfig()
 	if len(cfg.Defaults) != 2 {
@@ -192,14 +191,8 @@ func TestResolveStateFilters_AllEnabled(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		StateFilters: map[string]StateFilter{
-			"container_crashloop": {
-				Reasons:  []string{"CrashLoopBackOff"},
-				Severity: "critical",
-			},
-			"container_imagepull": {
-				Reasons:  []string{"ImagePullBackOff", "InvalidImageName"},
-				Severity: "warning",
-			},
+			"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"},
+			"container_imagepull": {Reasons: []string{"ImagePullBackOff", "InvalidImageName"}, Severity: "warning"},
 		},
 		Tenants: map[string]map[string]string{
 			"db-a": {"mysql_connections": "70"},
@@ -215,76 +208,48 @@ func TestResolveStateFilters_AllEnabled(t *testing.T) {
 		return resolved[i].FilterName < resolved[j].FilterName
 	})
 
-	// 2 filters × 2 tenants = 4 resolved state filters
 	if len(resolved) != 4 {
-		t.Fatalf("expected 4 resolved state filters, got %d: %+v", len(resolved), resolved)
+		t.Fatalf("expected 4, got %d: %+v", len(resolved), resolved)
 	}
 
-	// Verify all tenants get all filters
-	expected := []struct {
-		tenant, filter, severity string
-	}{
+	expected := []struct{ tenant, filter, severity string }{
 		{"db-a", "container_crashloop", "critical"},
 		{"db-a", "container_imagepull", "warning"},
 		{"db-b", "container_crashloop", "critical"},
 		{"db-b", "container_imagepull", "warning"},
 	}
-
 	for i, exp := range expected {
 		r := resolved[i]
 		if r.Tenant != exp.tenant || r.FilterName != exp.filter || r.Severity != exp.severity {
 			t.Errorf("index %d: expected {%s %s %s}, got {%s %s %s}",
-				i, exp.tenant, exp.filter, exp.severity,
-				r.Tenant, r.FilterName, r.Severity)
+				i, exp.tenant, exp.filter, exp.severity, r.Tenant, r.FilterName, r.Severity)
 		}
 	}
 }
 
 func TestResolveStateFilters_PerTenantDisable(t *testing.T) {
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80},
-		StateFilters: map[string]StateFilter{
-			"container_crashloop": {
-				Reasons:  []string{"CrashLoopBackOff"},
-				Severity: "critical",
-			},
-		},
+		Defaults:     map[string]float64{"mysql_connections": 80},
+		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
 		Tenants: map[string]map[string]string{
 			"db-a": {"mysql_connections": "70"},
-			"db-b": {
-				"mysql_connections":          "100",
-				"_state_container_crashloop": "disable", // disable for db-b
-			},
+			"db-b": {"mysql_connections": "100", "_state_container_crashloop": "disable"},
 		},
 	}
 
 	resolved := cfg.ResolveStateFilters()
-
-	// Only db-a should have the filter (db-b disabled)
 	if len(resolved) != 1 {
-		t.Fatalf("expected 1 resolved state filter, got %d: %+v", len(resolved), resolved)
+		t.Fatalf("expected 1, got %d: %+v", len(resolved), resolved)
 	}
-
-	if resolved[0].Tenant != "db-a" {
-		t.Errorf("expected tenant db-a, got %s", resolved[0].Tenant)
-	}
-	if resolved[0].FilterName != "container_crashloop" {
-		t.Errorf("expected filter container_crashloop, got %s", resolved[0].FilterName)
-	}
-	if resolved[0].Severity != "critical" {
-		t.Errorf("expected severity critical, got %s", resolved[0].Severity)
+	if resolved[0].Tenant != "db-a" || resolved[0].FilterName != "container_crashloop" {
+		t.Errorf("unexpected: %+v", resolved[0])
 	}
 }
 
 func TestResolveStateFilters_DisableVariants(t *testing.T) {
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
-		StateFilters: map[string]StateFilter{
-			"container_crashloop": {
-				Reasons:  []string{"CrashLoopBackOff"},
-				Severity: "critical",
-			},
-		},
+		Defaults:     map[string]float64{},
+		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
 		Tenants: map[string]map[string]string{
 			"t1": {"_state_container_crashloop": "disable"},
 			"t2": {"_state_container_crashloop": "disabled"},
@@ -296,85 +261,49 @@ func TestResolveStateFilters_DisableVariants(t *testing.T) {
 
 	resolved := cfg.ResolveStateFilters()
 	if len(resolved) != 0 {
-		t.Errorf("expected 0 resolved state filters for disabled variants, got %d: %+v", len(resolved), resolved)
+		t.Errorf("expected 0, got %d: %+v", len(resolved), resolved)
 	}
 }
 
 func TestResolveStateFilters_NoFilters(t *testing.T) {
-	// Backward compatibility: no state_filters section = no state filter metrics
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
-		Tenants: map[string]map[string]string{
-			"db-a": {"mysql_connections": "70"},
-		},
+		Tenants:  map[string]map[string]string{"db-a": {"mysql_connections": "70"}},
 	}
 
-	resolved := cfg.ResolveStateFilters()
-	if len(resolved) != 0 {
-		t.Errorf("expected 0 state filters for config without state_filters, got %d", len(resolved))
+	if len(cfg.ResolveStateFilters()) != 0 {
+		t.Error("expected 0 state filters")
 	}
-
-	// Verify Resolve() still works normally
-	thresholds := cfg.Resolve()
-	if len(thresholds) != 1 {
-		t.Errorf("expected 1 threshold, got %d", len(thresholds))
+	if len(cfg.Resolve()) != 1 {
+		t.Error("expected 1 threshold")
 	}
 }
 
 func TestResolveStateFilters_DefaultSeverity(t *testing.T) {
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
-		StateFilters: map[string]StateFilter{
-			"container_crashloop": {
-				Reasons: []string{"CrashLoopBackOff"},
-				// Severity omitted → should default to "warning"
-			},
-		},
-		Tenants: map[string]map[string]string{
-			"db-a": {},
-		},
+		Defaults:     map[string]float64{},
+		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}}},
+		Tenants:      map[string]map[string]string{"db-a": {}},
 	}
 
 	resolved := cfg.ResolveStateFilters()
-	if len(resolved) != 1 {
-		t.Fatalf("expected 1, got %d", len(resolved))
-	}
-	if resolved[0].Severity != "warning" {
-		t.Errorf("expected default severity 'warning', got %q", resolved[0].Severity)
+	if len(resolved) != 1 || resolved[0].Severity != "warning" {
+		t.Errorf("expected severity=warning, got %+v", resolved)
 	}
 }
 
 func TestResolve_IgnoresStateKeys(t *testing.T) {
-	// Verify that _state_ prefixed keys in tenant overrides don't affect numeric resolution
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80},
-		StateFilters: map[string]StateFilter{
-			"container_crashloop": {
-				Reasons:  []string{"CrashLoopBackOff"},
-				Severity: "critical",
-			},
-		},
-		Tenants: map[string]map[string]string{
-			"db-a": {
-				"mysql_connections":          "70",
-				"_state_container_crashloop": "disable",
-			},
-		},
+		Defaults:     map[string]float64{"mysql_connections": 80},
+		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
+		Tenants:      map[string]map[string]string{"db-a": {"mysql_connections": "70", "_state_container_crashloop": "disable"}},
 	}
 
-	// Numeric thresholds should work normally
-	thresholds := cfg.Resolve()
-	if len(thresholds) != 1 {
-		t.Fatalf("expected 1 threshold, got %d: %+v", len(thresholds), thresholds)
+	if thresholds := cfg.Resolve(); len(thresholds) != 1 || thresholds[0].Value != 70 {
+		t.Errorf("unexpected thresholds: %+v", thresholds)
 	}
-	if thresholds[0].Value != 70 {
-		t.Errorf("expected value 70, got %.0f", thresholds[0].Value)
-	}
-
-	// State filters should reflect the disable
-	stateFilters := cfg.ResolveStateFilters()
-	if len(stateFilters) != 0 {
-		t.Errorf("expected 0 state filters (disabled), got %d", len(stateFilters))
+	if sf := cfg.ResolveStateFilters(); len(sf) != 0 {
+		t.Errorf("expected 0 state filters, got %d", len(sf))
 	}
 }
 
@@ -408,19 +337,10 @@ tenants:
 	}
 
 	cfg := mgr.GetConfig()
-
-	// Verify state filters parsed
 	if len(cfg.StateFilters) != 2 {
 		t.Errorf("expected 2 state filters, got %d", len(cfg.StateFilters))
 	}
 
-	// Verify reasons
-	crash := cfg.StateFilters["container_crashloop"]
-	if len(crash.Reasons) != 1 || crash.Reasons[0] != "CrashLoopBackOff" {
-		t.Errorf("unexpected crashloop reasons: %v", crash.Reasons)
-	}
-
-	// Verify resolution
 	resolved := cfg.ResolveStateFilters()
 	sort.Slice(resolved, func(i, j int) bool {
 		if resolved[i].Tenant != resolved[j].Tenant {
@@ -429,24 +349,248 @@ tenants:
 		return resolved[i].FilterName < resolved[j].FilterName
 	})
 
-	// db-a: both filters enabled (2)
-	// db-b: crashloop disabled, imagepull enabled (1)
-	// Total: 3
+	// db-a: 2, db-b: 1 (crashloop disabled) = 3
 	if len(resolved) != 3 {
-		t.Fatalf("expected 3 resolved state filters, got %d: %+v", len(resolved), resolved)
+		t.Fatalf("expected 3, got %d: %+v", len(resolved), resolved)
+	}
+}
+
+// ============================================================
+// Directory Mode Tests (Phase 2C)
+// ============================================================
+
+func TestConfigManager_LoadDir_BasicMerge(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+  mysql_cpu: 80
+  container_cpu: 80
+state_filters:
+  container_crashloop:
+    reasons: ["CrashLoopBackOff"]
+    severity: "critical"
+  maintenance:
+    reasons: []
+    severity: "info"
+    default_state: "disable"
+`)
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "70"
+    container_cpu: "70"
+`)
+	writeTestFile(t, dir, "db-b.yaml", `
+tenants:
+  db-b:
+    mysql_connections: "100"
+    mysql_cpu: "60"
+    _state_container_crashloop: "disable"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("LoadDir failed: %v", err)
 	}
 
-	// Verify db-b only has imagepull
-	dbBFilters := []ResolvedStateFilter{}
-	for _, r := range resolved {
-		if r.Tenant == "db-b" {
-			dbBFilters = append(dbBFilters, r)
-		}
+	if mgr.Mode() != "directory" {
+		t.Errorf("expected directory mode, got %s", mgr.Mode())
 	}
-	if len(dbBFilters) != 1 {
-		t.Fatalf("expected 1 filter for db-b, got %d", len(dbBFilters))
+
+	cfg := mgr.GetConfig()
+
+	if len(cfg.Defaults) != 3 {
+		t.Errorf("expected 3 defaults, got %d", len(cfg.Defaults))
 	}
-	if dbBFilters[0].FilterName != "container_imagepull" {
-		t.Errorf("expected db-b to have container_imagepull, got %s", dbBFilters[0].FilterName)
+	if len(cfg.StateFilters) != 2 {
+		t.Errorf("expected 2 state_filters, got %d", len(cfg.StateFilters))
+	}
+	if len(cfg.Tenants) != 2 {
+		t.Errorf("expected 2 tenants, got %d", len(cfg.Tenants))
+	}
+	if cfg.Tenants["db-a"]["mysql_connections"] != "70" {
+		t.Errorf("expected db-a mysql_connections=70, got %s", cfg.Tenants["db-a"]["mysql_connections"])
+	}
+	if cfg.Tenants["db-b"]["mysql_cpu"] != "60" {
+		t.Errorf("expected db-b mysql_cpu=60, got %s", cfg.Tenants["db-b"]["mysql_cpu"])
+	}
+
+	// db-a: 3 metrics, db-b: 3 metrics = 6
+	resolved := cfg.Resolve()
+	if len(resolved) != 6 {
+		t.Errorf("expected 6 resolved thresholds, got %d: %+v", len(resolved), resolved)
+	}
+}
+
+func TestConfigManager_LoadDir_BoundaryEnforcement(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+	// Tenant file tries to sneak in defaults and state_filters → should be ignored
+	writeTestFile(t, dir, "db-a.yaml", `
+defaults:
+  mysql_connections: 999
+state_filters:
+  sneaky_filter:
+    reasons: ["SneakyReason"]
+tenants:
+  db-a:
+    mysql_connections: "70"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("LoadDir failed: %v", err)
+	}
+
+	cfg := mgr.GetConfig()
+
+	if cfg.Defaults["mysql_connections"] != 80 {
+		t.Errorf("boundary violation: expected 80, got %.0f", cfg.Defaults["mysql_connections"])
+	}
+	if len(cfg.StateFilters) != 0 {
+		t.Errorf("boundary violation: expected 0 state_filters, got %d", len(cfg.StateFilters))
+	}
+	if cfg.Tenants["db-a"]["mysql_connections"] != "70" {
+		t.Errorf("expected db-a tenant data preserved, got %s", cfg.Tenants["db-a"]["mysql_connections"])
+	}
+}
+
+func TestConfigManager_LoadDir_HashChangeDetection(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "70"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	hash1 := mgr.lastHash
+
+	// Reload without changes
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Reload failed: %v", err)
+	}
+	if mgr.lastHash != hash1 {
+		t.Error("hash should not change without modifications")
+	}
+
+	// Modify file
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "90"
+`)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Reload after change failed: %v", err)
+	}
+	if mgr.lastHash == hash1 {
+		t.Error("hash should change after modification")
+	}
+	if mgr.GetConfig().Tenants["db-a"]["mysql_connections"] != "90" {
+		t.Error("expected updated value 90")
+	}
+}
+
+func TestConfigManager_LoadDir_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err == nil {
+		t.Error("expected error for empty directory")
+	}
+}
+
+func TestConfigManager_LoadDir_SkipsHiddenAndSubdirs(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "70"
+`)
+	writeTestFile(t, dir, ".hidden.yaml", `
+defaults:
+  mysql_connections: 999
+`)
+
+	subdir := filepath.Join(dir, "subdir")
+	os.MkdirAll(subdir, 0755)
+	writeTestFile(t, subdir, "extra.yaml", `
+tenants:
+  db-c:
+    mysql_connections: "50"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	cfg := mgr.GetConfig()
+	if cfg.Defaults["mysql_connections"] != 80 {
+		t.Errorf("expected 80 (hidden file ignored), got %.0f", cfg.Defaults["mysql_connections"])
+	}
+	if len(cfg.Tenants) != 1 {
+		t.Errorf("expected 1 tenant (subdir ignored), got %d", len(cfg.Tenants))
+	}
+}
+
+func TestConfigManager_LoadDir_CriticalSuffix(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "70"
+    mysql_connections_critical: "120"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	resolved := mgr.GetConfig().Resolve()
+	sort.Slice(resolved, func(i, j int) bool {
+		return resolved[i].Severity < resolved[j].Severity
+	})
+
+	if len(resolved) != 2 {
+		t.Fatalf("expected 2 (warning + critical), got %d: %+v", len(resolved), resolved)
+	}
+	if resolved[0].Severity != "critical" || resolved[0].Value != 120 {
+		t.Errorf("expected critical=120, got %s=%.0f", resolved[0].Severity, resolved[0].Value)
+	}
+	if resolved[1].Severity != "warning" || resolved[1].Value != 70 {
+		t.Errorf("expected warning=70, got %s=%.0f", resolved[1].Severity, resolved[1].Value)
+	}
+}
+
+// writeTestFile is a helper to create YAML files in test directories.
+func writeTestFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }

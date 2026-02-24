@@ -1,0 +1,6 @@
+# db-a.yaml — Tenant-managed thresholds
+# Only 'tenants' block is allowed here.
+tenants:
+  db-a:
+    mysql_connections: "70"
+    container_cpu: "70"

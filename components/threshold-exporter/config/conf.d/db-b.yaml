@@ -1,0 +1,7 @@
+# db-b.yaml — Tenant-managed thresholds
+tenants:
+  db-b:
+    mysql_connections: "100"
+    mysql_cpu: "60"
+    container_memory: "90"
+    _state_container_crashloop: "disable"
