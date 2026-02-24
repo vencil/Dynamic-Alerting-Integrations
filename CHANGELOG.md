@@ -1,5 +1,22 @@
 # Changelog
 
+## [Phase 2D] - Migration Tooling (2026-02-24)
+
+### migrate_rule.py 驗證與修復
+- **Bug Fix — base_key 提取**: 新增 PromQL 函式名過濾表 (rate, absent, sum, avg 等 40+ 函式)，確保 `rate(mysql_global_status_slow_queries[5m])` 正確提取 metric 名稱而非函式名。
+- **語義不可轉換偵測**: `absent()`, `predict_linear()`, `vector()` 等改變向量語義的函式自動歸入「無法解析」情境，交由 LLM Fallback 處理。
+- **測試**: 新增 `tests/legacy-dummy.yml` (4 條規則覆蓋 3 種情境) + `tests/test-migrate-tool.sh` (13 assertions, 全部 PASS)。
+
+### Migration Guide 全面重寫 (`docs/migration-guide.md`)
+- **正規化層 (Step 0)**: 新增章節說明為何遷移前必須先建立 `tenant:` 正規化層，以抹平單節點 vs. 叢集差異。
+- **聚合模式選擇 (Step 2)**: 新增 Max (最弱環節) vs. Sum (叢集總量) 架構決策指南，附決策矩陣。
+- **工具核心流程 (Step 1)**: 以 `migrate_rule.py` 作為遷移入口，說明三種處理情境與「三件套」輸出。
+- **保留精華**: 五種場景範例 (連線數、多層嚴重度、Replication Lag、慢查詢 Rate、Buffer Pool 百分比)、Alertmanager routing 遷移、驗證 Checklist、LLM System Prompt、目錄模式注意事項。
+
+### 文件同步
+- **CLAUDE.md**: Phase 2D 標記 ✅，新增 `migrate_rule.py` 工具說明。
+- **CHANGELOG.md**: 新增 Phase 2D 完整記錄。
+
 ## [Phase 2C] - GitOps Directory Scanner (2026-02-24)
 
 ### 整合測試與修復 (Integration Test Fixes)

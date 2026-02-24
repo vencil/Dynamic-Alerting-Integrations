@@ -1,0 +1,39 @@
+# 測試用傳統 Prometheus Alert Rules — 涵蓋三種解析情境
+groups:
+  - name: mysql-alerts-legacy
+    rules:
+      # 情境 1: 簡單純數值比較 → 預期「完美解析」
+      - alert: MySQLTooManyConnections
+        expr: mysql_global_status_threads_connected > 150
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Too many connections on {{ $labels.instance }}"
+
+      # 情境 2: 包含函式的複雜比較 → 預期「複雜表達式 - 需人工確認」
+      - alert: MySQLHighSlowQueries
+        expr: rate(mysql_global_status_slow_queries[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High slow queries rate on {{ $labels.instance }}"
+
+      # 情境 2b: 多層嚴重度 (critical) 的純數值比較
+      - alert: MySQLTooManyConnectionsCritical
+        expr: mysql_global_status_threads_connected > 200
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical connections on {{ $labels.instance }}"
+
+      # 情境 3: 無法解析的特殊寫法 → 預期「無法自動解析」+ LLM Prompt
+      - alert: MySQLDown
+        expr: absent(mysql_up) == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL instance is down"

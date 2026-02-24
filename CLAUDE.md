@@ -2,7 +2,7 @@
 
 ## 專案概述 (Current Status)
 **Multi-Tenant Dynamic Alerting** 平台。
-**當前進度**: Phase 2C 完成 — 目錄模式 (Directory Scanner) 實作 + 整合測試通過 (15/16)。
+**當前進度**: Phase 2D 完成 — Migration Tooling 驗證 + Migration Guide 全面重寫。
 **核心機制**: Config-driven (ConfigMap 掛載), Hot-reload (SHA-256 hash 比對), 支援單檔與目錄兩種模式。
 
 ## Phase 1 完成摘要 (Week 1-4)
@@ -29,9 +29,11 @@
 - **測試**: 20 單元測試通過 + `tests/integration-2c.sh` 整合驗證 (15/16 PASS，1 個 K8s timing)。
 - **待擴展**: GitOps Repo + CI/CD pipeline。
 
-### 2D — Migration Tooling (待開發)
-- 目標: 自動化遷移工具，讀取傳統 `rules.yml` 並產生 `threshold-config.yaml`。
-- 可結合 LLM Prompt (已在 migration-guide.md 中定義)。
+### 2D — Migration Tooling ✅
+- **`migrate_rule.py`**: 80/20 自動轉換工具，三種情境 (完美解析 / 複雜表達式+TODO / LLM Fallback)。
+- **Bug Fix**: `base_key` 提取跳過 PromQL 函式名 (`rate`→metric)；`absent()` 等語義不同函式歸入 LLM Fallback。
+- **測試**: `tests/legacy-dummy.yml` (4 條規則覆蓋 3 種情境) + `tests/test-migrate-tool.sh` (13 assertions PASS)。
+- **Migration Guide 重寫**: 以正規化層、聚合模式選擇 (max vs sum)、工具核心流程為骨架，保留五種場景範例。
 
 ## 核心組件與架構 (Architecture)
 - **Cluster**: Kind (`dynamic-alerting-cluster`)
@@ -52,6 +54,7 @@
 - `patch_config.py <tenant> <metric_key> <value>`: 安全局部更新 ConfigMap (三態，自動偵測單檔/目錄模式)。
 - `check_alert.py <alert_name> <tenant>`: JSON 回傳 alert 狀態 (firing/pending/inactive)。
 - `diagnose.py <tenant>`: Exception-based 健康檢查。
+- `migrate_rule.py <legacy-rules.yml>`: 傳統 alert rules → 動態多租戶三件套 (Tenant Config + Recording Rule + Alert Rule)。
 
 ## AI Agent 環境 (MCP Connectivity)
 
