@@ -1,0 +1,68 @@
+=========================================
+ scaffold_tenant.py 測試
+=========================================
+
+[Test Group 1] 非互動模式 — MariaDB only
+⚙️  生成 db-c config (DBs: kubernetes, mariadb)...
+
+📁 輸出至 /tmp/test-scaffold-output/test1/
+  📄 /tmp/test-scaffold-output/test1/_defaults.yaml
+  📄 /tmp/test-scaffold-output/test1/db-c.yaml
+  📄 /tmp/test-scaffold-output/test1/scaffold-report.txt
+
+✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)
+  ✅ PASS: 生成 db-c.yaml
+  ✅ PASS: 生成 _defaults.yaml
+  ✅ PASS: 生成 scaffold-report.txt
+  ✅ PASS: defaults 含 mysql_connections
+  ✅ PASS: defaults 含 container_cpu
+  ✅ PASS: tenant yaml 含 db-c
+  ✅ PASS: report 含 MariaDB 預設啟用
+
+[Test Group 2] 非互動模式 — MariaDB + Redis
+⚙️  生成 db-d config (DBs: kubernetes, mariadb, redis)...
+
+📁 輸出至 /tmp/test-scaffold-output/test2/
+  📄 /tmp/test-scaffold-output/test2/_defaults.yaml
+  📄 /tmp/test-scaffold-output/test2/db-d.yaml
+  📄 /tmp/test-scaffold-output/test2/scaffold-report.txt
+
+✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)
+  ✅ PASS: 生成 db-d.yaml
+  ✅ PASS: defaults 含 redis_memory
+  ✅ PASS: defaults 含 redis_connected_clients
+  ✅ PASS: report 提示 Redis 已預載
+
+[Test Group 3] 非互動模式 — 全部 DB
+⚙️  生成 db-full config (DBs: kubernetes, mariadb, redis, mongodb, elasticsearch)...
+
+📁 輸出至 /tmp/test-scaffold-output/test3/
+  📄 /tmp/test-scaffold-output/test3/_defaults.yaml
+  📄 /tmp/test-scaffold-output/test3/db-full.yaml
+  📄 /tmp/test-scaffold-output/test3/scaffold-report.txt
+
+✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)
+  ✅ PASS: 生成 db-full.yaml
+  ✅ PASS: defaults 含 mongodb
+  ✅ PASS: defaults 含 elasticsearch
+  ✅ PASS: report 含 MongoDB 已預載
+  ✅ PASS: report 含 Elasticsearch 已預載
+  ✅ PASS: report Helm 指令含 helm upgrade
+
+[Test Group 4] state_filters 驗證
+  ✅ PASS: state_filters 含 crashloop
+  ✅ PASS: state_filters 含 maintenance
+  ✅ PASS: maintenance default_state disable
+
+[Test Group 5] --catalog 模式
+  ✅ PASS: catalog 顯示 kubernetes
+  ✅ PASS: catalog 顯示 redis
+
+[Test Group 6] 錯誤處理
+錯誤: 不支援的 DB 類型 'invalid_db'
+支援的類型: kubernetes, mariadb, redis, mongodb, elasticsearch
+  ✅ PASS: 無效 DB 類型應報錯
+
+=========================================
+結果: 23 PASS / 0 FAIL / 23 TOTAL
+✅ 全部通過

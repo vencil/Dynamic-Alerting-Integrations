@@ -1,7 +1,7 @@
 # Rule Packs — 模組化 Prometheus 規則
 
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
-> **所有 5 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
+> **所有 6 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
 > 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
 
 ## 支援的整合 (Supported Integrations)
@@ -13,6 +13,7 @@
 | **redis** | oliver006/redis_exporter | 🟢 預載 | 7 | 6 |
 | **mongodb** | percona/mongodb_exporter | 🟢 預載 | 7 | 6 |
 | **elasticsearch** | elasticsearch_exporter | 🟢 預載 | 7 | 7 |
+| **platform** | threshold-exporter self-monitoring | 🟢 預載 | 0 | 4 |
 
 ## 架構說明
 
@@ -44,7 +45,7 @@ groups:
   - name: <db>-threshold-normalization
     rules:
       - record: tenant:alert_threshold:<metric>
-        expr: sum by(tenant) (user_threshold{metric="<metric>", severity="warning"})
+        expr: max by(tenant) (user_threshold{metric="<metric>", severity="warning"})
 
   # 3. Alert Rules (使用 group_left + unless maintenance)
   - name: <db>-alerts

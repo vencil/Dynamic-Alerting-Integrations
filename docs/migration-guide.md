@@ -2,7 +2,7 @@
 
 ## Zero-Friction 導入
 
-本平台已預載 **5 個 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
+本平台已預載 **6 個核心 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
 
 **未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)**。新增 exporter 後，只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
 
@@ -52,7 +52,7 @@ python3 scripts/tools/scaffold_tenant.py --catalog
 | `<tenant>.yaml` | 租戶覆寫設定 (含三態範例) |
 | `scaffold-report.txt` | 部署步驟與 Rule Pack 狀態摘要 |
 
-所有 5 個 Rule Pack 已透過 Projected Volume 預載於平台，產出的 config 直接複製至 `conf.d/` 即可使用，無需額外掛載。
+所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，產出的 config 直接複製至 `conf.d/` 即可使用，無需額外掛載。
 
 ---
 
@@ -118,7 +118,7 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 helm upgrade --install threshold-exporter ./components/threshold-exporter \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v0.3.0 \
+  --set image.tag=v0.5.0 \
   -f environments/local/threshold-exporter.yaml
 ```
 
@@ -402,7 +402,7 @@ tenants:
 
 # Threshold Normalization — 必須 by(tenant, queue)
 - record: tenant:alert_threshold:redis_queue_length
-  expr: sum by(tenant, queue) (user_threshold{metric="redis_queue_length"})
+  expr: max by(tenant, queue) (user_threshold{metric="redis_queue_length"})
 
 # Alert Rule — 必須 on(tenant, queue) group_left
 - alert: RedisQueueTooLong

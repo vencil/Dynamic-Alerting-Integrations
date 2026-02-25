@@ -1,10 +1,10 @@
-# Threshold Exporter (v0.4.1)
+# Threshold Exporter (v0.5.0)
 
 **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤。
 
 ## 架構
 
-- **單一 Pod** 在 monitoring namespace，服務所有 tenant
+- **HA 架構**: 預設 2 Replicas，具備 PodAntiAffinity 與 PodDisruptionBudget，確保高可用性
 - **Directory Scanner 模式** (`-config-dir`): ConfigMap 拆分為多檔，掛載至 `/etc/threshold-exporter/conf.d/`，按檔名排序合併
 - **三態設計**: custom value / default / disable
 - **多層嚴重度**: `"40:critical"` 後綴覆寫 severity
@@ -105,11 +105,11 @@ Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯�
 ```yaml
 # 基本閾值 — 僅按 tenant 聚合
 - record: tenant:alert_threshold:connections
-  expr: sum by(tenant) (user_threshold{metric="connections"})
+  expr: max by(tenant) (user_threshold{metric="connections"})
 
 # 維度閾值 — 必須包含維度 label，否則 group_left 匹配會失敗
 - record: tenant:alert_threshold:redis_queue_length
-  expr: sum by(tenant, queue) (user_threshold{metric="redis_queue_length"})
+  expr: max by(tenant, queue) (user_threshold{metric="redis_queue_length"})
 ```
 
 > **重要**: 當租戶使用維度標籤時，對應的 Recording Rule 與 Alert Rule 都必須在 `by()` / `on()` 中包含該維度 label。詳見 [migration-guide.md §11 平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
