@@ -1,0 +1,192 @@
+# ============================================================
+# Rule Pack: MariaDB / MySQL (via mysqld_exporter / Percona)
+# 預設啟用 — 涵蓋連線數、CPU、複合瓶頸、重啟偵測
+#
+# 需要的 exporter:
+#   - mysqld_exporter (https://github.com/prometheus/mysqld_exporter)
+#   - 或 Percona PMM exporter
+#
+# 對應的 threshold-exporter defaults:
+#   mysql_connections: 80
+#   mysql_cpu: 80
+#
+# Tenant config 範例 (conf.d/db-a.yaml):
+#   tenants:
+#     db-a:
+#       mysql_connections: "70"        # 自訂連線數警告閾值
+#       mysql_connections_critical: "120"  # Critical 閾值
+#       mysql_cpu: "60"               # 自訂 CPU 警告閾值
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: MySQL metrics
+  # -------------------------------------------------------
+  - name: mariadb-normalization
+    interval: 15s
+    rules:
+      - record: tenant:mysql_cpu_usage:rate5m
+        expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
+
+      - record: tenant:mysql_threads_connected:sum
+        expr: sum by(tenant) (mysql_global_status_threads_connected)
+
+      - record: tenant:mysql_connection_usage:ratio
+        expr: |
+          sum by(tenant) (mysql_global_status_threads_connected)
+          / sum by(tenant) (mysql_global_variables_max_connections)
+
+      - record: tenant:mysql_uptime:hours
+        expr: min by(tenant) (mysql_global_status_uptime) / 3600
+
+      # Additional Percona-inspired normalization
+      - record: tenant:mysql_slow_queries:rate5m
+        expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
+
+      - record: tenant:mysql_aborted_connections:rate5m
+        expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))
+
+      - record: tenant:mysql_buffer_pool_usage:ratio
+        expr: |
+          sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)
+          / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)
+
+  # -------------------------------------------------------
+  # Threshold normalization: MySQL
+  # -------------------------------------------------------
+  - name: mariadb-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:connections
+        expr: sum by(tenant) (user_threshold{metric="connections", severity="warning"})
+
+      - record: tenant:alert_threshold:cpu
+        expr: sum by(tenant) (user_threshold{metric="cpu", severity="warning"})
+
+      # Multi-tier severity (Scenario D)
+      - record: tenant:alert_threshold:connections_critical
+        expr: sum by(tenant) (user_threshold{metric="connections", severity="critical"})
+
+      - record: tenant:alert_threshold:cpu_critical
+        expr: sum by(tenant) (user_threshold{metric="cpu", severity="critical"})
+
+  # -------------------------------------------------------
+  # Alert Rules: MariaDB
+  # -------------------------------------------------------
+  - name: mariadb-alerts
+    rules:
+      - alert: MariaDBDown
+        expr: mysql_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MariaDB instance {{ $labels.instance }} is DOWN"
+          description: "mysql_up=0 for 15s on {{ $labels.instance }}"
+
+      - alert: MariaDBExporterAbsent
+        expr: absent(mysql_up{job="tenant-exporters"})
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "mysqld-exporter target missing"
+          description: "No mysql_up metric found for 30s"
+
+      - alert: MariaDBHighConnections
+        expr: |
+          (
+            tenant:mysql_threads_connected:sum
+            > on(tenant) group_left
+            tenant:alert_threshold:connections
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+          unless on(tenant)
+          (
+            tenant:mysql_threads_connected:sum
+            > on(tenant) group_left
+            tenant:alert_threshold:connections_critical
+          )
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "High connections on {{ $labels.tenant }}"
+          description: "{{ $value }} threads connected (warning threshold exceeded)"
+
+      # Critical tier — suppresses warning via unless above
+      - alert: MariaDBHighConnectionsCritical
+        expr: |
+          (
+            tenant:mysql_threads_connected:sum
+            > on(tenant) group_left
+            tenant:alert_threshold:connections_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical connections on {{ $labels.tenant }}"
+          description: "{{ $value }} threads connected (critical threshold exceeded)"
+
+      # Composite alert: connections AND CPU both exceeded
+      - alert: MariaDBSystemBottleneck
+        expr: |
+          (
+            (
+              tenant:mysql_threads_connected:sum
+              > on(tenant) group_left
+              tenant:alert_threshold:connections
+            )
+            and on(tenant)
+            (
+              tenant:mysql_cpu_usage:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:cpu
+            )
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 60s
+        labels:
+          severity: critical
+        annotations:
+          summary: "System bottleneck on {{ $labels.tenant }}"
+          description: "Both connections AND CPU thresholds exceeded simultaneously"
+
+      - alert: MariaDBRecentRestart
+        expr: mysql_global_status_uptime < 300
+        for: 0s
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }} restarted recently"
+          description: "Uptime is only {{ $value }}s (< 5 min)"
+
+      # Percona-inspired: High slow queries rate
+      - alert: MariaDBHighSlowQueries
+        expr: |
+          tenant:mysql_slow_queries:rate5m > 1
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High slow query rate on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.2f\" }} slow queries/sec"
+
+      # Percona-inspired: High aborted connections
+      - alert: MariaDBHighAbortedConnections
+        expr: |
+          tenant:mysql_aborted_connections:rate5m > 5
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High aborted connections on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.2f\" }} aborted connections/sec"

@@ -160,7 +160,7 @@ tenants:
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -327,7 +327,7 @@ tenants:
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -531,7 +531,7 @@ defaults:
 `)
 
 	subdir := filepath.Join(dir, "subdir")
-	os.MkdirAll(subdir, 0755)
+	os.MkdirAll(subdir, 0700)
 	writeTestFile(t, subdir, "extra.yaml", `
 tenants:
   db-c:
@@ -796,7 +796,7 @@ tenants:
 // writeTestFile is a helper to create YAML files in test directories.
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 }

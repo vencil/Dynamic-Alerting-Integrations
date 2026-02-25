@@ -1,0 +1,192 @@
+# ============================================================
+# Rule Pack: Elasticsearch (via prometheus-community/elasticsearch_exporter)
+# 選配 — 涵蓋叢集健康、節點資源、索引大小、搜尋延遲
+#
+# 需要的 exporter:
+#   - elasticsearch_exporter
+#     (https://github.com/prometheus-community/elasticsearch_exporter)
+#
+# 對應的 threshold-exporter defaults (加入 _defaults.yaml):
+#   es_heap_usage_percent: 85
+#   es_disk_usage_percent: 80
+#   es_search_latency_ms: 500
+#   es_pending_tasks: 10
+#
+# Tenant config 範例 (conf.d/es-prod.yaml):
+#   tenants:
+#     es-prod:
+#       es_heap_usage_percent: "80"
+#       es_disk_usage_percent: "75"
+#       # 維度標籤 — 不同 index 設定不同大小閾值
+#       "es_index_store_size_bytes{index=\"logs-prod\"}": "107374182400"
+#       "es_index_store_size_bytes{index=\"metrics\"}": "53687091200"
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: Elasticsearch metrics
+  # -------------------------------------------------------
+  - name: elasticsearch-normalization
+    interval: 15s
+    rules:
+      # Cluster health (0=green, 1=yellow, 2=red)
+      - record: tenant:es_cluster_health:status
+        expr: max by(tenant) (elasticsearch_cluster_health_status{color="red"}) * 2
+              + max by(tenant) (elasticsearch_cluster_health_status{color="yellow"})
+
+      # JVM heap usage percent
+      - record: tenant:es_heap_usage_percent:max
+        expr: |
+          max by(tenant) (
+            elasticsearch_jvm_memory_used_bytes{area="heap"}
+            / elasticsearch_jvm_memory_max_bytes{area="heap"}
+          ) * 100
+
+      # Disk usage percent
+      - record: tenant:es_disk_usage_percent:max
+        expr: |
+          max by(tenant) (
+            1 - (
+              elasticsearch_filesystem_data_available_bytes
+              / elasticsearch_filesystem_data_size_bytes
+            )
+          ) * 100
+
+      # Search latency (ms)
+      - record: tenant:es_search_latency_ms:avg
+        expr: |
+          sum by(tenant) (rate(elasticsearch_indices_search_query_time_seconds[5m]))
+          / sum by(tenant) (rate(elasticsearch_indices_search_query_total[5m]))
+          * 1000
+
+      # Indexing rate
+      - record: tenant:es_indexing:rate5m
+        expr: sum by(tenant) (rate(elasticsearch_indices_indexing_index_total[5m]))
+
+      # Pending cluster tasks
+      - record: tenant:es_pending_tasks:max
+        expr: max by(tenant) (elasticsearch_cluster_health_number_of_pending_tasks)
+
+      # Unassigned shards
+      - record: tenant:es_unassigned_shards:count
+        expr: max by(tenant) (elasticsearch_cluster_health_unassigned_shards)
+
+  # -------------------------------------------------------
+  # Threshold normalization: Elasticsearch
+  # -------------------------------------------------------
+  - name: elasticsearch-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:es_heap_usage_percent
+        expr: sum by(tenant) (user_threshold{metric="es_heap_usage_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:es_disk_usage_percent
+        expr: sum by(tenant) (user_threshold{metric="es_disk_usage_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:es_search_latency_ms
+        expr: sum by(tenant) (user_threshold{metric="es_search_latency_ms", severity="warning"})
+
+      - record: tenant:alert_threshold:es_pending_tasks
+        expr: sum by(tenant) (user_threshold{metric="es_pending_tasks", severity="warning"})
+
+  # -------------------------------------------------------
+  # Alert Rules: Elasticsearch
+  # -------------------------------------------------------
+  - name: elasticsearch-alerts
+    rules:
+      - alert: ElasticsearchClusterRed
+        expr: |
+          tenant:es_cluster_health:status == 2
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elasticsearch cluster RED on {{ $labels.tenant }}"
+          description: "Cluster health is RED — data loss or unavailability possible"
+
+      - alert: ElasticsearchClusterYellow
+        expr: |
+          tenant:es_cluster_health:status == 1
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch cluster YELLOW on {{ $labels.tenant }}"
+          description: "Some replica shards are unassigned"
+
+      - alert: ElasticsearchHighHeapUsage
+        expr: |
+          (
+            tenant:es_heap_usage_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:es_heap_usage_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch high heap usage on {{ $labels.tenant }}"
+          description: "JVM heap: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: ElasticsearchHighDiskUsage
+        expr: |
+          (
+            tenant:es_disk_usage_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:es_disk_usage_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch high disk usage on {{ $labels.tenant }}"
+          description: "Disk usage: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: ElasticsearchHighSearchLatency
+        expr: |
+          (
+            tenant:es_search_latency_ms:avg
+            > on(tenant) group_left
+            tenant:alert_threshold:es_search_latency_ms
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch high search latency on {{ $labels.tenant }}"
+          description: "Average search latency: {{ $value | printf \"%.0f\" }}ms"
+
+      - alert: ElasticsearchUnassignedShards
+        expr: |
+          tenant:es_unassigned_shards:count > 0
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch has unassigned shards on {{ $labels.tenant }}"
+          description: "{{ $value }} unassigned shards — check node capacity"
+
+      - alert: ElasticsearchPendingTasks
+        expr: |
+          (
+            tenant:es_pending_tasks:max
+            > on(tenant) group_left
+            tenant:alert_threshold:es_pending_tasks
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch pending cluster tasks on {{ $labels.tenant }}"
+          description: "{{ $value }} pending tasks — cluster may be overloaded"

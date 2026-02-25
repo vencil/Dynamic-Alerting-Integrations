@@ -55,6 +55,10 @@ test-scenario-c: ## Scenario C 測試: 狀態字串比對
 test-scenario-d: ## Scenario D 測試: 維護模式 / 複合警報 / 多層嚴重度
 	@./tests/scenario-d.sh $(TENANT)
 
+.PHONY: demo
+demo: ## 端對端示範 (scaffold + migrate + diagnose + check_alert)
+	@bash ./scripts/demo.sh
+
 # ----------------------------------------------------------
 # Component 管理
 # ----------------------------------------------------------

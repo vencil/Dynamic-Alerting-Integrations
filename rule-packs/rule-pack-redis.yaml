@@ -1,0 +1,173 @@
+# ============================================================
+# Rule Pack: Redis (via oliver006/redis_exporter)
+# 選配 — 涵蓋記憶體、連線數、佇列長度、Eviction、Replication
+#
+# 需要的 exporter:
+#   - redis_exporter (https://github.com/oliver006/redis_exporter)
+#
+# 對應的 threshold-exporter defaults (加入 _defaults.yaml):
+#   redis_memory_used_bytes: 8589934592      # 8 GB
+#   redis_connected_clients: 500
+#   redis_evicted_keys_rate: 100
+#   redis_replication_lag: 10
+#
+# Tenant config 範例 (conf.d/redis-prod.yaml):
+#   tenants:
+#     redis-prod:
+#       redis_memory_used_bytes: "6442450944"   # 6 GB
+#       redis_connected_clients: "300"
+#       # 維度標籤 — 不同 queue 設定不同閾值
+#       "redis_queue_length{queue=\"order-processing\"}": "500:critical"
+#       "redis_queue_length{queue=\"email-notifications\"}": "1000"
+#       # 維度標籤 — 不同 db 設定不同閾值
+#       "redis_db_keys{db=\"db0\"}": "1000000"
+#       "redis_db_keys{db=\"db1\"}": "disable"
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: Redis metrics
+  # -------------------------------------------------------
+  - name: redis-normalization
+    interval: 15s
+    rules:
+      # Memory usage (absolute bytes)
+      - record: tenant:redis_memory_used_bytes:max
+        expr: max by(tenant) (redis_memory_used_bytes)
+
+      # Memory usage ratio
+      - record: tenant:redis_memory_usage:ratio
+        expr: |
+          max by(tenant) (redis_memory_used_bytes)
+          / max by(tenant) (redis_memory_max_bytes > 0)
+
+      # Connected clients
+      - record: tenant:redis_connected_clients:max
+        expr: max by(tenant) (redis_connected_clients)
+
+      # Key eviction rate
+      - record: tenant:redis_evicted_keys:rate5m
+        expr: sum by(tenant) (rate(redis_evicted_keys_total[5m]))
+
+      # Keyspace hit ratio
+      - record: tenant:redis_keyspace_hit_ratio:avg
+        expr: |
+          sum by(tenant) (rate(redis_keyspace_hits_total[5m]))
+          / (
+            sum by(tenant) (rate(redis_keyspace_hits_total[5m]))
+            + sum by(tenant) (rate(redis_keyspace_misses_total[5m]))
+          )
+
+      # Replication lag (for replicas)
+      - record: tenant:redis_replication_lag:max
+        expr: max by(tenant) (redis_connected_slave_lag_seconds)
+
+      # Commands per second
+      - record: tenant:redis_commands:rate5m
+        expr: sum by(tenant) (rate(redis_commands_processed_total[5m]))
+
+  # -------------------------------------------------------
+  # Threshold normalization: Redis
+  # -------------------------------------------------------
+  - name: redis-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:redis_memory_used_bytes
+        expr: sum by(tenant) (user_threshold{metric="redis_memory_used_bytes", severity="warning"})
+
+      - record: tenant:alert_threshold:redis_connected_clients
+        expr: sum by(tenant) (user_threshold{metric="redis_connected_clients", severity="warning"})
+
+      - record: tenant:alert_threshold:redis_evicted_keys_rate
+        expr: sum by(tenant) (user_threshold{metric="redis_evicted_keys_rate", severity="warning"})
+
+      - record: tenant:alert_threshold:redis_replication_lag
+        expr: sum by(tenant) (user_threshold{metric="redis_replication_lag", severity="warning"})
+
+  # -------------------------------------------------------
+  # Alert Rules: Redis
+  # -------------------------------------------------------
+  - name: redis-alerts
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis instance {{ $labels.instance }} is DOWN"
+
+      - alert: RedisHighMemory
+        expr: |
+          (
+            tenant:redis_memory_used_bytes:max
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_memory_used_bytes
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high memory usage on {{ $labels.tenant }}"
+          description: "Memory usage: {{ $value | humanize1024 }}B"
+
+      - alert: RedisHighConnections
+        expr: |
+          (
+            tenant:redis_connected_clients:max
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_connected_clients
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high connection count on {{ $labels.tenant }}"
+          description: "{{ $value }} connected clients"
+
+      - alert: RedisHighKeyEvictions
+        expr: |
+          (
+            tenant:redis_evicted_keys:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_evicted_keys_rate
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high key eviction rate on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.1f\" }} evictions/sec — consider increasing maxmemory"
+
+      - alert: RedisReplicationLag
+        expr: |
+          (
+            tenant:redis_replication_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_replication_lag
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis replication lag on {{ $labels.tenant }}"
+          description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
+
+      - alert: RedisLowHitRatio
+        expr: |
+          tenant:redis_keyspace_hit_ratio:avg < 0.9
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis low hit ratio on {{ $labels.tenant }}"
+          description: "Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy"

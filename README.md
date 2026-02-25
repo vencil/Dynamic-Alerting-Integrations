@@ -59,6 +59,7 @@ make test-alert         # 觸發故障測試 (TENANT=db-b 可指定)
 make test-scenario-a    # Scenario A: 動態閾值
 make test-scenario-b    # Scenario B: 弱環節檢測
 make test-scenario-c    # Scenario C: 狀態字串比對
+make demo               # 端對端示範 (scaffold + migrate + diagnose)
 make component-build    # Build component image (COMP=threshold-exporter)
 make component-deploy   # Deploy component (COMP=threshold-exporter ENV=local)
 make status             # 顯示所有 Pod 狀態
@@ -85,9 +86,16 @@ make help               # 顯示所有可用 targets
 ├── k8s/
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
+├── rule-packs/                 # 模組化 Prometheus 規則包
+│   ├── rule-pack-kubernetes.yaml   # cAdvisor + KSM (預設啟用)
+│   ├── rule-pack-mariadb.yaml      # mysqld_exporter (預設啟用)
+│   ├── rule-pack-redis.yaml        # Redis (選配)
+│   ├── rule-pack-mongodb.yaml      # MongoDB (選配)
+│   ├── rule-pack-elasticsearch.yaml # Elasticsearch (選配)
+│   └── README.md
 ├── scripts/                    # 操作腳本 (_lib.sh, setup, verify, cleanup...)
-│   └── tools/                  # 自動化工具 (patch_config, check_alert, diagnose)
-├── tests/                      # 整合測試 (scenario-a/b/c/d.sh)
+│   └── tools/                  # 自動化工具 (patch_config, check_alert, diagnose, migrate_rule)
+├── tests/                      # 整合測試 (scenario-a/b/c/d.sh, test-migrate-*.sh)
 ├── .devcontainer/              # Dev Container 配置
 ├── Makefile                    # 操作入口 (make help 查看所有 targets)
 ├── CLAUDE.md                   # AI Agent 開發上下文指引
@@ -101,9 +109,37 @@ make help               # 顯示所有可用 targets
 **[docs/migration-guide.md](docs/migration-guide.md)** 提供完整的遷移路徑，包含：自動轉換工具 (`migrate_rule.py`)、五種 Percona MariaDB 實戰場景、Recording Rule 聚合模式選擇指南、多 DB 維度標籤 (Redis/ES/MongoDB) 配置範例，以及 threshold-exporter 部署教學。
 
 ```bash
-# 快速開始: 用工具自動轉換既有 alert rules
+# 新租戶: 互動式產生 tenant config
+python3 scripts/tools/scaffold_tenant.py
+
+# 既有 alert rules: 自動轉換工具
 python3 scripts/tools/migrate_rule.py <your-legacy-rules.yml>
+
+# 端對端示範
+make demo
 ```
+
+## Rule Packs (模組化 Prometheus 規則)
+
+預先建置的 Normalization + Alert Rules 模組包，掛載即可使用：
+
+| Rule Pack | Exporter | 狀態 | Recording Rules | Alert Rules |
+|-----------|----------|------|----------------|-------------|
+| **kubernetes** | cAdvisor + kube-state-metrics | 預設啟用 | 5 | 4 |
+| **mariadb** | mysqld_exporter (Percona) | 預設啟用 | 7 | 8 |
+| **redis** | oliver006/redis_exporter | 選配 | 7 | 6 |
+| **mongodb** | percona/mongodb_exporter | 選配 | 7 | 6 |
+| **elasticsearch** | elasticsearch_exporter | 選配 | 7 | 7 |
+
+```bash
+# 啟用選配 rule pack (Helm values overlay)
+helm upgrade --install threshold-exporter ./components/threshold-exporter \
+  -n monitoring \
+  -f environments/local/threshold-exporter.yaml \
+  -f rule-packs/rule-pack-redis.yaml
+```
+
+詳見 [rule-packs/README.md](rule-packs/README.md)。
 
 ## Alert Rules & Thresholds
 

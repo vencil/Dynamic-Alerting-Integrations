@@ -131,13 +131,18 @@ data:
             action: keep
             regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes"
 
+  # ============================================================
   # Recording Rules (Normalization Layer)
+  # Canonical sources: rule-packs/rule-pack-kubernetes.yaml
+  #                    rule-packs/rule-pack-mariadb.yaml
+  # Optional packs:   rule-packs/rule-pack-redis/mongodb/elasticsearch.yaml
+  # ============================================================
   recording-rules.yml: |
     groups:
       # -------------------------------------------------------
-      # Scenario A: MySQL metric normalization
+      # MariaDB normalization (from rule-pack-mariadb.yaml)
       # -------------------------------------------------------
-      - name: mysql-normalization
+      - name: mariadb-normalization
         interval: 15s
         rules:
           - record: tenant:mysql_cpu_usage:rate5m
@@ -154,40 +159,41 @@ data:
           - record: tenant:mysql_uptime:hours
             expr: min by(tenant) (mysql_global_status_uptime) / 3600
 
+          # Percona-inspired additional normalization
+          - record: tenant:mysql_slow_queries:rate5m
+            expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
+
+          - record: tenant:mysql_aborted_connections:rate5m
+            expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))
+
+          - record: tenant:mysql_buffer_pool_usage:ratio
+            expr: |
+              sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)
+              / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)
+
       # -------------------------------------------------------
-      # Threshold normalization (Scenario A + B)
-      # threshold-exporter resolves defaults; here we just pass through.
+      # MariaDB threshold normalization (from rule-pack-mariadb.yaml)
       # -------------------------------------------------------
-      - name: threshold-normalization
+      - name: mariadb-threshold-normalization
         interval: 15s
         rules:
-          # Scenario A: MySQL thresholds
-          - record: tenant:alert_threshold:cpu
-            expr: sum by(tenant) (user_threshold{metric="cpu", severity="warning"})
-
           - record: tenant:alert_threshold:connections
             expr: sum by(tenant) (user_threshold{metric="connections", severity="warning"})
 
-          # Scenario D: Multi-tier severity — critical thresholds (optional, per-tenant)
+          - record: tenant:alert_threshold:cpu
+            expr: sum by(tenant) (user_threshold{metric="cpu", severity="warning"})
+
+          # Multi-tier severity (Scenario D)
           - record: tenant:alert_threshold:connections_critical
             expr: sum by(tenant) (user_threshold{metric="connections", severity="critical"})
 
           - record: tenant:alert_threshold:cpu_critical
             expr: sum by(tenant) (user_threshold{metric="cpu", severity="critical"})
 
-          # Scenario B: Container resource thresholds
-          - record: tenant:alert_threshold:container_cpu
-            expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
-
-          - record: tenant:alert_threshold:container_memory
-            expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
-
       # -------------------------------------------------------
-      # Scenario B: Container resource normalization (Weakest Link)
-      # Computes per-container CPU/memory as % of limits,
-      # then takes MAX across containers per pod (weakest link).
+      # Kubernetes container normalization (from rule-pack-kubernetes.yaml)
       # -------------------------------------------------------
-      - name: container-normalization
+      - name: kubernetes-container-normalization
         interval: 15s
         rules:
           # Container CPU usage as % of limit
@@ -228,14 +234,11 @@ data:
             expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
 
       # -------------------------------------------------------
-      # Scenario C: State matching normalization
-      # Counts pods in bad states per tenant namespace.
-      # Uses kube-state-metrics kube_pod_container_status_waiting_reason.
+      # Kubernetes state matching (from rule-pack-kubernetes.yaml)
       # -------------------------------------------------------
-      - name: state-matching
+      - name: kubernetes-state-matching
         interval: 15s
         rules:
-          # Count containers in each waiting reason per tenant
           - record: tenant:container_waiting_reason:count
             expr: |
               label_replace(
@@ -245,11 +248,28 @@ data:
                 "tenant", "$1", "namespace", "(.*)"
               )
 
-  # Alert Rules (使用 normalized metrics)
+      # -------------------------------------------------------
+      # Kubernetes threshold normalization (from rule-pack-kubernetes.yaml)
+      # -------------------------------------------------------
+      - name: kubernetes-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:container_cpu
+            expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
+
+          - record: tenant:alert_threshold:container_memory
+            expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
+
+  # ============================================================
+  # Alert Rules (using normalized metrics)
+  # Canonical sources: rule-packs/rule-pack-mariadb.yaml
+  #                    rule-packs/rule-pack-kubernetes.yaml
+  # Optional packs:   rule-packs/rule-pack-redis/mongodb/elasticsearch.yaml
+  # ============================================================
   alert-rules.yml: |
     groups:
       # -------------------------------------------------------
-      # Scenario A: MariaDB alerts
+      # MariaDB alerts (from rule-pack-mariadb.yaml)
       # -------------------------------------------------------
       - name: mariadb-alerts
         rules:
@@ -269,7 +289,7 @@ data:
               severity: critical
             annotations:
               summary: "mysqld-exporter target missing"
-              description: "No mysql_up metric found for 30s — exporter may have crashed."
+              description: "No mysql_up metric found for 30s"
 
           - alert: MariaDBHighConnections
             expr: |
@@ -293,8 +313,7 @@ data:
               summary: "High connections on {{ $labels.tenant }}"
               description: "{{ $value }} threads connected (warning threshold exceeded)"
 
-          # Scenario D: Critical tier — fires only when critical threshold is set and exceeded.
-          # Suppresses the warning-level MariaDBHighConnections via the unless above.
+          # Critical tier — suppresses warning via unless above
           - alert: MariaDBHighConnectionsCritical
             expr: |
               (
@@ -311,8 +330,7 @@ data:
               summary: "Critical connections on {{ $labels.tenant }}"
               description: "{{ $value }} threads connected (critical threshold exceeded)"
 
-          # Scenario D: Composite alert — fires only when BOTH connections AND CPU
-          # exceed their respective thresholds simultaneously for the same tenant.
+          # Composite alert: connections AND CPU both exceeded
           - alert: MariaDBSystemBottleneck
             expr: |
               (
@@ -346,11 +364,36 @@ data:
               summary: "{{ $labels.instance }} restarted recently"
               description: "Uptime is only {{ $value }}s (< 5 min)"
 
+          # Percona-inspired: High slow queries rate
+          - alert: MariaDBHighSlowQueries
+            expr: |
+              tenant:mysql_slow_queries:rate5m > 1
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High slow query rate on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.2f\" }} slow queries/sec"
+
+          # Percona-inspired: High aborted connections
+          - alert: MariaDBHighAbortedConnections
+            expr: |
+              tenant:mysql_aborted_connections:rate5m > 5
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High aborted connections on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.2f\" }} aborted connections/sec"
+
       # -------------------------------------------------------
-      # Scenario B: Container resource alerts (Weakest Link)
-      # Fires when ANY container in a pod exceeds threshold.
+      # Kubernetes container alerts (from rule-pack-kubernetes.yaml)
       # -------------------------------------------------------
-      - name: container-resource-alerts
+      - name: kubernetes-container-alerts
         rules:
           - alert: PodContainerHighCPU
             expr: |
@@ -385,13 +428,10 @@ data:
               description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
 
       # -------------------------------------------------------
-      # Scenario C: Pod state alerts (State/String Matching)
-      # Uses multiplication pattern: count * flag > 0
-      # If flag absent (disabled), result = empty = no alert.
+      # Kubernetes pod state alerts (from rule-pack-kubernetes.yaml)
       # -------------------------------------------------------
-      - name: pod-state-alerts
+      - name: kubernetes-pod-state-alerts
         rules:
-          # CrashLoopBackOff detected AND monitoring enabled
           - alert: ContainerCrashLoop
             expr: |
               (
@@ -410,7 +450,6 @@ data:
               summary: "Container crash loop detected in {{ $labels.tenant }}"
               description: "{{ $value }} container(s) in CrashLoopBackOff state"
 
-          # ImagePullBackOff detected AND monitoring enabled
           - alert: ContainerImagePullFailure
             expr: |
               (

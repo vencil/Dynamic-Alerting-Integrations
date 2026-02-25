@@ -11,8 +11,12 @@ import json
 import argparse
 
 def run_cmd(cmd):
+    """Execute a command safely using list arguments (no shell=True)."""
+    if isinstance(cmd, str):
+        import shlex
+        cmd = shlex.split(cmd)
     try:
-        return subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
     except subprocess.CalledProcessError:
         return None
 
@@ -20,7 +24,8 @@ def check(tenant):
     errors = []
 
     # 1. 檢查 Pod 狀態
-    pod_status = run_cmd(f"kubectl get pods -n {tenant} -l app=mariadb -o jsonpath='{{.items[0].status.phase}}'")
+    pod_status = run_cmd(["kubectl", "get", "pods", "-n", tenant, "-l", "app=mariadb",
+                          "-o", "jsonpath={.items[0].status.phase}"])
     if not pod_status:
         errors.append("Pod not found")
     elif pod_status != "Running":
@@ -30,7 +35,8 @@ def check(tenant):
     # 使用 localhost:9090 (假設 port-forward 已開啟)
     try:
         # 檢查 mysql_up
-        up_res = run_cmd(f"curl -s 'http://localhost:9090/api/v1/query?query=mysql_up{{instance=\"{tenant}\"}}'")
+        up_res = run_cmd(["curl", "-s",
+                          f"http://localhost:9090/api/v1/query?query=mysql_up{{instance=\"{tenant}\"}}"])
         if up_res and '"value":[1' not in up_res and '"value":["1"' not in up_res:
              errors.append("Exporter reports DOWN (mysql_up!=1)")
         elif not up_res:
@@ -43,7 +49,7 @@ def check(tenant):
         print(json.dumps({"status": "healthy", "tenant": tenant}))
     else:
         # 只有異常時，嘗試抓取最近的 error log
-        logs = run_cmd(f"kubectl logs -n {tenant} deploy/mariadb -c mariadb --tail=20")
+        logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb", "--tail=20"])
         error_logs = [line for line in logs.split('\n') if 'ERROR' in line] if logs else []
 
         print(json.dumps({

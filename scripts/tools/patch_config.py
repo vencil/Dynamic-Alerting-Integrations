@@ -25,9 +25,13 @@ import os
 
 
 def run_cmd(cmd):
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    """Execute a command safely using list arguments (no shell=True)."""
+    if isinstance(cmd, str):
+        import shlex
+        cmd = shlex.split(cmd)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Error executing: {cmd}\n{result.stderr}", file=sys.stderr)
+        print(f"Error executing: {' '.join(cmd)}\n{result.stderr}", file=sys.stderr)
         sys.exit(1)
     return result.stdout.strip()
 
@@ -98,7 +102,7 @@ def patch_multifile(cm_data, tenant, metric_key, value):
 
 def main(tenant, metric_key, value):
     # 1. Get existing ConfigMap
-    cm_json = run_cmd("kubectl get configmap threshold-config -n monitoring -o json")
+    cm_json = run_cmd(["kubectl", "get", "configmap", "threshold-config", "-n", "monitoring", "-o", "json"])
     cm_data = json.loads(cm_json)
 
     # 2. Detect mode and build patch
@@ -116,7 +120,7 @@ def main(tenant, metric_key, value):
         temp_path = temp.name
 
     print(f"Patching ConfigMap ({mode}) for {tenant}: {metric_key} = {value}...")
-    run_cmd(f"kubectl patch configmap threshold-config -n monitoring --type merge --patch-file {temp_path}")
+    run_cmd(["kubectl", "patch", "configmap", "threshold-config", "-n", "monitoring", "--type", "merge", "--patch-file", temp_path])
     os.remove(temp_path)
     print("Success! Exporter will reload within its interval.")
 

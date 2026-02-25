@@ -1,5 +1,32 @@
 # Changelog
 
+## [v0.4.0] - Ease of Adoption (Phase 3) (2026-02-25)
+
+### Task 3A: SAST Fixes + Migration Tool UX Upgrade
+- **SAST — `shell=True` 移除**: `patch_config.py`、`diagnose.py` 全面改用 `subprocess` list args，消除 OS Command Injection 風險。
+- **SAST — `check_alert.py`**: 標註 `# nosec B310` (localhost-only Prometheus API)。
+- **SAST — Go test 權限**: `config_test.go` 檔案 `0644→0600`、目錄 `0755→0700`，符合最小權限原則。
+- **`migrate_rule.py` v2 — 智能聚合猜測**: `guess_aggregation()` 六條 heuristic 規則 (rate→sum, percent→max, total→sum, connections→max 等)，fallback→max。
+- **`migrate_rule.py` v2 — 檔案化輸出**: `migration_output/` 目錄含四檔 (tenant-config.yaml、platform-recording-rules.yaml、platform-alert-rules.yaml、migration-report.txt)。
+- **`migrate_rule.py` v2 — CLI 升級**: `--dry-run` 預覽模式、`--interactive` 互動確認、`-o` 自訂輸出目錄。
+- **測試**: `test-migrate-tool.sh` (25 assertions) + `test-migrate-multidb.sh` (22 assertions) 全部通過。
+
+### Task 3B: Rule Packs — 模組化 Prometheus 規則
+- **`rule-packs/` 目錄結構**: 每個 Rule Pack 包含三件套 (Normalization Recording Rules + Threshold Normalization + Alert Rules)。
+- **`rule-pack-kubernetes.yaml`** (預設啟用): cAdvisor + kube-state-metrics — 5 recording rules + 4 alert rules (CPU/Memory weakest link + CrashLoop/ImagePull state matching)。
+- **`rule-pack-mariadb.yaml`** (預設啟用): mysqld_exporter (Percona) — 7 recording rules + 8 alert rules (含 Percona-inspired slow queries、aborted connections)。
+- **`rule-pack-redis.yaml`** (選配): oliver006/redis_exporter — 7 recording rules + 6 alert rules (memory、evictions、hit ratio、replication lag)。
+- **`rule-pack-mongodb.yaml`** (選配): percona/mongodb_exporter — 7 recording rules + 6 alert rules (connections、replication、page faults)。
+- **`rule-pack-elasticsearch.yaml`** (選配): elasticsearch_exporter — 7 recording rules + 7 alert rules (cluster health、heap、disk、search latency、unassigned shards)。
+- **`rule-packs/README.md`**: 整合目錄表、三種掛載方式 (kubectl/Helm overlay/合併 ConfigMap)、自訂 Rule Pack 結構指南、Exporter 文件連結。
+- **`configmap-prometheus.yaml` 重構**: group 名稱與 rule packs 同步 (mariadb-normalization, kubernetes-container-normalization 等)；新增 Percona-inspired MariaDB rules (slow_queries, aborted_connections, buffer_pool_usage)；新增 MariaDBHighSlowQueries + MariaDBHighAbortedConnections alerts。
+
+### Task 3C: Scaffold Tool + Demo
+- **`scaffold_tenant.py`**: 互動式 tenant config 產生器。支援 5 種 DB 類型，自動生成 `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (含 Helm 部署指令、Rule Pack 掛載提示)。
+- **CLI 模式**: `--tenant`/`--db` 非互動批次生成、`--catalog` 顯示 Exporter 清單、`-o` 自訂輸出目錄。
+- **`scripts/demo.sh` + `make demo`**: 端對端示範 — scaffold 產生 → migration 轉換 → dry-run 預覽 → diagnose 健康檢查 → check_alert 狀態查詢 → patch_config 動態修改。
+- **測試**: `test-scaffold.sh` (24 assertions) 全部通過。
+
 ## [v0.3.0] - Dimensional Metrics Milestone (2026-02-25)
 
 ### Go 核心 — Dimensional Labels (Phase 2B Task 1)

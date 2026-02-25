@@ -12,7 +12,7 @@ import sys
 def check_alert(alert_name, tenant):
     try:
         req = urllib.request.Request('http://localhost:9090/api/v1/alerts')
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req) as response:  # nosec B310 — localhost-only Prometheus API
             data = json.loads(response.read().decode())
     except Exception as e:
         print(f'{{"error": "Cannot connect to Prometheus API: {e}. Is port-forward running?"}}')
