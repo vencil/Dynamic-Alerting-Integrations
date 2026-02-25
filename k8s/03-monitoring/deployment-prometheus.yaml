@@ -102,5 +102,10 @@ spec:
                       path: elasticsearch-recording.yml
                     - key: elasticsearch-alert.yml
                       path: elasticsearch-alert.yml
+              - configMap:
+                  name: prometheus-rules-platform
+                  items:
+                    - key: platform-alert.yml
+                      path: platform-alert.yml
         - name: data
           emptyDir: {}

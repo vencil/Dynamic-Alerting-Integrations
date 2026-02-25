@@ -67,10 +67,10 @@ data:
         interval: 15s
         rules:
           - record: tenant:alert_threshold:container_cpu
-            expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
+            expr: max by(tenant) (user_threshold{component="container", metric="cpu"})
 
           - record: tenant:alert_threshold:container_memory
-            expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
+            expr: max by(tenant) (user_threshold{component="container", metric="memory"})
 
   kubernetes-alert.yml: |
     groups:

@@ -56,16 +56,16 @@ data:
         interval: 15s
         rules:
           - record: tenant:alert_threshold:es_heap_usage_percent
-            expr: sum by(tenant) (user_threshold{metric="es_heap_usage_percent", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="es_heap_usage_percent", severity="warning"})
 
           - record: tenant:alert_threshold:es_disk_usage_percent
-            expr: sum by(tenant) (user_threshold{metric="es_disk_usage_percent", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="es_disk_usage_percent", severity="warning"})
 
           - record: tenant:alert_threshold:es_search_latency_ms
-            expr: sum by(tenant) (user_threshold{metric="es_search_latency_ms", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="es_search_latency_ms", severity="warning"})
 
           - record: tenant:alert_threshold:es_pending_tasks
-            expr: sum by(tenant) (user_threshold{metric="es_pending_tasks", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="es_pending_tasks", severity="warning"})
 
   elasticsearch-alert.yml: |
     groups:

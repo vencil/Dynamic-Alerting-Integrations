@@ -47,13 +47,13 @@ data:
         interval: 15s
         rules:
           - record: tenant:alert_threshold:mongodb_connections_current
-            expr: sum by(tenant) (user_threshold{metric="mongodb_connections_current", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="mongodb_connections_current", severity="warning"})
 
           - record: tenant:alert_threshold:mongodb_replication_lag
-            expr: sum by(tenant) (user_threshold{metric="mongodb_replication_lag", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="mongodb_replication_lag", severity="warning"})
 
           - record: tenant:alert_threshold:mongodb_opcounters_rate
-            expr: sum by(tenant) (user_threshold{metric="mongodb_opcounters_rate", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="mongodb_opcounters_rate", severity="warning"})
 
   mongodb-alert.yml: |
     groups:

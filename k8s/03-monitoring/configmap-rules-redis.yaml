@@ -49,16 +49,16 @@ data:
         interval: 15s
         rules:
           - record: tenant:alert_threshold:redis_memory_used_bytes
-            expr: sum by(tenant) (user_threshold{metric="redis_memory_used_bytes", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="redis_memory_used_bytes", severity="warning"})
 
           - record: tenant:alert_threshold:redis_connected_clients
-            expr: sum by(tenant) (user_threshold{metric="redis_connected_clients", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="redis_connected_clients", severity="warning"})
 
           - record: tenant:alert_threshold:redis_evicted_keys_rate
-            expr: sum by(tenant) (user_threshold{metric="redis_evicted_keys_rate", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="redis_evicted_keys_rate", severity="warning"})
 
           - record: tenant:alert_threshold:redis_replication_lag
-            expr: sum by(tenant) (user_threshold{metric="redis_replication_lag", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="redis_replication_lag", severity="warning"})
 
   redis-alert.yml: |
     groups:

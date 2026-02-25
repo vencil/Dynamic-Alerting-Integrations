@@ -1,0 +1,62 @@
+# ============================================================
+# Platform Rule Pack — Self-Monitoring Alert Rules
+# Monitors the health of the Dynamic Alerting platform itself.
+# Maintained by: Platform / SRE Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-platform
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: platform
+data:
+  platform-alert.yml: |
+    groups:
+      - name: platform-self-monitoring
+        rules:
+          # --- Exporter Health ---
+          - alert: ThresholdExporterDown
+            expr: up{job="threshold-exporter"} == 0
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Threshold exporter instance {{ $labels.instance }} is DOWN"
+              description: "up=0 for 1m — partial HA degradation"
+
+          - alert: ThresholdExporterAbsent
+            expr: absent(up{job="threshold-exporter"} == 1)
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "All threshold-exporter instances are unreachable"
+              description: "No healthy threshold-exporter target found for 1m — alerting pipeline broken"
+
+          # --- HA Replica Health ---
+          - alert: ThresholdExporterTooFewReplicas
+            expr: count(up{job="threshold-exporter"} == 1) < 2
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Threshold exporter HA degraded"
+              description: "Only {{ $value }} healthy replica(s) — expected at least 2"
+
+          # --- Pod Restart Storm ---
+          - alert: ThresholdExporterHighRestarts
+            expr: |
+              increase(
+                kube_pod_container_status_restarts_total{
+                  container="threshold-exporter",
+                  namespace="monitoring"
+                }[1h]
+              ) > 3
+            for: 0s
+            labels:
+              severity: warning
+            annotations:
+              summary: "Threshold exporter {{ $labels.pod }} restarting frequently"
+              description: "{{ $value | printf \"%.0f\" }} restarts in the last hour"

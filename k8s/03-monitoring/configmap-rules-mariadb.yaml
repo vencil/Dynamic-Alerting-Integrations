@@ -46,16 +46,16 @@ data:
         interval: 15s
         rules:
           - record: tenant:alert_threshold:connections
-            expr: sum by(tenant) (user_threshold{metric="connections", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="connections", severity="warning"})
 
           - record: tenant:alert_threshold:cpu
-            expr: sum by(tenant) (user_threshold{metric="cpu", severity="warning"})
+            expr: max by(tenant) (user_threshold{metric="cpu", severity="warning"})
 
           - record: tenant:alert_threshold:connections_critical
-            expr: sum by(tenant) (user_threshold{metric="connections", severity="critical"})
+            expr: max by(tenant) (user_threshold{metric="connections", severity="critical"})
 
           - record: tenant:alert_threshold:cpu_critical
-            expr: sum by(tenant) (user_threshold{metric="cpu", severity="critical"})
+            expr: max by(tenant) (user_threshold{metric="cpu", severity="critical"})
 
   mariadb-alert.yml: |
     groups:
