@@ -31,12 +31,9 @@ spec:
             - name: config
               mountPath: /etc/prometheus/prometheus.yml
               subPath: prometheus.yml
-            - name: config
-              mountPath: /etc/prometheus/rules/recording-rules.yml
-              subPath: recording-rules.yml
-            - name: config
-              mountPath: /etc/prometheus/rules/alert-rules.yml
-              subPath: alert-rules.yml
+            - name: rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
             - name: data
               mountPath: /prometheus
           resources:
@@ -62,5 +59,48 @@ spec:
         - name: config
           configMap:
             name: prometheus-config
+        # ============================================================
+        # Projected Volume: merges 5 independent Rule Pack ConfigMaps
+        # into /etc/prometheus/rules/ (matched by rule_files: "*.yml")
+        # Each ConfigMap is maintained by its respective team.
+        # ============================================================
+        - name: rules
+          projected:
+            sources:
+              - configMap:
+                  name: prometheus-rules-mariadb
+                  items:
+                    - key: mariadb-recording.yml
+                      path: mariadb-recording.yml
+                    - key: mariadb-alert.yml
+                      path: mariadb-alert.yml
+              - configMap:
+                  name: prometheus-rules-kubernetes
+                  items:
+                    - key: kubernetes-recording.yml
+                      path: kubernetes-recording.yml
+                    - key: kubernetes-alert.yml
+                      path: kubernetes-alert.yml
+              - configMap:
+                  name: prometheus-rules-redis
+                  items:
+                    - key: redis-recording.yml
+                      path: redis-recording.yml
+                    - key: redis-alert.yml
+                      path: redis-alert.yml
+              - configMap:
+                  name: prometheus-rules-mongodb
+                  items:
+                    - key: mongodb-recording.yml
+                      path: mongodb-recording.yml
+                    - key: mongodb-alert.yml
+                      path: mongodb-alert.yml
+              - configMap:
+                  name: prometheus-rules-elasticsearch
+                  items:
+                    - key: elasticsearch-recording.yml
+                      path: elasticsearch-recording.yml
+                    - key: elasticsearch-alert.yml
+                      path: elasticsearch-alert.yml
         - name: data
           emptyDir: {}

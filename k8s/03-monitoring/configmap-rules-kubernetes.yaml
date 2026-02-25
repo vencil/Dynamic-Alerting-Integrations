@@ -1,0 +1,147 @@
+# ============================================================
+# Kubernetes Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-kubernetes.yaml
+# Maintained by: K8s Infra Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-kubernetes
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: kubernetes
+data:
+  kubernetes-recording.yml: |
+    groups:
+      - name: kubernetes-container-normalization
+        interval: 15s
+        rules:
+          - record: tenant:container_cpu_percent:by_container
+            expr: |
+              label_replace(
+                sum by(namespace, pod, container) (
+                  rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+                )
+                /
+                sum by(namespace, pod, container) (
+                  kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
+                )
+                * 100,
+                "tenant", "$1", "namespace", "(.*)"
+              )
+
+          - record: tenant:container_memory_percent:by_container
+            expr: |
+              label_replace(
+                sum by(namespace, pod, container) (
+                  container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"}
+                )
+                /
+                sum by(namespace, pod, container) (
+                  kube_pod_container_resource_limits{resource="memory", namespace=~"db-.+"}
+                )
+                * 100,
+                "tenant", "$1", "namespace", "(.*)"
+              )
+
+          - record: tenant:pod_weakest_cpu_percent:max
+            expr: max by(tenant, pod) (tenant:container_cpu_percent:by_container)
+
+          - record: tenant:pod_weakest_memory_percent:max
+            expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
+
+      - name: kubernetes-state-matching
+        interval: 15s
+        rules:
+          - record: tenant:container_waiting_reason:count
+            expr: |
+              label_replace(
+                count by(namespace, reason) (
+                  kube_pod_container_status_waiting_reason{namespace=~"db-.+"} > 0
+                ),
+                "tenant", "$1", "namespace", "(.*)"
+              )
+
+      - name: kubernetes-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:container_cpu
+            expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
+
+          - record: tenant:alert_threshold:container_memory
+            expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
+
+  kubernetes-alert.yml: |
+    groups:
+      - name: kubernetes-container-alerts
+        rules:
+          - alert: PodContainerHighCPU
+            expr: |
+              (
+                max by(tenant) (tenant:pod_weakest_cpu_percent:max)
+                > on(tenant) group_left
+                tenant:alert_threshold:container_cpu
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 60s
+            labels:
+              severity: warning
+            annotations:
+              summary: "High container CPU in {{ $labels.tenant }}"
+              description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+
+          - alert: PodContainerHighMemory
+            expr: |
+              (
+                max by(tenant) (tenant:pod_weakest_memory_percent:max)
+                > on(tenant) group_left
+                tenant:alert_threshold:container_memory
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 60s
+            labels:
+              severity: warning
+            annotations:
+              summary: "High container memory in {{ $labels.tenant }}"
+              description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+
+      - name: kubernetes-pod-state-alerts
+        rules:
+          - alert: ContainerCrashLoop
+            expr: |
+              (
+                (
+                  tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_crashloop"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Container crash loop detected in {{ $labels.tenant }}"
+              description: "{{ $value }} container(s) in CrashLoopBackOff state"
+
+          - alert: ContainerImagePullFailure
+            expr: |
+              (
+                (
+                  tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                  * on(tenant) group_left
+                  user_state_filter{filter="container_imagepull"}
+                ) > 0
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+            annotations:
+              summary: "Image pull failure detected in {{ $labels.tenant }}"
+              description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"

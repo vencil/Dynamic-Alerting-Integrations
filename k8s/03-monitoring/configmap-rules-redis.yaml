@@ -1,0 +1,149 @@
+# ============================================================
+# Redis Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-redis.yaml
+# Maintained by: DBA Team / Cache Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-redis
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: redis
+data:
+  redis-recording.yml: |
+    groups:
+      - name: redis-normalization
+        interval: 15s
+        rules:
+          - record: tenant:redis_memory_used_bytes:max
+            expr: max by(tenant) (redis_memory_used_bytes)
+
+          - record: tenant:redis_memory_usage:ratio
+            expr: |
+              max by(tenant) (redis_memory_used_bytes)
+              / max by(tenant) (redis_memory_max_bytes > 0)
+
+          - record: tenant:redis_connected_clients:max
+            expr: max by(tenant) (redis_connected_clients)
+
+          - record: tenant:redis_evicted_keys:rate5m
+            expr: sum by(tenant) (rate(redis_evicted_keys_total[5m]))
+
+          - record: tenant:redis_keyspace_hit_ratio:avg
+            expr: |
+              sum by(tenant) (rate(redis_keyspace_hits_total[5m]))
+              / (
+                sum by(tenant) (rate(redis_keyspace_hits_total[5m]))
+                + sum by(tenant) (rate(redis_keyspace_misses_total[5m]))
+              )
+
+          - record: tenant:redis_replication_lag:max
+            expr: max by(tenant) (redis_connected_slave_lag_seconds)
+
+          - record: tenant:redis_commands:rate5m
+            expr: sum by(tenant) (rate(redis_commands_processed_total[5m]))
+
+      - name: redis-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:redis_memory_used_bytes
+            expr: sum by(tenant) (user_threshold{metric="redis_memory_used_bytes", severity="warning"})
+
+          - record: tenant:alert_threshold:redis_connected_clients
+            expr: sum by(tenant) (user_threshold{metric="redis_connected_clients", severity="warning"})
+
+          - record: tenant:alert_threshold:redis_evicted_keys_rate
+            expr: sum by(tenant) (user_threshold{metric="redis_evicted_keys_rate", severity="warning"})
+
+          - record: tenant:alert_threshold:redis_replication_lag
+            expr: sum by(tenant) (user_threshold{metric="redis_replication_lag", severity="warning"})
+
+  redis-alert.yml: |
+    groups:
+      - name: redis-alerts
+        rules:
+          - alert: RedisDown
+            expr: redis_up == 0
+            for: 15s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Redis instance {{ $labels.instance }} is DOWN"
+
+          - alert: RedisHighMemory
+            expr: |
+              (
+                tenant:redis_memory_used_bytes:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_memory_used_bytes
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis high memory usage on {{ $labels.tenant }}"
+              description: "Memory usage: {{ $value | humanize1024 }}B"
+
+          - alert: RedisHighConnections
+            expr: |
+              (
+                tenant:redis_connected_clients:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_connected_clients
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis high connection count on {{ $labels.tenant }}"
+              description: "{{ $value }} connected clients"
+
+          - alert: RedisHighKeyEvictions
+            expr: |
+              (
+                tenant:redis_evicted_keys:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_evicted_keys_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis high key eviction rate on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.1f\" }} evictions/sec — consider increasing maxmemory"
+
+          - alert: RedisReplicationLag
+            expr: |
+              (
+                tenant:redis_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:redis_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis replication lag on {{ $labels.tenant }}"
+              description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
+
+          - alert: RedisLowHitRatio
+            expr: |
+              tenant:redis_keyspace_hit_ratio:avg < 0.9
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis low hit ratio on {{ $labels.tenant }}"
+              description: "Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy"

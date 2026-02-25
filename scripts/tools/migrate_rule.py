@@ -289,7 +289,8 @@ def write_outputs(results, output_dir):
         for k, v in r.tenant_config.items():
             tenant_configs[k] = v
 
-    with open(os.path.join(output_dir, "tenant-config.yaml"), 'w', encoding='utf-8') as f:
+    tenant_config_path = os.path.join(output_dir, "tenant-config.yaml")
+    with open(tenant_config_path, 'w', encoding='utf-8') as f:
         f.write("# ============================================================\n")
         f.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
         f.write("# ============================================================\n")
@@ -312,6 +313,7 @@ def write_outputs(results, output_dir):
                     dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
                     f.write(f'# "{dim_key}": "{list(r.tenant_config.values())[0]}"\n')
             f.write("\n")
+    os.chmod(tenant_config_path, 0o600)
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     # Deduplication: 追蹤已產出的 recording rule record 名稱
@@ -327,7 +329,8 @@ def write_outputs(results, output_dir):
             seen_records.add(record_name)
             deduplicated_rules.append((r, rr))
 
-    with open(os.path.join(output_dir, "platform-recording-rules.yaml"), 'w', encoding='utf-8') as f:
+    recording_rules_path = os.path.join(output_dir, "platform-recording-rules.yaml")
+    with open(recording_rules_path, 'w', encoding='utf-8') as f:
         f.write("# ============================================================\n")
         f.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
         f.write("# ============================================================\n")
@@ -335,13 +338,29 @@ def write_outputs(results, output_dir):
         f.write("  - name: migrated-recording-rules\n")
         f.write("    rules:\n")
         for r, rr in deduplicated_rules:
-            f.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
+            # 當聚合模式為 AI 猜測 (非使用者手動選擇) 時，插入醒目警告方塊
+            if r.status == "complex" and r.agg_reason != "使用者手動選擇":
+                f.write("      # ============================================================\n")
+                f.write("      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨\n")
+                f.write("      # ============================================================\n")
+                f.write(f"      # 以下 recording rule 的聚合模式為 AI 自動猜測: {r.agg_mode}\n")
+                f.write(f"      # 猜測原因: {r.agg_reason}\n")
+                f.write(f"      # 原始 Alert: {r.alert_name}\n")
+                f.write("      #\n")
+                f.write("      # ⚠️  請在複製貼上前確認:\n")
+                f.write(f"      #   - 聚合模式 {r.agg_mode} 是否正確? (sum=叢集總量, max=單點瓶頸)\n")
+                f.write("      #   - 如不確定，請用 --interactive 模式重新執行\n")
+                f.write("      # ============================================================\n")
+            else:
+                f.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
             f.write(f"      - record: {rr['record']}\n")
             f.write(f"        expr: {rr['expr']}\n")
             f.write("\n")
+    os.chmod(recording_rules_path, 0o600)
 
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    with open(os.path.join(output_dir, "platform-alert-rules.yaml"), 'w', encoding='utf-8') as f:
+    alert_rules_path = os.path.join(output_dir, "platform-alert-rules.yaml")
+    with open(alert_rules_path, 'w', encoding='utf-8') as f:
         f.write("# ============================================================\n")
         f.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
         f.write("# ============================================================\n")
@@ -370,13 +389,15 @@ def write_outputs(results, output_dir):
                     for ak, av in ar['annotations'].items():
                         f.write(f"          {ak}: \"{av}\"\n")
             f.write("\n")
+    os.chmod(alert_rules_path, 0o600)
 
     # --- migration-report.txt ---
     perfect = [r for r in results if r.status == "perfect"]
     complex_rules = [r for r in results if r.status == "complex"]
     unparseable = [r for r in results if r.status == "unparseable"]
 
-    with open(os.path.join(output_dir, "migration-report.txt"), 'w', encoding='utf-8') as f:
+    report_path = os.path.join(output_dir, "migration-report.txt")
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write("=" * 60 + "\n")
         f.write("遷移報告 (Migration Report)\n")
         f.write("=" * 60 + "\n\n")
@@ -411,6 +432,7 @@ def write_outputs(results, output_dir):
                 f.write(f"\n### {r.alert_name} ###\n")
                 f.write(r.llm_prompt)
                 f.write("\n")
+    os.chmod(report_path, 0o600)
 
     return len(perfect), len(complex_rules), len(unparseable)
 

@@ -69,10 +69,11 @@ func main() {
 	mux.HandleFunc("/api/v1/config", configViewHandler(manager))
 
 	server := &http.Server{
-		Addr:         listenAddr,
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Addr:              listenAddr,
+		Handler:           mux,
+		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: 3 * time.Second,
+		WriteTimeout:      10 * time.Second,
 	}
 
 	// Graceful shutdown

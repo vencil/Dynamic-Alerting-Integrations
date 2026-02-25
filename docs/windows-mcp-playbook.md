@@ -26,19 +26,39 @@ docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <command>
 | # | 陷阱 | 解法 |
 |---|------|------|
 | 1 | docker 直接呼叫無輸出 (PS pipeline 問題) | workspace mount 重定向 + Read tool |
-| 2 | `bash -c '...'` 引號被 PowerShell 拆解 | 用 `-ArgumentList @()` 或簡化指令 |
+| 2 | `bash -c '...'` 引號被 PowerShell 拆解 | 用雙引號包 bash -c，內部用單引號；或簡化指令 |
 | 3 | UTF-8 emoji 輸出完全消失 (✅❌📦📄) | workspace mount 重定向；判斷通過用 exit code (`set -euo pipefail`) |
 | 4 | Go test `./...` 找不到 module | `cd components/threshold-exporter/app/` 再跑 `go test ./...` |
 | 5 | 長時間測試 timeout | Desktop Commander `start_process` (支援 600s) |
 | 6 | kubeconfig 過期 | `kind export kubeconfig --name dynamic-alerting-cluster --kubeconfig /root/.kube/config` |
 | 7 | port-forward 殘留 | `docker exec vibe-dev-container pkill -f port-forward` |
+| 8 | PS `> file.txt` 重定向到 host path 失敗 | 重定向必須在 `bash -c` 內部，寫入 container 可見路徑 (如 `/workspaces/...`) |
+| 9 | Python inline 腳本含引號衝突 | 用 `python3 -c "..."` 包單引號；或寫成多行 Python string 避免跳脫 |
+
+## 批量 YAML 驗證 (快速做法)
+
+```bash
+# 容器內用 python3 inline 驗證，exit code=0 表示全過
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container \
+  python3 -c "import yaml; [yaml.safe_load(open(f)) for f in ['k8s/03-monitoring/configmap-rules-mariadb.yaml','k8s/03-monitoring/deployment-prometheus.yaml']]"
+```
 
 ## 指令快速參考
 
 ```bash
+# 叢集狀態
 docker exec vibe-dev-container kind get clusters
 docker exec vibe-dev-container kubectl get pods -A
-docker exec -w /workspaces/vibe-k8s-lab/components/threshold-exporter/app vibe-dev-container go test -v ./...
+
+# Go 編譯 & 靜態分析
+docker exec -w /workspaces/vibe-k8s-lab/components/threshold-exporter/app vibe-dev-container go build -o /dev/null .
+docker exec -w /workspaces/vibe-k8s-lab/components/threshold-exporter/app vibe-dev-container go vet ./...
+
+# Python 工具測試
 docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash tests/test-migrate-tool.sh
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash tests/test-migrate-multidb.sh
 docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash tests/test-scaffold.sh
+
+# K8s manifests apply (projected volume 架構)
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container kubectl apply -f k8s/03-monitoring/
 ```
