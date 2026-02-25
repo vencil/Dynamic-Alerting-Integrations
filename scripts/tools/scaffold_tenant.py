@@ -235,7 +235,7 @@ def generate_report(tenant_name, selected_dbs, output_dir):
         f"  - {output_dir}/_defaults.yaml (平台預設值)",
         "",
         "## Rule Packs (已預載於平台)",
-        "  所有 5 個 Rule Pack 已透過 Projected Volume 預載於平台中。",
+        "  所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台中。",
         "  未部署 exporter 的 pack 不會產生 metrics，alert 不會誤觸發。",
         "",
     ]
@@ -367,7 +367,7 @@ def run_interactive(output_dir):
     print("✅ Tenant config 生成完畢！")
     print("=" * 60)
 
-    print("\n  所有 Rule Packs 已透過 Projected Volume 預載於平台，無需額外掛載。")
+    print("\n  所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載。")
     print(f"\n詳見 {output_dir}/scaffold-report.txt")
 
 
@@ -392,7 +392,7 @@ def run_non_interactive(args):
     print(f"\n📁 輸出至 {output_dir}/")
     write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report)
 
-    print("\n✅ 完成 (所有 Rule Packs 已透過 Projected Volume 預載於平台，無需額外掛載)")
+    print("\n✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)")
 
 
 def main():

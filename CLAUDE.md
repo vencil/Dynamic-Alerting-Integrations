@@ -1,17 +1,19 @@
 # CLAUDE.md — AI 開發上下文指引
 
 ## 專案概述
-**Multi-Tenant Dynamic Alerting** 平台 (v0.4.1)。
+**Multi-Tenant Dynamic Alerting** 平台 (v0.5.0)。
 Config-driven (ConfigMap 掛載), Hot-reload (SHA-256 hash), Directory Scanner 模式 (`-config-dir`)。
-5 個 Rule Pack 透過 Projected Volume 預載 (MariaDB, Kubernetes, Redis, MongoDB, Elasticsearch)。
+6 個 Rule Pack 透過 Projected Volume 預載 (MariaDB, Kubernetes, Redis, MongoDB, Elasticsearch, Platform)。
+HA 架構: 2 Replicas + PodAntiAffinity + PDB + `max by(tenant)` 防 Double Counting。
 
 ## 核心架構
 - **Cluster**: Kind (`dynamic-alerting-cluster`)
 - **Namespaces**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
-- **threshold-exporter** (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤。
-- **Prometheus**: Projected Volume 掛載 5 個 `configmap-rules-*.yaml` → `/etc/prometheus/rules/`
+- **threshold-exporter** (port 8080, ×2 HA): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤。
+- **Prometheus**: Projected Volume 掛載 6 個 `configmap-rules-*.yaml` → `/etc/prometheus/rules/`
 - **Normalization**: `tenant:<component>_<metric>:<function>` 格式
 - **Scenario D**: 維護模式 (`unless`)、複合警報 (`and`)、嚴重度降級
+- **HA 關鍵**: threshold recording rules 使用 `max by(tenant)` 聚合 `user_threshold` (非 `sum`)
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`

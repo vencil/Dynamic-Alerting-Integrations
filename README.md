@@ -1,6 +1,6 @@
 # Dynamic Alerting Integrations
 
-> **Enterprise-grade Multi-Tenant Dynamic Alerting** — Config-driven thresholds, GitOps-ready directory mode, 5 pre-loaded Rule Packs via Projected Volume.
+> **Enterprise-grade Multi-Tenant Dynamic Alerting** — Config-driven thresholds, GitOps-ready directory mode, HA-ready (2 replicas), 6 Rule Packs (含 Platform self-monitoring) via Projected Volume.
 
 Kubernetes 本地測試環境，用於驗證 **Multi-Tenant Dynamic Alerting** 架構（參見 [spec.md](https://github.com/vencil/FunctionPlan/blob/main/AP_Alerts/spec.md)）。
 
@@ -19,8 +19,9 @@ Kind Cluster (dynamic-alerting-cluster)
 │
 └─ namespace: monitoring
    ├─ Prometheus  ─ scrape db-a:9104, db-b:9104
-   │  └─ Projected Volume: 5 Rule Pack ConfigMaps → /etc/prometheus/rules/
-   ├─ threshold-exporter ─ YAML → Prometheus metrics (Directory Scanner mode)
+   │  └─ Projected Volume: 6 Rule Pack ConfigMaps → /etc/prometheus/rules/
+   ├─ threshold-exporter (×2 HA) ─ YAML → Prometheus metrics (Directory Scanner mode)
+   │  └─ PodAntiAffinity + PDB (minAvailable: 1)
    ├─ Grafana     ─ MariaDB Overview dashboard
    └─ Alertmanager
 ```
@@ -87,7 +88,7 @@ make help               # 顯示所有可用 targets
 ├── k8s/
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
-│       ├── configmap-rules-*.yaml  # 5 個獨立 Rule Pack ConfigMaps
+│       ├── configmap-rules-*.yaml  # 6 個獨立 Rule Pack ConfigMaps (含 platform)
 │       └── deployment-prometheus.yaml  # Projected Volume 架構
 ├── rule-packs/                 # 模組化 Prometheus 規則包 (權威參考)
 ├── scripts/                    # 操作腳本 (_lib.sh, setup, verify, cleanup...)
@@ -122,7 +123,7 @@ make demo
 
 ## Rule Packs (模組化 Prometheus 規則)
 
-5 個 Rule Pack 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap，由不同團隊獨立維護：
+6 個 Rule Pack 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap，由不同團隊獨立維護：
 
 | Rule Pack | Exporter | Recording Rules | Alert Rules |
 |-----------|----------|----------------|-------------|
@@ -131,6 +132,7 @@ make demo
 | **redis** | oliver006/redis_exporter | 7 | 6 |
 | **mongodb** | percona/mongodb_exporter | 7 | 6 |
 | **elasticsearch** | elasticsearch_exporter | 7 | 7 |
+| **platform** | threshold-exporter self-monitoring | 0 | 4 |
 
 未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)。新增 exporter 後只需配置 `_defaults.yaml` + tenant YAML。
 
@@ -147,9 +149,27 @@ Alert rules are **dynamically managed** via the `threshold-exporter` (Directory 
 
 See [components/threshold-exporter/README.md](components/threshold-exporter/README.md) for details.
 
+## High Availability & Self-Monitoring
+
+threshold-exporter 預設以 **2 Replicas** 部署，具備以下 HA 機制：
+
+- **Pod Anti-Affinity** (`preferredDuringSchedulingIgnoredDuringExecution`): 盡可能將兩個 replica 分散在不同 Node，相容 Kind 單節點叢集。
+- **PodDisruptionBudget** (`minAvailable: 1`): Node 維護時保證至少 1 個 Pod 存活。
+- **RollingUpdate** (`maxUnavailable: 0`): 滾動更新期間零停機。
+- **`max by(tenant)` 聚合**: 所有 threshold recording rules 使用 `max` 而非 `sum` 聚合 `user_threshold`，避免多 replica 造成閾值翻倍 (Double Counting)。
+
+Platform Rule Pack (`configmap-rules-platform.yaml`) 提供 4 條自我監控警報：
+
+| Alert | 條件 | Severity |
+|-------|------|----------|
+| `ThresholdExporterDown` | 單一 Pod `up == 0` | warning |
+| `ThresholdExporterAbsent` | 所有 Pod 斷線 | critical |
+| `ThresholdExporterTooFewReplicas` | 健康 replica < 2 | warning |
+| `ThresholdExporterHighRestarts` | 1 小時內重啟 > 3 次 | warning |
+
 ## Key Design Decisions
 
-- **Projected Volume**: 5 個 Rule Pack ConfigMap 透過 projected volume 合併掛載至 `/etc/prometheus/rules/`，各團隊獨立維護、零 PR 衝突。
+- **Projected Volume**: 6 個 Rule Pack ConfigMap (含 Platform self-monitoring) 透過 projected volume 合併掛載至 `/etc/prometheus/rules/`，各團隊獨立維護、零 PR 衝突。
 - **GitOps Directory Mode**: threshold-exporter 使用 `-config-dir` 掃描 `conf.d/`，支援 `_defaults.yaml` + per-tenant YAML 拆分。
 - **PVC (not emptyDir)**: MariaDB 資料使用 Kind 內建 StorageClass，Pod 重啟後資料保留。
 - **Sidecar pattern**: mysqld_exporter 與 MariaDB 在同一 Pod，透過 `localhost:3306` 連線。
