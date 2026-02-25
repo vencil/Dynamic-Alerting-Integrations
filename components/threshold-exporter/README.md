@@ -1,6 +1,6 @@
-# Threshold Exporter (v0.3.0)
+# Threshold Exporter (v0.4.1)
 
-**核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤 (Phase 2B)。
+**核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤。
 
 ## 架構
 
@@ -9,8 +9,7 @@
 - **三態設計**: custom value / default / disable
 - **多層嚴重度**: `"40:critical"` 後綴覆寫 severity
 - **Hot-reload**: SHA-256 hash 比對，自動偵測 K8s ConfigMap symlink rotation
-
-> 也支援舊版單檔模式 (`-config`)，但新部署請使用 `-config-dir`。
+- **SAST 合規**: ReadHeaderTimeout (Gosec G112)、檔案權限 0o600 (CWE-276)
 
 ## Config 格式 (Directory Mode)
 

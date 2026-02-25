@@ -1,7 +1,7 @@
 # Rule Packs — 模組化 Prometheus 規則
 
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
-> **所有 5 個 Rule Pack 已預載於 `configmap-prometheus.yaml` 中**，無需額外掛載。
+> **所有 5 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
 > 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
 
 ## 支援的整合 (Supported Integrations)
@@ -16,7 +16,9 @@
 
 ## 架構說明
 
-所有 Rule Pack 的 recording rules 和 alert rules 已合併到 `k8s/03-monitoring/configmap-prometheus.yaml` 中。
+每個 Rule Pack 擁有獨立的 ConfigMap (`k8s/03-monitoring/configmap-rules-*.yaml`)，
+透過 Kubernetes **Projected Volume** 統一掛載至 Prometheus 的 `/etc/prometheus/rules/`。
+各團隊 (DBA, K8s Infra, Search) 可獨立維護自己的 ConfigMap，不會產生 PR 衝突。
 此目錄 (`rule-packs/`) 保留各 pack 的獨立 YAML 作為**權威參考 (canonical source)**，
 方便查閱各 pack 的完整結構和 PromQL 表達式。
 
