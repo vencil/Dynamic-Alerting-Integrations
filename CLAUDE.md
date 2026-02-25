@@ -11,9 +11,11 @@
 - **v0.3.0 (Phase 2B - Current)**: Dimensional Metrics — `"metric{label=\"value\"}"` 維度標籤 (Redis/ES/MongoDB)、Unchecked Collector 動態 Descriptor、`extract_label_matchers()` PromQL 維度偵測、權威範本 (`conf.d/examples/`)。
 - **設計約束**: 維度 key 不支援 `_critical` 後綴（改用 `"value:critical"`）；維度 key 為 tenant-only，不繼承 defaults。
 - **v0.4.0 (Phase 3 - Current)**: Ease of Adoption — 降低導入難度。
-  - **3A** ✅: SAST 修復 (`shell=True` 移除、Go test 權限縮緊) + `migrate_rule.py` UX 大升級 (智能聚合猜測 heuristics、檔案化輸出 `migration_output/`、`--dry-run`/`--interactive` flags)。
-  - **3B** ✅: Rule Packs 模組包架構 — `rule-packs/` 目錄含 5 個 pack (kubernetes/mariadb 預設、redis/mongodb/elasticsearch 選配)。每個 pack 含三件套 (normalization + threshold + alert rules)。Helm values overlay 掛載方式。
-  - **3C** ✅: `scaffold_tenant.py` 互動式 tenant config 產生器 (含 `--catalog` exporter 清單、`--non-interactive` 模式) + `make demo` 端對端示範 + `test-scaffold.sh` 測試。
+  - **3A** ✅: SAST 修復 + `migrate_rule.py` UX 大升級 (智能聚合猜測、檔案化輸出、`--dry-run`/`--interactive`)。
+  - **3A.1** ✅: `migrate_rule.py` 輸出合法 YAML (含 `groups:`/`rules:` boilerplate) + recording rule deduplication。
+  - **3B** ✅: Rule Packs 模組包架構 — `rule-packs/` 目錄含 5 個 pack，每個 pack 含三件套。
+  - **3B.1** ✅: 全部 5 個 Rule Pack 預載至 `configmap-prometheus.yaml` (no-metric → no-alert, near-zero cost)。移除「選配」概念和 Helm overlay 掛載。
+  - **3C** ✅: `scaffold_tenant.py` 互動式 tenant config 產生器 + `make demo` 端對端示範 + `test-scaffold.sh` 測試。
 
 ## 核心組件與架構 (Architecture)
 - **Cluster**: Kind (`dynamic-alerting-cluster`)
@@ -35,7 +37,7 @@
 - `check_alert.py <alert_name> <tenant>`: JSON 回傳 alert 狀態 (firing/pending/inactive)。
 - `diagnose.py <tenant>`: Exception-based 健康檢查。
 - `migrate_rule.py <legacy-rules.yml> [-o DIR] [--dry-run] [--interactive]`: 傳統 alert rules → 動態多租戶三件套。智能猜測聚合模式 (sum/max)，檔案化輸出至 `migration_output/` (tenant-config.yaml、platform-recording-rules.yaml、platform-alert-rules.yaml、migration-report.txt)。
-- `scaffold_tenant.py [--tenant NAME --db TYPE,...] [--catalog] [-o DIR]`: 互動式 tenant config 產生器。支援 5 種 DB 類型 (kubernetes/mariadb/redis/mongodb/elasticsearch)，自動生成 _defaults.yaml + tenant.yaml + scaffold-report.txt (含 Helm 部署指令)。
+- `scaffold_tenant.py [--tenant NAME --db TYPE,...] [--catalog] [-o DIR]`: 互動式 tenant config 產生器。支援 5 種 DB 類型，自動生成 _defaults.yaml + tenant.yaml + scaffold-report.txt。所有 Rule Packs 已預載，無需額外掛載。
 
 ## AI Agent 環境與排錯指南 (MCP & Troubleshooting)
 - **Kubernetes MCP**: Context `kind-dynamic-alerting-cluster`。

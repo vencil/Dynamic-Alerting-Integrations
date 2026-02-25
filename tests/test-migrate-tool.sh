@@ -102,7 +102,7 @@ assert_contains "Tenant config 包含 critical 後綴" 'mysql_global_status_thre
 # Recording Rules
 assert_contains "Recording rule 包含正確 metric" "tenant:mysql_global_status_threads_connected:" "$RECORDING_CONTENT"
 assert_not_contains "base_key 不應為 rate" "tenant:rate:" "$RECORDING_CONTENT"
-assert_contains "Recording rule 包含 AI 猜測註解" "AI" "$RECORDING_CONTENT"
+assert_contains "Recording rule 包含聚合猜測註解" "(sum|max)" "$RECORDING_CONTENT"
 
 # Alert Rules — YAML safe_dump 會將多行 expr 轉為 escaped string
 assert_contains "Alert rule 包含 maintenance 邏輯" "maintenance" "$ALERT_CONTENT"

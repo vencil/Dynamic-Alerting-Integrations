@@ -13,13 +13,18 @@
 
 ### Task 3B: Rule Packs — 模組化 Prometheus 規則
 - **`rule-packs/` 目錄結構**: 每個 Rule Pack 包含三件套 (Normalization Recording Rules + Threshold Normalization + Alert Rules)。
-- **`rule-pack-kubernetes.yaml`** (預設啟用): cAdvisor + kube-state-metrics — 5 recording rules + 4 alert rules (CPU/Memory weakest link + CrashLoop/ImagePull state matching)。
-- **`rule-pack-mariadb.yaml`** (預設啟用): mysqld_exporter (Percona) — 7 recording rules + 8 alert rules (含 Percona-inspired slow queries、aborted connections)。
-- **`rule-pack-redis.yaml`** (選配): oliver006/redis_exporter — 7 recording rules + 6 alert rules (memory、evictions、hit ratio、replication lag)。
-- **`rule-pack-mongodb.yaml`** (選配): percona/mongodb_exporter — 7 recording rules + 6 alert rules (connections、replication、page faults)。
-- **`rule-pack-elasticsearch.yaml`** (選配): elasticsearch_exporter — 7 recording rules + 7 alert rules (cluster health、heap、disk、search latency、unassigned shards)。
-- **`rule-packs/README.md`**: 整合目錄表、三種掛載方式 (kubectl/Helm overlay/合併 ConfigMap)、自訂 Rule Pack 結構指南、Exporter 文件連結。
-- **`configmap-prometheus.yaml` 重構**: group 名稱與 rule packs 同步 (mariadb-normalization, kubernetes-container-normalization 等)；新增 Percona-inspired MariaDB rules (slow_queries, aborted_connections, buffer_pool_usage)；新增 MariaDBHighSlowQueries + MariaDBHighAbortedConnections alerts。
+- **`rule-pack-kubernetes.yaml`**: cAdvisor + kube-state-metrics — 5 recording rules + 4 alert rules。
+- **`rule-pack-mariadb.yaml`**: mysqld_exporter (Percona) — 7 recording rules + 8 alert rules。
+- **`rule-pack-redis.yaml`**: oliver006/redis_exporter — 7 recording rules + 6 alert rules。
+- **`rule-pack-mongodb.yaml`**: percona/mongodb_exporter — 7 recording rules + 6 alert rules。
+- **`rule-pack-elasticsearch.yaml`**: elasticsearch_exporter — 7 recording rules + 7 alert rules。
+- **全部預載 (3B.1)**: 所有 5 個 Rule Pack 的 recording rules + alert rules 已合併至 `configmap-prometheus.yaml`。未部署 exporter 的 pack 不產生 metrics，alert 不誤觸發 (near-zero cost)。移除原「選配」概念和 Helm overlay 掛載方式。
+- **`rule-packs/README.md`**: 更新為預載架構說明 (含 `absent()` 安全性分析)、自訂 Rule Pack 結構指南。
+
+### Task 3A.1: migrate_rule.py Polish
+- **YAML Boilerplate**: `platform-recording-rules.yaml` 和 `platform-alert-rules.yaml` 輸出合法 YAML 結構 (含 `groups:` / `rules:` 頂層 key)，可直接合併至 Prometheus ConfigMap。
+- **Recording Rule Deduplication**: `seen_records = set()` 避免 warning + critical 同 metric 產生重複 recording rule。
+- **tenant-config.yaml**: 新增 copy-paste boilerplate 範例註解。
 
 ### Task 3C: Scaffold Tool + Demo
 - **`scaffold_tenant.py`**: 互動式 tenant config 產生器。支援 5 種 DB 類型，自動生成 `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (含 Helm 部署指令、Rule Pack 掛載提示)。

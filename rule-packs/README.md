@@ -1,50 +1,30 @@
 # Rule Packs — 模組化 Prometheus 規則
 
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
-> 掛載到 Prometheus 即可使用，無需自行撰寫 PromQL。
+> **所有 5 個 Rule Pack 已預載於 `configmap-prometheus.yaml` 中**，無需額外掛載。
+> 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
 
 ## 支援的整合 (Supported Integrations)
 
 | Rule Pack | Exporter | 狀態 | Recording Rules | Alert Rules |
 |-----------|----------|------|----------------|------------|
-| **kubernetes** | cAdvisor + kube-state-metrics | 🟢 預設啟用 | 5 | 4 |
-| **mariadb** | mysqld_exporter (Percona) | 🟢 預設啟用 | 7 | 8 |
-| **redis** | oliver006/redis_exporter | 🟡 選配 | 7 | 6 |
-| **mongodb** | percona/mongodb_exporter | 🟡 選配 | 7 | 6 |
-| **elasticsearch** | elasticsearch_exporter | 🟡 選配 | 7 | 7 |
+| **kubernetes** | cAdvisor + kube-state-metrics | 🟢 預載 | 5 | 4 |
+| **mariadb** | mysqld_exporter (Percona) | 🟢 預載 | 7 | 8 |
+| **redis** | oliver006/redis_exporter | 🟢 預載 | 7 | 6 |
+| **mongodb** | percona/mongodb_exporter | 🟢 預載 | 7 | 6 |
+| **elasticsearch** | elasticsearch_exporter | 🟢 預載 | 7 | 7 |
 
-## 快速啟用
+## 架構說明
 
-### 方法 1: 直接掛載 (kubectl)
+所有 Rule Pack 的 recording rules 和 alert rules 已合併到 `k8s/03-monitoring/configmap-prometheus.yaml` 中。
+此目錄 (`rule-packs/`) 保留各 pack 的獨立 YAML 作為**權威參考 (canonical source)**，
+方便查閱各 pack 的完整結構和 PromQL 表達式。
 
-```bash
-# 1. 將 rule pack 加入 Prometheus ConfigMap
-kubectl create configmap prometheus-rules-redis \
-  --from-file=rule-pack-redis.yml=rule-packs/rule-pack-redis.yaml \
-  -n monitoring
+### 為什麼全部預載？
 
-# 2. 掛載到 Prometheus Pod (修改 deployment)
-# Volume: configMap → prometheus-rules-redis
-# Mount:  /etc/prometheus/rules/rule-pack-redis.yml
-```
-
-### 方法 2: Helm values overlay (推薦)
-
-```bash
-# 安裝時啟用 Redis + MongoDB rule packs
-helm upgrade --install threshold-exporter ./components/threshold-exporter \
-  -n monitoring \
-  -f environments/local/threshold-exporter.yaml \
-  -f rule-packs/rule-pack-redis.yaml \
-  -f rule-packs/rule-pack-mongodb.yaml
-```
-
-### 方法 3: 合併到現有 ConfigMap
-
-```bash
-# 將 rule pack 的 groups 追加到 configmap-prometheus.yaml 的 recording-rules.yml / alert-rules.yml 中
-# 參考 configmap-prometheus.yaml 的格式
-```
+- **成本**: 沒有對應 metric 的 recording rule 會回傳空結果集，不佔 CPU/memory。
+- **簡化**: 新增 exporter 後只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
+- **安全**: 唯一的風險是 `absent()` — 目前只有 mariadb (已部署) 使用 `absent(mysql_up)`，其他 pack 都不含 `absent()`。
 
 ## 自訂 Rule Pack
 

@@ -234,39 +234,25 @@ def generate_report(tenant_name, selected_dbs, output_dir):
         f"  - {output_dir}/{tenant_name}.yaml (tenant 閾值設定)",
         f"  - {output_dir}/_defaults.yaml (平台預設值)",
         "",
-        "## 需要啟用的 Rule Packs",
+        "## Rule Packs (已預載於平台)",
+        "  所有 5 個 Rule Pack 已預載於 Prometheus ConfigMap 中。",
+        "  未部署 exporter 的 pack 不會產生 metrics，alert 不會誤觸發。",
+        "",
     ]
 
-    default_packs = []
-    optional_packs = []
     for db in selected_dbs:
         pack = RULE_PACKS.get(db)
         if pack:
-            if pack["default_on"]:
-                default_packs.append(f"  ✅ {pack['display']} — 已內建 (預設啟用)")
-            else:
-                optional_packs.append(
-                    f"  📦 {pack['display']} — 需掛載 {pack['rule_pack_file']}"
-                )
+            lines.append(f"  ✅ {pack['display']} — 已預載")
 
-    lines.extend(default_packs)
-    lines.extend(optional_packs)
-
-    # Helm deployment command
+    # Helm deployment command (no rule pack overlays needed)
     lines.extend(["", "## 部署指令", ""])
 
-    helm_cmd_parts = [
-        "helm upgrade --install threshold-exporter ./components/threshold-exporter",
-        "  -n monitoring",
-        "  -f environments/local/threshold-exporter.yaml",
-    ]
-    for db in selected_dbs:
-        pack = RULE_PACKS.get(db)
-        if pack and not pack["default_on"]:
-            helm_cmd_parts.append(f"  -f {pack['rule_pack_file']}")
-
     lines.append("```bash")
-    lines.append(" \\\n".join(helm_cmd_parts))
+    lines.append("# 部署/更新 threshold-exporter (Rule Packs 已內建，無需額外 -f)")
+    lines.append("helm upgrade --install threshold-exporter ./components/threshold-exporter \\")
+    lines.append("  -n monitoring \\")
+    lines.append("  -f environments/local/threshold-exporter.yaml")
     lines.append("```")
 
     # ConfigMap patching
@@ -327,9 +313,8 @@ def print_catalog():
     print("║          Dynamic Alerting — Supported Exporters            ║")
     print("╠══════════════════════════════════════════════════════════════╣")
     for key, pack in RULE_PACKS.items():
-        status = "預設" if pack["default_on"] else "選配"
         metrics = ", ".join(pack.get("defaults", {}).keys())
-        print(f"║ [{status}] {pack['display']:<45}║")
+        print(f"║ [預載] {pack['display']:<45}║")
         print(f"║   Exporter: {pack['exporter']:<44}║")
         print(f"║   Metrics:  {metrics:<44}║")
         print(f"║   Rule Pack: {pack['rule_pack_file']:<43}║")
@@ -379,13 +364,7 @@ def run_interactive(output_dir):
     print("✅ Tenant config 生成完畢！")
     print("=" * 60)
 
-    # Show required rule packs
-    optional = [db for db in selected_dbs if not RULE_PACKS[db]["default_on"]]
-    if optional:
-        print("\n⚠️  以下 Rule Pack 需要額外掛載:")
-        for db in optional:
-            pack = RULE_PACKS[db]
-            print(f"   {pack['rule_pack_file']}")
+    print("\n  所有 Rule Packs 已預載於 Prometheus，無需額外掛載。")
     print(f"\n詳見 {output_dir}/scaffold-report.txt")
 
 
@@ -410,10 +389,7 @@ def run_non_interactive(args):
     print(f"\n📁 輸出至 {output_dir}/")
     write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report)
 
-    optional = [db for db in selected_dbs if not RULE_PACKS[db]["default_on"]]
-    if optional:
-        print(f"\n⚠️  需掛載 Rule Packs: {', '.join(RULE_PACKS[db]['rule_pack_file'] for db in optional)}")
-    print("\n✅ 完成")
+    print("\n✅ 完成 (所有 Rule Packs 已預載於 Prometheus，無需額外掛載)")
 
 
 def main():

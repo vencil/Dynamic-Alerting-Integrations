@@ -75,7 +75,7 @@ python3 "$TOOL" --tenant db-d --db mariadb,redis -o "$OUT/test2" 2>/dev/null
 assert_file_exists "生成 db-d.yaml" "$OUT/test2/db-d.yaml"
 assert_file_contains "defaults 含 redis_memory" "$OUT/test2/_defaults.yaml" "redis_memory"
 assert_file_contains "defaults 含 redis_connected_clients" "$OUT/test2/_defaults.yaml" "redis_connected_clients"
-assert_file_contains "report 提示 Redis Rule Pack" "$OUT/test2/scaffold-report.txt" "rule-pack-redis"
+assert_file_contains "report 提示 Redis 已預載" "$OUT/test2/scaffold-report.txt" "Redis"
 
 # -----------------------------------------------
 echo ""
@@ -84,9 +84,9 @@ python3 "$TOOL" --tenant db-full --db mariadb,redis,mongodb,elasticsearch -o "$O
 assert_file_exists "生成 db-full.yaml" "$OUT/test3/db-full.yaml"
 assert_file_contains "defaults 含 mongodb" "$OUT/test3/_defaults.yaml" "mongodb_connections"
 assert_file_contains "defaults 含 elasticsearch" "$OUT/test3/_defaults.yaml" "es_jvm_memory"
-assert_file_contains "report 含 3 個選配 Rule Pack" "$OUT/test3/scaffold-report.txt" "rule-pack-mongodb"
-assert_file_contains "report 含 ES Rule Pack" "$OUT/test3/scaffold-report.txt" "rule-pack-elasticsearch"
-assert_file_contains "report Helm 指令含 -f" "$OUT/test3/scaffold-report.txt" "helm upgrade"
+assert_file_contains "report 含 MongoDB 已預載" "$OUT/test3/scaffold-report.txt" "MongoDB"
+assert_file_contains "report 含 Elasticsearch 已預載" "$OUT/test3/scaffold-report.txt" "Elasticsearch"
+assert_file_contains "report Helm 指令含 helm upgrade" "$OUT/test3/scaffold-report.txt" "helm upgrade"
 
 # -----------------------------------------------
 echo ""

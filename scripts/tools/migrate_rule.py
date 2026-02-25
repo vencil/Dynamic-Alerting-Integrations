@@ -278,85 +278,97 @@ def process_rule(rule, interactive=False):
 # ============================================================
 
 def write_outputs(results, output_dir):
-    """將遷移結果寫入分離的 YAML 檔案。"""
+    """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。"""
     os.makedirs(output_dir, exist_ok=True)
 
-    # --- tenant-config.yaml ---
+    # --- tenant-config.yaml (含 boilerplate 範例) ---
     tenant_configs = {}
     for r in results:
         if r.status == "unparseable":
             continue
         for k, v in r.tenant_config.items():
-            tenant_configs[k] = f'"{v}"'
+            tenant_configs[k] = v
 
-    tenant_yaml = {
-        "# 將以下 key-value 複製到對應的 tenant YAML (如 db-a.yaml)": None,
-        "# 範例: tenants.db-a 區塊中加入這些 key": None,
-    }
-    # Write as plain YAML-ready snippets
     with open(os.path.join(output_dir, "tenant-config.yaml"), 'w', encoding='utf-8') as f:
         f.write("# ============================================================\n")
-        f.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml 的 tenants 區塊\n")
+        f.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
         f.write("# ============================================================\n")
-        f.write("# 範例:\n")
+        f.write("# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n")
         f.write("# tenants:\n")
-        f.write("#   db-a:\n")
+        f.write("#   my-tenant-name:\n")
         for k, v in tenant_configs.items():
-            f.write(f"#     {k}: {v}\n")
-        f.write("#\n")
-        f.write("# 以下為各規則提取的閾值:\n\n")
+            f.write(f'#     {k}: "{v}"\n')
+        f.write("\n")
         for r in results:
             if r.status == "unparseable":
                 continue
             f.write(f"# --- From: {r.alert_name} (severity: {r.severity}) ---\n")
             for k, v in r.tenant_config.items():
-                f.write(f"{k}: \"{v}\"\n")
+                f.write(f'{k}: "{v}"\n')
             if r.dim_hints:
-                f.write("# 📐 維度標籤替代語法:\n")
+                f.write("# 維度標籤替代語法:\n")
                 for hint in r.dim_hints:
                     label_pairs = ', '.join(f'{lk}="{lv}"' for lk, lv in hint["labels"].items())
-                    dim_key = f'{r.tenant_config and list(r.tenant_config.keys())[0].split("_critical")[0] or "metric"}{{{label_pairs}}}'
+                    dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
                     f.write(f'# "{dim_key}": "{list(r.tenant_config.values())[0]}"\n')
             f.write("\n")
 
-    # --- platform-recording-rules.yaml (kubectl apply -f ready) ---
-    all_recording_rules = []
+    # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
+    # Deduplication: 追蹤已產出的 recording rule record 名稱
+    seen_records = set()
+    deduplicated_rules = []
     for r in results:
         if r.status == "unparseable":
             continue
         for rr in r.recording_rules:
-            rule_with_comment = dict(rr)
-            if r.agg_mode and r.agg_reason:
-                # Add heuristic annotation as a comment-like field
-                rule_with_comment['_comment'] = f"🤖 AI 猜測: {r.agg_mode} — {r.agg_reason}"
-            all_recording_rules.append(rule_with_comment)
+            record_name = rr["record"]
+            if record_name in seen_records:
+                continue
+            seen_records.add(record_name)
+            deduplicated_rules.append((r, rr))
 
     with open(os.path.join(output_dir, "platform-recording-rules.yaml"), 'w', encoding='utf-8') as f:
         f.write("# ============================================================\n")
-        f.write("# Platform Recording Rules\n")
-        f.write("# 加入 configmap-prometheus.yaml 的 recording rule group 中\n")
-        f.write("# ============================================================\n\n")
-        for r in results:
-            if r.status == "unparseable":
-                continue
-            f.write(f"# --- {r.alert_name} ---\n")
-            f.write(f"# 🤖 AI 猜測: {r.agg_mode} — {r.agg_reason}\n")
-            for rr in r.recording_rules:
-                f.write(yaml.dump([rr], sort_keys=False, allow_unicode=True, default_flow_style=False))
+        f.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
+        f.write("# ============================================================\n")
+        f.write("groups:\n")
+        f.write("  - name: migrated-recording-rules\n")
+        f.write("    rules:\n")
+        for r, rr in deduplicated_rules:
+            f.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
+            f.write(f"      - record: {rr['record']}\n")
+            f.write(f"        expr: {rr['expr']}\n")
             f.write("\n")
 
-    # --- platform-alert-rules.yaml (kubectl apply -f ready) ---
+    # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     with open(os.path.join(output_dir, "platform-alert-rules.yaml"), 'w', encoding='utf-8') as f:
         f.write("# ============================================================\n")
-        f.write("# Platform Dynamic Alert Rules\n")
-        f.write("# 加入 configmap-prometheus.yaml 的 alerting rule group 中\n")
-        f.write("# ============================================================\n\n")
+        f.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
+        f.write("# ============================================================\n")
+        f.write("groups:\n")
+        f.write("  - name: migrated-alert-rules\n")
+        f.write("    rules:\n")
         for r in results:
             if r.status == "unparseable":
                 continue
-            f.write(f"# --- {r.alert_name} ---\n")
-            alert_yaml = yaml.safe_dump(r.alert_rules, sort_keys=False, allow_unicode=True)
-            f.write(alert_yaml)
+            f.write(f"      # --- {r.alert_name} ---\n")
+            # Write alert rule with proper indentation
+            for ar in r.alert_rules:
+                f.write(f"      - alert: {ar['alert']}\n")
+                # Multiline expr — use YAML literal block
+                f.write(f"        expr: |\n")
+                for line in ar['expr'].strip().split('\n'):
+                    f.write(f"          {line}\n")
+                if 'for' in ar:
+                    f.write(f"        for: {ar['for']}\n")
+                if 'labels' in ar:
+                    f.write(f"        labels:\n")
+                    for lk, lv in ar['labels'].items():
+                        f.write(f"          {lk}: {lv}\n")
+                if 'annotations' in ar:
+                    f.write(f"        annotations:\n")
+                    for ak, av in ar['annotations'].items():
+                        f.write(f"          {ak}: \"{av}\"\n")
             f.write("\n")
 
     # --- migration-report.txt ---
