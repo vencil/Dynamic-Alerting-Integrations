@@ -22,6 +22,8 @@ exporter:
 # Threshold config (embedded in ConfigMap)
 # This is the actual alerting threshold configuration.
 # See config/conf.d/ directory for the reference multi-file format.
+# For multi-DB examples (Redis, MongoDB, Elasticsearch), see:
+#   config/conf.d/examples/ and migration-guide.md §7 (維度標籤)
 thresholdConfig:
   defaults:
     # Scenario A: MySQL thresholds

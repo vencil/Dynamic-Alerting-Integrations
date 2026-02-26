@@ -139,7 +139,7 @@ graph TD
     D --> TE
     T1 --> TE
     T2 --> TE
-    TE -->|"Expose user_threshold<br/>gauge metrics"| PROM
+    TE -->|"Expose user_threshold<br/>gauge metrics<br/>(max by tenant)"| PROM
     RP -->|"Recording Rules +<br/>Alert Rules"| PROM
     PROM --> AM["Alertmanager<br/>Route by tenant label"]
 

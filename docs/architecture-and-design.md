@@ -431,10 +431,10 @@ spec:
 
 #### ❌ 錯誤：使用 `sum`
 ```yaml
-- record: user_threshold:mariadb_replication_lag:warning
+- record: tenant:alert_threshold:connections
   expr: |
     sum by(tenant)
-      user_threshold{tenant=~".*", metric="mariadb_replication_lag", severity="warning"}
+      user_threshold{tenant=~".*", metric="connections"}
 ```
 
 **問題：**
@@ -444,10 +444,10 @@ spec:
 
 #### ✓ 正確：使用 `max`
 ```yaml
-- record: user_threshold:mariadb_replication_lag:warning
+- record: tenant:alert_threshold:connections
   expr: |
     max by(tenant)
-      user_threshold{tenant=~".*", metric="mariadb_replication_lag", severity="warning"}
+      user_threshold{tenant=~".*", metric="connections"}
 ```
 
 **優勢：**
@@ -637,10 +637,10 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 **修正：** 確保所有閾值規則使用 `max by(tenant)`
 
 ```yaml
-- record: user_threshold:mariadb_lag:warning
+- record: tenant:alert_threshold:slave_lag
   expr: |
     max by(tenant)  # ✓ 不是 sum
-      user_threshold{...}
+      user_threshold{metric="slave_lag"}
 ```
 
 ---
