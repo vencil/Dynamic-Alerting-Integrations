@@ -22,6 +22,15 @@ HA 架構: 2 Replicas + PodAntiAffinity + PDB + `max by(tenant)` 防 Double Coun
 4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`
 5. **SAST**: Go 必須 `ReadHeaderTimeout`; Python 寫檔必須 `os.chmod(path, 0o600)`
 
+## 文件架構
+| 文件 | 內容 | 受眾 |
+|------|------|------|
+| `README.md` | 痛點/解決方案 + 架構圖 + Quick Start | 技術主管、初訪者 |
+| `docs/architecture-and-design.md` | 效能分析、HA 設計、治理、SAST | Platform Engineers |
+| `docs/migration-guide.md` | scaffold/migrate 工具 + 5 場景 | Tenants, DevOps |
+| `rule-packs/README.md` | 6 Rule Pack 規格與範本 | All |
+| `components/threshold-exporter/README.md` | 元件架構、API、Config | Developers |
+
 ## 工具 (scripts/tools/)
 - `patch_config.py <tenant> <metric_key> <value>`: 安全局部更新 ConfigMap
 - `check_alert.py <alert_name> <tenant>`: JSON alert 狀態
@@ -30,8 +39,10 @@ HA 架構: 2 Replicas + PodAntiAffinity + PDB + `max by(tenant)` 防 Double Coun
 - `scaffold_tenant.py [--tenant NAME --db TYPE,...] [--catalog] [-o DIR]`: 互動式 tenant config 產生器
 
 ## AI Agent 環境
-- **Kubernetes MCP**: Context `kind-dynamic-alerting-cluster`
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`
+- **Kubernetes MCP**: Context `kind-dynamic-alerting-cluster`（簡單查詢可用，複雜操作常 timeout → fallback docker exec）
+- **Prometheus API**: 必須透過 `port-forward` + `localhost`，ClusterIP 不可直達
+- **檔案清理**: mounted workspace 無法從 VM 直接 rm → 用 `docker exec ... rm -f`
 - 🚨 **Playbooks** (遇到問題時讀取):
-  1. Windows/PowerShell 問題 → `docs/windows-mcp-playbook.md`
-  2. K8s/測試問題 → `docs/testing-playbook.md`
+  1. Windows/PowerShell/MCP 問題 → `docs/windows-mcp-playbook.md`
+  2. K8s/測試/Benchmark 問題 → `docs/testing-playbook.md`

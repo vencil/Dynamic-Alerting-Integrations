@@ -1,16 +1,21 @@
-# 遷移指南：從傳統 Prometheus 警報遷移至動態多租戶閾值架構
+# Migration Guide — 遷移指南
+
+> 從傳統 Prometheus 警報遷移至動態多租戶閾值架構。
+> **其他文件：** [README](../README.md) (概覽) · [Architecture & Design](architecture-and-design.md) (技術深度) · [Rule Packs](../rule-packs/README.md) (規則包目錄)
+
+## 你在哪個階段？(Where Are You?)
+
+| 你的情境 | 推薦路徑 | 工具 | 預估時間 |
+|----------|----------|------|---------|
+| **全新租戶** — 首次接入 | 互動式產生 tenant config | `scaffold_tenant.py` | ~5 min |
+| **已有傳統 alert rules** — 要遷移 | 自動轉換為三件套 | `migrate_rule.py` | ~15 min |
+| **不支援的 DB 類型** — 需擴展 | 手動建立 Recording + Alert Rules | 參見 [§9](#9-進階擴展不支援的-db-類型) | ~30 min |
 
 ## Zero-Friction 導入
 
 本平台已預載 **6 個核心 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
 
 **未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)**。新增 exporter 後，只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
-
-| 你的情境 | 推薦路徑 | 工具 |
-|----------|----------|------|
-| **全新租戶** | 互動式產生 tenant config | `scaffold_tenant.py` |
-| **已有傳統 alert rules** | 自動轉換為三件套 | `migrate_rule.py` |
-| **不支援的 DB 類型** | 手動建立 Recording + Alert Rules | 參見 [進階：擴展不支援的 DB 類型](#進階擴展不支援的-db-類型) |
 
 ---
 

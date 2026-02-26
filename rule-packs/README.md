@@ -3,6 +3,8 @@
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
 > **所有 6 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
 > 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
+>
+> **其他文件：** [README](../README.md) (概覽) · [Migration Guide](../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../docs/architecture-and-design.md) (技術深度)
 
 ## 支援的整合 (Supported Integrations)
 

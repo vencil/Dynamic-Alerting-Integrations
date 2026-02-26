@@ -1,6 +1,7 @@
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
 
 > 測試前置準備與已知問題修復指引。
+> **相關文件：** [Windows-MCP Playbook](windows-mcp-playbook.md) (docker exec 模式、Helm 防衝突、Prometheus 查詢)
 
 ## 測試前置準備
 
@@ -14,7 +15,7 @@
 | # | 問題 | 修復 |
 |---|------|------|
 | 1 | Helm upgrade 不清理舊 ConfigMap key | `kubectl delete cm threshold-config -n monitoring` → `helm upgrade` |
-| 2 | Helm upgrade field-manager conflict | 見 `windows-mcp-playbook.md` → Helm 防衝突流程 |
+| 2 | Helm field-manager conflict | 見 [Windows-MCP Playbook → Helm 防衝突流程](windows-mcp-playbook.md#helm-upgrade-防衝突流程) |
 | 3 | ConfigMap volume 更新延遲 30-90s | hot-reload 驗證需等 45+ 秒 |
 | 4 | Metrics label 順序 (`component,metric,severity,tenant`) | grep 用 `metric=.*tenant=`，不要反過來 |
 | 5 | 場景測試殘留值 | 測試前用 `patch_config.py` 恢復預設 |
@@ -22,7 +23,7 @@
 
 ## Projected Volume 架構 (v0.5+)
 
-Recording / Alert Rules 拆為 6 個獨立 ConfigMap，透過 `projected` volume 投射至 `/etc/prometheus/rules/`：
+6 個獨立 ConfigMap 透過 `projected` volume 投射至 `/etc/prometheus/rules/`：
 
 ```
 configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,platform}.yaml
@@ -57,16 +58,33 @@ docker exec vibe-dev-container bash -c "\
 |------|----------|------|
 | 2 Pods Running | `kubectl get pods -n monitoring -l app=threshold-exporter` | 2/2 Ready |
 | PDB 存在 | `kubectl get pdb -n monitoring` | `minAvailable: 1` |
-| AntiAffinity | `kubectl get deploy threshold-exporter -n monitoring -o jsonpath='{.spec.template.spec.affinity}'` | 含 `podAntiAffinity` |
-| RollingUpdate | `kubectl get deploy threshold-exporter -n monitoring -o jsonpath='{.spec.strategy}'` | `maxUnavailable: 0` |
-| Platform alerts 掛載 | `kubectl exec -n monitoring deploy/prometheus -- ls /etc/prometheus/rules/` | 含 `platform-alert.yml` |
+| AntiAffinity | `kubectl get deploy ... -o jsonpath='{.spec.template.spec.affinity}'` | 含 `podAntiAffinity` |
+| RollingUpdate | `kubectl get deploy ... -o jsonpath='{.spec.strategy}'` | `maxUnavailable: 0` |
+| Platform alerts | `kubectl exec -n monitoring deploy/prometheus -- ls /etc/prometheus/rules/` | 含 `platform-alert.yml` |
 
 ### kubectl scale 注意
 
-`helm upgrade` 後 replicas 可能被覆蓋。如果 `helm upgrade` 後只有 1 個 Pod：
+`helm upgrade` 後 replicas 可能被覆蓋。若只有 1 個 Pod：
 1. 檢查 `values.yaml` 的 `replicaCount` 是否為 2
-2. 若已是 2 但叢集仍 1，用 `kubectl scale deploy threshold-exporter -n monitoring --replicas=2` 補救
+2. `kubectl scale deploy threshold-exporter -n monitoring --replicas=2` 補救
 3. 根因通常是 server-side apply 與 Helm 的 field ownership 衝突
+
+## Performance Benchmark 測試
+
+使用一次性 port-forward 查詢 Prometheus 內建指標（詳見 [Windows-MCP Playbook → Prometheus API 查詢模式](windows-mcp-playbook.md#prometheus-api-查詢模式)）：
+
+**關鍵指標基線 (v0.5.0, 2 tenants, Kind 單節點)：**
+
+| 指標 | 值 | 說明 |
+|------|----|------|
+| 規則總數 | 85 | 33 recording + 35 alert + 17 threshold-norm |
+| 規則群組數 | 18 | 6 pack × 3 groups (部分合併) |
+| 每週期總評估時間 | ~20.8ms | `sum(prometheus_rule_group_last_duration_seconds)` |
+| p50 per-group | 0.59ms | `prometheus_rule_group_duration_seconds{quantile="0.5"}` |
+| p99 per-group | 5.05ms | `prometheus_rule_group_duration_seconds{quantile="0.99"}` |
+| 空向量 pack 成本 | <1.75ms | ES/Redis/MongoDB 無 exporter 時 |
+
+**用途：** 更新 README benchmark 表格或驗證架構變更未造成性能退化。
 
 ## Shell 測試腳本陷阱
 
