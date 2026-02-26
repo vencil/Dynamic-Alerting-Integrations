@@ -60,15 +60,21 @@ spec:
           configMap:
             name: prometheus-config
         # ============================================================
-        # Projected Volume: merges 5 independent Rule Pack ConfigMaps
+        # Projected Volume: merges independent Rule Pack ConfigMaps
         # into /etc/prometheus/rules/ (matched by rule_files: "*.yml")
         # Each ConfigMap is maintained by its respective team.
+        #
+        # optional: true — 允許租戶透過 kubectl delete cm 卸載不需要的
+        # Rule Pack，Prometheus 不會因缺少 ConfigMap 而 Crash。
+        # 大型客戶可關閉黃金標準，改用 migrate_rule.py 轉出的
+        # 自訂規則包 (configmap-rules-custom-*.yaml)。
         # ============================================================
         - name: rules
           projected:
             sources:
               - configMap:
                   name: prometheus-rules-mariadb
+                  optional: true
                   items:
                     - key: mariadb-recording.yml
                       path: mariadb-recording.yml
@@ -76,6 +82,7 @@ spec:
                       path: mariadb-alert.yml
               - configMap:
                   name: prometheus-rules-kubernetes
+                  optional: true
                   items:
                     - key: kubernetes-recording.yml
                       path: kubernetes-recording.yml
@@ -83,6 +90,7 @@ spec:
                       path: kubernetes-alert.yml
               - configMap:
                   name: prometheus-rules-redis
+                  optional: true
                   items:
                     - key: redis-recording.yml
                       path: redis-recording.yml
@@ -90,6 +98,7 @@ spec:
                       path: redis-alert.yml
               - configMap:
                   name: prometheus-rules-mongodb
+                  optional: true
                   items:
                     - key: mongodb-recording.yml
                       path: mongodb-recording.yml
@@ -97,6 +106,7 @@ spec:
                       path: mongodb-alert.yml
               - configMap:
                   name: prometheus-rules-elasticsearch
+                  optional: true
                   items:
                     - key: elasticsearch-recording.yml
                       path: elasticsearch-recording.yml
@@ -104,6 +114,7 @@ spec:
                       path: elasticsearch-alert.yml
               - configMap:
                   name: prometheus-rules-platform
+                  optional: true
                   items:
                     - key: platform-alert.yml
                       path: platform-alert.yml

@@ -1,0 +1,151 @@
+# ============================================================
+# metric-dictionary.yaml — 啟發式指標對照字典
+# ============================================================
+# 用途: migrate_rule.py 在轉換時自動比對此字典，
+#       若傳統規則使用的 metric 已有黃金標準對應，
+#       工具會建議使用者直接用 scaffold_tenant.py 設定閾值，
+#       而非轉出重複的 custom_ 規則。
+#
+# 維護: 平台團隊可直接編輯此檔案，不需改 Python code。
+# ============================================================
+
+# ────────────────────────────────────────
+# MariaDB / MySQL
+# ────────────────────────────────────────
+mysql_global_status_threads_connected:
+  maps_to: mysql_connections
+  golden_rule: MariaDBHighConnections
+  rule_pack: mariadb
+  note: "直接使用 scaffold_tenant.py 設定 mysql_connections 閾值"
+
+mysql_global_status_threads_running:
+  maps_to: mysql_cpu
+  golden_rule: MariaDBHighCPU
+  rule_pack: mariadb
+  note: "直接使用 scaffold_tenant.py 設定 mysql_cpu 閾值"
+
+mysql_global_status_slow_queries:
+  maps_to: mysql_slow_queries
+  golden_rule: MariaDBHighSlowQueries
+  rule_pack: mariadb
+  note: "rate() 指標 — 使用黃金標準的 sum by(tenant) 聚合"
+
+mysql_slave_status_seconds_behind_master:
+  maps_to: mysql_slave_lag
+  golden_rule: MariaDBSlaveLag
+  rule_pack: mariadb
+  note: "Replication lag — 使用黃金標準的 max by(tenant) 聚合"
+
+mysql_global_status_innodb_buffer_pool_pages_data:
+  maps_to: mysql_innodb_buffer_pool
+  golden_rule: MariaDBInnoDBBufferPoolHigh
+  rule_pack: mariadb
+  note: "Buffer Pool 百分比 — 黃金標準已內建除法計算"
+
+mysql_global_status_innodb_buffer_pool_pages_total:
+  maps_to: mysql_innodb_buffer_pool
+  golden_rule: MariaDBInnoDBBufferPoolHigh
+  rule_pack: mariadb
+  note: "Buffer Pool 分母 — 已整合進黃金標準 Recording Rule"
+
+mysql_global_variables_max_connections:
+  maps_to: mysql_connections
+  golden_rule: MariaDBHighConnections
+  rule_pack: mariadb
+  note: "max_connections 變數 — 黃金標準使用 threads_connected 更精確"
+
+mysqld_exporter_scrape_duration_seconds:
+  maps_to: null
+  golden_rule: null
+  rule_pack: null
+  note: "Exporter 自身指標 — 建議遷移到 Platform Rule Pack 的 self-monitoring"
+
+# ────────────────────────────────────────
+# Kubernetes (cAdvisor + KSM)
+# ────────────────────────────────────────
+container_cpu_usage_seconds_total:
+  maps_to: container_cpu
+  golden_rule: ContainerHighCPU
+  rule_pack: kubernetes
+  note: "容器 CPU — 使用黃金標準的 max by(tenant) 聚合"
+
+container_memory_working_set_bytes:
+  maps_to: container_memory
+  golden_rule: ContainerHighMemory
+  rule_pack: kubernetes
+  note: "容器記憶體 — 使用黃金標準的 max by(tenant) 聚合"
+
+kube_pod_container_status_waiting_reason:
+  maps_to: container_crashloop
+  golden_rule: ContainerCrashLoopBackOff
+  rule_pack: kubernetes
+  note: "CrashLoopBackOff — 使用 state_filter 控制開關"
+
+# ────────────────────────────────────────
+# Redis
+# ────────────────────────────────────────
+redis_memory_used_bytes:
+  maps_to: redis_memory_used_bytes
+  golden_rule: RedisHighMemory
+  rule_pack: redis
+  note: "Redis 記憶體 — 直接設定閾值"
+
+redis_connected_clients:
+  maps_to: redis_connected_clients
+  golden_rule: RedisTooManyClients
+  rule_pack: redis
+  note: "Redis 連線數 — 直接設定閾值"
+
+redis_evicted_keys_total:
+  maps_to: redis_evicted_keys_total
+  golden_rule: RedisHighEviction
+  rule_pack: redis
+  note: "Redis 驅逐 — rate() 指標"
+
+redis_keyspace_misses_total:
+  maps_to: redis_keyspace_misses_ratio
+  golden_rule: RedisHighCacheMiss
+  rule_pack: redis
+  note: "Cache miss — 需搭配 hits 計算比率"
+
+# ────────────────────────────────────────
+# MongoDB
+# ────────────────────────────────────────
+mongodb_connections_current:
+  maps_to: mongodb_connections_current
+  golden_rule: MongoDBHighConnections
+  rule_pack: mongodb
+  note: "MongoDB 連線數 — 直接設定閾值"
+
+mongodb_mongod_replset_member_replication_lag:
+  maps_to: mongodb_repl_lag_seconds
+  golden_rule: MongoDBReplicationLag
+  rule_pack: mongodb
+  note: "Replication lag — max by(tenant) 聚合"
+
+mongodb_ss_opcounters:
+  maps_to: mongodb_opcounters_total
+  golden_rule: MongoDBHighOps
+  rule_pack: mongodb
+  note: "Operations rate — sum by(tenant) 聚合"
+
+# ────────────────────────────────────────
+# Elasticsearch
+# ────────────────────────────────────────
+elasticsearch_jvm_memory_used_bytes:
+  maps_to: es_jvm_memory_used_percent
+  golden_rule: ElasticsearchHighJVMMemory
+  rule_pack: elasticsearch
+  note: "JVM heap — 黃金標準已內建百分比計算"
+
+elasticsearch_filesystem_data_free_bytes:
+  maps_to: es_filesystem_free_percent
+  golden_rule: ElasticsearchLowDiskSpace
+  rule_pack: elasticsearch
+  note: "磁碟空間 — 黃金標準已內建百分比計算"
+
+elasticsearch_cluster_health_status:
+  maps_to: es_cluster_health
+  golden_rule: ElasticsearchClusterUnhealthy
+  rule_pack: elasticsearch
+  note: "Cluster health — 0=green, 1=yellow, 2=red"

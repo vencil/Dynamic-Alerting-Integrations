@@ -9,7 +9,9 @@
 |----------|----------|------|---------|
 | **全新租戶** — 首次接入 | 互動式產生 tenant config | `scaffold_tenant.py` | ~5 min |
 | **已有傳統 alert rules** — 要遷移 | 自動轉換為三件套 | `migrate_rule.py` | ~15 min |
+| **大型租戶 (1000+ 條)** — 企業級遷移 | Triage → Shadow → 切換 | `migrate_rule.py --triage` + `validate_migration.py` | ~1-2 週 |
 | **不支援的 DB 類型** — 需擴展 | 手動建立 Recording + Alert Rules | 參見 [§9](#9-進階擴展不支援的-db-類型) | ~30 min |
+| **下架租戶/指標** | 安全移除 | `offboard_tenant.py` / `deprecate_rule.py` | ~5 min |
 
 ## Zero-Friction 導入
 
@@ -31,6 +33,9 @@
 8. [LLM 輔助手動轉換](#8-llm-輔助手動轉換)
 9. [進階：擴展不支援的 DB 類型](#9-進階擴展不支援的-db-類型)
 10. [FAQ](#10-faq)
+11. [企業級遷移 — 大型租戶 (1000+ 條規則)](#11-企業級遷移--大型租戶-1000-條規則)
+12. [Rule Pack 動態開關](#12-rule-pack-動態開關)
+13. [下架流程 — Tenant 與 Rule/Metric](#13-下架流程--tenant-與-rulemetric)
 
 ---
 
@@ -524,3 +529,194 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 # 預期: "Config loaded (directory): X defaults, Y state_filters, Z tenants"
 ```
+
+---
+
+## 11. 企業級遷移 — 大型租戶 (1000+ 條規則)
+
+對於擁有 1600+ 條規則的大型租戶，建議採用以下三階段遷移策略：
+
+### Phase A: Triage 分析
+
+```bash
+# 產出 CSV 分桶報告 — 在 Excel 中批次決策
+python3 scripts/tools/migrate_rule.py legacy-rules.yml --triage -o triage_output/
+```
+
+工具自動將規則分為四桶：
+
+| Triage Action | 說明 | 建議處理 |
+|---------------|------|----------|
+| `auto` | 簡單表達式，可自動轉換 | 直接採用 |
+| `review` | 複雜表達式，已猜測聚合模式 | 在 CSV 中確認 |
+| `skip` | 無法自動轉換 | 交 LLM 或手動處理 |
+| `use_golden` | 字典比對到黃金標準 | 直接用 `scaffold_tenant.py` 設定閾值 |
+
+### Phase B: 轉換 + Shadow Monitoring
+
+```bash
+# 1. 正式轉換 (自動帶 custom_ 前綴)
+python3 scripts/tools/migrate_rule.py legacy-rules.yml -o migration_output/
+
+# 2. 部署新規則 (帶 shadow label，不觸發通知)
+kubectl apply -f migration_output/platform-recording-rules.yaml
+kubectl apply -f migration_output/platform-alert-rules.yaml
+
+# 3. 在 Alertmanager 攔截 shadow 警報
+# 設定 route: matchers: [migration_status="shadow"] → null receiver
+
+# 4. 持續比對新舊 Recording Rule 數值
+#    叢集內 (推薦): 透過 K8s Service 存取 Prometheus
+python3 scripts/tools/validate_migration.py \
+  --mapping migration_output/prefix-mapping.yaml \
+  --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \
+  --watch --interval 60 --rounds 1440
+
+#    本地開發: 透過 port-forward
+kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
+python3 scripts/tools/validate_migration.py \
+  --mapping migration_output/prefix-mapping.yaml \
+  --prometheus http://localhost:9090 \
+  --watch --interval 60 --rounds 1440
+```
+
+**長期 Shadow Monitoring (K8s Job)**：大型客戶建議將驗證腳本包成 Job，在叢集內持續運行 1-2 週：
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migration-validator
+  namespace: monitoring
+spec:
+  template:
+    spec:
+      containers:
+        - name: validator
+          image: python:3.11-slim
+          command:
+            - python3
+            - /scripts/validate_migration.py
+            - --mapping
+            - /config/prefix-mapping.yaml
+            - --prometheus
+            - http://prometheus.monitoring.svc.cluster.local:9090
+            - --watch
+            - --interval
+            - "300"
+            - --rounds
+            - "4032"    # 每 5 分鐘一次，共 14 天
+            - -o
+            - /output/
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: config
+              mountPath: /config
+            - name: output
+              mountPath: /output
+      volumes:
+        - name: scripts
+          configMap:
+            name: migration-scripts
+        - name: config
+          configMap:
+            name: migration-config
+        - name: output
+          emptyDir: {}
+      restartPolicy: Never
+```
+
+### Phase C: 切換與收斂
+
+運行 1-2 週，`validate_migration.py` 報告 99.9% 一致後：
+
+1. 移除舊規則
+2. 拿掉新規則的 `migration_status: shadow` label
+3. 逐步啟用黃金標準 Rule Pack，替代 `custom_` 規則
+4. 參考 `prefix-mapping.yaml` 對照收斂
+
+### Metric Dictionary 自動比對
+
+`migrate_rule.py` v3 內建啟發式字典 (`metric-dictionary.yaml`)，自動比對傳統指標與黃金標準：
+
+```
+📖 MySQLTooManyConnections: 建議改用黃金標準 MariaDBHighConnections (scaffold_tenant.py)
+```
+
+平台團隊可直接編輯 `scripts/tools/metric-dictionary.yaml` 擴充字典，不需改 Python code。
+
+---
+
+## 12. Rule Pack 動態開關
+
+所有 6 個 Rule Pack ConfigMap 在 Projected Volume 中設定了 `optional: true`，允許選擇性卸載。
+
+### 卸載不需要的 Rule Pack
+
+```bash
+# 大型客戶自帶 MariaDB 規則，關閉黃金標準避免衝突
+kubectl delete cm prometheus-rules-mariadb -n monitoring
+
+# Prometheus 下次 reload 時會優雅地忽略缺少的 ConfigMap
+# 不需要重啟 Prometheus
+```
+
+### 重新啟用
+
+```bash
+# 從 rule-packs/ 目錄重新建立 ConfigMap
+kubectl create configmap prometheus-rules-mariadb \
+  --from-file=mariadb-recording.yml=rule-packs/rule-pack-mariadb.yaml \
+  --from-file=mariadb-alert.yml=rule-packs/rule-pack-mariadb.yaml \
+  -n monitoring
+```
+
+### 典型場景
+
+| 客戶類型 | 建議 Rule Pack 設定 |
+|----------|---------------------|
+| 全新租戶 | 全部保留 (預設) |
+| 自帶 MariaDB 規則 | 關閉 `prometheus-rules-mariadb` |
+| 只用 Redis | 關閉 MariaDB, MongoDB, Elasticsearch |
+| 全部自帶 | 只保留 `prometheus-rules-platform` (自我監控) |
+
+---
+
+## 13. 下架流程 — Tenant 與 Rule/Metric
+
+### Tenant 下架
+
+```bash
+# 預檢模式 — 確認無外部依賴
+python3 scripts/tools/offboard_tenant.py db-a
+
+# 確認後執行
+python3 scripts/tools/offboard_tenant.py db-a --execute
+```
+
+Pre-check 項目：設定檔存在性、跨檔案引用掃描、已設定指標清單。
+
+下架後效果：
+- threshold-exporter 下次 reload (30s) 自動清除閾值
+- Prometheus 下次 scrape 時向量消失
+- 所有相關 Alert 自動解除
+- **不影響其他 Tenant**
+
+### Rule/Metric 下架
+
+```bash
+# 預覽模式
+python3 scripts/tools/deprecate_rule.py mysql_slave_lag
+
+# 執行 (修改檔案)
+python3 scripts/tools/deprecate_rule.py mysql_slave_lag --execute
+
+# 批次處理
+python3 scripts/tools/deprecate_rule.py mysql_slave_lag mysql_innodb_buffer_pool --execute
+```
+
+三步自動化：
+1. `_defaults.yaml` 中設為 `"disable"`
+2. 掃描清除所有 tenant config 中的殘留
+3. 產出 ConfigMap 清理指引 (下個 Release Cycle 手動執行)

@@ -2,6 +2,30 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.6.0] - Enterprise Governance (Phase 5) (2026-02-27)
+
+本版本為 Phase 5 企業級治理，針對大型客戶（1500+ 條規則）的遷移場景提供完整的工具鏈與安全機制。
+
+### 🏗️ Architecture: Rule Pack 動態開關
+* **Projected Volume `optional: true`**: 所有 6 個 Rule Pack ConfigMap 加上 `optional: true`，允許客戶透過 `kubectl delete cm prometheus-rules-<type>` 卸載不需要的黃金標準 Rule Pack，Prometheus 不會 Crash。大型客戶可關閉黃金標準，改用自訂規則包。
+
+### 🔧 Tooling: migrate_rule.py v3 (企業級遷移)
+* **Triage Mode (`--triage`)**: 大規模遷移前的分析報告，輸出 CSV 檔案可在 Excel 中批次決策。自動將規則分為 auto / review / skip / use_golden 四桶。
+* **Prefix 隔離 (預設 `custom_`)**: 遷移產出的 Recording Rule 自動加上 `custom_` 前綴，在命名空間層面與黃金標準徹底隔離，避免 `multiple matches for labels` 錯誤。
+* **Prefix Mapping Table**: 自動產出 `prefix-mapping.yaml`，記錄 custom_ 前綴與黃金標準的對應關係，方便未來收斂。
+* **Metric Heuristic Dictionary**: 外部 `metric-dictionary.yaml` 啟發式比對，自動建議使用者改用黃金標準。平台團隊可直接維護字典，不需改 Python code。
+* **收斂率統計**: 報告中顯示壓縮率，讓客戶看到規則收斂的成效。
+* **Shadow Labels**: 遷移產出的 Alert Rule 自動帶上 `source: legacy` 與 `migration_status: shadow` label，支援 Alertmanager 雙軌並行。
+
+### 🔍 Tooling: Shadow Monitoring 驗證
+* **`validate_migration.py`**: 透過 Prometheus API 比對新舊 Recording Rule 的數值輸出（而非 Alert 狀態），精準度 100%。支援批次比對（讀取 prefix-mapping.yaml）、持續監控模式（`--watch`）、CSV 報告輸出。
+
+### 🗑️ Tooling: 下架工具
+* **`offboard_tenant.py`**: 安全 Tenant 下架工具，含 Pre-check（檔案存在、跨引用掃描）+ 執行模式。
+* **`deprecate_rule.py`**: 規則/指標三步下架工具 — (1) _defaults.yaml 設 disable (2) 掃描清除 tenant 殘留 (3) 產出 ConfigMap 清理指引。支援批次處理多個 metric。
+
+---
+
 ## [v0.5.0] - Enterprise High Availability (Phase 4) (2026-02-26)
 
 本版本為 Phase 4 企業級高可用性 (HA) 架構的重大升級。系統現在具備了容錯轉移能力、避免閾值重複計算的底層防護，以及專屬的平台自我監控網。

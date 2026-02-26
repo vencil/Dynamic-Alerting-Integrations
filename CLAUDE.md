@@ -1,16 +1,17 @@
 # CLAUDE.md — AI 開發上下文指引
 
 ## 專案概述
-**Multi-Tenant Dynamic Alerting** 平台 (v0.5.0)。
+**Multi-Tenant Dynamic Alerting** 平台 (v0.6.0)。
 Config-driven (ConfigMap 掛載), Hot-reload (SHA-256 hash), Directory Scanner 模式 (`-config-dir`)。
-6 個 Rule Pack 透過 Projected Volume 預載 (MariaDB, Kubernetes, Redis, MongoDB, Elasticsearch, Platform)。
+6 個 Rule Pack 透過 Projected Volume 預載 (MariaDB, Kubernetes, Redis, MongoDB, Elasticsearch, Platform)，`optional: true` 支援選擇性卸載。
 HA 架構: 2 Replicas + PodAntiAffinity + PDB + `max by(tenant)` 防 Double Counting。
+Enterprise Governance: Prefix 隔離 (`custom_`)、Metric Dictionary、Triage Mode、Shadow Monitoring 驗證。
 
 ## 核心架構
 - **Cluster**: Kind (`dynamic-alerting-cluster`)
 - **Namespaces**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** (port 8080, ×2 HA): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤。
-- **Prometheus**: Projected Volume 掛載 6 個 `configmap-rules-*.yaml` → `/etc/prometheus/rules/`
+- **Prometheus**: Projected Volume 掛載 6 個 `configmap-rules-*.yaml` → `/etc/prometheus/rules/` (`optional: true`)
 - **Normalization**: `tenant:<component>_<metric>:<function>` 格式
 - **Scenario D**: 維護模式 (`unless`)、複合警報 (`and`)、嚴重度降級
 - **HA 關鍵**: threshold recording rules 使用 `max by(tenant)` 聚合 `user_threshold` (非 `sum`)
@@ -33,15 +34,19 @@ HA 架構: 2 Replicas + PodAntiAffinity + PDB + `max by(tenant)` 防 Double Coun
 
 ## 工具 (scripts/tools/)
 - `patch_config.py <tenant> <metric_key> <value>`: 安全局部更新 ConfigMap
-- `check_alert.py <alert_name> <tenant>`: JSON alert 狀態
-- `diagnose.py <tenant>`: Exception-based 健康檢查
-- `migrate_rule.py <rules.yml> [-o DIR] [--dry-run] [--interactive]`: 傳統 → 動態三件套
+- `check_alert.py <alert_name> <tenant> [--prometheus URL]`: JSON alert 狀態
+- `diagnose.py <tenant> [--prometheus URL]`: Exception-based 健康檢查
+- `migrate_rule.py <rules.yml> [--triage] [--dry-run] [--interactive] [--no-prefix]`: 傳統 → 動態三件套 (v3: Triage CSV + Prefix 隔離 + Metric Dictionary)
 - `scaffold_tenant.py [--tenant NAME --db TYPE,...] [--catalog] [-o DIR]`: 互動式 tenant config 產生器
+- `validate_migration.py [--mapping FILE | --old Q --new Q] --prometheus URL`: Shadow Monitoring 驗證 (Recording Rule 數值 diff)
+- `offboard_tenant.py <tenant> [--execute]`: 安全 Tenant 下架 (Pre-check + 移除)
+- `deprecate_rule.py <metric_key...> [--execute]`: 規則/指標下架 (三步自動化)
+- `metric-dictionary.yaml`: 啟發式指標對照字典 (外部 YAML，平台團隊可直接維護)
 
 ## AI Agent 環境
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`
 - **Kubernetes MCP**: Context `kind-dynamic-alerting-cluster`（簡單查詢可用，複雜操作常 timeout → fallback docker exec）
-- **Prometheus API**: 必須透過 `port-forward` + `localhost`，ClusterIP 不可直達
+- **Prometheus API**: 開發環境透過 `port-forward` + `localhost`；生產環境用 K8s Service (`prometheus.monitoring.svc.cluster.local:9090`)
 - **檔案清理**: mounted workspace 無法從 VM 直接 rm → 用 `docker exec ... rm -f`
 - 🚨 **Playbooks** (遇到問題時讀取):
   1. Windows/PowerShell/MCP 問題 → `docs/windows-mcp-playbook.md`

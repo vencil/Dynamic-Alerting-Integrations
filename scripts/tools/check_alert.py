@@ -1,21 +1,40 @@
 #!/usr/bin/env python3
 """check_alert.py — Check Prometheus alert state for a specific tenant.
 
-Usage: check_alert.py <alert_name> <tenant>
+Usage:
+  # 本地開發 (透過 port-forward)
+  kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
+  python3 check_alert.py HighConnectionCount db-a
+
+  # 叢集內執行 (K8s Job / Pod)
+  python3 check_alert.py HighConnectionCount db-a \
+    --prometheus http://prometheus.monitoring.svc.cluster.local:9090
+
+  # 多叢集 (Thanos / VictoriaMetrics)
+  python3 check_alert.py HighConnectionCount db-a \
+    --prometheus http://thanos-query.monitoring.svc:9090
+
 Returns JSON: {"alert", "tenant", "state": "firing"|"pending"|"inactive"}
-Requires port-forward to Prometheus (localhost:9090).
+
+需求:
+  - Prometheus Query API 必須可從腳本執行位置存取
+    * 叢集內: K8s Service (http://prometheus.monitoring.svc.cluster.local:9090)
+    * 叢集外: port-forward 或 Ingress
+    * 多叢集: Thanos Query / VictoriaMetrics 等統一查詢端點亦可
 """
 import urllib.request
 import json
 import sys
+import argparse
 
-def check_alert(alert_name, tenant):
+
+def check_alert(alert_name, tenant, prom_url):
     try:
-        req = urllib.request.Request('http://localhost:9090/api/v1/alerts')
-        with urllib.request.urlopen(req) as response:  # nosec B310 — localhost-only Prometheus API
+        req = urllib.request.Request(f'{prom_url}/api/v1/alerts')  # nosec B310
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
     except Exception as e:
-        print(f'{{"error": "Cannot connect to Prometheus API: {e}. Is port-forward running?"}}')
+        print(json.dumps({"error": f"Cannot connect to Prometheus API ({prom_url}): {e}"}))
         sys.exit(1)
 
     alerts = data.get('data', {}).get('alerts', [])
@@ -51,8 +70,16 @@ def check_alert(alert_name, tenant):
         "details": [{"state": a.get('state'), "activeAt": a.get('activeAt')} for a in matched_alerts]
     }, indent=2))
 
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: check_alert.py <alert_name> <tenant>")
-        sys.exit(1)
-    check_alert(sys.argv[1], sys.argv[2])
+    parser = argparse.ArgumentParser(
+        description="Check Prometheus alert state for a specific tenant",
+    )
+    parser.add_argument("alert_name", help="Alert name (e.g. HighConnectionCount)")
+    parser.add_argument("tenant", help="Tenant ID (e.g. db-a)")
+    parser.add_argument("--prometheus", default="http://localhost:9090",
+                        help="Prometheus Query API URL "
+                             "(預設: http://localhost:9090; "
+                             "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    args = parser.parse_args()
+    check_alert(args.alert_name, args.tenant, args.prometheus)
