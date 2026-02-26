@@ -121,27 +121,27 @@ graph LR
 
 ```mermaid
 graph TD
-    subgraph "Tenant Layer (Zero PromQL)"
-        D["`_defaults.yaml`<br>Platform globals"]
-        T1["`db-a.yaml`<br>mysql_connections: 70"]
-        T2["`db-b.yaml`<br>redis_memory: 80"]
+    subgraph TL["Tenant Layer - Zero PromQL"]
+        D["_defaults.yaml<br/>Platform globals"]
+        T1["db-a.yaml<br/>mysql_connections: 70"]
+        T2["db-b.yaml<br/>redis_memory: 80"]
     end
 
-    subgraph "Platform Layer"
-        TE["`threshold-exporter (×2 HA)`<br>Directory Scanner · Hot-Reload<br>Three-State · SHA-256 Hash"]
-        RP["`Projected Volume`<br>6 Independent Rule Packs<br>mariadb │ kubernetes │ redis<br>mongodb │ elasticsearch │ platform"]
+    subgraph PL["Platform Layer"]
+        TE["threshold-exporter x2 HA<br/>Directory Scanner / Hot-Reload<br/>Three-State / SHA-256 Hash"]
+        RP["Projected Volume<br/>6 Independent Rule Packs<br/>mariadb | kubernetes | redis<br/>mongodb | elasticsearch | platform"]
     end
 
-    subgraph "Prometheus Engine"
-        PROM["`Prometheus`<br>Vector Matching: group_left<br>85 Rules · 18 Groups · ~20ms/cycle"]
+    subgraph PE["Prometheus Engine"]
+        PROM["Prometheus<br/>Vector Matching: group_left<br/>85 Rules / 18 Groups / ~20ms per cycle"]
     end
 
     D --> TE
     T1 --> TE
     T2 --> TE
-    TE -->|"Expose user_threshold<br>gauge metrics"| PROM
-    RP -->|"Recording Rules +<br>Alert Rules"| PROM
-    PROM --> AM[Alertmanager<br>Route by tenant label]
+    TE -->|"Expose user_threshold<br/>gauge metrics"| PROM
+    RP -->|"Recording Rules +<br/>Alert Rules"| PROM
+    PROM --> AM["Alertmanager<br/>Route by tenant label"]
 
     classDef tenant fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef platform fill:#fff3e0,stroke:#e65100,stroke-width:2px
