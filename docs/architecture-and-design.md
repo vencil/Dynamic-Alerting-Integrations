@@ -1,6 +1,8 @@
-# Architecture & Design — 動態多租戶警報平台技術白皮書
+# 架構與設計 — 動態多租戶警報平台技術白皮書
 
-## 簡介 (Introduction)
+> **Language / 語言：** [English](architecture-and-design.en.md) | **中文（當前）**
+
+## 簡介
 
 本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.5.0 的技術架構。
 

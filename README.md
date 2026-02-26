@@ -1,20 +1,22 @@
 # Dynamic Alerting Integrations
 
-> **Enterprise-grade Multi-Tenant Dynamic Alerting Platform** — Config-driven thresholds with zero PromQL for tenants, GitOps-ready directory mode, HA deployment, and 6 pre-loaded Rule Packs via Projected Volume.
+> **Language / 語言：** [English](README.en.md) | **中文（當前）**
+
+> **企業級多租戶動態警報平台** — 配置驅動閾值、租戶零 PromQL、GitOps 目錄模式、HA 部署、6 個預載規則包 (Projected Volume)。
 
 ---
 
-## 痛點與解決方案 (The Challenge & Our Solution)
+## 痛點與解決方案
 
-### 2.1 Rule Sprawl & Performance (規則膨脹與效能瓶頸)
+### 2.1 規則膨脹與效能瓶頸
 
-**❌ Traditional Pain:**
-100 tenants × 50 rules = 5,000 independent PromQL evaluations every 15 seconds. Prometheus CPU spikes, rule evaluation latency degrades SLA.
+**❌ 傳統痛點：**
+100 個租戶 × 50 條規則 = 5,000 次獨立 PromQL 評估（每 15 秒）。Prometheus CPU 飆升，規則評估延遲影響 SLA。
 
-**✅ Our Solution:**
-Vector Matching via `group_left`. Platform maintains fixed M rules. Prometheus evaluates once, matching against all tenants' `user_threshold` vector. Complexity: O(N×M) → O(M).
+**✅ 我們的方案：**
+透過 `group_left` 向量匹配。平台維護固定 M 條規則，Prometheus 一次評估即匹配所有租戶的 `user_threshold` 向量。複雜度：O(N×M) → O(M)。
 
-**Code Comparison:**
+**程式碼對比：**
 
 ```yaml
 # ❌ Traditional: 每個 tenant 一條 rule (×100 tenants = 100 rules)
@@ -32,7 +34,7 @@ Vector Matching via `group_left`. Platform maintains fixed M rules. Prometheus e
     tenant:alert_threshold:connections
 ```
 
-**Tenant Config (Zero PromQL):**
+**租戶配置（零 PromQL）：**
 
 ```yaml
 # conf.d/db-a.yaml
@@ -43,62 +45,62 @@ tenants:
     mysql_connections: "80"
 ```
 
-**Performance Benchmark:**
+**效能基準：**
 
-| Metric | Dynamic (Current) | Traditional @ 100 tenants |
-|--------|-------------------|--------------------------|
-| Alert Rules | 35 (fixed) | 3,500 (35×100) |
-| Total Rules | 85 | 3,500 |
-| Eval Time / Cycle | ~20.8ms | ~850ms+ (linear) |
-| Unused Rule Pack Cost | near-zero | N/A |
+| 指標 | 動態（現行） | 傳統 @ 100 租戶 |
+|------|-------------|-----------------|
+| 警報規則數 | 35（固定） | 3,500（35×100） |
+| 規則總數 | 85 | 3,500 |
+| 每週期評估時間 | ~20.8ms | ~850ms+（線性增長） |
+| 未使用規則包成本 | 近乎零 | N/A |
 
-Detailed performance analysis: see [docs/architecture-and-design.md](docs/architecture-and-design.md)
-
----
-
-### 2.2 Tenant Adoption Friction (租戶導入阻力)
-
-**❌ Traditional Pain:**
-Tenants must learn PromQL (`rate`, `sum by`, `group_left`). One wrong label = silent failure. Platform team debugs PromQL for tenants.
-
-**✅ Our Solution:**
-Zero PromQL. `scaffold_tenant.py` generates config from interactive Q&A. `migrate_rule.py` auto-converts legacy rules with intelligent aggregation heuristics. Tenant writes YAML only: `mysql_connections: "80"`.
+詳細效能分析：見 [架構與設計文件](docs/architecture-and-design.md)
 
 ---
 
-### 2.3 Platform Maintenance Nightmare (平台維護災難)
+### 2.2 租戶導入阻力
 
-**❌ Traditional Pain:**
-All rules in one giant ConfigMap. Every threshold change = PR → CI/CD → Prometheus reload. Multi-team edits = merge conflicts.
+**❌ 傳統痛點：**
+租戶必須學習 PromQL（`rate`、`sum by`、`group_left`）。一個 label 寫錯 = 靜默失敗。平台團隊替租戶除錯 PromQL。
 
-**✅ Our Solution:**
-6 independent Rule Pack ConfigMaps via Projected Volume. Each team (DBA, SRE, K8s) maintains their own pack. Hot-reload via SHA-256 hash — no Prometheus restart needed. Directory mode (`conf.d/`) with per-tenant YAML files.
-
----
-
-### 2.4 Alert Fatigue (警報疲勞)
-
-**❌ Traditional Pain:**
-Maintenance window = alert storm. Non-critical Redis queue alert = P0 page.
-
-**✅ Our Solution:**
-Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-tier severity (`_critical` suffix). Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: custom / default / disable per metric per tenant.
+**✅ 我們的方案：**
+零 PromQL。`scaffold_tenant.py` 透過互動式問答產生配置。`migrate_rule.py` 自動轉換舊規則並智能推斷聚合方式。租戶只寫 YAML：`mysql_connections: "80"`。
 
 ---
 
-### 2.5 Governance & Audit (治理與稽核)
+### 2.3 平台維護災難
 
-**❌ Traditional Pain:**
-Who changed what threshold? No audit trail. No separation of duties.
+**❌ 傳統痛點：**
+所有規則塞在一個巨型 ConfigMap 中。每次閾值修改 = PR → CI/CD → Prometheus reload。多團隊編輯 = merge conflicts。
 
-**✅ Our Solution:**
-Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by platform team (separation of duties). Boundary rules prevent tenants overwriting platform settings. File-level RBAC via Git permissions.
+**✅ 我們的方案：**
+6 個獨立 Rule Pack ConfigMap，透過 Projected Volume 掛載。各團隊（DBA、SRE、K8s）獨立維護自己的規則包。SHA-256 hash 熱重載 — 不需重啟 Prometheus。目錄模式（`conf.d/`）支援 per-tenant YAML 檔案。
 
 ---
 
-## 架構總覽 (Architecture)
+### 2.4 警報疲勞
 
-### Before vs After (概念對比)
+**❌ 傳統痛點：**
+維護窗口 = 警報風暴。非關鍵的 Redis queue alert = P0 呼叫。
+
+**✅ 我們的方案：**
+內建維護模式（`_state_maintenance: enable` 透過 `unless` 抑制所有警報）。多層嚴重度（`_critical` 後綴）。維度閾值（`redis_queue_length{queue="email"}: 1000`）。三態邏輯：每個租戶的每個指標支援 custom / default / disable。
+
+---
+
+### 2.5 治理與稽核
+
+**❌ 傳統痛點：**
+誰改了什麼閾值？沒有稽核軌跡。沒有權責分離。
+
+**✅ 我們的方案：**
+Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台團隊管控（權責分離）。邊界規則防止租戶覆蓋平台設定。透過 Git 權限實現檔案級 RBAC。
+
+---
+
+## 架構總覽
+
+### 概念對比：傳統 vs 動態
 
 ```mermaid
 graph LR
@@ -117,7 +119,7 @@ graph LR
     end
 ```
 
-### Data Flow Architecture (資料流)
+### 資料流架構
 
 ```mermaid
 graph TD
@@ -153,7 +155,7 @@ graph TD
 
 ---
 
-## Quick Start (快速開始)
+## 快速開始
 
 ```bash
 # 1. Open in VS Code → "Reopen in Container"
@@ -175,48 +177,46 @@ make port-forward
 
 ---
 
-## Documentation (文件導覽)
+## 文件導覽
 
-| Document | Description | Target Audience |
-|----------|-------------|-----------------|
-| [Migration Guide](docs/migration-guide.md) | Zero-friction onboarding, scaffold tools, 5 real-world scenarios | Tenants, DevOps |
-| [Architecture & Design](docs/architecture-and-design.md) | Performance analysis, HA design, Projected Volume deep-dive, governance | Platform Engineers, SREs |
-| [Rule Packs Catalog](rule-packs/README.md) | 6 Rule Pack specifications, structure template, exporter links | All |
-| [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, config format, development guide | Developers |
-| [Testing Playbook](docs/testing-playbook.md) | K8s environment issues, HA testing, shell script traps | Contributors |
-
----
-
-## Rule Packs (規則包目錄)
-
-6 Rule Packs 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap，由不同團隊獨立維護：
-
-| Rule Pack | Exporter | Rules | Status |
-|-----------|----------|-------|--------|
-| mariadb | mysqld_exporter (Percona) | 7R + 8A | 🟢 Pre-loaded |
-| kubernetes | cAdvisor + kube-state-metrics | 5R + 4A | 🟢 Pre-loaded |
-| redis | oliver006/redis_exporter | 7R + 6A | 🟢 Pre-loaded |
-| mongodb | percona/mongodb_exporter | 7R + 6A | 🟢 Pre-loaded |
-| elasticsearch | elasticsearch_exporter | 7R + 7A | 🟢 Pre-loaded |
-| platform | threshold-exporter self-monitoring | 0R + 4A | 🟢 Pre-loaded |
-
-**Note:** R=Recording Rules, A=Alert Rules. Unused packs have near-zero evaluation cost.
+| 文件 | 說明 | 目標讀者 |
+|------|------|---------|
+| [遷移指南](docs/migration-guide.md) | 零摩擦導入、scaffold 工具、5 個實戰場景 | 租戶、DevOps |
+| [架構與設計](docs/architecture-and-design.md) | 效能分析、HA 設計、Projected Volume 深度解析、治理 | Platform Engineers、SREs |
+| [規則包目錄](rule-packs/README.md) | 6 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
+| [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
+| [測試手冊](docs/testing-playbook.md) | K8s 環境問題、HA 測試、shell script 陷阱 | 貢獻者 |
 
 ---
 
-## Tools (工具)
+## 規則包目錄
 
-A concise table of automation tools:
+6 個 Rule Pack 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap，由不同團隊獨立維護：
 
-| Tool | Purpose |
-|------|---------|
-| `scaffold_tenant.py` | Interactive config generator for new tenants |
-| `migrate_rule.py` | Auto-convert legacy Prometheus rules to dynamic architecture |
-| `patch_config.py` | Safe partial ConfigMap update |
-| `check_alert.py` | Query alert status for a tenant |
-| `diagnose.py` | Health check for a tenant |
+| 規則包 | Exporter | 規則數 | 狀態 |
+|--------|----------|--------|------|
+| mariadb | mysqld_exporter (Percona) | 7R + 8A | 預載 |
+| kubernetes | cAdvisor + kube-state-metrics | 5R + 4A | 預載 |
+| redis | oliver006/redis_exporter | 7R + 6A | 預載 |
+| mongodb | percona/mongodb_exporter | 7R + 6A | 預載 |
+| elasticsearch | elasticsearch_exporter | 7R + 7A | 預載 |
+| platform | threshold-exporter 自我監控 | 0R + 4A | 預載 |
 
-**Usage Examples:**
+**備註：** R=Recording Rules、A=Alert Rules。未使用的規則包評估成本近乎零。
+
+---
+
+## 工具
+
+| 工具 | 用途 |
+|------|------|
+| `scaffold_tenant.py` | 新租戶互動式配置產生器 |
+| `migrate_rule.py` | 自動轉換傳統 Prometheus 規則為動態架構 |
+| `patch_config.py` | 安全局部更新 ConfigMap |
+| `check_alert.py` | 查詢租戶警報狀態 |
+| `diagnose.py` | 租戶健康檢查 |
+
+**使用範例：**
 
 ```bash
 # New tenant: Interactive config generator
@@ -231,14 +231,14 @@ make demo
 
 ---
 
-## Prerequisites
+## 前置需求
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS)
 - [VS Code](https://code.visualstudio.com/) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
 
 ---
 
-## Development (Makefile Targets)
+## 開發（Makefile 目標）
 
 <details>
 <summary><strong>Click to expand all Makefile targets</strong></summary>
@@ -270,7 +270,7 @@ make help               # 顯示說明
 
 ---
 
-## Project Structure
+## 專案結構
 
 <details>
 <summary><strong>Click to expand project directory tree</strong></summary>
@@ -325,19 +325,19 @@ make help               # 顯示說明
 
 ---
 
-## High Availability & Self-Monitoring
+## 高可用與自我監控
 
 threshold-exporter 預設以 **2 Replicas** 部署，具備以下 HA 機制：
 
-- **Pod Anti-Affinity** (`preferredDuringSchedulingIgnoredDuringExecution`): 盡可能將兩個 replica 分散在不同 Node，相容 Kind 單節點叢集。
-- **PodDisruptionBudget** (`minAvailable: 1`): Node 維護時保證至少 1 個 Pod 存活。
-- **RollingUpdate** (`maxUnavailable: 0`): 滾動更新期間零停機。
-- **`max by(tenant)` 聚合**: 所有 threshold recording rules 使用 `max` 而非 `sum` 聚合 `user_threshold`，避免多 replica 造成閾值翻倍 (Double Counting)。
+- **Pod Anti-Affinity**（`preferredDuringSchedulingIgnoredDuringExecution`）：盡可能將兩個 replica 分散在不同 Node，相容 Kind 單節點叢集。
+- **PodDisruptionBudget**（`minAvailable: 1`）：Node 維護時保證至少 1 個 Pod 存活。
+- **RollingUpdate**（`maxUnavailable: 0`）：滾動更新期間零停機。
+- **`max by(tenant)` 聚合**：所有 threshold recording rules 使用 `max` 而非 `sum` 聚合 `user_threshold`，避免多 replica 造成閾值翻倍。
 
-Platform Rule Pack (`configmap-rules-platform.yaml`) 提供 4 條自我監控警報：
+Platform Rule Pack（`configmap-rules-platform.yaml`）提供 4 條自我監控警報：
 
-| Alert | 條件 | Severity |
-|-------|------|----------|
+| 警報 | 條件 | 嚴重度 |
+|------|------|--------|
 | `ThresholdExporterDown` | 單一 Pod `up == 0` | warning |
 | `ThresholdExporterAbsent` | 所有 Pod 斷線 | critical |
 | `ThresholdExporterTooFewReplicas` | 健康 replica < 2 | warning |
@@ -345,14 +345,14 @@ Platform Rule Pack (`configmap-rules-platform.yaml`) 提供 4 條自我監控警
 
 ---
 
-## Key Design Decisions
+## 關鍵設計決策
 
-- **Projected Volume**: 6 個 Rule Pack ConfigMap (含 Platform self-monitoring) 透過 projected volume 合併掛載至 `/etc/prometheus/rules/`，各團隊獨立維護、零 PR 衝突。
-- **GitOps Directory Mode**: threshold-exporter 使用 `-config-dir` 掃描 `conf.d/`，支援 `_defaults.yaml` + per-tenant YAML 拆分。
-- **PVC (not emptyDir)**: MariaDB 資料使用 Kind 內建 StorageClass，Pod 重啟後資料保留。
-- **Sidecar Pattern**: mysqld_exporter 與 MariaDB 在同一 Pod，透過 `localhost:3306` 連線。
-- **Annotation-based SD**: `prometheus.io/scrape: "true"` 自動發現，新增組件不需修改 Prometheus 設定。
-- **Cross-platform Scripts**: `_lib.sh` 提供跨平台工具函式，所有 script 可在 Linux/macOS/Dev Container 環境運行。
+- **Projected Volume**：6 個 Rule Pack ConfigMap（含 Platform 自我監控）透過 projected volume 合併掛載至 `/etc/prometheus/rules/`，各團隊獨立維護、零 PR 衝突。
+- **GitOps 目錄模式**：threshold-exporter 使用 `-config-dir` 掃描 `conf.d/`，支援 `_defaults.yaml` + per-tenant YAML 拆分。
+- **PVC（非 emptyDir）**：MariaDB 資料使用 Kind 內建 StorageClass，Pod 重啟後資料保留。
+- **Sidecar 模式**：mysqld_exporter 與 MariaDB 在同一 Pod，透過 `localhost:3306` 連線。
+- **Annotation 自動發現**：`prometheus.io/scrape: "true"` 自動發現，新增組件不需修改 Prometheus 設定。
+- **跨平台腳本**：`_lib.sh` 提供跨平台工具函式，所有 script 可在 Linux/macOS/Dev Container 環境運行。
 
 ---
 
