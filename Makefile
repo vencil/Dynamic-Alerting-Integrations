@@ -35,6 +35,10 @@ destroy: clean ## 清除資源 + 刪除 Kind cluster
 verify: ## 驗證 Prometheus 指標抓取
 	@./scripts/verify.sh
 
+.PHONY: benchmark
+benchmark: ## 效能基準測試 (使用: make benchmark 或 make benchmark ARGS=--json)
+	@bash scripts/benchmark.sh $(ARGS)
+
 .PHONY: test-alert
 test-alert: ## 觸發故障測試 (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)

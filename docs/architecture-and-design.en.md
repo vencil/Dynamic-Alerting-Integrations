@@ -386,6 +386,54 @@ vs. Traditional approach (3,500 rules):
 - Total overhead: ~400MB+ (single hub)
 ```
 
+### 4.5 Resource Usage Baseline
+
+Actual measurements from a Kind single-node cluster (2 tenants, 85 rules):
+
+| Metric | Component | Value | Purpose |
+|--------|-----------|-------|---------|
+| CPU (5m avg) | Prometheus | ~0.02 cores | Capacity planning — estimate CPU requests |
+| RSS Memory | Prometheus | ~150MB | Memory budgeting — set memory limits |
+| RSS Memory | threshold-exporter (per pod) | ~64MB | Pod resource limits tuning |
+| RSS Memory | threshold-exporter (×2 HA) | ~128MB total | Cluster memory planning |
+
+**Automated collection:**
+
+```bash
+make benchmark              # Full report (human-readable)
+make benchmark ARGS=--json  # JSON output (CI/CD consumption)
+```
+
+### 4.6 Storage and Cardinality Analysis
+
+**Why Cardinality Matters More Than Disk**
+
+The performance bottleneck in Prometheus is **Active Series count**, not disk space. Each series consumes approximately 2KB of memory, and the series count directly determines: query latency, memory usage, and compaction frequency.
+
+**Kind cluster measurements:**
+
+| Metric | Value | Description |
+|--------|-------|-------------|
+| TSDB Disk Usage | ~12MB | All rules and metrics included |
+| Active Series Total | ~2,800 | Includes all exporters + recording rules |
+| `user_threshold` Series | ~16 | Threshold metrics from threshold-exporter |
+| Series Per Tenant (marginal) | ~8 | Marginal cost of adding 1 tenant |
+
+**Scaling estimation formula:**
+
+```
+Marginal cost of adding N tenants:
+  Series delta = N × (series per tenant)
+  Memory delta ≈ Series delta × 2KB
+
+Example (100 tenants):
+  user_threshold series = 100 × 8 = 800
+  Memory delta ≈ (800 - 16) × 2KB ≈ 1.5MB
+  Total series ≈ 2,800 - 16 + 800 = 3,584
+```
+
+**Conclusion:** The dynamic architecture has minimal series growth per tenant (~8 series each). 100 tenants add only ~1.5MB of memory. Compared to the traditional approach (35+ independent rules per tenant, each potentially generating multiple series), the cardinality advantage is significant.
+
 ---
 
 ## 5. High Availability Design

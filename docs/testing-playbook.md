@@ -71,9 +71,16 @@ docker exec vibe-dev-container bash -c "\
 
 ## Performance Benchmark 測試
 
-使用一次性 port-forward 查詢 Prometheus 內建指標（詳見 [Windows-MCP Playbook → Prometheus API 查詢模式](windows-mcp-playbook.md#prometheus-api-查詢模式)）：
+### 自動化 Benchmark（推薦）
 
-**關鍵指標基線 (v0.5.0, 2 tenants, Kind 單節點)：**
+```bash
+make benchmark              # 完整報告（規則評估 + CPU/Memory + 儲存/基數 + 擴展估算）
+make benchmark ARGS=--json  # JSON 輸出（CI/CD 消費）
+```
+
+腳本自動處理 port-forward 建立與清理，無需手動操作。
+
+### 關鍵指標基線 (v0.5.0, 2 tenants, Kind 單節點)
 
 | 指標 | 值 | 說明 |
 |------|----|------|
@@ -83,8 +90,12 @@ docker exec vibe-dev-container bash -c "\
 | p50 per-group | 0.59ms | `prometheus_rule_group_duration_seconds{quantile="0.5"}` |
 | p99 per-group | 5.05ms | `prometheus_rule_group_duration_seconds{quantile="0.99"}` |
 | 空向量 pack 成本 | <1.75ms | ES/Redis/MongoDB 無 exporter 時 |
+| Prometheus CPU | ~0.02 cores | `rate(process_cpu_seconds_total{job="prometheus"}[5m])` |
+| Prometheus Memory | ~150MB RSS | `process_resident_memory_bytes{job="prometheus"}` |
+| 活躍 Series | ~2,800 | `prometheus_tsdb_head_series` |
+| user_threshold Series | ~16 (8/tenant) | `count(user_threshold)` |
 
-**用途：** 更新 README benchmark 表格或驗證架構變更未造成性能退化。
+**用途：** 驗證架構變更未造成性能退化，或評估擴展成本。詳細分析見 [Architecture & Design §4.5-4.6](architecture-and-design.md#45-資源使用基準-resource-usage-baseline)。
 
 ## Shell 測試腳本陷阱
 

@@ -386,6 +386,54 @@ vs. 傳統方案 (3,500 規則)：
 - 總開銷：~400MB+（單樞紐）
 ```
 
+### 4.5 資源使用基準 (Resource Usage Baseline)
+
+以下為 Kind 單節點叢集實測數據（2 個租戶、85 條規則）：
+
+| 指標 | 元件 | 數值 | 用途 |
+|------|------|------|------|
+| CPU（5m 均值） | Prometheus | ~0.02 cores | 容量規劃 — 評估 Prometheus 所需 CPU request |
+| RSS Memory | Prometheus | ~150MB | 記憶體預算 — 設定 memory limits |
+| RSS Memory | threshold-exporter (per pod) | ~64MB | Pod resource limits 調整 |
+| RSS Memory | threshold-exporter (×2 HA) | ~128MB 合計 | 叢集記憶體規劃 |
+
+**自動化收集：**
+
+```bash
+make benchmark          # 完整報告（人類可讀）
+make benchmark ARGS=--json  # JSON 輸出（CI/CD 消費）
+```
+
+### 4.6 儲存與基數分析 (Storage & Cardinality)
+
+**為什麼基數（Cardinality）比磁碟更重要？**
+
+Prometheus 的效能瓶頸在於 **活躍時間序列數（Active Series）**，而非磁碟空間。每個 series 佔用約 2KB 記憶體，series 數直接決定：查詢延遲、記憶體用量、compaction 頻率。
+
+**Kind 叢集實測：**
+
+| 指標 | 數值 | 說明 |
+|------|------|------|
+| TSDB 磁碟用量 | ~12MB | 含所有規則與指標 |
+| 活躍 Series 總數 | ~2,800 | 包含所有 exporter + recording rules |
+| `user_threshold` Series | ~16 | threshold-exporter 輸出的閾值指標 |
+| 每租戶 Series 增量 | ~8 | 新增 1 個租戶的邊際成本 |
+
+**擴展估算公式：**
+
+```
+新增 N 個租戶的邊際成本：
+  Series 增量 = N × (每租戶 series 數)
+  記憶體增量 ≈ Series 增量 × 2KB
+
+範例（100 租戶）：
+  user_threshold series = 100 × 8 = 800
+  記憶體增量 ≈ (800 - 16) × 2KB ≈ 1.5MB
+  總 series ≈ 2,800 - 16 + 800 = 3,584
+```
+
+**結論：** 動態架構的 series 增量極小（每租戶 ~8 series），100 個租戶僅增加 ~1.5MB 記憶體。相比傳統方案（每租戶 35+ 條獨立規則，每條規則可能產生多個 series），基數優勢顯著。
+
 ---
 
 ## 5. 高可用性設計 (High Availability)
