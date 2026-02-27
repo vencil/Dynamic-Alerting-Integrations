@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.8.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.9.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念
@@ -717,6 +717,154 @@ tenants:
 
 複合警報 (AND 邏輯) 與多層嚴重度 (Critical 自動降級 Warning) 也已完整實現。
 
+### 9.2 企業級測試覆蓋矩陣 (Enterprise Test Coverage Matrix)
+
+以下矩陣將自動化測試場景對應到企業客戶關心的防護需求，每個場景的斷言邏輯均可透過 `make test-scenario-*` 一鍵驗證。
+
+| 場景 | 企業防護需求 | 測試方式 | 核心斷言 | 指令 |
+|------|-------------|----------|----------|------|
+| **A — 動態閾值** | 租戶自訂閾值即時生效，無需重啟 | 修改閾值 → 等待 exporter reload → 驗證 alert 觸發 | `user_threshold` 值更新；alert 狀態變為 firing | `make test-scenario-a` |
+| **B — 弱環節偵測** | 多指標中最差的自動觸發告警 | 注入 CPU 壓力 → 驗證 `pod_weakest_cpu_percent` 歸一化 | recording rule 產出正確的最差值；alert 正確觸發 | `make test-scenario-b` |
+| **C — 三態比對** | 指標可被 custom / default / disable 三態控制 | 切換三態 → 驗證 exporter 指標存在/消失 | custom: 值=自訂; default: 值=全域預設; disable: 指標消失 | scenario-a 內含 |
+| **D — 維護模式** | 計劃性維護期間自動靜音所有告警 | 啟用 `_state_maintenance` → 驗證 alert 被 `unless` 抑制 | 所有 alert 保持 inactive；解除後恢復正常 | scenario-a 內含 |
+| **E — 多租戶隔離** | 修改 Tenant A 不影響 Tenant B | 壓低 A 閾值/disable A 指標 → 驗證 B 不變 | A alert fires, B alert inactive; A 指標消失, B 指標存在 | `make test-scenario-e` |
+| **F — HA 故障切換** | Pod 被刪除後服務不中斷、閾值不翻倍 | Kill 1 Pod → 驗證 alert 持續 → 新 Pod 啟動 → 驗證 `max by` | 存活 Pod ≥1 (PDB); alert 無中斷; recording rule 值=原值 (非 2×) | `make test-scenario-f` |
+| **demo-full** | 端到端展演完整生命週期 | Composite load → alert 觸發 → cleanup → alert 恢復 | 6 步驟全部成功; alert firing → inactive 完整週期 | `make demo-full` |
+
+#### 斷言細節補充
+
+**Scenario E 的兩個隔離維度：**
+
+- **E1 — 閾值修改隔離**：將 db-a 的 `mysql_connections` 壓低至 5 → db-a 觸發 `MariaDBHighConnections`，db-b 的閾值和 alert 狀態完全不受影響
+- **E2 — Disable 隔離**：將 db-a 的 `container_cpu` 設為 `disable` → db-a 該指標從 exporter 消失，db-b 的 `container_cpu` 仍正常產出
+
+**Scenario F 的 `max by(tenant)` 證明：**
+
+兩個 threshold-exporter Pod 各自吐出相同的 `user_threshold{tenant="db-a", metric="connections"} = 5`。Recording rule 使用 `max by(tenant)` 聚合：
+
+- ✅ `max(5, 5) = 5`（正確）
+- ❌ 如果用 `sum by(tenant)`：`5 + 5 = 10`（翻倍，錯誤）
+
+測試在 Kill 一個 Pod 後驗證值仍為 5，且新 Pod 啟動後 series 數回到 2 但聚合值仍為 5。
+
+### 9.3 demo-full：端到端生命週期流程圖
+
+`make demo-full` 展示從工具驗證到真實負載的完整流程。以下時序圖描述 Step 6 (Live Load) 的核心路徑：
+
+```mermaid
+sequenceDiagram
+    participant Op as Operator
+    participant LG as Load Generator<br/>(connections + stress-ng)
+    participant DB as MariaDB<br/>(db-a)
+    participant TE as threshold-exporter
+    participant PM as Prometheus
+
+    Note over Op: Step 1-5: scaffold / migrate / diagnose / check_alert / baseline
+
+    Op->>LG: run_load.sh --type composite
+    LG->>DB: 95 idle connections + OLTP (sysbench)
+    DB-->>PM: mysql_threads_connected ≈ 95<br/>node_cpu busy ≈ 80%+
+    TE-->>PM: user_threshold_connections = 70
+
+    Note over PM: 評估 Recording Rule：<br/>normalized_connections = 95<br/>> user_threshold (70)
+
+    PM->>PM: Alert: MariaDBHighConnections → FIRING
+
+    Op->>LG: run_load.sh --cleanup
+    LG->>DB: Kill connections + stop stress-ng
+    DB-->>PM: mysql_threads_connected ≈ 5
+
+    Note over PM: normalized_connections = 5<br/>< user_threshold (70)
+
+    PM->>PM: Alert → RESOLVED (after for duration)
+    Note over Op: ✅ 完整 firing → resolved 週期驗證通過
+```
+
+### 9.4 Scenario E：多租戶隔離驗證
+
+驗證修改 Tenant A 的配置絕對不影響 Tenant B。流程分為兩個隔離維度：
+
+```mermaid
+flowchart TD
+    Start([Phase E: Setup]) --> SaveOrig[保存 db-a 原始閾值]
+    SaveOrig --> E1
+
+    subgraph E1["E1: 閾值修改隔離"]
+        PatchA[patch db-a mysql_connections = 5<br/>遠低於實際連線數] --> WaitReload[等待 exporter SHA-256 reload]
+        WaitReload --> CheckA{db-a alert?}
+        CheckA -- "firing ✅" --> CheckB{db-b alert?}
+        CheckA -- "inactive ❌" --> FailE1([FAIL: 閾值未生效])
+        CheckB -- "inactive ✅" --> CheckBVal{db-b 閾值不變?}
+        CheckB -- "firing ❌" --> FailE1b([FAIL: 隔離破壞])
+        CheckBVal -- "是 ✅" --> E2
+        CheckBVal -- "否 ❌" --> FailE1c([FAIL: 閾值洩漏])
+    end
+
+    subgraph E2["E2: Disable 隔離"]
+        DisableA[patch db-a container_cpu = disable] --> WaitAbsent[等待指標從 exporter 消失]
+        WaitAbsent --> CheckAbsent{db-a container_cpu<br/>absent?}
+        CheckAbsent -- "absent ✅" --> CheckBMetric{db-b container_cpu<br/>仍存在?}
+        CheckAbsent -- "exists ❌" --> FailE2([FAIL: disable 未生效])
+        CheckBMetric -- "exists ✅" --> Restore
+        CheckBMetric -- "absent ❌" --> FailE2b([FAIL: disable 洩漏])
+    end
+
+    subgraph Restore["E3: 復原"]
+        RestoreA[恢復 db-a 原始配置] --> VerifyBoth{兩個 tenant<br/>回到初始狀態?}
+        VerifyBoth -- "是 ✅" --> Pass([PASS: 隔離驗證通過])
+        VerifyBoth -- "否 ❌" --> FailRestore([FAIL: 復原失敗])
+    end
+```
+
+### 9.5 Scenario F：HA 故障切換與 `max by(tenant)` 防翻倍
+
+驗證 threshold-exporter HA ×2 在 Pod 被刪除後服務不中斷，且 `max by(tenant)` 聚合不會因 Pod 數量變化而翻倍：
+
+```mermaid
+flowchart TD
+    Start([Phase F: Setup]) --> CheckHA{Running Pods ≥ 2?}
+    CheckHA -- "是" --> SavePods
+    CheckHA -- "否" --> Scale[kubectl scale replicas=2] --> WaitScale[等待 Pod Ready] --> SavePods
+
+    SavePods[記錄 Pod Names + 原始閾值] --> F2
+
+    subgraph F2["F2: 觸發 Alert"]
+        PatchLow[patch db-a mysql_connections = 5] --> WaitThreshold[wait_exporter: 閾值 = 5]
+        WaitThreshold --> WaitAlert[等待 alert 評估 45s]
+        WaitAlert --> CheckFiring{MariaDBHighConnections<br/>= firing?}
+        CheckFiring -- "firing ✅" --> F3
+        CheckFiring -- "否 ❌" --> FailF2([FAIL: Alert 未觸發])
+    end
+
+    subgraph F3["F3: Kill Pod → 驗證持續性"]
+        KillPod["kubectl delete pod (--force)"] --> Wait15[等待 15s]
+        Wait15 --> CheckSurvivor{存活 Pods ≥ 1?<br/>PDB 保護}
+        CheckSurvivor -- "≥1 ✅" --> RebuildPF[重建 port-forward]
+        CheckSurvivor -- "0 ❌" --> FailF3([FAIL: PDB 未保護])
+        RebuildPF --> StillFiring{Alert 仍然 firing?}
+        StillFiring -- "firing ✅" --> F4
+        StillFiring -- "否 ❌" --> FailF3b([FAIL: 故障切換中斷])
+    end
+
+    subgraph F4["F4: Pod 恢復 → 防翻倍驗證"]
+        WaitRecovery[等待替代 Pod Ready ≤ 2min] --> CheckPods{Running Pods ≥ 2?}
+        CheckPods -- "≥2 ✅" --> QueryMax["查詢 recording rule 值"]
+        CheckPods -- "<2 ❌" --> FailF4([FAIL: Pod 未恢復])
+        QueryMax --> CheckValue{"值 = 5?<br/>(非 10)"}
+        CheckValue -- "5 ✅ max 正確" --> CountSeries["count(user_threshold) = 2?"]
+        CheckValue -- "10 ❌ sum 翻倍" --> FailF4b([FAIL: max by 失效])
+        CountSeries -- "2 ✅" --> F5
+        CountSeries -- "≠2 ❌" --> FailF4c([FAIL: series 數異常])
+    end
+
+    subgraph F5["F5: 復原"]
+        RestoreConfig[恢復原始閾值] --> WaitResolve[等待 alert resolved]
+        WaitResolve --> Pass([PASS: HA 驗證通過<br/>max by 防翻倍確認])
+    end
+```
+
+> **核心證明**：Scenario F 的 Phase F4 是整個 HA 設計的關鍵驗證——它直接證明了 `max by(tenant)` 聚合在 Pod 數量變動時的正確性，這是選擇 `max` 而非 `sum` 的技術根據。詳見 §5 高可用性設計。
+
 ---
 
 ## 10. 未來擴展路線 (Future Roadmap)
@@ -747,6 +895,6 @@ tenants:
 
 ---
 
-**文件版本：** v0.8.0 — 2026-02-27
-**最後更新：** Phase 7 Testing Coverage & Doc Hardening
+**文件版本：** v0.9.0 — 2026-02-27
+**最後更新：** Phase 8 BYOP Integration, da-tools CLI, Test Coverage Matrix & Flowcharts
 **維護者：** Platform Engineering Team

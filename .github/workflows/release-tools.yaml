@@ -1,0 +1,62 @@
+name: Publish da-tools Image
+
+on:
+  push:
+    tags:
+      - 'tools/v*'  # 當推送如 tools/v0.1.0 的 Tag 時觸發（與 exporter 版號獨立）
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/da-tools
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assemble build context
+        run: |
+          # Copy tool scripts into the Docker build context
+          mkdir -p components/da-tools/app/tools
+          TOOLS=(
+            check_alert.py
+            baseline_discovery.py
+            validate_migration.py
+            migrate_rule.py
+            scaffold_tenant.py
+            offboard_tenant.py
+            deprecate_rule.py
+            metric-dictionary.yaml
+          )
+          for f in "${TOOLS[@]}"; do
+            cp "scripts/tools/$f" "components/da-tools/app/tools/"
+          done
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=match,pattern=tools/v(.*),group=1
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./components/da-tools/app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

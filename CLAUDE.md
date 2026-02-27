@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v0.8.0 — Feature Freeze)
+## 專案概覽 (v0.9.0 — Feature Freeze)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
@@ -18,7 +18,8 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 4 | v0.5.0 | HA ×2, PDB, Anti-Affinity, Platform Self-Monitoring (第 6 個 Rule Pack) |
 | 5 | v0.6.0 | migrate_rule v3 (Triage/Prefix/Dictionary), Shadow Monitoring, offboard/deprecate 工具 |
 | 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新 |
-| 7 | **v0.8.0** | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一 |
+| 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一 |
+| 8 | **v0.9.0** | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖 |
 
 ## Backlog (Feature Freeze — 以下均需核心改動)
 - B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — exporter Go 改動
@@ -41,6 +42,8 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `README.md` / `README.en.md` | 技術主管、初訪者 | 含痛點對比 + 企業價值主張表 |
 | `docs/architecture-and-design.md` | Platform Engineers | O(M) 推導 + Benchmark 在 §4.1–4.2 |
 | `docs/migration-guide.md` | Tenants, DevOps | 含遷移安全保證陳述 |
+| `docs/byo-prometheus-integration.md` | Platform Engineers, SREs | BYOP 最小整合 (tenant label、scrape、rule mount) + Operator 附錄 |
+| `components/da-tools/README.md` | All | 可攜帶 CLI 容器：驗證整合、遷移規則、scaffold tenant |
 | `docs/shadow-monitoring-sop.md` | SRE, Platform Engineers | Shadow Monitoring 完整 SOP runbook |
 | `docs/testing-playbook.md` | Contributors | K8s 環境 + shell 陷阱 |
 | `rule-packs/README.md` | All | 含 `optional: true` 卸載文件 |

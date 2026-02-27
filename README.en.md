@@ -200,6 +200,8 @@ make port-forward
 | [Rule Packs Directory](rule-packs/README.md) | 6 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, daily inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
+| [BYOP Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps (Label injection, Scrape configs, Rule mounting) for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
+| [da-tools CLI](components/da-tools/README.md) | Portable verification toolkit container — validate integration, migrate rules, generate configs without cloning | Everyone |
 | [Testing Playbook](docs/testing-playbook.md) | K8s environment issues, HA testing, shell script pitfalls | Contributors |
 
 ---

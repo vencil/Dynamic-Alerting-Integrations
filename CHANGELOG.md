@@ -2,6 +2,51 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.9.0] - Ecosystem Integration, CI/CD Decoupling & Test Visibility (2026-02-27)
+
+本版本聚焦於企業生態系整合、版號治理與測試透明度，不涉及 Go 核心程式碼變更。
+
+### 🔌 BYOP 整合指南 (Bring Your Own Prometheus)
+
+* **`docs/byo-prometheus-integration.md`**: 全新獨立文件，指引 Platform Engineer 以 3 個最小步驟將現有 Prometheus / Thanos 叢集接入動態閾值引擎：
+  1. 透過 `relabel_configs` 注入 `tenant` 標籤
+  2. 設定 `scrape_configs` 抓取 `threshold-exporter`
+  3. 掛載黃金規則包 (Projected Volume / PrometheusRule CRD)
+* 每個步驟附完整的 curl/jq 驗證命令 + 端到端 Checklist。
+* **Appendix**: Prometheus Operator (kube-prometheus-stack) 的 ServiceMonitor / PrometheusRule 等價設定。
+
+### 🧰 da-tools CLI 容器
+
+* **`components/da-tools/`**: 可攜帶 CLI 驗證工具容器 (`ghcr.io/vencil/da-tools`)，打包 7 個 Python 工具 + metric-dictionary.yaml：
+  * Prometheus API 工具：`check-alert`、`baseline`、`validate`
+  * 檔案系統工具：`migrate`、`scaffold`、`offboard`、`deprecate`
+* **設計理念**: 不需 clone 專案，`docker pull` 即可驗證整合或遷移規則。
+* 支援 `PROMETHEUS_URL` 環境變數，可直接在 K8s Job 中執行。
+* 獨立版號 `tools/v0.1.0`，與平台和 exporter 版號脫鉤。
+* `docs/byo-prometheus-integration.md` 和 `docs/migration-guide.md` 均新增 `da-tools` docker run 範例。
+
+### 🏗️ CI/CD 版號治理
+
+* **`release-exporter.yaml`**: 觸發條件從 `v*` 改為 `exporter/v*`，避免文件更新誤觸發 Docker image 重建。
+* **`release-tools.yaml`**: 新增 da-tools CI/CD workflow，`tools/v*` tag 觸發。
+* **Helm Chart 雙版號分離**: `Chart.yaml` 的 `version` (0.9.0) 與 `appVersion` (0.5.0) 正式脫鉤，Chart 結構升級不再連帶 Go binary 版號。
+* 三條版號線互不干擾：`v*` (平台文件) / `exporter/v*` (Go binary) / `tools/v*` (Python CLI)。
+
+### 📊 測試透明度
+
+* **Enterprise Test Coverage Matrix** (`docs/testing-playbook.md`): 新增矩陣表格，將 scenario-a~f + demo-full 對應到企業防護場景與斷言邏輯。
+* **Mermaid 流程圖** (`docs/architecture-and-design.md` §9.2–9.4):
+  * §9.2 demo-full 時序圖：composite load → alert firing → cleanup → resolved 完整生命週期
+  * §9.3 Scenario E 流程圖：雙維度隔離驗證 (閾值修改 + disable metric)
+  * §9.4 Scenario F 流程圖：HA Kill Pod → PDB 保護 → `max by(tenant)` 防翻倍證明
+
+### 📖 文件更新
+
+* **README.md / README.en.md**: 文件導覽表新增 BYOP 整合指南、da-tools CLI 入口。
+* **CLAUDE.md**: 文件架構表同步更新。
+
+---
+
 ## [v0.8.0] - Testing Coverage, SRE Runbook & Baseline Discovery (2026-02-27)
 
 本版本為 Phase 7 測試覆蓋強化 + B6/B7 交付

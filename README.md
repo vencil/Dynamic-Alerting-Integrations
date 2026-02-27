@@ -200,6 +200,8 @@ make port-forward
 | [規則包目錄](rule-packs/README.md) | 6 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
 | [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、每日巡檢、收斂判定、切換退出 | SREs、Platform Engineers |
+| [BYOP 整合指南](docs/byo-prometheus-integration.md) | 企業現有 Prometheus / Thanos 叢集的最小整合步驟 (Label 注入、Exporter 抓取、規則掛載) | Platform Engineers、SREs |
+| [da-tools CLI](components/da-tools/README.md) | 可攜帶驗證工具容器 — 不需 clone 專案即可驗證整合、遷移規則、產生配置 | 全體 |
 | [測試手冊](docs/testing-playbook.md) | K8s 環境問題、HA 測試、shell script 陷阱 | 貢獻者 |
 
 ---

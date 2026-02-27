@@ -56,6 +56,12 @@ python3 scripts/tools/scaffold_tenant.py --tenant redis-prod --db redis,mariadb 
 python3 scripts/tools/scaffold_tenant.py --catalog
 ```
 
+> **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
+> ```bash
+> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:0.1.0 \
+>   scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
+> ```
+
 ### 工具產出
 
 | 檔案 | 說明 |
@@ -85,6 +91,12 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --interactive
 # 指定輸出目錄
 python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 ```
+
+> **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
+> ```bash
+> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:0.1.0 \
+>   migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
+> ```
 
 ### 三種處理情境
 
@@ -130,7 +142,7 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 helm upgrade --install threshold-exporter ./components/threshold-exporter \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v0.8.0
+  --set image.tag=0.5.0
 ```
 
 ### 選項 B: 本地建置
