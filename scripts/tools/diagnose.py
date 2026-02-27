@@ -31,10 +31,14 @@ import urllib.parse
 
 
 def run_cmd(cmd):
-    """Execute a command safely using list arguments (no shell=True)."""
-    if isinstance(cmd, str):
-        import shlex
-        cmd = shlex.split(cmd)
+    """Execute a command safely using list arguments only (no shell=True).
+
+    Args:
+        cmd: Command as a list of strings. String input is rejected
+             to prevent potential command injection via shlex parsing.
+    """
+    if not isinstance(cmd, list):
+        raise TypeError(f"run_cmd() requires list argument, got {type(cmd).__name__}")
     try:
         return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
     except subprocess.CalledProcessError:

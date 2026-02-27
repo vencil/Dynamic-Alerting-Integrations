@@ -211,10 +211,13 @@ make port-forward
 | Tool | Purpose |
 |------|---------|
 | `scaffold_tenant.py` | Interactive configuration generator for new tenants |
-| `migrate_rule.py` | Auto-convert traditional Prometheus rules to dynamic architecture |
+| `migrate_rule.py` | Auto-convert legacy rules (v3: Triage CSV + Prefix isolation + Metric Dictionary) |
+| `validate_migration.py` | Shadow Monitoring value diff (Recording Rule comparison) |
 | `patch_config.py` | Safe partial ConfigMap updates |
 | `check_alert.py` | Query tenant alert status |
 | `diagnose.py` | Tenant health check |
+| `offboard_tenant.py` | Safe tenant removal (pre-check + cross-reference cleanup) |
+| `deprecate_rule.py` | Graceful rule/metric deprecation (3-step automation) |
 
 **Usage Examples:**
 
@@ -302,7 +305,11 @@ make help               # Show help message
 │       ├── check_alert.py
 │       ├── diagnose.py
 │       ├── migrate_rule.py
-│       └── scaffold_tenant.py
+│       ├── validate_migration.py  # Shadow Monitoring validation
+│       ├── scaffold_tenant.py
+│       ├── offboard_tenant.py     # Tenant offboarding
+│       ├── deprecate_rule.py      # Rule/Metric deprecation
+│       └── metric-dictionary.yaml # Heuristic metric mapping dictionary
 ├── tests/                      # Integration tests
 │   ├── scenario-a.sh           # Dynamic threshold test
 │   ├── scenario-b.sh           # Weak link detection test

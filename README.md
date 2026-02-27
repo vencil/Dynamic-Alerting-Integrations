@@ -211,10 +211,13 @@ make port-forward
 | 工具 | 用途 |
 |------|------|
 | `scaffold_tenant.py` | 新租戶互動式配置產生器 |
-| `migrate_rule.py` | 自動轉換傳統 Prometheus 規則為動態架構 |
+| `migrate_rule.py` | 自動轉換傳統規則（v3: Triage CSV + Prefix 隔離 + Metric Dictionary） |
+| `validate_migration.py` | Shadow Monitoring 數值差異比對（Recording Rule diff） |
 | `patch_config.py` | 安全局部更新 ConfigMap |
 | `check_alert.py` | 查詢租戶警報狀態 |
 | `diagnose.py` | 租戶健康檢查 |
+| `offboard_tenant.py` | 安全移除 Tenant 配置（Pre-check + 連帶檢查） |
+| `deprecate_rule.py` | 平滑下架過時的 Rule / Metric（三步自動化） |
 
 **使用範例：**
 
@@ -302,7 +305,11 @@ make help               # 顯示說明
 │       ├── check_alert.py
 │       ├── diagnose.py
 │       ├── migrate_rule.py
-│       └── scaffold_tenant.py
+│       ├── validate_migration.py  # Shadow Monitoring 驗證
+│       ├── scaffold_tenant.py
+│       ├── offboard_tenant.py     # Tenant 下架
+│       ├── deprecate_rule.py      # Rule/Metric 下架
+│       └── metric-dictionary.yaml # 啟發式指標對照字典
 ├── tests/                      # 整合測試
 │   ├── scenario-a.sh           # 動態閾值測試
 │   ├── scenario-b.sh           # 弱環節檢測測試
