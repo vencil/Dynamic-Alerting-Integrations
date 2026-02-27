@@ -169,6 +169,18 @@ load-demo: ## 負載注入: 完整 Demo (stress-ng + connections → alert → c
 baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: make baseline-discovery TENANT=db-a)
 	@python3 ./scripts/tools/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
 
+version-check: ## 檢查版號一致性 (CI lint 用)
+	@python3 ./scripts/tools/bump_docs.py --check
+
+version-show: ## 顯示目前三條版號線
+	@python3 ./scripts/tools/bump_docs.py --show-current
+
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0)
+	@python3 ./scripts/tools/bump_docs.py \
+		$(if $(PLATFORM),--platform $(PLATFORM)) \
+		$(if $(EXPORTER),--exporter $(EXPORTER)) \
+		$(if $(TOOLS),--tools $(TOOLS))
+
 .PHONY: help
 help: ## 顯示說明
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'

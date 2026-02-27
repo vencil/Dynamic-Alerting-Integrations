@@ -59,6 +59,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - `offboard_tenant.py <tenant> [--execute]`: Tenant 下架 (Pre-check + 移除)
 - `deprecate_rule.py <metric_key...> [--execute]`: Rule/Metric 下架 (三步自動化)
 - `baseline_discovery.py <--tenant NAME> [--duration S --interval S --metrics LIST]`: 負載觀測 + 閾值建議
+- `bump_docs.py [--platform VER] [--exporter VER] [--tools VER] [--check]`: 版號一致性管理 (三條版號線批次更新 + CI lint)
 - `metric-dictionary.yaml`: 啟發式指標對照字典
 
 ## 共用函式庫 (scripts/_lib.sh)

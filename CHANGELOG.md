@@ -34,16 +34,22 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### 📊 測試透明度
 
-* **Enterprise Test Coverage Matrix** (`docs/testing-playbook.md`): 新增矩陣表格，將 scenario-a~f + demo-full 對應到企業防護場景與斷言邏輯。
-* **Mermaid 流程圖** (`docs/architecture-and-design.md` §9.2–9.4):
-  * §9.2 demo-full 時序圖：composite load → alert firing → cleanup → resolved 完整生命週期
-  * §9.3 Scenario E 流程圖：雙維度隔離驗證 (閾值修改 + disable metric)
-  * §9.4 Scenario F 流程圖：HA Kill Pod → PDB 保護 → `max by(tenant)` 防翻倍證明
+* **Enterprise Test Coverage Matrix** (`docs/architecture-and-design.md` §9.2): 矩陣表格對應 scenario-a~f + demo-full 到企業防護場景與斷言邏輯。中英文版同步。
+* **Mermaid 流程圖** (`docs/architecture-and-design.md` §9.3–9.5):
+  * §9.3 demo-full 時序圖：composite load → alert firing → cleanup → resolved 完整生命週期
+  * §9.4 Scenario E 流程圖：雙維度隔離驗證 (閾值修改 + disable metric)
+  * §9.5 Scenario F 流程圖：HA Kill Pod → PDB 保護 → `max by(tenant)` 防翻倍證明
+
+### 🔧 版號治理工具
+
+* **`scripts/tools/bump_docs.py`**: 三條版號線批次更新工具 (`--platform` / `--exporter` / `--tools`)，含 `--check` 模式供 CI lint。
+* **Makefile**: 新增 `make version-check`、`make version-show`、`make bump-docs` targets。
 
 ### 📖 文件更新
 
 * **README.md / README.en.md**: 文件導覽表新增 BYOP 整合指南、da-tools CLI 入口。
-* **CLAUDE.md**: 文件架構表同步更新。
+* **CLAUDE.md**: 文件架構表 + 工具清單同步更新。
+* **`docs/architecture-and-design.en.md`**: 補齊 §9.2–9.5 (矩陣 + 三張 Mermaid 流程圖)，與中文版完整對齊。
 
 ---
 
