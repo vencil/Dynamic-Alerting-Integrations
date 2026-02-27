@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.5.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.7.0).
 
 **This document covers:**
 - System architecture and core design principles
@@ -747,6 +747,6 @@ Support multi-cluster federation:
 
 ---
 
-**Document version:** v0.5.0 — 2026-02-26
-**Last updated:** Multi-Tenant Dynamic Alerting Platform GA Release
+**Document version:** v0.7.0 — 2026-02-27
+**Last updated:** Phase 7 Testing Coverage & Doc Hardening
 **Maintainer:** Platform Engineering Team

@@ -30,7 +30,7 @@ Usage: $(basename "$0") [OPTIONS]
 
 OPTIONS:
   --tenant TENANT    Target tenant namespace (e.g., db-a, db-b)
-  --type TYPE        Load type: connections | cpu | stress-ng
+  --type TYPE        Load type: connections | cpu | stress-ng | composite
   --dry-run          Print K8s manifest without applying
   --cleanup          Remove all load-generator resources
   -h, --help         Show this help
@@ -39,6 +39,7 @@ EXAMPLES:
   $(basename "$0") --tenant db-a --type connections    # 連線數風暴
   $(basename "$0") --tenant db-a --type cpu            # CPU 與慢查詢
   $(basename "$0") --tenant db-a --type stress-ng      # 容器 CPU 極限
+  $(basename "$0") --tenant db-a --type composite      # 複合負載 (connections + cpu)
   $(basename "$0") --cleanup                           # 清除所有壓測
 USAGE
   exit 0
@@ -371,6 +372,31 @@ EOF
 }
 
 # ============================================================
+# Scenario D: Composite Load (connections + cpu)
+# ============================================================
+load_composite() {
+  local tenant="$1"
+
+  info "Scenario D: Composite Load → ${tenant}"
+  info "Launching connections + cpu simultaneously for MariaDBSystemBottleneck..."
+
+  # Launch both load types — type-specific cleanup ensures no conflict
+  load_connections "$tenant"
+  load_cpu "$tenant"
+
+  if ! $DRY_RUN; then
+    log "Composite load active in namespace '${tenant}'"
+    info "Expected alerts:"
+    info "  - MariaDBHighConnections (connections > threshold)"
+    info "  - MariaDBHighSlowQueries (sysbench slow queries)"
+    info "  - MariaDBSystemBottleneck (composite: connections AND cpu)"
+    info "Monitor:"
+    info "  kubectl logs -n ${tenant} job/load-conn-${tenant} -f"
+    info "  kubectl logs -n ${tenant} job/load-cpu-${tenant} -f"
+  fi
+}
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -412,6 +438,10 @@ if ! $DRY_RUN; then
     stress-ng)
       kubectl delete pod "load-stress-${TENANT}" -n "$TENANT" --ignore-not-found &>/dev/null
       ;;
+    composite)
+      kubectl delete job "load-conn-${TENANT}" -n "$TENANT" --ignore-not-found &>/dev/null
+      kubectl delete job "load-cpu-${TENANT}" -n "$TENANT" --ignore-not-found &>/dev/null
+      ;;
   esac
   # Brief pause for resource cleanup
   sleep 2
@@ -422,9 +452,10 @@ case "$LOAD_TYPE" in
   connections) load_connections "$TENANT" ;;
   cpu)         load_cpu "$TENANT" ;;
   stress-ng)   load_stress_ng "$TENANT" ;;
+  composite)   load_composite "$TENANT" ;;
   *)
     err "Unknown load type: '${LOAD_TYPE}'"
-    err "Valid types: connections, cpu, stress-ng"
+    err "Valid types: connections, cpu, stress-ng, composite"
     exit 1
     ;;
 esac

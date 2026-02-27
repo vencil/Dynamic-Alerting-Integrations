@@ -3,6 +3,8 @@
 > 從傳統 Prometheus 警報遷移至動態多租戶閾值架構。
 > **其他文件：** [README](../README.md) (概覽) · [Architecture & Design](architecture-and-design.md) (技術深度) · [Rule Packs](../rule-packs/README.md) (規則包目錄)
 
+> **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
+
 ## 你在哪個階段？(Where Are You?)
 
 | 你的情境 | 推薦路徑 | 工具 | 預估時間 |
@@ -128,7 +130,7 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 helm upgrade --install threshold-exporter ./components/threshold-exporter \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=v0.5.0
+  --set image.tag=v0.7.0
 ```
 
 ### 選項 B: 本地建置
@@ -629,7 +631,7 @@ spec:
 
 ### Phase C: 切換與收斂
 
-運行 1-2 週，`validate_migration.py` 報告 99.9% 一致後：
+運行 1-2 週，`validate_migration.py` 持續比對所有規則對的數值輸出。確認所有 mismatch 均已調查並排除後：
 
 1. 移除舊規則
 2. 拿掉新規則的 `migration_status: shadow` label

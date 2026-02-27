@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.5.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.7.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念
@@ -747,6 +747,6 @@ tenants:
 
 ---
 
-**文件版本：** v0.5.0 — 2026-02-26
-**最後更新：** 動態多租戶警報平台 GA 發布
+**文件版本：** v0.7.0 — 2026-02-27
+**最後更新：** Phase 7 Testing Coverage & Doc Hardening
 **維護者：** Platform Engineering Team

@@ -28,6 +28,13 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **Scenario B (`--with-load`)**: 保持原始閾值(70)，stress-ng 97.3% > 70% → alert fires → 清除 → resolves。
 * 所有 load 路徑加入 `trap cleanup EXIT`，確保 Ctrl+C / 錯誤退出時自動清除 load-generator 資源。
 
+### 🧪 Testing Coverage Expansion (Phase 7)
+* **`run_load.sh --type composite`**: 複合負載 — 同時啟動 connections + cpu 負載，用於驗證 `MariaDBSystemBottleneck` 複合警報在真實負載下觸發。
+* **`tests/scenario-e.sh`**: Scenario E — Multi-Tenant 隔離測試。修改 tenant A 的閾值/disable metric，驗證 tenant B 完全不受影響。支援 `--with-load` 真實負載模式。
+* **`tests/scenario-f.sh`**: Scenario F — HA 故障切換測試。殺掉一個 threshold-exporter Pod → 驗證 alert 持續 → Pod 恢復 → 驗證閾值不翻倍（max by vs sum by）。
+* **Migration Guide**: 開頭加入「遷移安全保證」定心丸陳述；Phase C 的「99.9% 一致」修正為準確的工程描述。
+* **全域版本一致性**: 統一 6 個文件的 v0.5.0 → v0.7.0 標示。
+
 ### 📖 文件更新
 * **README.md / README.en.md**: Quick Start 加入 `make demo-full`（動態負載展演）與 `make test-alert`（硬體故障測試）的語義區分。新增「企業級價值主張」表格（Risk-Free Migration, Zero-Crash Opt-Out, Full Lifecycle, Live Verifiability）融入痛點與解決方案區塊。
 * **rule-packs/README.md**: 補充「動態卸載 (optional: true)」文件 — 說明 Projected Volume 的 `optional: true` 機制，含卸載/恢復操作範例。
@@ -37,11 +44,14 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * `make load-connections TENANT=db-a` — 連線數風暴
 * `make load-cpu TENANT=db-a` — CPU 與慢查詢
 * `make load-stress TENANT=db-a` — 容器 CPU 極限
+* `make load-composite TENANT=db-a` — 複合負載 (connections + cpu)
 * `make load-cleanup` — 清除所有壓測資源
 * `make load-demo TENANT=db-a` — 壓測 Demo（啟動 → 觀察 → 手動 cleanup）
 * `make demo-full` — 完整端對端 Demo（含 Live Load）
 * `make test-scenario-a ARGS=--with-load` — Scenario A 真實負載模式
 * `make test-scenario-b ARGS=--with-load` — Scenario B 真實負載模式
+* `make test-scenario-e ARGS=--with-load` — Scenario E 多租戶隔離（可選真實負載）
+* `make test-scenario-f TENANT=db-a` — Scenario F HA 故障切換
 
 ---
 

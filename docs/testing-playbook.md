@@ -168,7 +168,7 @@ make benchmark ARGS=--json  # JSON 輸出（CI/CD 消費）
 
 腳本自動處理 port-forward 建立與清理，無需手動操作。
 
-### 關鍵指標基線 (v0.5.0, 2 tenants, Kind 單節點)
+### 關鍵指標基線 (v0.7.0, 2 tenants, Kind 單節點)
 
 | 指標 | 值 | 說明 |
 |------|----|------|

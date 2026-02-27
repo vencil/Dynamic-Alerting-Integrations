@@ -59,6 +59,14 @@ test-scenario-c: ## Scenario C 測試: 狀態字串比對
 test-scenario-d: ## Scenario D 測試: 維護模式 / 複合警報 / 多層嚴重度
 	@./tests/scenario-d.sh $(TENANT)
 
+.PHONY: test-scenario-e
+test-scenario-e: ## Scenario E 測試: 多租戶隔離 (ARGS=--with-load 使用真實負載)
+	@./tests/scenario-e.sh $(ARGS)
+
+.PHONY: test-scenario-f
+test-scenario-f: ## Scenario F 測試: HA 故障切換 (Kill Pod → 恢復 → 閾值不翻倍)
+	@./tests/scenario-f.sh $(TENANT)
+
 .PHONY: demo
 demo: ## 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check_alert)
 	@bash ./scripts/demo.sh --skip-load
@@ -136,6 +144,10 @@ load-cpu: ## 負載注入: CPU 與慢查詢 (使用: make load-cpu TENANT=db-a)
 .PHONY: load-stress
 load-stress: ## 負載注入: 容器 CPU 極限 (使用: make load-stress TENANT=db-a)
 	@./scripts/run_load.sh --tenant $(TENANT) --type stress-ng
+
+.PHONY: load-composite
+load-composite: ## 負載注入: 複合負載 connections+cpu (使用: make load-composite TENANT=db-a)
+	@./scripts/run_load.sh --tenant $(TENANT) --type composite
 
 .PHONY: load-cleanup
 load-cleanup: ## 負載注入: 清除所有壓測資源

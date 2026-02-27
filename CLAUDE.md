@@ -7,7 +7,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
 - **Prometheus**: Projected Volume 掛載 6 個 Rule Pack (`optional: true`)。Recording rules 用 `max by(tenant)` (非 `sum`)
 - **Enterprise**: Prefix 隔離 (`custom_`)、Metric Dictionary、Triage Mode、Shadow Monitoring
-- **Load Injection**: `run_load.sh` 支援 connections / cpu / stress-ng 三種負載類型，整合進 demo + scenario
+- **Load Injection**: `run_load.sh` 支援 connections / cpu / stress-ng / composite 四種負載類型，整合進 demo + scenario
 
 ## 已完成 Phases
 | Phase | 版本 | 核心內容 |
@@ -18,11 +18,15 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 4 | v0.5.0 | HA ×2, PDB, Anti-Affinity, Platform Self-Monitoring (第 6 個 Rule Pack) |
 | 5 | v0.6.0 | migrate_rule v3 (Triage/Prefix/Dictionary), Shadow Monitoring, offboard/deprecate 工具 |
 | 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新 |
+| 7 | v0.7.0+ | Testing Coverage: Composite Load, Scenario E/F, Migration Guide 安全陳述, 版本一致性 |
 
-## 下一階段 (Phase 7): Testing Coverage & Doc Hardening
-1. **Migration Guide 安全感陳述** — 開頭加「遷移不會炸」定心丸 (小)
-2. **Scenario E: Multi-tenant 交叉影響** — tenant A 調整不影響 tenant B (中)
-3. **Scenario F: HA 故障切換** — Kill Pod → 警報持續 → Pod 恢復 → 不翻倍 (中)
+## 下一階段: 已完成
+Phase 7 (Testing Coverage & Doc Hardening) 全部完成：
+- ✅ Migration Guide 安全感陳述 + 99.9% 修正
+- ✅ `run_load.sh --type composite` (connections + cpu 並行)
+- ✅ Scenario E: Multi-tenant 隔離 (`tests/scenario-e.sh`)
+- ✅ Scenario F: HA 故障切換 (`tests/scenario-f.sh`)
+- ✅ 全域版本 v0.5.0 → v0.7.0 (6 個文件)
 
 ## Backlog
 - B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — exporter Go 改動
@@ -30,6 +34,8 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - B3: Oracle / DB2 rule-pack 模板 (依賴 B1)
 - B4: 排程式閾值 (備份窗口) — workaround: CronJob + patch_config.py
 - B5: Log-based 錯誤偵測 (ORA-600) — 非 metrics 路線，另一產品方向
+- B6: Shadow Monitoring SRE SOP — 獨立 runbook (目前 migration-guide 已有基本覆蓋)
+- B7: Baseline Discovery 模式 — 負載注入觀察崩潰邊緣指標，輔助閾值設定
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
@@ -44,7 +50,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 |------|------|------|
 | `README.md` / `README.en.md` | 技術主管、初訪者 | 含痛點對比 + 企業價值主張表 |
 | `docs/architecture-and-design.md` | Platform Engineers | O(M) 推導 + Benchmark 在 §4.1–4.2 |
-| `docs/migration-guide.md` | Tenants, DevOps | ⚠️ Phase 7: 開頭需加安全感陳述 |
+| `docs/migration-guide.md` | Tenants, DevOps | 含遷移安全保證陳述 |
 | `rule-packs/README.md` | All | 含 `optional: true` 卸載文件 |
 | `components/threshold-exporter/README.md` | Developers | |
 | `docs/testing-playbook.md` | Contributors | K8s 環境 + shell 陷阱 |
@@ -81,7 +87,10 @@ Scenario / benchmark 腳本透過 `source scripts/_lib.sh` 共用（demo.sh 有�
 - `make test-alert`: **硬體故障/服務中斷測試** — Kill process 模擬 Hard Outage
 - `make demo-full`: **動態負載展演** — Live Load Demo (stress-ng + connections → alert 觸發 → 清除 → 恢復)
 - `make demo`: 快速模式 (scaffold + migrate + diagnose，不含負載)
-- `make test-scenario-{a,b} ARGS=--with-load`: Scenario 真實負載模式
+- `make test-scenario-{a,b,e} ARGS=--with-load`: Scenario 真實負載模式
+- `make test-scenario-e`: Multi-tenant 隔離測試
+- `make test-scenario-f`: HA 故障切換測試
+- `make load-composite TENANT=db-a`: 複合負載 (connections + cpu)
 
 ## AI Agent 環境
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`
