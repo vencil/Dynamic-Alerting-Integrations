@@ -98,6 +98,17 @@ Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by pla
 
 ---
 
+### Enterprise Value Propositions
+
+| Value | Mechanism | Verifiability |
+|-------|-----------|---------------|
+| **Risk-Free Migration** | `migrate_rule.py --triage` bucketing + `custom_` prefix isolation + Shadow Monitoring dual-track | `validate_migration.py` numerical diff report |
+| **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
+| **Full Lifecycle Governance** | `scaffold_tenant.py` onboard → `patch_config.py` operate → `deprecate_rule.py` / `offboard_tenant.py` offboard | Every tool has `--dry-run` or pre-check mode |
+| **Live Verifiability** | `make demo-full` end-to-end: real load injection → alert fires → cleanup → auto-recovery | Full cycle < 5 minutes, visually observable |
+
+---
+
 ## Architecture Overview
 
 ### Concept Comparison: Traditional vs. Dynamic
@@ -166,10 +177,13 @@ make setup
 # 3. Verify metrics
 make verify
 
-# 4. Test alerts
+# 4. Hard Outage Test — Kill process to simulate service failure
 make test-alert
 
-# 5. Access UIs
+# 5. Live Load Demo — stress-ng + connections → alert fires → cleanup → auto-recovery
+make demo-full
+
+# 6. Access UIs
 make port-forward
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3000 (admin/admin)
@@ -250,12 +264,13 @@ make demo
 make setup              # Deploy all resources (Kind cluster + DB + Monitoring)
 make reset              # Clean and redeploy
 make verify             # Verify Prometheus metric collection
-make test-alert         # Trigger failure test (usage: make test-alert TENANT=db-b)
+make test-alert         # Hard outage test — kill process simulation (usage: make test-alert TENANT=db-b)
 make test-scenario-a    # Scenario A: Dynamic thresholds (usage: make test-scenario-a TENANT=db-a)
 make test-scenario-b    # Scenario B: Weak link detection
 make test-scenario-c    # Scenario C: Status string matching
 make test-scenario-d    # Scenario D: Maintenance mode / composite alerts / multi-layer severity
-make demo               # End-to-end demo (scaffold + migrate + diagnose + check_alert)
+make demo               # End-to-end demo — quick mode (scaffold + migrate + diagnose + check_alert)
+make demo-full          # Live Load Demo (stress-ng + connections → alert fire/resolve cycle)
 make component-build    # Build component image (COMP=threshold-exporter)
 make component-deploy   # Deploy component (COMP=threshold-exporter ENV=local)
 make component-logs     # View component logs

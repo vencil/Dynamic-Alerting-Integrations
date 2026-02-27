@@ -40,7 +40,7 @@ benchmark: ## 效能基準測試 (使用: make benchmark 或 make benchmark ARGS
 	@bash scripts/benchmark.sh $(ARGS)
 
 .PHONY: test-alert
-test-alert: ## 觸發故障測試 (使用: make test-alert TENANT=db-b)
+test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
 
 .PHONY: test-scenario-a
@@ -64,7 +64,7 @@ demo: ## 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check
 	@bash ./scripts/demo.sh --skip-load
 
 .PHONY: demo-full
-demo-full: ## 端對端示範 — 完整模式 (含 Live Load Injection + alert 觸發/消除)
+demo-full: ## 動態負載展演 — Live Load Demo (stress-ng + connections → alert 觸發 → 清除 → 自動恢復)
 	@bash ./scripts/demo.sh
 
 # ----------------------------------------------------------

@@ -31,6 +31,25 @@
 - **簡化**: 新增 exporter 後只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
 - **安全**: 唯一的風險是 `absent()` — 目前只有 mariadb (已部署) 使用 `absent(mysql_up)`，其他 pack 都不含 `absent()`。
 
+### 動態卸載 (optional: true)
+
+所有 6 個 Rule Pack 在 Projected Volume 中均設定 `optional: true`，這代表：
+
+- **卸載不崩潰**: 刪除任何 Rule Pack 的 ConfigMap（`kubectl delete cm prometheus-rules-<type> -n monitoring`）後，Prometheus **不會 Crash**，只是對應的規則消失。
+- **適用場景**: 大型客戶可能有自己的規則體系，需要關閉平台的黃金標準 Rule Pack，改用 `custom_` 前綴的遷移規則或完全自訂的規則。
+- **重新載入**: 重新 `kubectl apply` 對應的 ConfigMap YAML 即可恢復。Prometheus 的 `--web.enable-lifecycle` 端點或 SHA-256 hash 偵測會自動觸發重載。
+
+```bash
+# 卸載 MongoDB Rule Pack（不影響其他 pack 和 Prometheus 運行）
+kubectl delete cm prometheus-rules-mongodb -n monitoring
+
+# 驗證 Prometheus 正常
+kubectl logs -n monitoring deploy/prometheus --tail=5
+
+# 恢復
+kubectl apply -f k8s/03-monitoring/configmap-rules-mongodb.yaml
+```
+
 ## 自訂 Rule Pack
 
 每個 Rule Pack 遵循統一結構：

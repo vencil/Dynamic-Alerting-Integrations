@@ -28,6 +28,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **Scenario B (`--with-load`)**: 保持原始閾值(70)，stress-ng 97.3% > 70% → alert fires → 清除 → resolves。
 * 所有 load 路徑加入 `trap cleanup EXIT`，確保 Ctrl+C / 錯誤退出時自動清除 load-generator 資源。
 
+### 📖 文件更新
+* **README.md / README.en.md**: Quick Start 加入 `make demo-full`（動態負載展演）與 `make test-alert`（硬體故障測試）的語義區分。新增「企業級價值主張」表格（Risk-Free Migration, Zero-Crash Opt-Out, Full Lifecycle, Live Verifiability）融入痛點與解決方案區塊。
+* **rule-packs/README.md**: 補充「動態卸載 (optional: true)」文件 — 說明 Projected Volume 的 `optional: true` 機制，含卸載/恢復操作範例。
+* **Makefile**: `test-alert` 重新定義為「硬體故障/服務中斷測試 (Hard Outage Test)」；`demo-full` 定義為「動態負載展演 (Live Load Demo)」。
+
 ### 🎯 Makefile Targets
 * `make load-connections TENANT=db-a` — 連線數風暴
 * `make load-cpu TENANT=db-a` — CPU 與慢查詢

@@ -98,6 +98,17 @@ Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台�
 
 ---
 
+### 企業級價值主張
+
+| 價值 | 機制 | 可驗證性 |
+|------|------|----------|
+| **零摩擦遷移 (Risk-Free Migration)** | `migrate_rule.py --triage` 分桶 + `custom_` Prefix 隔離 + Shadow Monitoring 雙軌並行 | `validate_migration.py` 數值 diff 報告 |
+| **零崩潰退出 (Zero-Crash Opt-Out)** | Projected Volume `optional: true` — 刪除 ConfigMap 不影響 Prometheus 運行 | `kubectl delete cm prometheus-rules-<type>` 立即可測 |
+| **全生命週期治理 (Full Lifecycle)** | `scaffold_tenant.py` 導入 → `patch_config.py` 營運 → `deprecate_rule.py` / `offboard_tenant.py` 下架 | 每個工具皆具 `--dry-run` 或 Pre-check 模式 |
+| **即時可驗證 (Live Verifiability)** | `make demo-full` 端對端展演：真實負載注入 → alert 觸發 → 清除 → 自動恢復 | 完整循環 < 5 分鐘，肉眼可見 |
+
+---
+
 ## 架構總覽
 
 ### 概念對比：傳統 vs 動態
@@ -166,10 +177,13 @@ make setup
 # 3. 驗證指標
 make verify
 
-# 4. 測試 Alert
+# 4. 硬體故障測試 — Kill process 模擬服務中斷 (Hard Outage Test)
 make test-alert
 
-# 5. 存取 UI
+# 5. 動態負載展演 — Live Load Demo (stress-ng + connections → alert 觸發 → 清除 → 自動恢復)
+make demo-full
+
+# 6. 存取 UI
 make port-forward
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3000 (admin/admin)
@@ -250,12 +264,13 @@ make demo
 make setup              # 部署全部資源 (Kind cluster + DB + Monitoring)
 make reset              # 清除後重新部署
 make verify             # 驗證 Prometheus 指標抓取
-make test-alert         # 觸發故障測試 (使用: make test-alert TENANT=db-b)
+make test-alert         # 硬體故障/服務中斷測試 (使用: make test-alert TENANT=db-b)
 make test-scenario-a    # Scenario A: 動態閾值 (使用: make test-scenario-a TENANT=db-a)
 make test-scenario-b    # Scenario B: 弱環節檢測
 make test-scenario-c    # Scenario C: 狀態字串比對
 make test-scenario-d    # Scenario D: 維護模式 / 複合警報 / 多層嚴重度
-make demo               # 端對端示範 (scaffold + migrate + diagnose + check_alert)
+make demo               # 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check_alert)
+make demo-full          # 動態負載展演 — Live Load Demo (含 alert 觸發/消除完整循環)
 make component-build    # Build component image (COMP=threshold-exporter)
 make component-deploy   # Deploy component (COMP=threshold-exporter ENV=local)
 make component-logs     # View component logs
