@@ -869,18 +869,60 @@ flowchart TD
 
 ## 10. Future Roadmap
 
-### 10.1 Full RBAC Integration
+The following items are listed in priority order. Items marked `[Backlog Bx]` correspond to the backlog IDs in CLAUDE.md.
 
-Bind with Kubernetes RBAC:
-- Platform Team gets `configmaps/patch` on `_defaults.yaml`
-- Tenant Team gets `configmaps/patch` on `<tenant>.yaml`
+### 10.1 Regex Dimension Thresholds `[B1]`
 
-### 10.2 Prometheus Federation
+Currently, threshold keys use exact matching (`tablespace: "USERS"`). In enterprise Oracle/DB2 environments, there can be dozens of tablespaces, making per-key configuration impractical. This item adds regex matching support (`tablespace=~"SYS.*"`), allowing a single rule to cover multiple dimension values. Requires changes to the exporter Go code's config parser and metric generation logic.
 
-Support multi-cluster federation:
-- Edge clusters collect tenant metrics
-- Central cluster performs global alert evaluation
-- Cross-cluster SLA monitoring
+### 10.2 Oracle / DB2 Rule-Pack Templates `[B3]`
+
+Depends on B1 completion. Provides default rule-packs for Oracle (tablespace utilization, session count) and DB2 (lock wait, bufferpool hit ratio), enabling enterprise DBAs to use them out of the box.
+
+### 10.3 Scheduled Thresholds `[B4]`
+
+Database backup windows cause expected CPU/IO spikes, but currently trigger alerts. This item provides native scheduled threshold overrides (e.g., "raise connections threshold to 200 daily from 02:00–04:00"). A workaround using CronJob + `patch_config.py` is available today.
+
+### 10.4 Benchmark Under-Load Mode `[B2]`
+
+Currently, `make benchmark` only measures hot-reload latency in idle state. This mode will measure reload latency during real load (composite load), proving that "hot-reload does not impact production performance."
+
+### 10.5 Migration Tool AST Parsing `[B6]`
+
+Currently, `migrate_rule.py` uses regex + heuristic dictionary matching to parse legacy PromQL alert rules, categorizing results into Perfect / Complex / Unparseable buckets. This approach has limited tolerance for "syntactically equivalent but textually different" variations such as label ordering differences or whitespace style, requiring human or LLM intervention for the Complex bucket.
+
+Introducing PromQL AST (Abstract Syntax Tree) parsing would allow the tool to extract thresholds and metric names directly from the tree structure, ignoring stylistic differences and pushing the auto-conversion success rate close to 100%. Two implementation paths exist: integrating an existing Rust-based Python binding (e.g., `promql-parser` on PyPI), or compiling a lightweight Go CLI that calls the official `prometheus/promql/parser` and outputs JSON AST, invoked from Python via subprocess.
+
+The ROI of this item depends on real migration data. We recommend running `migrate_rule.py --dry-run --triage` on the first enterprise customer's rule set to measure the Perfect/Complex/Unparseable ratio — if Perfect is already 90%+, AST is a nice-to-have; if below 70%, it should be prioritized.
+
+### 10.6 Governance Evolution
+
+Currently all tenant configs reside in a single `threshold-config` ConfigMap, and K8s native RBAC can only control access at the resource level, not at the key level. Splitting into multiple ConfigMaps is feasible but projected volumes require each ConfigMap name to be hardcoded in the Pod Spec — adding a new tenant would require a Deployment change and trigger a Pod restart, breaking the core hot-reload mechanism.
+
+#### Current Best Practice: GitOps-Driven RBAC
+
+The recommended approach is to shift configuration changes from `kubectl patch` to Git commit → GitOps sync (ArgoCD / Flux). The permission boundary moves up to the Git layer:
+
+- **CODEOWNERS / Branch Protection**: Restrict Tenant A's team to only modify `conf.d/db-a.yaml`, while only the Platform Team can modify `_defaults.yaml`
+- **CI/CD Pipeline**: Assembles the `conf.d/` directory into a single `threshold-config` ConfigMap and applies it, preserving hot-reload performance
+- **Audit Trail**: Git history natively provides complete who / when / what change records
+
+In practice, configuration changes operate at three levels:
+
+1. **Standard Pathway**: All changes go through Git PR → review → merge → GitOps sync. Complete RBAC audit trail, suitable for routine threshold tuning and new tenant onboarding.
+2. **Emergency Break-Glass**: During P0 incidents, SREs can use `patch_config.py` to directly runtime-patch the K8s ConfigMap for minimum MTTR.
+3. **Drift Reconciliation**: After a break-glass patch, SREs must submit a follow-up PR to sync the change back to Git. Otherwise, the next GitOps sync will overwrite the K8s configuration back to the Git version — this self-healing property naturally prevents "forgot to update the code after firefighting" from becoming permanent technical debt.
+
+#### Future Blueprint: CRD + Operator Architecture
+
+When the platform scales to require auto-scaling, drift reconciliation, and cross-cluster management, a `ThresholdConfig` CRD and Operator can be introduced, elevating tenant configurations to Kubernetes first-class resources. K8s native RBAC would then provide precise per-CR access control, integrating seamlessly with GitOps toolchains. This path requires additional Operator development and operational investment, and is best evaluated when the product enters its scaling phase.
+
+### 10.7 Prometheus Federation
+
+Support multi-cluster architecture:
+- Edge clusters each collect tenant metrics and run threshold-exporter
+- Central cluster performs global alert evaluation via federation or remote-write
+- Cross-cluster SLA monitoring and unified dashboards
 
 ---
 

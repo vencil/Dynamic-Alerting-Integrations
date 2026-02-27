@@ -181,8 +181,8 @@ def _build_rules():
     platform_rules.append({
         "file": "CLAUDE.md",
         "desc": "CLAUDE.md project overview version",
-        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+ — Feature Freeze",
-        "replacement": lambda v: f"v{v} — Feature Freeze",
+        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+\)",
+        "replacement": lambda v: f"v{v})",
     })
 
     # da-tools README platform version reference

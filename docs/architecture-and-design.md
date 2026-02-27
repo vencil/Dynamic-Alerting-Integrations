@@ -869,18 +869,60 @@ flowchart TD
 
 ## 10. 未來擴展路線 (Future Roadmap)
 
-### 10.1 完整 RBAC 整合
+以下項目依優先序排列。標記 `[Backlog Bx]` 的項目對應 CLAUDE.md 中的 Backlog 編號。
 
-與 Kubernetes RBAC 綁定：
-- Platform Team 取得 `configmaps/patch` on `_defaults.yaml`
-- Tenant Team 取得 `configmaps/patch` on `<tenant>.yaml`
+### 10.1 Regex 維度閾值 `[B1]`
 
-### 10.2 Prometheus 聯邦 (Federation)
+目前 threshold key 為精確比對（`tablespace: "USERS"`）。企業 Oracle/DB2 環境中，tablespace 數量可能數十個，逐一配置不現實。此項目將支援 regex 匹配（`tablespace=~"SYS.*"`），讓單條規則覆蓋多個維度值。需要修改 exporter Go 程式碼的 config parser 與 metric 產生邏輯。
 
-支援多叢集聯邦：
-- 邊界叢集收集租戶指標
-- 中央叢集進行全域警報評估
-- 跨叢集 SLA 監控
+### 10.2 Oracle / DB2 Rule-Pack 模板 `[B3]`
+
+依賴 B1 完成。提供針對 Oracle（tablespace utilization、session count）和 DB2（lock wait、bufferpool hit ratio）的預設 rule-pack，讓企業 DBA 可以開箱即用。
+
+### 10.3 排程式閾值 `[B4]`
+
+資料庫備份窗口期間 CPU/IO 飆高屬正常行為，但目前會觸發告警。此項目提供原生的排程式閾值覆蓋（如「每日 02:00–04:00 connections 閾值提升至 200」）。目前可用 CronJob + `patch_config.py` 作為 workaround。
+
+### 10.4 Benchmark Under-Load 模式 `[B2]`
+
+目前 `make benchmark` 僅測量 idle 狀態下的 hot-reload 延遲。此模式將在真實負載（composite load）運行期間同步測量 reload 延遲，證明「hot-reload 不影響生產環境效能」。
+
+### 10.5 遷移工具 AST 解析 `[B6]`
+
+目前 `migrate_rule.py` 使用 regex + 啟發式字典比對解析傳統 PromQL alert rule，將結果分為 Perfect / Complex / Unparseable 三類。此方式對標籤順序差異、空白風格變體等「語法等價但字面不同」的寫法容錯有限，需人工或 LLM 介入處理 Complex 桶。
+
+引入 PromQL AST（抽象語法樹）解析後，工具可直接從樹狀結構精準抽取閾值與指標名稱，無視寫法風格差異，將自動轉換成功率逼近 100%。實作路線有兩條：整合既有的 Rust-based Python binding（如 PyPI 上的 `promql-parser`），或編譯一個輕量 Go CLI 呼叫官方 `prometheus/promql/parser` 並輸出 JSON AST，Python 端透過 subprocess 調用。
+
+此項目的 ROI 取決於真實遷移數據。建議在第一個企業客戶導入時，以 `migrate_rule.py --dry-run --triage` 統計 Perfect/Complex/Unparseable 比例——若 Perfect 已達 90%+，AST 為錦上添花；若低於 70%，則應優先投資。
+
+### 10.6 治理架構演進 (Governance Evolution)
+
+目前所有租戶配置集中於單一 `threshold-config` ConfigMap，K8s 原生 RBAC 僅能控制到 resource 層級，無法區分 key 層級的存取權限。拆分為多個 ConfigMap 雖然可行，但 projected volume 必須在 Pod Spec 中寫死每個 ConfigMap name——新增租戶時需修改 Deployment 並觸發 Pod 重啟，破壞 hot-reload 核心機制。
+
+#### 現行最佳實踐：GitOps-Driven RBAC
+
+推薦將配置變更流程從 `kubectl patch` 轉為 Git commit → GitOps sync（ArgoCD / Flux）。權限邊界上移至 Git 層：
+
+- **CODEOWNERS / Branch Protection**：限制 Tenant A 團隊僅能修改 `conf.d/db-a.yaml`，Platform Team 才能修改 `_defaults.yaml`
+- **CI/CD Pipeline**：將 `conf.d/` 目錄組裝為單一 `threshold-config` ConfigMap 並 apply，保留 hot-reload 效能優勢
+- **審計軌跡**：Git history 天然提供 who / when / what 的完整變更紀錄
+
+實務上，配置變更分為三個層次：
+
+1. **常規流程 (Standard Pathway)**：所有變更經 Git PR → review → merge → GitOps sync。RBAC 稽核軌跡完整，適用於日常閾值調校與新租戶上線。
+2. **緊急破窗 (Break-Glass)**：P0 事故期間，SRE 可直接使用 `patch_config.py` 對 K8s ConfigMap 做 runtime patch，以最短 MTTR 止血。
+3. **飄移收斂 (Drift Reconciliation)**：破窗修改後，SRE 必須補發 PR 將變更同步回 Git。否則下一次 GitOps sync 會將 K8s 上的配置覆蓋回 Git 版本——這正是 GitOps 的自癒特性，天然防止「急救後忘記改程式碼」造成永久技術債。
+
+#### 終極藍圖：CRD + Operator
+
+當平台擴展至需要自動擴縮、drift reconciliation、跨叢集管理時，可引入 `ThresholdConfig` CRD 與 Operator，將租戶配置提升為 Kubernetes first-class resource。K8s 原生 RBAC 即可在 per-CR 層級精確控制存取，同時與 GitOps 工具鏈無縫整合。此路線需要額外的 Operator 開發與維運投資，適合在產品進入規模化階段時評估。
+
+### 10.7 Prometheus 聯邦 (Federation)
+
+支援多叢集架構：
+- 邊界叢集各自收集租戶指標並運行 threshold-exporter
+- 中央叢集透過 federation 或 remote-write 進行全域警報評估
+- 跨叢集 SLA 監控與統一儀表板
 
 ---
 

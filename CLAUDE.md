@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v0.9.0 — Feature Freeze)
+## 專案概覽 (v0.9.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
@@ -21,12 +21,13 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一 |
 | 8 | **v0.9.0** | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖 |
 
-## Backlog (Feature Freeze — 以下均需核心改動)
+## Backlog (以下均需核心改動)
 - B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — exporter Go 改動
 - B2: benchmark `--under-load` 模式
 - B3: Oracle / DB2 rule-pack 模板 (依賴 B1)
 - B4: 排程式閾值 (備份窗口) — workaround: CronJob + patch_config.py
 - B5: Log-based 錯誤偵測 (ORA-600) — 非 metrics 路線，另一產品方向
+- B6: migrate_rule AST 解析 — 現行 regex+triage 可運作，待真實遷移數據驗證 ROI
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
@@ -35,6 +36,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`
 5. **SAST**: Go 必須 `ReadHeaderTimeout`; Python 寫檔必須 `os.chmod(path, 0o600)`; `subprocess` 禁止 `shell=True`
 6. **推銷語言不進 repo**: README 保持客觀工程語言；Pitch Deck 獨立產出
+7. **版號治理**: 打 tag 前必須 `make version-check`；更新版號用 `make bump-docs`
 
 ## 文件架構
 | 文件 | 受眾 | 備註 |
@@ -88,6 +90,9 @@ Scenario / benchmark 腳本透過 `source scripts/_lib.sh` 共用（demo.sh 有�
 - `make test-scenario-f`: HA 故障切換測試
 - `make load-composite TENANT=db-a`: 複合負載 (connections + cpu)
 - `make baseline-discovery TENANT=db-a`: 觀測指標 + 閾值建議
+- `make version-check`: 版號一致性 CI lint
+- `make version-show`: 顯示三條版號線現狀
+- `make bump-docs PLATFORM=x EXPORTER=x TOOLS=x`: 批次更新版號引用
 
 ## AI Agent 環境
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`
