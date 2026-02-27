@@ -27,16 +27,7 @@ PATCH_CMD="python3 ${SCRIPT_DIR}/../scripts/tools/patch_config.py"
 # ============================================================
 log "Phase 1: Environment Setup"
 
-if ! kubectl get pods -n monitoring -l app=threshold-exporter | grep -q Running; then
-  err "threshold-exporter is not running"
-  err "Please deploy it first: make component-deploy COMP=threshold-exporter"
-  exit 1
-fi
-
-if ! kubectl get pods -n monitoring -l app=prometheus | grep -q Running; then
-  err "Prometheus is not running"
-  exit 1
-fi
+require_services threshold-exporter prometheus
 
 # Verify kube-state-metrics is running
 if ! kubectl get pods -n monitoring -l app.kubernetes.io/name=kube-state-metrics 2>/dev/null | grep -q Running; then
@@ -47,26 +38,16 @@ if ! kubectl get pods -n monitoring -l app.kubernetes.io/name=kube-state-metrics
   fi
 fi
 
-log "✓ All required services are running"
-
-# Port forwards
-kubectl port-forward -n monitoring svc/prometheus 9090:9090 &>/dev/null &
-PROM_PF_PID=$!
-kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 &>/dev/null &
-EXPORTER_PF_PID=$!
-sleep 5
+setup_port_forwards
 
 # Save original image for restore
 ORIGINAL_IMAGE=$(kubectl get deployment mariadb -n "${TENANT}" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "mariadb:11")
 
 cleanup() {
   log "Cleaning up..."
-  # Restore original image (in case test was interrupted)
   kubectl set image deployment/mariadb mariadb="${ORIGINAL_IMAGE}" -n "${TENANT}" 2>/dev/null || true
-  # Restore ConfigMap: 刪除 _state_container_imagepull key (恢復為 default = enabled)
   ${PATCH_CMD} "${TENANT}" _state_container_imagepull default 2>/dev/null || true
-  kill ${PROM_PF_PID} 2>/dev/null || true
-  kill ${EXPORTER_PF_PID} 2>/dev/null || true
+  cleanup_port_forwards
 }
 trap cleanup EXIT
 
@@ -78,7 +59,6 @@ log "Phase 2: Verify state filter metrics from threshold-exporter"
 
 METRICS=$(curl -sf http://localhost:8080/metrics 2>/dev/null || echo "")
 
-# Check user_state_filter for tenant
 if echo "$METRICS" | grep 'user_state_filter' | grep "tenant=\"${TENANT}\"" | grep -q 'filter="container_crashloop"'; then
   log "✓ user_state_filter{tenant=\"${TENANT}\", filter=\"container_crashloop\"} = 1"
 else
@@ -115,7 +95,6 @@ kubectl set image deployment/mariadb mariadb=nonexistent-registry.io/bad-image:v
 log "Waiting 60s for pod to enter ImagePullBackOff state..."
 sleep 60
 
-# Verify pod is in ImagePullBackOff
 POD_STATUS=$(kubectl get pods -n "${TENANT}" -l app=mariadb -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "unknown")
 log "Pod waiting reason: ${POD_STATUS}"
 
@@ -135,10 +114,8 @@ log "Phase 4: Verify kube-state-metrics detects the bad state"
 log "Waiting 30s for Prometheus to scrape kube-state-metrics..."
 sleep 30
 
-KSM_QUERY="kube_pod_container_status_waiting_reason{namespace=\"${TENANT}\",reason=~\"ImagePullBackOff|ErrImagePull\"}"
-KSM_COUNT=$(curl -sf http://localhost:9090/api/v1/query \
-  --data-urlencode "query=${KSM_QUERY}" | \
-  python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(len(r))" 2>/dev/null || echo "0")
+KSM_COUNT=$(prom_query_value "count(kube_pod_container_status_waiting_reason{namespace=\"${TENANT}\",reason=~\"ImagePullBackOff|ErrImagePull\"})" "0")
+KSM_COUNT=$(printf '%.0f' "$KSM_COUNT" 2>/dev/null || echo "0")
 
 if [ "$KSM_COUNT" -gt 0 ]; then
   log "✓ kube-state-metrics reports ${KSM_COUNT} container(s) in ImagePullBackOff"
@@ -146,11 +123,7 @@ else
   warn "kube-state-metrics reports 0 containers in ImagePullBackOff (may need more time)"
 fi
 
-# Check recording rule
-REASON_COUNT=$(curl -sf http://localhost:9090/api/v1/query \
-  --data-urlencode "query=tenant:container_waiting_reason:count{tenant=\"${TENANT}\",reason=~\"ImagePullBackOff|ErrImagePull\"}" | \
-  python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(sum(float(x['value'][1]) for x in r))" 2>/dev/null || echo "0")
-
+REASON_COUNT=$(prom_query_value "sum(tenant:container_waiting_reason:count{tenant=\"${TENANT}\",reason=~\"ImagePullBackOff|ErrImagePull\"})" "0")
 log "Recording rule tenant:container_waiting_reason:count = ${REASON_COUNT}"
 
 # ============================================================
@@ -161,17 +134,7 @@ log "Phase 5: Verify ContainerImagePullFailure alert fires"
 log "Waiting 45s for alert evaluation..."
 sleep 45
 
-ALERT_STATUS=$(curl -sf "http://localhost:9090/api/v1/alerts" | \
-  python3 -c "
-import sys,json
-data = json.load(sys.stdin)
-alerts = [a for a in data['data']['alerts']
-          if a.get('labels',{}).get('alertname') == 'ContainerImagePullFailure'
-          and '${TENANT}' in str(a)]
-print('firing' if any(a['state']=='firing' for a in alerts)
-      else 'pending' if any(a['state']=='pending' for a in alerts)
-      else 'inactive')
-" 2>/dev/null || echo "unknown")
+ALERT_STATUS=$(get_alert_status "ContainerImagePullFailure" "${TENANT}")
 
 if [ "$ALERT_STATUS" = "firing" ]; then
   log "✓ ContainerImagePullFailure alert is FIRING!"
@@ -179,7 +142,6 @@ elif [ "$ALERT_STATUS" = "pending" ]; then
   warn "Alert is PENDING (may need more time for 'for' duration)"
 else
   warn "Alert is ${ALERT_STATUS} — checking multiplication logic..."
-  # Debug: show the multiplication components
   curl -sf http://localhost:9090/api/v1/query \
     --data-urlencode "query=user_state_filter{tenant=\"${TENANT}\",filter=\"container_imagepull\"}" | \
     python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(f'  state_filter flag: {r}')" 2>/dev/null || true
@@ -195,11 +157,9 @@ ${PATCH_CMD} "${TENANT}" _state_container_imagepull disable
 
 log "✓ ConfigMap updated (imagepull filter disabled for ${TENANT})"
 
-# Wait for exporter reload + Prometheus scrape
 log "Waiting for exporter reload + Prometheus scrape (60s)..."
 sleep 60
 
-# Verify filter metric is gone
 FILTER_CHECK=$(curl -sf http://localhost:8080/metrics 2>/dev/null | \
   grep 'user_state_filter' | grep "tenant=\"${TENANT}\"" | grep 'filter="container_imagepull"' || echo "")
 
@@ -209,21 +169,10 @@ else
   warn "State filter metric still present (exporter may not have reloaded yet)"
 fi
 
-# Check alert status
 log "Waiting 60s for alert to resolve..."
 sleep 60
 
-ALERT_STATUS=$(curl -sf "http://localhost:9090/api/v1/alerts" | \
-  python3 -c "
-import sys,json
-data = json.load(sys.stdin)
-alerts = [a for a in data['data']['alerts']
-          if a.get('labels',{}).get('alertname') == 'ContainerImagePullFailure'
-          and '${TENANT}' in str(a)]
-print('firing' if any(a['state']=='firing' for a in alerts)
-      else 'inactive')
-" 2>/dev/null || echo "unknown")
-
+ALERT_STATUS=$(get_alert_status "ContainerImagePullFailure" "${TENANT}")
 if [ "$ALERT_STATUS" = "inactive" ] || [ "$ALERT_STATUS" = "unknown" ]; then
   log "✓ Alert RESOLVED after disabling filter — multiplication pattern works!"
 else

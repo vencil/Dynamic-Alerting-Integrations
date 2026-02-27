@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案 (v0.6.0)
+## 專案 (v0.7.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
@@ -33,6 +33,23 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - `offboard_tenant.py <tenant> [--execute]`: Tenant 下架 (Pre-check + 移除)
 - `deprecate_rule.py <metric_key...> [--execute]`: Rule/Metric 下架 (三步自動化)
 - `metric-dictionary.yaml`: 啟發式指標對照字典
+
+## 共用函式庫 (scripts/_lib.sh)
+Scenario / demo / benchmark 腳本透過 `source scripts/_lib.sh` 共用以下函式：
+
+| 類別 | 函式 | 用途 |
+|------|------|------|
+| 日誌 | `log`, `warn`, `err`, `info` | 彩色輸出 |
+| Port-forward | `setup_port_forwards [ns]` | 建立 Prometheus:9090 + Exporter:8080，PID 自動追蹤 |
+| | `cleanup_port_forwards` | 清除所有已追蹤的 port-forward |
+| Prometheus | `prom_query_value <promql> [default]` | 查詢單一數值 |
+| | `get_alert_status <alertname> <tenant>` | 回傳 firing/pending/inactive/unknown |
+| | `wait_for_alert <name> <tenant> <state> [timeout]` | 輪詢等待 alert 達到預期狀態 |
+| Exporter | `get_exporter_metric <pattern>` | grep exporter /metrics 取值 |
+| | `wait_exporter <pattern> <expected> [timeout]` | 等待 metric 出現/消失/達到特定值 |
+| 環境 | `require_services [labels...]` | 確認 K8s 服務 Running |
+| | `kill_port <port>` | 殺掉佔用端口的程序 |
+| ConfigMap | `get_cm_value <tenant> <key>` | 讀取 threshold-config 的當前值 |
 
 ## AI Agent 環境
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`

@@ -21,57 +21,20 @@ TENANT=${1:-db-a}
 PATCH_CMD="python3 ${SCRIPT_DIR}/../scripts/tools/patch_config.py"
 CHECK_ALERT="python3 ${SCRIPT_DIR}/../scripts/tools/check_alert.py"
 
-# get_cm_value() is provided by _lib.sh (supports both multi-file and legacy ConfigMap)
-
-# Helper: 查詢 exporter 上某 metric 的值
-get_exporter_metric() {
-  local metric_pattern=$1
-  curl -sf http://localhost:8080/metrics 2>/dev/null | \
-    grep -E "$metric_pattern" | grep -oP '\d+\.?\d*$' || echo ""
-}
-
-# Helper: 等待 exporter reload 直到指定 pattern 出現/消失
-wait_exporter() {
-  local pattern=$1 expect=$2 max_wait=${3:-90}
-  local waited=0
-  while [ $waited -lt $max_wait ]; do
-    local val=$(get_exporter_metric "$pattern")
-    if [ "$expect" = "present" ] && [ -n "$val" ]; then return 0; fi
-    if [ "$expect" = "absent" ] && [ -z "$val" ]; then return 0; fi
-    if [ "$expect" = "$val" ]; then return 0; fi
-    sleep 5; waited=$((waited + 5)); echo -n "."
-  done
-  echo ""; return 1
-}
-
 # ============================================================
 # Phase 1: 環境檢查
 # ============================================================
 log "Phase 1: Environment Setup"
 
-for svc in threshold-exporter prometheus; do
-  if ! kubectl get pods -n monitoring -l app=$svc | grep -q Running; then
-    err "$svc is not running. Run 'make setup' first."
-    exit 1
-  fi
-done
-log "✓ All services running"
-
-# Port forwards
-kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-PROM_PF_PID=$!
-kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 &
-EXPORTER_PF_PID=$!
-sleep 5
+require_services threshold-exporter prometheus
+setup_port_forwards
 
 cleanup() {
   log "Cleaning up..."
-  kill ${PROM_PF_PID} 2>/dev/null || true
-  kill ${EXPORTER_PF_PID} 2>/dev/null || true
-  # 還原所有測試修改
   ${PATCH_CMD} "${TENANT}" _state_maintenance default 2>/dev/null || true
   ${PATCH_CMD} "${TENANT}" mysql_connections "${ORIG_CONNECTIONS:-default}" 2>/dev/null || true
   ${PATCH_CMD} "${TENANT}" mysql_connections_critical default 2>/dev/null || true
+  cleanup_port_forwards
 }
 trap cleanup EXIT
 

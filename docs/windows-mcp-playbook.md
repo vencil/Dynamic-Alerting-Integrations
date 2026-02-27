@@ -1,7 +1,7 @@
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
 
 > AI Agent 透過 Windows-MCP Shell / Desktop Commander 操作 Dev Container 的最佳實踐與已知陷阱。
-> **相關文件：** [Testing Playbook](testing-playbook.md) (K8s/測試排錯)
+> **相關文件：** [Testing Playbook](testing-playbook.md) (K8s/測試排錯、負載注入陷阱)
 
 ## 前提
 
@@ -26,6 +26,35 @@ docker exec vibe-dev-container bash -c "{ \
 docker exec vibe-dev-container kubectl get pods > output.txt
 ```
 
+## 非同步腳本模式 — 長時間操作
+
+Desktop Commander 的 `docker exec` 在 PowerShell 中約 2-3 秒即返回，不會等待 container 內的命令完成。用以下模式處理超過 3 秒的操作：
+
+```bash
+# Step 1: 將完整邏輯寫成腳本（Write tool → scripts/_task.sh）
+# Step 2: 腳本內輸出重定向到檔案
+#!/bin/bash
+{
+  # ... 所有操作 ...
+  echo "=== Done ==="
+} > /workspaces/vibe-k8s-lab/_task_result.txt 2>&1
+echo "DONE"   # 給 stdout 一個信號
+
+# Step 3: 透過 Desktop Commander 啟動
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash scripts/_task.sh
+
+# Step 4: 用 Bash tool sleep 等待（不用 Desktop Commander，它也有 timeout）
+sleep 30 && echo "WAIT_DONE"
+
+# Step 5: 用 Read tool 讀取結果
+Read /sessions/.../mnt/vibe-k8s-lab/_task_result.txt
+
+# Step 6: 事後清理腳本和結果檔
+docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/scripts/_task.sh /workspaces/vibe-k8s-lab/_task_result.txt
+```
+
+**不要試圖** 在 Desktop Commander 的 `start_process` 中用 `Start-Sleep` 超過 30 秒 — 會觸發 MCP timeout。用 Claude Code 的 `Bash` tool (`sleep N`) 做長等待。
+
 ## Kubernetes MCP vs docker exec — 選擇策略
 
 | 情境 | 推薦方式 | 原因 |
@@ -35,6 +64,7 @@ docker exec vibe-dev-container kubectl get pods > output.txt
 | 需要 curl Prometheus API | `docker exec` + port-forward | ClusterIP 在 container 外不可達 |
 | Context 切換/列表 | K8s MCP `kubectl_context` | 穩定、不需 docker |
 | 檔案清理 (mounted workspace) | `docker exec ... rm -f` | Linux VM 無法直接 rm 掛載路徑 |
+| 負載注入 + 驗證（多步，含等待） | 寫成腳本 → docker exec | 非同步模式，避免 timeout |
 
 **K8s MCP 已知限制：**
 - `kubectl_generic` 易 timeout（超過 30s 的操作改用 docker exec）
@@ -55,7 +85,23 @@ docker exec vibe-dev-container bash -c "\
   kill %1 2>/dev/null"
 ```
 
-**常用 Benchmark 查詢：**
+### port-forward 端口衝突
+
+若前一次 port-forward 未清理，新的會失敗。在腳本中先殺殘留：
+
+```bash
+# 在 bash -c 內
+if command -v lsof &>/dev/null; then
+  lsof -ti:9090 | xargs kill -9 2>/dev/null || true
+elif command -v fuser &>/dev/null; then
+  fuser -k 9090/tcp 2>/dev/null || true
+fi
+sleep 1
+kubectl port-forward svc/prometheus 9090:9090 -n monitoring &>/dev/null &
+```
+
+### 常用 Benchmark 查詢
+
 ```bash
 # 多個查詢一次完成
 docker exec vibe-dev-container bash -c "\
@@ -72,8 +118,9 @@ docker exec vibe-dev-container bash -c "\
 | `count(prometheus_rule_group_rules)` | 群組數 |
 | `sum(prometheus_rule_group_last_duration_seconds)` | 每週期總評估時間 |
 | `prometheus_rule_group_duration_seconds` | 各百分位 (p50/p99) |
-| `prometheus_rule_group_last_duration_seconds` | 各群組最近評估時間 |
 | `count(count by(tenant)(user_threshold))` | 租戶數 |
+| `mysql_global_status_threads_connected{tenant="db-a"}` | 即時連線數（驗證負載注入） |
+| `tenant:pod_weakest_cpu_percent:max{tenant="db-a"}` | 弱環節 CPU%（驗證 stress-ng） |
 
 ## 已知陷阱
 
@@ -84,12 +131,14 @@ docker exec vibe-dev-container bash -c "\
 | 3 | `bash -c '...'` 引號被 PS 拆解 | 外層雙引號 `bash -c "..."`，內部單引號 |
 | 4 | UTF-8 emoji 輸出消失 | 用 exit code 判斷 (`set -euo pipefail`) |
 | 5 | Go test `./...` 找不到 module | `-w /workspaces/vibe-k8s-lab/components/threshold-exporter/app` |
-| 6 | 長時間測試 timeout | Desktop Commander `start_process` (支援 600s) |
+| 6 | 長時間操作 timeout | 寫成腳本 → `docker exec ... bash script.sh` → `sleep N` → Read 結果 |
 | 7 | kubeconfig 過期 | `kind export kubeconfig --name dynamic-alerting-cluster` |
 | 8 | port-forward 殘留 | `docker exec vibe-dev-container pkill -f port-forward` |
 | 9 | Python 引號衝突 | 寫檔再執行，或 `python3 -c "..."` 包單引號 |
 | 10 | mounted workspace 無法從 VM 刪檔 | 用 `docker exec ... rm -f` 清理暫存檔 |
 | 11 | K8s MCP timeout | Fallback 到 `docker exec` via Windows-MCP Shell |
+| 12 | Desktop Commander `Start-Sleep` > 30s | 改用 Bash tool 的 `sleep N`（支援 10 分鐘） |
+| 13 | 複雜 Python inline 在 PS 中崩潰 | PS 會解析 `f'{}'`、`for...in` → 寫腳本檔避開 PS 解析 |
 
 ## Helm Upgrade 防衝突流程
 
@@ -135,6 +184,10 @@ docker exec vibe-dev-container bash -c "{ \
   kubectl get pdb -n monitoring ; \
 } > /workspaces/vibe-k8s-lab/output.txt 2>&1"
 
+# 負載注入 (在 dev container 內執行)
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --tenant db-a --type connections
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --cleanup
+
 # 暫存檔清理 (必須透過 container)
-docker exec vibe-dev-container bash -c "rm -f /workspaces/vibe-k8s-lab/tmp-*.txt"
+docker exec vibe-dev-container bash -c "rm -f /workspaces/vibe-k8s-lab/tmp-*.txt /workspaces/vibe-k8s-lab/_*.txt"
 ```

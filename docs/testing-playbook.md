@@ -1,6 +1,6 @@
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
 
-> 測試前置準備與已知問題修復指引。
+> 測試前置準備、已知問題、負載注入陷阱、Benchmark 基線。
 > **相關文件：** [Windows-MCP Playbook](windows-mcp-playbook.md) (docker exec 模式、Helm 防衝突、Prometheus 查詢)
 
 ## 測試前置準備
@@ -8,7 +8,7 @@
 1. **Dev Container**: `docker ps` → `vibe-dev-container` 運行中。
 2. **Kind 叢集**: `docker exec vibe-dev-container kubectl get nodes` 正常。
 3. **PyYAML**: `docker exec vibe-dev-container python3 -c "import yaml"` (失敗則 `pip3 install pyyaml`)。
-4. **清理殘留**: `docker exec vibe-dev-container pkill -f port-forward`。
+4. **清理殘留**: `docker exec vibe-dev-container pkill -f port-forward` + `make load-cleanup`。
 
 ## K8s 環境問題
 
@@ -18,7 +18,7 @@
 | 2 | Helm field-manager conflict | 見 [Windows-MCP Playbook → Helm 防衝突流程](windows-mcp-playbook.md#helm-upgrade-防衝突流程) |
 | 3 | ConfigMap volume 更新延遲 30-90s | hot-reload 驗證需等 45+ 秒 |
 | 4 | Metrics label 順序 (`component,metric,severity,tenant`) | grep 用 `metric=.*tenant=`，不要反過來 |
-| 5 | 場景測試殘留值 | 測試前用 `patch_config.py` 恢復預設 |
+| 5 | 場景測試殘留值 | 測試前用 `patch_config.py` 恢復預設，負載測試用 `make load-cleanup` |
 | 6 | Projected volume ConfigMap 未生效 | 確認所有 6 個 `configmap-rules-*.yaml` 已 apply；projected volume 要求每個 ConfigMap 都存在 |
 
 ## Projected Volume 架構 (v0.5+)
@@ -35,6 +35,94 @@ configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,platform}.yaml
 - 少 apply 一個 ConfigMap → Prometheus Pod 啟動失敗（projected volume 要求所有 source 都存在）。
 - 修改單個 Rule Pack 只需 apply 對應的 ConfigMap，不影響其他。
 - YAML 驗證: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" <file>`。
+
+## 負載注入 (Load Injection) — 設計原則與已知陷阱
+
+### 連線數與 Exporter 共存
+
+MariaDB `max_connections=100`，`mysqld_exporter` (exporter user) 需要至少 1 個連線槽位才能回報 `SHOW STATUS`。
+
+| 連線數 | 結果 | Prometheus 指標 |
+|--------|------|-----------------|
+| 150 | 101 成功 + 49 拒絕，exporter 被鎖死 | `Threads_connected` 停滯在舊值 (stale) |
+| 100 | 全滿，exporter 被鎖死 | 同上 |
+| **95** | 95 成功，exporter 正常 | `Threads_connected=96` (95+exporter)，**alert fires** |
+
+**原則：負載連線數 < `max_connections` - 5**，保留足夠槽位給 exporter + 管理操作。95 > 70 (threshold) 即可觸發 `MariaDBHighConnections`。
+
+### Container Image 選擇
+
+| 用途 | Image | 原因 |
+|------|-------|------|
+| Connection Storm | `python:3.12-alpine` + PyMySQL | 單進程持有多連線，記憶體 ~128Mi |
+| CPU Burn (sysbench) | `severalnines/sysbench` | 標準 sysbench OLTP image |
+| Container CPU 壓測 | `alpine:3.19` + shell loop | `alexeiled/stress-ng` 在 PATH 找不到 `stress-ng`；alpine shell `while true; do :; done` 最可靠 |
+| ~~Connection Storm~~ | ~~`mariadb:11` + bash loop~~ | ❌ 150 個 `mariadb` CLI 進程各吃數 MB → OOM；且 `apt-get install python3` 太慢 (>90s) |
+
+### 單進程 vs 多進程連線持有
+
+❌ **多進程方式** (`for i in $(seq 150); do mariadb -e "SELECT SLEEP(600)" & done`)：
+- 每個 CLI 進程 ~5MB，150 個 = 750MB → 超過 container memory limit → OOM Kill
+- 回收困難，`kill` 訊號傳遞不確定
+
+✅ **單進程方式** (PyMySQL in Python)：
+- 一個 Python process 持有所有 `pymysql.connect()` objects
+- 記憶體穩定 ~50MB，即使 95 連線
+- `time.sleep(duration)` 後乾淨關閉所有連線
+
+### YAML Heredoc 中嵌入 Python
+
+在 `run_load.sh` 的 YAML `|` block 中放 Python 代碼時：
+
+```yaml
+# ❌ heredoc 內嵌 heredoc → YAML parser 崩潰 ("could not find expected ':'")
+command: |
+  python3 - <<'PYEOF'
+  import pymysql
+  PYEOF
+
+# ✅ 用 python3 -c "..." inline（雙引號包裹，內部用單引號）
+command: |
+  python3 -c "
+  import pymysql, time, os
+  conns = []
+  for i in range(95):
+      c = pymysql.connect(host='$HOST', ...)
+      conns.append(c)
+  time.sleep(600)
+  "
+```
+
+### 負載測試的清理保障
+
+所有負載路徑必須有 cleanup trap，覆蓋三種退出情境：
+
+```bash
+# 在 demo.sh / scenario-*.sh 中
+cleanup() {
+  "${SCRIPT_DIR}/run_load.sh" --cleanup 2>/dev/null || true
+  kill ${PF_PID} 2>/dev/null || true
+}
+trap cleanup EXIT  # Ctrl+C、錯誤退出、正常結束都觸發
+```
+
+`run_load.sh --cleanup` 透過 label selector 一次清除所有場景：
+```bash
+kubectl delete jobs,pods -l app=load-generator --all-namespaces
+```
+
+K8s Job 的 `ttlSecondsAfterFinished: 600` 是第二道防線，但不可依賴（controller 可能未啟用）。
+
+### 場景執行順序
+
+同時執行多場景時，Connection Storm 會搶光連線槽位，導致 CPU Burn (sysbench) 無法連線：
+
+| 順序 | 推薦原因 |
+|------|---------|
+| 1. stress-ng | 不需要 DB 連線，獨立運行 |
+| 2. CPU Burn | 需要 DB 連線，先確保能連上 |
+| 3. Connection Storm | 放最後，避免搶光連線影響其他場景 |
+| *或者* | 每個場景獨立測試，跑完 cleanup 再跑下一個 |
 
 ## HA 相關測試 (v0.5+)
 
@@ -95,7 +183,27 @@ make benchmark ARGS=--json  # JSON 輸出（CI/CD 消費）
 | 活躍 Series | ~2,800 | `prometheus_tsdb_head_series` |
 | user_threshold Series | ~16 (8/tenant) | `count(user_threshold)` |
 
-**用途：** 驗證架構變更未造成性能退化，或評估擴展成本。詳細分析見 [Architecture & Design §4.5-4.6](architecture-and-design.md#45-資源使用基準-resource-usage-baseline)。
+### 負載下的 Alert 驗證基線 (v0.7.0)
+
+| 場景 | 觸發指標 | 實測值 | 閾值 | Alert |
+|------|---------|--------|------|-------|
+| Connection Storm (95 conn) | `mysql_global_status_threads_connected` | 96 | 70 | `MariaDBHighConnections` FIRING ✅ |
+| stress-ng (CPU limit 100m) | `tenant:pod_weakest_cpu_percent:max` | 97.3% | 70% | `PodContainerHighCPU` FIRING ✅ |
+| sysbench (16 threads, 300s) | `mysql_global_status_slow_queries` | 運行中 | — | `MariaDBHighSlowQueries` (視 long_query_time) |
+
+**用途：** 驗證負載注入改動未破壞 alert pipeline，或確認新場景的觸發條件。
+
+## Demo 工作流
+
+| 指令 | 行為 | 耗時 |
+|------|------|------|
+| `make demo` | 快速展示：scaffold → migrate → diagnose → check_alert → patch_config | ~30s |
+| `make demo-full` | 完整展示：上述 + stress-ng + connection storm → alerts FIRING → cleanup → alerts resolved | ~5min |
+| `make load-demo` | 僅負載：啟動 stress-ng + connections，手動觀察 alerts，手動 `make load-cleanup` | 手動 |
+| `make test-scenario-a ARGS=--with-load` | 真實連線負載觸發 `MariaDBHighConnections`（不修改閾值） | ~3min |
+| `make test-scenario-b ARGS=--with-load` | 真實 CPU 壓力觸發 `PodContainerHighCPU`（不修改閾值） | ~3min |
+
+`--with-load` 模式的意義：展示「相同閾值下，真實負載觸發 alert」，比手動壓低閾值更具說服力。
 
 ## Shell 測試腳本陷阱
 
@@ -121,6 +229,14 @@ grep -F "max by(tenant)" file.yaml
 - **Unparseable**: 含 `absent()`, `predict_linear()` 等語義不可轉換函式
 
 新增測試案例前，先跑 `--dry-run` 確認實際分類。
+
+### set -euo pipefail 與測試腳本
+
+負載測試的輔助腳本不宜用 `set -euo pipefail`：
+- `kubectl logs` 對 ContainerCreating 的 Pod 返回非零 → 腳本提前退出
+- 解法：移除 strict mode，對可能失敗的指令加 `|| true`
+
+但 **正式的場景測試腳本** (scenario-a/b/c/d) 保留 `set -euo pipefail`，因為它們需要精確的錯誤偵測。
 
 ## SAST 相關測試
 

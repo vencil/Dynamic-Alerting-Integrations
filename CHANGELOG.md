@@ -2,6 +2,44 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.7.0] - Live Observability & Load Injection (Phase 6) (2026-02-27)
+
+本版本為 Phase 6 真實負載注入與動態展演，讓系統價值「肉眼可見」，徹底解決「改設定觸發警報像作弊」的痛點。
+
+### 🔥 Load Injection Toolkit
+* **`scripts/run_load.sh`**: 統一負載注入入口腳本，支援三個展演劇本：
+  * **Connection Storm** (`--type connections`): 使用 PyMySQL 持有 95 個 idle 連線，觸發 `MariaDBHighConnections`（保留 exporter 連線槽位，確保 Prometheus 能持續回報指標）。
+  * **CPU & Slow Query Burn** (`--type cpu`): 使用 `sysbench oltp_read_write` 執行高密度 OLTP 查詢（16 threads, 300s），觸發 `MariaDBHighSlowQueries` 與 `MariaDBSystemBottleneck` 複合警報。
+  * **Container Weakest Link** (`--type stress-ng`): Alpine CPU burn Pod（CPU limit: 100m），故意造成 CPU throttling，驗證 `PodContainerHighCPU` 弱環節偵測精準度（實測 97.3%）。
+* **`--dry-run` 模式**: 預覽 K8s manifest 而不實際 apply，方便審查與教學。
+* **`--cleanup` 模式**: 一鍵清除所有負載注入資源，trap 確保異常退出也能清理。
+
+### 🏗️ Testing 模組化重構
+* **`scripts/_lib.sh` 擴充**: 新增 `setup_port_forwards`, `cleanup_port_forwards`, `prom_query_value`, `get_alert_status`, `wait_for_alert`, `get_exporter_metric`, `wait_exporter`, `require_services` 共 8 個共用函式，取代 4 個 scenario + demo.sh 中重複的 inline Python + port-forward 管理程式碼。
+* **Scenario A/B/C/D 重構**: 移除各腳本中重複的 alert polling、port-forward 建立、exporter metric 查詢邏輯，統一透過 `_lib.sh` 提供。
+* **清除 7 個 debug 暫存腳本**: 刪除 `_check_alerts.sh`, `_check_alerts2.sh`, `_check_load.sh`, `_final_check.sh`, `_retest_load.sh`, `_test_conn.sh`, `_test_conn95.sh` — 已被正式工具取代。
+* **淨減 ~580 行**: 正式腳本總行數從 ~2,200 降至 ~1,625 行（含 _lib.sh 從 94 行擴充至 260 行）。
+
+### 🎭 Demo & Testing 整合
+* **`make demo-full`**: 完整 demo 含 Live Load Injection — stress-ng + connection storm → 等待 alerts FIRING → 清除 → alerts 自動消失，展示「負載→觸發→清除→恢復」完整循環。
+* **`make demo`**: 保持原始快速模式（`--skip-load`），僅展示工具鏈。
+* **`make load-demo`**: 單獨啟動 stress-ng + connections 壓測，手動觀察 alerts。
+* **Scenario A (`--with-load`)**: 保持原始閾值(70)，真實 95 connections > 70 → alert fires → 清除 → resolves。不再需要人為壓低閾值。
+* **Scenario B (`--with-load`)**: 保持原始閾值(70)，stress-ng 97.3% > 70% → alert fires → 清除 → resolves。
+* 所有 load 路徑加入 `trap cleanup EXIT`，確保 Ctrl+C / 錯誤退出時自動清除 load-generator 資源。
+
+### 🎯 Makefile Targets
+* `make load-connections TENANT=db-a` — 連線數風暴
+* `make load-cpu TENANT=db-a` — CPU 與慢查詢
+* `make load-stress TENANT=db-a` — 容器 CPU 極限
+* `make load-cleanup` — 清除所有壓測資源
+* `make load-demo TENANT=db-a` — 壓測 Demo（啟動 → 觀察 → 手動 cleanup）
+* `make demo-full` — 完整端對端 Demo（含 Live Load）
+* `make test-scenario-a ARGS=--with-load` — Scenario A 真實負載模式
+* `make test-scenario-b ARGS=--with-load` — Scenario B 真實負載模式
+
+---
+
 ## [v0.6.0] - Enterprise Governance (Phase 5) (2026-02-27)
 
 本版本為 Phase 5 企業級治理，針對大型客戶（1500+ 條規則）的遷移場景提供完整的工具鏈與安全機制。
