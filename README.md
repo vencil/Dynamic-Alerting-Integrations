@@ -199,6 +199,7 @@ make port-forward
 | [架構與設計](docs/architecture-and-design.md) | 效能分析、HA 設計、Projected Volume 深度解析、治理 | Platform Engineers、SREs |
 | [規則包目錄](rule-packs/README.md) | 6 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
 | [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
+| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、每日巡檢、收斂判定、切換退出 | SREs、Platform Engineers |
 | [測試手冊](docs/testing-playbook.md) | K8s 環境問題、HA 測試、shell script 陷阱 | 貢獻者 |
 
 ---
@@ -232,6 +233,7 @@ make port-forward
 | `diagnose.py` | 租戶健康檢查 |
 | `offboard_tenant.py` | 安全移除 Tenant 配置（Pre-check + 連帶檢查） |
 | `deprecate_rule.py` | 平滑下架過時的 Rule / Metric（三步自動化） |
+| `baseline_discovery.py` | 負載觀測 + 閾值建議（p95/p99 統計 → 建議值） |
 
 **使用範例：**
 
@@ -269,6 +271,10 @@ make test-scenario-a    # Scenario A: 動態閾值 (使用: make test-scenario-a
 make test-scenario-b    # Scenario B: 弱環節檢測
 make test-scenario-c    # Scenario C: 狀態字串比對
 make test-scenario-d    # Scenario D: 維護模式 / 複合警報 / 多層嚴重度
+make test-scenario-e    # Scenario E: 多租戶隔離驗證 (--with-load 支援真實負載)
+make test-scenario-f    # Scenario F: HA 故障切換驗證 (Kill Pod → 連續性 → 無翻倍)
+make load-composite     # 複合負載注入 (connections + cpu) (TENANT=db-a)
+make baseline-discovery # 負載觀測 + 閾值建議 (TENANT=db-a)
 make demo               # 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check_alert)
 make demo-full          # 動態負載展演 — Live Load Demo (含 alert 觸發/消除完整循環)
 make component-build    # Build component image (COMP=threshold-exporter)
@@ -324,18 +330,22 @@ make help               # 顯示說明
 │       ├── scaffold_tenant.py
 │       ├── offboard_tenant.py     # Tenant 下架
 │       ├── deprecate_rule.py      # Rule/Metric 下架
+│       ├── baseline_discovery.py  # 負載觀測 + 閾值建議
 │       └── metric-dictionary.yaml # 啟發式指標對照字典
 ├── tests/                      # 整合測試
 │   ├── scenario-a.sh           # 動態閾值測試
 │   ├── scenario-b.sh           # 弱環節檢測測試
 │   ├── scenario-c.sh           # 狀態字串比對測試
 │   ├── scenario-d.sh           # 維護模式/複合警報測試
+│   ├── scenario-e.sh           # 多租戶隔離測試
+│   ├── scenario-f.sh           # HA 故障切換測試
 │   └── test-migrate-*.sh       # 遷移工具測試
 ├── docs/                       # 文件目錄
 │   ├── migration-guide.md      # 完整遷移指南 (5 scenarios + 範例)
 │   ├── architecture-and-design.md  # 架構深度文件
-│   ├── windows-mcp-playbook.md # Dev Container 操作手冊
-│   └── testing-playbook.md     # 測試排錯手冊
+│   ├── shadow-monitoring-sop.md   # Shadow Monitoring SRE SOP
+│   ├── windows-mcp-playbook.md    # Dev Container 操作手冊
+│   └── testing-playbook.md        # 測試排錯手冊
 ├── .devcontainer/              # Dev Container 配置
 ├── CLAUDE.md                   # AI Agent 開發上下文指引
 ├── CHANGELOG.md                # 版本變更日誌

@@ -2,6 +2,31 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.8.0] - Testing Coverage, SRE Runbook & Baseline Discovery (2026-02-27)
+
+本版本為 Phase 7 測試覆蓋強化 + B6/B7 交付，進入 Feature Freeze。
+
+### 🧪 Testing Coverage
+* **`run_load.sh --type composite`**: 複合負載 — connections + cpu 同時啟動，驗證 `MariaDBSystemBottleneck` 複合警報。
+* **`tests/scenario-e.sh`**: Multi-Tenant 隔離測試 — 修改 tenant A 不影響 tenant B。支援 `--with-load`。
+* **`tests/scenario-f.sh`**: HA 故障切換測試 — Kill Pod → alert 持續 → 恢復 → 閾值不翻倍 (max by)。
+
+### 📋 SRE Runbook & Discovery Tooling
+* **`docs/shadow-monitoring-sop.md`**: Shadow Monitoring SRE SOP — 啟動/巡檢/異常處理/收斂判定/退出完整 runbook。
+* **`scripts/tools/baseline_discovery.py`**: Baseline Discovery — 觀測 p50~p99 統計，建議 warning (p95×1.2) / critical (p99×1.5) 閾值。
+
+### 🎭 Demo 強化
+* **`make demo`**: Step 5d 新增 `baseline_discovery.py` 快速觀測（15s 取樣 + 閾值建議），展示完整工具鏈。
+* **`make demo-full`**: Step 6 改用 `--type composite` 一次啟動 connections + stress-ng（取代原本分開注入），步驟從 6a–6j 精簡為 6a–6i。
+
+### 📖 文件與版本
+* **Migration Guide**: 開頭加入「遷移安全保證」陳述；Phase C 的「99.9%」修正為準確工程描述。
+* **README.md / README.en.md**: 文件導覽表新增 Shadow Monitoring SOP；工具表新增 `baseline_discovery.py`；Makefile 目標與專案結構補齊 Scenario E/F、composite、baseline。
+* **全域版本一致性**: Helm Chart 0.8.0、CI image tag v0.8.0、所有文件統一 v0.8.0。
+* **清理**: 刪除根目錄殘留的 `test-legacy-rules.yaml`（測試輸入已收斂至 `tests/legacy-dummy.yml`）。
+
+---
+
 ## [v0.7.0] - Live Observability & Load Injection (Phase 6) (2026-02-27)
 
 本版本為 Phase 6 真實負載注入與動態展演，讓系統價值「肉眼可見」，徹底解決「改設定觸發警報像作弊」的痛點。
@@ -27,6 +52,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **Scenario A (`--with-load`)**: 保持原始閾值(70)，真實 95 connections > 70 → alert fires → 清除 → resolves。不再需要人為壓低閾值。
 * **Scenario B (`--with-load`)**: 保持原始閾值(70)，stress-ng 97.3% > 70% → alert fires → 清除 → resolves。
 * 所有 load 路徑加入 `trap cleanup EXIT`，確保 Ctrl+C / 錯誤退出時自動清除 load-generator 資源。
+
+### 📋 SRE Runbook & Discovery Tooling
+* **`docs/shadow-monitoring-sop.md`**: Shadow Monitoring SRE SOP — 完整 runbook 涵蓋：啟動（本地 / K8s Job）、日常巡檢流程與頻率、異常處理 Playbook（mismatch / missing / 工具故障）、收斂判定標準（7 天 0 mismatch + 覆蓋業務高低峰）、退出與回退步驟。
+* **`scripts/tools/baseline_discovery.py`**: Baseline Discovery 工具 — 在負載注入環境下持續觀測指標（connections / cpu / slow_queries / memory / disk_io），計算 p50/p90/p95/p99/max 統計摘要，自動建議 warning (p95×1.2) / critical (p99×1.5) 閾值。產出時間序列 CSV + 統計摘要 CSV + patch_config.py 建議指令。
+* **`make baseline-discovery TENANT=db-a`**: Makefile target 快捷入口。
 
 ### 🧪 Testing Coverage Expansion (Phase 7)
 * **`run_load.sh --type composite`**: 複合負載 — 同時啟動 connections + cpu 負載，用於驗證 `MariaDBSystemBottleneck` 複合警報在真實負載下觸發。

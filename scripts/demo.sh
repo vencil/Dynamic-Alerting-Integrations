@@ -9,7 +9,8 @@
 #   2. migrate_rule.py    — 轉換傳統 alert rules
 #   3. migrate_rule.py    — Dry-run 模式
 #   4. diagnose / check_alert / patch_config — 即時工具
-#   5. Live Load Injection — 真實負載觸發 alert (需要 --skip-load=false)
+#   5d. baseline_discovery.py — 負載觀測 + 閾值建議
+#   6. Live Composite Load — 真實負載觸發 alert (需要 --skip-load=false)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -200,6 +201,17 @@ if kubectl cluster-info &>/dev/null; then
   echo ""
   info "  還原閾值..."
   python3 scripts/tools/patch_config.py db-a mysql_connections 70 2>/dev/null || true
+  echo ""
+
+  info "5d. baseline_discovery.py — 負載觀測 + 閾值建議 (15 秒快速取樣):"
+  python3 scripts/tools/baseline_discovery.py \
+    --tenant db-a --duration 15 --interval 5 \
+    --output-dir "$DEMO_DIR/baseline" 2>/dev/null || warn "baseline_discovery 失敗 (可能需要 port-forward)"
+  if [ -f "$DEMO_DIR/baseline/db-a-suggestions.txt" ]; then
+    echo ""
+    info "  閾值建議："
+    cat "$DEMO_DIR/baseline/db-a-suggestions.txt"
+  fi
 
 else
   warn "Kind cluster 未啟動，跳過即時工具示範"
@@ -242,19 +254,14 @@ if [[ "$SKIP_LOAD" == "false" ]] && [[ "$CLUSTER_ALIVE" == "true" ]]; then
       sleep 3
       echo ""
 
-      # --- 6c. 啟動 stress-ng (Container CPU) ---
-      info "6c. 啟動 Container CPU 壓測 (stress-ng, CPU limit=100m)..."
-      "${SCRIPT_DIR}/run_load.sh" --tenant db-a --type stress-ng
+      # --- 6c. 啟動 Composite Load (connections + cpu) ---
+      info "6c. 啟動 Composite Load (connections + stress-ng 同時注入)..."
+      "${SCRIPT_DIR}/run_load.sh" --tenant db-a --type composite
       LOAD_STARTED=true
       echo ""
 
-      # --- 6d. 啟動 Connection Storm ---
-      info "6d. 啟動 Connection Storm (95 idle connections)..."
-      "${SCRIPT_DIR}/run_load.sh" --tenant db-a --type connections
-      echo ""
-
-      # --- 6e. 等待 alerts 觸發 ---
-      info "6e. 等待 Prometheus 偵測負載並觸發 alerts..."
+      # --- 6d. 等待 alerts 觸發 ---
+      info "6d. 等待 Prometheus 偵測負載並觸發 alerts..."
       info "  (需要 ~90 秒: scrape 15s + recording rule eval + alert for duration)"
       echo ""
 
@@ -266,8 +273,8 @@ if [[ "$SKIP_LOAD" == "false" ]] && [[ "$CLUSTER_ALIVE" == "true" ]]; then
       printf "\r                              \r"
       echo ""
 
-      # --- 6f. 展示 Alert 狀態 ---
-      info "6f. Prometheus Alert 狀態："
+      # --- 6e. 展示 Alert 狀態 ---
+      info "6e. Prometheus Alert 狀態："
       echo ""
       curl -sf 'http://localhost:9090/api/v1/alerts' 2>/dev/null | python3 -c "
 import sys, json
@@ -287,8 +294,8 @@ for a in firing + pending:
 " 2>/dev/null || echo "  (查詢失敗)"
       echo ""
 
-      # --- 6g. 關鍵指標 ---
-      info "6g. 關鍵 Prometheus 指標："
+      # --- 6f. 關鍵指標 ---
+      info "6f. 關鍵 Prometheus 指標："
       TC=$(_demo_prom_value 'mysql_global_status_threads_connected{tenant="db-a"}' "N/A")
       CPU=$(_demo_prom_value 'tenant:pod_weakest_cpu_percent:max{tenant="db-a"}' "N/A")
       if [ "$CPU" != "N/A" ]; then
@@ -298,14 +305,14 @@ for a in firing + pending:
       echo "  pod_weakest_cpu_percent (db-a): ${CPU}% (threshold: 70%)"
       echo ""
 
-      # --- 6h. 清除負載 ---
-      info "6h. 清除所有 load-generator 資源..."
+      # --- 6g. 清除負載 ---
+      info "6g. 清除所有 load-generator 資源..."
       "${SCRIPT_DIR}/run_load.sh" --cleanup
       LOAD_STARTED=false
       echo ""
 
-      # --- 6i. 等待 alerts 消失 ---
-      info "6i. 等待 alerts 自動解除 (~60s)..."
+      # --- 6h. 等待 alerts 消失 ---
+      info "6h. 等待 alerts 自動解除 (~60s)..."
       for i in $(seq 60 -10 10); do
         printf "\r  %02d seconds remaining..." "${i}"
         sleep 10
@@ -313,8 +320,8 @@ for a in firing + pending:
       printf "\r                              \r"
       echo ""
 
-      # --- 6j. 展示恢復狀態 ---
-      info "6j. 恢復後 Alert 狀態："
+      # --- 6i. 展示恢復狀態 ---
+      info "6i. 恢復後 Alert 狀態："
       echo ""
       curl -sf 'http://localhost:9090/api/v1/alerts' 2>/dev/null | python3 -c "
 import sys, json
@@ -349,17 +356,20 @@ echo -e "${BOLD}  Demo 完成！${NC}"
 echo -e "${BOLD}============================================${NC}"
 echo ""
 echo "  工具一覽:"
-echo "    scaffold_tenant.py  — 互動式 tenant config 產生器"
-echo "    migrate_rule.py     — 傳統 alert rules 遷移工具"
-echo "    patch_config.py     — 動態閾值更新"
-echo "    diagnose.py         — Tenant 健康檢查"
-echo "    check_alert.py      — Alert 狀態查詢"
-echo "    run_load.sh         — Live Load Injection Toolkit"
+echo "    scaffold_tenant.py     — 互動式 tenant config 產生器"
+echo "    migrate_rule.py        — 傳統 alert rules 遷移工具"
+echo "    patch_config.py        — 動態閾值更新"
+echo "    diagnose.py            — Tenant 健康檢查"
+echo "    check_alert.py         — Alert 狀態查詢"
+echo "    baseline_discovery.py  — 負載觀測 + 閾值建議"
+echo "    run_load.sh            — Live Load Injection Toolkit"
 echo ""
 echo "  Makefile 捷徑:"
 echo "    make demo           — 快速展示（工具 only）"
-echo "    make demo-full      — 完整展示（含 Live Load）"
+echo "    make demo-full      — 完整展示（含 Composite Load）"
+echo "    make load-composite — 複合負載 (connections + cpu)"
 echo "    make load-connections/load-cpu/load-stress  — 單獨壓測"
+echo "    make baseline-discovery  — 負載觀測 + 閾值建議"
 echo "    make load-cleanup   — 清除壓測資源"
 echo ""
 echo "  Rule Packs:"

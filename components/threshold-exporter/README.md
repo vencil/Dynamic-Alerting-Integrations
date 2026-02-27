@@ -1,4 +1,4 @@
-# Threshold Exporter (v0.7.0)
+# Threshold Exporter (v0.8.0)
 
 > **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤。
 >

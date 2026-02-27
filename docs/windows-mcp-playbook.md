@@ -186,6 +186,7 @@ docker exec vibe-dev-container bash -c "{ \
 
 # 負載注入 (在 dev container 內執行)
 docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --tenant db-a --type connections
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --tenant db-a --type composite
 docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --cleanup
 
 # 暫存檔清理 (必須透過 container)

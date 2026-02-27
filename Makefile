@@ -165,6 +165,10 @@ load-demo: ## 負載注入: 完整 Demo (stress-ng + connections → alert → c
 	@echo ""
 	@echo "Cleanup when done: make load-cleanup"
 
+.PHONY: baseline-discovery
+baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: make baseline-discovery TENANT=db-a)
+	@python3 ./scripts/tools/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
+
 .PHONY: help
 help: ## 顯示說明
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'

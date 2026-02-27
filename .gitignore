@@ -15,6 +15,9 @@ Thumbs.db
 *.test
 components/*/app/threshold-exporter
 
+# --- Python ---
+__pycache__
+
 # --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔
 *.log

@@ -199,6 +199,7 @@ make port-forward
 | [Architecture and Design](docs/architecture-and-design.en.md) | Performance analysis, HA design, Projected Volume deep-dive, governance | Platform Engineers, SREs |
 | [Rule Packs Directory](rule-packs/README.md) | 6 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
+| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, daily inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
 | [Testing Playbook](docs/testing-playbook.md) | K8s environment issues, HA testing, shell script pitfalls | Contributors |
 
 ---
@@ -232,6 +233,7 @@ make port-forward
 | `diagnose.py` | Tenant health check |
 | `offboard_tenant.py` | Safe tenant removal (pre-check + cross-reference cleanup) |
 | `deprecate_rule.py` | Graceful rule/metric deprecation (3-step automation) |
+| `baseline_discovery.py` | Load observation + threshold suggestions (p95/p99 stats → recommendations) |
 
 **Usage Examples:**
 
@@ -269,6 +271,10 @@ make test-scenario-a    # Scenario A: Dynamic thresholds (usage: make test-scena
 make test-scenario-b    # Scenario B: Weak link detection
 make test-scenario-c    # Scenario C: Status string matching
 make test-scenario-d    # Scenario D: Maintenance mode / composite alerts / multi-layer severity
+make test-scenario-e    # Scenario E: Multi-tenant isolation (--with-load for real injection)
+make test-scenario-f    # Scenario F: HA failover (Kill Pod → continuity → no doubling)
+make load-composite     # Composite load injection (connections + cpu) (TENANT=db-a)
+make baseline-discovery # Load observation + threshold suggestions (TENANT=db-a)
 make demo               # End-to-end demo — quick mode (scaffold + migrate + diagnose + check_alert)
 make demo-full          # Live Load Demo (stress-ng + connections → alert fire/resolve cycle)
 make component-build    # Build component image (COMP=threshold-exporter)
@@ -324,18 +330,22 @@ make help               # Show help message
 │       ├── scaffold_tenant.py
 │       ├── offboard_tenant.py     # Tenant offboarding
 │       ├── deprecate_rule.py      # Rule/Metric deprecation
+│       ├── baseline_discovery.py  # Load observation + threshold suggestions
 │       └── metric-dictionary.yaml # Heuristic metric mapping dictionary
 ├── tests/                      # Integration tests
 │   ├── scenario-a.sh           # Dynamic threshold test
 │   ├── scenario-b.sh           # Weak link detection test
 │   ├── scenario-c.sh           # Status string matching test
 │   ├── scenario-d.sh           # Maintenance mode/composite alert test
+│   ├── scenario-e.sh           # Multi-tenant isolation test
+│   ├── scenario-f.sh           # HA failover test
 │   └── test-migrate-*.sh       # Migration tool tests
 ├── docs/                       # Documentation directory
 │   ├── migration-guide.md      # Complete migration guide (5 scenarios + examples)
 │   ├── architecture-and-design.md  # Architecture deep-dive document
-│   ├── windows-mcp-playbook.md # Dev Container operation manual
-│   └── testing-playbook.md     # Testing troubleshooting manual
+│   ├── shadow-monitoring-sop.md   # Shadow Monitoring SRE SOP
+│   ├── windows-mcp-playbook.md    # Dev Container operation manual
+│   └── testing-playbook.md        # Testing troubleshooting manual
 ├── .devcontainer/              # Dev Container configuration
 ├── CLAUDE.md                   # AI Agent development context guide
 ├── CHANGELOG.md                # Version changelog
