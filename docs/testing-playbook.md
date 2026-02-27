@@ -200,6 +200,12 @@ make benchmark ARGS=--json  # JSON 輸出（CI/CD 消費）
 | sysbench (16 threads, 300s) | `mysql_global_status_slow_queries` | 運行中 | — | `MariaDBHighSlowQueries` (視 long_query_time) |
 | composite (conn + cpu) | connections AND cpu | — | — | `MariaDBSystemBottleneck` (複合警報) |
 
+### Composite Load 在 Kind 單節點的行為
+
+Kind 單節點環境下，`composite` 模式（connections + cpu 同時啟動）可能觸發 **`MariaDBDown`** 而非預期的 `MariaDBHighConnections`。原因：95 idle connections + sysbench OLTP 的額外連線可超過 `max_connections=100`，導致 `mysqld_exporter` 無法連線回報 `SHOW STATUS`，Prometheus 判定為 DB down。
+
+這在 demo 中反而更有衝擊力（critical alert > warning alert）。若需要較溫和的 `MariaDBHighConnections`，改用 `--type connections` 單獨注入。
+
 ## Demo & Scenario 工作流
 
 | 指令 | 行為 | 耗時 |

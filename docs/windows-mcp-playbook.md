@@ -55,6 +55,23 @@ docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/scripts/_task.sh /
 
 **不要試圖** 在 Desktop Commander 的 `start_process` 中用 `Start-Sleep` 超過 30 秒 — 會觸發 MCP timeout。用 Claude Code 的 `Bash` tool (`sleep N`) 做長等待。
 
+## Desktop Commander cmd shell 模式 — 繞過 PowerShell 限制
+
+當 PowerShell 的管道或引號解析導致 docker exec 失敗時，改用 Desktop Commander 的 `cmd` shell：
+
+```
+start_process(command: "docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash scripts/_task.sh",
+              shell: "cmd", timeout_ms: 60000)
+```
+
+**關鍵限制：** `start_process` 的硬上限為 60 秒（無論 `timeout_ms` 設多大）。超過 60s 的操作須拆成多個子腳本，每個 <60s，依序執行。
+
+**典型拆法（以 demo-full Step 6 為例）：**
+1. `_inject.sh` — 啟動負載（~10s）
+2. `_check.sh` — 等待 alert firing + 查詢狀態（~50s）
+3. `_cleanup.sh` — 清除負載（~10s）
+4. `_recovery.sh` — 等待 alert 解除 + 驗證（~50s）
+
 ## Kubernetes MCP vs docker exec — 選擇策略
 
 | 情境 | 推薦方式 | 原因 |
@@ -139,6 +156,10 @@ docker exec vibe-dev-container bash -c "\
 | 11 | K8s MCP timeout | Fallback 到 `docker exec` via Windows-MCP Shell |
 | 12 | Desktop Commander `Start-Sleep` > 30s | 改用 Bash tool 的 `sleep N`（支援 10 分鐘） |
 | 13 | 複雜 Python inline 在 PS 中崩潰 | PS 會解析 `f'{}'`、`for...in` → 寫腳本檔避開 PS 解析 |
+| 14 | Desktop Commander `start_process` 硬上限 60s | `timeout_ms` 參數被 cap 在 60s，長操作必須拆成多個 <60s 的子腳本 |
+| 15 | PS 管道 docker exec 失敗 (`CantActivateDocumentInPipeline`) | 改用 Desktop Commander 的 `cmd` shell，或在 `bash -c` 內重定向 |
+| 16 | `cmd` shell 下 `bash -c "..."` 引號被吞 | 不要透過 cmd 傳遞 inline bash -c，改寫 .sh 到 mounted workspace 再 `docker exec bash script.sh` |
+| 17 | K8s MCP 在 Docker Desktop 未啟動時 TLS timeout | 先確認 `docker ps` 正常、Kind 節點 Running，再使用 K8s MCP |
 
 ## Helm Upgrade 防衝突流程
 
