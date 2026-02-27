@@ -4,7 +4,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ## [v0.8.0] - Testing Coverage, SRE Runbook & Baseline Discovery (2026-02-27)
 
-本版本為 Phase 7 測試覆蓋強化 + B6/B7 交付，進入 Feature Freeze。
+本版本為 Phase 7 測試覆蓋強化 + B6/B7 交付
 
 ### 🧪 Testing Coverage
 * **`run_load.sh --type composite`**: 複合負載 — connections + cpu 同時啟動，驗證 `MariaDBSystemBottleneck` 複合警報。
