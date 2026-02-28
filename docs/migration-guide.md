@@ -58,7 +58,7 @@ python3 scripts/tools/scaffold_tenant.py --catalog
 
 > **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
 > ```bash
-> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:0.2.0 \
+> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:0.3.0 \
 >   scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 > ```
 
@@ -76,7 +76,7 @@ python3 scripts/tools/scaffold_tenant.py --catalog
 
 ## 2. 既有規則遷移 — migrate_rule.py
 
-已有傳統 Prometheus alert rules 的團隊，使用自動轉換工具：
+已有傳統 Prometheus alert rules 的團隊，使用自動轉換工具（v4 — AST + regex 雙引擎）：
 
 ```bash
 # 預覽模式 — 不產出檔案，只顯示分析結果
@@ -88,13 +88,18 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml>
 # 互動模式 — 手動確認每個聚合模式
 python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --interactive
 
+# 強制使用 regex 模式 (不使用 AST 引擎)
+python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --no-ast
+
 # 指定輸出目錄
 python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 ```
 
+> **v0.11.0 新功能**：工具預設使用 PromQL AST 引擎 (`promql-parser`) 精準辨識 metric name，自動注入 `custom_` 前綴與 `tenant` label。AST 解析失敗時自動降級至 regex 路徑，確保向後相容。
+
 > **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
 > ```bash
-> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:0.2.0 \
+> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:0.3.0 \
 >   migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
 > ```
 
@@ -652,7 +657,7 @@ spec:
 
 ### Metric Dictionary 自動比對
 
-`migrate_rule.py` v3 內建啟發式字典 (`metric-dictionary.yaml`)，自動比對傳統指標與黃金標準：
+`migrate_rule.py` v4 內建啟發式字典 (`metric-dictionary.yaml`)，自動比對傳統指標與黃金標準：
 
 ```
 📖 MySQLTooManyConnections: 建議改用黃金標準 MariaDBHighConnections (scaffold_tenant.py)

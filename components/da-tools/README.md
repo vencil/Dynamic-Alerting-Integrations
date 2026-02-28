@@ -15,7 +15,7 @@
 - 將既有 Prometheus 規則轉換為動態格式
 - 產生新 tenant 配置、下架 tenant 或棄用指標
 
-**Image 大小**：~60 MB（Python 3.12 Alpine + PyYAML）
+**Image 大小**：~60 MB（Python 3.12 Alpine + PyYAML + promql-parser）
 
 ---
 
@@ -52,7 +52,7 @@ docker run --rm ghcr.io/vencil/da-tools:0.2.0 --version
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
-| `migrate` | 傳統規則 → 動態格式轉換 | `<input_file>` |
+| `migrate` | 傳統規則 → 動態格式轉換 (AST + regex 雙引擎) | `<input_file>` |
 | `scaffold` | 產生 tenant 配置 | `--tenant <name> --db <types>` |
 | `offboard` | 下架 tenant 配置 | `<tenant>` |
 | `deprecate` | 標記指標為 disabled | `<metric_keys...>` |
@@ -173,11 +173,11 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v0.10.0+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v0.11.0+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v0.10.0 | `v0.9.0` | 文件 + CI/CD + 流程圖 |
+| 平台文件 | v0.11.0 | `v0.11.0` | AST 遷移引擎 + 治理模型 + 流程圖 |
 | threshold-exporter | v0.5.0 | `exporter/v0.5.0` | Go binary |
 | **da-tools** | **v0.2.0** | **`tools/v0.2.0`** | **Python CLI 工具集** |
 

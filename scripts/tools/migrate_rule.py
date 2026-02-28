@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v3)。
+"""migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
 1. Tenant ConfigMap YAML    → migration_output/tenant-config.yaml
 2. 平台 Recording Rule      → migration_output/platform-recording-rules.yaml
 3. 平台動態 Alert Rule      → migration_output/platform-alert-rules.yaml
 4. 遷移報告                 → migration_output/migration-report.txt
-5. (v3 新增) Triage CSV      → migration_output/triage-report.csv
-6. (v3 新增) Prefix Mapping  → migration_output/prefix-mapping.yaml
+5. Triage CSV               → migration_output/triage-report.csv
+6. Prefix Mapping           → migration_output/prefix-mapping.yaml
 
 用法:
   python3 migrate_rule.py <legacy_rules.yml>                    # 預設檔案輸出
@@ -16,13 +16,13 @@
   python3 migrate_rule.py <legacy_rules.yml> -o /custom/path    # 自訂輸出目錄
   python3 migrate_rule.py <legacy_rules.yml> --triage           # Triage 模式: 只產出 CSV 分桶報告
   python3 migrate_rule.py <legacy_rules.yml> --no-prefix        # 停用 custom_ 前綴 (不建議)
+  python3 migrate_rule.py <legacy_rules.yml> --no-ast           # 強制使用舊版 regex 引擎
 
-Phase 5 升級 (v3):
-  - Triage Mode (--triage): 大規模遷移前的分析報告 (CSV)，支援 Excel 批次決策
-  - Prefix 隔離: 預設自動加 custom_ 前綴，隔離客製規則與黃金標準
-  - Metric Dictionary: 外部 metric-dictionary.yaml 啟發式比對黃金標準
-  - 收斂率統計: 顯示規則壓縮率
-  - Prefix Mapping Table: 記錄前綴對應關係，方便未來收斂
+v4 升級 (AST Engine — Phase 10):
+  - promql-parser (Rust/PyO3) 取代 regex 進行 metric name 辨識
+  - AST-Informed String Surgery: 精準 prefix 替換 + tenant label 注入
+  - Reparse 驗證: 確保改寫後的 PromQL 仍然合法
+  - Graceful degradation: promql-parser 不可用時自動降級為 regex
 """
 
 import sys
@@ -31,6 +31,200 @@ import os
 import csv
 import argparse
 import yaml
+
+# ---------------------------------------------------------------------------
+# AST Engine: promql-parser (optional — graceful degradation)
+# ---------------------------------------------------------------------------
+try:
+    import promql_parser
+    HAS_AST = True
+except ImportError:
+    HAS_AST = False
+
+
+# ============================================================
+# AST Engine: PromQL AST 走訪與改寫
+# ============================================================
+
+def _walk_vector_selectors(node):
+    """遞迴走訪 AST，yield 所有 VectorSelector 節點。
+
+    支援的 AST 節點類型:
+      BinaryExpr (.lhs, .rhs), ParenExpr (.expr), UnaryExpr (.expr),
+      AggregateExpr (.expr), Call (.args), MatrixSelector (.vector_selector),
+      SubqueryExpr (.expr), VectorSelector (leaf node)
+    """
+    tname = type(node).__name__
+    if tname == 'VectorSelector':
+        yield node
+        return
+    if tname == 'MatrixSelector':
+        vs = getattr(node, 'vector_selector', None)
+        if vs is not None:
+            yield vs
+        return
+    # Recurse into known child attributes
+    for attr in ('lhs', 'rhs', 'expr'):
+        child = getattr(node, attr, None)
+        if child is not None:
+            yield from _walk_vector_selectors(child)
+    # Function call arguments
+    args = getattr(node, 'args', None)
+    if args:
+        for arg in args:
+            yield from _walk_vector_selectors(arg)
+    # AggregateExpr param (e.g. histogram_quantile(0.95, ...))
+    param = getattr(node, 'param', None)
+    if param is not None and type(param).__name__ not in ('NumberLiteral', 'StringLiteral'):
+        yield from _walk_vector_selectors(param)
+
+
+def extract_metrics_ast(expr_str):
+    """使用 AST 精準提取 PromQL 中所有 metric 名稱。
+
+    回傳: list of unique metric names (保留出現順序)。
+    若 promql-parser 不可用或解析失敗，回傳空 list (呼叫端降級為 regex)。
+    """
+    if not HAS_AST:
+        return []
+    try:
+        ast = promql_parser.parse(expr_str)
+    except Exception:
+        return []
+    names = []
+    for vs in _walk_vector_selectors(ast):
+        name = vs.name
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def extract_label_matchers_ast(expr_str):
+    """使用 AST 提取每個 VectorSelector 的 label matchers。
+
+    回傳: list of {"metric": str, "labels": dict}
+    只保留「有意義」的維度標籤 (排除 job/instance/__name__/namespace/pod/container)。
+    """
+    if not HAS_AST:
+        return []
+    try:
+        ast = promql_parser.parse(expr_str)
+    except Exception:
+        return []
+
+    skip_labels = frozenset({'job', 'instance', '__name__', 'namespace', 'pod', 'container'})
+    results = []
+    for vs in _walk_vector_selectors(ast):
+        name = vs.name or ''
+        matchers_obj = vs.matchers
+        if matchers_obj is None:
+            continue
+        inner = getattr(matchers_obj, 'matchers', [])
+        labels = {}
+        for m in inner:
+            if m.name in skip_labels:
+                continue
+            # Only exact-match labels for dimension hints
+            if str(m.op) == 'MatchOp.Equal':
+                labels[m.name] = m.value
+        if labels:
+            results.append({"metric": name, "labels": labels})
+    return results
+
+
+def detect_semantic_break_ast(expr_str):
+    """使用 AST 偵測語義不可轉換的函式 (absent, predict_linear 等)。
+
+    回傳: True 如果表達式包含語義中斷函式。
+    """
+    if not HAS_AST:
+        return False
+    try:
+        ast = promql_parser.parse(expr_str)
+    except Exception:
+        return False
+
+    def _walk_calls(node):
+        tname = type(node).__name__
+        if tname == 'Call':
+            func_obj = getattr(node, 'func', None)
+            if func_obj is not None:
+                fname = getattr(func_obj, 'name', '')
+                if fname in SEMANTIC_BREAK_FUNCS:
+                    return True
+            args = getattr(node, 'args', [])
+            if args:
+                for arg in args:
+                    if _walk_calls(arg):
+                        return True
+        for attr in ('lhs', 'rhs', 'expr'):
+            child = getattr(node, attr, None)
+            if child is not None:
+                if _walk_calls(child):
+                    return True
+        args = getattr(node, 'args', None)
+        if args:
+            for arg in args:
+                if _walk_calls(arg):
+                    return True
+        return False
+
+    return _walk_calls(ast)
+
+
+def rewrite_expr_prefix(expr_str, rename_map):
+    """AST-Informed String Surgery: 精準替換 metric 名稱 (加 prefix)。
+
+    rename_map: dict {old_name: new_name}
+    使用 word-boundary regex，確保不誤改 label name 或子字串。
+    改寫後 reparse 驗證；驗證失敗回傳原始字串。
+    """
+    result = expr_str
+    for old_name, new_name in rename_map.items():
+        if old_name == new_name:
+            continue
+        result = re.sub(r'\b' + re.escape(old_name) + r'\b', new_name, result)
+
+    # Validate rewrite
+    if HAS_AST:
+        try:
+            promql_parser.parse(result)
+        except Exception:
+            return expr_str  # 驗證失敗，回退原始
+    return result
+
+
+def rewrite_expr_tenant_label(expr_str, metric_names):
+    """AST-Informed String Surgery: 注入 tenant label matcher。
+
+    對每個 metric name:
+      - 有 {...} 的: 在 { 後插入 tenant=~".+",
+      - 無 label 的: 在 metric name 後附加 {tenant=~".+"}
+    改寫後 reparse 驗證。
+    """
+    result = expr_str
+    for name in metric_names:
+        # Pattern 1: metric{existing...} → metric{tenant=~".+",existing...}
+        pattern_with_labels = r'\b' + re.escape(name) + r'\{'
+        if re.search(pattern_with_labels, result):
+            result = re.sub(
+                pattern_with_labels,
+                name + '{tenant=~".+",',
+                result
+            )
+        else:
+            # Pattern 2: bare metric name → metric{tenant=~".+"}
+            # Negative lookahead: not followed by { or alphanumeric (substring)
+            pattern_bare = r'\b' + re.escape(name) + r'(?![{a-zA-Z0-9_])'
+            result = re.sub(pattern_bare, name + '{tenant=~".+"}', result)
+
+    # Validate rewrite
+    if HAS_AST:
+        try:
+            promql_parser.parse(result)
+        except Exception:
+            return expr_str  # 驗證失敗，回退原始
+    return result
 
 
 # ============================================================
@@ -125,11 +319,17 @@ PROMQL_FUNCS = frozenset({
 
 
 def extract_label_matchers(expr_str):
-    """從 PromQL 表達式中提取 label matchers (如 {queue="tasks", db="0"})。
+    """從 PromQL 表達式中提取 label matchers。
 
+    v4: 優先使用 AST 引擎，降級為 regex。
     回傳: list of dict，每個 dict = {"metric": str, "labels": dict}
-    用於 Phase 2B 維度標籤提示。
     """
+    # AST path
+    ast_result = extract_label_matchers_ast(expr_str)
+    if ast_result:
+        return ast_result
+
+    # Regex fallback (legacy)
     results = []
     pattern = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\{([^}]+)\}')
     for m in pattern.finditer(expr_str):
@@ -149,7 +349,16 @@ def extract_label_matchers(expr_str):
 
 
 def extract_all_metrics(expr_str):
-    """從 PromQL 中提取所有出現的 metric 名稱 (排除函式名)。"""
+    """從 PromQL 中提取所有 metric 名稱。
+
+    v4: 優先使用 AST 引擎，降級為 regex + function blacklist。
+    """
+    # AST path
+    ast_result = extract_metrics_ast(expr_str)
+    if ast_result:
+        return ast_result
+
+    # Regex fallback (legacy)
     metrics = []
     for m in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)', expr_str):
         name = m.group(1)
@@ -158,8 +367,11 @@ def extract_all_metrics(expr_str):
     return list(dict.fromkeys(metrics))  # deduplicate, preserve order
 
 
-def parse_expr(expr_str):
-    """解析 PromQL 表達式，嘗試切分為 LHS, Operator, RHS (閾值數值)。"""
+def parse_expr(expr_str, use_ast=True):
+    """解析 PromQL 表達式，嘗試切分為 LHS, Operator, RHS (閾值數值)。
+
+    v4: 使用 AST 進行 metric name 辨識與語義中斷偵測。
+    """
     match = re.match(
         r'^\s*(.*?)\s*(==|!=|>=|<=|>|<)\s*([0-9.]+(?:[eE][+-]?[0-9]+)?)\s*$',
         expr_str
@@ -169,19 +381,30 @@ def parse_expr(expr_str):
 
     lhs, op, rhs = match.groups()
 
-    # 語義不可轉換的函式 → 交由 LLM Fallback
-    first_func = re.match(r'\s*([a-zA-Z_]+)\s*\(', lhs)
-    if first_func and first_func.group(1) in SEMANTIC_BREAK_FUNCS:
+    # 語義不可轉換的函式偵測
+    if use_ast and detect_semantic_break_ast(lhs):
         return None
+    else:
+        # Regex fallback
+        first_func = re.match(r'\s*([a-zA-Z_]+)\s*\(', lhs)
+        if first_func and first_func.group(1) in SEMANTIC_BREAK_FUNCS:
+            return None
 
     is_complex = bool(re.search(r'[\(\)\[\]/+\-*]', lhs))
 
-    # 提取真正的 metric 名稱 (跳過函式名)
+    # v4: AST-based metric extraction (精準，不需 function blacklist)
     base_key = "unknown_metric"
-    for m in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)', lhs):
-        if m.group(1) not in PROMQL_FUNCS:
-            base_key = m.group(1)
-            break
+    if use_ast:
+        ast_metrics = extract_metrics_ast(lhs)
+        if ast_metrics:
+            base_key = ast_metrics[0]
+
+    # Regex fallback
+    if base_key == "unknown_metric":
+        for m in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)', lhs):
+            if m.group(1) not in PROMQL_FUNCS:
+                base_key = m.group(1)
+                break
 
     return {
         "lhs": lhs.strip(),
@@ -189,6 +412,7 @@ def parse_expr(expr_str):
         "val": rhs,
         "is_complex": is_complex,
         "base_key": base_key,
+        "all_metrics": extract_metrics_ast(lhs) if use_ast else [],
     }
 
 
@@ -229,15 +453,19 @@ def lookup_dictionary(metric_name, dictionary):
     return dictionary.get(metric_name)
 
 
-def process_rule(rule, interactive=False, prefix="custom_", dictionary=None):
-    """處理單條傳統 Prometheus 規則，回傳 MigrationResult。"""
+def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
+                  use_ast=True):
+    """處理單條傳統 Prometheus 規則，回傳 MigrationResult。
+
+    v4: use_ast=True 啟用 AST 引擎進行精準 metric 辨識與表達式改寫。
+    """
     alert_name = rule.get('alert')
     if not alert_name:
         return None
 
     expr = rule.get('expr', '')
     severity = rule.get('labels', {}).get('severity', 'warning')
-    parsed = parse_expr(expr)
+    parsed = parse_expr(expr, use_ast=use_ast)
 
     # 情境 3: 無法解析
     if not parsed:
@@ -327,9 +555,26 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None):
     record_name = f"tenant:{prefixed_key}:{agg_mode}"
     threshold_name = f"tenant:alert_threshold:{prefixed_key}"
 
+    # v4: AST-Informed String Surgery — 改寫 LHS 表達式
+    recording_lhs = parsed['lhs']
+    if use_ast and HAS_AST:
+        all_metrics = parsed.get('all_metrics', [])
+        # Step 1: Prefix injection (如果需要)
+        if prefix and not has_golden and all_metrics:
+            rename_map = {}
+            for m_name in all_metrics:
+                if not m_name.startswith(prefix):
+                    rename_map[m_name] = f"{prefix}{m_name}"
+            if rename_map:
+                recording_lhs = rewrite_expr_prefix(recording_lhs, rename_map)
+        # Step 2: Tenant label injection
+        rewritten_metrics = extract_metrics_ast(recording_lhs) or all_metrics
+        if rewritten_metrics:
+            recording_lhs = rewrite_expr_tenant_label(recording_lhs, rewritten_metrics)
+
     result.recording_rules.append({
         "record": record_name,
-        "expr": f"{agg_mode} by(tenant) ({parsed['lhs']})",
+        "expr": f"{agg_mode} by(tenant) ({recording_lhs})",
     })
     result.recording_rules.append({
         "record": threshold_name,
@@ -595,7 +840,8 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     report_path = os.path.join(output_dir, "migration-report.txt")
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write("=" * 60 + "\n")
-        f.write("遷移報告 (Migration Report) — v3\n")
+        engine = "AST" if HAS_AST else "regex"
+        f.write(f"遷移報告 (Migration Report) — v4 ({engine} engine)\n")
         f.write("=" * 60 + "\n\n")
         f.write(f"總規則數: {len(results)}\n")
         f.write(f"  ✅ 完美解析: {len(perfect)}\n")
@@ -745,7 +991,7 @@ def print_triage(results):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="傳統 Prometheus 警報規則遷移輔助工具 (v3) — 自動轉換為動態多租戶三件套"
+        description="傳統 Prometheus 警報規則遷移輔助工具 (v4 AST) — 自動轉換為動態多租戶三件套"
     )
     parser.add_argument("input_file", help="傳統 Prometheus alert rules YAML 檔案")
     parser.add_argument("-o", "--output-dir", default="migration_output",
@@ -762,10 +1008,18 @@ def main():
                         help="自訂前綴 (預設: custom_)")
     parser.add_argument("--no-dictionary", action="store_true",
                         help="停用啟發式字典比對")
+    parser.add_argument("--no-ast", action="store_true",
+                        help="停用 AST 引擎，強制使用舊版 regex 解析 (除錯用)")
     args = parser.parse_args()
 
     # 確定 prefix
     prefix = "" if args.no_prefix else args.prefix
+
+    # AST 引擎
+    use_ast = (not args.no_ast) and HAS_AST
+    if not args.no_ast and not HAS_AST:
+        print("[WARN] promql-parser 未安裝，降級為 regex 引擎。"
+              "安裝: pip install promql-parser", file=sys.stderr)
 
     # 載入字典
     dictionary = {} if args.no_dictionary else load_metric_dictionary()
@@ -792,6 +1046,7 @@ def main():
                 interactive=args.interactive,
                 prefix=prefix,
                 dictionary=dictionary,
+                use_ast=use_ast,
             )
             if result:
                 results.append(result)

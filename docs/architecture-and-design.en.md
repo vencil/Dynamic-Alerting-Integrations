@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.10.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.11.0).
 
 **This document covers:**
 - System architecture and core design principles
@@ -887,13 +887,18 @@ Database backup windows cause expected CPU/IO spikes, but currently trigger aler
 
 Currently, `make benchmark` only measures hot-reload latency in idle state. This mode will measure reload latency during real load (composite load), proving that "hot-reload does not impact production performance."
 
-### 10.5 Migration Tool AST Parsing `[B6]`
+### 10.5 ~~Migration Tool AST Parsing~~ `[B6]` — ✅ Completed (v0.11.0)
 
-Currently, `migrate_rule.py` uses regex + heuristic dictionary matching to parse legacy PromQL alert rules, categorizing results into Perfect / Complex / Unparseable buckets. This approach has limited tolerance for "syntactically equivalent but textually different" variations such as label ordering differences or whitespace style, requiring human or LLM intervention for the Complex bucket.
-
-Introducing PromQL AST (Abstract Syntax Tree) parsing would allow the tool to extract thresholds and metric names directly from the tree structure, ignoring stylistic differences and pushing the auto-conversion success rate close to 100%. Two implementation paths exist: integrating an existing Rust-based Python binding (e.g., `promql-parser` on PyPI), or compiling a lightweight Go CLI that calls the official `prometheus/promql/parser` and outputs JSON AST, invoked from Python via subprocess.
-
-The ROI of this item depends on real migration data. We recommend running `migrate_rule.py --dry-run --triage` on the first enterprise customer's rule set to measure the Perfect/Complex/Unparseable ratio — if Perfect is already 90%+, AST is a nice-to-have; if below 70%, it should be prioritized.
+> **Implemented in v0.11.0.** `migrate_rule.py` v4 integrates `promql-parser` (Rust PyO3 binding, v0.7.0) using an **AST-Informed String Surgery** architecture: the AST precisely identifies metric names and label matchers, word-boundary regex performs string replacements, and reparsing validates correctness. New capabilities include:
+>
+> - `extract_metrics_ast()` / `extract_label_matchers_ast()` — precise AST-based identification
+> - `rewrite_expr_prefix()` — `custom_` prefix injection (word-boundary prevents substring false matches)
+> - `rewrite_expr_tenant_label()` — `tenant=~".+"` label injection
+> - `detect_semantic_break_ast()` — detects `absent()` / `predict_linear()` and other semantic-breaking functions
+> - Graceful degradation: automatically falls back to regex when promql-parser is unavailable or parsing fails
+> - 38 test cases covering compound `and/or/unless`, complex regex labels, aggregation+offset
+>
+> CLI adds `--no-ast` flag to force regex-only mode.
 
 ### 10.6 Governance Evolution
 
@@ -936,6 +941,6 @@ Support multi-cluster architecture:
 
 ---
 
-**Document version:** v0.10.0 — 2026-02-27
-**Last updated:** Phase 8 BYOP Integration, da-tools CLI, Test Coverage Matrix & Flowcharts
+**Document version:** v0.11.0 — 2026-02-27
+**Last updated:** Phase 10 AST Migration Engine (promql-parser), Test Coverage Matrix & Flowcharts
 **Maintainer:** Platform Engineering Team

@@ -6,8 +6,8 @@ LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.source="https://github.com/vencil/vibe-k8s-lab" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
-# ── Dependencies (only PyYAML) ──────────────────────────────────────
-RUN pip install --no-cache-dir PyYAML==6.0.2
+# ── Dependencies ──────────────────────────────────────────────────────
+RUN pip install --no-cache-dir PyYAML==6.0.2 promql-parser==0.7.0
 
 # ── Copy tools ──────────────────────────────────────────────────────
 WORKDIR /opt/da-tools

@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.10.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.11.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念
@@ -887,13 +887,18 @@ flowchart TD
 
 目前 `make benchmark` 僅測量 idle 狀態下的 hot-reload 延遲。此模式將在真實負載（composite load）運行期間同步測量 reload 延遲，證明「hot-reload 不影響生產環境效能」。
 
-### 10.5 遷移工具 AST 解析 `[B6]`
+### 10.5 ~~遷移工具 AST 解析~~ `[B6]` — ✅ 已完成 (v0.11.0)
 
-目前 `migrate_rule.py` 使用 regex + 啟發式字典比對解析傳統 PromQL alert rule，將結果分為 Perfect / Complex / Unparseable 三類。此方式對標籤順序差異、空白風格變體等「語法等價但字面不同」的寫法容錯有限，需人工或 LLM 介入處理 Complex 桶。
-
-引入 PromQL AST（抽象語法樹）解析後，工具可直接從樹狀結構精準抽取閾值與指標名稱，無視寫法風格差異，將自動轉換成功率逼近 100%。實作路線有兩條：整合既有的 Rust-based Python binding（如 PyPI 上的 `promql-parser`），或編譯一個輕量 Go CLI 呼叫官方 `prometheus/promql/parser` 並輸出 JSON AST，Python 端透過 subprocess 調用。
-
-此項目的 ROI 取決於真實遷移數據。建議在第一個企業客戶導入時，以 `migrate_rule.py --dry-run --triage` 統計 Perfect/Complex/Unparseable 比例——若 Perfect 已達 90%+，AST 為錦上添花；若低於 70%，則應優先投資。
+> **已於 v0.11.0 實現。** `migrate_rule.py` v4 整合了 `promql-parser` (Rust PyO3 binding, v0.7.0)，採用 **AST-Informed String Surgery** 架構：AST 負責精準辨識 metric name 與 label matcher，word-boundary regex 負責字串替換，reparse 驗證結果正確性。新增功能包含：
+>
+> - `extract_metrics_ast()` / `extract_label_matchers_ast()` — AST 精準辨識
+> - `rewrite_expr_prefix()` — `custom_` 前綴注入 (word-boundary 防子字串誤替換)
+> - `rewrite_expr_tenant_label()` — `tenant=~".+"` label 注入
+> - `detect_semantic_break_ast()` — 偵測 `absent()` / `predict_linear()` 等語意中斷函式
+> - Graceful degradation：promql-parser 未安裝或解析失敗時，自動降級至 regex 路徑
+> - 38 個測試案例覆蓋 compound `and/or/unless`、complex regex labels、aggregation+offset
+>
+> CLI 新增 `--no-ast` 旗標可強制回到 regex 模式。
 
 ### 10.6 治理架構演進 (Governance Evolution)
 
@@ -936,6 +941,6 @@ flowchart TD
 
 ---
 
-**文件版本：** v0.10.0 — 2026-02-27
-**最後更新：** Phase 8 BYOP Integration, da-tools CLI, Test Coverage Matrix & Flowcharts
+**文件版本：** v0.11.0 — 2026-02-27
+**最後更新：** Phase 10 AST Migration Engine (promql-parser), Test Coverage Matrix & Flowcharts
 **維護者：** Platform Engineering Team

@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v0.10.0)
+## 專案概覽 (v0.11.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
@@ -20,22 +20,10 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新 |
 | 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一 |
 | 8 | v0.9.0 | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖 |
-| 9 | **v0.10.0** | 三層治理模型 + RnR + CI deny-list linting + 文件重整 |
+| 9 | v0.10.0 | 三層治理模型 + RnR + CI deny-list linting + 文件重整 |
+| 10 | **v0.11.0** | AST 遷移引擎 (promql-parser) — migrate_rule v4, tenant label 注入, 38 測試案例 |
 
 ## 規劃中 Phases
-
-### Phase 9 (v0.10.0) — 治理與文件重整
-- `docs/custom-rule-governance.md`：三層治理模型 (Standard / Pre-packaged / True Custom) + RnR 權責定義 + SLA 切割
-- CI deny-list linting script (`scripts/tools/lint_custom_rules.py`)：禁止危險 PromQL 語法、強制 tenant label
-- Playbook 遷移：`testing-playbook.md` / `windows-mcp-playbook.md` 移至 `docs/internal/`，與 user-facing 文件分離
-- README 文件導覽重排：按讀者旅程排序 (架構→部署→整合→遷移→治理→SOP→Rule Packs)
-- README 前置需求改寫：必要條件僅列 Docker Engine + kubectl；Dev Container 降為建議選項
-
-### Phase 10 (v0.11.0) — AST 遷移引擎
-- `migrate_rule.py` 核心升級：引入 promql-parser (Rust PyO3 binding) 取代 regex
-- 第一版範圍：AST 層級的 metric name 辨識 + prefix 替換 (`custom_`) + tenant label 注入
-- 巢狀 `and/or/unless` 遷移正確性測試案例
-- Triage mode 與 dry-run 保持相容
 
 ### Phase 11 (v0.12.0) — Exporter 核心擴展 (B1 + B4)
 - B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — config parser 擴展支援 regex matcher
@@ -86,7 +74,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - `patch_config.py <tenant> <key> <value>`: ConfigMap 局部更新
 - `check_alert.py <alert> <tenant> [--prometheus URL]`: Alert 狀態 JSON
 - `diagnose.py <tenant> [--prometheus URL]`: 健康檢查 JSON
-- `migrate_rule.py <rules.yml> [--triage] [--dry-run] [--no-prefix]`: 傳統→動態 (Triage CSV + Prefix + Dictionary)
+- `migrate_rule.py <rules.yml> [--triage] [--dry-run] [--no-prefix] [--no-ast]`: 傳統→動態 (Triage CSV + Prefix + Dictionary + AST Engine)
 - `scaffold_tenant.py [--tenant NAME --db TYPE,...] [--catalog]`: 互動式 Tenant 配置產生器
 - `validate_migration.py [--mapping FILE | --old Q --new Q] --prometheus URL`: Shadow Monitoring 數值 diff
 - `offboard_tenant.py <tenant> [--execute]`: Tenant 下架 (Pre-check + 移除)

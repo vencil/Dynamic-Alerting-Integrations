@@ -2,6 +2,36 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.11.0] - AST Migration Engine (2026-02-28)
+
+`migrate_rule.py` 核心升級：以 AST 取代 regex 進行 PromQL 解析，實現精準 metric 辨識與安全改寫。
+
+### 🧬 AST Engine (promql-parser Rust/PyO3)
+
+* **`migrate_rule.py` v4**: 引入 `promql-parser` 0.7.0 (Rust/PyO3 binding) 作為 PromQL 解析核心
+  * AST-Informed String Surgery: 先用 AST 精準定位 VectorSelector 節點，再用字串操作改寫
+  * Metric name 辨識不再依賴 function blacklist (`PROMQL_FUNCS`)，直接由 AST 提取
+  * 支援巢狀 `and/or/unless`、`offset`、subquery 等複雜 PromQL 結構
+* **Prefix injection**: AST 驗證的 word-boundary 替換，不誤改子字串或 label name
+* **Tenant label injection**: 自動注入 `tenant=~".+"` matcher 到所有 VectorSelector
+* **Reparse validation**: 每次改寫後 reparse 驗證，失敗則回退原始表達式
+* **Graceful degradation**: `promql-parser` 未安裝時自動降級為 regex (`--no-ast` 可強制)
+
+### 🧪 測試套件
+
+* **`tests/test_migrate_ast.py`**: 38 個測試案例，涵蓋:
+  * AST metric 提取 (簡單/巢狀/複合/histogram_quantile)
+  * Prefix injection (含子字串安全/複合表達式)
+  * Tenant label injection (有/無現有 labels/巢狀函式)
+  * 「Regex Killer」案例: compound and、regex labels、aggregation+offset
+  * 語義中斷偵測、降級行為、端到端 process_rule 整合
+
+### 🐳 da-tools Container
+
+* **Dockerfile**: 新增 `promql-parser==0.7.0` 依賴 (Alpine pre-built wheel)
+
+---
+
 ## [v0.10.0] - Governance, Documentation Restructure & CI Linting (2026-02-28)
 
 本版本建立多租戶客製化規則治理框架，重整文件架構，並新增 CI 護欄工具。

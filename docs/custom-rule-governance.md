@@ -1,7 +1,7 @@
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
-> **版本**: v0.10.0
+> **版本**: v0.11.0
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](../rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---
@@ -211,7 +211,7 @@ python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/c
 # 透過 da-tools 容器執行（不需 clone 專案）
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:0.2.0 \
+  ghcr.io/vencil/da-tools:0.3.0 \
   lint /data/rules --ci
 
 # 輸出範例
