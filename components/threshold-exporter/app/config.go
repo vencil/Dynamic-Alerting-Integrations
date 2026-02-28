@@ -34,6 +34,122 @@ type ResolvedStateFilter struct {
 	Severity   string
 }
 
+// TimeWindowOverride defines a UTC time window with an override value.
+// Window format: "HH:MM-HH:MM" (UTC-only, cross-midnight supported).
+//
+// Example:
+//
+//	overrides:
+//	  - window: "01:00-09:00"
+//	    value: "1000"
+type TimeWindowOverride struct {
+	Window string `yaml:"window"` // "HH:MM-HH:MM" (UTC)
+	Value  string `yaml:"value"`  // same value syntax as existing ("70", "disable", "500:critical")
+}
+
+// ScheduledValue supports both simple scalar strings (backward compatible)
+// and structured values with time-window overrides (Phase 11 — B4).
+//
+// Scalar format (existing):
+//
+//	mysql_connections: "70"
+//
+// Structured format (new):
+//
+//	mysql_connections:
+//	  default: "70"
+//	  overrides:
+//	    - window: "01:00-09:00"
+//	      value: "1000"
+type ScheduledValue struct {
+	Default   string
+	Overrides []TimeWindowOverride
+}
+
+// UnmarshalYAML implements custom YAML unmarshalling for ScheduledValue.
+// Supports scalar strings (backward compatible) and mapping with default+overrides.
+func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		sv.Default = value.Value
+		return nil
+	}
+	if value.Kind == yaml.MappingNode {
+		var structured struct {
+			Default   string              `yaml:"default"`
+			Overrides []TimeWindowOverride `yaml:"overrides"`
+		}
+		if err := value.Decode(&structured); err != nil {
+			return err
+		}
+		sv.Default = structured.Default
+		sv.Overrides = structured.Overrides
+		return nil
+	}
+	return fmt.Errorf("ScheduledValue: unsupported YAML node kind %d", value.Kind)
+}
+
+// String returns the default value for backward-compatible string access.
+func (sv ScheduledValue) String() string {
+	return sv.Default
+}
+
+// ResolveValue returns the effective value at the given time.
+// If a time-window override matches, its value is returned; otherwise the default.
+func (sv ScheduledValue) ResolveValue(now time.Time) string {
+	for _, o := range sv.Overrides {
+		if matchTimeWindow(o.Window, now) {
+			return o.Value
+		}
+	}
+	return sv.Default
+}
+
+// matchTimeWindow checks if the given time falls within a UTC "HH:MM-HH:MM" window.
+// Supports cross-midnight windows (e.g., "22:00-06:00").
+func matchTimeWindow(window string, now time.Time) bool {
+	parts := strings.SplitN(window, "-", 2)
+	if len(parts) != 2 {
+		log.Printf("WARN: invalid time window format %q", window)
+		return false
+	}
+	startH, startM, err1 := parseHHMM(parts[0])
+	endH, endM, err2 := parseHHMM(parts[1])
+	if err1 != nil || err2 != nil {
+		log.Printf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
+		return false
+	}
+
+	utcNow := now.UTC()
+	nowMinutes := utcNow.Hour()*60 + utcNow.Minute()
+	startMinutes := startH*60 + startM
+	endMinutes := endH*60 + endM
+
+	if startMinutes <= endMinutes {
+		// Same day: e.g., 01:00-09:00
+		return nowMinutes >= startMinutes && nowMinutes < endMinutes
+	}
+	// Cross midnight: e.g., 22:00-06:00
+	return nowMinutes >= startMinutes || nowMinutes < endMinutes
+}
+
+// parseHHMM parses "HH:MM" into hour and minute.
+func parseHHMM(s string) (int, int, error) {
+	s = strings.TrimSpace(s)
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)
+	}
+	h, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || h < 0 || h > 23 {
+		return 0, 0, fmt.Errorf("invalid hour in %q", s)
+	}
+	m, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || m < 0 || m > 59 {
+		return 0, 0, fmt.Errorf("invalid minute in %q", s)
+	}
+	return h, m, nil
+}
+
 // ThresholdConfig represents the YAML config structure.
 //
 // Example config:
@@ -48,17 +164,23 @@ type ResolvedStateFilter struct {
 //	tenants:
 //	  db-a:
 //	    mysql_connections: "70"
+//	    mysql_connections_backup:             # B4: scheduled override
+//	      default: "70"
+//	      overrides:
+//	        - window: "01:00-09:00"
+//	          value: "1000"
 //	  db-b:
 //	    mysql_connections: "disable"
 //	    _state_container_crashloop: "disable"
 type ThresholdConfig struct {
-	Defaults     map[string]float64           `yaml:"defaults"`
-	StateFilters map[string]StateFilter       `yaml:"state_filters"`
-	Tenants      map[string]map[string]string `yaml:"tenants"`
+	Defaults     map[string]float64                  `yaml:"defaults"`
+	StateFilters map[string]StateFilter              `yaml:"state_filters"`
+	Tenants      map[string]map[string]ScheduledValue `yaml:"tenants"`
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
 // Phase 2B: CustomLabels supports dimensional metrics (e.g., queue="tasks").
+// Phase 11 B1: RegexLabels supports regex dimensional metrics (e.g., tablespace=~"SYS.*").
 type ResolvedThreshold struct {
 	Tenant       string
 	Metric       string
@@ -66,10 +188,19 @@ type ResolvedThreshold struct {
 	Severity     string
 	Component    string
 	CustomLabels map[string]string // dimensional labels from {key="value"} syntax
+	RegexLabels  map[string]string // regex labels from {key=~"pattern"} syntax
 }
 
-// Resolve applies three-state logic:
-//   - custom value → use it
+// Resolve applies three-state logic using the current time.
+// Wraps ResolveAt(time.Now()) for backward compatibility.
+func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
+	return c.ResolveAt(time.Now())
+}
+
+// ResolveAt applies three-state logic at a specific time.
+// The time parameter enables deterministic testing of time-window overrides (B4).
+//
+//   - custom value → use it (with time-window resolution)
 //   - omitted      → use default
 //   - "disable"    → skip (no metric exposed)
 //
@@ -79,7 +210,7 @@ type ResolvedThreshold struct {
 // PromQL can then use `unless` to suppress warning when critical fires.
 //
 // Returns the list of thresholds to expose as Prometheus metrics.
-func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
+func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 	var result []ResolvedThreshold
 
 	for tenant, overrides := range c.Tenants {
@@ -94,7 +225,8 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 			severity := "warning" // default severity
 
 			// Check tenant override (skip _state_ overrides)
-			if override, exists := overrides[metricKey]; exists {
+			if sv, exists := overrides[metricKey]; exists {
+				override := sv.ResolveValue(now)
 				lower := strings.TrimSpace(strings.ToLower(override))
 
 				// State 3: disable
@@ -137,11 +269,12 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 
 		// Multi-tier severity: scan for <metricKey>_critical overrides.
 		// These produce an additional threshold with severity=critical.
-		for key, override := range overrides {
+		for key, sv := range overrides {
 			if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") {
 				continue
 			}
 
+			override := sv.ResolveValue(now)
 			lower := strings.TrimSpace(strings.ToLower(override))
 			if isDisabled(lower) {
 				continue
@@ -170,9 +303,10 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 		}
 
 		// Phase 2B: dimensional keys — tenant overrides with {label="value"} syntax.
+		// Phase 11 B1: also supports {label=~"pattern"} regex matchers.
 		// These are tenant-only (no default inheritance) and don't support _critical suffix.
 		// Severity override uses the "value:severity" syntax (e.g., "500:critical").
-		for key, valStr := range overrides {
+		for key, sv := range overrides {
 			if !strings.Contains(key, "{") {
 				continue // not a dimensional key
 			}
@@ -180,12 +314,13 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 				continue
 			}
 
-			baseKey, customLabels := parseKeyWithLabels(key)
-			if len(customLabels) == 0 {
+			baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
+			if len(customLabels) == 0 && len(regexLabels) == 0 {
 				log.Printf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
 				continue
 			}
 
+			valStr := sv.ResolveValue(now)
 			lower := strings.TrimSpace(strings.ToLower(valStr))
 			if isDisabled(lower) {
 				continue
@@ -213,6 +348,7 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 				Severity:     severity,
 				Component:    component,
 				CustomLabels: customLabels,
+				RegexLabels:  regexLabels,
 			})
 		}
 	}
@@ -244,8 +380,8 @@ func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
 
 		for tenant, overrides := range c.Tenants {
 			stateKey := "_state_" + filterName
-			if override, exists := overrides[stateKey]; exists {
-				lower := strings.TrimSpace(strings.ToLower(override))
+			if sv, exists := overrides[stateKey]; exists {
+				lower := strings.TrimSpace(strings.ToLower(sv.Default))
 				if isDisabled(lower) {
 					continue // 明確停用
 				}
@@ -284,31 +420,55 @@ func parseMetricKey(key string) (component, metric string) {
 var keyWithLabelsRe = regexp.MustCompile(`^([a-zA-Z0-9_]+)\{(.+)\}$`)
 
 // parseKeyWithLabels splits a metric key that may contain dimensional labels.
+// Returns base key, exact-match labels (=), and regex-match labels (=~).
 //
 // Examples:
 //
-//	"redis_queue_length"                                  → ("redis_queue_length", nil)
-//	"redis_queue_length{queue=\"tasks\", priority=\"high\"}" → ("redis_queue_length", {"queue": "tasks", "priority": "high"})
-func parseKeyWithLabels(key string) (string, map[string]string) {
+//	"redis_queue_length"                                         → ("redis_queue_length", nil, nil)
+//	"redis_queue_length{queue=\"tasks\", priority=\"high\"}"     → ("redis_queue_length", {"queue":"tasks","priority":"high"}, nil)
+//	"oracle_tablespace{tablespace=~\"SYS.*\"}"                  → ("oracle_tablespace", nil, {"tablespace":"SYS.*"})
+//	"oracle_ts{env=\"prod\", tablespace=~\"SYS.*\"}"            → ("oracle_ts", {"env":"prod"}, {"tablespace":"SYS.*"})
+func parseKeyWithLabels(key string) (string, map[string]string, map[string]string) {
 	m := keyWithLabelsRe.FindStringSubmatch(key)
 	if m == nil {
-		return key, nil
+		return key, nil, nil
 	}
 	baseKey := m[1]
-	labels := parseLabelsString(m[2])
-	if len(labels) == 0 {
-		return baseKey, nil
+	exact, regex := parseLabelsStringWithOp(m[2])
+	if len(exact) == 0 {
+		exact = nil
 	}
-	return baseKey, labels
+	if len(regex) == 0 {
+		regex = nil
+	}
+	if exact == nil && regex == nil {
+		return baseKey, nil, nil
+	}
+	return baseKey, exact, regex
 }
 
-// parseLabelsString parses a comma-separated label string into a map.
-// Input: `queue="tasks", priority="high"` or `queue='tasks'`
-func parseLabelsString(s string) map[string]string {
-	result := make(map[string]string)
+// parseLabelsStringWithOp parses a comma-separated label string into exact and regex maps.
+// Supports both = (exact match) and =~ (regex match) operators.
+//
+// Input: `queue="tasks", tablespace=~"SYS.*"`
+// Returns: exact={"queue":"tasks"}, regex={"tablespace":"SYS.*"}
+func parseLabelsStringWithOp(s string) (exact map[string]string, regex map[string]string) {
+	exact = make(map[string]string)
+	regex = make(map[string]string)
 	pairs := strings.Split(s, ",")
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
+		// Check for =~ first (must check before = to avoid partial match)
+		if idx := strings.Index(pair, "=~"); idx >= 0 {
+			k := strings.TrimSpace(pair[:idx])
+			v := strings.TrimSpace(pair[idx+2:])
+			v = strings.Trim(v, `"'`)
+			if k != "" {
+				regex[k] = v
+			}
+			continue
+		}
+		// Regular = operator
 		eqIdx := strings.Index(pair, "=")
 		if eqIdx < 0 {
 			continue
@@ -318,10 +478,10 @@ func parseLabelsString(s string) map[string]string {
 		// Strip surrounding quotes (single or double)
 		v = strings.Trim(v, `"'`)
 		if k != "" {
-			result[k] = v
+			exact[k] = v
 		}
 	}
-	return result
+	return
 }
 
 // ============================================================
@@ -380,7 +540,7 @@ func (m *ConfigManager) Load() error {
 		cfg.Defaults = make(map[string]float64)
 	}
 	if cfg.Tenants == nil {
-		cfg.Tenants = make(map[string]map[string]string)
+		cfg.Tenants = make(map[string]map[string]ScheduledValue)
 	}
 	if cfg.StateFilters == nil {
 		cfg.StateFilters = make(map[string]StateFilter)
@@ -437,7 +597,7 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 	merged := ThresholdConfig{
 		Defaults:     make(map[string]float64),
 		StateFilters: make(map[string]StateFilter),
-		Tenants:      make(map[string]map[string]string),
+		Tenants:      make(map[string]map[string]ScheduledValue),
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -507,7 +667,7 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 		// Merge tenants (deep merge per tenant)
 		for tenant, overrides := range partial.Tenants {
 			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]string)
+				merged.Tenants[tenant] = make(map[string]ScheduledValue)
 			}
 			for k, v := range overrides {
 				merged.Tenants[tenant][k] = v

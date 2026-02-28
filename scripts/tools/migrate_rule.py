@@ -18,7 +18,7 @@
   python3 migrate_rule.py <legacy_rules.yml> --no-prefix        # 停用 custom_ 前綴 (不建議)
   python3 migrate_rule.py <legacy_rules.yml> --no-ast           # 強制使用舊版 regex 引擎
 
-v4 升級 (AST Engine — Phase 10):
+v4 升級 (AST Engine — Phase 11):
   - promql-parser (Rust/PyO3) 取代 regex 進行 metric name 辨識
   - AST-Informed String Surgery: 精準 prefix 替換 + tenant label 注入
   - Reparse 驗證: 確保改寫後的 PromQL 仍然合法
@@ -152,16 +152,20 @@ def detect_semantic_break_ast(expr_str):
                 fname = getattr(func_obj, 'name', '')
                 if fname in SEMANTIC_BREAK_FUNCS:
                     return True
+            # Walk into Call arguments (the only children of a Call node)
             args = getattr(node, 'args', [])
             if args:
                 for arg in args:
                     if _walk_calls(arg):
                         return True
+            return False
+        # Non-Call nodes: walk known child attributes
         for attr in ('lhs', 'rhs', 'expr'):
             child = getattr(node, attr, None)
             if child is not None:
                 if _walk_calls(child):
                     return True
+        # AggregateExpr / other nodes with args
         args = getattr(node, 'args', None)
         if args:
             for arg in args:
@@ -201,6 +205,11 @@ def rewrite_expr_tenant_label(expr_str, metric_names):
       - 有 {...} 的: 在 { 後插入 tenant=~".+",
       - 無 label 的: 在 metric name 後附加 {tenant=~".+"}
     改寫後 reparse 驗證。
+
+    Known limitation: 若同一 metric 同時有帶 label 和裸露的用法 (e.g.
+    "my_metric > on() group_left my_metric{a="1"}")，if/else 分支只會套用
+    帶 label 的 pattern，裸露出現不會被注入 tenant。Recording rule LHS 通常
+    只有一種形式，此限制在實際遷移場景中影響極小。
     """
     result = expr_str
     for name in metric_names:
@@ -382,10 +391,10 @@ def parse_expr(expr_str, use_ast=True):
     lhs, op, rhs = match.groups()
 
     # 語義不可轉換的函式偵測
-    if use_ast and detect_semantic_break_ast(lhs):
+    if use_ast and HAS_AST and detect_semantic_break_ast(lhs):
         return None
-    else:
-        # Regex fallback
+    elif not use_ast or not HAS_AST:
+        # Regex fallback — when AST is disabled or unavailable
         first_func = re.match(r'\s*([a-zA-Z_]+)\s*\(', lhs)
         if first_func and first_func.group(1) in SEMANTIC_BREAK_FUNCS:
             return None
@@ -394,10 +403,9 @@ def parse_expr(expr_str, use_ast=True):
 
     # v4: AST-based metric extraction (精準，不需 function blacklist)
     base_key = "unknown_metric"
-    if use_ast:
-        ast_metrics = extract_metrics_ast(lhs)
-        if ast_metrics:
-            base_key = ast_metrics[0]
+    ast_metrics = extract_metrics_ast(lhs) if use_ast else []
+    if ast_metrics:
+        base_key = ast_metrics[0]
 
     # Regex fallback
     if base_key == "unknown_metric":
@@ -412,7 +420,7 @@ def parse_expr(expr_str, use_ast=True):
         "val": rhs,
         "is_complex": is_complex,
         "base_key": base_key,
-        "all_metrics": extract_metrics_ast(lhs) if use_ast else [],
+        "all_metrics": ast_metrics,
     }
 
 

@@ -27,7 +27,6 @@
 import argparse
 import os
 import re
-import stat
 import sys
 from pathlib import Path
 
@@ -106,9 +105,23 @@ def lint_expr(expr, policy, filepath, rule_name):
                 f"denied function '{func}' in expr"
             ))
 
-    # Check denied patterns
+    # Check denied patterns (whitespace-tolerant matching)
     for pat in policy.get("denied_patterns", []):
-        if pat in expr:
+        # Build regex: escape each character for literal match, then insert
+        # optional \s* after operator chars and before/after parens.
+        # This tolerates '=~ ".*"' matching '=~".*"' and
+        # 'without (tenant)' matching 'without(tenant)'.
+        regex_parts = []
+        for ch in pat:
+            # Insert optional whitespace before opening/closing parens
+            if ch in ('(', ')'):
+                regex_parts.append(r'\s*')
+            regex_parts.append(re.escape(ch))
+            # Insert optional whitespace after operator chars and parens
+            if ch in ('=', '~', '!', '<', '>', '(', ')'):
+                regex_parts.append(r'\s*')
+        ws_regex = ''.join(regex_parts)
+        if re.search(ws_regex, expr):
             results.append(LintResult(
                 filepath, rule_name, None, "ERROR",
                 f"denied pattern '{pat}' in expr"
@@ -192,24 +205,25 @@ def check_owner_label(labels, filepath, rule_name):
 # File processing
 # ---------------------------------------------------------------------------
 def lint_file(filepath, policy):
-    """Lint a single YAML rule file. Returns list of LintResult."""
+    """Lint a single YAML rule file. Returns (list of LintResult, rule_count)."""
     results = []
+    rule_count = 0
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
     except Exception as e:
         results.append(LintResult(filepath, None, None, "ERROR", f"cannot read file: {e}"))
-        return results
+        return results, rule_count
 
     # Handle ConfigMap-wrapped rules (data: key: |)
     try:
         doc = yaml.safe_load(content)
     except yaml.YAMLError as e:
         results.append(LintResult(filepath, None, None, "ERROR", f"YAML parse error: {e}"))
-        return results
+        return results, rule_count
 
     if not doc:
-        return results
+        return results, rule_count
 
     # Extract rule groups — support both direct format and ConfigMap wrapper
     groups = []
@@ -228,7 +242,7 @@ def lint_file(filepath, policy):
                         pass
 
     if not groups:
-        return results
+        return results, rule_count
 
     for group in groups:
         if not isinstance(group, dict):
@@ -243,6 +257,7 @@ def lint_file(filepath, policy):
         for rule in group.get("rules", []):
             if not isinstance(rule, dict):
                 continue
+            rule_count += 1
 
             # Determine rule name and type
             rule_name = rule.get("alert") or rule.get("record") or "<unnamed>"
@@ -259,7 +274,7 @@ def lint_file(filepath, policy):
                 results.extend(check_expiry_label(labels, filepath, rule_name))
                 results.extend(check_owner_label(labels, filepath, rule_name))
 
-    return results
+    return results, rule_count
 
 
 # ---------------------------------------------------------------------------
@@ -328,19 +343,10 @@ def main():
     rules_checked = 0
 
     for filepath in files:
-        results = lint_file(filepath, policy)
+        results, count = lint_file(filepath, policy)
         all_results.extend(results)
         files_checked += 1
-
-        # Count rules in file for summary
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                doc = yaml.safe_load(f)
-            if isinstance(doc, dict) and "groups" in doc:
-                for g in doc["groups"]:
-                    rules_checked += len(g.get("rules", []))
-        except Exception:
-            pass
+        rules_checked += count
 
     # Output
     errors = [r for r in all_results if r.severity == "ERROR"]

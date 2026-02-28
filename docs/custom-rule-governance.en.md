@@ -1,7 +1,7 @@
 # Multi-Tenant Custom Rule Governance Model
 
 > **Audience**: Platform Engineering, Domain Experts (DBA/Infra), Tenant Tech Leads
-> **Version**: v0.11.0
+> **Version**: v0.12.0
 > **Related**: [Architecture and Design](architecture-and-design.en.md), [Rule Packs Directory](../rule-packs/README.md), [Migration Guide](migration-guide.md)
 
 ---

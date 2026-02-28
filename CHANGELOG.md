@@ -2,6 +2,50 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.12.0] - Exporter Core Expansion: B1 + B4 (2026-02-28)
+
+threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值覆蓋。
+
+### 🔧 B1: Regex 維度閾值
+
+* **`parseLabelsStringWithOp()`**: Config key 支援 `=~` 運算子（如 `oracle_tablespace{tablespace=~"SYS.*"}`）
+* **`RegexLabels` field**: `ResolvedThreshold` 新增 regex label map，collector 以 `_re` 後綴輸出
+* **PromQL 匹配策略**: Exporter 輸出 regex pattern 為 label value，recording rules 透過 `label_replace` + `=~` 匹配
+* **混合模式**: 同一 key 可同時包含 exact (`=`) 和 regex (`=~`) label matcher
+
+### ⏰ B4: 排程式閾值 (Time-Window Overrides)
+
+* **`ScheduledValue` 型別**: 自訂 `UnmarshalYAML`，支援雙格式：
+  * 純量字串 `"70"` — 完全向後相容
+  * 結構化 `{default: "70", overrides: [{window: "01:00-09:00", value: "1000"}]}`
+* **`ResolveAt(now time.Time)`**: 時間感知解析，取代原本的 `Resolve()` 作為核心方法
+* **跨午夜支援**: `matchTimeWindow()` 正確處理 `22:00-06:00` 等跨日窗口
+* **UTC-only 設計**: 窗口時間統一為 UTC，時區轉換由 Tenant 自行處理
+* **三態相容**: 窗口內 `value: "disable"` 可在特定時段停用告警
+
+### 🏗️ Tenants 型別重構
+
+* **型別變更**: `Tenants` 從 `map[string]map[string]string` 升級為 `map[string]map[string]ScheduledValue`
+* **向後相容**: 所有現有 YAML 配置透過 `UnmarshalYAML` 自動轉換為 `ScheduledValue`
+* **`loadDir` 合併邏輯**: Directory mode deep-merge 更新為新型別
+* **`configViewHandler`**: `/api/v1/config` 端點顯示 time override 數量，支援 `?at=<RFC3339>` 查詢參數以 debug 排程式閾值
+
+### 🧪 測試套件
+
+* **56 個測試函數** (26 個既有 Go 測試更新為 ScheduledValue 型別 + 30 個新增)：
+  * `ScheduledValue` YAML 解析 (scalar / structured / mixed)
+  * `ResolveValue` 時間窗口匹配 (same-day / cross-midnight / boundary / first-match-wins)
+  * `ResolveAt` 整合測試 (scheduled override / scheduled disable / scheduled critical)
+  * `matchTimeWindow` 邊界條件 (minute precision / non-UTC input conversion)
+  * `parseHHMM` 輸入驗證
+  * `parseLabelsStringWithOp` regex 解析 (pure regex / mixed / multiple)
+  * Regex dimensional 解析 + B1+B4 組合測試 + 負面案例 (regex+_critical 不支援)
+  * HTTP handler 測試 (healthHandler / configViewHandler regex 顯示 / 排程 override 計數 / `?at=` 時間覆寫 / readyHandler 狀態)
+  * Collector Prometheus 整合測試 (_re suffix / mixed exact+regex / state filter)
+  * Directory mode ScheduledValue 合併測試
+
+---
+
 ## [v0.11.0] - AST Migration Engine (2026-02-28)
 
 `migrate_rule.py` 核心升級：以 AST 取代 regex 進行 PromQL 解析，實現精準 metric 辨識與安全改寫。
@@ -19,12 +63,17 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### 🧪 測試套件
 
-* **`tests/test_migrate_ast.py`**: 38 個測試案例，涵蓋:
+* **`tests/test_migrate_ast.py`**: 54 個測試案例，涵蓋:
   * AST metric 提取 (簡單/巢狀/複合/histogram_quantile)
   * Prefix injection (含子字串安全/複合表達式)
-  * Tenant label injection (有/無現有 labels/巢狀函式)
+  * Tenant label injection (有/無現有 labels/巢狀函式/同 metric 多次出現)
   * 「Regex Killer」案例: compound and、regex labels、aggregation+offset
-  * 語義中斷偵測、降級行為、端到端 process_rule 整合
+  * 語義中斷偵測 (含巢狀 Call 節點: absent(rate())、predict_linear in sum)
+  * Metric Dictionary 載入與查找測試
+  * write_outputs / write_triage_csv 整合測試
+  * `parse_expr` all_metrics 欄位驗證 (simple / compound / no-ast)
+  * AST 路徑端到端 write_outputs 整合 (tenant label 注入驗證)
+  * 降級行為、端到端 process_rule 整合
 
 ### 🐳 da-tools Container
 
@@ -50,10 +99,25 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 * **`scripts/tools/lint_custom_rules.py`**: Custom Rule 治理合規 linter
   * 禁止高成本函式 (`holt_winters`, `predict_linear`)
-  * 禁止危險 regex (`=~".*"`) 和 tenant 隔離破壞 (`without(tenant)`)
+  * 禁止危險 regex (`=~".*"`) 和 tenant 隔離破壞 (`without(tenant)`) — whitespace-tolerant 比對
   * 強制 `tenant` label、限制 range vector duration
   * 支援自訂 policy 檔 (`--policy`) 和 CI 模式 (`--ci`)
 * **`.github/custom-rule-policy.yaml`**: 預設 deny-list 規則定義檔
+
+### 🧪 測試套件
+
+* **`tests/test_lint_custom_rules.py`**: 40 個測試案例，涵蓋:
+  * Duration 解析、denied function 偵測 (含子字串安全)
+  * Denied pattern 偵測 (whitespace 變體: `=~ ".*"`, `without (tenant)`)
+  * Range vector duration 超限、required label 檢查
+  * Tier 3 governance labels (expiry / owner)
+  * 完整檔案 lint (直接格式 + ConfigMap wrapper + 空檔 + 不存在)
+  * Policy 載入合併、group interval 檢查、檔案收集
+* **`tests/test_bump_docs.py`**: 11 個測試案例，涵蓋:
+  * `_build_rules()` 結構完整性 (三條版號線 + 必要 key)
+  * `apply_rules()` check-only / 寫入模式 / whole_file 模式
+  * 邊界案例 (檔案不存在、pattern 無匹配)
+  * `read_current_versions()` 真實 repo 讀取
 
 ### 📄 文件重整
 
@@ -113,6 +177,25 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **CLAUDE.md**: 文件架構表 + 工具清單同步更新。
 * **`docs/architecture-and-design.en.md`**: 補齊 §9.2–9.5 (矩陣 + 三張 Mermaid 流程圖)，與中文版完整對齊。
 
+### 🔧 Self-Review 修正
+
+* **`release-tools.yaml`**: CI TOOLS array 補齊 `lint_custom_rules.py`，與 `build.sh` 和 `entrypoint.py` 對齊
+* **`entrypoint.py`**: `open()` 補上 `encoding='utf-8'`
+* **`da-tools/README.md`**: 版本 header 修正 0.2.0 → 0.3.0 (與 VERSION 檔對齊)
+* **`bump_docs.py`**: 新增 da-tools README version header 更新 rule，防止未來版號 drift
+
+### 🧪 測試套件
+
+* **`tests/test_entrypoint.py`** (15 tests): CLI dispatcher 完整測試
+  * `TestCommandMapConsistency` (3): COMMAND_MAP 覆蓋所有 build.sh 工具、值格式、PROMETHEUS_COMMANDS 子集
+  * `TestInjectPrometheusEnv` (4): 環境變數注入 / 已有 flag 不重複 / 未設定不注入 / 回傳同 list
+  * `TestVersionDisplay` (2): VERSION 檔存在 + semver 格式
+  * `TestRunToolErrors` (1): 缺失腳本 exit(1)
+  * `TestPrintUsage` (1): usage exit(0)
+  * `TestCIWorkflowSync` (1): release-tools.yaml ⊇ build.sh 工具一致性
+  * `TestBumpDocsToolsRuleCoverage` (1): bump_docs 涵蓋 README header rule
+  * `TestMainRouting` (2): unknown command exit(1) + help exit(0)
+
 ---
 
 ## [v0.8.0] - Testing Coverage, SRE Runbook & Baseline Discovery (2026-02-27)
@@ -137,6 +220,15 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **README.md / README.en.md**: 文件導覽表新增 Shadow Monitoring SOP；工具表新增 `baseline_discovery.py`；Makefile 目標與專案結構補齊 Scenario E/F、composite、baseline。
 * **全域版本一致性**: Helm Chart 0.8.0、CI image tag v0.8.0、所有文件統一 v0.8.0。
 * **清理**: 刪除根目錄殘留的 `test-legacy-rules.yaml`（測試輸入已收斂至 `tests/legacy-dummy.yml`）。
+
+### 🧪 測試套件
+
+* **`tests/test_baseline_discovery.py`** (28 tests): baseline_discovery.py 純邏輯測試
+  * `TestExtractScalar` (8): valid/empty/None/NaN/Inf/non-numeric/missing-key/zero
+  * `TestPercentile` (7): p50 odd/even, p0, p100, single, empty, p95 interpolation
+  * `TestComputeStats` (5): normal/None-filter/all-None/empty/single
+  * `TestSuggestThreshold` (5): sufficient/insufficient/connections-ceil/zero-p95/note
+  * `TestDefaultMetrics` (3): required keys/tenant placeholder/known keys
 
 ---
 
@@ -195,6 +287,17 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * `make test-scenario-b ARGS=--with-load` — Scenario B 真實負載模式
 * `make test-scenario-e ARGS=--with-load` — Scenario E 多租戶隔離（可選真實負載）
 * `make test-scenario-f TENANT=db-a` — Scenario F HA 故障切換
+
+### 🧪 測試套件
+
+* **`tests/test_lib_helpers.py`** (34 tests): _lib.sh Python snippet 邏輯測試
+  * `TestUrlEncode` (6): simple/spaces/braces/single-quote/empty/complex-PromQL
+  * `TestPromQueryValueParsing` (6): normal/empty/malformed/missing-key/custom-default/float
+  * `TestGetAlertStatusParsing` (6): firing/pending/inactive/precedence/empty/malformed
+  * `TestGetCmValueParsing` (4): per-tenant-yaml/config-fallback/missing-key/empty
+  * `TestGetExporterMetricRegex` (5): integer/float/none/zero/large
+  * `TestLibShStructure` (4): file-exists/shebang/functions-present/stdin-pattern
+  * `TestScenarioScriptsSourceLib` (3): source-lib/set-pipefail/trap-cleanup
 
 ---
 

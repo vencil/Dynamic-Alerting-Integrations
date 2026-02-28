@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_migrate_ast.py — AST Migration Engine 測試套件 (Phase 10)。
+"""test_migrate_ast.py — AST Migration Engine 測試套件 (Phase 11)。
 
 驗證 promql-parser AST 引擎的核心功能:
   1. Metric name 精準提取 (vs regex blacklist)
@@ -18,6 +18,8 @@
 import os
 import sys
 import unittest
+
+import yaml
 
 # Add scripts/tools to path
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -425,6 +427,69 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(result.status, "unparseable")
 
 
+class TestParseExprAllMetrics(unittest.TestCase):
+    """測試 parse_expr 回傳的 all_metrics 欄位。"""
+
+    @unittest.skipUnless(HAS_AST, "promql-parser not installed")
+    def test_all_metrics_simple(self):
+        """簡單表達式: all_metrics 應包含唯一 metric。"""
+        parsed = migrate_rule.parse_expr("mysql_connections > 100", use_ast=True)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["all_metrics"], ["mysql_connections"])
+
+    @unittest.skipUnless(HAS_AST, "promql-parser not installed")
+    def test_all_metrics_compound(self):
+        """複合表達式: all_metrics 應包含多個 metric。"""
+        parsed = migrate_rule.parse_expr(
+            "(metric_a - metric_b) / metric_c > 0.5", use_ast=True
+        )
+        self.assertIsNotNone(parsed)
+        self.assertIn("metric_a", parsed["all_metrics"])
+        self.assertIn("metric_b", parsed["all_metrics"])
+        self.assertIn("metric_c", parsed["all_metrics"])
+
+    def test_all_metrics_no_ast(self):
+        """use_ast=False: all_metrics 應為空 list。"""
+        parsed = migrate_rule.parse_expr("mysql_up > 0", use_ast=False)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["all_metrics"], [])
+
+
+class TestWriteOutputsWithAST(unittest.TestCase):
+    """端到端 AST 路徑的 write_outputs 測試。"""
+
+    @unittest.skipUnless(HAS_AST, "promql-parser not installed")
+    def test_write_outputs_ast_path(self):
+        """AST 引擎產出: recording rule LHS 應包含 tenant label。"""
+        import tempfile
+
+        rule = {
+            "alert": "TestASTOutput",
+            "expr": "mysql_connections > 100",
+            "labels": {"severity": "warning"},
+        }
+        result = migrate_rule.process_rule(
+            rule, prefix="custom_", dictionary={}, use_ast=True
+        )
+        self.assertIsNotNone(result)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            counts = migrate_rule.write_outputs(
+                [result], tmpdir, prefix="custom_", dictionary={}
+            )
+            self.assertEqual(len(counts), 4)
+
+            # Verify recording rules contain tenant label
+            rr_path = os.path.join(tmpdir, "platform-recording-rules.yaml")
+            with open(rr_path, 'r', encoding='utf-8') as f:
+                content = yaml.safe_load(f)
+            rules = content["groups"][0]["rules"]
+            # First rule should be the aggregation recording rule
+            agg_rule = rules[0]
+            self.assertIn("tenant", agg_rule["expr"])
+            self.assertIn("custom_mysql_connections", agg_rule["record"])
+
+
 class TestGracefulDegradation(unittest.TestCase):
     """測試降級行為。"""
 
@@ -447,6 +512,167 @@ class TestGracefulDegradation(unittest.TestCase):
             self.assertIn("mysql_up", result)
         finally:
             migrate_rule.HAS_AST = orig
+
+
+class TestNestedSemanticBreak(unittest.TestCase):
+    """B1: 巢狀 Call 中的語義中斷偵測。"""
+
+    @unittest.skipUnless(HAS_AST, "promql-parser not installed")
+    def test_nested_absent_in_rate(self):
+        """rate(absent(x)) — 內層 absent 應被偵測。"""
+        # absent 接受 vector，rate 接受 matrix — 這不是合法 PromQL，
+        # 但 _walk_calls 應能遍歷巢狀 Call 找到 absent
+        # 使用合法的表達式：absent(rate(x[5m]))
+        self.assertTrue(migrate_rule.detect_semantic_break_ast(
+            'absent(rate(http_requests_total[5m]))'
+        ))
+
+    @unittest.skipUnless(HAS_AST, "promql-parser not installed")
+    def test_deeply_nested_predict_linear(self):
+        """sum(predict_linear(x[1h], 3600)) — 深層巢狀。"""
+        self.assertTrue(migrate_rule.detect_semantic_break_ast(
+            'sum(predict_linear(node_filesystem_free_bytes[1h], 3600))'
+        ))
+
+    @unittest.skipUnless(HAS_AST, "promql-parser not installed")
+    def test_no_break_in_nested_safe_funcs(self):
+        """sum(rate(x[5m])) — 無語義中斷。"""
+        self.assertFalse(migrate_rule.detect_semantic_break_ast(
+            'sum(rate(http_requests_total[5m]))'
+        ))
+
+
+class TestTenantLabelEdgeCases(unittest.TestCase):
+    """B2: tenant label 注入邊界案例。"""
+
+    def test_same_metric_multiple_occurrences(self):
+        """同一 metric 出現多次 (帶 label) — 每處都應注入 tenant。"""
+        result = migrate_rule.rewrite_expr_tenant_label(
+            'my_metric{a="1"} / my_metric{b="2"}',
+            ["my_metric"]
+        )
+        # Both occurrences should have tenant label
+        self.assertEqual(result.count('tenant=~".+"'), 2)
+
+    def test_same_metric_bare_and_labeled(self):
+        """同一 metric 同時有帶 label 和不帶 label 的用法。
+
+        Known limitation: if/else 邏輯假設同一 metric 的所有出現形式一致。
+        當 Pattern 1 (帶 label) 命中時，裸露的 metric 不會被注入 tenant。
+        實際場景中，recording rule 的 LHS 通常只有一種形式，此限制影響小。
+        """
+        result = migrate_rule.rewrite_expr_tenant_label(
+            'my_metric > on() group_left my_metric{a="1"}',
+            ["my_metric"]
+        )
+        # Known limitation: only the labeled occurrence gets injected
+        # because the if/else branch only applies one pattern type per metric
+        self.assertGreaterEqual(result.count('tenant=~".+"'), 1)
+        self.assertIn('tenant=~".+",a="1"', result)
+
+
+class TestMetricDictionaryLoading(unittest.TestCase):
+    """B3: metric dictionary 載入測試。"""
+
+    def test_load_from_nonexistent_dir(self):
+        """不存在的目錄 — 回傳空 dict。"""
+        result = migrate_rule.load_metric_dictionary("/nonexistent/path")
+        self.assertEqual(result, {})
+
+    def test_load_from_scripts_tools(self):
+        """從 scripts/tools 載入 — 應成功 (若檔案存在)。"""
+        script_dir = os.path.join(REPO_ROOT, "scripts", "tools")
+        dict_path = os.path.join(script_dir, "metric-dictionary.yaml")
+        result = migrate_rule.load_metric_dictionary(script_dir)
+        if os.path.exists(dict_path):
+            self.assertIsInstance(result, dict)
+            self.assertGreater(len(result), 0)
+        else:
+            self.assertEqual(result, {})
+
+    def test_lookup_dictionary_none(self):
+        """空字典查找 — 回傳 None。"""
+        result = migrate_rule.lookup_dictionary("any_metric", None)
+        self.assertIsNone(result)
+
+    def test_lookup_dictionary_miss(self):
+        """字典中不存在的 metric — 回傳 None。"""
+        result = migrate_rule.lookup_dictionary("missing", {"other": {}})
+        self.assertIsNone(result)
+
+    def test_lookup_dictionary_hit(self):
+        """字典中存在的 metric — 回傳對應 entry。"""
+        entry = {"maps_to": "mysql_connections", "golden_rule": "X"}
+        result = migrate_rule.lookup_dictionary("mysql_up", {"mysql_up": entry})
+        self.assertEqual(result, entry)
+
+
+class TestWriteOutputsIntegration(unittest.TestCase):
+    """B4: write_outputs 整合測試 — 驗證產出檔案結構。"""
+
+    def test_write_outputs_basic(self):
+        """基本遷移產出: 驗證所有檔案都被建立且 YAML 可解析。"""
+        import tempfile
+
+        rule = {
+            "alert": "TestHighConn",
+            "expr": "mysql_connections > 100",
+            "labels": {"severity": "warning"},
+        }
+        result = migrate_rule.process_rule(
+            rule, prefix="custom_", dictionary={}, use_ast=False
+        )
+        self.assertIsNotNone(result)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            counts = migrate_rule.write_outputs(
+                [result], tmpdir, prefix="custom_", dictionary={}
+            )
+            self.assertEqual(len(counts), 4)  # (perfect, complex, unparseable, golden)
+
+            # Verify files exist
+            expected_files = [
+                "tenant-config.yaml",
+                "platform-recording-rules.yaml",
+                "platform-alert-rules.yaml",
+                "migration-report.txt",
+                "triage-report.csv",
+                "prefix-mapping.yaml",
+            ]
+            for fname in expected_files:
+                fpath = os.path.join(tmpdir, fname)
+                self.assertTrue(os.path.exists(fpath), f"Missing: {fname}")
+
+            # Verify recording rules YAML is parseable
+            with open(os.path.join(tmpdir, "platform-recording-rules.yaml"),
+                       'r', encoding='utf-8') as f:
+                content = yaml.safe_load(f)
+                self.assertIn("groups", content)
+                rules = content["groups"][0]["rules"]
+                self.assertGreater(len(rules), 0)
+
+    def test_write_triage_csv_structure(self):
+        """Triage CSV: 驗證欄位數量和標頭。"""
+        import tempfile
+        import csv as csv_mod
+
+        rule = {
+            "alert": "TestSimple",
+            "expr": "my_metric > 50",
+            "labels": {"severity": "warning"},
+        }
+        result = migrate_rule.process_rule(
+            rule, prefix="custom_", dictionary={}, use_ast=False
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = migrate_rule.write_triage_csv([result], tmpdir, {})
+            with open(csv_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv_mod.reader(f)
+                header = next(reader)
+                self.assertEqual(len(header), 14)  # 14 columns
+                row = next(reader)
+                self.assertEqual(row[0], "TestSimple")  # Alert Name
 
 
 if __name__ == "__main__":

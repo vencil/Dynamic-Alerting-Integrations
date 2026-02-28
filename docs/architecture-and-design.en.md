@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.11.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.12.0).
 
 **This document covers:**
 - System architecture and core design principles
@@ -871,17 +871,17 @@ flowchart TD
 
 The following items are listed in priority order. Items marked `[Backlog Bx]` correspond to the backlog IDs in CLAUDE.md.
 
-### 10.1 Regex Dimension Thresholds `[B1]`
+### 10.1 ~~Regex Dimension Thresholds~~ `[B1]` — ✅ Completed (v0.12.0)
 
-Currently, threshold keys use exact matching (`tablespace: "USERS"`). In enterprise Oracle/DB2 environments, there can be dozens of tablespaces, making per-key configuration impractical. This item adds regex matching support (`tablespace=~"SYS.*"`), allowing a single rule to cover multiple dimension values. Requires changes to the exporter Go code's config parser and metric generation logic.
+> **Completed in v0.12.0.** Config parser extended to support `=~` operator (e.g., `tablespace=~"SYS.*"`). Regex patterns are output as `_re` suffixed labels on Prometheus metrics. PromQL recording rules use `label_replace` + `=~` for actual matching at query time. This design keeps the exporter as a pure config→metric converter without external data dependencies.
 
 ### 10.2 Oracle / DB2 Rule-Pack Templates `[B3]`
 
 Depends on B1 completion. Provides default rule-packs for Oracle (tablespace utilization, session count) and DB2 (lock wait, bufferpool hit ratio), enabling enterprise DBAs to use them out of the box.
 
-### 10.3 Scheduled Thresholds `[B4]`
+### 10.3 ~~Scheduled Thresholds~~ `[B4]` — ✅ Completed (v0.12.0)
 
-Database backup windows cause expected CPU/IO spikes, but currently trigger alerts. This item provides native scheduled threshold overrides (e.g., "raise connections threshold to 200 daily from 02:00–04:00"). A workaround using CronJob + `patch_config.py` is available today.
+> **Completed in v0.12.0.** `ScheduledValue` custom YAML type supports dual format: scalar strings (backward compatible) and structured `{default, overrides[{window, value}]}`. Time windows are UTC-only `HH:MM-HH:MM` format with cross-midnight support (e.g., `22:00-06:00`). `ResolveAt(now time.Time)` ensures testability. 45 test cases cover boundary conditions.
 
 ### 10.4 Benchmark Under-Load Mode `[B2]`
 
@@ -896,7 +896,7 @@ Currently, `make benchmark` only measures hot-reload latency in idle state. This
 > - `rewrite_expr_tenant_label()` — `tenant=~".+"` label injection
 > - `detect_semantic_break_ast()` — detects `absent()` / `predict_linear()` and other semantic-breaking functions
 > - Graceful degradation: automatically falls back to regex when promql-parser is unavailable or parsing fails
-> - 38 test cases covering compound `and/or/unless`, complex regex labels, aggregation+offset
+> - 54 test cases covering compound `and/or/unless`, complex regex labels, aggregation+offset, nested semantic break detection, parse_expr all_metrics validation, dictionary loading, write_outputs integration (including AST path)
 >
 > CLI adds `--no-ast` flag to force regex-only mode.
 
@@ -941,6 +941,6 @@ Support multi-cluster architecture:
 
 ---
 
-**Document version:** v0.11.0 — 2026-02-27
-**Last updated:** Phase 10 AST Migration Engine (promql-parser), Test Coverage Matrix & Flowcharts
+**Document version:** v0.12.0 — 2026-02-28
+**Last updated:** Phase 11 Exporter Core Expansion — B1 Regex Dimensions + B4 Scheduled Thresholds (ScheduledValue, ResolveAt, _re suffix labels)
 **Maintainer:** Platform Engineering Team

@@ -180,6 +180,31 @@ docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash -c "\
 
 **注意：** `helm upgrade --force` 與 server-side apply 互斥，不要用 `--force`。
 
+## Cowork VM 直接執行 vs docker exec
+
+Cowork 環境的 Linux VM 已有 Python3 + pytest，**Python 測試可直接在 VM 內跑**（不需 docker exec）：
+
+```bash
+# ✅ Cowork VM 直接執行 Python tests
+cd /sessions/.../mnt/vibe-k8s-lab && python3 -m pytest tests/ -v
+
+# Go tests 仍需 docker exec（Go 工具鏈僅在 Dev Container 內）
+docker exec -w /workspaces/vibe-k8s-lab/components/threshold-exporter/app \
+  vibe-dev-container bash -c "go test ./... -v > /workspaces/vibe-k8s-lab/.go-test.txt 2>&1"
+```
+
+### Go test count 擷取
+
+`--- PASS` 前綴的三個 dash 會被 grep 誤解為 option：
+
+```bash
+# ❌ grep 把 --- 當 option
+grep -cF "--- PASS" .go-test.txt
+
+# ✅ 用 -- 終止 option 解析
+grep -cF -- "--- PASS" .go-test.txt
+```
+
 ## 指令快速參考
 
 ```bash

@@ -144,6 +144,17 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 			return
 		}
 
+		// Determine resolve time: ?at=2006-01-02T15:04:05Z for debugging scheduled overrides
+		resolveTime := time.Now()
+		if atParam := r.URL.Query().Get("at"); atParam != "" {
+			if parsed, err := time.Parse(time.RFC3339, atParam); err == nil {
+				resolveTime = parsed
+				fmt.Fprintf(w, "Resolve at:    %s (overridden)\n", resolveTime.Format(time.RFC3339))
+			} else {
+				fmt.Fprintf(w, "Resolve at:    now (invalid ?at= param: %v)\n", err)
+			}
+		}
+
 		fmt.Fprintf(w, "\nDefaults (%d metrics):\n", len(cfg.Defaults))
 		for k, v := range cfg.Defaults {
 			fmt.Fprintf(w, "  %s: %.0f\n", k, v)
@@ -153,25 +164,41 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 		for tenant, metrics := range cfg.Tenants {
 			fmt.Fprintf(w, "  %s:\n", tenant)
 			for k, v := range metrics {
-				fmt.Fprintf(w, "    %s: %s\n", k, v)
+				if len(v.Overrides) > 0 {
+					fmt.Fprintf(w, "    %s: %s (+ %d time overrides)\n", k, v.Default, len(v.Overrides))
+				} else {
+					fmt.Fprintf(w, "    %s: %s\n", k, v.Default)
+				}
 			}
 		}
 
-		// Show resolved state
+		// Show resolved state at the determined time
 		fmt.Fprintf(w, "\nResolved thresholds:\n")
-		resolved := cfg.Resolve()
+		resolved := cfg.ResolveAt(resolveTime)
 		for _, t := range resolved {
+			// Format label pairs for display (exact + regex)
+			var pairs []string
 			if len(t.CustomLabels) > 0 {
-				// Format custom labels as {key="value", ...}
 				keys := make([]string, 0, len(t.CustomLabels))
 				for k := range t.CustomLabels {
 					keys = append(keys, k)
 				}
 				sort.Strings(keys)
-				var pairs []string
 				for _, k := range keys {
 					pairs = append(pairs, fmt.Sprintf("%s=%q", k, t.CustomLabels[k]))
 				}
+			}
+			if len(t.RegexLabels) > 0 {
+				keys := make([]string, 0, len(t.RegexLabels))
+				for k := range t.RegexLabels {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					pairs = append(pairs, fmt.Sprintf("%s=~%q", k, t.RegexLabels[k]))
+				}
+			}
+			if len(pairs) > 0 {
 				fmt.Fprintf(w, "  tenant=%s metric=%s{%s} value=%.0f severity=%s component=%s\n",
 					t.Tenant, t.Metric, strings.Join(pairs, ", "), t.Value, t.Severity, t.Component)
 			} else {

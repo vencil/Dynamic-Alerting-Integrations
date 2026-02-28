@@ -58,7 +58,7 @@ kill_port() {
 # --- URL encode（跨平台：python3 → printf fallback） ---
 url_encode() {
   if command -v python3 &>/dev/null; then
-    python3 -c "import urllib.parse; print(urllib.parse.quote('$1'))" 2>/dev/null
+    echo "$1" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip()))" 2>/dev/null
   else
     echo "$1" | sed 's/ /%20/g; s/{/%7B/g; s/}/%7D/g; s/=/%3D/g; s/"/%22/g; s/~/%7E/g'
   fi

@@ -223,6 +223,57 @@ Kind 單節點環境下，`composite` 模式（connections + cpu 同時啟動）
 
 `--with-load` 模式的意義：展示「相同閾值下，真實負載觸發 alert」，比手動壓低閾值更具說服力。
 
+## Shell → Python Snippet 注入防護
+
+`_lib.sh` 多處用 inline Python 解析 JSON/YAML。傳入參數時 **禁止** 直接嵌入 shell 變數到 Python string literal：
+
+```bash
+# ❌ $1 含單引號或特殊字元時會注入/斷行
+python3 -c "import urllib.parse; print(urllib.parse.quote('$1'))"
+
+# ✅ 透過 stdin 傳遞，徹底隔離 shell 與 Python
+echo "$1" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip()))"
+```
+
+**適用場景**: `url_encode`、任何接受使用者輸入（PromQL 表達式等）的 inline Python。`get_cm_value` 的 `${t}` / `${key}` 因來源為已知安全值（tenant ID、metric key），實務風險低但仍須留意。
+
+## Python 測試碼品質規範
+
+Self-review 中反覆發現的 anti-pattern：
+
+| 問題 | 修正 |
+|------|------|
+| `import re` 在 class body 或 method 內 | 提升至模組層級 |
+| `import yaml` 在多個 test method 內重複 | 提升至模組層級 |
+| 未使用的 `import` (如 `tempfile`) | 移除，或用 `# noqa: F401` 標註 |
+
+**原則**: 所有 import 放模組頂部（標準庫 → 第三方 → 本地），test method 內不應有 import。
+
+## CI / Build 同步守衛
+
+CI workflow 與 build script 的工具清單容易 drift（如 `release-tools.yaml` 漏掉 `lint_custom_rules.py`）。用 **守衛測試** 自動偵測：
+
+```python
+class TestCIWorkflowSync(unittest.TestCase):
+    def test_ci_matches_build_sh(self):
+        build_tools = self._parse_tools_from_file(build_sh, "TOOL_FILES=(", ")")
+        ci_tools = self._parse_tools_from_file(ci_yaml, "TOOLS=(", ")")
+        missing = build_tools - ci_tools
+        self.assertEqual(missing, set(), f"Tools in build.sh but missing from CI: {missing}")
+```
+
+同理，`bump_docs.py` 的 rules 應涵蓋所有帶版號的文件。新增帶版號的文件時，同步新增 bump_docs rule + 守衛測試。
+
+## 文件計數驗證流程
+
+CHANGELOG / CLAUDE.md 的測試計數必須在 **pytest 執行後** 才寫入：
+
+1. 寫完測試 → `pytest -v` 取得實際 collected 數
+2. 逐 class 加總交叉驗證（如 8+7+5+5+3=28）
+3. 更新 CHANGELOG + CLAUDE.md
+
+**反面案例**: v0.8.0 R1 先寫 "25 tests" 後才跑 pytest，實際為 28 — 被 R1 自我驗證攔截。
+
 ## Shell 測試腳本陷阱
 
 ### grep 正則特殊字元 (PromQL)
@@ -255,6 +306,7 @@ grep -F "max by(tenant)" file.yaml
 | Go G112 | `ReadHeaderTimeout` 必設 | `grep ReadHeaderTimeout components/threshold-exporter/app/main.go` |
 | Python CWE-276 | 寫檔後必須 `os.chmod(path, 0o600)` | `grep -rn "os.chmod" scripts/tools/` |
 | Python B602 | `subprocess` 禁止 `shell=True` | `grep -rn "shell=True" scripts/` (期望: 0 match) |
+| Python 編碼 | `open()` 必須帶 `encoding="utf-8"` | `grep -rn "open(" scripts/tools/ \| grep -v encoding` (期望: 0 match) |
 
 **全部 10 個 Python 工具均已通過 SAST 驗證** (v0.8.0)：patch_config, check_alert, diagnose, migrate_rule, scaffold_tenant, validate_migration, offboard_tenant, deprecate_rule, baseline_discovery, metric-dictionary.yaml (非 Python，不適用)。
 

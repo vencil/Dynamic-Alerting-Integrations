@@ -103,7 +103,7 @@ def main():
     if command == "--version":
         version_file = os.path.join(TOOLS_DIR, "VERSION")
         if os.path.isfile(version_file):
-            with open(version_file) as f:
+            with open(version_file, encoding="utf-8") as f:
                 print(f"da-tools {f.read().strip()}")
         else:
             print("da-tools (dev)")

@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v0.11.0)
+## 專案概覽 (v0.12.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
@@ -17,22 +17,17 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 3 | v0.4.0 | Projected Volume 5 Rule Packs, scaffold_tenant, SAST 修復 |
 | 4 | v0.5.0 | HA ×2, PDB, Anti-Affinity, Platform Self-Monitoring (第 6 個 Rule Pack) |
 | 5 | v0.6.0 | migrate_rule v3 (Triage/Prefix/Dictionary), Shadow Monitoring, offboard/deprecate 工具 |
-| 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新 |
-| 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一 |
-| 8 | v0.9.0 | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖 |
-| 9 | v0.10.0 | 三層治理模型 + RnR + CI deny-list linting + 文件重整 |
-| 10 | **v0.11.0** | AST 遷移引擎 (promql-parser) — migrate_rule v4, tenant label 注入, 38 測試案例 |
+| 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新, 34 測試案例 |
+| 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一, 28 測試案例 |
+| 8 | v0.9.0 | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖, 15 測試案例 |
+| 9 | v0.10.0 | 三層治理模型 + RnR + CI deny-list linting + 文件重整, 51 測試案例 |
+| 10 | **v0.11.0** | AST 遷移引擎 (promql-parser) — migrate_rule v4, tenant label 注入, 54 測試案例 |
+| 11 | **v0.12.0** | Exporter 核心擴展 — B1 Regex 維度閾值 (`=~` + `_re` label) + B4 排程式閾值 (ScheduledValue + ResolveAt), 56 測試案例 |
 
 ## 規劃中 Phases
 
-### Phase 11 (v0.12.0) — Exporter 核心擴展 (B1 + B4)
-- B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — config parser 擴展支援 regex matcher
-- B4: 排程式閾值 (備份窗口) — UTC-only 整點時段 override（`schedule: [{hours: "01:00-09:00", value: "1000"}]`），不支援 Cron 語法，時區轉換由 Tenant 自行處理
-- 兩者合併：統一重構 exporter config 解析邏輯，避免改兩次
-- 對應 Scenario / 測試案例更新
-
 ### Phase 12 (v0.13.0) — DB Rule Pack 擴展 + Benchmark 強化 (B3 + B2)
-- B3: Oracle / DB2 rule-pack 模板 (依賴 B1 的 regex 維度閾值)
+- B3: Oracle / DB2 rule-pack 模板 (B1 regex 維度閾值已完成，可直接使用)
 - B2: benchmark `--under-load` 模式 — 在新 rule-pack + 維度閾值到位後跑 benchmark 最有意義
 - scaffold_tenant 擴展支援新 DB 類型
 

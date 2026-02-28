@@ -1,6 +1,6 @@
-# Threshold Exporter (v0.11.0)
+# Threshold Exporter (v0.12.0)
 
-> **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤。
+> **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤 + regex 維度 + 排程式閾值。
 >
 > **其他文件：** [README](../../README.md) (概覽) · [Migration Guide](../../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../../docs/architecture-and-design.md) (技術深度) · [Rule Packs](../../rule-packs/README.md) (規則包目錄)
 
@@ -63,6 +63,45 @@ tenants:
 - 不支援 `_critical` 後綴，改用 `"value:critical"` 語法覆寫 severity
 - Prometheus 輸出會包含額外標籤：`user_threshold{..., queue="tasks", priority="high"} 500`
 
+### Regex 維度標籤 (Phase 11 B1)
+
+支援在 metric key 中使用 `=~` 運算子指定 regex 匹配模式：
+
+```yaml
+"oracle_tablespace{tablespace=~'SYS.*'}": "95"
+"oracle_ts{env='prod', tablespace=~'TEMP.*'}": "200"
+```
+
+**重要規則**：
+- Regex pattern 以 `_re` 後綴 label 輸出：`user_threshold{..., tablespace_re="SYS.*"} 95`
+- 實際匹配由 PromQL recording rules 透過 `label_replace` + `=~` 完成
+- 可混合使用 exact (`=`) 和 regex (`=~`) label matcher
+- Exporter 不進行實際 regex 匹配，僅輸出 pattern
+
+### 排程式閾值 (Phase 11 B4)
+
+支援在特定 UTC 時間窗口覆蓋閾值，適用於備份窗口等場景：
+
+```yaml
+tenants:
+  db-a:
+    mysql_connections:                # 結構化格式
+      default: "70"
+      overrides:
+        - window: "01:00-09:00"       # UTC 備份窗口
+          value: "1000"               # 提升閾值
+        - window: "22:00-06:00"       # UTC 跨午夜窗口
+          value: "disable"            # 停用告警
+    mysql_cpu: "80"                   # 純量格式 (向後相容)
+```
+
+**重要規則**：
+- 窗口格式：`HH:MM-HH:MM`（UTC-only），支援跨午夜
+- 開始時間 inclusive、結束時間 exclusive
+- 多個窗口重疊時，**第一個匹配** 的勝出
+- `value` 支援所有現有語法：數值、`disable`、`"70:critical"`
+- 純量字串格式完全向後相容，不需修改現有配置
+
 ### 邊界規則
 
 | 檔案類型 | 允許的區塊 | 違規行為 |
@@ -109,12 +148,24 @@ Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯�
 - record: tenant:alert_threshold:connections
   expr: max by(tenant) (user_threshold{metric="connections"})
 
-# 維度閾值 — 必須包含維度 label，否則 group_left 匹配會失敗
+# 維度閾值 (exact label) — 必須包含維度 label
 - record: tenant:alert_threshold:redis_queue_length
   expr: max by(tenant, queue) (user_threshold{metric="redis_queue_length"})
+
+# Regex 維度閾值 (B1) — 透過 label_replace 將 _re pattern 轉為實際匹配
+# Step 1: 提取 regex pattern
+- record: tenant:alert_threshold:tablespace
+  expr: max by(tenant, tablespace_re) (user_threshold{metric="tablespace", tablespace_re!=""})
+
+# Step 2: Alert rule 中使用 =~ 匹配實際值
+# oracle_tablespace_usage > on(tenant) group_left()
+#   (tenant:alert_threshold:tablespace{tablespace_re=~"<pattern>"})
+# 具體實現需根據實際 metric label 結構設計 recording rule chain
 ```
 
 > **重要**: 當租戶使用維度標籤時，對應的 Recording Rule 與 Alert Rule 都必須在 `by()` / `on()` 中包含該維度 label。詳見 [migration-guide.md §11 平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
+
+> **B4 排程式閾值**: Recording rules 不需要特別調整。`ScheduledValue` 的時間窗口在每次 scrape 時由 exporter 即時解析，recording rule 自動取得當下有效的閾值。
 
 Service Discovery 透過 `prometheus.io/scrape: "true"` annotation 自動發現。
 

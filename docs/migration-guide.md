@@ -147,7 +147,7 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 helm upgrade --install threshold-exporter ./components/threshold-exporter \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=0.5.0
+  --set image.tag=0.12.0
 ```
 
 ### 選項 B: 本地建置

@@ -59,6 +59,21 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 			}
 		}
 
+		// Phase 11 B1: append regex labels with _re suffix for PromQL matching.
+		// Exporter outputs the regex pattern as a label value; recording rules
+		// use label_replace + =~ to match actual metrics at query time.
+		if len(t.RegexLabels) > 0 {
+			keys := make([]string, 0, len(t.RegexLabels))
+			for k := range t.RegexLabels {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				labelNames = append(labelNames, k+"_re")
+				labelValues = append(labelValues, t.RegexLabels[k])
+			}
+		}
+
 		desc := prometheus.NewDesc(
 			"user_threshold",
 			"User-defined alerting threshold (config-driven, three-state: custom/default/disable)",

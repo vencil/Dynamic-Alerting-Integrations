@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.11.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.12.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念
@@ -871,17 +871,17 @@ flowchart TD
 
 以下項目依優先序排列。標記 `[Backlog Bx]` 的項目對應 CLAUDE.md 中的 Backlog 編號。
 
-### 10.1 Regex 維度閾值 `[B1]`
+### 10.1 ~~Regex 維度閾值~~ `[B1]` — ✅ 已完成 (v0.12.0)
 
-目前 threshold key 為精確比對（`tablespace: "USERS"`）。企業 Oracle/DB2 環境中，tablespace 數量可能數十個，逐一配置不現實。此項目將支援 regex 匹配（`tablespace=~"SYS.*"`），讓單條規則覆蓋多個維度值。需要修改 exporter Go 程式碼的 config parser 與 metric 產生邏輯。
+> **已於 v0.12.0 實現。** Config parser 擴展支援 `=~` 運算子（如 `tablespace=~"SYS.*"`），regex pattern 作為 `_re` 後綴 label 輸出至 Prometheus metric，由 PromQL recording rules 透過 `label_replace` + `=~` 在查詢時完成實際匹配。此設計保持 exporter 為純 config→metric 轉換器，不引入外部資料依賴。
 
 ### 10.2 Oracle / DB2 Rule-Pack 模板 `[B3]`
 
 依賴 B1 完成。提供針對 Oracle（tablespace utilization、session count）和 DB2（lock wait、bufferpool hit ratio）的預設 rule-pack，讓企業 DBA 可以開箱即用。
 
-### 10.3 排程式閾值 `[B4]`
+### 10.3 ~~排程式閾值~~ `[B4]` — ✅ 已完成 (v0.12.0)
 
-資料庫備份窗口期間 CPU/IO 飆高屬正常行為，但目前會觸發告警。此項目提供原生的排程式閾值覆蓋（如「每日 02:00–04:00 connections 閾值提升至 200」）。目前可用 CronJob + `patch_config.py` 作為 workaround。
+> **已於 v0.12.0 實現。** `ScheduledValue` 自訂 YAML 型別支援雙格式：純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`。時間窗口為 UTC-only `HH:MM-HH:MM` 格式，支援跨午夜（如 `22:00-06:00`）。`ResolveAt(now time.Time)` 確保可測試性，45 個測試案例覆蓋邊界條件。
 
 ### 10.4 Benchmark Under-Load 模式 `[B2]`
 
@@ -896,7 +896,7 @@ flowchart TD
 > - `rewrite_expr_tenant_label()` — `tenant=~".+"` label 注入
 > - `detect_semantic_break_ast()` — 偵測 `absent()` / `predict_linear()` 等語意中斷函式
 > - Graceful degradation：promql-parser 未安裝或解析失敗時，自動降級至 regex 路徑
-> - 38 個測試案例覆蓋 compound `and/or/unless`、complex regex labels、aggregation+offset
+> - 54 個測試案例覆蓋 compound `and/or/unless`、complex regex labels、aggregation+offset、巢狀語義中斷、parse_expr all_metrics 驗證、dictionary 載入、write_outputs 整合 (含 AST 路徑)
 >
 > CLI 新增 `--no-ast` 旗標可強制回到 regex 模式。
 
@@ -941,6 +941,6 @@ flowchart TD
 
 ---
 
-**文件版本：** v0.11.0 — 2026-02-27
-**最後更新：** Phase 10 AST Migration Engine (promql-parser), Test Coverage Matrix & Flowcharts
+**文件版本：** v0.12.0 — 2026-02-28
+**最後更新：** Phase 11 Exporter Core Expansion — B1 Regex Dimensions + B4 Scheduled Thresholds (ScheduledValue, ResolveAt, _re suffix labels)
 **維護者：** Platform Engineering Team

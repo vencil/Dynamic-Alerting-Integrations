@@ -77,6 +77,14 @@ def _build_rules():
         "whole_file": True,
     })
 
+    # da-tools README version header
+    tools_rules.append({
+        "file": "components/da-tools/README.md",
+        "desc": "da-tools README version header",
+        "pattern": r"\*\*版本\*\*：[0-9]+\.[0-9]+\.[0-9]+（獨立版號",
+        "replacement": lambda v: f"**版本**：{v}（獨立版號",
+    })
+
     # da-tools README version strategy table
     tools_rules.append({
         "file": "components/da-tools/README.md",
@@ -120,11 +128,6 @@ def _build_rules():
     ]
 
     # --- platform version rules ---
-    platform_doc_files = [
-        ("docs/architecture-and-design.md", r"v[0-9]+\.[0-9]+\.[0-9]+", "header+footer"),
-        ("docs/architecture-and-design.en.md", r"v[0-9]+\.[0-9]+\.[0-9]+", "header+footer"),
-        ("components/threshold-exporter/README.md", r"v[0-9]+\.[0-9]+\.[0-9]+", "header"),
-    ]
     platform_rules = []
 
     # Doc footers: **文件版本：** vX.Y.Z or **Document version:** vX.Y.Z
