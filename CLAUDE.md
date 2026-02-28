@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v0.9.0)
+## 專案概覽 (v0.10.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
@@ -19,15 +19,44 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 5 | v0.6.0 | migrate_rule v3 (Triage/Prefix/Dictionary), Shadow Monitoring, offboard/deprecate 工具 |
 | 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新 |
 | 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一 |
-| 8 | **v0.9.0** | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖 |
+| 8 | v0.9.0 | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖 |
+| 9 | **v0.10.0** | 三層治理模型 + RnR + CI deny-list linting + 文件重整 |
 
-## Backlog (以下均需核心改動)
-- B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — exporter Go 改動
-- B2: benchmark `--under-load` 模式
-- B3: Oracle / DB2 rule-pack 模板 (依賴 B1)
-- B4: 排程式閾值 (備份窗口) — workaround: CronJob + patch_config.py
-- B5: Log-based 錯誤偵測 (ORA-600) — 非 metrics 路線，另一產品方向
-- B6: migrate_rule AST 解析 — 現行 regex+triage 可運作，待真實遷移數據驗證 ROI
+## 規劃中 Phases
+
+### Phase 9 (v0.10.0) — 治理與文件重整
+- `docs/custom-rule-governance.md`：三層治理模型 (Standard / Pre-packaged / True Custom) + RnR 權責定義 + SLA 切割
+- CI deny-list linting script (`scripts/tools/lint_custom_rules.py`)：禁止危險 PromQL 語法、強制 tenant label
+- Playbook 遷移：`testing-playbook.md` / `windows-mcp-playbook.md` 移至 `docs/internal/`，與 user-facing 文件分離
+- README 文件導覽重排：按讀者旅程排序 (架構→部署→整合→遷移→治理→SOP→Rule Packs)
+- README 前置需求改寫：必要條件僅列 Docker Engine + kubectl；Dev Container 降為建議選項
+
+### Phase 10 (v0.11.0) — AST 遷移引擎
+- `migrate_rule.py` 核心升級：引入 promql-parser (Rust PyO3 binding) 取代 regex
+- 第一版範圍：AST 層級的 metric name 辨識 + prefix 替換 (`custom_`) + tenant label 注入
+- 巢狀 `and/or/unless` 遷移正確性測試案例
+- Triage mode 與 dry-run 保持相容
+
+### Phase 11 (v0.12.0) — Exporter 核心擴展 (B1 + B4)
+- B1: Regex 維度閾值 (`tablespace=~"SYS.*"`) — config parser 擴展支援 regex matcher
+- B4: 排程式閾值 (備份窗口) — UTC-only 整點時段 override（`schedule: [{hours: "01:00-09:00", value: "1000"}]`），不支援 Cron 語法，時區轉換由 Tenant 自行處理
+- 兩者合併：統一重構 exporter config 解析邏輯，避免改兩次
+- 對應 Scenario / 測試案例更新
+
+### Phase 12 (v0.13.0) — DB Rule Pack 擴展 + Benchmark 強化 (B3 + B2)
+- B3: Oracle / DB2 rule-pack 模板 (依賴 B1 的 regex 維度閾值)
+- B2: benchmark `--under-load` 模式 — 在新 rule-pack + 維度閾值到位後跑 benchmark 最有意義
+- scaffold_tenant 擴展支援新 DB 類型
+
+### Phase 13 (v0.14.0) — 敘事重寫
+- README 痛點對比表更新：納入治理維度 (從「自動化工具」升級到「多租戶監控治理平台」)
+- 商業價值主張重寫：整合 RnR 框架、三層治理、AST 遷移、多 DB 支援
+- `README.en.md` 同步更新
+- 確保所有文件用語風格一致 (客觀工程語言，不含推銷用語)
+
+## Backlog (不在近期 Phase 規劃內)
+- B5: Log-based 錯誤偵測 (ORA-600) — 非 metrics 路線，建議作為獨立 companion project
+  - 生態系解法：引導客戶用 grok_exporter / mtail 將 log 轉為 Prometheus metric，再由本平台接管閾值管理。可在 BYOP 整合指南補充附錄段落
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
@@ -45,9 +74,11 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `docs/architecture-and-design.md` | Platform Engineers | O(M) 推導 + Benchmark 在 §4.1–4.2 |
 | `docs/migration-guide.md` | Tenants, DevOps | 含遷移安全保證陳述 |
 | `docs/byo-prometheus-integration.md` | Platform Engineers, SREs | BYOP 最小整合 (tenant label、scrape、rule mount) + Operator 附錄 |
+| `docs/custom-rule-governance.md` | Platform Leads, Domain Experts, Tenant Tech Leads | 三層治理模型 + RnR 權責 + SLA 切割 + CI Linting |
 | `components/da-tools/README.md` | All | 可攜帶 CLI 容器：驗證整合、遷移規則、scaffold tenant |
 | `docs/shadow-monitoring-sop.md` | SRE, Platform Engineers | Shadow Monitoring 完整 SOP runbook |
-| `docs/testing-playbook.md` | Contributors | K8s 環境 + shell 陷阱 |
+| `docs/internal/testing-playbook.md` | Contributors (AI Agent) | K8s 環境 + shell 陷阱 |
+| `docs/internal/windows-mcp-playbook.md` | Contributors (AI Agent) | Dev Container 操作手冊 |
 | `rule-packs/README.md` | All | 含 `optional: true` 卸載文件 |
 | `components/threshold-exporter/README.md` | Developers | |
 
@@ -62,6 +93,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - `deprecate_rule.py <metric_key...> [--execute]`: Rule/Metric 下架 (三步自動化)
 - `baseline_discovery.py <--tenant NAME> [--duration S --interval S --metrics LIST]`: 負載觀測 + 閾值建議
 - `bump_docs.py [--platform VER] [--exporter VER] [--tools VER] [--check]`: 版號一致性管理 (三條版號線批次更新 + CI lint)
+- `lint_custom_rules.py <path...> [--policy FILE] [--ci]`: Custom Rule deny-list linter (治理合規檢查)
 - `metric-dictionary.yaml`: 啟發式指標對照字典
 
 ## 共用函式庫 (scripts/_lib.sh)
@@ -99,4 +131,4 @@ Scenario / benchmark 腳本透過 `source scripts/_lib.sh` 共用（demo.sh 有�
 - **Kubernetes MCP**: Context `kind-dynamic-alerting-cluster`（複雜操作常 timeout → fallback docker exec）
 - **Prometheus API**: 開發環境 `port-forward` + `localhost`；生產環境 K8s Service (`prometheus.monitoring.svc.cluster.local:9090`)
 - **檔案清理**: mounted workspace 無法從 VM 直接 rm → 用 `docker exec ... rm -f`（Cowork 環境需 `allow_cowork_file_delete`）
-- 🚨 **Playbooks**: Windows/MCP → `docs/windows-mcp-playbook.md` | K8s/測試 → `docs/testing-playbook.md`
+- 🚨 **Playbooks**: Windows/MCP → `docs/internal/windows-mcp-playbook.md` | K8s/測試 → `docs/internal/testing-playbook.md`

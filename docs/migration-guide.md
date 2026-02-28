@@ -58,7 +58,7 @@ python3 scripts/tools/scaffold_tenant.py --catalog
 
 > **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
 > ```bash
-> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:0.1.0 \
+> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:0.2.0 \
 >   scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 > ```
 
@@ -94,7 +94,7 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 
 > **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
 > ```bash
-> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:0.1.0 \
+> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:0.2.0 \
 >   migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
 > ```
 

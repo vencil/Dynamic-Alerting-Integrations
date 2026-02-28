@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.9.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.10.0).
 
 **This document covers:**
 - System architecture and core design principles
@@ -930,13 +930,12 @@ Support multi-cluster architecture:
 
 - **README.en.md** — Quick start and overview
 - **migration-guide.md** — Migration from traditional approach
+- **custom-rule-governance.md** — Multi-tenant custom rule governance model
 - **rule-packs/README.md** — Rule pack development and extension
 - **components/threshold-exporter/README.md** — Exporter internal implementation
-- **docs/testing-playbook.md** — K8s and testing troubleshooting
-- **docs/windows-mcp-playbook.md** — Windows/PowerShell compatibility
 
 ---
 
-**Document version:** v0.9.0 — 2026-02-27
+**Document version:** v0.10.0 — 2026-02-27
 **Last updated:** Phase 8 BYOP Integration, da-tools CLI, Test Coverage Matrix & Flowcharts
 **Maintainer:** Platform Engineering Team

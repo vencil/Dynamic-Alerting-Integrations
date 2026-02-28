@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.9.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.10.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念
@@ -930,13 +930,12 @@ flowchart TD
 
 - **README.md** — 快速開始與概述
 - **migration-guide.md** — 從傳統方案遷移
+- **custom-rule-governance.md** — 多租戶客製化規則治理規範
 - **rule-packs/README.md** — 規則包開發與擴展
 - **components/threshold-exporter/README.md** — 匯出器內部實現
-- **docs/testing-playbook.md** — K8s 與測試故障排查
-- **docs/windows-mcp-playbook.md** — Windows/PowerShell 相容性
 
 ---
 
-**文件版本：** v0.9.0 — 2026-02-27
+**文件版本：** v0.10.0 — 2026-02-27
 **最後更新：** Phase 8 BYOP Integration, da-tools CLI, Test Coverage Matrix & Flowcharts
 **維護者：** Platform Engineering Team

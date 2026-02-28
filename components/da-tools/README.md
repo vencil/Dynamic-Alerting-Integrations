@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs、Tenants (DevOps)
 > **Image**：`ghcr.io/vencil/da-tools`
-> **版本**：0.1.0（獨立版號，與 threshold-exporter 脫鉤）
+> **版本**：0.2.0（獨立版號，與 threshold-exporter 脫鉤）
 
 ---
 
@@ -23,13 +23,13 @@
 
 ```bash
 # 拉取 image
-docker pull ghcr.io/vencil/da-tools:0.1.0
+docker pull ghcr.io/vencil/da-tools:0.2.0
 
 # 查看說明
-docker run --rm ghcr.io/vencil/da-tools:0.1.0 --help
+docker run --rm ghcr.io/vencil/da-tools:0.2.0 --help
 
 # 查看版本
-docker run --rm ghcr.io/vencil/da-tools:0.1.0 --version
+docker run --rm ghcr.io/vencil/da-tools:0.2.0 --version
 ```
 
 ---
@@ -56,6 +56,7 @@ docker run --rm ghcr.io/vencil/da-tools:0.1.0 --version
 | `scaffold` | 產生 tenant 配置 | `--tenant <name> --db <types>` |
 | `offboard` | 下架 tenant 配置 | `<tenant>` |
 | `deprecate` | 標記指標為 disabled | `<metric_keys...>` |
+| `lint` | 檢查 Custom Rule 治理合規性 | `<path...>` |
 
 ---
 
@@ -72,20 +73,20 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 # 1. 確認 alert 狀態
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:0.1.0 \
+  ghcr.io/vencil/da-tools:0.2.0 \
   check-alert MariaDBHighConnections db-a
 
 # 2. 觀測指標並取得閾值建議
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:0.1.0 \
+  ghcr.io/vencil/da-tools:0.2.0 \
   baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:0.1.0 \
+  ghcr.io/vencil/da-tools:0.2.0 \
   validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
@@ -96,7 +97,7 @@ docker run --rm --network=host \
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/my-rules.yml \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:0.1.0 \
+  ghcr.io/vencil/da-tools:0.2.0 \
   migrate /data/my-rules.yml -o /data/output --dry-run --triage
 
 # 產出：
@@ -110,7 +111,7 @@ docker run --rm \
 # 非互動式產生 tenant 配置
 docker run --rm \
   -v $(pwd)/configs:/data/configs \
-  ghcr.io/vencil/da-tools:0.1.0 \
+  ghcr.io/vencil/da-tools:0.2.0 \
   scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/configs
 ```
 
@@ -159,7 +160,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:0.1.0
+          image: ghcr.io/vencil/da-tools:0.2.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"
@@ -172,13 +173,13 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v0.9.0+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v0.10.0+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v0.9.0 | `v0.9.0` | 文件 + CI/CD + 流程圖 |
+| 平台文件 | v0.10.0 | `v0.9.0` | 文件 + CI/CD + 流程圖 |
 | threshold-exporter | v0.5.0 | `exporter/v0.5.0` | Go binary |
-| **da-tools** | **v0.1.0** | **`tools/v0.1.0`** | **Python CLI 工具集** |
+| **da-tools** | **v0.2.0** | **`tools/v0.2.0`** | **Python CLI 工具集** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。
 
@@ -195,6 +196,7 @@ CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變
 | `scaffold_tenant.py` | `scaffold` | `scripts/tools/` |
 | `offboard_tenant.py` | `offboard` | `scripts/tools/` |
 | `deprecate_rule.py` | `deprecate` | `scripts/tools/` |
+| `lint_custom_rules.py` | `lint` | `scripts/tools/` |
 | `metric-dictionary.yaml` | （migrate 內部參照） | `scripts/tools/` |
 
 > **未收錄**：`diagnose.py` 和 `patch_config.py` 需要 kubectl 叢集存取，屬於集群內操作工具，不適合「帶回家驗證」的場景。

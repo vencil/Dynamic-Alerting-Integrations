@@ -193,16 +193,18 @@ make port-forward
 
 ## 文件導覽
 
+按讀者旅程排序：理解架構 → 部署 → 整合 → 遷移 → 治理 → 維運。
+
 | 文件 | 說明 | 目標讀者 |
 |------|------|---------|
-| [遷移指南](docs/migration-guide.md) | 零摩擦導入、scaffold 工具、5 個實戰場景 | 租戶、DevOps |
-| [架構與設計](docs/architecture-and-design.md) | 效能分析、HA 設計、Projected Volume 深度解析、治理 | Platform Engineers、SREs |
+| [架構與設計](docs/architecture-and-design.md) | O(M) 推導、HA 設計、Projected Volume 深度解析 | Platform Engineers、SREs |
 | [規則包目錄](rule-packs/README.md) | 6 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
 | [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
-| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、每日巡檢、收斂判定、切換退出 | SREs、Platform Engineers |
-| [BYOP 整合指南](docs/byo-prometheus-integration.md) | 企業現有 Prometheus / Thanos 叢集的最小整合步驟 (Label 注入、Exporter 抓取、規則掛載) | Platform Engineers、SREs |
-| [da-tools CLI](components/da-tools/README.md) | 可攜帶驗證工具容器 — 不需 clone 專案即可驗證整合、遷移規則、產生配置 | 全體 |
-| [測試手冊](docs/testing-playbook.md) | K8s 環境問題、HA 測試、shell script 陷阱 | 貢獻者 |
+| [BYOP 整合指南](docs/byo-prometheus-integration.md) | 企業現有 Prometheus / Thanos 叢集的最小整合步驟 | Platform Engineers、SREs |
+| [遷移指南](docs/migration-guide.md) | 零摩擦導入、scaffold 工具、5 個實戰場景 | 租戶、DevOps |
+| [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、RnR 權責定義、SLA 切割、CI Linting | Platform Leads、Domain Experts |
+| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、巡檢、收斂判定、切換退出 | SREs、Platform Engineers |
+| [da-tools CLI](components/da-tools/README.md) | 可攜帶驗證工具容器 — 不需 clone 專案即可驗證整合 | 全體 |
 
 ---
 
@@ -236,6 +238,7 @@ make port-forward
 | `offboard_tenant.py` | 安全移除 Tenant 配置（Pre-check + 連帶檢查） |
 | `deprecate_rule.py` | 平滑下架過時的 Rule / Metric（三步自動化） |
 | `baseline_discovery.py` | 負載觀測 + 閾值建議（p95/p99 統計 → 建議值） |
+| `lint_custom_rules.py` | CI deny-list linter — 檢查 Custom Rule 治理合規性 |
 
 **使用範例：**
 
@@ -254,8 +257,14 @@ make demo
 
 ## 前置需求
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS)
-- [VS Code](https://code.visualstudio.com/) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+**必要條件：**
+
+- [Docker Engine](https://docs.docker.com/engine/install/) 或 Docker Desktop
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+
+**建議（非必要）：**
+
+- [VS Code](https://code.visualstudio.com/) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) — 提供預先配好工具鏈的開發環境，但非使用本平台的必要條件
 
 ---
 
@@ -343,11 +352,14 @@ make help               # 顯示說明
 │   ├── scenario-f.sh           # HA 故障切換測試
 │   └── test-migrate-*.sh       # 遷移工具測試
 ├── docs/                       # 文件目錄
-│   ├── migration-guide.md      # 完整遷移指南 (5 scenarios + 範例)
 │   ├── architecture-and-design.md  # 架構深度文件
+│   ├── migration-guide.md      # 完整遷移指南 (5 scenarios + 範例)
+│   ├── custom-rule-governance.md  # 客製化規則治理規範
+│   ├── byo-prometheus-integration.md # BYOP 整合指南
 │   ├── shadow-monitoring-sop.md   # Shadow Monitoring SRE SOP
-│   ├── windows-mcp-playbook.md    # Dev Container 操作手冊
-│   └── testing-playbook.md        # 測試排錯手冊
+│   └── internal/               # 內部開發手冊 (非 user-facing)
+│       ├── testing-playbook.md    # 測試排錯手冊
+│       └── windows-mcp-playbook.md # Dev Container 操作手冊
 ├── .devcontainer/              # Dev Container 配置
 ├── CLAUDE.md                   # AI Agent 開發上下文指引
 ├── CHANGELOG.md                # 版本變更日誌

@@ -1,0 +1,20 @@
+# Custom Rule Governance Policy
+# 參考: docs/custom-rule-governance.md §4
+#
+# 此檔案定義 CI deny-list linting 的檢查規則。
+# 由 scripts/tools/lint_custom_rules.py 讀取。
+
+denied_functions:
+  - holt_winters           # CPU 密集型函式
+  - predict_linear         # 大範圍回溯查詢
+  - quantile_over_time     # 高記憶體消耗
+
+denied_patterns:
+  - '=~".*"'              # 全通配 regex（效能殺手）
+  - 'without(tenant)'     # 破壞 tenant 隔離
+
+required_labels:
+  - tenant                 # 所有 Custom Alert Rule 必須帶 tenant label
+
+max_range_duration: 1h     # 禁止超長 range vector (如 [7d])
+max_evaluation_interval: 60s  # Custom Rule Group interval 上限

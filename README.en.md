@@ -193,16 +193,18 @@ make port-forward
 
 ## Documentation Guide
 
+Ordered by reader journey: Understand → Deploy → Integrate → Migrate → Govern → Operate.
+
 | Document | Description | Target Audience |
 |----------|-------------|-----------------|
-| [Migration Guide](docs/migration-guide.md) | Frictionless onboarding, scaffold tools, 5 hands-on scenarios | Tenants, DevOps |
-| [Architecture and Design](docs/architecture-and-design.en.md) | Performance analysis, HA design, Projected Volume deep-dive, governance | Platform Engineers, SREs |
+| [Architecture and Design](docs/architecture-and-design.en.md) | O(M) derivation, HA design, Projected Volume deep-dive | Platform Engineers, SREs |
 | [Rule Packs Directory](rule-packs/README.md) | 6 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
-| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, daily inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
-| [BYOP Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps (Label injection, Scrape configs, Rule mounting) for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
-| [da-tools CLI](components/da-tools/README.md) | Portable verification toolkit container — validate integration, migrate rules, generate configs without cloning | Everyone |
-| [Testing Playbook](docs/testing-playbook.md) | K8s environment issues, HA testing, shell script pitfalls | Contributors |
+| [BYOP Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
+| [Migration Guide](docs/migration-guide.md) | Frictionless onboarding, scaffold tools, 5 hands-on scenarios | Tenants, DevOps |
+| [Custom Rule Governance](docs/custom-rule-governance.md) | 3-Tier governance model, RnR definitions, SLA boundaries, CI linting | Platform Leads, Domain Experts |
+| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
+| [da-tools CLI](components/da-tools/README.md) | Portable verification toolkit — validate integration without cloning | Everyone |
 
 ---
 
@@ -236,6 +238,7 @@ make port-forward
 | `offboard_tenant.py` | Safe tenant removal (pre-check + cross-reference cleanup) |
 | `deprecate_rule.py` | Graceful rule/metric deprecation (3-step automation) |
 | `baseline_discovery.py` | Load observation + threshold suggestions (p95/p99 stats → recommendations) |
+| `lint_custom_rules.py` | CI deny-list linter — validates Custom Rule governance compliance |
 
 **Usage Examples:**
 
@@ -254,8 +257,14 @@ make demo
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS)
-- [VS Code](https://code.visualstudio.com/) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+**Required:**
+
+- [Docker Engine](https://docs.docker.com/engine/install/) or Docker Desktop
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+
+**Recommended (not required):**
+
+- [VS Code](https://code.visualstudio.com/) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) — provides a pre-configured development environment, but is not required to use this platform
 
 ---
 
@@ -343,11 +352,14 @@ make help               # Show help message
 │   ├── scenario-f.sh           # HA failover test
 │   └── test-migrate-*.sh       # Migration tool tests
 ├── docs/                       # Documentation directory
-│   ├── migration-guide.md      # Complete migration guide (5 scenarios + examples)
 │   ├── architecture-and-design.md  # Architecture deep-dive document
+│   ├── migration-guide.md      # Complete migration guide (5 scenarios + examples)
+│   ├── custom-rule-governance.md  # Custom rule governance model
+│   ├── byo-prometheus-integration.md # BYOP integration guide
 │   ├── shadow-monitoring-sop.md   # Shadow Monitoring SRE SOP
-│   ├── windows-mcp-playbook.md    # Dev Container operation manual
-│   └── testing-playbook.md        # Testing troubleshooting manual
+│   └── internal/               # Internal dev playbooks (not user-facing)
+│       ├── testing-playbook.md    # Testing troubleshooting manual
+│       └── windows-mcp-playbook.md # Dev Container operation manual
 ├── .devcontainer/              # Dev Container configuration
 ├── CLAUDE.md                   # AI Agent development context guide
 ├── CHANGELOG.md                # Version changelog

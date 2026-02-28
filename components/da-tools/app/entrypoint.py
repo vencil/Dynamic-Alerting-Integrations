@@ -19,6 +19,7 @@ Commands (File System — offline):
     scaffold          Generate tenant configuration interactively
     offboard          Pre-check and remove a tenant configuration
     deprecate         Mark metrics as disabled across configs
+    lint              Validate custom rules against governance deny-list
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -42,6 +43,7 @@ COMMAND_MAP = {
     "scaffold": "scaffold_tenant.py",
     "offboard": "offboard_tenant.py",
     "deprecate": "deprecate_rule.py",
+    "lint": "lint_custom_rules.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
@@ -58,6 +60,7 @@ def print_usage():
     print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
     print("  da-tools migrate legacy-rules.yml --dry-run --triage")
     print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
+    print("  da-tools lint /path/to/custom-rules/ --ci")
     print()
     print("Environment:")
     print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")

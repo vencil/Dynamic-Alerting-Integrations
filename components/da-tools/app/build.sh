@@ -21,6 +21,7 @@
 #       ├── scaffold_tenant.py
 #       ├── offboard_tenant.py
 #       ├── deprecate_rule.py
+#       ├── lint_custom_rules.py
 #       └── metric-dictionary.yaml
 set -euo pipefail
 
@@ -45,6 +46,7 @@ TOOL_FILES=(
     scaffold_tenant.py
     offboard_tenant.py
     deprecate_rule.py
+    lint_custom_rules.py
     metric-dictionary.yaml
 )
 

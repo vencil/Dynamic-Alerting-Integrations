@@ -2,6 +2,38 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.10.0] - Governance, Documentation Restructure & CI Linting (2026-02-28)
+
+本版本建立多租戶客製化規則治理框架，重整文件架構，並新增 CI 護欄工具。
+
+### 📋 三層治理模型 (Custom Rule Governance)
+
+* **`docs/custom-rule-governance.md`**: 全新治理規範文件，定義三層客製化規則模型：
+  * Tier 1 (Standard): Config-driven 三態控制，覆蓋 ~80% 需求
+  * Tier 2 (Pre-packaged Scenarios): 平台預製複合場景，Tenant 僅控制啟停
+  * Tier 3 (True Custom): 嚴格治理，獨立 Rule Group 隔離，帶 expiry date
+* **RnR 權責定義**: Platform Engineering / Domain Experts / Tenant Teams 三角責任歸屬
+* **SLA 切割**: Tier 1-2 由平台保證，Tier 3 不保證 SLA，平台有權強制下架
+* **收編週期 (Assimilation Cycle)**: 季度 review，將具共性的 Tier 3 晉升為 Tier 2
+
+### 🛡️ CI Deny-list Linting
+
+* **`scripts/tools/lint_custom_rules.py`**: Custom Rule 治理合規 linter
+  * 禁止高成本函式 (`holt_winters`, `predict_linear`)
+  * 禁止危險 regex (`=~".*"`) 和 tenant 隔離破壞 (`without(tenant)`)
+  * 強制 `tenant` label、限制 range vector duration
+  * 支援自訂 policy 檔 (`--policy`) 和 CI 模式 (`--ci`)
+* **`.github/custom-rule-policy.yaml`**: 預設 deny-list 規則定義檔
+
+### 📄 文件重整
+
+* **Playbook 搬移**: `testing-playbook.md` / `windows-mcp-playbook.md` 移至 `docs/internal/`，與 user-facing 文件分離
+* **文件導覽重排**: 按讀者旅程排序 (架構→部署→整合→遷移→治理→SOP)
+* **前置需求改寫**: 必要條件僅列 Docker Engine + kubectl；Dev Container 降為建議選項
+* **README.en.md**: 同步更新所有上述變更
+
+---
+
 ## [v0.9.0] - Ecosystem Integration, CI/CD Decoupling & Test Visibility (2026-02-27)
 
 本版本聚焦於企業生態系整合、版號治理與測試透明度，不涉及 Go 核心程式碼變更。
