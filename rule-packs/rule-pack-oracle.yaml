@@ -1,0 +1,185 @@
+# ============================================================
+# Rule Pack: Oracle Database (via oracledb_exporter)
+# 選配 — 涵蓋 Session、Tablespace、Wait Time、Process、PGA
+#
+# 需要的 exporter:
+#   - oracledb_exporter (https://github.com/iamseth/oracledb_exporter)
+#
+# 對應的 threshold-exporter defaults (加入 _defaults.yaml):
+#   oracle_sessions_active: 200
+#   oracle_tablespace_used_percent: 85
+#   oracle_wait_time_rate: 50
+#   oracle_process_count: 300
+#   oracle_pga_allocated_bytes: 4294967296   # 4 GB
+#
+# Tenant config 範例 (conf.d/oracle-prod.yaml):
+#   tenants:
+#     oracle-prod:
+#       oracle_sessions_active: "150"
+#       oracle_tablespace_used_percent: "80"
+#       # ── Regex 維度閾值 (v0.12.0 B1 feature) ──
+#       # 一次性控管多個 Tablespace 的閾值：
+#       "oracle_tablespace_used_percent{tablespace_name=~\"USERS|DATA.*\"}": "90"
+#       # 單一 Tablespace 精確匹配：
+#       "oracle_tablespace_used_percent{tablespace_name=\"SYSTEM\"}": "95:critical"
+#       # 停用特定 Tablespace 監控：
+#       "oracle_tablespace_used_percent{tablespace_name=\"TEMP\"}": "disable"
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: Oracle Database metrics
+  # -------------------------------------------------------
+  - name: oracle-normalization
+    interval: 15s
+    rules:
+      # Active sessions
+      - record: tenant:oracle_sessions_active:max
+        expr: max by(tenant) (oracledb_sessions_active)
+
+      # Tablespace usage percentage (key dimensional metric)
+      - record: tenant:oracle_tablespace_used_percent:max
+        expr: max by(tenant) (oracledb_tablespace_used_percent)
+
+      # Wait time rate (seconds per second over 5m window)
+      - record: tenant:oracle_wait_time:rate5m
+        expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))
+
+      # Process count
+      - record: tenant:oracle_process_count:max
+        expr: max by(tenant) (oracledb_process_count)
+
+      # PGA allocated memory (bytes)
+      - record: tenant:oracle_pga_allocated_bytes:max
+        expr: max by(tenant) (oracledb_pga_allocated_bytes)
+
+      # Session utilization ratio (active / max)
+      - record: tenant:oracle_session_utilization:ratio
+        expr: |
+          max by(tenant) (oracledb_sessions_active)
+          / max by(tenant) (oracledb_resource_limit{resource="sessions"} > 0)
+
+  # -------------------------------------------------------
+  # Threshold normalization: Oracle
+  # -------------------------------------------------------
+  - name: oracle-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:oracle_sessions_active
+        expr: max by(tenant) (user_threshold{metric="oracle_sessions_active", severity="warning"})
+
+      - record: tenant:alert_threshold:oracle_tablespace_used_percent
+        expr: max by(tenant) (user_threshold{metric="oracle_tablespace_used_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:oracle_wait_time_rate
+        expr: max by(tenant) (user_threshold{metric="oracle_wait_time_rate", severity="warning"})
+
+      - record: tenant:alert_threshold:oracle_process_count
+        expr: max by(tenant) (user_threshold{metric="oracle_process_count", severity="warning"})
+
+      - record: tenant:alert_threshold:oracle_pga_allocated_bytes
+        expr: max by(tenant) (user_threshold{metric="oracle_pga_allocated_bytes", severity="warning"})
+
+  # -------------------------------------------------------
+  # Alert Rules: Oracle
+  # -------------------------------------------------------
+  - name: oracle-alerts
+    rules:
+      - alert: OracleDatabaseDown
+        expr: oracledb_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oracle instance {{ $labels.instance }} is DOWN"
+
+      - alert: OracleHighActiveSessions
+        expr: |
+          (
+            tenant:oracle_sessions_active:max
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_sessions_active
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle high active sessions on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.0f\" }} active sessions"
+
+      - alert: OracleTablespaceAlmostFull
+        expr: |
+          (
+            tenant:oracle_tablespace_used_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_tablespace_used_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle tablespace nearing capacity on {{ $labels.tenant }}"
+          description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: OracleHighWaitTime
+        expr: |
+          (
+            tenant:oracle_wait_time:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_wait_time_rate
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle high wait time on {{ $labels.tenant }}"
+          description: "Wait time rate: {{ $value | printf \"%.1f\" }}s/s"
+
+      - alert: OracleHighProcessCount
+        expr: |
+          (
+            tenant:oracle_process_count:max
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_process_count
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle high process count on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.0f\" }} active processes"
+
+      - alert: OracleHighPGAUsage
+        expr: |
+          (
+            tenant:oracle_pga_allocated_bytes:max
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_pga_allocated_bytes
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle high PGA usage on {{ $labels.tenant }}"
+          description: "PGA allocated: {{ $value | humanize1024 }}B"
+
+      - alert: OracleHighSessionUtilization
+        expr: |
+          tenant:oracle_session_utilization:ratio > 0.85
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle session limit approaching on {{ $labels.tenant }}"
+          description: "Session utilization: {{ $value | printf \"%.0f\" }}%"

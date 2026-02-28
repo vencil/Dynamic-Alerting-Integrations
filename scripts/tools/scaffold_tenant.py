@@ -115,6 +115,62 @@ RULE_PACKS = {
             "es_index_doc_count{index=\"logs-prod\"}": "50000000",
         },
     },
+    "oracle": {
+        "display": "Oracle Database (oracledb_exporter)",
+        "exporter": "iamseth/oracledb_exporter",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-oracle.yaml",
+        "defaults": {
+            "oracle_sessions_active": {"value": 200, "unit": "count", "desc": "Active sessions warning"},
+            "oracle_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
+        },
+        "optional_overrides": {
+            "oracle_wait_time_rate": {"value": 50, "unit": "s/s", "desc": "Wait time rate (5m)"},
+            "oracle_process_count": {"value": 300, "unit": "count", "desc": "Active processes warning"},
+            "oracle_pga_allocated_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "PGA allocation warning"},
+        },
+        "dimensional_example": {
+            "oracle_tablespace_used_percent{tablespace_name=~\"USERS|DATA.*\"}": "90",
+            "oracle_tablespace_used_percent{tablespace_name=\"SYSTEM\"}": "95:critical",
+        },
+    },
+    "db2": {
+        "display": "IBM DB2 (ibm_db2_exporter)",
+        "exporter": "ibm_db2_exporter (community)",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-db2.yaml",
+        "defaults": {
+            "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning"},
+            "db2_bufferpool_hit_ratio": {"value": 0.95, "unit": "ratio", "desc": "Bufferpool hit ratio warning"},
+        },
+        "optional_overrides": {
+            "db2_log_usage_percent": {"value": 70, "unit": "%", "desc": "Transaction log usage warning"},
+            "db2_deadlock_rate": {"value": 5, "unit": "count/s", "desc": "Deadlock rate (5m)"},
+            "db2_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
+        },
+        "dimensional_example": {
+            "db2_bufferpool_hit_ratio{bufferpool_name=~\"IBMDEFAULT.*|BP_USER.*\"}": "0.90",
+            "db2_tablespace_used_percent{tablespace_name=~\"USERSPACE.*\"}": "80",
+        },
+    },
+    "clickhouse": {
+        "display": "ClickHouse (built-in /metrics)",
+        "exporter": "ClickHouse built-in Prometheus endpoint",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-clickhouse.yaml",
+        "defaults": {
+            "clickhouse_queries_rate": {"value": 500, "unit": "qps", "desc": "Query rate warning (5m)"},
+            "clickhouse_active_connections": {"value": 200, "unit": "count", "desc": "Active TCP connections warning"},
+        },
+        "optional_overrides": {
+            "clickhouse_max_part_count": {"value": 300, "unit": "count", "desc": "Max part count per partition"},
+            "clickhouse_replication_queue": {"value": 50, "unit": "count", "desc": "Replication queue size"},
+            "clickhouse_memory_tracking_bytes": {"value": 8589934592, "unit": "bytes (8GB)", "desc": "Memory tracking warning"},
+        },
+        "dimensional_example": {
+            "clickhouse_max_part_count{database=~\"prod_.*\"}": "200",
+        },
+    },
 }
 
 

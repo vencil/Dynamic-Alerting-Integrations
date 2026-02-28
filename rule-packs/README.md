@@ -1,7 +1,7 @@
 # Rule Packs — 模組化 Prometheus 規則
 
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
-> **所有 6 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
+> **所有 9 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
 > 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
 >
 > **其他文件：** [README](../README.md) (概覽) · [Migration Guide](../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../docs/architecture-and-design.md) (技術深度)
@@ -15,6 +15,9 @@
 | **redis** | oliver006/redis_exporter | 🟢 預載 | 7 | 6 |
 | **mongodb** | percona/mongodb_exporter | 🟢 預載 | 7 | 6 |
 | **elasticsearch** | elasticsearch_exporter | 🟢 預載 | 7 | 7 |
+| **oracle** | oracledb_exporter (iamseth) | 🟢 預載 | 6 | 7 |
+| **db2** | ibm_db2_exporter (community) | 🟢 預載 | 7 | 7 |
+| **clickhouse** | ClickHouse built-in /metrics | 🟢 預載 | 7 | 7 |
 | **platform** | threshold-exporter self-monitoring | 🟢 預載 | 0 | 4 |
 
 ## 架構說明
@@ -33,7 +36,7 @@
 
 ### 動態卸載 (optional: true)
 
-所有 6 個 Rule Pack 在 Projected Volume 中均設定 `optional: true`，這代表：
+所有 9 個 Rule Pack 在 Projected Volume 中均設定 `optional: true`，這代表：
 
 - **卸載不崩潰**: 刪除任何 Rule Pack 的 ConfigMap（`kubectl delete cm prometheus-rules-<type> -n monitoring`）後，Prometheus **不會 Crash**，只是對應的規則消失。
 - **適用場景**: 大型客戶可能有自己的規則體系，需要關閉平台的黃金標準 Rule Pack，改用 `custom_` 前綴的遷移規則或完全自訂的規則。
@@ -83,4 +86,7 @@ groups:
 - **redis_exporter**: https://github.com/oliver006/redis_exporter
 - **mongodb_exporter**: https://github.com/percona/mongodb_exporter
 - **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter
+- **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter
+- **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)
+- **clickhouse_exporter**: https://github.com/ClickHouse/clickhouse_exporter (或 ClickHouse 內建 /metrics)
 - **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics

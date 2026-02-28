@@ -113,6 +113,30 @@ spec:
                     - key: elasticsearch-alert.yml
                       path: elasticsearch-alert.yml
               - configMap:
+                  name: prometheus-rules-oracle
+                  optional: true
+                  items:
+                    - key: oracle-recording.yml
+                      path: oracle-recording.yml
+                    - key: oracle-alert.yml
+                      path: oracle-alert.yml
+              - configMap:
+                  name: prometheus-rules-db2
+                  optional: true
+                  items:
+                    - key: db2-recording.yml
+                      path: db2-recording.yml
+                    - key: db2-alert.yml
+                      path: db2-alert.yml
+              - configMap:
+                  name: prometheus-rules-clickhouse
+                  optional: true
+                  items:
+                    - key: clickhouse-recording.yml
+                      path: clickhouse-recording.yml
+                    - key: clickhouse-alert.yml
+                      path: clickhouse-alert.yml
+              - configMap:
                   name: prometheus-rules-platform
                   optional: true
                   items:

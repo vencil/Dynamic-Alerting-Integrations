@@ -101,10 +101,48 @@ echo "[Test Group 5] --catalog 模式"
 OUTPUT=$(python3 "$TOOL" --catalog 2>&1)
 assert "catalog 顯示 kubernetes" "$(echo "$OUTPUT" | grep -c 'Kubernetes' | grep -q '[1-9]' && echo 0 || echo 1)"
 assert "catalog 顯示 redis" "$(echo "$OUTPUT" | grep -c 'Redis' | grep -q '[1-9]' && echo 0 || echo 1)"
+assert "catalog 顯示 Oracle" "$(echo "$OUTPUT" | grep -c 'Oracle' | grep -q '[1-9]' && echo 0 || echo 1)"
+assert "catalog 顯示 DB2" "$(echo "$OUTPUT" | grep -c 'DB2' | grep -q '[1-9]' && echo 0 || echo 1)"
+assert "catalog 顯示 ClickHouse" "$(echo "$OUTPUT" | grep -c 'ClickHouse' | grep -q '[1-9]' && echo 0 || echo 1)"
 
 # -----------------------------------------------
 echo ""
-echo "[Test Group 6] 錯誤處理"
+echo "[Test Group 6] 非互動模式 — Oracle"
+python3 "$TOOL" --tenant db-ora --db oracle -o "$OUT/test6a" 2>/dev/null
+assert_file_exists "生成 db-ora.yaml" "$OUT/test6a/db-ora.yaml"
+assert_file_contains "defaults 含 oracle_sessions_active" "$OUT/test6a/_defaults.yaml" "oracle_sessions_active"
+assert_file_contains "defaults 含 oracle_tablespace_used_percent" "$OUT/test6a/_defaults.yaml" "oracle_tablespace_used_percent"
+assert_file_contains "report 含 Oracle" "$OUT/test6a/scaffold-report.txt" "Oracle"
+
+# -----------------------------------------------
+echo ""
+echo "[Test Group 7] 非互動模式 — DB2"
+python3 "$TOOL" --tenant db-ibm --db db2 -o "$OUT/test7" 2>/dev/null
+assert_file_exists "生成 db-ibm.yaml" "$OUT/test7/db-ibm.yaml"
+assert_file_contains "defaults 含 db2_connections_active" "$OUT/test7/_defaults.yaml" "db2_connections_active"
+assert_file_contains "defaults 含 db2_bufferpool_hit_ratio" "$OUT/test7/_defaults.yaml" "db2_bufferpool_hit_ratio"
+assert_file_contains "report 含 DB2" "$OUT/test7/scaffold-report.txt" "DB2"
+
+# -----------------------------------------------
+echo ""
+echo "[Test Group 8] 非互動模式 — Oracle + DB2 複合"
+python3 "$TOOL" --tenant db-enterprise --db oracle,db2 -o "$OUT/test8" 2>/dev/null
+assert_file_exists "生成 db-enterprise.yaml" "$OUT/test8/db-enterprise.yaml"
+assert_file_contains "defaults 含 oracle + db2" "$OUT/test8/_defaults.yaml" "oracle_sessions_active"
+assert_file_contains "defaults 含 db2_connections" "$OUT/test8/_defaults.yaml" "db2_connections_active"
+
+# -----------------------------------------------
+echo ""
+echo "[Test Group 9] 非互動模式 — ClickHouse"
+python3 "$TOOL" --tenant db-ch --db clickhouse -o "$OUT/test9" 2>/dev/null
+assert_file_exists "生成 db-ch.yaml" "$OUT/test9/db-ch.yaml"
+assert_file_contains "defaults 含 clickhouse_queries_rate" "$OUT/test9/_defaults.yaml" "clickhouse_queries_rate"
+assert_file_contains "defaults 含 clickhouse_active_connections" "$OUT/test9/_defaults.yaml" "clickhouse_active_connections"
+assert_file_contains "report 含 ClickHouse" "$OUT/test9/scaffold-report.txt" "ClickHouse"
+
+# -----------------------------------------------
+echo ""
+echo "[Test Group 10] 錯誤處理"
 python3 "$TOOL" --tenant db-err --db invalid_db -o "$OUT/test6" 2>/dev/null && ERR=0 || ERR=1
 assert "無效 DB 類型應報錯" "$([[ $ERR -eq 1 ]] && echo 0 || echo 1)"
 

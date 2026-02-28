@@ -149,3 +149,102 @@ elasticsearch_cluster_health_status:
   golden_rule: ElasticsearchClusterUnhealthy
   rule_pack: elasticsearch
   note: "Cluster health — 0=green, 1=yellow, 2=red"
+
+# ────────────────────────────────────────
+# Oracle Database
+# ────────────────────────────────────────
+oracledb_sessions_active:
+  maps_to: oracle_sessions_active
+  golden_rule: OracleHighActiveSessions
+  rule_pack: oracle
+  note: "Active sessions — max by(tenant) 聚合"
+
+oracledb_tablespace_used_percent:
+  maps_to: oracle_tablespace_used_percent
+  golden_rule: OracleTablespaceAlmostFull
+  rule_pack: oracle
+  note: "Tablespace 使用率 — 支援 Regex 維度 (tablespace_name=~)"
+
+oracledb_wait_time_seconds_total:
+  maps_to: oracle_wait_time_rate
+  golden_rule: OracleHighWaitTime
+  rule_pack: oracle
+  note: "Wait time — rate() 指標, sum by(tenant) 聚合"
+
+oracledb_process_count:
+  maps_to: oracle_process_count
+  golden_rule: OracleHighProcessCount
+  rule_pack: oracle
+  note: "Active processes — max by(tenant) 聚合"
+
+oracledb_pga_allocated_bytes:
+  maps_to: oracle_pga_allocated_bytes
+  golden_rule: OracleHighPGAUsage
+  rule_pack: oracle
+  note: "PGA 記憶體分配 — max by(tenant) 聚合"
+
+# ────────────────────────────────────────
+# IBM DB2
+# ────────────────────────────────────────
+db2_connections_active:
+  maps_to: db2_connections_active
+  golden_rule: DB2HighConnections
+  rule_pack: db2
+  note: "Active connections — max by(tenant) 聚合"
+
+db2_bufferpool_hit_ratio:
+  maps_to: db2_bufferpool_hit_ratio
+  golden_rule: DB2LowBufferpoolHitRatio
+  rule_pack: db2
+  note: "Bufferpool hit ratio — 支援 Regex 維度 (bufferpool_name=~)"
+
+db2_log_usage_percent:
+  maps_to: db2_log_usage_percent
+  golden_rule: DB2HighLogUsage
+  rule_pack: db2
+  note: "Transaction log 使用率 — max by(tenant) 聚合"
+
+db2_deadlocks_total:
+  maps_to: db2_deadlock_rate
+  golden_rule: DB2HighDeadlockRate
+  rule_pack: db2
+  note: "Deadlocks — rate() 指標, sum by(tenant) 聚合"
+
+db2_tablespace_used_percent:
+  maps_to: db2_tablespace_used_percent
+  golden_rule: DB2TablespaceAlmostFull
+  rule_pack: db2
+  note: "Tablespace 使用率 — 支援 Regex 維度 (tablespace_name=~)"
+
+# ────────────────────────────────────────
+# ClickHouse
+# ────────────────────────────────────────
+ClickHouseProfileEvents_Query:
+  maps_to: clickhouse_queries_rate
+  golden_rule: ClickHouseHighQueryRate
+  rule_pack: clickhouse
+  note: "Query rate — rate() 指標, sum by(tenant) 聚合"
+
+ClickHouseMetrics_TCPConnection:
+  maps_to: clickhouse_active_connections
+  golden_rule: ClickHouseHighConnections
+  rule_pack: clickhouse
+  note: "Active TCP connections — max by(tenant) 聚合"
+
+ClickHouseAsyncMetrics_MaxPartCountForPartition:
+  maps_to: clickhouse_max_part_count
+  golden_rule: ClickHouseHighPartCount
+  rule_pack: clickhouse
+  note: "Max part count — merge 壓力指標, 支援 Regex 維度 (database=~)"
+
+ClickHouseMetrics_MemoryTracking:
+  maps_to: clickhouse_memory_tracking_bytes
+  golden_rule: ClickHouseHighMemoryUsage
+  rule_pack: clickhouse
+  note: "Memory tracking — max by(tenant) 聚合"
+
+ClickHouseProfileEvents_FailedQuery:
+  maps_to: clickhouse_failed_queries
+  golden_rule: ClickHouseHighFailedQueryRate
+  rule_pack: clickhouse
+  note: "Failed query rate — rate() 指標, 固定閾值 (無 user override)"

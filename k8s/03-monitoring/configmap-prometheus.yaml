@@ -135,6 +135,6 @@ data:
   # Recording Rules & Alert Rules — DECOUPLED (v0.4.1)
   # Rules are now in separate ConfigMaps (configmap-rules-*.yaml)
   # mounted via projected volume in deployment-prometheus.yaml.
-  # Each team (DBA, K8s infra, Search) maintains their own ConfigMap.
-  # See: configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch}.yaml
+  # Each team (DBA, K8s infra, Search, Analytics) maintains their own ConfigMap.
+  # See: configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,clickhouse,platform}.yaml
   # ============================================================

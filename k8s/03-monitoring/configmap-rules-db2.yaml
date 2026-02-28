@@ -1,0 +1,163 @@
+# ============================================================
+# DB2 Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-db2.yaml
+# Maintained by: DBA Team / DB2 Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-db2
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: db2
+data:
+  db2-recording.yml: |
+    groups:
+      - name: db2-normalization
+        interval: 15s
+        rules:
+          - record: tenant:db2_connections_active:max
+            expr: max by(tenant) (db2_connections_active)
+
+          - record: tenant:db2_bufferpool_hit_ratio:min
+            expr: min by(tenant) (db2_bufferpool_hit_ratio)
+
+          - record: tenant:db2_log_usage_percent:max
+            expr: max by(tenant) (db2_log_usage_percent)
+
+          - record: tenant:db2_deadlocks:rate5m
+            expr: sum by(tenant) (rate(db2_deadlocks_total[5m]))
+
+          - record: tenant:db2_tablespace_used_percent:max
+            expr: max by(tenant) (db2_tablespace_used_percent)
+
+          - record: tenant:db2_lock_wait_time:rate5m
+            expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
+
+          - record: tenant:db2_sort_overflow_ratio:avg
+            expr: |
+              sum by(tenant) (db2_sort_overflows)
+              / (sum by(tenant) (db2_total_sorts) > 0)
+
+      - name: db2-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:db2_connections_active
+            expr: max by(tenant) (user_threshold{metric="db2_connections_active", severity="warning"})
+
+          - record: tenant:alert_threshold:db2_bufferpool_hit_ratio
+            expr: max by(tenant) (user_threshold{metric="db2_bufferpool_hit_ratio", severity="warning"})
+
+          - record: tenant:alert_threshold:db2_log_usage_percent
+            expr: max by(tenant) (user_threshold{metric="db2_log_usage_percent", severity="warning"})
+
+          - record: tenant:alert_threshold:db2_deadlock_rate
+            expr: max by(tenant) (user_threshold{metric="db2_deadlock_rate", severity="warning"})
+
+          - record: tenant:alert_threshold:db2_tablespace_used_percent
+            expr: max by(tenant) (user_threshold{metric="db2_tablespace_used_percent", severity="warning"})
+
+  db2-alert.yml: |
+    groups:
+      - name: db2-alerts
+        rules:
+          - alert: DB2DatabaseDown
+            expr: db2_up == 0
+            for: 15s
+            labels:
+              severity: critical
+            annotations:
+              summary: "DB2 instance {{ $labels.instance }} is DOWN"
+
+          - alert: DB2HighConnections
+            expr: |
+              (
+                tenant:db2_connections_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:db2_connections_active
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DB2 high active connections on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.0f\" }} active connections"
+
+          - alert: DB2LowBufferpoolHitRatio
+            expr: |
+              (
+                tenant:db2_bufferpool_hit_ratio:min
+                < on(tenant) group_left
+                tenant:alert_threshold:db2_bufferpool_hit_ratio
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
+              description: "Hit ratio: {{ $value | printf \"%.4f\" }} — check bufferpool sizing"
+
+          - alert: DB2HighLogUsage
+            expr: |
+              (
+                tenant:db2_log_usage_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:db2_log_usage_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
+              description: "Log usage: {{ $value | printf \"%.1f\" }}%"
+
+          - alert: DB2HighDeadlockRate
+            expr: |
+              (
+                tenant:db2_deadlocks:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:db2_deadlock_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.1f\" }} deadlocks/sec"
+
+          - alert: DB2TablespaceAlmostFull
+            expr: |
+              (
+                tenant:db2_tablespace_used_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:db2_tablespace_used_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
+              description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
+
+          - alert: DB2HighSortOverflow
+            expr: |
+              tenant:db2_sort_overflow_ratio:avg > 0.05
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"
+              description: "Sort overflow ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP"

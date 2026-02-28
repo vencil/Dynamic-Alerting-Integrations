@@ -1,0 +1,189 @@
+# ============================================================
+# Rule Pack: IBM DB2 (via ibm_db2_exporter / custom exporter)
+# 選配 — 涵蓋 Connection、Bufferpool、Log Usage、Deadlock、Tablespace
+#
+# 需要的 exporter:
+#   - ibm_db2_exporter (community) or custom Prometheus exporter
+#
+# 對應的 threshold-exporter defaults (加入 _defaults.yaml):
+#   db2_connections_active: 200
+#   db2_bufferpool_hit_ratio: 0.95
+#   db2_log_usage_percent: 70
+#   db2_deadlock_rate: 5
+#   db2_tablespace_used_percent: 85
+#
+# Tenant config 範例 (conf.d/db2-prod.yaml):
+#   tenants:
+#     db2-prod:
+#       db2_connections_active: "150"
+#       db2_bufferpool_hit_ratio: "0.98"
+#       # ── Regex 維度閾值 (v0.12.0 B1 feature) ──
+#       # 一次性控管多個 Bufferpool 的 hit ratio：
+#       "db2_bufferpool_hit_ratio{bufferpool_name=~\"IBMDEFAULT.*|BP_USER.*\"}": "0.90"
+#       # 單一 Bufferpool 精確匹配：
+#       "db2_bufferpool_hit_ratio{bufferpool_name=\"BP_TEMP\"}": "disable"
+#       # Tablespace 維度 — 多個 Tablespace Regex 匹配：
+#       "db2_tablespace_used_percent{tablespace_name=~\"USERSPACE.*|SYSTOOLSPACE\"}": "80"
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: DB2 metrics
+  # -------------------------------------------------------
+  - name: db2-normalization
+    interval: 15s
+    rules:
+      # Active connections
+      - record: tenant:db2_connections_active:max
+        expr: max by(tenant) (db2_connections_active)
+
+      # Bufferpool hit ratio (key dimensional metric)
+      - record: tenant:db2_bufferpool_hit_ratio:min
+        expr: min by(tenant) (db2_bufferpool_hit_ratio)
+
+      # Transaction log usage percentage
+      - record: tenant:db2_log_usage_percent:max
+        expr: max by(tenant) (db2_log_usage_percent)
+
+      # Deadlock rate
+      - record: tenant:db2_deadlocks:rate5m
+        expr: sum by(tenant) (rate(db2_deadlocks_total[5m]))
+
+      # Tablespace usage percentage
+      - record: tenant:db2_tablespace_used_percent:max
+        expr: max by(tenant) (db2_tablespace_used_percent)
+
+      # Lock wait time (seconds per 5m window)
+      - record: tenant:db2_lock_wait_time:rate5m
+        expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
+
+      # Sort overflow ratio
+      - record: tenant:db2_sort_overflow_ratio:avg
+        expr: |
+          sum by(tenant) (db2_sort_overflows)
+          / (sum by(tenant) (db2_total_sorts) > 0)
+
+  # -------------------------------------------------------
+  # Threshold normalization: DB2
+  # -------------------------------------------------------
+  - name: db2-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:db2_connections_active
+        expr: max by(tenant) (user_threshold{metric="db2_connections_active", severity="warning"})
+
+      - record: tenant:alert_threshold:db2_bufferpool_hit_ratio
+        expr: max by(tenant) (user_threshold{metric="db2_bufferpool_hit_ratio", severity="warning"})
+
+      - record: tenant:alert_threshold:db2_log_usage_percent
+        expr: max by(tenant) (user_threshold{metric="db2_log_usage_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:db2_deadlock_rate
+        expr: max by(tenant) (user_threshold{metric="db2_deadlock_rate", severity="warning"})
+
+      - record: tenant:alert_threshold:db2_tablespace_used_percent
+        expr: max by(tenant) (user_threshold{metric="db2_tablespace_used_percent", severity="warning"})
+
+  # -------------------------------------------------------
+  # Alert Rules: DB2
+  # -------------------------------------------------------
+  - name: db2-alerts
+    rules:
+      - alert: DB2DatabaseDown
+        expr: db2_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "DB2 instance {{ $labels.instance }} is DOWN"
+
+      - alert: DB2HighConnections
+        expr: |
+          (
+            tenant:db2_connections_active:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_connections_active
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB2 high active connections on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.0f\" }} active connections"
+
+      - alert: DB2LowBufferpoolHitRatio
+        expr: |
+          (
+            tenant:db2_bufferpool_hit_ratio:min
+            < on(tenant) group_left
+            tenant:alert_threshold:db2_bufferpool_hit_ratio
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
+          description: "Hit ratio: {{ $value | printf \"%.4f\" }} — check bufferpool sizing"
+
+      - alert: DB2HighLogUsage
+        expr: |
+          (
+            tenant:db2_log_usage_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_log_usage_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
+          description: "Log usage: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: DB2HighDeadlockRate
+        expr: |
+          (
+            tenant:db2_deadlocks:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_deadlock_rate
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
+          description: "{{ $value | printf \"%.1f\" }} deadlocks/sec"
+
+      - alert: DB2TablespaceAlmostFull
+        expr: |
+          (
+            tenant:db2_tablespace_used_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_tablespace_used_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
+          description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: DB2HighSortOverflow
+        expr: |
+          tenant:db2_sort_overflow_ratio:avg > 0.05
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"
+          description: "Sort overflow ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP"

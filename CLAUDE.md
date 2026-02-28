@@ -1,11 +1,11 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v0.12.0)
+## 專案概覽 (v0.13.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
-- **Prometheus**: Projected Volume 掛載 6 個 Rule Pack (`optional: true`)。Recording rules 用 `max by(tenant)` (非 `sum`)
+- **Prometheus**: Projected Volume 掛載 9 個 Rule Pack (`optional: true`)。Recording rules 用 `max by(tenant)` (非 `sum`)
 - **Enterprise**: Prefix 隔離 (`custom_`)、Metric Dictionary、Triage Mode、Shadow Monitoring
 - **Load Injection**: `run_load.sh` 支援 connections / cpu / stress-ng / composite 四種負載類型，整合進 demo + scenario
 
@@ -23,13 +23,9 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 9 | v0.10.0 | 三層治理模型 + RnR + CI deny-list linting + 文件重整, 51 測試案例 |
 | 10 | **v0.11.0** | AST 遷移引擎 (promql-parser) — migrate_rule v4, tenant label 注入, 54 測試案例 |
 | 11 | **v0.12.0** | Exporter 核心擴展 — B1 Regex 維度閾值 (`=~` + `_re` label) + B4 排程式閾值 (ScheduledValue + ResolveAt), 56 測試案例 |
+| 12 | **v0.13.0** | Enterprise DB Rule Packs (Oracle + DB2 + ClickHouse) + benchmark `--under-load` + Go micro-benchmark, 50 測試案例 |
 
 ## 規劃中 Phases
-
-### Phase 12 (v0.13.0) — DB Rule Pack 擴展 + Benchmark 強化 (B3 + B2)
-- B3: Oracle / DB2 rule-pack 模板 (B1 regex 維度閾值已完成，可直接使用)
-- B2: benchmark `--under-load` 模式 — 在新 rule-pack + 維度閾值到位後跑 benchmark 最有意義
-- scaffold_tenant 擴展支援新 DB 類型
 
 ### Phase 13 (v0.14.0) — 敘事重寫
 - README 痛點對比表更新：納入治理維度 (從「自動化工具」升級到「多租戶監控治理平台」)

@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.12.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.13.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念
@@ -47,12 +47,15 @@ graph TB
                 TE2["Replica 2\nport 8080"]
             end
 
-            subgraph Rules["Projected Volume\nRule Packs"]
+            subgraph Rules["Projected Volume\nRule Packs (×9)"]
                 RP1["configmap-rules-mariadb.yaml"]
                 RP2["configmap-rules-kubernetes.yaml"]
                 RP3["configmap-rules-redis.yaml"]
                 RP4["configmap-rules-mongodb.yaml"]
                 RP5["configmap-rules-elasticsearch.yaml"]
+                RP7["configmap-rules-oracle.yaml"]
+                RP8["configmap-rules-db2.yaml"]
+                RP9["configmap-rules-clickhouse.yaml"]
                 RP6["configmap-rules-platform.yaml"]
             end
 
@@ -231,7 +234,7 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 
 ## 3. Projected Volume 架構 (Rule Packs)
 
-### 3.1 六個獨立規則包
+### 3.1 九個獨立規則包
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|---------|-----------------|----------------|-------------|
@@ -240,8 +243,11 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 | Redis | Cache | `configmap-rules-redis` | 7 | 6 |
 | MongoDB | AppData | `configmap-rules-mongodb` | 7 | 6 |
 | Elasticsearch | Search | `configmap-rules-elasticsearch` | 7 | 7 |
+| Oracle | DBA / Oracle | `configmap-rules-oracle` | 6 | 7 |
+| DB2 | DBA / DB2 | `configmap-rules-db2` | 7 | 7 |
+| ClickHouse | Analytics | `configmap-rules-clickhouse` | 7 | 7 |
 | Platform | Platform | `configmap-rules-platform` | 0 | 4 |
-| **總計** | | | **33** | **35** |
+| **總計** | | | **53** | **56** |
 
 ### 3.2 自包含三部分結構
 
@@ -875,17 +881,17 @@ flowchart TD
 
 > **已於 v0.12.0 實現。** Config parser 擴展支援 `=~` 運算子（如 `tablespace=~"SYS.*"`），regex pattern 作為 `_re` 後綴 label 輸出至 Prometheus metric，由 PromQL recording rules 透過 `label_replace` + `=~` 在查詢時完成實際匹配。此設計保持 exporter 為純 config→metric 轉換器，不引入外部資料依賴。
 
-### 10.2 Oracle / DB2 Rule-Pack 模板 `[B3]`
+### 10.2 ~~Oracle / DB2 / ClickHouse Rule-Pack 模板~~ `[B3]` — ✅ 已完成 (v0.13.0)
 
-依賴 B1 完成。提供針對 Oracle（tablespace utilization、session count）和 DB2（lock wait、bufferpool hit ratio）的預設 rule-pack，讓企業 DBA 可以開箱即用。
+> **已於 v0.13.0 實現。** Oracle Rule Pack (6 + 5 + 7) 涵蓋 sessions、tablespace、wait_time、process、PGA、session_utilization。DB2 Rule Pack (7 + 5 + 7) 涵蓋 connections、bufferpool_hit_ratio (< 反轉)、log_usage、deadlocks、tablespace、lock_wait、sort_overflow。ClickHouse Rule Pack (7 + 5 + 7) 涵蓋 queries rate、TCP connections、max_part_count (merge 壓力)、replication queue、memory tracking、merge rate、failed queries。三者皆支援 B1 regex 維度閾值。Rule Packs 總數 6 → 9，scaffold_tenant 同步擴展。
 
 ### 10.3 ~~排程式閾值~~ `[B4]` — ✅ 已完成 (v0.12.0)
 
 > **已於 v0.12.0 實現。** `ScheduledValue` 自訂 YAML 型別支援雙格式：純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`。時間窗口為 UTC-only `HH:MM-HH:MM` 格式，支援跨午夜（如 `22:00-06:00`）。`ResolveAt(now time.Time)` 確保可測試性，45 個測試案例覆蓋邊界條件。
 
-### 10.4 Benchmark Under-Load 模式 `[B2]`
+### 10.4 ~~Benchmark Under-Load 模式~~ `[B2]` — ✅ 已完成 (v0.13.0)
 
-目前 `make benchmark` 僅測量 idle 狀態下的 hot-reload 延遲。此模式將在真實負載（composite load）運行期間同步測量 reload 延遲，證明「hot-reload 不影響生產環境效能」。
+> **已於 v0.13.0 實現。** `benchmark.sh --under-load [--tenants N]` 合成 N 個 synthetic tenants → patch ConfigMap → 量測 reload latency / memory delta / scrape duration / eval time。idle-state 基準新增 `scrape_duration_seconds`。`--json` 輸出包含 `under_load` 區段。Go micro-benchmark (`config_bench_test.go`) 提供 7 個 `testing.B` 函數，覆蓋 10/100/1000 tenants × scalar/mixed/night-window。
 
 ### 10.5 ~~遷移工具 AST 解析~~ `[B6]` — ✅ 已完成 (v0.11.0)
 
@@ -941,6 +947,6 @@ flowchart TD
 
 ---
 
-**文件版本：** v0.12.0 — 2026-02-28
-**最後更新：** Phase 11 Exporter Core Expansion — B1 Regex Dimensions + B4 Scheduled Thresholds (ScheduledValue, ResolveAt, _re suffix labels)
+**文件版本：** v0.13.0 — 2026-02-28
+**最後更新：** Phase 12 Enterprise DB Rule Packs (Oracle + DB2 + ClickHouse) + Benchmark Under-Load + Go Micro-Benchmark
 **維護者：** Platform Engineering Team

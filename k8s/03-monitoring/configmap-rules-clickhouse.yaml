@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-clickhouse
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: clickhouse
+data:
+  clickhouse-recording.yml: |
+    groups:
+      - name: clickhouse-normalization
+        rules:
+          - record: tenant:clickhouse_queries:rate5m
+            expr: |
+              sum by(tenant) (
+                rate(ClickHouseProfileEvents_Query{tenant!=""}[5m])
+              )
+          - record: tenant:clickhouse_active_connections:max
+            expr: |
+              max by(tenant) (
+                ClickHouseMetrics_TCPConnection{tenant!=""}
+              )
+          - record: tenant:clickhouse_max_part_count:max
+            expr: |
+              max by(tenant) (
+                ClickHouseAsyncMetrics_MaxPartCountForPartition{tenant!=""}
+              )
+          - record: tenant:clickhouse_replication_queue:max
+            expr: |
+              max by(tenant) (
+                ClickHouseMetrics_ReplicatedSendQueueSize{tenant!=""}
+                + ClickHouseMetrics_ReplicatedFetchQueueSize{tenant!=""}
+              )
+          - record: tenant:clickhouse_memory_tracking:max
+            expr: |
+              max by(tenant) (
+                ClickHouseMetrics_MemoryTracking{tenant!=""}
+              )
+          - record: tenant:clickhouse_merges_rate:rate5m
+            expr: |
+              sum by(tenant) (
+                rate(ClickHouseProfileEvents_MergedRows{tenant!=""}[5m])
+              )
+          - record: tenant:clickhouse_failed_queries:rate5m
+            expr: |
+              sum by(tenant) (
+                rate(ClickHouseProfileEvents_FailedQuery{tenant!=""}[5m])
+              )
+
+      - name: clickhouse-threshold-normalization
+        rules:
+          - record: tenant:alert_threshold:clickhouse_queries_rate
+            expr: |
+              max by(tenant) (
+                user_threshold{metric="clickhouse_queries_rate", severity="warning"}
+              )
+          - record: tenant:alert_threshold:clickhouse_active_connections
+            expr: |
+              max by(tenant) (
+                user_threshold{metric="clickhouse_active_connections", severity="warning"}
+              )
+          - record: tenant:alert_threshold:clickhouse_max_part_count
+            expr: |
+              max by(tenant) (
+                user_threshold{metric="clickhouse_max_part_count", severity="warning"}
+              )
+          - record: tenant:alert_threshold:clickhouse_replication_queue
+            expr: |
+              max by(tenant) (
+                user_threshold{metric="clickhouse_replication_queue", severity="warning"}
+              )
+          - record: tenant:alert_threshold:clickhouse_memory_tracking_bytes
+            expr: |
+              max by(tenant) (
+                user_threshold{metric="clickhouse_memory_tracking_bytes", severity="warning"}
+              )
+
+  clickhouse-alert.yml: |
+    groups:
+      - name: clickhouse-alerts
+        rules:
+          - alert: ClickHouseDown
+            expr: up{job="clickhouse"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "ClickHouse instance is DOWN"
+          - alert: ClickHouseHighQueryRate
+            expr: |
+              (
+                tenant:clickhouse_queries:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_queries_rate
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ClickHouse query rate exceeds threshold"
+          - alert: ClickHouseHighConnections
+            expr: |
+              (
+                tenant:clickhouse_active_connections:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_active_connections
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ClickHouse active connections exceed threshold"
+          - alert: ClickHouseHighPartCount
+            expr: |
+              (
+                tenant:clickhouse_max_part_count:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_max_part_count
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ClickHouse max part count per partition exceeds threshold (merge pressure)"
+          - alert: ClickHouseReplicationLag
+            expr: |
+              (
+                tenant:clickhouse_replication_queue:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_replication_queue
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ClickHouse replication queue size exceeds threshold"
+          - alert: ClickHouseHighMemoryUsage
+            expr: |
+              (
+                tenant:clickhouse_memory_tracking:max
+                > on(tenant) group_left
+                tenant:alert_threshold:clickhouse_memory_tracking_bytes
+              )
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ClickHouse memory tracking exceeds threshold"
+          - alert: ClickHouseHighFailedQueryRate
+            expr: |
+              tenant:clickhouse_failed_queries:rate5m > 10
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ClickHouse failed query rate > 10/s"

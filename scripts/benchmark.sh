@@ -1,7 +1,13 @@
 #!/bin/bash
 # ============================================================
 # benchmark.sh — 自動化效能基準測試
-# Usage: ./scripts/benchmark.sh [--json]
+# Usage: ./scripts/benchmark.sh [--json] [--under-load [--tenants N]]
+#
+# Modes:
+#   (default)      Idle-state benchmark — collect current cluster metrics
+#   --under-load   Generate N synthetic tenants, inject load, measure perf
+#                  Includes scrape duration, reload latency, memory delta
+#   --tenants N    Number of synthetic tenants (default: 100, max: 2000)
 # ============================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,7 +15,16 @@ source "${SCRIPT_DIR}/_lib.sh"
 
 # --- Options ---
 JSON_MODE=false
-[[ "${1:-}" == "--json" ]] && JSON_MODE=true
+UNDER_LOAD=false
+SYNTH_TENANTS=100
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) JSON_MODE=true; shift ;;
+    --under-load) UNDER_LOAD=true; shift ;;
+    --tenants) SYNTH_TENANTS="${2:-100}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 
 # --- Cleanup ---
 PF_PID=""
@@ -148,6 +163,10 @@ UT_SERIES=$(prom_count 'user_threshold' '0')
 TENANTS=$(prom_scalar 'count(count by(tenant)(user_threshold))' '0')
 TENANTS_INT=$(python3 -c "print(int(float(${TENANTS})))" 2>/dev/null || echo "0")
 
+# --- Scrape Duration ---
+SCRAPE_DUR_S=$(prom_scalar 'scrape_duration_seconds{job="threshold-exporter"}' '0')
+SCRAPE_DUR_MS=$(python3 -c "print(f'{float(${SCRAPE_DUR_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
+
 # --- Scaling Estimate (100 tenants) ---
 UT_PER_TENANT=0
 if [[ "${TENANTS_INT}" -gt 0 ]]; then
@@ -164,6 +183,176 @@ EST_MEM_DELTA_MB=$(python3 -c "
 delta_series = ${EST_UT_100} - ${UT_SERIES}
 print(f'{delta_series * 2 / 1024:.0f}')
 " 2>/dev/null || echo "N/A")
+
+# ============================================================
+# Under-Load Mode: synthetic tenants + metric collection
+# ============================================================
+UL_STATUS="skipped"
+UL_TENANTS_INJECTED=0
+UL_MEM_BEFORE_MB="N/A"
+UL_MEM_AFTER_MB="N/A"
+UL_MEM_DELTA_MB="N/A"
+UL_SCRAPE_DUR_MS="N/A"
+UL_RELOAD_LATENCY_S="N/A"
+UL_UT_SERIES_AFTER=0
+UL_ACTIVE_SERIES_AFTER=0
+
+if [[ "${UNDER_LOAD}" == true ]]; then
+  # Validate tenant count
+  if [[ "${SYNTH_TENANTS}" -gt 2000 ]]; then
+    warn "Capping synthetic tenants to 2000 (requested: ${SYNTH_TENANTS})"
+    SYNTH_TENANTS=2000
+  fi
+
+  log "Under-load mode: generating ${SYNTH_TENANTS} synthetic tenants..."
+
+  # --- Snapshot: before ---
+  UL_MEM_BEFORE_B=$(prom_scalar 'process_resident_memory_bytes{job="prometheus"}' '0')
+  UL_MEM_BEFORE_MB=$(python3 -c "print(f'{float(${UL_MEM_BEFORE_B})/1024/1024:.1f}')" 2>/dev/null || echo "N/A")
+
+  # --- Generate synthetic tenant YAML ---
+  SYNTH_DIR=$(mktemp -d)
+  trap "rm -rf ${SYNTH_DIR}; cleanup" EXIT
+
+  python3 -c "
+import yaml, os, stat
+tenants = {}
+for i in range(${SYNTH_TENANTS}):
+    name = f'synth-{i:04d}'
+    tenants[name] = {
+        'mysql_connections': str(50 + i % 100),
+        'mysql_cpu': str(60 + i % 40),
+        'container_cpu': str(70 + i % 30),
+        'container_memory': str(75 + i % 20),
+    }
+data = yaml.dump({'tenants': tenants}, default_flow_style=False)
+out = '${SYNTH_DIR}/synth-tenants.yaml'
+with open(out, 'w') as f:
+    f.write(data)
+os.chmod(out, 0o600)
+print(f'Generated {len(tenants)} tenants → {out}')
+"
+
+  # --- Patch ConfigMap with synthetic tenants ---
+  # Read current ConfigMap, merge synthetic tenants, apply
+  RELOAD_START=$(date +%s%N)
+
+  python3 -c "
+import subprocess, yaml, json, sys, os, stat
+
+# Read current ConfigMap
+result = subprocess.run(
+    ['kubectl', 'get', 'configmap', 'threshold-config', '-n', 'monitoring', '-o', 'json'],
+    capture_output=True, text=True
+)
+if result.returncode != 0:
+    print('Failed to read threshold-config ConfigMap', file=sys.stderr)
+    sys.exit(1)
+
+cm = json.loads(result.stdout)
+config_str = cm['data'].get('thresholds.yaml', '')
+config = yaml.safe_load(config_str) or {}
+
+# Merge synthetic tenants
+with open('${SYNTH_DIR}/synth-tenants.yaml') as f:
+    synth = yaml.safe_load(f)
+
+if 'tenants' not in config:
+    config['tenants'] = {}
+config['tenants'].update(synth.get('tenants', {}))
+
+# Write merged config
+merged = yaml.dump(config, default_flow_style=False)
+patch_json = json.dumps({'data': {'thresholds.yaml': merged}})
+patch_file = '${SYNTH_DIR}/patch.json'
+with open(patch_file, 'w') as f:
+    f.write(patch_json)
+os.chmod(patch_file, 0o600)
+
+# Apply patch
+result = subprocess.run(
+    ['kubectl', 'patch', 'configmap', 'threshold-config', '-n', 'monitoring',
+     '--type', 'merge', '-p', patch_json],
+    capture_output=True, text=True
+)
+if result.returncode != 0:
+    print(f'Patch failed: {result.stderr}', file=sys.stderr)
+    sys.exit(1)
+print(f'Patched ConfigMap with {len(synth.get(\"tenants\", {}))} synthetic tenants')
+" 2>/dev/null
+
+  # --- Wait for exporter reload (SHA-256 change detection) ---
+  info "Waiting for exporter hot-reload (up to 90s)..."
+  RELOAD_OK=false
+  for i in $(seq 1 30); do
+    # Check if exporter has reloaded by watching metric count growth
+    CURRENT_UT=$(prom_count 'user_threshold' '0')
+    if [[ "${CURRENT_UT}" -gt "$((UT_SERIES + SYNTH_TENANTS))" ]] 2>/dev/null; then
+      RELOAD_OK=true
+      break
+    fi
+    sleep 3
+  done
+
+  RELOAD_END=$(date +%s%N)
+  UL_RELOAD_LATENCY_S=$(python3 -c "print(f'{(${RELOAD_END} - ${RELOAD_START}) / 1e9:.1f}')" 2>/dev/null || echo "N/A")
+
+  if [[ "${RELOAD_OK}" == true ]]; then
+    log "Reload detected in ${UL_RELOAD_LATENCY_S}s"
+  else
+    warn "Reload not fully confirmed after 90s — collecting metrics anyway"
+  fi
+
+  UL_TENANTS_INJECTED=${SYNTH_TENANTS}
+
+  # --- Wait for Prometheus to scrape new metrics (2 cycles) ---
+  sleep 35
+
+  # --- Snapshot: after ---
+  UL_MEM_AFTER_B=$(prom_scalar 'process_resident_memory_bytes{job="prometheus"}' '0')
+  UL_MEM_AFTER_MB=$(python3 -c "print(f'{float(${UL_MEM_AFTER_B})/1024/1024:.1f}')" 2>/dev/null || echo "N/A")
+  UL_MEM_DELTA_MB=$(python3 -c "print(f'{(float(${UL_MEM_AFTER_B}) - float(${UL_MEM_BEFORE_B}))/1024/1024:.1f}')" 2>/dev/null || echo "N/A")
+
+  UL_SCRAPE_DUR_S=$(prom_scalar 'scrape_duration_seconds{job="threshold-exporter"}' '0')
+  UL_SCRAPE_DUR_MS=$(python3 -c "print(f'{float(${UL_SCRAPE_DUR_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
+
+  UL_UT_SERIES_AFTER=$(prom_count 'user_threshold' '0')
+  UL_ACTIVE_SERIES_AFTER=$(prom_scalar 'prometheus_tsdb_head_series' '0')
+
+  UL_EVAL_TIME_S=$(prom_scalar 'sum(prometheus_rule_group_last_duration_seconds)')
+  UL_EVAL_TIME_MS=$(python3 -c "print(f'{float(${UL_EVAL_TIME_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
+
+  # --- Cleanup: remove synthetic tenants from ConfigMap ---
+  info "Cleaning up synthetic tenants..."
+  python3 -c "
+import subprocess, yaml, json, sys
+
+result = subprocess.run(
+    ['kubectl', 'get', 'configmap', 'threshold-config', '-n', 'monitoring', '-o', 'json'],
+    capture_output=True, text=True
+)
+cm = json.loads(result.stdout)
+config = yaml.safe_load(cm['data'].get('thresholds.yaml', '')) or {}
+
+# Remove synth- tenants
+tenants = config.get('tenants', {})
+synth_keys = [k for k in tenants if k.startswith('synth-')]
+for k in synth_keys:
+    del tenants[k]
+
+merged = yaml.dump(config, default_flow_style=False)
+patch_json = json.dumps({'data': {'thresholds.yaml': merged}})
+subprocess.run(
+    ['kubectl', 'patch', 'configmap', 'threshold-config', '-n', 'monitoring',
+     '--type', 'merge', '-p', patch_json],
+    capture_output=True, text=True
+)
+print(f'Removed {len(synth_keys)} synthetic tenants')
+" 2>/dev/null
+
+  UL_STATUS="completed"
+  log "Under-load benchmark complete."
+fi
 
 # ============================================================
 # Output
@@ -185,7 +374,8 @@ data = {
     'prometheus_cpu_cores': float('${PROM_CPU_FMT}') if '${PROM_CPU_FMT}' != 'N/A' else None,
     'prometheus_memory_mb': float('${PROM_MEM_MB}') if '${PROM_MEM_MB}' != 'N/A' else None,
     'exporter_pods': json.loads('${EXPORTER_MEM_JSON}'),
-    'exporter_memory_source': '${EXPORTER_MEM_SOURCE}'
+    'exporter_memory_source': '${EXPORTER_MEM_SOURCE}',
+    'scrape_duration_ms': float('${SCRAPE_DUR_MS}') if '${SCRAPE_DUR_MS}' != 'N/A' else None
   },
   'storage_cardinality': {
     'tsdb_storage_mb': float('${TSDB_SIZE_MB}') if '${TSDB_SIZE_MB}' != 'N/A' else None,
@@ -198,7 +388,19 @@ data = {
     'est_user_threshold_series': int('${EST_UT_100}'),
     'est_total_series': int(float('${ACTIVE_SERIES}')) - int('${UT_SERIES}') + int('${EST_UT_100}'),
     'est_additional_memory_mb': float('${EST_MEM_DELTA_MB}') if '${EST_MEM_DELTA_MB}' != 'N/A' else None
-  }
+  },
+  'under_load': {
+    'status': '${UL_STATUS}',
+    'synthetic_tenants': int('${UL_TENANTS_INJECTED}'),
+    'reload_latency_s': float('${UL_RELOAD_LATENCY_S}') if '${UL_RELOAD_LATENCY_S}' != 'N/A' else None,
+    'memory_before_mb': float('${UL_MEM_BEFORE_MB}') if '${UL_MEM_BEFORE_MB}' != 'N/A' else None,
+    'memory_after_mb': float('${UL_MEM_AFTER_MB}') if '${UL_MEM_AFTER_MB}' != 'N/A' else None,
+    'memory_delta_mb': float('${UL_MEM_DELTA_MB}') if '${UL_MEM_DELTA_MB}' != 'N/A' else None,
+    'scrape_duration_ms': float('${UL_SCRAPE_DUR_MS}') if '${UL_SCRAPE_DUR_MS}' != 'N/A' else None,
+    'eval_time_ms': float('${UL_EVAL_TIME_MS}') if '${UL_EVAL_TIME_MS}' != 'N/A' else None,
+    'user_threshold_series': int('${UL_UT_SERIES_AFTER}'),
+    'active_series': int(float('${UL_ACTIVE_SERIES_AFTER}')) if '${UL_ACTIVE_SERIES_AFTER}' != '0' else None
+  } if '${UL_STATUS}' != 'skipped' else None
 }
 print(json.dumps(data, indent=2))
 "
@@ -220,6 +422,7 @@ else
   printf "    %-26s %s cores\n" "Prometheus CPU (5m avg)" "${PROM_CPU_FMT}"
   printf "    %-26s %sMB RSS\n" "Prometheus Memory" "${PROM_MEM_MB}"
   printf "    %-26s %s %s\n" "Exporter Memory (x2 HA)" "${EXPORTER_MEM_DISPLAY}" "${EXPORTER_MEM_SOURCE}"
+  printf "    %-26s %sms\n" "Scrape Duration" "${SCRAPE_DUR_MS}"
   echo ""
   echo "  Storage & Cardinality"
   printf "    %-26s %sMB\n" "TSDB Storage" "${TSDB_SIZE_MB}"
@@ -231,6 +434,18 @@ else
   printf "    %-26s ~%s series (+%s)\n" "Est. user_threshold" "${EST_UT_100}" "$((EST_UT_100 - UT_SERIES))"
   printf "    %-26s ~%s\n" "Est. Total Series" "${EST_SERIES_100}"
   printf "    %-26s ~%sMB\n" "Est. Additional Memory" "${EST_MEM_DELTA_MB}"
+
+  if [[ "${UL_STATUS}" != "skipped" ]]; then
+    echo ""
+    echo "  Under-Load Results (${UL_TENANTS_INJECTED} synthetic tenants)"
+    printf "    %-26s %ss\n" "Reload Latency" "${UL_RELOAD_LATENCY_S}"
+    printf "    %-26s %sMB → %sMB (Δ %sMB)\n" "Prometheus Memory" "${UL_MEM_BEFORE_MB}" "${UL_MEM_AFTER_MB}" "${UL_MEM_DELTA_MB}"
+    printf "    %-26s %sms\n" "Scrape Duration (after)" "${UL_SCRAPE_DUR_MS}"
+    printf "    %-26s %sms\n" "Eval Time (after)" "${UL_EVAL_TIME_MS}"
+    printf "    %-26s %s → %s\n" "user_threshold Series" "${UT_SERIES}" "${UL_UT_SERIES_AFTER}"
+    printf "    %-26s %s\n" "Active Series (after)" "${UL_ACTIVE_SERIES_AFTER}"
+  fi
+
   echo ""
   echo "==========================================================="
   log "Benchmark complete. Use --json for machine-readable output."

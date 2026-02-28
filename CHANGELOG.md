@@ -2,6 +2,53 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v0.13.0] - Enterprise DB Rule Packs & Benchmark (2026-02-28)
+
+Oracle + DB2 + ClickHouse Rule Pack 擴展，benchmark `--under-load` 模式，Go micro-benchmark。
+
+### 🗃️ Enterprise DB Rule Packs (B3)
+
+* **Oracle Rule Pack** (`rule-packs/rule-pack-oracle.yaml` + `configmap-rules-oracle.yaml`)
+  * 6 normalization recording rules + 5 threshold normalization + 7 alert rules
+  * 涵蓋: sessions_active, tablespace_used_percent, wait_time rate, process_count, PGA, session_utilization
+  * Regex 維度範例: `oracle_tablespace_used_percent{tablespace_name=~"USERS|DATA.*"}`
+* **DB2 Rule Pack** (`rule-packs/rule-pack-db2.yaml` + `configmap-rules-db2.yaml`)
+  * 7 normalization recording rules + 5 threshold normalization + 7 alert rules
+  * 涵蓋: connections_active, bufferpool_hit_ratio (< 反轉), log_usage, deadlocks, tablespace, lock_wait, sort_overflow
+  * Regex 維度範例: `db2_bufferpool_hit_ratio{bufferpool_name=~"IBMDEFAULT.*"}`
+* **ClickHouse Rule Pack** (`rule-packs/rule-pack-clickhouse.yaml` + `configmap-rules-clickhouse.yaml`)
+  * 7 normalization recording rules + 5 threshold normalization + 7 alert rules
+  * 涵蓋: queries rate, TCP connections, max_part_count (merge 壓力), replication queue, memory tracking, merge rate, failed queries
+  * Regex 維度範例: `clickhouse_max_part_count{database=~"prod_.*"}`
+* **Rule Packs 總數**: 6 → 9 (Projected Volume `optional: true`)
+
+### 📊 Benchmark 強化 (B2)
+
+* **`benchmark.sh --under-load [--tenants N]`**: 合成 N 個 synthetic tenants → patch ConfigMap → 量測 reload latency / memory delta / scrape duration / eval time
+* **Scrape Duration**: idle-state 基準也納入 `scrape_duration_seconds{job="threshold-exporter"}`
+* **JSON 輸出**: `--json` 模式包含 `under_load` 區段，供 CI pipeline 自動化比對
+* **Go micro-benchmark** (`config_bench_test.go`): 7 個 `testing.B` 函數，覆蓋 10/100/1000 tenants × scalar/mixed/night-window
+
+### 🔧 Tooling
+
+* **`scaffold_tenant.py`**: 新增 `oracle` + `db2` + `clickhouse` 至 `RULE_PACKS` catalogue (含 dimensional_example)
+* **`metric-dictionary.yaml`**: 新增 Oracle 5 + DB2 5 + ClickHouse 5 = 15 個指標對照條目
+
+### 🧪 Testing
+
+* **51 個新 Python 測試** (`test_scaffold_db.py`): RULE_PACKS catalogue / non-interactive generation / metric dictionary / rule pack YAML 結構驗證 (Oracle + DB2 + ClickHouse)
+* **19 個新 Shell 測試** (test-scaffold.sh): Oracle/DB2/ClickHouse/composite scaffold + catalog
+
+### 📄 Documentation
+
+* `rule-packs/README.md`: 6 → 9 packs，新增 Oracle + DB2 + ClickHouse rows + exporter links
+* `deployment-prometheus.yaml`: Projected Volume 新增 3 個 ConfigMap (oracle, db2, clickhouse)
+* `architecture-and-design.md`: §3.1 表格 + Mermaid 圖更新至 9 個 Rule Pack，版本 → v0.13.0
+* `CLAUDE.md`: Phase 12 → version history, 9 Rule Packs
+* `CHANGELOG.md`: v0.13.0 entry
+
+---
+
 ## [v0.12.0] - Exporter Core Expansion: B1 + B4 (2026-02-28)
 
 threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值覆蓋。

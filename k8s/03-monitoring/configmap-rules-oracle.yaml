@@ -1,0 +1,160 @@
+# ============================================================
+# Oracle Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-oracle.yaml
+# Maintained by: DBA Team / Oracle Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-oracle
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: oracle
+data:
+  oracle-recording.yml: |
+    groups:
+      - name: oracle-normalization
+        interval: 15s
+        rules:
+          - record: tenant:oracle_sessions_active:max
+            expr: max by(tenant) (oracledb_sessions_active)
+
+          - record: tenant:oracle_tablespace_used_percent:max
+            expr: max by(tenant) (oracledb_tablespace_used_percent)
+
+          - record: tenant:oracle_wait_time:rate5m
+            expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))
+
+          - record: tenant:oracle_process_count:max
+            expr: max by(tenant) (oracledb_process_count)
+
+          - record: tenant:oracle_pga_allocated_bytes:max
+            expr: max by(tenant) (oracledb_pga_allocated_bytes)
+
+          - record: tenant:oracle_session_utilization:ratio
+            expr: |
+              max by(tenant) (oracledb_sessions_active)
+              / max by(tenant) (oracledb_resource_limit{resource="sessions"} > 0)
+
+      - name: oracle-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:oracle_sessions_active
+            expr: max by(tenant) (user_threshold{metric="oracle_sessions_active", severity="warning"})
+
+          - record: tenant:alert_threshold:oracle_tablespace_used_percent
+            expr: max by(tenant) (user_threshold{metric="oracle_tablespace_used_percent", severity="warning"})
+
+          - record: tenant:alert_threshold:oracle_wait_time_rate
+            expr: max by(tenant) (user_threshold{metric="oracle_wait_time_rate", severity="warning"})
+
+          - record: tenant:alert_threshold:oracle_process_count
+            expr: max by(tenant) (user_threshold{metric="oracle_process_count", severity="warning"})
+
+          - record: tenant:alert_threshold:oracle_pga_allocated_bytes
+            expr: max by(tenant) (user_threshold{metric="oracle_pga_allocated_bytes", severity="warning"})
+
+  oracle-alert.yml: |
+    groups:
+      - name: oracle-alerts
+        rules:
+          - alert: OracleDatabaseDown
+            expr: oracledb_up == 0
+            for: 15s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Oracle instance {{ $labels.instance }} is DOWN"
+
+          - alert: OracleHighActiveSessions
+            expr: |
+              (
+                tenant:oracle_sessions_active:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_sessions_active
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Oracle high active sessions on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.0f\" }} active sessions"
+
+          - alert: OracleTablespaceAlmostFull
+            expr: |
+              (
+                tenant:oracle_tablespace_used_percent:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_tablespace_used_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Oracle tablespace nearing capacity on {{ $labels.tenant }}"
+              description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
+
+          - alert: OracleHighWaitTime
+            expr: |
+              (
+                tenant:oracle_wait_time:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_wait_time_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Oracle high wait time on {{ $labels.tenant }}"
+              description: "Wait time rate: {{ $value | printf \"%.1f\" }}s/s"
+
+          - alert: OracleHighProcessCount
+            expr: |
+              (
+                tenant:oracle_process_count:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_process_count
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Oracle high process count on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.0f\" }} active processes"
+
+          - alert: OracleHighPGAUsage
+            expr: |
+              (
+                tenant:oracle_pga_allocated_bytes:max
+                > on(tenant) group_left
+                tenant:alert_threshold:oracle_pga_allocated_bytes
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Oracle high PGA usage on {{ $labels.tenant }}"
+              description: "PGA allocated: {{ $value | humanize1024 }}B"
+
+          - alert: OracleHighSessionUtilization
+            expr: |
+              tenant:oracle_session_utilization:ratio > 0.85
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Oracle session limit approaching on {{ $labels.tenant }}"
+              description: "Session utilization: {{ $value | printf \"%.0f\" }}%"
