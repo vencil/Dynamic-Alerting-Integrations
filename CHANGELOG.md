@@ -323,6 +323,13 @@ threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值
 * **`offboard_tenant.py`**: 安全 Tenant 下架工具，含 Pre-check（檔案存在、跨引用掃描）+ 執行模式。
 * **`deprecate_rule.py`**: 規則/指標三步下架工具 — (1) _defaults.yaml 設 disable (2) 掃描清除 tenant 殘留 (3) 產出 ConfigMap 清理指引。支援批次處理多個 metric。
 
+### 🧪 Testing: v0.6.0 Self-Review (R1)
+* **`test_migrate_v3.py`** (38 tests): migrate_rule v3 核心邏輯 — guess_aggregation 6-rule heuristic、lookup_dictionary、parse_expr regex path、MigrationResult 資料結構、process_rule (perfect/complex/unparseable/golden/shadow)、write_triage_csv、write_prefix_mapping、收斂率計算修正驗證、load_metric_dictionary
+* **`test_offboard_deprecate.py`** (34 tests): offboard/deprecate/validate 三工具純邏輯 — find_config_file、check_cross_references、get_tenant_metrics、run_precheck、scan_for_metric (含 dimensional key)、disable_in_defaults (preview/execute)、remove_from_tenants、extract_value_map、compare_vectors (8 status 分支)
+
+### 🐛 Fixes
+* **收斂率計算 Bug (A1)**: `write_outputs()` 中 `golden_matches` 包含 unparseable 規則，導致 `convertible` 被過度扣減。修正為 `golden_parseable` 排除 `status == "unparseable"` 的規則。
+
 ---
 
 ## [v0.5.0] - Enterprise High Availability (Phase 4) (2026-02-26)

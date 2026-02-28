@@ -16,7 +16,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 2 | v0.2.0~v0.3.0 | Directory Scanner, SHA-256 Hot-reload, 維度標籤, migrate_rule v1~v2 |
 | 3 | v0.4.0 | Projected Volume 5 Rule Packs, scaffold_tenant, SAST 修復 |
 | 4 | v0.5.0 | HA ×2, PDB, Anti-Affinity, Platform Self-Monitoring (第 6 個 Rule Pack) |
-| 5 | v0.6.0 | migrate_rule v3 (Triage/Prefix/Dictionary), Shadow Monitoring, offboard/deprecate 工具 |
+| 5 | v0.6.0 | migrate_rule v3 (Triage/Prefix/Dictionary), Shadow Monitoring, offboard/deprecate 工具, 72 測試案例 |
 | 6 | v0.7.0 | Load Injection Toolkit, _lib.sh 模組化, demo-full, 文件 + 企業價值主張更新, 34 測試案例 |
 | 7 | v0.8.0 | Composite Load, Scenario E/F, Shadow Monitoring SOP, Baseline Discovery, 版本統一, 28 測試案例 |
 | 8 | v0.9.0 | BYOP 整合指南, da-tools CLI 容器, CI/CD 版號治理, 測試矩陣 + Mermaid 流程圖, 15 測試案例 |

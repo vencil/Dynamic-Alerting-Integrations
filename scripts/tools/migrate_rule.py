@@ -857,8 +857,11 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
         f.write(f"  🚨 無法解析 (需 LLM 協助): {len(unparseable)}\n")
         f.write(f"  📖 建議使用黃金標準: {len(golden_matches)}\n\n")
 
-        # 收斂率統計
-        convertible = len(perfect) + len(complex_rules) - len(golden_matches)
+        # 收斂率統計 — 排除 unparseable 的 golden matches 避免多扣
+        golden_parseable = len([r for r in results
+                                if r.triage_action == "use_golden"
+                                and r.status != "unparseable"])
+        convertible = len(perfect) + len(complex_rules) - golden_parseable
         if convertible > 0:
             f.write(f"📊 收斂率統計:\n")
             f.write(f"  輸入: {len(results)} 條傳統規則\n")
@@ -922,7 +925,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     # --- v3: Prefix Mapping ---
     mapping_path = write_prefix_mapping(results, output_dir, prefix)
 
-    return len(perfect), len(complex_rules), len(unparseable), len(golden_matches)
+    return len(perfect), len(complex_rules), len(unparseable), golden_parseable
 
 
 def print_dry_run(results):
