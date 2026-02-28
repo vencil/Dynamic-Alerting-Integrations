@@ -55,6 +55,8 @@ def _build_rules():
         "components/da-tools/README.md",
         "docs/byo-prometheus-integration.md",
         "docs/migration-guide.md",
+        "docs/custom-rule-governance.md",
+        "docs/custom-rule-governance.en.md",
     ]
 
     tools_rules = []
@@ -161,6 +163,20 @@ def _build_rules():
         "replacement": lambda v: f"**版本**：v{v}",
     })
 
+    # Governance doc version headers
+    platform_rules.append({
+        "file": "docs/custom-rule-governance.md",
+        "desc": "governance doc (zh) version header",
+        "pattern": r"\*\*版本\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**版本**: v{v}",
+    })
+    platform_rules.append({
+        "file": "docs/custom-rule-governance.en.md",
+        "desc": "governance doc (en) version header",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**Version**: v{v}",
+    })
+
     # threshold-exporter README title
     platform_rules.append({
         "file": "components/threshold-exporter/README.md",
@@ -177,12 +193,12 @@ def _build_rules():
         "replacement": lambda v: f"version: {v}",
     })
 
-    # CLAUDE.md project overview
+    # CLAUDE.md project overview (only the "## 專案概覽 (vX.Y.Z)" line)
     platform_rules.append({
         "file": "CLAUDE.md",
         "desc": "CLAUDE.md project overview version",
-        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+\)",
-        "replacement": lambda v: f"v{v})",
+        "pattern": r"專案概覽 \(v[0-9]+\.[0-9]+\.[0-9]+\)",
+        "replacement": lambda v: f"專案概覽 (v{v})",
     })
 
     # da-tools README platform version reference

@@ -211,7 +211,7 @@ python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/c
 # 透過 da-tools 容器執行（不需 clone 專案）
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:0.1.0 \
+  ghcr.io/vencil/da-tools:0.2.0 \
   lint /data/rules --ci
 
 # 輸出範例
