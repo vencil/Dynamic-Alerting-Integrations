@@ -675,6 +675,202 @@ class TestWriteOutputsIntegration(unittest.TestCase):
                 self.assertEqual(row[0], "TestSimple")  # Alert Name
 
 
+class TestAutoSuppression(unittest.TestCase):
+    """Auto-Suppression: warning ↔ critical 配對測試。"""
+
+    def _make_pair(self, prefix="custom_", base_metric="mysql_connections",
+                   op=">", warn_val="100", crit_val="200"):
+        """產生一組 warning + critical 規則並處理。"""
+        warn_rule = {
+            "alert": "TestHighConn",
+            "expr": f"{base_metric} {op} {warn_val}",
+            "labels": {"severity": "warning"},
+        }
+        crit_rule = {
+            "alert": "TestHighConnCritical",
+            "expr": f"{base_metric} {op} {crit_val}",
+            "labels": {"severity": "critical"},
+        }
+        warn_r = migrate_rule.process_rule(
+            warn_rule, prefix=prefix, dictionary={}, use_ast=True
+        )
+        crit_r = migrate_rule.process_rule(
+            crit_rule, prefix=prefix, dictionary={}, use_ast=True
+        )
+        return [warn_r, crit_r]
+
+    def test_basic_pairing(self):
+        """基本配對: warning + critical → warning 應有雙層 unless。"""
+        results = self._make_pair()
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 1)
+
+        warn_expr = results[0].alert_rules[0]["expr"]
+        # 應有兩個 unless
+        self.assertEqual(warn_expr.count("unless on(tenant)"), 2)
+        # 第一個 unless 是 maintenance
+        self.assertIn('user_state_filter{filter="maintenance"}', warn_expr)
+        # 第二個 unless 引用 critical threshold
+        self.assertIn("alert_threshold:custom_mysql_connections_critical",
+                       warn_expr)
+
+    def test_critical_not_modified(self):
+        """critical 的 expr 不應被修改。"""
+        results = self._make_pair()
+        crit_expr_before = results[1].alert_rules[0]["expr"]
+        migrate_rule.apply_auto_suppression(results)
+        crit_expr_after = results[1].alert_rules[0]["expr"]
+        self.assertEqual(crit_expr_before, crit_expr_after)
+
+    def test_no_pairing_warning_only(self):
+        """只有 warning 沒有 critical → 不配對。"""
+        warn_rule = {
+            "alert": "TestWarnOnly",
+            "expr": "my_metric > 50",
+            "labels": {"severity": "warning"},
+        }
+        results = [migrate_rule.process_rule(
+            warn_rule, prefix="custom_", dictionary={}, use_ast=True
+        )]
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 0)
+        # 仍然只有一個 unless
+        self.assertEqual(
+            results[0].alert_rules[0]["expr"].count("unless on(tenant)"), 1
+        )
+
+    def test_no_pairing_critical_only(self):
+        """只有 critical 沒有 warning → 不配對。"""
+        crit_rule = {
+            "alert": "TestCritOnly",
+            "expr": "my_metric > 100",
+            "labels": {"severity": "critical"},
+        }
+        results = [migrate_rule.process_rule(
+            crit_rule, prefix="custom_", dictionary={}, use_ast=True
+        )]
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 0)
+
+    def test_no_pairing_different_metrics(self):
+        """不同 metric 的 warning/critical → 不配對。"""
+        warn_rule = {
+            "alert": "TestConn",
+            "expr": "metric_a > 50",
+            "labels": {"severity": "warning"},
+        }
+        crit_rule = {
+            "alert": "TestCPU",
+            "expr": "metric_b > 100",
+            "labels": {"severity": "critical"},
+        }
+        results = [
+            migrate_rule.process_rule(
+                warn_rule, prefix="custom_", dictionary={}, use_ast=True),
+            migrate_rule.process_rule(
+                crit_rule, prefix="custom_", dictionary={}, use_ast=True),
+        ]
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 0)
+
+    def test_multiple_pairs(self):
+        """多組配對: 各自獨立配對。"""
+        results = (
+            self._make_pair(base_metric="metric_a", warn_val="10", crit_val="20")
+            + self._make_pair(base_metric="metric_b", warn_val="30", crit_val="60")
+        )
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 2)
+
+        # 兩個 warning 都有雙層 unless
+        for r in results:
+            if r.severity == "warning":
+                self.assertEqual(
+                    r.alert_rules[0]["expr"].count("unless on(tenant)"), 2
+                )
+
+    def test_operator_preserved(self):
+        """< 運算子: suppression 子句應使用相同運算子。"""
+        results = self._make_pair(op="<", warn_val="100", crit_val="50")
+        migrate_rule.apply_auto_suppression(results)
+        warn_expr = results[0].alert_rules[0]["expr"]
+        # 應有 "< on(tenant) group_left" 在 suppression 子句
+        lines = warn_expr.split("\n")
+        # 尋找 suppression 區塊中的運算子
+        suppression_ops = [l.strip() for l in lines
+                           if "on(tenant) group_left" in l]
+        # 第一個是原始 alert expr，第二個是 suppression
+        self.assertEqual(len(suppression_ops), 2)
+        self.assertTrue(suppression_ops[1].startswith("<"))
+
+    def test_notes_added(self):
+        """配對後 warning result 應有 Auto-Suppression 備註。"""
+        results = self._make_pair()
+        migrate_rule.apply_auto_suppression(results)
+        notes = results[0].notes
+        self.assertTrue(any("Auto-Suppression" in n for n in notes))
+
+    def test_unparseable_skipped(self):
+        """unparseable 規則不參與配對。"""
+        results = self._make_pair()
+        results[1].status = "unparseable"  # 標記 critical 為 unparseable
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 0)
+
+    def test_golden_skipped(self):
+        """use_golden 規則不參與配對。"""
+        results = self._make_pair()
+        results[1].triage_action = "use_golden"
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 0)
+
+    def test_write_outputs_with_suppression(self):
+        """端到端: write_outputs 產出的 alert YAML 包含雙層 unless。"""
+        import tempfile
+
+        results = self._make_pair()
+        migrate_rule.apply_auto_suppression(results)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            migrate_rule.write_outputs(results, tmpdir, prefix="custom_",
+                                        dictionary={})
+            alert_path = os.path.join(tmpdir, "platform-alert-rules.yaml")
+            with open(alert_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # warning alert 應有雙層 unless
+            self.assertIn("alert_threshold:custom_mysql_connections_critical",
+                          content)
+            self.assertEqual(content.count("unless on(tenant)"), 3)
+            # 3 = warning(2) + critical(1)
+
+    def test_dry_run_with_suppression(self):
+        """dry-run path: print_dry_run 不應因 suppressed expr 而崩潰。"""
+        import io
+        import contextlib
+
+        results = self._make_pair()
+        migrate_rule.apply_auto_suppression(results)
+
+        # Capture stdout — 確認 print_dry_run 能正常輸出
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            migrate_rule.print_dry_run(results)
+
+        output = buf.getvalue()
+        # 應包含兩條規則的摘要
+        self.assertIn("TestHighConn", output)
+        self.assertIn("TestHighConnCritical", output)
+
+    def test_no_prefix_pairing(self):
+        """prefix="" 時也能正確配對。"""
+        results = self._make_pair(prefix="")
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 1)
+        warn_expr = results[0].alert_rules[0]["expr"]
+        self.assertIn("alert_threshold:mysql_connections_critical", warn_expr)
+
+
 if __name__ == "__main__":
     print(f"AST Engine available: {HAS_AST}")
     if HAS_AST:

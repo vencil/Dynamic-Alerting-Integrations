@@ -2,7 +2,7 @@
 
 > **Language / 語言：** [English](README.en.md) | **中文（當前）**
 
-> **企業級多租戶監控治理平台** v1.0.0 — 配置驅動閾值、租戶零 PromQL、9 個預載規則包 (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform)、AST 遷移引擎、三層治理模型、Regex 維度閾值、排程式時間窗口、HA 部署。
+> **企業級多租戶監控治理平台** v1.0.1 — 配置驅動閾值、租戶零 PromQL、9 個預載規則包 (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform)、AST 遷移引擎、三層治理模型、Regex 維度閾值、排程式時間窗口、HA 部署。
 
 ---
 

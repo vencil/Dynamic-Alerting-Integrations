@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.0.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.0.1 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
@@ -250,15 +250,17 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+    unless on(tenant)                    # ← Auto-Suppression：critical 觸發時抑制 warning
+    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
 ```
 
-**結果：**
-- 連線數 ≥ 150 (critical)：只觸發 critical 警報
-- 連線數 100-150 (warning only)：觸發 warning 警報
+**結果：**（雙層 `unless` 邏輯）
+- 連線數 ≥ 150 (critical)：warning 被第二層 `unless` 抑制，只觸發 critical 警報
+- 連線數 100–150 (warning only)：第二層 `unless` 不成立，正常觸發 warning 警報
 
 ### 2.4 Regex 維度閾值 (Regex Dimension Thresholds)
 
@@ -556,6 +558,8 @@ make benchmark ARGS="--under-load --tenants 1000"
 
 **結論：** 10→100→1000 租戶，Scalar resolve 的 ns/op 呈線性增長（~10x / ~19x），記憶體也線性（26KB→196KB→3.7MB）。Mixed（含 ScheduledValue）的額外開銷約 3.4× Scalar。1000 租戶的完整 resolve 仍在 5ms 以內。5 輪量測的 stddev 控制在中位數的 2–5% 內，確認結果穩定可重現。
 
+> **與 §4.2 的關係：** §4.2 量測的是 **Prometheus 規則評估**——由於規則數固定為 O(M)，評估時間不隨租戶數增長（2 租戶 ~20ms ≈ 100 租戶 ~20ms）。本節量測的是 **threshold-exporter 設定解析**——每多一個租戶就多一份設定要 resolve，因此成本為 O(N) 線性增長。兩者互補：平台最關鍵的瓶頸（規則評估）恆定不變，次要成本（設定解析）雖線性增長，但 1000 租戶仍僅 ~5ms，遠低於 Prometheus 15 秒抓取週期，對端到端效能影響可忽略。
+
 ### 4.8 Rule Evaluation Scaling Curve
 
 量測 Rule Pack 數量對 Prometheus rule evaluation 時間的邊際影響。透過逐步移除 Rule Pack（9→6→3）並量測 `prometheus_rule_group_last_duration_seconds`，可觀察 evaluation 成本是否呈線性增長。
@@ -842,11 +846,20 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
       user_threshold{metric="slave_lag"}
 ```
 
+**閾值 vs 資料——聚合方式的差異：**
+
+此問題僅涉及 **threshold（閾值）recording rules**。閾值本質上是一個設定值（例如「連線上限 100」），無論幾個 exporter 副本回報，數值都相同，因此 `max by(tenant)` 是語義上唯一正確的聚合方式——不存在需要 `sum` 的場景。平台在兩層保證這一點：
+
+1. **Platform Rule Packs**：所有 threshold recording rules 固定使用 `max by(tenant)`
+2. **`migrate_rule.py` AST 引擎**：產出的 threshold recording rule 也固定為 `max by(tenant)`，使用者無法覆寫
+
+另一方面，**data（資料）recording rules** 的聚合方式依語義而異。例如 `mysql_threads_connected`（當前連線數）每個副本觀察到的是同一個值，用 `max`；但 `rate(requests_total)`（每秒請求量）若來自不同來源，可能需要 `sum`。Data recording rules 的聚合策略可透過 metric dictionary 指定，不受本節 threshold 聚合約束的影響。
+
 ---
 
 ## 9. 已實現的進階場景 (Implemented Advanced Scenarios)
 
-### 9.1 Scenario D：維護模式與複合警報 (已實現 ✓)
+### 9.1 維護模式與複合警報 (已實現 ✓)
 
 所有 Alert Rules 內建 `unless maintenance` 邏輯，租戶可透過 state_filter 一鍵靜音：
 
@@ -1067,6 +1080,8 @@ flowchart LR
 3. **Shadow Monitoring**：`validate_migration.py` 驗證遷移前後的數值一致性（容差 ≤ 5%）
 4. **上線**：透過 `scaffold_tenant.py` 產出完整的租戶配置包
 
+> **為什麼容差是 5%？** 遷移前後的 PromQL 查詢結果不可能完全一致，因為存在三個天然誤差來源：(1) **時間窗口偏移**——新舊規則在不同 evaluation cycle 被評估，對 `rate()` / `irate()` 等時間敏感函數會產生取樣偏差；(2) **聚合路徑改變**——從嵌入式 PromQL 改為 recording rule 引用，多一層 evaluation cycle 的時序延遲；(3) **浮點精度**——不同 expression 路徑的浮點運算可能在末位小數產生差異。5% 的設計目標是「寬鬆到足以容納這些天然抖動，但嚴格到能偵測語義錯誤」（例如漏了 label filter 或聚合方式錯誤）。若特定場景需要更嚴格或更寬鬆的容差，可透過 `--tolerance` 參數調整。
+
 ---
 
 ## 11. 未來擴展路線 (Future Roadmap)
@@ -1149,6 +1164,6 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 ---
 
-**文件版本：** v1.0.0 — 2026-03-01
+**文件版本：** v1.0.1 — 2026-03-01
 **最後更新：** v1.0.0 GA Release — 文件重構 + 基準數據更新：§4 性能分析全面改為多輪統計量測（idle-state ×5, scaling-curve ×3, Go micro-benchmark ×5），報告 mean ± stddev / median (range)
 **維護者：** Platform Engineering Team

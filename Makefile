@@ -8,6 +8,7 @@ CLUSTER  := dynamic-alerting-cluster
 TENANT   ?= db-a
 COMP     ?= threshold-exporter
 ENV      ?= local
+OCI_REGISTRY ?= ghcr.io/vencil
 
 # ----------------------------------------------------------
 # 部署與環境
@@ -180,6 +181,23 @@ bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS))
+
+# ----------------------------------------------------------
+# Helm Chart 發佈
+# ----------------------------------------------------------
+CHART_DIR  := components/threshold-exporter
+CHART_VER  := $(shell grep '^version:' $(CHART_DIR)/Chart.yaml | awk '{print $$2}')
+
+.PHONY: chart-package
+chart-package: ## 打包 Helm chart (.tgz)
+	@mkdir -p .build
+	@helm package $(CHART_DIR) -d .build/
+	@echo "✓ .build/threshold-exporter-$(CHART_VER).tgz"
+
+.PHONY: chart-push
+chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker login ghcr.io)
+	@helm push .build/threshold-exporter-$(CHART_VER).tgz oci://$(OCI_REGISTRY)/charts
+	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
 
 .PHONY: help
 help: ## 顯示說明

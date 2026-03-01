@@ -7,23 +7,23 @@
 
 ## 你在哪個階段？(Where Are You?)
 
-| 你的情境 | 推薦路徑 | 工具 | 預估時間 |
+| 你的情境 | 推薦路徑 | 工具 (`da-tools` 命令) | 預估時間 |
 |----------|----------|------|---------|
-| **全新租戶** — 首次接入 | 互動式產生 tenant config | `scaffold_tenant.py` | ~5 min |
-| **已有傳統 alert rules** — 要遷移 | 自動轉換為三件套 | `migrate_rule.py` | ~15 min |
-| **大型租戶 (1000+ 條)** — 企業級遷移 | Triage → Shadow → 切換 | `migrate_rule.py --triage` + `validate_migration.py` | ~1-2 週 |
+| **全新租戶** — 首次接入 | 互動式產生 tenant config | `da-tools scaffold` | ~5 min |
+| **已有傳統 alert rules** — 要遷移 | 自動轉換為三件套 | `da-tools migrate` | ~15 min |
+| **大型租戶 (1000+ 條)** — 企業級遷移 | Triage → Shadow → 切換 | `da-tools migrate --triage` + `da-tools validate` | ~1-2 週 |
 | **不支援的 DB 類型** — 需擴展 | 手動建立 Recording + Alert Rules | 參見 [§9](#9-進階擴展不支援的-db-類型) | ~30 min |
-| **下架租戶/指標** | 安全移除 | `offboard_tenant.py` / `deprecate_rule.py` | ~5 min |
+| **下架租戶/指標** | 安全移除 | `da-tools offboard` / `da-tools deprecate` | ~5 min |
 
 ```mermaid
 flowchart TD
     Start["開始遷移"] --> Q1{"有既有<br/>Prometheus<br/>alert rules?"}
-    Q1 -->|"沒有"| S1["scaffold_tenant.py<br/>互動式產生配置"]
+    Q1 -->|"沒有"| S1["da-tools scaffold<br/>互動式產生配置"]
     Q1 -->|"有"| Q2{"規則數量?"}
-    Q2 -->|"< 100 條"| S2["migrate_rule.py<br/>--dry-run 預覽"]
-    Q2 -->|"100+ 條"| S3["migrate_rule.py<br/>--triage 分類"]
+    Q2 -->|"< 100 條"| S2["da-tools migrate<br/>--dry-run 預覽"]
+    Q2 -->|"100+ 條"| S3["da-tools migrate<br/>--triage 分類"]
     S2 --> D1["檢視輸出 →<br/>kubectl apply"]
-    S3 --> S4["Shadow Monitoring<br/>validate_migration.py"]
+    S3 --> S4["Shadow Monitoring<br/>da-tools validate"]
     S4 --> S5["漸進切換<br/>(數週並行觀察)"]
     S1 --> Done["✅ 完成"]
     D1 --> Done
@@ -43,8 +43,8 @@ flowchart TD
 
 ## 目錄
 
-1. [新租戶快速接入 — scaffold_tenant.py](#1-新租戶快速接入--scaffold_tenantpy)
-2. [既有規則遷移 — migrate_rule.py](#2-既有規則遷移--migrate_rulepy)
+1. [新租戶快速接入 — da-tools scaffold](#1-新租戶快速接入--da-tools-scaffold)
+2. [既有規則遷移 — da-tools migrate](#2-既有規則遷移--da-tools-migrate)
 3. [部署 threshold-exporter](#3-部署-threshold-exporter)
 4. [實戰範例：五種遷移場景](#4-實戰範例五種遷移場景)
 5. [Alertmanager 路由遷移](#5-alertmanager-路由遷移)
@@ -59,25 +59,25 @@ flowchart TD
 
 ---
 
-## 1. 新租戶快速接入 — scaffold_tenant.py
+## 1. 新租戶快速接入 — da-tools scaffold
 
 對於全新租戶，使用互動式產生器即可在 30 秒內完成設定：
 
 ```bash
-# 互動模式 — 逐步引導選擇 DB 類型與指標
-python3 scripts/tools/scaffold_tenant.py
-
 # CLI 模式 — 一行搞定
-python3 scripts/tools/scaffold_tenant.py --tenant redis-prod --db redis,mariadb -o output/
+docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.0.0 \
+  scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 
 # 查看支援的 DB 類型與指標
-python3 scripts/tools/scaffold_tenant.py --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.0.0 scaffold --catalog
 ```
 
-> **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
+> **已 clone 專案？** 也可直接執行 Python 腳本：
 > ```bash
-> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.0.0 \
->   scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
+> python3 scripts/tools/scaffold_tenant.py --tenant redis-prod --db redis,mariadb -o output/
+> python3 scripts/tools/scaffold_tenant.py --catalog
+> # 互動模式（僅限本地執行）
+> python3 scripts/tools/scaffold_tenant.py
 > ```
 
 ### 工具產出
@@ -90,35 +90,59 @@ python3 scripts/tools/scaffold_tenant.py --catalog
 
 所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，產出的 config 直接複製至 `conf.d/` 即可使用，無需額外掛載。
 
+### 注入 K8s 叢集
+
+scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-exporter 才能讀取：
+
+```bash
+# 方式 A (推薦): Helm values 覆寫 — OCI registry
+#   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
+helm upgrade threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  -n monitoring -f values-override.yaml
+
+# 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
+kubectl create configmap threshold-config \
+  --from-file=conf.d/ \
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+```
+
+ConfigMap 變更後，exporter 會在 1-3 分鐘內自動 hot-reload（K8s propagation + SHA-256 watcher），不需重啟 Pod。
+
+> 詳細的三種注入方式（Helm / kubectl / GitOps）參見 [threshold-exporter README — K8s 部署與配置管理](../components/threshold-exporter/README.md#k8s-部署與配置管理)。
+
 ---
 
-## 2. 既有規則遷移 — migrate_rule.py
+## 2. 既有規則遷移 — da-tools migrate
 
 已有傳統 Prometheus alert rules 的團隊，使用自動轉換工具（v4 — AST + regex 雙引擎）：
 
 ```bash
 # 預覽模式 — 不產出檔案，只顯示分析結果
-python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --dry-run
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  migrate /data/legacy-rules.yml --dry-run
 
-# 正式轉換 — 輸出至 migration_output/
-python3 scripts/tools/migrate_rule.py <legacy-rules.yml>
+# 正式轉換 — 輸出至 output/
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  migrate /data/legacy-rules.yml -o /data/output
 
-# 互動模式 — 手動確認每個聚合模式
-python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --interactive
+# Triage + Dry Run（企業級遷移推薦）
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
 
 # 強制使用 regex 模式 (不使用 AST 引擎)
-python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --no-ast
-
-# 指定輸出目錄
-python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  migrate /data/legacy-rules.yml --no-ast
 ```
 
 > 工具預設使用 PromQL AST 引擎 (`promql-parser`) 精準辨識 metric name，自動注入 `custom_` 前綴與 `tenant` label。AST 解析失敗時自動降級至 regex 路徑，確保向後相容。
 
-> **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
+> **已 clone 專案？** 也可直接執行 Python 腳本，並支援互動模式：
 > ```bash
-> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
->   migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
+> python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --dry-run
+> python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
+> # 互動模式 — 手動確認每個聚合模式（僅限本地執行）
+> python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --interactive
 > ```
 
 ### 三種處理情境
@@ -137,8 +161,32 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 |------|------|
 | `tenant-config.yaml` | 租戶需填入 `db-*.yaml` 的 YAML 片段 |
 | `platform-recording-rules.yaml` | 平台團隊的正規化 Recording Rules (合法 YAML，含 `groups:` boilerplate) |
-| `platform-alert-rules.yaml` | 包含 `group_left` + `unless maintenance` 的 Alert Rules |
+| `platform-alert-rules.yaml` | 包含 `group_left` + `unless maintenance` + Auto-Suppression 的 Alert Rules |
 | `migration-report.txt` | 轉換摘要與未解析規則的 LLM Prompt |
+
+### 部署至 K8s 叢集
+
+轉換後的三件套需分別部署至不同位置：
+
+```bash
+# 1. tenant-config.yaml → 合併至 threshold-config ConfigMap
+#    將 tenant-config.yaml 內容合併至 conf.d/<tenant>.yaml，再更新 ConfigMap
+kubectl create configmap threshold-config \
+  --from-file=conf.d/ \
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+# 2. Recording Rules + Alert Rules → 建立為獨立 ConfigMap，掛載至 Prometheus
+kubectl create configmap prometheus-rules-custom \
+  --from-file=platform-recording-rules.yaml \
+  --from-file=platform-alert-rules.yaml \
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+# 3. 確認 Prometheus Projected Volume 已包含此 ConfigMap
+#    若使用 Helm，在 values.yaml 中加入新 source；
+#    若已有 custom rule pack slot，ConfigMap 建立後自動掛載
+```
+
+> **Helm 使用者**：也可將 recording/alert rules 整合至 Helm chart 的 values 中統一管理。詳見 [threshold-exporter README](../components/threshold-exporter/README.md#k8s-部署與配置管理)。
 
 ### 聚合模式智能猜測
 
@@ -155,18 +203,43 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 # ============================================================
 ```
 
+### Auto-Suppression (自動抑制)
+
+當輸入的規則同時包含 warning 和 critical 版本（相同 base metric key），工具會自動配對並為 warning alert 注入第二層 `unless` 子句。這確保 critical 觸發時抑制 warning，避免重複告警：
+
+```yaml
+# 轉換前 (兩條獨立傳統規則)
+- alert: HighConnections       # severity: warning, expr: connections > 100
+- alert: HighConnectionsCrit   # severity: critical, expr: connections > 200
+
+# 轉換後 (warning 自動帶 auto-suppression)
+- alert: CustomHighConnections
+  expr: |
+    ( tenant:custom_connections:max > on(tenant) group_left tenant:alert_threshold:custom_connections )
+    unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+    unless on(tenant)                           # ← Auto-Suppression
+    ( tenant:custom_connections:max > on(tenant) group_left tenant:alert_threshold:custom_connections_critical )
+```
+
+配對邏輯：以 tenant_config 的 metric key 為基礎，warning key `custom_X` 對應 critical key `custom_X_critical`。若只有單一嚴重度則不注入。
+
 ---
 
 ## 3. 部署 threshold-exporter
 
-### 選項 A (推薦): 官方 Image
+> **Config 分離原則**：Helm chart 和 Docker image **均不包含測試租戶資料**。`values.yaml` 的 `thresholdConfig.tenants` 預設為空。你需要透過 values-override 或 GitOps 注入自身的租戶設定（參見 [§1 注入 K8s 叢集](#注入-k8s-叢集)）。開發測試環境使用 `environments/local/threshold-exporter.yaml`，其中已包含 db-a、db-b 範例租戶。
+
+### 選項 A (推薦): OCI Registry
 
 ```bash
-helm upgrade --install threshold-exporter ./components/threshold-exporter \
+# 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
+helm upgrade --install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
   -n monitoring --create-namespace \
-  --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=1.0.0
+  -f values-override.yaml
 ```
+
+> 不需要 clone repo 或指定 image tag——chart 內已綁定對應版本的 image。
 
 ### 選項 B: 本地建置
 
@@ -184,6 +257,62 @@ kubectl get pods -n monitoring -l app=threshold-exporter
 curl -s http://localhost:8080/metrics | grep user_threshold
 curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 ```
+
+### 在 K8s 叢集內使用 da-tools
+
+當 threshold-exporter 部署在客戶的 K8s 環境中，da-tools 也可以直接作為 K8s Job 運行，省去 port-forward 和本地 Docker 環境的設定：
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: da-tools-scaffold
+  namespace: monitoring
+spec:
+  template:
+    spec:
+      containers:
+        - name: da-tools
+          image: ghcr.io/vencil/da-tools:1.0.0
+          args:
+            - scaffold
+            - --tenant
+            - db-c
+            - --db
+            - mariadb,redis
+            - --non-interactive
+            - -o
+            - /output
+          volumeMounts:
+            - name: output
+              mountPath: /output
+      volumes:
+        - name: output
+          emptyDir: {}
+      restartPolicy: Never
+  backoffLimit: 0
+```
+
+```bash
+# 取回 Job 產出
+kubectl cp monitoring/da-tools-scaffold-<pod>:/output ./scaffold-output/
+
+# 將產出注入 threshold-config ConfigMap
+kubectl create configmap threshold-config \
+  --from-file=conf.d/ \
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+```
+
+叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus，適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令：
+
+```bash
+# 環境變數設定 Prometheus 端點
+env:
+  - name: PROMETHEUS_URL
+    value: "http://prometheus.monitoring.svc.cluster.local:9090"
+```
+
+> 長期運行的 Shadow Monitoring Job 範例參見 [§11 企業級遷移 Phase B](#11-企業級遷移--大型租戶-1000-條規則)。
 
 ---
 
@@ -392,11 +521,17 @@ route:
 curl -s http://localhost:8080/metrics | grep 'user_threshold{.*connections'
 
 # 確認 Alert 狀態
-python3 scripts/tools/check_alert.py MariaDBHighConnections db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.0.0 \
+  check-alert MariaDBHighConnections db-a
 
-# 租戶健康總檢
+# 租戶健康總檢（需叢集存取，僅限本地 Python 執行）
 python3 scripts/tools/diagnose.py db-a
 ```
+
+> **已 clone 專案？** `check_alert.py` 也可直接執行：
+> ```bash
+> python3 scripts/tools/check_alert.py MariaDBHighConnections db-a
+> ```
 
 ### Checklist
 
@@ -476,7 +611,7 @@ tenants:
 
 ## 8. LLM 輔助手動轉換
 
-當 `migrate_rule.py` 遇到無法解析的規則，它會產出可直接交 LLM 的 Prompt。你也可以用以下 System Prompt 批量轉換：
+當 `da-tools migrate` 遇到無法解析的規則，它會產出可直接交 LLM 的 Prompt。你也可以用以下 System Prompt 批量轉換：
 
 ```
 你是一位 SRE 專家，負責將傳統 Prometheus Alert Rules 遷移到「動態多租戶閾值架構」。
@@ -532,7 +667,7 @@ tenant:<component>_<metric>:<aggregation_function>
 4. 建立獨立 ConfigMap (`configmap-rules-<db>.yaml`)
 5. 在 `deployment-prometheus.yaml` 的 projected volume 中加入新 source
 6. 在 `_defaults.yaml` 加入預設閾值
-7. 用 `scaffold_tenant.py` 產生 tenant config
+7. 用 `da-tools scaffold` 產生 tenant config
 
 完整 Rule Pack 結構參見 [rule-packs/README.md](../rule-packs/README.md)。
 
@@ -577,7 +712,8 @@ kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 
 ```bash
 # 產出 CSV 分桶報告 — 在 Excel 中批次決策
-python3 scripts/tools/migrate_rule.py legacy-rules.yml --triage -o triage_output/
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 ```
 
 工具自動將規則分為四桶：
@@ -587,13 +723,14 @@ python3 scripts/tools/migrate_rule.py legacy-rules.yml --triage -o triage_output
 | `auto` | 簡單表達式，可自動轉換 | 直接採用 |
 | `review` | 複雜表達式，已猜測聚合模式 | 在 CSV 中確認 |
 | `skip` | 無法自動轉換 | 交 LLM 或手動處理 |
-| `use_golden` | 字典比對到黃金標準 | 直接用 `scaffold_tenant.py` 設定閾值 |
+| `use_golden` | 字典比對到黃金標準 | 直接用 `da-tools scaffold` 設定閾值 |
 
 ### Phase B: 轉換 + Shadow Monitoring
 
 ```bash
 # 1. 正式轉換 (自動帶 custom_ 前綴)
-python3 scripts/tools/migrate_rule.py legacy-rules.yml -o migration_output/
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  migrate /data/legacy-rules.yml -o /data/migration_output/
 
 # 2. 部署新規則 (帶 shadow label，不觸發通知)
 kubectl apply -f migration_output/platform-recording-rules.yaml
@@ -604,18 +741,29 @@ kubectl apply -f migration_output/platform-alert-rules.yaml
 
 # 4. 持續比對新舊 Recording Rule 數值
 #    叢集內 (推薦): 透過 K8s Service 存取 Prometheus
-python3 scripts/tools/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
-  --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \
+docker run --rm --network=host \
+  -v $(pwd)/migration_output:/data \
+  -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
+  ghcr.io/vencil/da-tools:1.0.0 \
+  validate --mapping /data/prefix-mapping.yaml \
   --watch --interval 60 --rounds 1440
 
 #    本地開發: 透過 port-forward
 kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
-python3 scripts/tools/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
-  --prometheus http://localhost:9090 \
+docker run --rm --network=host \
+  -v $(pwd)/migration_output:/data \
+  ghcr.io/vencil/da-tools:1.0.0 \
+  validate --mapping /data/prefix-mapping.yaml \
   --watch --interval 60 --rounds 1440
 ```
+
+> **已 clone 專案？** 也可直接用 Python 腳本：
+> ```bash
+> python3 scripts/tools/migrate_rule.py legacy-rules.yml -o migration_output/
+> python3 scripts/tools/validate_migration.py \
+>   --mapping migration_output/prefix-mapping.yaml \
+>   --prometheus http://localhost:9090 --watch --interval 60 --rounds 1440
+> ```
 
 **長期 Shadow Monitoring (K8s Job)**：大型客戶建議將驗證腳本包成 Job，在叢集內持續運行 1-2 週：
 
@@ -662,7 +810,7 @@ spec:
 
 ### Phase C: 切換與收斂
 
-運行 1-2 週，`validate_migration.py` 持續比對所有規則對的數值輸出。確認所有 mismatch 均已調查並排除後：
+運行 1-2 週，`da-tools validate` 持續比對所有規則對的數值輸出。確認所有 mismatch 均已調查並排除後：
 
 1. 移除舊規則
 2. 拿掉新規則的 `migration_status: shadow` label
@@ -671,10 +819,10 @@ spec:
 
 ### Metric Dictionary 自動比對
 
-`migrate_rule.py` v4 內建啟發式字典 (`metric-dictionary.yaml`)，自動比對傳統指標與黃金標準：
+`da-tools migrate` (v4) 內建啟發式字典 (`metric-dictionary.yaml`)，自動比對傳統指標與黃金標準：
 
 ```
-📖 MySQLTooManyConnections: 建議改用黃金標準 MariaDBHighConnections (scaffold_tenant.py)
+📖 MySQLTooManyConnections: 建議改用黃金標準 MariaDBHighConnections (da-tools scaffold)
 ```
 
 平台團隊可直接編輯 `scripts/tools/metric-dictionary.yaml` 擴充字典，不需改 Python code。
@@ -721,10 +869,12 @@ kubectl create configmap prometheus-rules-mariadb \
 
 ```bash
 # 預檢模式 — 確認無外部依賴
-python3 scripts/tools/offboard_tenant.py db-a
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+  offboard db-a
 
 # 確認後執行
-python3 scripts/tools/offboard_tenant.py db-a --execute
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+  offboard db-a --execute
 ```
 
 Pre-check 項目：設定檔存在性、跨檔案引用掃描、已設定指標清單。
@@ -739,14 +889,23 @@ Pre-check 項目：設定檔存在性、跨檔案引用掃描、已設定指標�
 
 ```bash
 # 預覽模式
-python3 scripts/tools/deprecate_rule.py mysql_slave_lag
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+  deprecate mysql_slave_lag
 
 # 執行 (修改檔案)
-python3 scripts/tools/deprecate_rule.py mysql_slave_lag --execute
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+  deprecate mysql_slave_lag --execute
 
 # 批次處理
-python3 scripts/tools/deprecate_rule.py mysql_slave_lag mysql_innodb_buffer_pool --execute
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+  deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute
 ```
+
+> **已 clone 專案？** 也可直接用 Python 腳本：
+> ```bash
+> python3 scripts/tools/offboard_tenant.py db-a [--execute]
+> python3 scripts/tools/deprecate_rule.py mysql_slave_lag [--execute]
+> ```
 
 三步自動化：
 1. `_defaults.yaml` 中設為 `"disable"`

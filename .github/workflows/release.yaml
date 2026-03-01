@@ -1,0 +1,116 @@
+# release.yaml — Build & push container images + Helm chart on tag
+#
+# 觸發條件：推送 v* tag（例如 v1.1.0）
+# 產出：
+#   - ghcr.io/vencil/threshold-exporter:<version>  (Docker image)
+#   - ghcr.io/vencil/da-tools:<da-tools-version>    (Docker image, 僅 tools/* tag)
+#   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
+#
+# 前置條件：
+#   - Repository Settings → Actions → Workflow permissions → Read and write
+#   - 或建立 PAT 並設為 GHCR_TOKEN secret
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "tools/v*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: vencil
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ----------------------------------------------------------------
+  # Job 1: Build & push threshold-exporter image + Helm chart
+  # ----------------------------------------------------------------
+  release-exporter:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Chart.yaml version matches tag
+        run: |
+          CHART_VER=$(grep '^version:' components/threshold-exporter/Chart.yaml | awk '{print $2}')
+          if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            echo "Run: make bump-docs EXPORTER=${{ steps.version.outputs.VERSION }}"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Docker image ---
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push threshold-exporter image
+        uses: docker/build-push-action@v6
+        with:
+          context: components/threshold-exporter/app
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:latest
+
+      # --- Helm chart ---
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p .build
+          helm package components/threshold-exporter -d .build/
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+
+  # ----------------------------------------------------------------
+  # Job 2: Build & push da-tools image (only on tools/* tags)
+  # ----------------------------------------------------------------
+  release-da-tools:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/tools/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#tools/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push da-tools image
+        uses: docker/build-push-action@v6
+        with:
+          context: components/da-tools/app
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest

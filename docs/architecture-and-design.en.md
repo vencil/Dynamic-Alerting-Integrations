@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.0.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.0.1).
 
 **This document covers:**
 - System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
@@ -251,15 +251,17 @@ Platform Alert Rules use `unless` logic to auto-suppress warning when critical t
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+    unless on(tenant)                    # ← Auto-Suppression: suppress warning when critical fires
+    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
 ```
 
-**Result:**
-- Connection count ≥ 150 (critical): only critical alert fires
-- Connection count 100-150 (warning only): warning alert fires
+**Result:** (dual `unless` logic)
+- Connection count ≥ 150 (critical): warning suppressed by second `unless`, only critical alert fires
+- Connection count 100–150 (warning only): second `unless` does not match, warning alert fires normally
 
 ### 2.4 Regex Dimension Thresholds
 
@@ -557,6 +559,8 @@ make benchmark ARGS="--under-load --tenants 1000"
 
 **Conclusion:** From 10→100→1000 tenants, Scalar resolve ns/op grows linearly (~10×/~19×), memory also linear (26KB→196KB→3.7MB). Mixed (with ScheduledValue) adds ~3.4× overhead over Scalar. Full resolve for 1000 tenants stays under 5ms. 5-round stddev within 2–5% of median, confirming stable and reproducible results.
 
+> **Relationship to §4.2:** §4.2 measures **Prometheus rule evaluation** — since rule count is fixed at O(M), evaluation time does not grow with tenant count (2 tenants ~20ms ≈ 100 tenants ~20ms). This section measures **threshold-exporter config resolution** — each additional tenant adds one more config to resolve, so the cost is O(N) linear growth. The two are complementary: the platform's most critical bottleneck (rule evaluation) remains constant, while the secondary cost (config resolution) grows linearly but stays at ~5ms even at 1000 tenants — well below Prometheus's 15-second scrape interval and negligible in end-to-end performance.
+
 ### 4.8 Rule Evaluation Scaling Curve
 
 Measures the marginal impact of Rule Pack count on Prometheus rule evaluation time. By progressively removing Rule Packs (9→6→3) and measuring `prometheus_rule_group_last_duration_seconds`, we can observe whether evaluation cost grows linearly.
@@ -843,11 +847,20 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
       user_threshold{metric="slave_lag"}
 ```
 
+**Threshold vs Data — Aggregation Differences:**
+
+This issue applies only to **threshold recording rules**. A threshold is inherently a configuration value (e.g., "connection limit = 100") — regardless of how many exporter replicas report it, the value is identical. Therefore `max by(tenant)` is the only semantically correct aggregation; there is no scenario where `sum` would be needed. The platform enforces this at two levels:
+
+1. **Platform Rule Packs**: All threshold recording rules use `max by(tenant)` by design
+2. **`migrate_rule.py` AST engine**: Generated threshold recording rules are hardcoded to `max by(tenant)` — users cannot override this
+
+On the other hand, **data recording rules** use context-dependent aggregation. For example, `mysql_threads_connected` (current connection count) reports the same value from every replica, so `max` is correct. But `rate(requests_total)` (per-second request volume) from distinct sources may require `sum`. Data recording rule aggregation can be specified via the metric dictionary and is not constrained by the threshold aggregation rule described in this section.
+
 ---
 
 ## 9. Implemented Advanced Scenarios
 
-### 9.1 Scenario D: Maintenance Mode and Composite Alerts (Implemented ✓)
+### 9.1 Maintenance Mode and Composite Alerts (Implemented ✓)
 
 All Alert Rules have built-in `unless maintenance` logic, tenants can mute with one state_filter switch:
 
@@ -1068,6 +1081,8 @@ The complete migration path integrates the AST engine, Shadow Monitoring, and Tr
 3. **Shadow Monitoring**: `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%)
 4. **Go-live**: `scaffold_tenant.py` generates the complete tenant configuration package
 
+> **Why 5% tolerance?** PromQL query results before and after migration cannot be perfectly identical due to three inherent sources of variance: (1) **Evaluation timing offset** — old and new rules are evaluated in different cycles, causing sampling differences for time-sensitive functions like `rate()` / `irate()`; (2) **Aggregation path change** — migrating from inline PromQL to recording rule references introduces an additional evaluation cycle of temporal offset; (3) **Floating-point precision** — different expression paths may produce minor differences in trailing decimal places. The 5% threshold is designed to be "tolerant enough to absorb these natural fluctuations, yet strict enough to detect semantic errors" (e.g., missing label filters or incorrect aggregation). If a specific scenario requires tighter or looser tolerance, use the `--tolerance` flag to adjust.
+
 ---
 
 ## 11. Future Roadmap
@@ -1150,6 +1165,6 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v1.0.0 — 2026-03-01
+**Document version:** v1.0.1 — 2026-03-01
 **Last updated:** v1.0.0 GA Release — Document restructuring: completed features moved to main body (§2.4 Regex Dimensions, §2.5 Scheduled Thresholds, §4.7 Under-Load Benchmarks, §10 AST Migration Engine), Future Roadmap streamlined to unrealized items only. §4 Benchmark data updated to multi-round statistical measurements (idle ×5, scaling-curve ×3, Go micro-bench ×5).
 **Maintainer:** Platform Engineering Team

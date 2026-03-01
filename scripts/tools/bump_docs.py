@@ -4,21 +4,24 @@
 掃描 repo 中的文件、Chart.yaml、VERSION 檔案，批次更新版號引用。
 三條版號線獨立管理：--platform / --exporter / --tools。
 
+Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
+--exporter 同時更新：Chart.yaml version + appVersion + image tag + OCI chart references。
+
 用法:
+  # 更新 exporter 版號 (Chart.yaml version + appVersion + image tag + OCI chart)
+  python3 scripts/tools/bump_docs.py --exporter 1.1.0
+
   # 更新 da-tools 版號 (所有 image tag + VERSION)
-  python3 scripts/tools/bump_docs.py --tools 0.2.0
+  python3 scripts/tools/bump_docs.py --tools 1.1.0
 
   # 更新平台文件版號
-  python3 scripts/tools/bump_docs.py --platform 0.10.0
-
-  # 更新 exporter 版號 (appVersion + image tag)
-  python3 scripts/tools/bump_docs.py --exporter 0.6.0
+  python3 scripts/tools/bump_docs.py --platform 1.1.0
 
   # 只檢查不修改 (CI lint 用)
   python3 scripts/tools/bump_docs.py --check
 
   # 組合使用
-  python3 scripts/tools/bump_docs.py --platform 0.10.0 --tools 0.2.0 --exporter 0.6.0
+  python3 scripts/tools/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0
 """
 import argparse
 import os
@@ -57,6 +60,7 @@ def _build_rules():
         "docs/migration-guide.md",
         "docs/custom-rule-governance.md",
         "docs/custom-rule-governance.en.md",
+        "docs/shadow-monitoring-sop.md",
     ]
 
     tools_rules = []
@@ -100,7 +104,14 @@ def _build_rules():
     })
 
     # --- exporter version rules ---
+    # Chart.yaml version 與 appVersion 同步（chart 版號 = exporter 版號）
     exporter_rules = [
+        {
+            "file": "components/threshold-exporter/Chart.yaml",
+            "desc": "Chart.yaml version (chart release)",
+            "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"version: {v}",
+        },
         {
             "file": "components/threshold-exporter/Chart.yaml",
             "desc": "Chart.yaml appVersion",
@@ -109,9 +120,15 @@ def _build_rules():
         },
         {
             "file": "docs/migration-guide.md",
-            "desc": "Helm --set image.tag in migration guide",
-            "pattern": r"--set image\.tag=[0-9]+\.[0-9]+\.[0-9]+",
-            "replacement": lambda v: f"--set image.tag={v}",
+            "desc": "OCI chart --version in migration guide",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "components/threshold-exporter/README.md",
+            "desc": "OCI chart --version in exporter README",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "components/da-tools/README.md",
@@ -188,13 +205,7 @@ def _build_rules():
         "replacement": lambda v: f"# Threshold Exporter (v{v})",
     })
 
-    # Chart.yaml version (chart structure version)
-    platform_rules.append({
-        "file": "components/threshold-exporter/Chart.yaml",
-        "desc": "Chart.yaml version (chart structure)",
-        "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
-        "replacement": lambda v: f"version: {v}",
-    })
+    # NOTE: Chart.yaml version 已移至 exporter_rules（chart 版號 = exporter 版號）
 
     # CLAUDE.md project overview (only the "## 專案概覽 (vX.Y.Z)" line)
     platform_rules.append({
@@ -218,6 +229,20 @@ def _build_rules():
         "replacement": lambda v: f"| 平台文件 | v{v}",
     })
 
+    # README.md / README.en.md intro version
+    platform_rules.append({
+        "file": "README.md",
+        "desc": "README.md intro version",
+        "pattern": r"治理平台\*\* v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"治理平台** v{v}",
+    })
+    platform_rules.append({
+        "file": "README.en.md",
+        "desc": "README.en.md intro version",
+        "pattern": r"Governance Platform\*\* v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"Governance Platform** v{v}",
+    })
+
     return {
         "platform": platform_rules,
         "exporter": exporter_rules,
@@ -233,15 +258,20 @@ def read_current_versions():
     """Read current versions from source-of-truth files."""
     versions = {}
 
-    # Platform version from Chart.yaml 'version' field
+    # Exporter version from Chart.yaml (version = appVersion = exporter version)
     if CHART_YAML.exists():
         content = CHART_YAML.read_text()
-        m = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
-        if m:
-            versions["platform"] = m.group(1)
         m = re.search(r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE)
         if m:
             versions["exporter"] = m.group(1)
+
+    # Platform version from CLAUDE.md "專案概覽 (vX.Y.Z)"
+    claude_md = REPO_ROOT / "CLAUDE.md"
+    if claude_md.exists():
+        content = claude_md.read_text()
+        m = re.search(r"專案概覽 \(v([0-9]+\.[0-9]+\.[0-9]+)\)", content)
+        if m:
+            versions["platform"] = m.group(1)
 
     # da-tools version from VERSION file
     if DA_TOOLS_VERSION.exists():

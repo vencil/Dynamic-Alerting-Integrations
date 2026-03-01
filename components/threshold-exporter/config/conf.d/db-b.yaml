@@ -1,4 +1,5 @@
-# db-b.yaml — Tenant-managed thresholds
+# db-b.yaml — Tenant-managed thresholds (DEVELOPMENT EXAMPLE)
+# ⚠️  此檔為開發參考範本，不會被包含在發布的 Helm chart 或 Docker image 中。
 tenants:
   db-b:
     mysql_connections: "100"

@@ -1,0 +1,23 @@
+# Patterns to ignore when building Helm chart packages.
+# This supports shell glob matching, relative path matching, and
+# negation (prefixed with !). Only one pattern per line.
+
+# Go source & Dockerfile (image 獨立 build)
+app/
+
+# Directory Scanner 開發範本 (不屬於 chart)
+config/
+
+# Documentation (README 不需進 chart .tgz)
+README.md
+
+# Version control
+.git
+.gitignore
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

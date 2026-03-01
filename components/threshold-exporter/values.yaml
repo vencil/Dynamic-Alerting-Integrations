@@ -50,19 +50,19 @@ thresholdConfig:
       severity: "info"
       default_state: "disable"
 
-  tenants:
-    db-a:
-      mysql_connections: "70"
-      # Scenario B: stricter container CPU for db-a
-      container_cpu: "70"
-      # All state filters enabled (default)
-    db-b:
-      mysql_connections: "100"
-      mysql_cpu: "60"
-      # Scenario B: relaxed container memory for db-b
-      container_memory: "90"
-      # Scenario C: disable crashloop monitoring for db-b
-      _state_container_crashloop: "disable"
+  # Tenant overrides — 客戶依自身環境設定，chart 預設不帶任何測試租戶。
+  # 透過 values-override.yaml 或 GitOps 注入，例如：
+  #   tenants:
+  #     db-a:
+  #       mysql_connections: "70"
+  #       container_cpu: "70"
+  #     db-b:
+  #       mysql_connections: "100"
+  #       _state_container_crashloop: "disable"
+  #
+  # 開發/測試環境請使用 environments/local/threshold-exporter.yaml
+  # 完整範例參見 config/conf.d/examples/
+  tenants: {}
 
 resources:
   requests:

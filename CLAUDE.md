@@ -1,12 +1,13 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v1.0.0)
+## 專案概覽 (v1.0.1)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
 - **Prometheus**: Projected Volume 掛載 9 個 Rule Pack (`optional: true`)。Threshold normalization 用 `max by(tenant)` 防 HA 翻倍；Data normalization 依語義選擇聚合方式（connections 用 `max`，rate/ratio 用 `sum`）
 - **Enterprise**: Prefix 隔離 (`custom_`)、Metric Dictionary、Triage Mode、Shadow Monitoring
+- **Distribution**: OCI registry (`oci://ghcr.io/vencil/charts/threshold-exporter`) + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`)
 - **Load Injection**: `run_load.sh` 支援 connections / cpu / stress-ng / composite 四種負載類型，整合進 demo + scenario
 
 版本歷程詳見 `CHANGELOG.md`。v1.0.0 為 GA Release，後續版本視社群/客戶回饋決定。
@@ -39,7 +40,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - `patch_config.py <tenant> <key> <value>`: ConfigMap 局部更新
 - `check_alert.py <alert> <tenant> [--prometheus URL]`: Alert 狀態 JSON
 - `diagnose.py <tenant> [--prometheus URL]`: 健康檢查 JSON
-- `migrate_rule.py <rules.yml> [--triage] [--dry-run] [--no-prefix] [--no-ast]`: 傳統→動態 (Triage CSV + Prefix + Dictionary + AST Engine)
+- `migrate_rule.py <rules.yml> [--triage] [--dry-run] [--no-prefix] [--no-ast]`: 傳統→動態 (Triage CSV + Prefix + Dictionary + AST Engine + Auto-Suppression)
 - `scaffold_tenant.py [--tenant NAME --db TYPE,...] [--catalog]`: 互動式 Tenant 配置產生器
 - `validate_migration.py [--mapping FILE | --old Q --new Q] --prometheus URL`: Shadow Monitoring 數值 diff
 - `offboard_tenant.py <tenant> [--execute]`: Tenant 下架 (Pre-check + 移除)
@@ -56,7 +57,13 @@ Scenario / benchmark 腳本透過 `source scripts/_lib.sh` 共用 port-forward �
 - `make test-alert`: **硬體故障/服務中斷測試** — Kill process 模擬 Hard Outage
 - `make demo-full`: **動態負載展演** — Composite Load (conn+cpu) → alert 觸發 → 清除 → 恢復
 - `make demo`: 快速模式 (scaffold + migrate + diagnose + baseline_discovery，不含負載)
+- `make chart-package` / `make chart-push`: Helm chart 打包 + 推送至 OCI registry (`ghcr.io/vencil/charts`)
 - 其餘目標見 `make help`
+
+## Release 流程
+1. `make bump-docs EXPORTER=X.Y.Z` → 更新 Chart.yaml (version + appVersion) + 文件版號
+2. `make version-check` → 驗證版號一致性
+3. `git tag vX.Y.Z && git push --tags` → GitHub Actions 自動 build image + push chart
 
 ## AI Agent 環境
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`

@@ -176,12 +176,12 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v1.0.0+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v1.0.1+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v1.0.0 | `v1.0.0` | GA Release — 文件重構 + 9 Rule Packs |
-| threshold-exporter | v1.0.0 | `exporter/v1.0.0` | Go binary |
+| 平台文件 | v1.0.1 | `v1.0.0` | GA Release — 文件重構 + 9 Rule Packs |
+| threshold-exporter | v1.0.1 | `exporter/v1.0.1` | Go binary |
 | **da-tools** | **v1.0.0** | **`tools/v1.0.0`** | **Python CLI 工具集** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。

@@ -1,14 +1,14 @@
 # Shadow Monitoring SRE SOP
 
 > **受眾**: SRE / Platform Engineer / DevOps
-> **前提**: 已完成 `migrate_rule.py` 轉換，新舊 Recording Rule 同時在 Prometheus 運行
-> **工具**: `validate_migration.py`（`--watch` 持續模式 / 單次模式）
+> **前提**: 已完成 `da-tools migrate` 轉換，新舊 Recording Rule 同時在 Prometheus 運行
+> **工具**: `da-tools validate`（`--watch` 持續模式 / 單次模式）
 
 ---
 
 ## 1. 概述
 
-Shadow Monitoring 是遷移流程的**並行驗證階段**：新規則（`custom_` prefix）與舊規則同時運行，透過 `validate_migration.py` 持續比對數值輸出，確認行為等價後再切換。
+Shadow Monitoring 是遷移流程的**並行驗證階段**：新規則（`custom_` prefix）與舊規則同時運行，透過 `da-tools validate` 持續比對數值輸出，確認行為等價後再切換。
 
 本 SOP 涵蓋：啟動 → 日常巡檢 → 異常處理 → 收斂判定 → 退出。
 
@@ -50,12 +50,22 @@ receivers:
 ```bash
 kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
-python3 scripts/tools/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+docker run --rm --network=host \
+  -v $(pwd)/migration_output:/data \
+  ghcr.io/vencil/da-tools:1.0.0 \
+  validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
 # 300 秒間隔 × 4032 輪 ≈ 14 天
 ```
+
+> **已 clone 專案？** 也可直接執行 Python 腳本：
+> ```bash
+> python3 scripts/tools/validate_migration.py \
+>   --mapping migration_output/prefix-mapping.yaml \
+>   --prometheus http://localhost:9090 \
+>   --watch --interval 300 --rounds 4032
+> ```
 
 **方式 B: K8s Job（生產環境推薦）**
 
@@ -135,14 +145,14 @@ kubectl logs job/shadow-monitor -n monitoring --tail=50
 
 ### 4.1 數值 Mismatch
 
-**症狀**: `validate_migration.py` 報告 `mismatch`，delta ≠ 0
+**症狀**: `da-tools validate` 報告 `mismatch`，delta ≠ 0
 
 **排查步驟**:
 
 ```bash
 # 1. 確認具體哪些 tenant/metric 不一致
-python3 scripts/tools/validate_migration.py \
-  --old "<old_query>" --new "<new_query>" \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.0.0 \
+  validate --old "<old_query>" --new "<new_query>" \
   --prometheus http://localhost:9090
 
 # 2. 直接查詢 Prometheus，比對原始數據
@@ -179,7 +189,7 @@ curl -s "http://localhost:9090/api/v1/label/__name__/values" | \
 - `prefix-mapping.yaml` 中的 query 名稱拼寫錯誤
 - 該 tenant 的 metric 已被 `disable`（三態機制）
 
-### 4.3 validate_migration.py 本身失敗
+### 4.3 da-tools validate 本身失敗
 
 ```bash
 # 確認 Prometheus 可達
@@ -233,7 +243,10 @@ kubectl delete job shadow-monitor -n monitoring
 # 4. 移除 Alertmanager 的 shadow 攔截 route
 
 # 5. 驗證切換後 alert 正常觸發
-python3 scripts/tools/check_alert.py MariaDBHighConnections db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.0.0 \
+  check-alert MariaDBHighConnections db-a
+
+# 租戶健康總檢（需叢集存取，僅限本地 Python 執行）
 python3 scripts/tools/diagnose.py db-a
 ```
 
@@ -246,8 +259,10 @@ kubectl apply -f old-recording-rules.yaml
 # 2. 重新掛上 shadow label（讓新規則回到 shadow 狀態）
 
 # 3. 重啟 Shadow Monitor，重新進入觀察
-python3 scripts/tools/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+docker run --rm --network=host \
+  -v $(pwd)/migration_output:/data \
+  ghcr.io/vencil/da-tools:1.0.0 \
+  validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
 ```
@@ -259,8 +274,9 @@ python3 scripts/tools/validate_migration.py \
 rm -rf migration_output/
 rm -rf validation_output/
 
-# 若不再需要 custom_ prefix 規則，使用 deprecate_rule.py
-python3 scripts/tools/deprecate_rule.py custom_mysql_connections --execute
+# 若不再需要 custom_ prefix 規則
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+  deprecate custom_mysql_connections --execute
 ```
 
 ## 7. 快速參考卡
@@ -269,9 +285,9 @@ python3 scripts/tools/deprecate_rule.py custom_mysql_connections --execute
 ┌──────────────────────────────────────────────────┐
 │ Shadow Monitoring 生命週期                        │
 │                                                    │
-│  migrate_rule.py → 新規則部署 → Alertmanager 攔截 │
+│  da-tools migrate → 新規則部署 → Alertmanager 攔截 │
 │       ↓                                            │
-│  validate_migration.py --watch                     │
+│  da-tools validate --watch                         │
 │       ↓                                            │
 │  日常巡檢 (1-2 週)                                 │
 │       ↓                                            │
@@ -279,6 +295,6 @@ python3 scripts/tools/deprecate_rule.py custom_mysql_connections --execute
 │       ↓                                            │
 │  切換：移除舊規則 + 移除 shadow label              │
 │       ↓                                            │
-│  清理：deprecate_rule.py / rm 產物                 │
+│  清理：da-tools deprecate / rm 產物                │
 └──────────────────────────────────────────────────┘
 ```

@@ -1,4 +1,6 @@
-# _defaults.yaml — Platform-managed global settings
+# _defaults.yaml — Platform-managed global settings (DEVELOPMENT EXAMPLE)
+# ⚠️  此檔為開發參考範本，不會被包含在發布的 Helm chart 或 Docker image 中。
+#     生產環境請透過 Helm values 或 GitOps 注入。
 # Loaded first (underscore prefix sorts before letters).
 # Only this file should contain 'defaults' and 'state_filters'.
 defaults:

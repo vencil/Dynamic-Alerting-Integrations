@@ -27,8 +27,9 @@ tmp/
 kubeconfig
 
 # --- Helm ---
-# 忽略 helm package 產生的壓縮檔
+# 忽略 helm package 產生的壓縮檔與建置目錄
 *.tgz
+.build/
 
 # --- AI & Tools ---
 .claude/history/

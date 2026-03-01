@@ -441,6 +441,9 @@ class MigrationResult:
         self.recording_rules = []     # list of dict (YAML-ready)
         self.alert_rules = []         # list of dict (YAML-ready)
 
+        # Auto-suppression 用
+        self.op = None                # 比較運算子 (e.g., ">", "<")
+
         # 報告附加資訊
         self.agg_mode = None
         self.agg_reason = None
@@ -536,6 +539,7 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
 
     status = "complex" if parsed["is_complex"] else "perfect"
     result = MigrationResult(alert_name, status, severity)
+    result.op = parsed['op']
     result.agg_mode = agg_mode
     result.agg_reason = agg_reason
     result.original_expr = expr
@@ -561,7 +565,8 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
 
     # === 產出 2. Recording Rules ===
     record_name = f"tenant:{prefixed_key}:{agg_mode}"
-    threshold_name = f"tenant:alert_threshold:{prefixed_key}"
+    threshold_suffix = "_critical" if severity == "critical" else ""
+    threshold_name = f"tenant:alert_threshold:{prefixed_key}{threshold_suffix}"
 
     # v4: AST-Informed String Surgery — 改寫 LHS 表達式
     recording_lhs = parsed['lhs']
@@ -615,6 +620,78 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     result.alert_rules.append(alert_rule)
 
     return result
+
+
+# ============================================================
+# Auto-Suppression: Warning ↔ Critical 配對
+# ============================================================
+
+def apply_auto_suppression(results):
+    """配對 warning/critical 規則，為 warning 注入第二層 unless (auto-suppression)。
+
+    當同一 base metric key 同時有 warning 和 critical 結果時，warning alert
+    的 expr 會自動追加 unless 子句，確保 critical 觸發時抑制 warning。
+
+    修改 results 中 warning MigrationResult 的 alert_rules[0]["expr"]（in-place）。
+    回傳配對成功的數量。
+    """
+    # 建立 base_key → {severity: result} 映射
+    pairs = {}  # base_key → {"warning": result, "critical": result}
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        if not r.tenant_config:
+            continue
+
+        # 取出 metric_key_yaml (tenant_config 的第一個 key)
+        metric_key_yaml = list(r.tenant_config.keys())[0]
+
+        # 推導 base_key：critical 去掉 _critical 後綴
+        if r.severity == "critical" and metric_key_yaml.endswith("_critical"):
+            base_key = metric_key_yaml[: -len("_critical")]
+        else:
+            base_key = metric_key_yaml
+
+        if base_key not in pairs:
+            pairs[base_key] = {}
+        pairs[base_key][r.severity] = r
+
+    paired = 0
+    for base_key, sev_map in pairs.items():
+        warn_r = sev_map.get("warning")
+        crit_r = sev_map.get("critical")
+        if not warn_r or not crit_r:
+            continue
+        if not warn_r.alert_rules or len(crit_r.recording_rules) < 2:
+            continue
+
+        # 取得 warning 的 data recording rule name (第一條)
+        record_name = warn_r.recording_rules[0]["record"]
+        # 取得 critical 的 threshold recording rule name (第二條)
+        crit_threshold = crit_r.recording_rules[1]["record"]
+        # 運算子取自 warning result
+        op = warn_r.op or ">"
+
+        suppression_clause = (
+            f"\nunless on(tenant)\n"
+            f"(\n"
+            f"  {record_name}\n"
+            f"  {op} on(tenant) group_left\n"
+            f"  {crit_threshold}\n"
+            f")"
+        )
+
+        # 修改 warning alert 的 expr（in-place）
+        for ar in warn_r.alert_rules:
+            ar["expr"] += suppression_clause
+
+        warn_r.notes.append(
+            f"Auto-Suppression: 已配對 critical ({crit_r.alert_name})，"
+            f"warning 觸發時若同時超過 critical 閾值則自動抑制"
+        )
+        paired += 1
+
+    return paired
 
 
 # ============================================================
@@ -1065,6 +1142,11 @@ def main():
     if not results:
         print("No alert rules found to process.")
         return
+
+    # Auto-Suppression: warning ↔ critical 配對
+    n_paired = apply_auto_suppression(results)
+    if n_paired:
+        print(f"[🔗] Auto-Suppression: {n_paired} 組 warning↔critical 配對完成")
 
     # 輸出
     if args.triage:

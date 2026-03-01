@@ -2,6 +2,50 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.0.1] - OCI Chart Publishing, da-tools Priority & Doc Polish (2026-03-01)
+
+Helm chart OCI 發佈、da-tools 容器優先敘述、Config 分離、Auto-Suppression、全 repo 文件一致性修正。
+
+### 📦 Helm Chart OCI Publishing
+
+* **OCI Registry 發佈**: Helm chart 推送至 `oci://ghcr.io/vencil/charts/threshold-exporter`，用戶不需 clone repo 即可 `helm install`。
+* **`.helmignore`**: 排除 Go source (`app/`)、dev config (`config/`)、README.md，確保 chart .tgz 乾淨。
+* **`.github/workflows/release.yaml`**: 統一 CI pipeline，`v*` tag 觸發 exporter image + chart push，`tools/v*` tag 觸發 da-tools image push。含 Chart.yaml version verification gate。
+* **Makefile**: 新增 `chart-package` / `chart-push` targets + `OCI_REGISTRY` 變數。
+* **`bump_docs.py` 重構**: Chart.yaml `version` 歸入 exporter 版號線（chart version = appVersion = exporter version）；新增 OCI `--version` 追蹤規則（migration-guide + exporter README）；platform 版號來源改為 CLAUDE.md。
+
+### 🔄 da-tools 優先敘述
+
+* **`docs/migration-guide.md`**: helm 指令全面改為 OCI registry 路徑；da-tools 容器為主要敘述，python3 降為 blockquote fallback。
+* **`docs/shadow-monitoring-sop.md`**: 6 處 python3 命令改為 da-tools（validate、check-alert、deprecate），保留 diagnose.py（需 kubectl）。prose 引用同步更新。
+* **`components/threshold-exporter/README.md`**: §部署 + §方式A 改為 OCI install，local chart 降為 blockquote。
+
+### 🏗️ Config 分離
+
+* **`values.yaml`**: 清空為 `tenants: {}`，移除內嵌的 tenant 設定範例。
+* **`environments/local/`**: tenant-specific 設定移至 environment overlay，對齊生產 helm upgrade -f 流程。
+
+### 🔧 migrate_rule.py Enhancements
+
+* **Auto-Suppression (warning ↔ critical 配對)**：自動為 warning alert 注入第二層 `unless on(tenant)` 子句，critical 觸發時抑制 warning。
+* **Threshold naming fix**：critical threshold recording rule 加上 `_critical` 後綴，對齊 Rule Pack 慣例。
+* **`MigrationResult.op` 欄位**：新增比較運算子儲存，供 Auto-Suppression 引用。
+
+### 📄 Documentation Polish
+
+* **`architecture-and-design.md` (中/英)**：§4.7 K8s 使用注意事項（Pod scheduling 與 ConfigMap 生命週期）、§8.3 threshold vs data normalization 語義釐清、§10.4 tolerance rationale 補充、§2.3 Auto-Suppression `unless` 範例修正。
+* **全 repo `:sum` → `:max` 掃描**：修正 12 處殘留引用，零殘留。
+* **`README.md`**：Rule Pack 計數表修正（85R + 56A = 141）。
+* **Mermaid `\n` → `<br/>`**：6 個文件共 135 處替換，修正 GitHub 渲染。
+* **`CLAUDE.md`**：精簡重寫 + Release 流程 + chart-package/chart-push 語義。
+* **`.gitignore`**：新增 `.build/`（Helm package 輸出目錄）。
+
+### 🧪 Testing
+
+* **13 個新測試案例** (`test_migrate_ast.py::TestAutoSuppression`)：基本配對、critical 不被修改、單一嚴重度不配對、不同 metric 不配對、多組配對、運算子保留、備註新增、unparseable/golden 跳過、write_outputs 端到端、dry-run 路徑、無前綴配對。
+
+---
+
 ## [v1.0.0] - GA Release (2026-03-01)
 
 首個正式穩定版本。文件大重構、版號統一。

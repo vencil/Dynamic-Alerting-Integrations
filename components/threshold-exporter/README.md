@@ -1,4 +1,4 @@
-# Threshold Exporter (v1.0.0)
+# Threshold Exporter (v1.0.1)
 
 > **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤 + regex 維度 + 排程式閾值。
 >
@@ -12,6 +12,20 @@
 - **多層嚴重度**: `"40:critical"` 後綴覆寫 severity
 - **Hot-reload**: SHA-256 hash 比對，自動偵測 K8s ConfigMap symlink rotation
 - **SAST 合規**: ReadHeaderTimeout (Gosec G112)、檔案權限 0o600 (CWE-276)
+
+## Config 與 Image 分離原則
+
+Helm chart (`values.yaml`) **預設不包含任何測試租戶資料**。`thresholdConfig.tenants` 為空物件 (`{}`)，客戶部署時透過 values-override 或 GitOps 注入自身的租戶設定。
+
+| 來源 | 內容 | 用途 |
+|------|------|------|
+| `values.yaml` | defaults + state_filters + `tenants: {}` | 生產基底，不帶測試資料 |
+| `environments/local/threshold-exporter.yaml` | db-a、db-b 測試租戶 | 開發/測試用 (`make component-deploy ENV=local`) |
+| `environments/ci/threshold-exporter.yaml` | `tenants: {}` | CI 環境，依 pipeline 注入 |
+| `config/conf.d/` | _defaults + db-a + db-b (標註 DEVELOPMENT EXAMPLE) | Directory Scanner 格式參考範本 |
+| `config/conf.d/examples/` | Redis、MongoDB、Elasticsearch 多 DB 維度範本 | 文件參考 |
+
+> **Docker image 只包含 Go binary**，不含任何 config 檔案。Config 完全透過 ConfigMap volume mount 在 runtime 注入。
 
 ## Config 格式 (Directory Mode)
 
@@ -168,6 +182,115 @@ Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯�
 > **排程式閾值**: Recording rules 不需要特別調整。`ScheduledValue` 的時間窗口在每次 scrape 時由 exporter 即時解析，recording rule 自動取得當下有效的閾值。
 
 Service Discovery 透過 `prometheus.io/scrape: "true"` annotation 自動發現。
+
+## K8s 部署與配置管理
+
+### 部署 (Helm)
+
+```bash
+# 首次安裝 (OCI registry — 推薦)
+helm install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  -n monitoring --create-namespace \
+  -f values-override.yaml
+
+# 升級 (含 config 變更)
+helm upgrade threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  -n monitoring \
+  -f values-override.yaml
+```
+
+> **已 clone 專案？** 也可指向本地 chart 目錄：
+> ```bash
+> helm install threshold-exporter ./components/threshold-exporter \
+>   -n monitoring --create-namespace -f values-override.yaml
+> ```
+
+Helm chart 會自動建立：Deployment (2 replicas + PDB)、Service (含 Prometheus scrape annotations)、ConfigMap (`threshold-config`)。
+
+### 將 da-tools 產出注入 K8s
+
+`da-tools scaffold` 和 `da-tools migrate` 產出的 tenant config 需注入 `threshold-config` ConfigMap，exporter 才能讀取。有三種方式：
+
+**方式 A (推薦)：Helm values 覆寫**
+
+將產出的 `<tenant>.yaml` 內容合併至 `values.yaml` 的 `thresholdConfig.tenants`，再 `helm upgrade`：
+
+```bash
+# 1. da-tools 產出 tenant config
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
+  scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/output
+
+# 2. 將產出的 tenant config 合併至 values override file
+#    (手動或用 yq 工具將 output/db-c.yaml 合併至 values-override.yaml)
+
+# 3. Helm upgrade — ConfigMap 自動更新，exporter hot-reload
+helm upgrade threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  -n monitoring -f values-override.yaml
+```
+
+**方式 B：kubectl patch ConfigMap**
+
+直接 patch 既有 ConfigMap，不需 Helm：
+
+```bash
+# 將 da-tools 產出的 tenant YAML 注入 ConfigMap
+kubectl create configmap threshold-config \
+  --from-file=_defaults.yaml=conf.d/_defaults.yaml \
+  --from-file=db-a.yaml=conf.d/db-a.yaml \
+  --from-file=db-c.yaml=output/db-c.yaml \
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+```
+
+**方式 C：GitOps (生產環境推薦)**
+
+將 `conf.d/` 目錄納入 Git repo，CI/CD pipeline 組裝為 ConfigMap 並 apply。詳見 [Architecture & Design §11.1](../../docs/architecture-and-design.md) GitOps-Driven RBAC 章節。
+
+> **Hot-reload**：無論哪種方式，ConfigMap 變更後 K8s 會在 1-2 分鐘內 propagate 新內容至 Pod volume，exporter 的 SHA-256 watcher 在下一個 reload-interval (預設 30s) 自動偵測並載入。不需重啟 Pod。
+
+### 驗證部署
+
+```bash
+# Pod 狀態
+kubectl get pods -n monitoring -l app=threshold-exporter
+
+# 閾值輸出
+kubectl port-forward svc/threshold-exporter 8080:8080 -n monitoring &
+curl -s http://localhost:8080/metrics | grep user_threshold
+
+# 完整 config (debug)
+curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
+```
+
+### 在 K8s 內執行 da-tools
+
+當 threshold-exporter 運行在 K8s 叢集內時，da-tools 也可以作為 K8s Job 執行，直接透過 K8s Service 存取 Prometheus，不需 port-forward：
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-alert
+  namespace: monitoring
+spec:
+  template:
+    spec:
+      containers:
+        - name: da-tools
+          image: ghcr.io/vencil/da-tools:1.0.0
+          env:
+            - name: PROMETHEUS_URL
+              value: "http://prometheus.monitoring.svc.cluster.local:9090"
+          args: ["check-alert", "MariaDBHighConnections", "db-a"]
+      restartPolicy: Never
+  backoffLimit: 0
+```
+
+> **叢集內網路**：da-tools 容器可直接使用 `http://prometheus.monitoring.svc.cluster.local:9090`，無需 `--network=host` 或 port-forward。
+
+---
 
 ## 開發
 

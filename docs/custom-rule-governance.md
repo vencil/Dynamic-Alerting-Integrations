@@ -1,7 +1,7 @@
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
-> **版本**: v1.0.0
+> **版本**: v1.0.1
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](../rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---
