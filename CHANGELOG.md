@@ -2,7 +2,7 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
-## [v1.0.1] - OCI Chart Publishing, da-tools Priority & Doc Polish (2026-03-01)
+## [v1.1.0] - OCI Chart Publishing, da-tools Priority & Doc Polish (2026-03-01)
 
 Helm chart OCI 發佈、da-tools 容器優先敘述、Config 分離、Auto-Suppression、全 repo 文件一致性修正。
 

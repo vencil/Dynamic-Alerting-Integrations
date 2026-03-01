@@ -61,30 +61,45 @@ tenants:
 ### 2.2 租戶導入阻力
 
 **❌ 傳統痛點：**
-租戶必須學習 PromQL（`rate`、`sum by`、`group_left`）。一個 label 寫錯 = 靜默失敗。平台團隊替租戶除錯 PromQL。
+租戶必須學習 PromQL（`rate`、`sum by`、`group_left`）。一個 label 寫錯 = 靜默失敗。平台團隊替租戶除錯 PromQL。導入工具散落在 repo 各處，新租戶得先 clone 專案、安裝依賴。
 
 **✅ 我們的方案：**
-零 PromQL。`scaffold_tenant.py` 透過互動式問答產生配置。`migrate_rule.py` 自動轉換舊規則並智能推斷聚合方式。租戶只寫 YAML：`mysql_connections: "80"`。
+零 PromQL。租戶只寫 YAML：`mysql_connections: "80"`。所有工具封裝在 **`da-tools` 容器**中，`docker pull` 即可使用——不需 clone 專案、不需安裝 Python 依賴。`da-tools scaffold` 互動式產生配置，`da-tools migrate` 自動轉換舊規則並推斷聚合方式。
+
+```bash
+# 不需 clone — 直接使用
+docker run --rm -it ghcr.io/vencil/da-tools:1.1.0 scaffold --tenant my-app --db mariadb,redis
+```
 
 ---
 
-### 2.3 平台維護災難
+### 2.3 平台維護與部署災難
 
 **❌ 傳統痛點：**
-所有規則塞在一個巨型 ConfigMap 中。每次閾值修改 = PR → CI/CD → Prometheus reload。多團隊編輯 = merge conflicts。
+所有規則塞在一個巨型 ConfigMap 中。每次閾值修改 = PR → CI/CD → Prometheus reload。多團隊編輯 = merge conflicts。部署時得 clone 整個 repo、手動管理 chart 路徑與 image tag 對齊。
 
 **✅ 我們的方案：**
 9 個獨立 Rule Pack ConfigMap，透過 Projected Volume 掛載。各團隊（DBA、SRE、K8s、Analytics）獨立維護自己的規則包。SHA-256 hash 熱重載 — 不需重啟 Prometheus。目錄模式（`conf.d/`）支援 per-tenant YAML 檔案。
+
+部署面：Helm chart 發佈至 **OCI registry**，一行指令完成安裝——chart 內已綁定對應版本的 image，無需手動管理 tag。基礎 chart 僅包含平台預設（`tenants: {}`），租戶配置透過 `values-override.yaml` 注入，完全分離。
+
+```bash
+# 一行部署 — 不需 clone repo
+helm install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0 \
+  -n monitoring --create-namespace \
+  -f values-override.yaml
+```
 
 ---
 
 ### 2.4 警報疲勞
 
 **❌ 傳統痛點：**
-維護窗口 = 警報風暴。非關鍵的 Redis queue alert = P0 呼叫。
+維護窗口 = 警報風暴。非關鍵的 Redis queue alert = P0 呼叫。Warning 和 Critical 同時響 = 重複通知。
 
 **✅ 我們的方案：**
-內建維護模式（`_state_maintenance: enable` 透過 `unless` 抑制所有警報）。多層嚴重度（`_critical` 後綴）。維度閾值（`redis_queue_length{queue="email"}: 1000`）。三態邏輯：每個租戶的每個指標支援 custom / default / disable。**排程式閾值**：支援時間窗口自動切換（如 `22:00-06:00` 夜間放寬閾值），減少非工作時段的誤報。
+內建維護模式（`_state_maintenance: enable` 透過 `unless` 抑制所有警報）。多層嚴重度（`_critical` 後綴）搭配 **Auto-Suppression**——Critical 觸發時自動抑制對應的 Warning，避免重複告警。維度閾值（`redis_queue_length{queue="email"}: 1000`）。三態邏輯：每個租戶的每個指標支援 custom / default / disable。**排程式閾值**：支援時間窗口自動切換（如 `22:00-06:00` 夜間放寬閾值），減少非工作時段的誤報。
 
 ---
 
@@ -104,7 +119,7 @@ Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台�
 數百條手寫 PromQL 規則無法自動轉換。手動遷移耗時數週，且一次性切換風險極高——切換失敗意味著監控盲區。
 
 **✅ 我們的方案：**
-`migrate_rule.py` v4 搭載 **AST 遷移引擎**（`promql-parser` Rust PyO3），精準辨識 metric name 與 label matcher。`custom_` prefix 隔離避免命名衝突。`--triage` 模式產出 CSV 清單分類每條規則的遷移策略。**Shadow Monitoring** 雙軌並行——`validate_migration.py` 驗證遷移前後數值一致（容差 ≤ 5%），零風險漸進式切換。
+`migrate_rule.py` v4 搭載 **AST 遷移引擎**（`promql-parser` Rust PyO3），精準辨識 metric name 與 label matcher。`custom_` prefix 隔離避免命名衝突。`--triage` 模式產出 CSV 清單分類每條規則的遷移策略。**Shadow Monitoring** 雙軌並行——`da-tools validate` 驗證遷移前後數值一致（容差 ≤ 5%），零風險漸進式切換。所有工具均可透過 `da-tools` 容器執行，不需建置本地環境。
 
 ---
 
@@ -122,11 +137,14 @@ Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台�
 
 | 價值 | 機制 | 可驗證性 |
 |------|------|----------|
-| **零摩擦遷移 (Risk-Free Migration)** | `migrate_rule.py` v4 AST 引擎 + `custom_` Prefix 隔離 + Shadow Monitoring 雙軌並行 | `validate_migration.py` 數值 diff ≤ 5% |
+| **一行部署 (One-Command Deploy)** | Helm chart 發佈至 OCI registry，chart 內綁定 image 版本。基礎 chart `tenants: {}` + overlay 分離 | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0` |
+| **可攜帶工具鏈 (Portable Toolchain)** | `da-tools` 容器封裝 9 個 CLI 工具，`docker pull` 即用——不需 clone、不需裝 Python | `docker run --rm ghcr.io/vencil/da-tools:1.1.0 --help` |
+| **零摩擦遷移 (Risk-Free Migration)** | AST 遷移引擎 + `custom_` Prefix 隔離 + Shadow Monitoring 雙軌並行 | `da-tools validate` 數值 diff ≤ 5% |
+| **智慧告警抑制 (Smart Alert Suppression)** | Auto-Suppression（Critical ↔ Warning 配對）+ 維護模式 + 排程式閾值 + 三態開關 | Critical 觸發 → Warning 自動靜默，零人工介入 |
 | **零崩潰退出 (Zero-Crash Opt-Out)** | Projected Volume `optional: true` — 刪除 ConfigMap 不影響 Prometheus 運行 | `kubectl delete cm prometheus-rules-<type>` 立即可測 |
-| **全生命週期治理 (Full Lifecycle)** | `scaffold_tenant.py` 導入 → `patch_config.py` 營運 → `deprecate_rule.py` / `offboard_tenant.py` 下架 | 每個工具皆具 `--dry-run` 或 Pre-check 模式 |
+| **全生命週期治理 (Full Lifecycle)** | `da-tools scaffold` 導入 → `patch_config.py` 營運 → `da-tools deprecate` / `da-tools offboard` 下架 | 每個工具皆具 `--dry-run` 或 Pre-check 模式 |
 | **即時可驗證 (Live Verifiability)** | `make demo-full` 端對端展演：真實負載注入 → alert 觸發 → 清除 → 自動恢復 | 完整循環 < 5 分鐘，肉眼可見 |
-| **Multi-DB 生態系 (Multi-DB Ecosystem)** | 9 個 Rule Pack 涵蓋 7 種資料庫（MariaDB / Redis / MongoDB / ES / Oracle / DB2 / ClickHouse）+ K8s + Platform 自監控 | `scaffold_tenant.py --catalog` 列出所有支援的 DB 類型 |
+| **Multi-DB 生態系 (Multi-DB Ecosystem)** | 9 個 Rule Pack 涵蓋 7 種資料庫 + K8s + Platform 自監控 | `da-tools scaffold --catalog` 列出所有支援的 DB 類型 |
 
 ---
 
@@ -264,21 +282,24 @@ make port-forward
 | `baseline_discovery.py` | 負載觀測 + 閾值建議（p95/p99 統計 → 建議值） |
 | `lint_custom_rules.py` | CI deny-list linter — 檢查 Custom Rule 治理合規性 |
 
-**使用範例：**
+**使用範例（da-tools 容器 — 不需 clone 專案）：**
 
 ```bash
-# View supported DB types
-python3 scripts/tools/scaffold_tenant.py --catalog
+# 查看支援的 DB 類型
+docker run --rm ghcr.io/vencil/da-tools:1.1.0 scaffold --catalog
 
-# New tenant: Interactive config generator (supports 8 DB types)
-python3 scripts/tools/scaffold_tenant.py
+# 新租戶：互動式配置產生器（支援 8 種 DB）
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.1.0 scaffold
 
-# Existing alert rules: Auto-convert with AST engine
-python3 scripts/tools/migrate_rule.py <your-legacy-rules.yml>
+# 舊規則自動轉換（AST 引擎）
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.1.0 migrate /data/legacy-rules.yml
 
-# End-to-end demo
-make demo
+# Shadow Monitoring 驗證
+docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
+  ghcr.io/vencil/da-tools:1.1.0 validate --mapping /data/prefix-mapping.yaml
 ```
+
+> **已 clone 專案？** 也可直接用 `python3 scripts/tools/scaffold_tenant.py --catalog` 等本地指令。
 
 ---
 

@@ -61,30 +61,45 @@ Detailed performance analysis: see [Architecture and Design Document](docs/archi
 ### 2.2 Tenant Onboarding Friction
 
 **❌ Traditional Pain Points:**
-Tenants must learn PromQL (`rate`, `sum by`, `group_left`). A single label typo = silent failure. Platform team debugs PromQL for tenants.
+Tenants must learn PromQL (`rate`, `sum by`, `group_left`). A single label typo = silent failure. Platform team debugs PromQL for tenants. Onboarding tools are scattered across the repo — new tenants must clone the project and install dependencies first.
 
 **✅ Our Solution:**
-Zero PromQL. `scaffold_tenant.py` generates configuration through interactive Q&A. `migrate_rule.py` automatically converts legacy rules with intelligent aggregation inference. Tenants write only YAML: `mysql_connections: "80"`.
+Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are packaged in the **`da-tools` container** — `docker pull` and go, no cloning or Python dependencies needed. `da-tools scaffold` generates configuration interactively; `da-tools migrate` auto-converts legacy rules with intelligent aggregation inference.
+
+```bash
+# No clone needed — just pull and run
+docker run --rm -it ghcr.io/vencil/da-tools:1.1.0 scaffold --tenant my-app --db mariadb,redis
+```
 
 ---
 
-### 2.3 Platform Maintenance Nightmare
+### 2.3 Platform Maintenance and Deployment Nightmare
 
 **❌ Traditional Pain Points:**
-All rules packed in a single giant ConfigMap. Every threshold change = PR → CI/CD → Prometheus reload. Multi-team editing = merge conflicts.
+All rules packed in a single giant ConfigMap. Every threshold change = PR → CI/CD → Prometheus reload. Multi-team editing = merge conflicts. Deployment requires cloning the repo, manually managing chart paths and image tag alignment.
 
 **✅ Our Solution:**
 9 independent Rule Pack ConfigMaps mounted via Projected Volume. Each team (DBA, SRE, K8s, Analytics) maintains their own rule pack independently. SHA-256 hash hot-reload — no Prometheus restart needed. Directory mode (`conf.d/`) supports per-tenant YAML files.
+
+On the deployment side: the Helm chart is published to an **OCI registry** — one command to install with the correct image version pre-bound. The base chart ships with empty tenant config (`tenants: {}`); tenant-specific settings are injected via `values-override.yaml`, cleanly separated.
+
+```bash
+# One-command deploy — no repo clone needed
+helm install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0 \
+  -n monitoring --create-namespace \
+  -f values-override.yaml
+```
 
 ---
 
 ### 2.4 Alert Fatigue
 
 **❌ Traditional Pain Points:**
-Maintenance window = alert storm. Non-critical Redis queue alert = P0 on-call.
+Maintenance window = alert storm. Non-critical Redis queue alert = P0 on-call. Warning and Critical fire simultaneously = duplicate notifications.
 
 **✅ Our Solution:**
-Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-layer severity (`_critical` suffix). Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable. **Scheduled thresholds**: time-window auto-switching (e.g., `22:00-06:00` relaxed nighttime thresholds), reducing off-hours false positives.
+Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-layer severity (`_critical` suffix) with **Auto-Suppression** — when Critical fires, the corresponding Warning is automatically suppressed, eliminating duplicate alerts. Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable. **Scheduled thresholds**: time-window auto-switching (e.g., `22:00-06:00` relaxed nighttime thresholds), reducing off-hours false positives.
 
 ---
 
@@ -104,7 +119,7 @@ Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by pla
 Hundreds of hand-written PromQL rules with no automated conversion path. Manual migration takes weeks, and a big-bang cutover carries extreme risk — a failed switch means monitoring blind spots.
 
 **✅ Our Solution:**
-`migrate_rule.py` v4 with **AST migration engine** (`promql-parser` Rust PyO3) precisely identifies metric names and label matchers. `custom_` prefix isolation prevents naming conflicts. `--triage` mode produces a CSV inventory categorizing each rule's migration strategy. **Shadow Monitoring** dual-track — `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%), enabling zero-risk progressive cutover.
+`migrate_rule.py` v4 with **AST migration engine** (`promql-parser` Rust PyO3) precisely identifies metric names and label matchers. `custom_` prefix isolation prevents naming conflicts. `--triage` mode produces a CSV inventory categorizing each rule's migration strategy. **Shadow Monitoring** dual-track — `da-tools validate` verifies numerical consistency before and after migration (tolerance ≤ 5%), enabling zero-risk progressive cutover. All tools are available via the `da-tools` container — no local environment setup required.
 
 ---
 
@@ -122,11 +137,14 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 
 | Value | Mechanism | Verifiability |
 |-------|-----------|---------------|
-| **Risk-Free Migration** | `migrate_rule.py` v4 AST engine + `custom_` prefix isolation + Shadow Monitoring dual-track | `validate_migration.py` numerical diff ≤ 5% |
+| **One-Command Deploy** | Helm chart published to OCI registry with pre-bound image version. Base chart `tenants: {}` + overlay separation | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0` |
+| **Portable Toolchain** | `da-tools` container packages 9 CLI tools — `docker pull` and go, no clone or Python needed | `docker run --rm ghcr.io/vencil/da-tools:1.1.0 --help` |
+| **Risk-Free Migration** | AST migration engine + `custom_` prefix isolation + Shadow Monitoring dual-track | `da-tools validate` numerical diff ≤ 5% |
+| **Smart Alert Suppression** | Auto-Suppression (Critical ↔ Warning pairing) + maintenance mode + scheduled thresholds + three-state toggle | Critical fires → Warning auto-silenced, zero manual intervention |
 | **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
-| **Full Lifecycle Governance** | `scaffold_tenant.py` onboard → `patch_config.py` operate → `deprecate_rule.py` / `offboard_tenant.py` offboard | Every tool has `--dry-run` or pre-check mode |
+| **Full Lifecycle Governance** | `da-tools scaffold` onboard → `patch_config.py` operate → `da-tools deprecate` / `da-tools offboard` offboard | Every tool has `--dry-run` or pre-check mode |
 | **Live Verifiability** | `make demo-full` end-to-end: real load injection → alert fires → cleanup → auto-recovery | Full cycle < 5 minutes, visually observable |
-| **Multi-DB Ecosystem** | 9 Rule Packs covering 7 database types (MariaDB / Redis / MongoDB / ES / Oracle / DB2 / ClickHouse) + K8s + Platform self-monitoring | `scaffold_tenant.py --catalog` lists all supported DB types |
+| **Multi-DB Ecosystem** | 9 Rule Packs covering 7 database types + K8s + Platform self-monitoring | `da-tools scaffold --catalog` lists all supported DB types |
 
 ---
 
@@ -167,7 +185,7 @@ graph TD
     end
 
     subgraph PE["Prometheus Engine"]
-        PROM["Prometheus<br/>Vector Matching: group_left<br/>85 Rules / 18 Groups / ~20ms per cycle"]
+        PROM["Prometheus<br/>Vector Matching: group_left<br/>141 Rules / 27 Groups / ~20ms per cycle"]
     end
 
     D --> TE
@@ -235,17 +253,17 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 | Rule Pack | Exporter | Rules | Status |
 |-----------|----------|-------|--------|
-| mariadb | mysqld_exporter (Percona) | 7R + 8A | Pre-loaded |
-| kubernetes | cAdvisor + kube-state-metrics | 5R + 4A | Pre-loaded |
-| redis | oliver006/redis_exporter | 7R + 6A | Pre-loaded |
-| mongodb | percona/mongodb_exporter | 7R + 6A | Pre-loaded |
-| elasticsearch | elasticsearch_exporter | 7R + 7A | Pre-loaded |
-| oracle | oracledb_exporter | 6R + 7A | Pre-loaded |
-| db2 | db2_exporter | 7R + 7A | Pre-loaded |
-| clickhouse | clickhouse_exporter | 7R + 7A | Pre-loaded |
+| mariadb | mysqld_exporter (Percona) | 11R + 8A | Pre-loaded |
+| kubernetes | cAdvisor + kube-state-metrics | 7R + 4A | Pre-loaded |
+| redis | oliver006/redis_exporter | 11R + 6A | Pre-loaded |
+| mongodb | percona/mongodb_exporter | 10R + 6A | Pre-loaded |
+| elasticsearch | elasticsearch_exporter | 11R + 7A | Pre-loaded |
+| oracle | oracledb_exporter | 11R + 7A | Pre-loaded |
+| db2 | db2_exporter | 12R + 7A | Pre-loaded |
+| clickhouse | clickhouse_exporter | 12R + 7A | Pre-loaded |
 | platform | threshold-exporter self-monitoring | 0R + 4A | Pre-loaded |
 
-**Note:** R=Recording Rules, A=Alert Rules. Total: 53R + 56A = 109 rules. Evaluation cost of unused rule packs is near zero.
+**Note:** R=Recording Rules (incl. Normalization + Threshold Normalization), A=Alert Rules. Total: 85R + 56A = 141 rules. Evaluation cost of unused rule packs is near zero.
 
 ---
 
@@ -264,21 +282,24 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | `baseline_discovery.py` | Load observation + threshold suggestions (p95/p99 stats → recommendations) |
 | `lint_custom_rules.py` | CI deny-list linter — validates Custom Rule governance compliance |
 
-**Usage Examples:**
+**Usage Examples (da-tools container — no clone needed):**
 
 ```bash
 # View supported DB types
-python3 scripts/tools/scaffold_tenant.py --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.1.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-python3 scripts/tools/scaffold_tenant.py
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.1.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-python3 scripts/tools/migrate_rule.py <your-legacy-rules.yml>
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.1.0 migrate /data/legacy-rules.yml
 
-# End-to-end demo
-make demo
+# Shadow Monitoring validation
+docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
+  ghcr.io/vencil/da-tools:1.1.0 validate --mapping /data/prefix-mapping.yaml
 ```
+
+> **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.
 
 ---
 

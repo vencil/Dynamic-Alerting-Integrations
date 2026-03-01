@@ -60,6 +60,8 @@ def _build_rules():
         "docs/migration-guide.md",
         "docs/custom-rule-governance.md",
         "docs/custom-rule-governance.en.md",
+        "README.md",
+        "README.en.md",
         "docs/shadow-monitoring-sop.md",
     ]
 
@@ -127,6 +129,18 @@ def _build_rules():
         {
             "file": "components/threshold-exporter/README.md",
             "desc": "OCI chart --version in exporter README",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "README.md",
+            "desc": "OCI chart --version in Chinese README",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "README.en.md",
+            "desc": "OCI chart --version in English README",
             "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },

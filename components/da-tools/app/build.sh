@@ -29,7 +29,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 TOOLS_SRC="$PROJECT_ROOT/scripts/tools"
 
-TAG="${1:-dev}"
+ASSEMBLE_ONLY=false
+TAG="dev"
+for arg in "$@"; do
+    case "$arg" in
+        --assemble-only) ASSEMBLE_ONLY=true ;;
+        *) TAG="$arg" ;;
+    esac
+done
 IMAGE_NAME="da-tools:$TAG"
 
 # ── Assemble build context ──────────────────────────────────────────
@@ -59,6 +66,12 @@ for f in "${TOOL_FILES[@]}"; do
 done
 
 echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
+
+# ── Assemble-only mode (for CI — Buildx handles the docker build) ──
+if [ "$ASSEMBLE_ONLY" = true ]; then
+    echo "✓ Build context assembled (--assemble-only). tools/ kept for Buildx."
+    exit 0
+fi
 
 # ── Build ───────────────────────────────────────────────────────────
 echo "▸ Building $IMAGE_NAME..."
