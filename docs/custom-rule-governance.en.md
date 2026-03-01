@@ -1,7 +1,7 @@
 # Multi-Tenant Custom Rule Governance Model
 
 > **Audience**: Platform Engineering, Domain Experts (DBA/Infra), Tenant Tech Leads
-> **Version**: v0.12.0
+> **Version**: v1.0.0
 > **Related**: [Architecture and Design](architecture-and-design.en.md), [Rule Packs Directory](../rule-packs/README.md), [Migration Guide](migration-guide.md)
 
 ---
@@ -16,6 +16,24 @@ In practice, however, some tenant alerting requirements go beyond simple thresho
 
 ## 2. Three-Tier Governance Model
 
+```mermaid
+flowchart TD
+    A["I need a new alert"] --> B{"Existing metric +\ndifferent threshold?"}
+    B -- YES --> T1["Tier 1 — Standard\nModify tenant.yaml\nCoverage ~80-85%"]
+    B -- NO --> C{"Compound condition\non existing metrics?"}
+    C -- YES --> D{"Matching\nPre-packaged Scenario?"}
+    D -- YES --> T2a["Tier 2 — Pre-packaged\nEnable that Scenario"]
+    D -- NO --> E{"Common need?"}
+    E -- YES --> T2b["Tier 2 — Pre-packaged\nDomain Expert creates new Scenario\nCoverage ~10-15%"]
+    E -- NO --> T3["Tier 3 — Custom\nChange Request process\nTarget ≤5% of rules"]
+    C -- NO --> F["Evaluate whether it falls\nwithin platform scope"]
+
+    style T1 fill:#d4edda,stroke:#28a745
+    style T2a fill:#cce5ff,stroke:#007bff
+    style T2b fill:#cce5ff,stroke:#007bff
+    style T3 fill:#fff3cd,stroke:#ffc107
+```
+
 ### 2.1 Tier 1 — Standard (Config-Driven Three-State Control)
 
 **Coverage**: ~80–85% of tenant requirements
@@ -23,10 +41,10 @@ In practice, however, some tenant alerting requirements go beyond simple thresho
 Tenants configure thresholds via `tenant.yaml` without touching PromQL:
 
 ```yaml
-# Three-state control example
-connections_threshold: "800"        # Custom: user-defined threshold
-cpu_threshold: ""                   # Default: use platform default (omit or empty string)
-replication_lag_threshold: "disable" # Disable: turn off this alert
+# Three-state control example (key names match metric definitions in _defaults.yaml)
+mysql_connections: "800"        # Custom: user-defined threshold
+mysql_cpu: ""                   # Default: use platform default (omit or empty string)
+mariadb_replication_lag: "disable" # Disable: turn off this alert
 ```
 
 Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering.
@@ -46,7 +64,7 @@ Domain Experts define composite alerting scenarios with clear business semantics
 - alert: MariaDBSystemBottleneck
   expr: |
     (
-      tenant:mysql_threads_connected:sum
+      tenant:mysql_threads_connected:max
       > on(tenant) group_left
       tenant:alert_threshold:connections
     )
@@ -60,19 +78,19 @@ Domain Experts define composite alerting scenarios with clear business semantics
     (user_state_filter{filter="maintenance"} == 1)
 ```
 
-Tenants enable/disable via three-state control:
+**Enable/disable mechanism**: Tier 2 scenarios are implicitly controlled through existing three-state controls — no additional toggle key is needed:
 
-```yaml
-_state_mariadb_bottleneck: "true"     # Enable
-_state_mariadb_bottleneck: "disable"  # Disable
-```
+- **Enable**: As long as all metrics the scenario depends on have valid thresholds (Custom or Default), the scenario is active.
+- **Disable a single metric**: Set that metric to `"disable"`. The corresponding recording rule produces no value, making the `>` comparison false and the scenario inactive.
+- **Global maintenance mode**: Set `state_filters.maintenance` to `"true"`. The `unless ... user_state_filter{filter="maintenance"}` clause in the scenario expression takes effect, silencing all alerts.
+
+> **Design rationale**: PromQL has no native on/off switch. This mechanism leverages the propagation effect of "missing threshold → recording rule produces no value → condition is false" to achieve implicit enable/disable, avoiding an extra config key per scenario.
 
 **Design principles**:
 
 - Tier 2 scenarios are defined by Domain Experts, not assembled by tenants. "The platform offers curated packages; tenants decide whether to subscribe" — not "hand tenants building blocks to assemble themselves."
 - Each scenario must have clear business semantics documentation (what business question it answers, why this combination is meaningful).
 - Thresholds remain config-driven — tenants can adjust numbers but cannot alter the logic structure.
-- PromQL does not support dynamic metric name substitution, so each scenario's metric combination is fixed at rule load time.
 
 **Rule complexity**: O(number of scenarios) — does not grow with tenant count.
 
@@ -98,7 +116,7 @@ Tier 3 rules are placed in a dedicated Prometheus Rule Group with a longer `eval
 - Platform team can independently monitor Custom Rule Group evaluation duration
 
 ```yaml
-# rule-packs/custom/tenant-specific.yaml
+# rule-packs/custom/tenant-specific.yaml (this directory is created when the first Tier 3 Rule is submitted)
 groups:
   - name: custom_tenant_rules
     interval: 30s   # Dedicated evaluation interval
@@ -123,47 +141,18 @@ groups:
 
 This platform involves three roles. In smaller teams, one person may wear multiple hats — the key is clear responsibility boundaries, not org chart structure.
 
-### 3.1 Platform Engineering / Core SRE
-
-**Role**: Infrastructure provider and guardrail builder
-
-| Responsibility | Description |
-|----------------|-------------|
-| Platform availability | Maintain Prometheus cluster, threshold-exporter HA, Projected Volume mounts |
-| CI/CD guardrails | Maintain deny-list linting, version governance, Rule Pack structure validation |
-| Performance monitoring | Monitor Rule evaluation duration, identify Noisy Neighbors |
-| Forced removal authority | May force-disable non-compliant or performance-degrading Tier 3 Rules without prior notice to protect the platform |
-
-**SLA scope**: Guarantees the "alerting engine" operates correctly (Rule evaluation, metric scraping, alert routing). Not responsible for false positives/negatives of specific business metrics.
-
-### 3.2 Domain Experts (DBA, Network Admin, K8s Admin)
-
-**Role**: Golden Standards definers
-
-| Responsibility | Description |
-|----------------|-------------|
-| Rule Pack maintenance | Own their domain's Rule Pack (e.g., DBA owns mariadb rule-pack) |
-| Tier 2 scenario design | Design Pre-packaged Scenarios based on operational experience; write business semantics documentation |
-| Tier 3 review | Review tenant Custom Rule requests; determine whether they should be abstracted into Tier 2 |
-| Assimilation cycle | Participate in quarterly reviews to promote commonly-needed Tier 3 Rules to Tier 2 |
-
-**SLA scope**: Responsible for business correctness of Tier 1 / Tier 2 Rules (threshold reasonableness, scenario design logic).
-
-### 3.3 Tenant Teams (Application Development Teams)
-
-**Role**: Platform consumers and owners of their own business systems
-
-| Responsibility | Description |
-|----------------|-------------|
-| Threshold management | Maintain Warning / Critical thresholds for their services via `tenant.yaml` |
-| Scenario selection | Decide whether to enable Tier 2 Pre-packaged Scenarios |
-| Custom Rule ownership | If submitting Tier 3 Rules, follow the "You build it, you run it" principle |
-
-**SLA note**: Tier 3 Custom Rules carry no SLA guarantee. If a tenant's Custom Rule causes false positives, the platform team will not handle it during off-hours — it goes into the tenant's own ticket queue.
+| | Platform Engineering | Domain Expert | Tenant |
+|---|---|---|---|
+| **Role** | Infrastructure provider + guardrail builder | Golden Standards definer | Platform consumer + business system owner |
+| **Tier 1** | Guarantee alerting engine operation | Define default thresholds, metric semantics | Self-manage Warning/Critical thresholds |
+| **Tier 2** | Guarantee alerting engine operation | Design scenarios, write business semantics docs | Decide whether to enable scenarios |
+| **Tier 3** | Performance monitoring + forced removal authority | Review requests, evaluate Tier 2 promotion | You build it, you run it (no SLA guarantee) |
+| **CI/CD** | Maintain deny-list linting + Rule Pack structure validation | Maintain owned Rule Packs | — |
+| **SLA scope** | Alerting engine operation (eval, scrape, routing) | Tier 1/2 business correctness | Tier 3 alert quality is self-owned |
 
 > **Practical note**: Tenant teams typically lack PromQL expertise. In practice, tenants submit requirements and Domain Experts write the rules on their behalf, but SLA ownership still falls on the tenant — i.e., "Domain Expert writes it for you, but you own the alert quality."
 
-### 3.4 Responsibility Quick Reference
+**Responsibility quick reference**:
 
 | Scenario | Responsible party |
 |----------|-------------------|
@@ -182,7 +171,7 @@ All rules submitted to `rule-packs/custom/` must pass automated checks.
 ### 4.1 Deny-list Rules
 
 ```yaml
-# .github/custom-rule-policy.yaml
+# .github/custom-rule-policy.yaml (optional; the lint tool has a built-in default policy)
 denied_functions:
   - holt_winters           # CPU-intensive function
   - predict_linear         # Large lookback queries
@@ -211,7 +200,7 @@ python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/c
 # Via da-tools container (no repo clone needed)
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:0.4.0 \
+  ghcr.io/vencil/da-tools:1.0.0 \
   lint /data/rules --ci
 
 # Example output
@@ -222,11 +211,7 @@ docker run --rm \
 
 ### 4.3 Why Limit "Weight" Instead of "Count"
 
-Problems with fixed quotas (e.g., "5 rules per tenant"):
-
-- **Waste and shortage coexist**: Some tenants use zero rules while others hit the cap at rule #6
-- **Rule explosion unsolved**: 50 tenants × 5 rules = 250 rules, each with different logic — maintenance cost is actually higher
-- **Idle evaluation cost**: Prometheus evaluates all rules every 15 seconds regardless of whether any tenant uses them
+Problems with fixed quotas (e.g., "5 rules per tenant"): waste and shortage coexist (some tenants use zero, others hit the cap at rule #6), rule explosion unsolved (50 tenants × 5 = 250 rules with different logic), and idle evaluation cost (Prometheus evaluates all rules every 15 seconds regardless).
 
 The deny-list approach constrains each rule's "computational weight" rather than rule count. Combined with dedicated Rule Group isolation and evaluation duration monitoring, this prevents performance degradation without imposing hard limits.
 
@@ -234,31 +219,25 @@ The deny-list approach constrains each rule's "computational weight" rather than
 
 ## 5. Assimilation Cycle
 
-### 5.1 Cadence
-
 Quarterly Custom Rule Review (recommended to combine with quarterly SLA review).
 
-### 5.2 Process
-
-```
-Tier 3 Custom Rule
-    │
-    ├─ Multiple tenants requesting similar functionality?
-    │   └─ YES → Domain Expert evaluates abstraction into Tier 2 Pre-packaged Scenario
-    │            → Write business semantics documentation
-    │            → Move into the appropriate Rule Pack
-    │            → Mark original Tier 3 Rule as deprecated, set expiry
-    │
-    ├─ Past expiry date?
-    │   └─ YES → Notify tenant owner
-    │            → No response within 14 days → Auto-disable
-    │
-    └─ Evaluation duration consistently elevated?
-        └─ YES → Platform Engineering notifies tenant
-                 → Not optimized within 30 days → Forced removal
+```mermaid
+flowchart TD
+    A["Tier 3 Custom Rule\nQuarterly Review"] --> B{"Multiple tenants\nrequesting similar\nfunctionality?"}
+    B -- YES --> C["Domain Expert evaluates\nabstraction into Tier 2"]
+    C --> C1["Write business semantics docs"]
+    C1 --> C2["Move into appropriate Rule Pack"]
+    C2 --> C3["Mark original Tier 3 as deprecated\nSet expiry"]
+    B -- NO --> D{"Past\nexpiry date?"}
+    D -- YES --> E["Notify tenant owner"]
+    E --> E1["No response in 14 days\n→ Auto-disable"]
+    D -- NO --> F{"Evaluation duration\nconsistently elevated?"}
+    F -- YES --> G["Platform Engineering notifies tenant"]
+    G --> G1["Not optimized in 30 days\n→ Forced removal"]
+    F -- NO --> H["Retain until next review"]
 ```
 
-### 5.3 Health Metrics
+### Health Metrics (Planned, Not Yet Implemented)
 
 Recommended tracking in threshold-exporter:
 
@@ -281,22 +260,9 @@ If a specific tenant's Tier 3 count keeps rising, this signals that Tier 2 scena
 
 | | Tier 1 (Standard) | Tier 2 (Pre-packaged) | Tier 3 (Custom) |
 |---|---|---|---|
-| **Control method** | tenant.yaml thresholds | Three-state enable/disable + params | Full PromQL |
+| **Control method** | tenant.yaml thresholds | Threshold three-state implicit toggle + params | Full PromQL |
 | **Author** | Tenant self-service | Domain Expert pre-built | Domain Expert writes on behalf |
 | **SLA** | Platform-guaranteed | Platform-guaranteed | No guarantee |
 | **Rule complexity** | O(M) | O(scenario count) | O(Custom count) |
 | **CI checks** | Automatic (three-state validation) | Rule Pack CI | Deny-list linting |
 | **Lifecycle** | Permanent | Permanent | Expiry date required |
-
-### Tenant Decision Tree
-
-```
-I need a new alert →
-  ├─ Existing metric + different threshold? → Tier 1: Modify tenant.yaml
-  ├─ Compound condition on existing metrics? → Tier 2: Check for matching Pre-packaged Scenario
-  │   ├─ Exists → Enable that Scenario
-  │   └─ Doesn't exist → Submit request to Domain Expert
-  │       ├─ Common need → Domain Expert creates new Tier 2 Scenario
-  │       └─ Highly specific → Enter Tier 3 process
-  └─ Entirely different metric source? → Evaluate whether it falls within platform scope
-```

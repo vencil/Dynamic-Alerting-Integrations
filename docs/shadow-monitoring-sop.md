@@ -70,14 +70,15 @@ spec:
     spec:
       containers:
         - name: validator
-          image: python:3.11-slim
-          command:
-            - python3
-            - /scripts/validate_migration.py
+          image: ghcr.io/vencil/da-tools:1.0.0
+          env:
+            - name: PROMETHEUS_URL
+              value: http://prometheus.monitoring.svc.cluster.local:9090
+          command: ["da-tools"]
+          args:
+            - validate
             - --mapping
             - /config/prefix-mapping.yaml
-            - --prometheus
-            - http://prometheus.monitoring.svc.cluster.local:9090
             - --watch
             - --interval
             - "300"
@@ -86,16 +87,11 @@ spec:
             - -o
             - /output
           volumeMounts:
-            - name: scripts
-              mountPath: /scripts
             - name: config
               mountPath: /config
             - name: output
               mountPath: /output
       volumes:
-        - name: scripts
-          configMap:
-            name: migration-scripts
         - name: config
           configMap:
             name: prefix-mapping

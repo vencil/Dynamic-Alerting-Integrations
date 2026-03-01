@@ -1,0 +1,81 @@
+# ============================================================
+# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap
+# ============================================================
+# 收斂率: 7 條規則 → 8 條 Recording Rules (壓縮 42.9%)
+# ============================================================
+
+groups:
+  - name: custom_migrated-recording-rules
+    rules:
+      # ============================================================
+      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨
+      # ============================================================
+      # 以下 recording rule 的聚合模式為 AI 自動猜測: max
+      # 猜測原因: 關鍵字 'queue' — 單點上限
+      # 原始 Alert: RedisQueueTooLong
+      #
+      # ⚠️  請在複製貼上前確認:
+      #   - 聚合模式 max 是否正確? (sum=叢集總量, max=單點瓶頸)
+      #   - 如不確定，請用 --interactive 模式重新執行
+      # ============================================================
+      - record: tenant:custom_redis_queue_length:max
+        expr: max by(tenant) (custom_redis_queue_length{tenant=~".+",queue="order-processing"})
+
+      # ============================================================
+      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨
+      # ============================================================
+      # 以下 recording rule 的聚合模式為 AI 自動猜測: max
+      # 猜測原因: 關鍵字 'queue' — 單點上限
+      # 原始 Alert: RedisQueueTooLong
+      #
+      # ⚠️  請在複製貼上前確認:
+      #   - 聚合模式 max 是否正確? (sum=叢集總量, max=單點瓶頸)
+      #   - 如不確定，請用 --interactive 模式重新執行
+      # ============================================================
+      - record: tenant:alert_threshold:custom_redis_queue_length
+        expr: max by(tenant) (user_threshold{metric="custom_redis_queue_length", severity="critical"})
+
+      # ============================================================
+      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨
+      # ============================================================
+      # 以下 recording rule 的聚合模式為 AI 自動猜測: sum
+      # 猜測原因: Counter 命名慣例 (_total) — 叢集聚合總量
+      # 原始 Alert: ESIndexTooLarge
+      #
+      # ⚠️  請在複製貼上前確認:
+      #   - 聚合模式 sum 是否正確? (sum=叢集總量, max=單點瓶頸)
+      #   - 如不確定，請用 --interactive 模式重新執行
+      # ============================================================
+      - record: tenant:custom_elasticsearch_indices_store_size_bytes_total:sum
+        expr: sum by(tenant) (custom_elasticsearch_indices_store_size_bytes_total{tenant=~".+",index="logs-prod"})
+
+      # ============================================================
+      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨
+      # ============================================================
+      # 以下 recording rule 的聚合模式為 AI 自動猜測: sum
+      # 猜測原因: Counter 命名慣例 (_total) — 叢集聚合總量
+      # 原始 Alert: ESIndexTooLarge
+      #
+      # ⚠️  請在複製貼上前確認:
+      #   - 聚合模式 sum 是否正確? (sum=叢集總量, max=單點瓶頸)
+      #   - 如不確定，請用 --interactive 模式重新執行
+      # ============================================================
+      - record: tenant:alert_threshold:custom_elasticsearch_indices_store_size_bytes_total
+        expr: max by(tenant) (user_threshold{metric="custom_elasticsearch_indices_store_size_bytes_total", severity="warning"})
+
+      # ESIndexDocCountHigh | sum — Counter 命名慣例 (_total) — 叢集聚合總量
+      - record: tenant:custom_elasticsearch_indices_docs_total:sum
+        expr: sum by(tenant) (custom_elasticsearch_indices_docs_total{tenant=~".+",index="metrics", type="gauge"})
+
+      # ESIndexDocCountHigh | sum — Counter 命名慣例 (_total) — 叢集聚合總量
+      - record: tenant:alert_threshold:custom_elasticsearch_indices_docs_total
+        expr: max by(tenant) (user_threshold{metric="custom_elasticsearch_indices_docs_total", severity="warning"})
+
+      # MongoDBStorageTooLarge | sum — 關鍵字 'size' — 叢集累積量
+      - record: tenant:custom_mongodb_dbstats_storage_size:sum
+        expr: sum by(tenant) (custom_mongodb_dbstats_storage_size{tenant=~".+",database="orders"})
+
+      # MongoDBStorageTooLarge | sum — 關鍵字 'size' — 叢集累積量
+      - record: tenant:alert_threshold:custom_mongodb_dbstats_storage_size
+        expr: max by(tenant) (user_threshold{metric="custom_mongodb_dbstats_storage_size", severity="warning"})
+

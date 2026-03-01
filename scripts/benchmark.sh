@@ -1,13 +1,14 @@
 #!/bin/bash
 # ============================================================
 # benchmark.sh — 自動化效能基準測試
-# Usage: ./scripts/benchmark.sh [--json] [--under-load [--tenants N]]
+# Usage: ./scripts/benchmark.sh [--json] [--under-load [--tenants N]] [--scaling-curve]
 #
 # Modes:
-#   (default)      Idle-state benchmark — collect current cluster metrics
-#   --under-load   Generate N synthetic tenants, inject load, measure perf
-#                  Includes scrape duration, reload latency, memory delta
-#   --tenants N    Number of synthetic tenants (default: 100, max: 2000)
+#   (default)        Idle-state benchmark — collect current cluster metrics
+#   --under-load     Generate N synthetic tenants, inject load, measure perf
+#                    Includes scrape duration, reload latency, memory delta
+#   --tenants N      Number of synthetic tenants (default: 100, max: 2000)
+#   --scaling-curve  Measure rule evaluation time at 3/6/9 Rule Packs
 # ============================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,11 +17,13 @@ source "${SCRIPT_DIR}/_lib.sh"
 # --- Options ---
 JSON_MODE=false
 UNDER_LOAD=false
+SCALING_CURVE=false
 SYNTH_TENANTS=100
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON_MODE=true; shift ;;
     --under-load) UNDER_LOAD=true; shift ;;
+    --scaling-curve) SCALING_CURVE=true; shift ;;
     --tenants) SYNTH_TENANTS="${2:-100}"; shift 2 ;;
     *) shift ;;
   esac
@@ -194,6 +197,7 @@ UL_MEM_AFTER_MB="N/A"
 UL_MEM_DELTA_MB="N/A"
 UL_SCRAPE_DUR_MS="N/A"
 UL_RELOAD_LATENCY_S="N/A"
+UL_EVAL_TIME_MS="N/A"
 UL_UT_SERIES_AFTER=0
 UL_ACTIVE_SERIES_AFTER=0
 
@@ -355,6 +359,80 @@ print(f'Removed {len(synth_keys)} synthetic tenants')
 fi
 
 # ============================================================
+# Scaling Curve Mode: measure eval time at 3/6/9 Rule Packs
+# ============================================================
+SC_STATUS="skipped"
+SC_DATA=""
+
+if [[ "${SCALING_CURVE}" == true ]]; then
+  log "Scaling curve mode: measuring rule evaluation at 3/6/9 Rule Packs..."
+
+  # Rule Packs grouped by tier:
+  #   Tier 1 (3): mariadb, kubernetes, platform  (base set)
+  #   Tier 2 (6): + redis, mongodb, elasticsearch
+  #   Tier 3 (9): + oracle, db2, clickhouse      (full set = current state)
+  TIER2_CMS="prometheus-rules-redis prometheus-rules-mongodb prometheus-rules-elasticsearch"
+  TIER3_CMS="prometheus-rules-oracle prometheus-rules-db2 prometheus-rules-clickhouse"
+  K8S_DIR="${SCRIPT_DIR}/../k8s/03-monitoring"
+
+  # --- Measure at 9 Rule Packs (current state) ---
+  sleep 20  # ensure stable eval metrics
+  SC_9_GROUPS=$(prom_scalar 'count(prometheus_rule_group_rules)')
+  SC_9_RULES=$(prom_scalar 'sum(prometheus_rule_group_rules)')
+  SC_9_EVAL_S=$(prom_scalar 'sum(prometheus_rule_group_last_duration_seconds)')
+  SC_9_EVAL_MS=$(python3 -c "print(f'{float(${SC_9_EVAL_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
+
+  # --- Remove tier 3 → measure at 6 Rule Packs ---
+  info "Removing tier 3 (oracle, db2, clickhouse)..."
+  for cm in ${TIER3_CMS}; do
+    kubectl delete configmap "${cm}" -n monitoring --ignore-not-found >/dev/null 2>&1
+  done
+  # Trigger Prometheus config reload
+  kubectl delete pod -l app=prometheus -n monitoring --wait=false >/dev/null 2>&1 || true
+  sleep 45  # wait for pod restart + 2 eval cycles
+
+  SC_6_GROUPS=$(prom_scalar 'count(prometheus_rule_group_rules)')
+  SC_6_RULES=$(prom_scalar 'sum(prometheus_rule_group_rules)')
+  SC_6_EVAL_S=$(prom_scalar 'sum(prometheus_rule_group_last_duration_seconds)')
+  SC_6_EVAL_MS=$(python3 -c "print(f'{float(${SC_6_EVAL_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
+
+  # --- Remove tier 2 → measure at 3 Rule Packs ---
+  info "Removing tier 2 (redis, mongodb, elasticsearch)..."
+  for cm in ${TIER2_CMS}; do
+    kubectl delete configmap "${cm}" -n monitoring --ignore-not-found >/dev/null 2>&1
+  done
+  kubectl delete pod -l app=prometheus -n monitoring --wait=false >/dev/null 2>&1 || true
+  sleep 45
+
+  SC_3_GROUPS=$(prom_scalar 'count(prometheus_rule_group_rules)')
+  SC_3_RULES=$(prom_scalar 'sum(prometheus_rule_group_rules)')
+  SC_3_EVAL_S=$(prom_scalar 'sum(prometheus_rule_group_last_duration_seconds)')
+  SC_3_EVAL_MS=$(python3 -c "print(f'{float(${SC_3_EVAL_S})*1000:.1f}')" 2>/dev/null || echo "N/A")
+
+  # --- Restore all Rule Packs ---
+  info "Restoring all Rule Pack ConfigMaps..."
+  for f in "${K8S_DIR}"/configmap-rules-*.yaml; do
+    kubectl apply -f "${f}" -n monitoring >/dev/null 2>&1
+  done
+  kubectl delete pod -l app=prometheus -n monitoring --wait=false >/dev/null 2>&1 || true
+  sleep 30
+  log "Rule Packs restored to 9."
+
+  SC_STATUS="completed"
+  SC_DATA=$(python3 -c "
+import json
+data = [
+    {'rule_packs': 3, 'rule_groups': int(float('${SC_3_GROUPS}')), 'total_rules': int(float('${SC_3_RULES}')), 'eval_time_ms': float('${SC_3_EVAL_MS}') if '${SC_3_EVAL_MS}' != 'N/A' else None},
+    {'rule_packs': 6, 'rule_groups': int(float('${SC_6_GROUPS}')), 'total_rules': int(float('${SC_6_RULES}')), 'eval_time_ms': float('${SC_6_EVAL_MS}') if '${SC_6_EVAL_MS}' != 'N/A' else None},
+    {'rule_packs': 9, 'rule_groups': int(float('${SC_9_GROUPS}')), 'total_rules': int(float('${SC_9_RULES}')), 'eval_time_ms': float('${SC_9_EVAL_MS}') if '${SC_9_EVAL_MS}' != 'N/A' else None}
+]
+print(json.dumps(data))
+" 2>/dev/null || echo "[]")
+
+  log "Scaling curve benchmark complete."
+fi
+
+# ============================================================
 # Output
 # ============================================================
 if [[ "${JSON_MODE}" == true ]]; then
@@ -400,7 +478,8 @@ data = {
     'eval_time_ms': float('${UL_EVAL_TIME_MS}') if '${UL_EVAL_TIME_MS}' != 'N/A' else None,
     'user_threshold_series': int('${UL_UT_SERIES_AFTER}'),
     'active_series': int(float('${UL_ACTIVE_SERIES_AFTER}')) if '${UL_ACTIVE_SERIES_AFTER}' != '0' else None
-  } if '${UL_STATUS}' != 'skipped' else None
+  } if '${UL_STATUS}' != 'skipped' else None,
+  'scaling_curve': json.loads('${SC_DATA}') if '${SC_STATUS}' != 'skipped' else None
 }
 print(json.dumps(data, indent=2))
 "
@@ -444,6 +523,19 @@ else
     printf "    %-26s %sms\n" "Eval Time (after)" "${UL_EVAL_TIME_MS}"
     printf "    %-26s %s → %s\n" "user_threshold Series" "${UT_SERIES}" "${UL_UT_SERIES_AFTER}"
     printf "    %-26s %s\n" "Active Series (after)" "${UL_ACTIVE_SERIES_AFTER}"
+  fi
+
+  if [[ "${SC_STATUS}" != "skipped" ]]; then
+    echo ""
+    echo "  Rule Evaluation Scaling Curve"
+    printf "    %-14s %-14s %-14s %s\n" "Rule Packs" "Rule Groups" "Total Rules" "Eval Time"
+    printf "    %-14s %-14s %-14s %s\n" "----------" "-----------" "-----------" "---------"
+    python3 -c "
+import json
+for row in json.loads('${SC_DATA}'):
+    et = f\"{row['eval_time_ms']}ms\" if row['eval_time_ms'] is not None else 'N/A'
+    print(f\"    {row['rule_packs']:<14} {row['rule_groups']:<14} {row['total_rules']:<14} {et}\")
+" 2>/dev/null
   fi
 
   echo ""

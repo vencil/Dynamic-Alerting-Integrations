@@ -1,4 +1,4 @@
-# mongodb-tenant.yaml — 範例: MongoDB 租戶閾值設定 (Phase 2B 維度標籤)
+# mongodb-tenant.yaml — 範例: MongoDB 租戶閾值設定 (維度標籤)
 # 來源參考: percona/mongodb_exporter
 #
 # MongoDB 典型維度: database (庫), collection (集合), rs (replica set)

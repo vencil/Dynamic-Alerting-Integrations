@@ -4,15 +4,16 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v0.12.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.0.0).
 
 **This document covers:**
-- System architecture and core design principles
+- System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
 - Config-driven configuration workflow
-- Governance model for Projected Volume and Rule Packs
-- Performance analysis and scalability proof
+- Governance model for Projected Volume and 9 Rule Packs
+- Performance analysis and scalability proof (including under-load benchmarks and Go micro-benchmarks)
 - High availability (HA) design
 - Governance, audit, and security compliance
+- AST migration engine architecture
 
 **Related documentation:**
 - **Quick Start** → [README.en.md](../README.en.md)
@@ -23,6 +24,36 @@ This document provides Platform Engineers and Site Reliability Engineers (SREs) 
 ---
 
 ## 1. System Architecture Diagram
+
+### 1.1 C4 Context — System Boundary & Actor Interactions
+
+```mermaid
+graph TB
+    PT["👤 Platform Team\nManages _defaults.yaml\nMaintains Rule Packs"]
+    TT["👤 Tenant Team\nManages tenant YAML\nConfigures thresholds"]
+    Git["📂 Git Repository\nconf.d/ + rule-packs/"]
+
+    subgraph DAP["Dynamic Alerting Platform"]
+        TE["threshold-exporter\n×2 HA"]
+        PM["Prometheus\n+ 9 Rule Packs"]
+        CM["ConfigMap\nthreshold-config"]
+    end
+
+    AM["📟 Alertmanager\n→ Slack / PagerDuty"]
+
+    PT -->|"PR: _defaults.yaml\n+ Rule Pack YAML"| Git
+    TT -->|"PR: tenant YAML\n(threshold config)"| Git
+    Git -->|"GitOps sync\n(ArgoCD/Flux)"| CM
+    CM -->|"SHA-256\nhot-reload"| TE
+    TE -->|"Prometheus\nmetrics :8080"| PM
+    PM -->|"Alert rules\nevaluation"| AM
+
+    style DAP fill:#e8f4fd,stroke:#1a73e8
+    style Git fill:#f0f0f0,stroke:#666
+    style AM fill:#fff3e0,stroke:#e65100
+```
+
+### 1.2 Internal Architecture
 
 ```mermaid
 graph TB
@@ -47,12 +78,15 @@ graph TB
                 TE2["Replica 2\nport 8080"]
             end
 
-            subgraph Rules["Projected Volume\nRule Packs"]
+            subgraph Rules["Projected Volume\nRule Packs (×9)"]
                 RP1["configmap-rules-mariadb.yaml"]
                 RP2["configmap-rules-kubernetes.yaml"]
                 RP3["configmap-rules-redis.yaml"]
                 RP4["configmap-rules-mongodb.yaml"]
                 RP5["configmap-rules-elasticsearch.yaml"]
+                RP7["configmap-rules-oracle.yaml"]
+                RP8["configmap-rules-db2.yaml"]
+                RP9["configmap-rules-clickhouse.yaml"]
                 RP6["configmap-rules-platform.yaml"]
             end
 
@@ -83,7 +117,7 @@ graph TB
 **Architecture highlights:**
 1. **Directory Scanner** scans the `conf.d/` directory, automatically discovering `_defaults.yaml` and tenant configuration files
 2. **threshold-exporter × 2 HA Replicas** read ConfigMap and output three-state Prometheus metrics
-3. **Projected Volume** mounts 6 independent rule packs, zero PR conflicts, each team independently owns their rules
+3. **Projected Volume** mounts 9 independent rule packs, zero PR conflicts, each team independently owns their rules
 4. **Prometheus** uses `group_left` vector matching to join with user thresholds, achieving O(M) complexity
 
 ---
@@ -151,7 +185,7 @@ tenants:
     container_cpu: "70"              # Override default 80
     mysql_slave_lag: "disable"       # No replica, disable
     # mysql_cpu not specified → use default value 80
-    # Dimensional labels (Phase 2B)
+    # Dimensional labels
     "redis_queue_length{queue='tasks'}": "500"
     "redis_queue_length{queue='events', priority='high'}": "1000:critical"
 ```
@@ -227,11 +261,59 @@ Platform Alert Rules use `unless` logic to auto-suppress warning when critical t
 - Connection count ≥ 150 (critical): only critical alert fires
 - Connection count 100-150 (warning only): warning alert fires
 
+### 2.4 Regex Dimension Thresholds
+
+Since v0.12.0, the config parser supports the `=~` operator, enabling regex-based fine-grained matching on dimension labels. This design allows thresholds to target specific dimension subsets without introducing external data dependencies.
+
+**Configuration syntax:**
+```yaml
+tenants:
+  db-a:
+    # Exact match
+    "oracle_tablespace_used_percent{tablespace='USERS'}": "85"
+    # Regex match: all tablespaces starting with SYS
+    "oracle_tablespace_used_percent{tablespace=~'SYS.*'}": "95"
+```
+
+**Implementation path:**
+
+1. **Exporter layer**: Config parser detects the `=~` operator and outputs the regex pattern as a `_re` suffixed label
+   ```
+   user_threshold{tenant="db-a", metric="oracle_tablespace_used_percent",
+                  tablespace_re="SYS.*", severity="warning"} 95
+   ```
+2. **Recording rule layer**: PromQL uses `label_replace` + `=~` for actual matching at query time
+3. **Design principle**: The exporter remains a pure config→metric converter; matching logic is entirely handled by Prometheus native vector operations
+
+### 2.5 Scheduled Thresholds
+
+Since v0.12.0, thresholds support time-window scheduling, allowing automatic threshold switching across different time periods. Typical use cases: relaxed thresholds during nighttime maintenance windows, tightened thresholds during peak hours.
+
+**Configuration syntax:**
+```yaml
+tenants:
+  db-a:
+    mysql_connections:
+      default: "100"
+      overrides:
+        - window: "22:00-06:00"    # UTC nighttime window (cross-midnight supported)
+          value: "200"             # Nighttime batch jobs, relax to 200
+        - window: "09:00-18:00"
+          value: "80"              # Daytime peak, tighten to 80
+```
+
+**Technical implementation:**
+
+- **`ScheduledValue` custom YAML type**: Supports dual-format parsing — scalar strings (backward compatible) and structured `{default, overrides[{window, value}]}`
+- **`ResolveAt(now time.Time)`**: Resolves the applicable threshold based on current UTC time, ensuring determinism and testability
+- **Time window format**: `HH:MM-HH:MM` (UTC), cross-midnight support (e.g., `22:00-06:00` means 10 PM to 6 AM next day)
+- **45 test cases**: Covering boundary conditions — window overlap, cross-midnight, scalar fallback, empty overrides
+
 ---
 
 ## 3. Projected Volume Architecture (Rule Packs)
 
-### 3.1 Six Independent Rule Packs
+### 3.1 Nine Independent Rule Packs
 
 | Rule Pack | Owning Team | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|------------|-----------------|----------------|-------------|
@@ -240,8 +322,11 @@ Platform Alert Rules use `unless` logic to auto-suppress warning when critical t
 | Redis | Cache | `configmap-rules-redis` | 7 | 6 |
 | MongoDB | AppData | `configmap-rules-mongodb` | 7 | 6 |
 | Elasticsearch | Search | `configmap-rules-elasticsearch` | 7 | 7 |
+| Oracle | DBA / Oracle | `configmap-rules-oracle` | 6 | 7 |
+| DB2 | DBA / DB2 | `configmap-rules-db2` | 7 | 7 |
+| ClickHouse | Analytics | `configmap-rules-clickhouse` | 7 | 7 |
 | Platform | Platform | `configmap-rules-platform` | 0 | 4 |
-| **Total** | | | **33** | **35** |
+| **Total** | | | **53** | **56** |
 
 ### 3.2 Self-Contained Three-Part Structure
 
@@ -329,23 +414,25 @@ Example: 100 tenants, 35 alert rules
 
 ### 4.2 Actual Benchmark Data (Kind Cluster Measurement)
 
-**Current setup: 2 tenants, 85 rules, 18 alert groups**
+**Current setup: 2 tenants, 141 rules (9 Rule Packs), 27 rule groups**
+
+> Data below from **5 independent rounds** (Kind single-node cluster, 45s intervals between rounds), reporting mean ± stddev.
 
 ```
-Total evaluation time (per cycle): ~20.8ms
-- p50 (50th percentile):  0.59ms per group
-- p99 (99th percentile):  5.05ms per group
+Total evaluation time (per cycle): 20.3 ± 1.9ms  (range: 17.7–22.8ms, n=5)
+- p50 (50th percentile):  1.23 ± 0.28ms per group
+- p99 (99th percentile):  6.89 ± 0.44ms per group
 ```
 
 **Scalability comparison:**
 
 | Metric | Current (2 tenants) | Traditional (100 tenants) | Dynamic (100 tenants) |
 |--------|-------|-------------------|------------------|
-| Alert rule count | 35 (fixed) | 3,500 (35×100) | 35 (fixed) |
-| Recording rule count | 50 (normalization) | 0 (embedded in alerts) | 50 (fixed) |
-| **Total rule count** | **85** | **3,500** | **85** |
+| Alert rule count | 56 (fixed) | 5,600 (56×100) | 56 (fixed) |
+| Recording rule count | 85 (normalization) | 0 (embedded in alerts) | 85 (fixed) |
+| **Total rule count** | **141** | **5,600** | **141** |
 | Evaluation complexity | O(M) | O(N×M) | O(M) |
-| **Estimated evaluation time** | **~20.8ms** | **~850ms+** | **~20.8ms** |
+| **Estimated evaluation time** | **~20ms** | **~800ms+** | **~20ms** |
 
 **Conclusion:**
 - Traditional approach increases evaluation time by **40×** at 100 tenants
@@ -353,7 +440,7 @@ Total evaluation time (per cycle): ~20.8ms
 
 ### 4.3 Empty Vector Zero-Cost
 
-6 rule packs are pre-loaded. Packs without deployed exporters are evaluated against empty vectors.
+9 rule packs are pre-loaded. Packs without deployed exporters are evaluated against empty vectors.
 
 **Kind cluster actual measurement:**
 
@@ -371,31 +458,33 @@ Total evaluation time (per cycle): ~20.8ms
 
 ### 4.4 Memory Efficiency
 
+> Data below from **5 independent rounds** mean ± stddev.
+
 ```
-Single threshold-exporter Pod:
-- ConfigMap memory: ~5MB (YAML parsing)
-- Output metrics: ~2,000 series (2 tenants)
-- Total usage: ~150MB (RSS)
+Single threshold-exporter pod (measured):
+- Heap memory: 2.4 ± 0.4MB (YAML parsing + metric generation)
+- Output metrics: ~8 user_threshold series (2 tenants)
+- Scrape Duration: 4.1 ± 1.2ms
 
-× 2 HA Replicas: ~300MB total
-+ Prometheus rule cache: ~50MB
-= Cluster overhead: ~350MB
+× 2 HA Replicas: ~4.8MB total
++ Prometheus RSS: 142.7 ± 1.4MB (9 Rule Packs, 141 rules)
+= Cluster overhead: ~148MB
 
-vs. Traditional approach (3,500 rules):
-- Prometheus rule cache: ~200MB+
-- Total overhead: ~400MB+ (single hub)
+vs. Traditional approach (100 tenants, 5,600 rules):
+- Prometheus rules cache: ~500MB+
+- Total overhead: ~600MB+ (single hub)
 ```
 
 ### 4.5 Resource Usage Baseline
 
-Actual measurements from a Kind single-node cluster (2 tenants, 85 rules):
+Kind single-node cluster, 5-round measurements (2 tenants, 141 rules, 9 Rule Packs, mean ± stddev):
 
-| Metric | Component | Value | Purpose |
+| Metric | Component | Value (n=5) | Purpose |
 |--------|-----------|-------|---------|
-| CPU (5m avg) | Prometheus | ~0.02 cores | Capacity planning — estimate CPU requests |
-| RSS Memory | Prometheus | ~150MB | Memory budgeting — set memory limits |
-| RSS Memory | threshold-exporter (per pod) | ~64MB | Pod resource limits tuning |
-| RSS Memory | threshold-exporter (×2 HA) | ~128MB total | Cluster memory planning |
+| CPU (5m avg) | Prometheus | ~0.014 ± 0.003 cores | Capacity planning — estimate CPU requests |
+| RSS Memory | Prometheus | 142.7 ± 1.4MB | Memory budgeting — set memory limits |
+| Heap Memory | threshold-exporter (per pod) | 2.4 ± 0.4MB | Pod resource limits tuning |
+| Scrape Duration | Prometheus → exporter | 4.1 ± 1.2ms | Scrape performance baseline |
 
 **Automated collection:**
 
@@ -414,10 +503,10 @@ The performance bottleneck in Prometheus is **Active Series count**, not disk sp
 
 | Metric | Value | Description |
 |--------|-------|-------------|
-| TSDB Disk Usage | ~12MB | All rules and metrics included |
-| Active Series Total | ~2,800 | Includes all exporters + recording rules |
-| `user_threshold` Series | ~16 | Threshold metrics from threshold-exporter |
-| Series Per Tenant (marginal) | ~8 | Marginal cost of adding 1 tenant |
+| TSDB Disk Usage | 8.9 ± 0.2MB | All rules and metrics included (n=5) |
+| Active Series Total | ~6,037 ± 10 | Includes all exporters + recording rules (n=5) |
+| `user_threshold` Series | ~8 | Threshold metrics from threshold-exporter |
+| Series Per Tenant (marginal) | ~4 | Marginal cost of adding 1 tenant |
 
 **Scaling estimation formula:**
 
@@ -427,12 +516,73 @@ Marginal cost of adding N tenants:
   Memory delta ≈ Series delta × 2KB
 
 Example (100 tenants):
-  user_threshold series = 100 × 8 = 800
-  Memory delta ≈ (800 - 16) × 2KB ≈ 1.5MB
-  Total series ≈ 2,800 - 16 + 800 = 3,584
+  user_threshold series = 100 × 4 = 400
+  Memory delta ≈ (400 - 8) × 2KB ≈ 0.8MB
+  Total series ≈ 6,029 - 8 + 400 = 6,421
 ```
 
-**Conclusion:** The dynamic architecture has minimal series growth per tenant (~8 series each). 100 tenants add only ~1.5MB of memory. Compared to the traditional approach (35+ independent rules per tenant, each potentially generating multiple series), the cardinality advantage is significant.
+**Conclusion:** The dynamic architecture has minimal series growth per tenant (~4 series each). 100 tenants add only ~0.8MB of memory. Compared to the traditional approach (56+ independent rules per tenant, each potentially generating multiple series), the cardinality advantage is significant.
+
+### 4.7 Under-Load Benchmark Mode
+
+v0.13.0 added the `--under-load` mode, which validates platform scalability under synthetic tenant load. Idle-state benchmarks only measure performance at rest; under-load mode simulates real multi-tenant environments.
+
+**Test methodology:**
+```bash
+make benchmark ARGS="--under-load --tenants 1000"
+```
+
+1. **Synthetic tenant generation**: Dynamically creates N synthetic tenant configurations (scalar + mixed + night-window combinations)
+2. **ConfigMap patch**: Injects synthetic configurations into the `threshold-config` ConfigMap
+3. **Measurement dimensions**:
+   - **Reload Latency**: Time from ConfigMap change to exporter reload completion
+   - **Memory Delta**: RSS memory change after adding N tenants
+   - **Scrape Duration**: Prometheus scrape time for threshold-exporter
+   - **Evaluation Time**: Recording rules + Alert rules evaluation time
+4. **Cleanup**: Automatically removes synthetic tenants, restoring original state
+
+**Go Micro-Benchmark:**
+
+`config_bench_test.go` provides precise Go-level performance measurement (Intel Core 7 240H, `-count=5` median):
+
+| Benchmark | ns/op (median) | ns/op (stddev) | B/op | allocs/op |
+|-----------|------:|------:|-----:|----------:|
+| Resolve_10Tenants_Scalar | 11,570 | 237 | 26,032 | 58 |
+| Resolve_100Tenants_Scalar | 107,346 | 4,315 | 196,080 | 511 |
+| Resolve_1000Tenants_Scalar | 2,215,080 | 113,589 | 3,739,792 | 5,019 |
+| ResolveAt_10Tenants_Mixed | 39,487 | 1,720 | 39,491 | 268 |
+| ResolveAt_100Tenants_Mixed | 419,960 | 18,120 | 454,366 | 2,612 |
+| ResolveAt_1000Tenants_Mixed | 4,882,962 | 105,810 | 5,160,416 | 26,038 |
+| ResolveAt_NightWindow_1000 | 4,887,959 | 123,943 | 5,123,590 | 25,037 |
+
+**Conclusion:** From 10→100→1000 tenants, Scalar resolve ns/op grows linearly (~10×/~19×), memory also linear (26KB→196KB→3.7MB). Mixed (with ScheduledValue) adds ~3.4× overhead over Scalar. Full resolve for 1000 tenants stays under 5ms. 5-round stddev within 2–5% of median, confirming stable and reproducible results.
+
+### 4.8 Rule Evaluation Scaling Curve
+
+Measures the marginal impact of Rule Pack count on Prometheus rule evaluation time. By progressively removing Rule Packs (9→6→3) and measuring `prometheus_rule_group_last_duration_seconds`, we can observe whether evaluation cost grows linearly.
+
+**Methodology:**
+```bash
+make benchmark ARGS="--scaling-curve"
+```
+
+1. **Tier 3 (9 packs)**: Full state (mariadb, kubernetes, redis, mongodb, elasticsearch, oracle, db2, clickhouse, platform)
+2. **Tier 2 (6 packs)**: Remove oracle, db2, clickhouse
+3. **Tier 1 (3 packs)**: Keep only mariadb, kubernetes, platform
+
+Each tier waits for at least 2 Prometheus evaluation cycles before sampling. All Rule Packs are automatically restored after the test.
+
+**Kind cluster measurement (2026-03-01, 3 rounds, reporting median):**
+
+| Rule Packs | Rule Groups | Total Rules | Eval Time (median) | Range |
+|------------|-------------|-------------|-----------|-------|
+| 3          | 9           | 34          | 7.7ms     | 3.3–15.3ms |
+| 6          | 18          | 85          | 17.3ms    | 14.3–18.6ms |
+| 9          | 27          | 141         | 22.7ms    | 8.7–26.0ms |
+
+> **Measurement note:** Each round involves removing Rule Packs → restarting Prometheus → waiting for stabilization → sampling, so per-cycle values are affected by Prometheus restart warm-up, resulting in higher variance than idle-state measurements. Median best represents stable behavior.
+
+**Conclusion:** From 3→6→9 Rule Packs, eval time median grows from 7.7→17.3→22.7ms — approximately linear (~+5–10ms per 3 packs added). Average eval time per group remains stable at ~0.8ms, unaffected by other groups. This confirms the horizontal scalability of the Projected Volume architecture — the marginal cost of adding Rule Packs is predictable and constant.
 
 ---
 
@@ -867,40 +1017,64 @@ flowchart TD
 
 ---
 
-## 10. Future Roadmap
+## 10. AST Migration Engine Architecture
 
-The following items are listed in priority order. Items marked `[Backlog Bx]` correspond to the backlog IDs in CLAUDE.md.
+v0.11.0 implemented `migrate_rule.py` v4, upgrading the migration tool's core from regex to AST (Abstract Syntax Tree) precision. This is a critical capability for enterprise customers migrating from traditional monitoring to this platform.
 
-### 10.1 ~~Regex Dimension Thresholds~~ `[B1]` — ✅ Completed (v0.12.0)
+### 10.1 Architecture: AST-Informed String Surgery
 
-> **Completed in v0.12.0.** Config parser extended to support `=~` operator (e.g., `tablespace=~"SYS.*"`). Regex patterns are output as `_re` suffixed labels on Prometheus metrics. PromQL recording rules use `label_replace` + `=~` for actual matching at query time. This design keeps the exporter as a pure config→metric converter without external data dependencies.
+```mermaid
+flowchart LR
+    A["Original PromQL\nstring"] --> B["promql_parser\n.parse()"]
+    B -->|"read-only AST"| C["walk_ast()\nCollect VectorSelector\nnodes"]
+    C --> D["rewrite_expr()\n1. custom_ prefix\n2. tenant label"]
+    D --> E["Reparse +\nprettify()"]
+    E -->|"✅ Valid"| F["Output\nRewritten PromQL"]
+    B -->|"❌ Parse fails"| G["Fallback\nRegex path"]
+    E -->|"❌ Reparse fails"| G
 
-### 10.2 Oracle / DB2 Rule-Pack Templates `[B3]`
+    style F fill:#c8e6c9,stroke:#2e7d32
+    style G fill:#fff3e0,stroke:#e65100
+```
 
-Depends on B1 completion. Provides default rule-packs for Oracle (tablespace utilization, session count) and DB2 (lock wait, bufferpool hit ratio), enabling enterprise DBAs to use them out of the box.
+**Why not full AST rewrite?** The `promql-parser` (Rust PyO3, v0.7.0) AST is read-only — node attributes cannot be modified and re-serialized. The string surgery approach is safer (preserves original expression structure), simpler (no custom PromQL serializer needed), and verifiable (reparse confirms correctness).
 
-### 10.3 ~~Scheduled Thresholds~~ `[B4]` — ✅ Completed (v0.12.0)
+### 10.2 Core Capabilities
 
-> **Completed in v0.12.0.** `ScheduledValue` custom YAML type supports dual format: scalar strings (backward compatible) and structured `{default, overrides[{window, value}]}`. Time windows are UTC-only `HH:MM-HH:MM` format with cross-midnight support (e.g., `22:00-06:00`). `ResolveAt(now time.Time)` ensures testability. 45 test cases cover boundary conditions.
+| Capability | Description |
+|------------|-------------|
+| `extract_metrics_ast()` | Precise AST-based metric name identification, replacing regex + blacklist approach |
+| `extract_label_matchers_ast()` | Extracts all label matchers (including `=~` regex matchers) |
+| `rewrite_expr_prefix()` | `custom_` prefix injection using word-boundary regex to prevent substring false matches |
+| `rewrite_expr_tenant_label()` | `tenant=~".+"` label injection, ensuring tenant isolation |
+| `detect_semantic_break_ast()` | Detects `absent()` / `predict_linear()` and other semantic-breaking functions |
 
-### 10.4 Benchmark Under-Load Mode `[B2]`
+### 10.3 Graceful Degradation
 
-Currently, `make benchmark` only measures hot-reload latency in idle state. This mode will measure reload latency during real load (composite load), proving that "hot-reload does not impact production performance."
+The migration engine employs a progressive degradation strategy:
 
-### 10.5 ~~Migration Tool AST Parsing~~ `[B6]` — ✅ Completed (v0.11.0)
+1. **AST path** (default): Used when `promql-parser` is available and the expression parses successfully
+2. **Regex path** (fallback): Automatically activated when `promql-parser` is not installed or a specific expression fails to parse
+3. **Forced regex**: CLI `--no-ast` flag bypasses AST for debugging or comparison
 
-> **Implemented in v0.11.0.** `migrate_rule.py` v4 integrates `promql-parser` (Rust PyO3 binding, v0.7.0) using an **AST-Informed String Surgery** architecture: the AST precisely identifies metric names and label matchers, word-boundary regex performs string replacements, and reparsing validates correctness. New capabilities include:
->
-> - `extract_metrics_ast()` / `extract_label_matchers_ast()` — precise AST-based identification
-> - `rewrite_expr_prefix()` — `custom_` prefix injection (word-boundary prevents substring false matches)
-> - `rewrite_expr_tenant_label()` — `tenant=~".+"` label injection
-> - `detect_semantic_break_ast()` — detects `absent()` / `predict_linear()` and other semantic-breaking functions
-> - Graceful degradation: automatically falls back to regex when promql-parser is unavailable or parsing fails
-> - 54 test cases covering compound `and/or/unless`, complex regex labels, aggregation+offset, nested semantic break detection, parse_expr all_metrics validation, dictionary loading, write_outputs integration (including AST path)
->
-> CLI adds `--no-ast` flag to force regex-only mode.
+Degradation does not affect output format — both paths produce the same three-piece suite (recording rules + threshold normalization + alert rules).
 
-### 10.6 Governance Evolution
+### 10.4 Enterprise Migration Workflow
+
+The complete migration path integrates the AST engine, Shadow Monitoring, and Triage mode:
+
+1. **Triage**: `migrate_rule.py --triage` produces a CSV inventory, categorizing each rule's migration strategy (direct / prefix / skip)
+2. **Migration execution**: AST engine handles prefix injection and tenant label injection
+3. **Shadow Monitoring**: `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%)
+4. **Go-live**: `scaffold_tenant.py` generates the complete tenant configuration package
+
+---
+
+## 11. Future Roadmap
+
+The following items represent technical directions not yet implemented, listed by expected impact.
+
+### 11.1 Governance Evolution
 
 Currently all tenant configs reside in a single `threshold-config` ConfigMap, and K8s native RBAC can only control access at the resource level, not at the key level. Splitting into multiple ConfigMaps is feasible but projected volumes require each ConfigMap name to be hardcoded in the Pod Spec — adding a new tenant would require a Deployment change and trigger a Pod restart, breaking the core hot-reload mechanism.
 
@@ -922,12 +1096,47 @@ In practice, configuration changes operate at three levels:
 
 When the platform scales to require auto-scaling, drift reconciliation, and cross-cluster management, a `ThresholdConfig` CRD and Operator can be introduced, elevating tenant configurations to Kubernetes first-class resources. K8s native RBAC would then provide precise per-CR access control, integrating seamlessly with GitOps toolchains. This path requires additional Operator development and operational investment, and is best evaluated when the product enters its scaling phase.
 
-### 10.7 Prometheus Federation
+### 11.2 Prometheus Federation
 
 Support multi-cluster architecture:
 - Edge clusters each collect tenant metrics and run threshold-exporter
 - Central cluster performs global alert evaluation via federation or remote-write
 - Cross-cluster SLA monitoring and unified dashboards
+
+### 11.3 Ecosystem Expansion
+
+The platform currently covers database types (MariaDB, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse) as its primary scope. The architecture itself is not limited to databases — any component that exports Prometheus metrics can be managed by adding a new Rule Pack.
+
+The onboarding pattern for each new domain is identical to existing DB Rule Packs: Normalization → Threshold Normalization → Alert Rules three-part structure, paired with `scaffold_tenant.py` for automatic configuration generation. The following table outlines concrete integration paths:
+
+| Domain | Recommended Exporter | Key Metrics for Threshold Management | Integration Pattern |
+|--------|---------------------|-------------------------------------|-------------------|
+| **Kafka** | [danielqsj/kafka_exporter](https://github.com/danielqsj/kafka_exporter) | `kafka_consumergroup_lag`, `kafka_brokers`, `kafka_topic_partition_current_offset` | Standard three-part — lag/broker count use `max by(tenant)`, throughput uses `sum by(tenant)` |
+| **RabbitMQ** | [kbudde/rabbitmq_exporter](https://github.com/kbudde/rabbitmq_exporter) | `rabbitmq_queue_messages_ready`, `rabbitmq_queue_consumers`, `rabbitmq_connections` | Standard three-part — queue depth suits regex dimensions (per-queue thresholds) |
+| **JVM** | [prometheus/jmx_exporter](https://github.com/prometheus/jmx_exporter) | `jvm_gc_pause_seconds_sum`, `jvm_memory_used_bytes`, `jvm_threads_current` | Standard three-part — GC pause suits scheduled thresholds (different tolerances for peak vs. off-peak) |
+| **Nginx** | [nginxinc/nginx-prometheus-exporter](https://github.com/nginxinc/nginx-prometheus-exporter) | `nginx_connections_active`, `nginx_http_requests_total` rate, `nginx_connections_waiting` | Standard three-part — active connections use `max by(tenant)` |
+| **AWS RDS** | [percona/rds_exporter](https://github.com/percona/rds_exporter) or [YACE](https://github.com/nerdswords/yet-another-cloudwatch-exporter) | `rds_cpu_utilization`, `rds_free_storage_space`, `rds_database_connections` | Standard three-part — CloudWatch metrics converted to Prometheus format via exporter, fully compatible with this platform |
+
+### 11.4 Log-to-Metric Bridge
+
+This platform's design boundary is the **Prometheus metrics layer** — it manages thresholds and alerts, and does not directly process logs. For scenarios requiring log-based alerting (e.g., Oracle ORA-600 fatal errors, MySQL slow query log analysis), the recommended ecosystem approach is:
+
+**Architecture pattern:**
+```
+Application Log → grok_exporter / mtail → Prometheus metric → Platform threshold management
+```
+
+| Tool | Use Case | Description |
+|------|----------|-------------|
+| [grok_exporter](https://github.com/fstab/grok_exporter) | Structured logs (syslog, access log) | Parses log lines with Grok patterns, outputs as Prometheus counter/gauge/histogram |
+| [mtail](https://github.com/google/mtail) | High-throughput real-time log streams | Google open-source, programmatic log pattern → metric definitions, suitable for large-scale deployments |
+
+**Integration example (ORA-600):**
+1. grok_exporter monitors Oracle alert log, increments `oracle_fatal_errors_total{instance="..."}` for each `ORA-600` match
+2. Platform `_defaults.yaml` sets `oracle_fatal_errors_rate: "0"` (alert on any error)
+3. Recording rule: `tenant:oracle_fatal_errors:rate5m` → Alert rule fires
+
+This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture.
 
 ---
 
@@ -941,6 +1150,6 @@ Support multi-cluster architecture:
 
 ---
 
-**Document version:** v0.12.0 — 2026-02-28
-**Last updated:** Phase 11 Exporter Core Expansion — B1 Regex Dimensions + B4 Scheduled Thresholds (ScheduledValue, ResolveAt, _re suffix labels)
+**Document version:** v1.0.0 — 2026-03-01
+**Last updated:** v1.0.0 GA Release — Document restructuring: completed features moved to main body (§2.4 Regex Dimensions, §2.5 Scheduled Thresholds, §4.7 Under-Load Benchmarks, §10 AST Migration Engine), Future Roadmap streamlined to unrealized items only. §4 Benchmark data updated to multi-round statistical measurements (idle ×5, scaling-curve ×3, Go micro-bench ×5).
 **Maintainer:** Platform Engineering Team

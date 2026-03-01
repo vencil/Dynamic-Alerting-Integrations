@@ -1,7 +1,7 @@
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
-> **版本**: v0.12.0
+> **版本**: v1.0.0
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](../rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---
@@ -16,6 +16,24 @@ Dynamic Alerting 平台的核心價值在於 **O(M) 複雜度**：定義 M 種�
 
 ## 2. 三層治理模型
 
+```mermaid
+flowchart TD
+    A["我需要一個新的告警"] --> B{"現有指標 +\n不同閾值？"}
+    B -- YES --> T1["Tier 1 — Standard\n修改 tenant.yaml\n覆蓋率 ~80-85%"]
+    B -- NO --> C{"現有指標的\n複合條件？"}
+    C -- YES --> D{"有對應的\nPre-packaged Scenario？"}
+    D -- YES --> T2a["Tier 2 — Pre-packaged\n啟用該 Scenario"]
+    D -- NO --> E{"具共性？"}
+    E -- YES --> T2b["Tier 2 — Pre-packaged\nDomain Expert 建立新 Scenario\n覆蓋率 ~10-15%"]
+    E -- NO --> T3["Tier 3 — Custom\nChange Request 流程\n目標 ≤5% of rules"]
+    C -- NO --> F["評估是否為\n平台應涵蓋的範疇"]
+
+    style T1 fill:#d4edda,stroke:#28a745
+    style T2a fill:#cce5ff,stroke:#007bff
+    style T2b fill:#cce5ff,stroke:#007bff
+    style T3 fill:#fff3cd,stroke:#ffc107
+```
+
 ### 2.1 Tier 1 — Standard（Config-Driven 三態控制）
 
 **覆蓋率**: 約 80–85% 的 Tenant 需求
@@ -23,10 +41,10 @@ Dynamic Alerting 平台的核心價值在於 **O(M) 複雜度**：定義 M 種�
 Tenant 透過 `tenant.yaml` 設定閾值，不接觸 PromQL：
 
 ```yaml
-# 三態控制範例
-connections_threshold: "800"        # Custom: 自訂閾值
-cpu_threshold: ""                   # Default: 採用平台預設值 (省略或空字串)
-replication_lag_threshold: "disable" # Disable: 關閉此告警
+# 三態控制範例（key 名稱對應 _defaults.yaml 中的指標定義）
+mysql_connections: "800"        # Custom: 自訂閾值
+mysql_cpu: ""                   # Default: 採用平台預設值 (省略或空字串)
+mariadb_replication_lag: "disable" # Disable: 關閉此告警
 ```
 
 每個指標支援 Warning / Critical 兩層嚴重度（`_critical` suffix），以及維度標籤篩選。
@@ -46,7 +64,7 @@ replication_lag_threshold: "disable" # Disable: 關閉此告警
 - alert: MariaDBSystemBottleneck
   expr: |
     (
-      tenant:mysql_threads_connected:sum
+      tenant:mysql_threads_connected:max
       > on(tenant) group_left
       tenant:alert_threshold:connections
     )
@@ -60,19 +78,19 @@ replication_lag_threshold: "disable" # Disable: 關閉此告警
     (user_state_filter{filter="maintenance"} == 1)
 ```
 
-Tenant 透過三態控制啟停：
+**啟停機制**：Tier 2 場景的啟停透過既有三態控制間接實現，不需要額外的開關 key：
 
-```yaml
-_state_mariadb_bottleneck: "true"     # 啟用
-_state_mariadb_bottleneck: "disable"  # 停用
-```
+- **啟用**：只要場景依賴的各指標閾值均為有效值（Custom 或 Default），場景自動生效。
+- **停用某一指標**：將該指標設為 `"disable"`，對應的 recording rule 不產出值，`>` 比較自然為 false，場景不觸發。
+- **全域維護模式**：透過 `state_filters.maintenance` 設為 `"true"`，場景中的 `unless ... user_state_filter{filter="maintenance"}` 子句生效，全面靜音。
+
+> **設計考量**：PromQL 不支援動態開關。此機制透過「閾值缺失 → recording rule 無值 → 條件不成立」的傳遞效應實現隱式啟停，避免為每個場景引入額外 config key。
 
 **設計原則**：
 
 - Tier 2 場景由 Domain Expert 定義，不是由 Tenant 自行拼裝。「平台提供精選套餐，Tenant 決定要不要點」，而非「給 Tenant 積木自己拼」。
 - 每個場景必須有明確的業務語義文件（回答什麼業務問題、為什麼這個組合有意義）。
 - 閾值仍然是 Config-driven，Tenant 可調整數字但不能改變邏輯結構。
-- PromQL 中不存在動態指標名稱替換的能力，因此每個場景的指標組合在 Rule 載入時即確定。
 
 **Rule 複雜度**: O(場景數)，不隨 Tenant 數成長。
 
@@ -98,7 +116,7 @@ Tier 3 規則放置於獨立的 Prometheus Rule Group，可設定較長的 `eval
 - 平台團隊可獨立監控 Custom Rule Group 的 evaluation duration
 
 ```yaml
-# rule-packs/custom/tenant-specific.yaml
+# rule-packs/custom/tenant-specific.yaml（此目錄於首個 Tier 3 Rule 提交時建立）
 groups:
   - name: custom_tenant_rules
     interval: 30s   # 獨立 evaluation interval
@@ -123,47 +141,18 @@ groups:
 
 本平台涉及三種角色。在小型團隊中同一人可能兼任多個角色，重點是職責邊界清楚，不是組織架構。
 
-### 3.1 Platform Engineering / Core SRE
-
-**定位**: 基礎設施的提供者與護欄的建立者
-
-| 職責 | 說明 |
-|------|------|
-| 平台可用性 | 維護 Prometheus 叢集、threshold-exporter HA、Projected Volume 掛載 |
-| CI/CD 護欄 | 維護 deny-list linting、版號治理、Rule Pack 結構驗證 |
-| 效能監控 | 監控 Rule evaluation duration，識別 Noisy Neighbor |
-| 強制下架權 | 對違規或導致效能問題的 Tier 3 Rule，有權在不事先通知的情況下強制停用以保全局 |
-
-**SLA 範圍**: 保證「告警引擎」正常運作（Rule evaluation、metric scraping、alert routing）。不對特定業務指標的誤報/漏報負責。
-
-### 3.2 Domain Experts（DBA、網路管理員、K8s 管理員）
-
-**定位**: 黃金標準 (Golden Standards) 的制定者
-
-| 職責 | 說明 |
-|------|------|
-| Rule Pack 維護 | 各自負責所屬領域的 Rule Pack（例如 DBA 負責 mariadb rule-pack） |
-| Tier 2 場景設計 | 根據實戰經驗設計 Pre-packaged Scenarios，撰寫業務語義文件 |
-| Tier 3 審查 | 審查 Tenant 提出的 Custom Rule 需求，判斷是否應抽象為 Tier 2 |
-| 收編週期 | 參與季度 review，將具備共性的 Tier 3 Rule 晉升為 Tier 2 |
-
-**SLA 範圍**: 對 Tier 1 / Tier 2 Rule 的業務正確性負責（閾值合理性、場景設計邏輯）。
-
-### 3.3 Tenant Teams（應用程式開發團隊）
-
-**定位**: 平台的使用者與自身業務系統的負責人
-
-| 職責 | 說明 |
-|------|------|
-| 閾值管理 | 透過 `tenant.yaml` 維護自己服務的 Warning / Critical 閾值 |
-| 場景選擇 | 決定是否啟用 Tier 2 的 Pre-packaged Scenarios |
-| Custom Rule 維運 | 若提交 Tier 3 Rule，遵循 "You build it, you run it" 原則 |
-
-**SLA 說明**: Tier 3 Custom Rule 不保證 SLA。如果 Tenant 自行提出的 Custom Rule 導致誤報，平台團隊不會在非工作時間處理，排入 Tenant 自己的 Ticket Queue。
+| | Platform Engineering | Domain Expert | Tenant |
+|---|---|---|---|
+| **定位** | 基礎設施提供者 + 護欄建立者 | 黃金標準 (Golden Standards) 制定者 | 平台使用者 + 業務系統負責人 |
+| **Tier 1** | 保證告警引擎運作 | 定義預設閾值、指標語義 | 自行調整 Warning/Critical 閾值 |
+| **Tier 2** | 保證告警引擎運作 | 設計場景、撰寫業務語義文件 | 決定是否啟用場景 |
+| **Tier 3** | 效能監控 + 強制下架權 | 審查需求、判斷是否晉升 Tier 2 | You build it, you run it（SLA 不保證） |
+| **CI/CD** | 維護 deny-list linting + Rule Pack 結構驗證 | 維護所屬 Rule Pack | — |
+| **SLA 範圍** | 告警引擎正常運作（eval、scrape、routing） | Tier 1/2 業務正確性 | Tier 3 告警品質自負 |
 
 > **實務補充**: Tenant 團隊通常不具備撰寫 PromQL 的能力。實際流程中，Tenant 提出需求，Domain Expert 評估後代為撰寫，但 SLA 歸屬仍回到 Tenant — 即「Domain Expert 幫你寫，但告警品質由你負責」。
 
-### 3.4 責任歸屬速查表
+**責任歸屬速查**：
 
 | 情境 | 責任歸屬 |
 |------|---------|
@@ -182,7 +171,7 @@ groups:
 ### 4.1 Deny-list 規則
 
 ```yaml
-# .github/custom-rule-policy.yaml
+# .github/custom-rule-policy.yaml（可選；lint 工具有內建 default policy）
 denied_functions:
   - holt_winters           # CPU 密集型函式
   - predict_linear         # 大範圍回溯查詢
@@ -211,7 +200,7 @@ python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/c
 # 透過 da-tools 容器執行（不需 clone 專案）
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:0.4.0 \
+  ghcr.io/vencil/da-tools:1.0.0 \
   lint /data/rules --ci
 
 # 輸出範例
@@ -222,11 +211,7 @@ docker run --rm \
 
 ### 4.3 為什麼限制「重量」而非「數量」
 
-固定 Quota（如「每個 Tenant 5 條」）的問題：
-
-- **浪費與不足並存**: 有的 Tenant 一條都不用，有的 Tenant 第 6 條需求來了就卡住
-- **Rule 爆炸未解決**: 50 Tenant × 5 條 = 250 條，每條邏輯不同，維護成本反而更高
-- **空轉成本**: Prometheus 每 15 秒 evaluate 所有 Rule，不管是否有 Tenant 在用
+固定 Quota（如「每個 Tenant 5 條」）的問題：浪費與不足並存（有的 Tenant 零條、有的第 6 條就卡住）、Rule 爆炸未解決（50 Tenant × 5 = 250 條，每條邏輯不同）、空轉成本（Prometheus 每 15 秒 evaluate 所有 Rule）。
 
 Deny-list 方式限制的是每條 Rule 的「計算重量」，而非 Rule 數量。搭配獨立 Rule Group 隔離和 evaluation duration 監控，能在不設硬上限的情況下防止效能劣化。
 
@@ -234,31 +219,25 @@ Deny-list 方式限制的是每條 Rule 的「計算重量」，而非 Rule 數�
 
 ## 5. 收編與晉升機制 (Assimilation Cycle)
 
-### 5.1 週期
-
 每季進行一次 Custom Rule Review（建議與季度 SLA Review 合併）。
 
-### 5.2 流程
-
-```
-Tier 3 Custom Rule
-    │
-    ├─ 多個 Tenant 提出相似需求？
-    │   └─ YES → Domain Expert 評估抽象為 Tier 2 Pre-packaged Scenario
-    │            → 撰寫業務語義文件
-    │            → 移入對應 Rule Pack
-    │            → 原 Tier 3 Rule 標記 deprecated，設定 expiry
-    │
-    ├─ 已過 expiry date？
-    │   └─ YES → 通知 Tenant owner
-    │            → 14 天內未回應 → 自動停用
-    │
-    └─ evaluation duration 持續偏高？
-        └─ YES → Platform Engineering 通知 Tenant
-                 → 30 天內未優化 → 強制下架
+```mermaid
+flowchart TD
+    A["Tier 3 Custom Rule\n季度 Review"] --> B{"多個 Tenant\n提出相似需求？"}
+    B -- YES --> C["Domain Expert 評估\n抽象為 Tier 2 Scenario"]
+    C --> C1["撰寫業務語義文件"]
+    C1 --> C2["移入對應 Rule Pack"]
+    C2 --> C3["原 Tier 3 標記 deprecated\n設定 expiry"]
+    B -- NO --> D{"已過\nexpiry date？"}
+    D -- YES --> E["通知 Tenant owner"]
+    E --> E1["14 天未回應\n→ 自動停用"]
+    D -- NO --> F{"evaluation duration\n持續偏高？"}
+    F -- YES --> G["Platform Engineering 通知 Tenant"]
+    G --> G1["30 天未優化\n→ 強制下架"]
+    F -- NO --> H["保留至下次 Review"]
 ```
 
-### 5.3 健康度指標
+### 健康度指標（規劃中，尚未實作）
 
 建議在 threshold-exporter 中追蹤：
 
@@ -281,22 +260,9 @@ da_custom_rule_ratio_tier3 > 0.05
 
 | | Tier 1 (Standard) | Tier 2 (Pre-packaged) | Tier 3 (Custom) |
 |---|---|---|---|
-| **控制方式** | tenant.yaml 閾值 | 三態啟停 + 參數 | 完整 PromQL |
+| **控制方式** | tenant.yaml 閾值 | 閾值三態間接啟停 + 參數 | 完整 PromQL |
 | **撰寫者** | Tenant 自行設定 | Domain Expert 預製 | Domain Expert 代寫 |
 | **SLA** | 平台保證 | 平台保證 | 不保證 |
 | **Rule 複雜度** | O(M) | O(場景數) | O(Custom 數) |
 | **CI 檢查** | 自動（三態驗證） | Rule Pack CI | Deny-list linting |
 | **生命週期** | 永久 | 永久 | 帶 expiry date |
-
-### Tenant 決策樹
-
-```
-我需要一個新的告警 →
-  ├─ 現有指標 + 不同閾值？ → Tier 1: 修改 tenant.yaml
-  ├─ 現有指標的複合條件？ → Tier 2: 檢查是否有對應 Pre-packaged Scenario
-  │   ├─ 有 → 啟用該 Scenario
-  │   └─ 沒有 → 向 Domain Expert 提出需求
-  │       ├─ 具共性 → Domain Expert 建立新 Tier 2 Scenario
-  │       └─ 高度特殊 → 進入 Tier 3 流程
-  └─ 完全不同的指標來源？ → 評估是否為平台應涵蓋的範疇
-```

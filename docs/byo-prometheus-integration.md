@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v0.12.0
+> **版本**：v1.0.0
 
 ---
 
@@ -18,7 +18,31 @@
 | 2 | 抓取 `threshold-exporter` | ~2 分鐘 |
 | 3 | 掛載黃金規則包 (Rule Packs) | ~5 分鐘 |
 
-整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 6 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
+整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 9 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
+
+```mermaid
+graph LR
+    subgraph YP["Your Existing Prometheus"]
+        P["Prometheus\nServer"]
+    end
+
+    subgraph NS["Your Namespaces"]
+        T1["Tenant A\n(namespace)"]
+        T2["Tenant B\n(namespace)"]
+    end
+
+    subgraph DA["Dynamic Alerting (新增)"]
+        TE["threshold-exporter\n×2 HA :8080"]
+        RP["9 Rule Pack\nConfigMaps"]
+    end
+
+    NS -->|"① relabel_configs\nnamespace → tenant"| P
+    TE -->|"② scrape job\n/metrics"| P
+    RP -->|"③ projected volume\n掛載至 /etc/prometheus/rules/"| P
+
+    style DA fill:#e8f4fd,stroke:#1a73e8
+    style YP fill:#f5f5f5,stroke:#666
+```
 
 ---
 
@@ -28,12 +52,12 @@
 
 ```promql
 # 簡化範例：當實際連線數超過該租戶的自訂閾值時觸發
-mysql_global_status_threads_connected
+tenant:mysql_threads_connected:max
   > on(tenant) group_left()
-user_threshold_connections
+tenant:alert_threshold:connections
 ```
 
-這要求兩邊的指標**都必須帶有相同的 `tenant` 標籤**。`threshold-exporter` 的指標天生自帶 `tenant`，但你的資料庫 exporter（如 mysqld_exporter、redis_exporter）吐出的指標**預設沒有**。如果 `tenant` 標籤不匹配，`group_left` 會靜默返回空向量，所有警報都不會觸發。
+這要求兩邊的指標**都必須帶有相同的 `tenant` 標籤**。`threshold-exporter` 吐出的 `user_threshold` 指標天生自帶 `tenant`，Recording Rule 也會將其歸一化為 `tenant:alert_threshold:*` 系列。但你的資料庫 exporter（如 mysqld_exporter、redis_exporter）吐出的指標**預設沒有 `tenant`**。如果 `tenant` 標籤不匹配，`group_left` 會靜默返回空向量，所有警報都不會觸發。
 
 ---
 
@@ -112,7 +136,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/targets' \
 
 ### 目標
 
-讓你的 Prometheus 知道去哪裡讀取動態閾值指標（`user_threshold_*` 系列）。
+讓你的 Prometheus 知道去哪裡讀取動態閾值指標（`user_threshold` 系列）。
 
 ### 設定
 
@@ -156,8 +180,8 @@ curl -s 'http://<your-prometheus>:9090/api/v1/targets' \
 
 # 預期：health: "up"
 
-# 2. 確認閾值指標可查詢
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold_connections' \
+# 2. 確認閾值指標可查詢（metric name 是 user_threshold，透過 metric label 區分指標類型）
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{metric="connections"}' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
 
 # 預期：每個 tenant 一筆，value 為其自訂閾值
@@ -165,13 +189,13 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold_connect
 # {"tenant": "db-b", "value": "80"}
 
 # 3. 確認三態指標（state filter）
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold_state_filter' \
-  | jq '.data.result[] | {tenant: .metric.tenant, metric_key: .metric.metric_key, value: .value[1]}'
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_state_filter' \
+  | jq '.data.result[] | {tenant: .metric.tenant, filter: .metric.filter, value: .value[1]}'
 
-# value=1 表示 custom，value=0 表示 default，value=-1 表示 disable
+# value=1 表示啟用（例如 maintenance mode on），absent 表示停用
 ```
 
-**✅ 通過條件**：`dynamic-thresholds` job 狀態為 `up`，且 `user_threshold_*` 指標可正常查詢。
+**✅ 通過條件**：`dynamic-thresholds` job 狀態為 `up`，且 `user_threshold` 指標可正常查詢。
 
 ---
 
@@ -185,11 +209,14 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold_state_f
 
 | ConfigMap 名稱 | 內容 | 規則數 |
 |----------------|------|--------|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 7R + 8A |
-| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 5R + 4A |
-| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 7R + 6A |
-| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 7R + 6A |
-| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 7R + 7A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 8A |
+| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 7R + 4A |
+| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 11R + 6A |
+| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 6A |
+| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 11R + 7A |
+| `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
+| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 12R + 7A |
+| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 4A |
 
 > **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。
@@ -263,10 +290,11 @@ kill -HUP $(pidof prometheus)
 curl -s 'http://<your-prometheus>:9090/api/v1/rules' \
   | jq '.data.groups[].name' | sort -u
 
-# 預期：應看到類似以下的規則群組名稱
-# "mariadb-recording-rules"
-# "mariadb-alert-rules"
-# "redis-recording-rules"
+# 預期：應看到類似以下的規則群組名稱（每個 pack 有 normalization + threshold-normalization + alerts 三組）
+# "mariadb-normalization"
+# "mariadb-threshold-normalization"
+# "mariadb-alerts"
+# "redis-normalization"
 # ...
 
 # 2. 確認規則數量與預期一致
@@ -280,7 +308,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/rules' \
 # 預期：空輸出（沒有錯誤）
 
 # 4. 確認 recording rule 有產生歸一化指標
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=normalized_connections' \
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=tenant:mysql_threads_connected:max' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
 ```
 
@@ -303,7 +331,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresh
 # 預期：true
 
 # ③ 向量匹配可正常運作（核心驗證）
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=normalized_connections%20-%20on(tenant)%20user_threshold_connections' \
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=tenant%3Amysql_threads_connected%3Amax%20-%20on(tenant)%20tenant%3Aalert_threshold%3Aconnections' \
   | jq '.data.result[] | {tenant: .metric.tenant, diff: .value[1]}'
 # 預期：每個 tenant 一筆結果。diff 為負表示在閾值內，為正表示超過閾值。
 # 如果結果為空，代表 tenant 標籤匹配失敗 — 回頭檢查步驟 1。
@@ -318,7 +346,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/rules?type=alert' \
 > # 資料庫指標的 tenant 值
 > curl -s '...query=group(mysql_global_status_threads_connected) by (tenant)' | jq '.data.result[].metric.tenant'
 > # 閾值指標的 tenant 值
-> curl -s '...query=group(user_threshold_connections) by (tenant)' | jq '.data.result[].metric.tenant'
+> curl -s '...query=group(user_threshold{metric="connections"}) by (tenant)' | jq '.data.result[].metric.tenant'
 > # 兩邊的值必須完全一致（包含大小寫）
 > ```
 
@@ -334,17 +362,17 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 
 # ① 確認特定 alert 的狀態
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:0.4.0 check-alert MariaDBHighConnections db-a
+  ghcr.io/vencil/da-tools:1.0.0 check-alert MariaDBHighConnections db-a
 
 # ② 觀測現有指標，取得閾值建議
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:0.4.0 baseline --tenant db-a --duration 300
+  ghcr.io/vencil/da-tools:1.0.0 baseline --tenant db-a --duration 300
 
 # ③ 啟動 Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:0.4.0 validate --mapping /data/mapping.csv --watch --rounds 5
+  ghcr.io/vencil/da-tools:1.0.0 validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
 > **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull` 即可使用。詳見 [da-tools README](../components/da-tools/README.md)。
@@ -410,7 +438,7 @@ spec:
     matchLabels:
       app: threshold-exporter
   endpoints:
-    - port: http-metrics                  # ← threshold-exporter Service 的 port 名稱
+    - port: http                            # ← threshold-exporter Service 的 port 名稱
       interval: 15s
 ```
 
@@ -429,9 +457,11 @@ metadata:
 spec:
   groups:
     # 將 configmap-rules-mariadb.yaml 中的 groups 內容貼入此處
-    - name: mariadb-recording-rules
+    - name: mariadb-normalization
       rules: [...]                        # ← 從 rule-packs/ 目錄取得
-    - name: mariadb-alert-rules
+    - name: mariadb-threshold-normalization
+      rules: [...]
+    - name: mariadb-alerts
       rules: [...]
 ```
 
@@ -462,7 +492,7 @@ A: 不需要。如果你啟用了 `--web.enable-lifecycle`，`curl -X POST /-/re
 A: 可以。所有規則包使用 `optional: true`，你只需加入你需要的。未掛載的規則包不會影響 Prometheus。
 
 **Q: 我現有的 alerting rule 會衝突嗎？**
-A: 不會。動態閾值規則包使用獨立的指標命名空間（`user_threshold_*`、`normalized_*`），不會與你現有的規則衝突。但建議在 Shadow Monitoring 階段（參考 [Shadow Monitoring SOP](shadow-monitoring-sop.md)）雙軌並行一段時間再切換。
+A: 不會。動態閾值規則包使用獨立的指標命名空間（`user_threshold`、`user_state_filter`、`tenant:*` recording rules），不會與你現有的規則衝突。但建議在 Shadow Monitoring 階段（參考 [Shadow Monitoring SOP](shadow-monitoring-sop.md)）雙軌並行一段時間再切換。
 
 **Q: threshold-exporter 需要部署在我的叢集裡嗎？**
 A: 是的。`threshold-exporter` 需要存取 tenant ConfigMap，因此必須部署在同一叢集的 `monitoring` namespace。它是一個輕量的 Go binary，HA ×2 副本，資源消耗極低（< 50MB RSS）。

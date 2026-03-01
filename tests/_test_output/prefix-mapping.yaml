@@ -1,0 +1,22 @@
+# ============================================================
+# Prefix Mapping Table — custom_ 前綴對應關係
+# ============================================================
+# 用途: 未來收斂至黃金標準時的對照表
+# Prefix: custom_
+# ============================================================
+
+mysql_global_status_threads_connected:
+  original_metric: mysql_global_status_threads_connected
+  alert_name: MySQLTooManyConnections
+  golden_match: mysql_connections
+  golden_rule: MariaDBHighConnections
+mysql_global_status_slow_queries:
+  original_metric: mysql_global_status_slow_queries
+  alert_name: MySQLHighSlowQueries
+  golden_match: mysql_slow_queries
+  golden_rule: MariaDBHighSlowQueries
+mysql_global_status_threads_connected_critical:
+  original_metric: mysql_global_status_threads_connected_critical
+  alert_name: MySQLTooManyConnectionsCritical
+  golden_match: mysql_connections
+  golden_rule: MariaDBHighConnections

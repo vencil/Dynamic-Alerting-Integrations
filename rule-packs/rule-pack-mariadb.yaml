@@ -27,8 +27,8 @@ groups:
       - record: tenant:mysql_cpu_usage:rate5m
         expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
 
-      - record: tenant:mysql_threads_connected:sum
-        expr: sum by(tenant) (mysql_global_status_threads_connected)
+      - record: tenant:mysql_threads_connected:max
+        expr: max by(tenant) (mysql_global_status_threads_connected)
 
       - record: tenant:mysql_connection_usage:ratio
         expr: |
@@ -57,17 +57,17 @@ groups:
     interval: 15s
     rules:
       - record: tenant:alert_threshold:connections
-        expr: sum by(tenant) (user_threshold{metric="connections", severity="warning"})
+        expr: max by(tenant) (user_threshold{metric="connections", severity="warning"})
 
       - record: tenant:alert_threshold:cpu
-        expr: sum by(tenant) (user_threshold{metric="cpu", severity="warning"})
+        expr: max by(tenant) (user_threshold{metric="cpu", severity="warning"})
 
       # Multi-tier severity (Scenario D)
       - record: tenant:alert_threshold:connections_critical
-        expr: sum by(tenant) (user_threshold{metric="connections", severity="critical"})
+        expr: max by(tenant) (user_threshold{metric="connections", severity="critical"})
 
       - record: tenant:alert_threshold:cpu_critical
-        expr: sum by(tenant) (user_threshold{metric="cpu", severity="critical"})
+        expr: max by(tenant) (user_threshold{metric="cpu", severity="critical"})
 
   # -------------------------------------------------------
   # Alert Rules: MariaDB
@@ -95,7 +95,7 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            tenant:mysql_threads_connected:sum
+            tenant:mysql_threads_connected:max
             > on(tenant) group_left
             tenant:alert_threshold:connections
           )
@@ -103,7 +103,7 @@ groups:
           (user_state_filter{filter="maintenance"} == 1)
           unless on(tenant)
           (
-            tenant:mysql_threads_connected:sum
+            tenant:mysql_threads_connected:max
             > on(tenant) group_left
             tenant:alert_threshold:connections_critical
           )
@@ -118,7 +118,7 @@ groups:
       - alert: MariaDBHighConnectionsCritical
         expr: |
           (
-            tenant:mysql_threads_connected:sum
+            tenant:mysql_threads_connected:max
             > on(tenant) group_left
             tenant:alert_threshold:connections_critical
           )
@@ -136,7 +136,7 @@ groups:
         expr: |
           (
             (
-              tenant:mysql_threads_connected:sum
+              tenant:mysql_threads_connected:max
               > on(tenant) group_left
               tenant:alert_threshold:connections
             )

@@ -1,0 +1,58 @@
+============================================================
+遷移報告 (Migration Report) — v4 (AST engine)
+============================================================
+
+總規則數: 4
+  ✅ 完美解析: 2
+  ⚠️  複雜表達式 (已自動猜測): 1
+  🚨 無法解析 (需 LLM 協助): 1
+  📖 建議使用黃金標準: 3
+
+----------------------------------------
+📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值
+----------------------------------------
+  • MySQLTooManyConnections
+    → 黃金標準: MariaDBHighConnections
+    → Metric Key: mysql_connections
+    → Rule Pack: mariadb
+    → 直接使用 scaffold_tenant.py 設定 mysql_connections 閾值
+  • MySQLHighSlowQueries
+    → 黃金標準: MariaDBHighSlowQueries
+    → Metric Key: mysql_slow_queries
+    → Rule Pack: mariadb
+    → rate() 指標 — 使用黃金標準的 sum by(tenant) 聚合
+  • MySQLTooManyConnectionsCritical
+    → 黃金標準: MariaDBHighConnections
+    → Metric Key: mysql_connections
+    → Rule Pack: mariadb
+    → 直接使用 scaffold_tenant.py 設定 mysql_connections 閾值
+
+----------------------------------------
+✅ 完美解析的規則
+----------------------------------------
+
+----------------------------------------
+⚠️  複雜表達式 — 已自動猜測聚合模式，建議人工確認
+----------------------------------------
+
+----------------------------------------
+🚨 無法自動解析 — 請將以下 LLM Prompt 交給 Claude 處理
+----------------------------------------
+
+### MySQLDown ###
+請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：
+要求：
+1. 提取閾值並提供 threshold-config.yaml 範例。
+2. 提供包含 sum/max by(tenant) 的 Recording Rule。
+3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。
+4. 如有維度標籤 (如 queue, db, index)，請用 "metric{label=\"value\"}" 語法提供範例。
+
+原始規則：
+- alert: MySQLDown
+  expr: absent(mysql_up) == 1
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: MySQL instance is down
+

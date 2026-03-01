@@ -1,0 +1,67 @@
+============================================================
+遷移報告 (Migration Report) — v4 (AST engine)
+============================================================
+
+總規則數: 8
+  ✅ 完美解析: 4
+  ⚠️  複雜表達式 (已自動猜測): 3
+  🚨 無法解析 (需 LLM 協助): 1
+  📖 建議使用黃金標準: 3
+
+📊 收斂率統計:
+  輸入: 8 條傳統規則
+  輸出: 8 條 Recording Rules + 4 條 Alert Rules
+  壓縮率: 42.9%
+
+----------------------------------------
+📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值
+----------------------------------------
+  • RedisHighMemory
+    → 黃金標準: RedisHighMemory
+    → Metric Key: redis_memory_used_bytes
+    → Rule Pack: redis
+    → Redis 記憶體 — 直接設定閾值
+  • RedisHighKeyEvictions
+    → 黃金標準: RedisHighEviction
+    → Metric Key: redis_evicted_keys_total
+    → Rule Pack: redis
+    → Redis 驅逐 — rate() 指標
+  • MongoDBHighConnections
+    → 黃金標準: MongoDBHighConnections
+    → Metric Key: mongodb_connections_current
+    → Rule Pack: mongodb
+    → MongoDB 連線數 — 直接設定閾值
+
+----------------------------------------
+✅ 完美解析的規則
+----------------------------------------
+  • ESIndexDocCountHigh: sum (Counter 命名慣例 (_total) — 叢集聚合總量)
+  • MongoDBStorageTooLarge: sum (關鍵字 'size' — 叢集累積量)
+
+----------------------------------------
+⚠️  複雜表達式 — 已自動猜測聚合模式，建議人工確認
+----------------------------------------
+  • RedisQueueTooLong: max (關鍵字 'queue' — 單點上限)
+    📐 維度標籤偵測: [{'metric': 'redis_queue_length', 'labels': {'queue': 'order-processing'}}]
+  • ESIndexTooLarge: sum (Counter 命名慣例 (_total) — 叢集聚合總量)
+    📐 維度標籤偵測: [{'metric': 'elasticsearch_indices_store_size_bytes_total', 'labels': {'index': 'logs-prod'}}]
+
+----------------------------------------
+🚨 無法自動解析 — 請將以下 LLM Prompt 交給 Claude 處理
+----------------------------------------
+
+### MongoDBDown ###
+請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：
+要求：
+1. 提取閾值並提供 threshold-config.yaml 範例。
+2. 提供包含 sum/max by(tenant) 的 Recording Rule。
+3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。
+4. 如有維度標籤 (如 queue, db, index)，請用 "metric{label=\"value\"}" 語法提供範例。
+
+原始規則：
+- alert: MongoDBDown
+  expr: absent(mongodb_up) == 1
+  for: 1m
+  labels:
+    severity: critical
+

@@ -1,4 +1,4 @@
-# elasticsearch-tenant.yaml — 範例: Elasticsearch 租戶閾值設定 (Phase 2B 維度標籤)
+# elasticsearch-tenant.yaml — 範例: Elasticsearch 租戶閾值設定 (維度標籤)
 # 來源參考: prometheus-community/elasticsearch_exporter
 #
 # ES 典型維度: index (索引), node (節點)

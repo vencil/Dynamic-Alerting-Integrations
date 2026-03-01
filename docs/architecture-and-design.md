@@ -4,15 +4,16 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v0.13.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.0.0 的技術架構。
 
 **本文涵蓋內容：**
-- 系統架構與核心設計理念
+- 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
 - Config-driven 配置驅動的工作流程
-- Projected Volume 與規則包 (Rule Packs) 的治理模型
-- 性能分析與擴展性証明
+- Projected Volume 與 9 個規則包 (Rule Packs) 的治理模型
+- 性能分析與擴展性証明（含 Under-Load 基準測試與 Go Micro-Benchmark）
 - 高可用性 (HA) 設計
 - 治理、稽核、安全性合規
+- AST 遷移引擎架構
 
 **其他相關文件：**
 - **快速入門** → [README.md](../README.md)
@@ -23,6 +24,36 @@
 ---
 
 ## 1. 系統架構圖 (System Architecture Diagram)
+
+### 1.1 C4 Context — 系統邊界與角色互動
+
+```mermaid
+graph TB
+    PT["👤 Platform Team\n管理 _defaults.yaml\n維護 Rule Packs"]
+    TT["👤 Tenant Team\n管理 tenant YAML\n設定閾值"]
+    Git["📂 Git Repository\nconf.d/ + rule-packs/"]
+
+    subgraph DAP["Dynamic Alerting Platform"]
+        TE["threshold-exporter\n×2 HA"]
+        PM["Prometheus\n+ 9 Rule Packs"]
+        CM["ConfigMap\nthreshold-config"]
+    end
+
+    AM["📟 Alertmanager\n→ Slack / PagerDuty"]
+
+    PT -->|"PR: _defaults.yaml\n+ Rule Pack YAML"| Git
+    TT -->|"PR: tenant YAML\n(閾值設定)"| Git
+    Git -->|"GitOps sync\n(ArgoCD/Flux)"| CM
+    CM -->|"SHA-256\nhot-reload"| TE
+    TE -->|"Prometheus\nmetrics :8080"| PM
+    PM -->|"Alert rules\nevaluation"| AM
+
+    style DAP fill:#e8f4fd,stroke:#1a73e8
+    style Git fill:#f0f0f0,stroke:#666
+    style AM fill:#fff3e0,stroke:#e65100
+```
+
+### 1.2 系統內部架構 (Internal Architecture)
 
 ```mermaid
 graph TB
@@ -48,15 +79,15 @@ graph TB
             end
 
             subgraph Rules["Projected Volume\nRule Packs (×9)"]
-                RP1["configmap-rules-mariadb.yaml"]
-                RP2["configmap-rules-kubernetes.yaml"]
-                RP3["configmap-rules-redis.yaml"]
-                RP4["configmap-rules-mongodb.yaml"]
-                RP5["configmap-rules-elasticsearch.yaml"]
-                RP7["configmap-rules-oracle.yaml"]
-                RP8["configmap-rules-db2.yaml"]
-                RP9["configmap-rules-clickhouse.yaml"]
-                RP6["configmap-rules-platform.yaml"]
+                RP1["prometheus-rules-mariadb"]
+                RP2["prometheus-rules-kubernetes"]
+                RP3["prometheus-rules-redis"]
+                RP4["prometheus-rules-mongodb"]
+                RP5["prometheus-rules-elasticsearch"]
+                RP7["prometheus-rules-oracle"]
+                RP8["prometheus-rules-db2"]
+                RP9["prometheus-rules-clickhouse"]
+                RP6["prometheus-rules-platform"]
             end
 
             Prom["Prometheus\n(Scrape: TE, Rule Evaluation)"]
@@ -86,7 +117,7 @@ graph TB
 **架構要點：**
 1. **Directory Scanner** 掃描 `conf.d/` 目錄，自動發現 `_defaults.yaml` 和租戶配置文件
 2. **threshold-exporter × 2 HA Replicas** 讀取 ConfigMap，輸出三態 Prometheus 指標
-3. **Projected Volume** 掛載 6 個獨立規則包，零 PR 衝突，各團隊獨立擁有
+3. **Projected Volume** 掛載 9 個獨立規則包，零 PR 衝突，各團隊獨立擁有
 4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度
 
 ---
@@ -132,7 +163,6 @@ conf.d/
 defaults:
   mysql_connections: 80
   mysql_cpu: 80
-  mysql_slave_lag: 30
   container_cpu: 80
   container_memory: 85
 
@@ -154,7 +184,7 @@ tenants:
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_slave_lag: "disable"       # 無 replica，停用
     # mysql_cpu 未指定 → 使用預設值 80
-    # 維度標籤 (Phase 2B)
+    # 維度標籤
     "redis_queue_length{queue='tasks'}": "500"
     "redis_queue_length{queue='events', priority='high'}": "1000:critical"
 ```
@@ -230,6 +260,54 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 - 連線數 ≥ 150 (critical)：只觸發 critical 警報
 - 連線數 100-150 (warning only)：觸發 warning 警報
 
+### 2.4 Regex 維度閾值 (Regex Dimension Thresholds)
+
+v0.12.0 起，Config parser 支援 `=~` 運算子，允許以 regex 模式精細匹配維度標籤。此設計在不引入外部資料依賴的前提下，讓閾值配置可針對特定維度子集生效。
+
+**配置語法：**
+```yaml
+tenants:
+  db-a:
+    # 精確匹配
+    "oracle_tablespace_used_percent{tablespace='USERS'}": "85"
+    # Regex 匹配：所有 SYS 開頭的 tablespace
+    "oracle_tablespace_used_percent{tablespace=~'SYS.*'}": "95"
+```
+
+**實現路徑：**
+
+1. **Exporter 層**：Config parser 偵測 `=~` 運算子，將 regex pattern 作為 `_re` 後綴 label 輸出
+   ```
+   user_threshold{tenant="db-a", metric="oracle_tablespace_used_percent",
+                  tablespace_re="SYS.*", severity="warning"} 95
+   ```
+2. **Recording Rule 層**：PromQL 使用 `label_replace` + `=~` 在查詢時完成實際匹配
+3. **設計原則**：Exporter 保持為純 config→metric 轉換器，匹配邏輯完全由 Prometheus 原生向量運算執行
+
+### 2.5 排程式閾值 (Scheduled Thresholds)
+
+v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換不同閾值。典型場景：夜間維護窗口放寬閾值、尖峰時段收緊閾值。
+
+**配置語法：**
+```yaml
+tenants:
+  db-a:
+    mysql_connections:
+      default: "100"
+      overrides:
+        - window: "22:00-06:00"    # UTC 夜間窗口（支援跨午夜）
+          value: "200"             # 夜間批次作業，放寬到 200
+        - window: "09:00-18:00"
+          value: "80"              # 日間高峰，收緊到 80
+```
+
+**技術實現：**
+
+- **`ScheduledValue` 自訂 YAML 型別**：支援雙格式解析——純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`
+- **`ResolveAt(now time.Time)`**：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性
+- **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）
+- **45 個測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
+
 ---
 
 ## 3. Projected Volume 架構 (Rule Packs)
@@ -238,16 +316,16 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|---------|-----------------|----------------|-------------|
-| MariaDB | DBA | `configmap-rules-mariadb` | 7 | 8 |
-| Kubernetes | Infra | `configmap-rules-kubernetes` | 5 | 4 |
-| Redis | Cache | `configmap-rules-redis` | 7 | 6 |
-| MongoDB | AppData | `configmap-rules-mongodb` | 7 | 6 |
-| Elasticsearch | Search | `configmap-rules-elasticsearch` | 7 | 7 |
-| Oracle | DBA / Oracle | `configmap-rules-oracle` | 6 | 7 |
-| DB2 | DBA / DB2 | `configmap-rules-db2` | 7 | 7 |
-| ClickHouse | Analytics | `configmap-rules-clickhouse` | 7 | 7 |
-| Platform | Platform | `configmap-rules-platform` | 0 | 4 |
-| **總計** | | | **53** | **56** |
+| MariaDB | DBA | `prometheus-rules-mariadb` | 11 | 8 |
+| Kubernetes | Infra | `prometheus-rules-kubernetes` | 7 | 4 |
+| Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
+| MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 6 |
+| Elasticsearch | Search | `prometheus-rules-elasticsearch` | 11 | 7 |
+| Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
+| DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
+| ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
+| Platform | Platform | `prometheus-rules-platform` | 0 | 4 |
+| **總計** | | | **85** | **56** |
 
 ### 3.2 自包含三部分結構
 
@@ -335,23 +413,25 @@ M 個警報規則 × 1 次向量匹配 = M 個評估
 
 ### 4.2 實際基準數據 (Kind 叢集量測)
 
-**現有設置：2 個租戶，85 個規則，18 個警報群組**
+**現有設置：2 個租戶，141 個規則（9 Rule Packs），27 個規則群組**
+
+> 以下數據取自 **5 輪獨立量測**（Kind 單節點叢集，各輪間隔 45 秒），報告 mean ± stddev。
 
 ```
-總評估時間（per cycle）: ~20.8ms
-- p50 (50th percentile):  0.59ms per group
-- p99 (99th percentile):  5.05ms per group
+總評估時間（per cycle）: 20.3 ± 1.9ms  (range: 17.7–22.8ms, n=5)
+- p50 (50th percentile):  1.23 ± 0.28ms per group
+- p99 (99th percentile):  6.89 ± 0.44ms per group
 ```
 
 **擴展性對比：**
 
 | 指標 | 現有（2 租戶） | 傳統方案（100 租戶） | 動態方案（100 租戶） |
 |------|-------|-------------------|------------------|
-| 警報規則數 | 35（固定） | 3,500（35×100） | 35（固定） |
-| 記錄規則數 | 50（正規化） | 0（嵌入在警報中） | 50（固定） |
-| **規則總數** | **85** | **3,500** | **85** |
+| 警報規則數 | 56（固定） | 5,600（56×100） | 56（固定） |
+| 記錄規則數 | 85（正規化） | 0（嵌入在警報中） | 85（固定） |
+| **規則總數** | **141** | **5,600** | **141** |
 | 評估複雜度 | O(M) | O(N×M) | O(M) |
-| **估計評估時間** | **~20.8ms** | **~850ms+** | **~20.8ms** |
+| **估計評估時間** | **~20ms** | **~800ms+** | **~20ms** |
 
 **結論：**
 - 傳統方案在 100 租戶時評估時間增加 **40 倍**
@@ -359,7 +439,7 @@ M 個警報規則 × 1 次向量匹配 = M 個評估
 
 ### 4.3 空向量零成本 (Empty Vector Zero-Cost)
 
-6 個規則包預加載。未部署匯出器的包針對空向量評估。
+9 個規則包預加載。未部署匯出器的包針對空向量評估。
 
 **Kind 叢集實際測量：**
 
@@ -377,31 +457,33 @@ M 個警報規則 × 1 次向量匹配 = M 個評估
 
 ### 4.4 記憶體效率
 
+> 以下數據取自 **5 輪獨立量測** mean ± stddev。
+
 ```
-單個 threshold-exporter Pod：
-- ConfigMap 記憶體：~5MB（YAML 解析）
-- 輸出指標：~2,000 series（2 個租戶）
-- 總用量：~150MB (RSS)
+單個 threshold-exporter Pod（實測）：
+- Heap 記憶體：2.4 ± 0.4MB（YAML 解析 + 指標生成）
+- 輸出指標：~8 user_threshold series（2 個租戶）
+- Scrape Duration：4.1 ± 1.2ms
 
-× 2 HA Replicas：~300MB 總計
-+ Prometheus 規則快取：~50MB
-= 叢集開銷：~350MB
+× 2 HA Replicas：~4.8MB 合計
++ Prometheus RSS：142.7 ± 1.4MB（含 9 Rule Packs、141 條規則）
+= 叢集開銷：~148MB
 
-vs. 傳統方案 (3,500 規則)：
-- Prometheus 規則快取：~200MB+
-- 總開銷：~400MB+（單樞紐）
+vs. 傳統方案 (5,600 規則 @ 100 租戶)：
+- Prometheus 規則快取：~500MB+
+- 總開銷：~600MB+（單樞紐）
 ```
 
 ### 4.5 資源使用基準 (Resource Usage Baseline)
 
-以下為 Kind 單節點叢集實測數據（2 個租戶、85 條規則）：
+以下為 Kind 單節點叢集 5 輪實測數據（2 個租戶、141 條規則、9 Rule Packs，mean ± stddev）：
 
-| 指標 | 元件 | 數值 | 用途 |
+| 指標 | 元件 | 數值 (n=5) | 用途 |
 |------|------|------|------|
-| CPU（5m 均值） | Prometheus | ~0.02 cores | 容量規劃 — 評估 Prometheus 所需 CPU request |
-| RSS Memory | Prometheus | ~150MB | 記憶體預算 — 設定 memory limits |
-| RSS Memory | threshold-exporter (per pod) | ~64MB | Pod resource limits 調整 |
-| RSS Memory | threshold-exporter (×2 HA) | ~128MB 合計 | 叢集記憶體規劃 |
+| CPU（5m 均值） | Prometheus | ~0.014 ± 0.003 cores | 容量規劃 — 評估 Prometheus 所需 CPU request |
+| RSS Memory | Prometheus | 142.7 ± 1.4MB | 記憶體預算 — 設定 memory limits |
+| Heap Memory | threshold-exporter (per pod) | 2.4 ± 0.4MB | Pod resource limits 調整 |
+| Scrape Duration | Prometheus → exporter | 4.1 ± 1.2ms | 抓取效能基線 |
 
 **自動化收集：**
 
@@ -420,10 +502,10 @@ Prometheus 的效能瓶頸在於 **活躍時間序列數（Active Series）**，
 
 | 指標 | 數值 | 說明 |
 |------|------|------|
-| TSDB 磁碟用量 | ~12MB | 含所有規則與指標 |
-| 活躍 Series 總數 | ~2,800 | 包含所有 exporter + recording rules |
-| `user_threshold` Series | ~16 | threshold-exporter 輸出的閾值指標 |
-| 每租戶 Series 增量 | ~8 | 新增 1 個租戶的邊際成本 |
+| TSDB 磁碟用量 | 8.9 ± 0.2MB | 含所有規則與指標（n=5） |
+| 活躍 Series 總數 | ~6,037 ± 10 | 包含所有 exporter + recording rules（n=5） |
+| `user_threshold` Series | 8 | threshold-exporter 輸出的閾值指標 |
+| 每租戶 Series 增量 | ~4 | 新增 1 個租戶的邊際成本 |
 
 **擴展估算公式：**
 
@@ -433,12 +515,73 @@ Prometheus 的效能瓶頸在於 **活躍時間序列數（Active Series）**，
   記憶體增量 ≈ Series 增量 × 2KB
 
 範例（100 租戶）：
-  user_threshold series = 100 × 8 = 800
-  記憶體增量 ≈ (800 - 16) × 2KB ≈ 1.5MB
-  總 series ≈ 2,800 - 16 + 800 = 3,584
+  user_threshold series = 100 × 4 = 400
+  記憶體增量 ≈ (400 - 8) × 2KB ≈ 0.8MB
+  總 series ≈ 6,037 - 8 + 400 = 6,429
 ```
 
-**結論：** 動態架構的 series 增量極小（每租戶 ~8 series），100 個租戶僅增加 ~1.5MB 記憶體。相比傳統方案（每租戶 35+ 條獨立規則，每條規則可能產生多個 series），基數優勢顯著。
+**結論：** 動態架構的 series 增量極小（每租戶 ~4 series），100 個租戶僅增加 ~0.8MB 記憶體。相比傳統方案（每租戶 56+ 條獨立規則，每條規則可能產生多個 series），基數優勢顯著。
+
+### 4.7 Under-Load 基準測試 (Benchmark Under-Load Mode)
+
+v0.13.0 新增 `--under-load` 模式，在合成租戶負載下驗證平台擴展性。idle-state 基準只量測空閒效能，under-load 模式則模擬真實的多租戶環境。
+
+**測試方法論：**
+```bash
+make benchmark ARGS="--under-load --tenants 1000"
+```
+
+1. **合成租戶生成**：動態建立 N 個 synthetic tenant 配置（scalar + mixed + night-window 組合）
+2. **ConfigMap Patch**：將合成配置注入 `threshold-config` ConfigMap
+3. **量測維度**：
+   - **Reload Latency**：ConfigMap 變更到 exporter 完成重載的時間
+   - **Memory Delta**：新增 N 個租戶後的 RSS 記憶體變化
+   - **Scrape Duration**：Prometheus 抓取 threshold-exporter 的時間
+   - **Evaluation Time**：Recording rules + Alert rules 的評估時間
+4. **清理**：自動移除合成租戶，回到原始狀態
+
+**Go Micro-Benchmark：**
+
+`config_bench_test.go` 提供精確的 Go 層面效能量測（Intel Core 7 240H，`-count=5` 取中位數）：
+
+| Benchmark | ns/op (median) | ns/op (stddev) | B/op | allocs/op |
+|-----------|------:|------:|-----:|----------:|
+| Resolve_10Tenants_Scalar | 11,570 | 237 | 26,032 | 58 |
+| Resolve_100Tenants_Scalar | 107,346 | 4,315 | 196,080 | 511 |
+| Resolve_1000Tenants_Scalar | 2,215,080 | 113,589 | 3,739,792 | 5,019 |
+| ResolveAt_10Tenants_Mixed | 39,487 | 1,720 | 39,491 | 268 |
+| ResolveAt_100Tenants_Mixed | 419,960 | 18,120 | 454,366 | 2,612 |
+| ResolveAt_1000Tenants_Mixed | 4,882,962 | 105,810 | 5,160,416 | 26,038 |
+| ResolveAt_NightWindow_1000 | 4,887,959 | 123,943 | 5,123,590 | 25,037 |
+
+**結論：** 10→100→1000 租戶，Scalar resolve 的 ns/op 呈線性增長（~10x / ~19x），記憶體也線性（26KB→196KB→3.7MB）。Mixed（含 ScheduledValue）的額外開銷約 3.4× Scalar。1000 租戶的完整 resolve 仍在 5ms 以內。5 輪量測的 stddev 控制在中位數的 2–5% 內，確認結果穩定可重現。
+
+### 4.8 Rule Evaluation Scaling Curve
+
+量測 Rule Pack 數量對 Prometheus rule evaluation 時間的邊際影響。透過逐步移除 Rule Pack（9→6→3）並量測 `prometheus_rule_group_last_duration_seconds`，可觀察 evaluation 成本是否呈線性增長。
+
+**測試方法：**
+```bash
+make benchmark ARGS="--scaling-curve"
+```
+
+1. **Tier 3 (9 packs)**：完整狀態（mariadb, kubernetes, redis, mongodb, elasticsearch, oracle, db2, clickhouse, platform）
+2. **Tier 2 (6 packs)**：移除 oracle, db2, clickhouse
+3. **Tier 1 (3 packs)**：僅保留 mariadb, kubernetes, platform
+
+每個階段等待 Prometheus 完成至少 2 個 evaluation cycle 後取樣。測試結束自動還原所有 Rule Pack。
+
+**Kind 叢集實測（2026-03-01，3 輪量測，報告 median）：**
+
+| Rule Packs | Rule Groups | Total Rules | Eval Time (median) | Range |
+|------------|-------------|-------------|-----------|-------|
+| 3          | 9           | 34          | 7.7ms     | 3.3–15.3ms |
+| 6          | 18          | 85          | 17.3ms    | 14.3–18.6ms |
+| 9          | 27          | 141         | 22.7ms    | 8.7–26.0ms |
+
+> **量測說明：** 每輪需刪除 Rule Pack → 重啟 Prometheus → 等待穩定 → 取樣，因此 per-cycle 值受 Prometheus 重啟暖機影響，變異較 idle-state 大。取 median 更能代表穩態行為。
+
+**結論：** Rule Pack 從 3→6→9，eval time 中位數從 7.7→17.3→22.7ms，增長接近線性（每增加 3 packs 約 +5–10ms）。每個 group 的平均 eval time 穩定在 ~0.8ms，不受其他 group 影響。這確認了 Projected Volume 架構的水平擴展性 — 新增 Rule Pack 的邊際成本可預測且恆定。
 
 ---
 
@@ -519,8 +662,8 @@ spec:
 |------|------|------|
 | ThresholdExporterDown | `up{job="threshold-exporter"} == 0` for 2m | PageDuty → SRE |
 | ThresholdExporterAbsent | Metrics absent > 5m | 警告 → 平台團隊 |
-| TooFewReplicas | `count(up{job="threshold-exporter"}) < 2` | 警告 → SRE |
-| HighRestarts | `rate(container_last_terminated_reason[5m]) > 0.1` | 調查 |
+| ThresholdExporterTooFewReplicas | `count(up{job="threshold-exporter"}) < 2` | 警告 → SRE |
+| ThresholdExporterHighRestarts | `rate(container_last_terminated_reason[5m]) > 0.1` | 調查 |
 
 ---
 
@@ -770,9 +913,9 @@ sequenceDiagram
     Op->>LG: run_load.sh --type composite
     LG->>DB: 95 idle connections + OLTP (sysbench)
     DB-->>PM: mysql_threads_connected ≈ 95<br/>node_cpu busy ≈ 80%+
-    TE-->>PM: user_threshold_connections = 70
+    TE-->>PM: user_threshold{metric="connections"} = 70
 
-    Note over PM: 評估 Recording Rule：<br/>normalized_connections = 95<br/>> user_threshold (70)
+    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max = 95<br/>> tenant:alert_threshold:connections (70)
 
     PM->>PM: Alert: MariaDBHighConnections → FIRING
 
@@ -780,7 +923,7 @@ sequenceDiagram
     LG->>DB: Kill connections + stop stress-ng
     DB-->>PM: mysql_threads_connected ≈ 5
 
-    Note over PM: normalized_connections = 5<br/>< user_threshold (70)
+    Note over PM: tenant:mysql_threads_connected:max = 5<br/>< tenant:alert_threshold:connections (70)
 
     PM->>PM: Alert → RESOLVED (after for duration)
     Note over Op: ✅ 完整 firing → resolved 週期驗證通過
@@ -873,40 +1016,64 @@ flowchart TD
 
 ---
 
-## 10. 未來擴展路線 (Future Roadmap)
+## 10. AST 遷移引擎架構 (Migration Engine Architecture)
 
-以下項目依優先序排列。標記 `[Backlog Bx]` 的項目對應 CLAUDE.md 中的 Backlog 編號。
+v0.11.0 實現了 `migrate_rule.py` v4，將遷移工具的核心從 regex 提升至 AST (Abstract Syntax Tree) 精度。這是企業客戶從傳統監控遷移至本平台的關鍵能力。
 
-### 10.1 ~~Regex 維度閾值~~ `[B1]` — ✅ 已完成 (v0.12.0)
+### 10.1 架構：AST-Informed String Surgery
 
-> **已於 v0.12.0 實現。** Config parser 擴展支援 `=~` 運算子（如 `tablespace=~"SYS.*"`），regex pattern 作為 `_re` 後綴 label 輸出至 Prometheus metric，由 PromQL recording rules 透過 `label_replace` + `=~` 在查詢時完成實際匹配。此設計保持 exporter 為純 config→metric 轉換器，不引入外部資料依賴。
+```mermaid
+flowchart LR
+    A["Original PromQL\nstring"] --> B["promql_parser\n.parse()"]
+    B -->|"read-only AST"| C["walk_ast()\nCollect VectorSelector\nnodes"]
+    C --> D["rewrite_expr()\n1. custom_ prefix\n2. tenant label"]
+    D --> E["Reparse +\nprettify()"]
+    E -->|"✅ Valid"| F["Output\nRewritten PromQL"]
+    B -->|"❌ Parse fails"| G["Fallback\nRegex path"]
+    E -->|"❌ Reparse fails"| G
 
-### 10.2 ~~Oracle / DB2 / ClickHouse Rule-Pack 模板~~ `[B3]` — ✅ 已完成 (v0.13.0)
+    style F fill:#c8e6c9,stroke:#2e7d32
+    style G fill:#fff3e0,stroke:#e65100
+```
 
-> **已於 v0.13.0 實現。** Oracle Rule Pack (6 + 5 + 7) 涵蓋 sessions、tablespace、wait_time、process、PGA、session_utilization。DB2 Rule Pack (7 + 5 + 7) 涵蓋 connections、bufferpool_hit_ratio (< 反轉)、log_usage、deadlocks、tablespace、lock_wait、sort_overflow。ClickHouse Rule Pack (7 + 5 + 7) 涵蓋 queries rate、TCP connections、max_part_count (merge 壓力)、replication queue、memory tracking、merge rate、failed queries。三者皆支援 B1 regex 維度閾值。Rule Packs 總數 6 → 9，scaffold_tenant 同步擴展。
+**為什麼不做完整 AST 重寫？** `promql-parser` (Rust PyO3, v0.7.0) 的 AST 是唯讀的——無法修改節點屬性後重新序列化。String surgery 方法更安全（保留原始表達式結構）、更簡單（無需自建 PromQL 序列化器）、且可驗證（reparse 確認結果正確性）。
 
-### 10.3 ~~排程式閾值~~ `[B4]` — ✅ 已完成 (v0.12.0)
+### 10.2 核心功能
 
-> **已於 v0.12.0 實現。** `ScheduledValue` 自訂 YAML 型別支援雙格式：純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`。時間窗口為 UTC-only `HH:MM-HH:MM` 格式，支援跨午夜（如 `22:00-06:00`）。`ResolveAt(now time.Time)` 確保可測試性，45 個測試案例覆蓋邊界條件。
+| 功能 | 說明 |
+|------|------|
+| `extract_metrics_ast()` | AST 精準辨識 metric name，取代 regex + blacklist 方式 |
+| `extract_label_matchers_ast()` | 提取所有 label matcher（含 `=~` regex matcher） |
+| `rewrite_expr_prefix()` | `custom_` 前綴注入，使用 word-boundary regex 防止子字串誤替換 |
+| `rewrite_expr_tenant_label()` | `tenant=~".+"` label 注入，確保租戶隔離 |
+| `detect_semantic_break_ast()` | 偵測 `absent()` / `predict_linear()` 等語意中斷函式 |
 
-### 10.4 ~~Benchmark Under-Load 模式~~ `[B2]` — ✅ 已完成 (v0.13.0)
+### 10.3 Graceful Degradation
 
-> **已於 v0.13.0 實現。** `benchmark.sh --under-load [--tenants N]` 合成 N 個 synthetic tenants → patch ConfigMap → 量測 reload latency / memory delta / scrape duration / eval time。idle-state 基準新增 `scrape_duration_seconds`。`--json` 輸出包含 `under_load` 區段。Go micro-benchmark (`config_bench_test.go`) 提供 7 個 `testing.B` 函數，覆蓋 10/100/1000 tenants × scalar/mixed/night-window。
+遷移引擎採用漸進式降級策略：
 
-### 10.5 ~~遷移工具 AST 解析~~ `[B6]` — ✅ 已完成 (v0.11.0)
+1. **AST 路徑**（預設）：`promql-parser` 可用且表達式可解析時，使用 AST 精確辨識
+2. **Regex 路徑**（降級）：`promql-parser` 未安裝或特定表達式解析失敗時，自動回到 regex 路徑
+3. **強制 Regex**：CLI `--no-ast` 旗標可跳過 AST，用於除錯或比較
 
-> **已於 v0.11.0 實現。** `migrate_rule.py` v4 整合了 `promql-parser` (Rust PyO3 binding, v0.7.0)，採用 **AST-Informed String Surgery** 架構：AST 負責精準辨識 metric name 與 label matcher，word-boundary regex 負責字串替換，reparse 驗證結果正確性。新增功能包含：
->
-> - `extract_metrics_ast()` / `extract_label_matchers_ast()` — AST 精準辨識
-> - `rewrite_expr_prefix()` — `custom_` 前綴注入 (word-boundary 防子字串誤替換)
-> - `rewrite_expr_tenant_label()` — `tenant=~".+"` label 注入
-> - `detect_semantic_break_ast()` — 偵測 `absent()` / `predict_linear()` 等語意中斷函式
-> - Graceful degradation：promql-parser 未安裝或解析失敗時，自動降級至 regex 路徑
-> - 54 個測試案例覆蓋 compound `and/or/unless`、complex regex labels、aggregation+offset、巢狀語義中斷、parse_expr all_metrics 驗證、dictionary 載入、write_outputs 整合 (含 AST 路徑)
->
-> CLI 新增 `--no-ast` 旗標可強制回到 regex 模式。
+降級不影響輸出格式——兩條路徑產出相同的三件式套件（recording rules + threshold normalization + alert rules）。
 
-### 10.6 治理架構演進 (Governance Evolution)
+### 10.4 企業遷移工作流
+
+完整遷移路徑整合 AST 引擎、Shadow Monitoring 與 Triage 模式：
+
+1. **Triage**：`migrate_rule.py --triage` 產出 CSV 清單，分類每條規則的遷移策略（direct / prefix / skip）
+2. **遷移執行**：AST 引擎處理 prefix 注入與 tenant label 注入
+3. **Shadow Monitoring**：`validate_migration.py` 驗證遷移前後的數值一致性（容差 ≤ 5%）
+4. **上線**：透過 `scaffold_tenant.py` 產出完整的租戶配置包
+
+---
+
+## 11. 未來擴展路線 (Future Roadmap)
+
+以下項目為尚未實現的技術方向，依預期影響排列。
+
+### 11.1 治理架構演進 (Governance Evolution)
 
 目前所有租戶配置集中於單一 `threshold-config` ConfigMap，K8s 原生 RBAC 僅能控制到 resource 層級，無法區分 key 層級的存取權限。拆分為多個 ConfigMap 雖然可行，但 projected volume 必須在 Pod Spec 中寫死每個 ConfigMap name——新增租戶時需修改 Deployment 並觸發 Pod 重啟，破壞 hot-reload 核心機制。
 
@@ -928,12 +1095,47 @@ flowchart TD
 
 當平台擴展至需要自動擴縮、drift reconciliation、跨叢集管理時，可引入 `ThresholdConfig` CRD 與 Operator，將租戶配置提升為 Kubernetes first-class resource。K8s 原生 RBAC 即可在 per-CR 層級精確控制存取，同時與 GitOps 工具鏈無縫整合。此路線需要額外的 Operator 開發與維運投資，適合在產品進入規模化階段時評估。
 
-### 10.7 Prometheus 聯邦 (Federation)
+### 11.2 Prometheus 聯邦 (Federation)
 
 支援多叢集架構：
 - 邊界叢集各自收集租戶指標並運行 threshold-exporter
 - 中央叢集透過 federation 或 remote-write 進行全域警報評估
 - 跨叢集 SLA 監控與統一儀表板
+
+### 11.3 生態系擴展展望 (Ecosystem Expansion)
+
+目前平台以資料庫類型（MariaDB, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse）為主要涵蓋範圍。架構本身不限於 DB——任何能輸出 Prometheus metrics 的元件都可透過新增 Rule Pack 納入管理。
+
+每個新領域的接入模式與現有 DB Rule Pack 相同：Normalization → Threshold Normalization → Alert Rules 三件式結構，搭配 `scaffold_tenant.py` 自動生成配置。以下列出具體的整合路徑：
+
+| 領域 | 推薦 Exporter | 適合閾值管理的關鍵指標 | 整合模式 |
+|------|--------------|----------------------|---------|
+| **Kafka** | [danielqsj/kafka_exporter](https://github.com/danielqsj/kafka_exporter) | `kafka_consumergroup_lag`, `kafka_brokers`, `kafka_topic_partition_current_offset` | 標準三件式 — lag/broker count 用 `max by(tenant)`，throughput 用 `sum by(tenant)` |
+| **RabbitMQ** | [kbudde/rabbitmq_exporter](https://github.com/kbudde/rabbitmq_exporter) | `rabbitmq_queue_messages_ready`, `rabbitmq_queue_consumers`, `rabbitmq_connections` | 標準三件式 — queue depth 適合 regex 維度（per-queue 閾值） |
+| **JVM** | [prometheus/jmx_exporter](https://github.com/prometheus/jmx_exporter) | `jvm_gc_pause_seconds_sum`, `jvm_memory_used_bytes`, `jvm_threads_current` | 標準三件式 — GC pause 適合排程式閾值（尖峰 vs 離峰容忍度不同） |
+| **Nginx** | [nginxinc/nginx-prometheus-exporter](https://github.com/nginxinc/nginx-prometheus-exporter) | `nginx_connections_active`, `nginx_http_requests_total` rate, `nginx_connections_waiting` | 標準三件式 — active connections 用 `max by(tenant)` |
+| **AWS RDS** | [percona/rds_exporter](https://github.com/percona/rds_exporter) 或 [YACE](https://github.com/nerdswords/yet-another-cloudwatch-exporter) | `rds_cpu_utilization`, `rds_free_storage_space`, `rds_database_connections` | 標準三件式 — CloudWatch metrics 經 exporter 轉為 Prometheus 格式後，與本平台完全相容 |
+
+### 11.4 Log-to-Metric Bridge（日誌轉指標橋接）
+
+本平台的設計邊界是 **Prometheus metrics 層**——它管理閾值與警報，不直接處理日誌。對於需要基於日誌觸發警報的場景（如 Oracle ORA-600 致命錯誤、MySQL slow query log 分析），推薦的生態系解法是：
+
+**架構模式：**
+```
+Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理
+```
+
+| 工具 | 適用場景 | 說明 |
+|------|---------|------|
+| [grok_exporter](https://github.com/fstab/grok_exporter) | 結構化日誌（syslog, access log） | 用 Grok pattern 解析日誌行，輸出為 Prometheus counter/gauge/histogram |
+| [mtail](https://github.com/google/mtail) | 高吞吐量即時日誌串流 | Google 開源，程式化定義日誌 pattern → metric，適合大規模部署 |
+
+**整合範例（ORA-600）：**
+1. grok_exporter 監控 Oracle alert log，每匹配到 `ORA-600` 遞增 `oracle_fatal_errors_total{instance="..."}`
+2. 本平台 `_defaults.yaml` 設定 `oracle_fatal_errors_rate: "0"` (任何錯誤即告警)
+3. Recording rule: `tenant:oracle_fatal_errors:rate5m` → Alert rule 觸發
+
+此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力，而不需要在核心架構中引入日誌處理邏輯。
 
 ---
 
@@ -947,6 +1149,6 @@ flowchart TD
 
 ---
 
-**文件版本：** v0.13.0 — 2026-02-28
-**最後更新：** Phase 12 Enterprise DB Rule Packs (Oracle + DB2 + ClickHouse) + Benchmark Under-Load + Go Micro-Benchmark
+**文件版本：** v1.0.0 — 2026-03-01
+**最後更新：** v1.0.0 GA Release — 文件重構 + 基準數據更新：§4 性能分析全面改為多輪統計量測（idle-state ×5, scaling-curve ×3, Go micro-benchmark ×5），報告 mean ± stddev / median (range)
 **維護者：** Platform Engineering Team

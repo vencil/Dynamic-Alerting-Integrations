@@ -68,7 +68,7 @@ trap cleanup EXIT
 log ""
 log "Phase 2: Check initial state"
 
-CURRENT_CONN=$(prom_query_value "tenant:mysql_threads_connected:sum{tenant=\"${TENANT}\"}" "0")
+CURRENT_CONN=$(prom_query_value "tenant:mysql_threads_connected:max{tenant=\"${TENANT}\"}" "0")
 CURRENT_CONN=$(printf '%.0f' "$CURRENT_CONN" 2>/dev/null || echo "0")
 log "Current connections for ${TENANT}: ${CURRENT_CONN}"
 

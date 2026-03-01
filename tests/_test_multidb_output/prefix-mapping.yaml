@@ -1,0 +1,42 @@
+# ============================================================
+# Prefix Mapping Table — custom_ 前綴對應關係
+# ============================================================
+# 用途: 未來收斂至黃金標準時的對照表
+# Prefix: custom_
+# ============================================================
+
+redis_memory_used_bytes:
+  original_metric: redis_memory_used_bytes
+  alert_name: RedisHighMemory
+  golden_match: redis_memory_used_bytes
+  golden_rule: RedisHighMemory
+custom_redis_queue_length_critical:
+  original_metric: redis_queue_length_critical
+  alert_name: RedisQueueTooLong
+  golden_match: null
+  golden_rule: null
+redis_evicted_keys_total:
+  original_metric: redis_evicted_keys_total
+  alert_name: RedisHighKeyEvictions
+  golden_match: redis_evicted_keys_total
+  golden_rule: RedisHighEviction
+custom_elasticsearch_indices_store_size_bytes_total:
+  original_metric: elasticsearch_indices_store_size_bytes_total
+  alert_name: ESIndexTooLarge
+  golden_match: null
+  golden_rule: null
+custom_elasticsearch_indices_docs_total:
+  original_metric: elasticsearch_indices_docs_total
+  alert_name: ESIndexDocCountHigh
+  golden_match: null
+  golden_rule: null
+mongodb_connections_current:
+  original_metric: mongodb_connections_current
+  alert_name: MongoDBHighConnections
+  golden_match: mongodb_connections_current
+  golden_rule: MongoDBHighConnections
+custom_mongodb_dbstats_storage_size:
+  original_metric: mongodb_dbstats_storage_size
+  alert_name: MongoDBStorageTooLarge
+  golden_match: null
+  golden_rule: null

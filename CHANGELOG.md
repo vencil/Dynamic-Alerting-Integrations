@@ -2,6 +2,34 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.0.0] - GA Release (2026-03-01)
+
+首個正式穩定版本。文件大重構、版號統一。
+
+### 📄 Documentation Overhaul
+
+* **`architecture-and-design.md` (中/英) 大重構**：
+  * §10 Future Roadmap 中已完成功能歸位至核心章節：§2.4 Regex 維度閾值、§2.5 排程式閾值、§4.7 Under-Load 基準測試
+  * 新增 §10 AST 遷移引擎架構（獨立章節）
+  * §11 Future Roadmap 精簡為 3 項未實現方向（治理演進、Prometheus 聯邦、生態系擴展）
+  * 英文版同步補齊 v0.12.0→v0.13.0 差異（Mermaid 圖、Rule Pack 表格 6→9）
+* **`README.md` / `README.en.md` 重寫**：
+  * 痛點對比表：新增「舊規則遷移風險」(AST 引擎) + 「維度精細控制」(Regex) 兩大段落
+  * 企業價值主張表：新增 Multi-DB 生態系行、更新遷移安全數據
+  * 全文 Rule Pack 數量 6→9，含 Oracle、DB2、ClickHouse
+* **其餘文件更新**：
+  * `migration-guide.md`：§9 擴展 DB 類型說明、Rule Pack 數量 6→9
+  * `byo-prometheus-integration.md`：Rule Pack 表格新增 3 個 DB 類型
+  * `custom-rule-governance.md` / `.en.md`：版號→v1.0.0
+  * `components/threshold-exporter/README.md`：版號→v1.0.0
+
+### 🏷️ Version Governance
+
+* 全 repo 版號統一至 v1.0.0
+* `CLAUDE.md`：Phase 13 歸位至版本歷程
+
+---
+
 ## [v0.13.0] - Enterprise DB Rule Packs & Benchmark (2026-02-28)
 
 Oracle + DB2 + ClickHouse Rule Pack 擴展，benchmark `--under-load` 模式，Go micro-benchmark。

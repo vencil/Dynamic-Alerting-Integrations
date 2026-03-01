@@ -15,9 +15,27 @@
 | **不支援的 DB 類型** — 需擴展 | 手動建立 Recording + Alert Rules | 參見 [§9](#9-進階擴展不支援的-db-類型) | ~30 min |
 | **下架租戶/指標** | 安全移除 | `offboard_tenant.py` / `deprecate_rule.py` | ~5 min |
 
+```mermaid
+flowchart TD
+    Start["開始遷移"] --> Q1{"有既有\nPrometheus\nalert rules?"}
+    Q1 -->|"沒有"| S1["scaffold_tenant.py\n互動式產生配置"]
+    Q1 -->|"有"| Q2{"規則數量?"}
+    Q2 -->|"< 100 條"| S2["migrate_rule.py\n--dry-run 預覽"]
+    Q2 -->|"100+ 條"| S3["migrate_rule.py\n--triage 分類"]
+    S2 --> D1["檢視輸出 →\nkubectl apply"]
+    S3 --> S4["Shadow Monitoring\nvalidate_migration.py"]
+    S4 --> S5["漸進切換\n(數週並行觀察)"]
+    S1 --> Done["✅ 完成"]
+    D1 --> Done
+    S5 --> Done
+
+    style Done fill:#c8e6c9,stroke:#2e7d32
+    style Start fill:#e3f2fd,stroke:#1565c0
+```
+
 ## Zero-Friction 導入
 
-本平台已預載 **6 個核心 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
+本平台已預載 **9 個核心 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
 
 **未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)**。新增 exporter 後，只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
 
@@ -58,7 +76,7 @@ python3 scripts/tools/scaffold_tenant.py --catalog
 
 > **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
 > ```bash
-> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:0.4.0 \
+> docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.0.0 \
 >   scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 > ```
 
@@ -95,11 +113,11 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> --no-ast
 python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 ```
 
-> **v0.11.0 新功能**：工具預設使用 PromQL AST 引擎 (`promql-parser`) 精準辨識 metric name，自動注入 `custom_` 前綴與 `tenant` label。AST 解析失敗時自動降級至 regex 路徑，確保向後相容。
+> 工具預設使用 PromQL AST 引擎 (`promql-parser`) 精準辨識 metric name，自動注入 `custom_` 前綴與 `tenant` label。AST 解析失敗時自動降級至 regex 路徑，確保向後相容。
 
 > **不想 clone 專案？** 使用 [da-tools 容器](../components/da-tools/README.md)：
 > ```bash
-> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:0.4.0 \
+> docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
 >   migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
 > ```
 
@@ -147,7 +165,7 @@ python3 scripts/tools/migrate_rule.py <legacy-rules.yml> -o my-output/
 helm upgrade --install threshold-exporter ./components/threshold-exporter \
   -n monitoring --create-namespace \
   --set image.repository=ghcr.io/vencil/threshold-exporter \
-  --set image.tag=0.12.0
+  --set image.tag=1.0.0
 ```
 
 ### 選項 B: 本地建置
@@ -480,7 +498,7 @@ tenants:
 
 ## 9. 進階：擴展不支援的 DB 類型
 
-若需支援尚無 Rule Pack 的 DB 類型，需手動建立正規化層。
+v1.0.0 已預載 9 個 Rule Pack，涵蓋 MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse 及 Platform 自我監控。若需支援尚無 Rule Pack 的 DB 類型，需手動建立正規化層。
 
 ### 正規化命名規範
 
@@ -546,7 +564,7 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 ```bash
 kubectl logs -n monitoring -l app=threshold-exporter --tail=20
-# 預期: "Config loaded (directory): X defaults, Y state_filters, Z tenants"
+# 預期: "Config loaded (directory): X defaults, Y state_filters, Z tenants, N resolved thresholds, M resolved state filters"
 ```
 
 ---
@@ -612,14 +630,12 @@ spec:
     spec:
       containers:
         - name: validator
-          image: python:3.11-slim
+          image: ghcr.io/vencil/da-tools:1.0.0
           command:
-            - python3
-            - /scripts/validate_migration.py
+            - da-tools
+            - validate
             - --mapping
             - /config/prefix-mapping.yaml
-            - --prometheus
-            - http://prometheus.monitoring.svc.cluster.local:9090
             - --watch
             - --interval
             - "300"
@@ -627,17 +643,15 @@ spec:
             - "4032"    # 每 5 分鐘一次，共 14 天
             - -o
             - /output/
+          env:
+            - name: PROMETHEUS_URL
+              value: http://prometheus.monitoring.svc.cluster.local:9090
           volumeMounts:
-            - name: scripts
-              mountPath: /scripts
             - name: config
               mountPath: /config
             - name: output
               mountPath: /output
       volumes:
-        - name: scripts
-          configMap:
-            name: migration-scripts
         - name: config
           configMap:
             name: migration-config
@@ -669,7 +683,7 @@ spec:
 
 ## 12. Rule Pack 動態開關
 
-所有 6 個 Rule Pack ConfigMap 在 Projected Volume 中設定了 `optional: true`，允許選擇性卸載。
+所有 9 個 Rule Pack ConfigMap 在 Projected Volume 中設定了 `optional: true`，允許選擇性卸載。
 
 ### 卸載不需要的 Rule Pack
 
@@ -686,8 +700,7 @@ kubectl delete cm prometheus-rules-mariadb -n monitoring
 ```bash
 # 從 rule-packs/ 目錄重新建立 ConfigMap
 kubectl create configmap prometheus-rules-mariadb \
-  --from-file=mariadb-recording.yml=rule-packs/rule-pack-mariadb.yaml \
-  --from-file=mariadb-alert.yml=rule-packs/rule-pack-mariadb.yaml \
+  --from-file=rule-pack-mariadb.yaml=rule-packs/rule-pack-mariadb.yaml \
   -n monitoring
 ```
 

@@ -1,0 +1,5 @@
+﻿Alert Name,Triage Action,Status,Severity,Metric Key,Threshold,Aggregation,Aggregation Reason,Golden Standard Match,Golden Rule,Rule Pack,Dictionary Note,Dimensions,Original Expression
+MySQLTooManyConnections,use_golden,perfect,warning,mysql_global_status_threads_connected,150,max,關鍵字 'connected' — 單點上限,mysql_connections,MariaDBHighConnections,mariadb,直接使用 scaffold_tenant.py 設定 mysql_connections 閾值,,mysql_global_status_threads_connected > 150
+MySQLHighSlowQueries,use_golden,complex,warning,mysql_global_status_slow_queries,0.5,sum,包含 rate/increase — 叢集聚合總量,mysql_slow_queries,MariaDBHighSlowQueries,mariadb,rate() 指標 — 使用黃金標準的 sum by(tenant) 聚合,,rate(mysql_global_status_slow_queries[5m]) > 0.5
+MySQLTooManyConnectionsCritical,use_golden,perfect,critical,mysql_global_status_threads_connected_critical,200,max,關鍵字 'connected' — 單點上限,mysql_connections,MariaDBHighConnections,mariadb,直接使用 scaffold_tenant.py 設定 mysql_connections 閾值,,mysql_global_status_threads_connected > 200
+MySQLDown,skip,unparseable,critical,,,,,,,,,,absent(mysql_up) == 1

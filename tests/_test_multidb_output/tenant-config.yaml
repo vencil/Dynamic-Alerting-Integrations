@@ -1,0 +1,31 @@
+# ============================================================
+# Tenant Config — 複製到 conf.d/<tenant>.yaml
+# ============================================================
+# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：
+# tenants:
+#   my-tenant-name:
+#     custom_redis_queue_length_critical: "500"
+#     custom_elasticsearch_indices_store_size_bytes_total: "107374182400"
+#     custom_elasticsearch_indices_docs_total: "500000000"
+#     custom_mongodb_dbstats_storage_size: "53687091200"
+
+# --- From: RedisQueueTooLong (severity: critical) ---
+custom_redis_queue_length_critical: "500"
+# 維度標籤替代語法:
+# "custom_redis_queue_length{queue="order-processing"}": "500"
+
+# --- From: ESIndexTooLarge (severity: warning) ---
+custom_elasticsearch_indices_store_size_bytes_total: "107374182400"
+# 維度標籤替代語法:
+# "custom_elasticsearch_indices_store_size_bytes_total{index="logs-prod"}": "107374182400"
+
+# --- From: ESIndexDocCountHigh (severity: warning) ---
+custom_elasticsearch_indices_docs_total: "500000000"
+# 維度標籤替代語法:
+# "custom_elasticsearch_indices_docs_total{index="metrics", type="gauge"}": "500000000"
+
+# --- From: MongoDBStorageTooLarge (severity: warning) ---
+custom_mongodb_dbstats_storage_size: "53687091200"
+# 維度標籤替代語法:
+# "custom_mongodb_dbstats_storage_size{database="orders"}": "53687091200"
+

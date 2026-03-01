@@ -1,0 +1,6 @@
+# ============================================================
+# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap
+# ============================================================
+groups:
+  - name: custom_migrated-alert-rules
+    rules:

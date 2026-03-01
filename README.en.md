@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Dynamic Alerting Platform** — Configuration-driven thresholds, zero PromQL for tenants, GitOps directory mode, HA deployment, 6 pre-loaded rule packs (Projected Volume).
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.0.0 — Configuration-driven thresholds, zero PromQL for tenants, 9 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, HA deployment.
 
 ---
 
@@ -49,9 +49,9 @@ tenants:
 
 | Metric | Dynamic (Current) | Traditional @ 100 Tenants |
 |--------|-------------------|---------------------------|
-| Alert Rules | 35 (fixed) | 3,500 (35×100) |
-| Total Rules | 85 | 3,500 |
-| Evaluation Time per Cycle | ~20.8ms | ~850ms+ (linear growth) |
+| Alert Rules | 56 (fixed) | 5,600 (56×100) |
+| Total Rules | 141 (9 Rule Packs) | 5,600+ |
+| **Evaluation Time per Cycle** | **~20ms** (5-round mean ± 1.9ms) | **~800ms+** (linear growth) |
 | Cost of Unused Rule Packs | Near zero | N/A |
 
 Detailed performance analysis: see [Architecture and Design Document](docs/architecture-and-design.en.md)
@@ -74,7 +74,7 @@ Zero PromQL. `scaffold_tenant.py` generates configuration through interactive Q&
 All rules packed in a single giant ConfigMap. Every threshold change = PR → CI/CD → Prometheus reload. Multi-team editing = merge conflicts.
 
 **✅ Our Solution:**
-6 independent Rule Pack ConfigMaps mounted via Projected Volume. Each team (DBA, SRE, K8s) maintains their own rule pack independently. SHA-256 hash hot-reload — no Prometheus restart needed. Directory mode (`conf.d/`) supports per-tenant YAML files.
+9 independent Rule Pack ConfigMaps mounted via Projected Volume. Each team (DBA, SRE, K8s, Analytics) maintains their own rule pack independently. SHA-256 hash hot-reload — no Prometheus restart needed. Directory mode (`conf.d/`) supports per-tenant YAML files.
 
 ---
 
@@ -84,7 +84,7 @@ All rules packed in a single giant ConfigMap. Every threshold change = PR → CI
 Maintenance window = alert storm. Non-critical Redis queue alert = P0 on-call.
 
 **✅ Our Solution:**
-Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-layer severity (`_critical` suffix). Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable.
+Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-layer severity (`_critical` suffix). Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable. **Scheduled thresholds**: time-window auto-switching (e.g., `22:00-06:00` relaxed nighttime thresholds), reducing off-hours false positives.
 
 ---
 
@@ -94,7 +94,27 @@ Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts vi
 Who changed which threshold? No audit trail. No separation of duties.
 
 **✅ Our Solution:**
-Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by platform team (separation of duties). Boundary rules prevent tenants from overriding platform settings. File-level RBAC via Git permissions.
+Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by platform team (separation of duties). Boundary rules prevent tenants from overriding platform settings. File-level RBAC via Git permissions. **Three-tier governance model**: Platform Team manages global defaults → Domain Experts define golden standards → Tenant Tech Leads tune business thresholds, with CI deny-list linting for compliance.
+
+---
+
+### 2.6 Legacy Rule Migration Risk
+
+**❌ Traditional Pain Points:**
+Hundreds of hand-written PromQL rules with no automated conversion path. Manual migration takes weeks, and a big-bang cutover carries extreme risk — a failed switch means monitoring blind spots.
+
+**✅ Our Solution:**
+`migrate_rule.py` v4 with **AST migration engine** (`promql-parser` Rust PyO3) precisely identifies metric names and label matchers. `custom_` prefix isolation prevents naming conflicts. `--triage` mode produces a CSV inventory categorizing each rule's migration strategy. **Shadow Monitoring** dual-track — `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%), enabling zero-risk progressive cutover.
+
+---
+
+### 2.7 Fine-Grained Dimension Control
+
+**❌ Traditional Pain Points:**
+Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 95% for `SYSTEM` tablespace — traditional approach requires two separate rules.
+
+**✅ Our Solution:**
+**Regex dimension thresholds**: support `=~` operator (e.g., `tablespace=~"SYS.*"`), specifying dimension-level thresholds directly in YAML. The exporter outputs regex patterns as `_re` suffixed labels, and PromQL recording rules perform matching at query time. Tenants still write zero PromQL.
 
 ---
 
@@ -102,10 +122,11 @@ Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by pla
 
 | Value | Mechanism | Verifiability |
 |-------|-----------|---------------|
-| **Risk-Free Migration** | `migrate_rule.py --triage` bucketing + `custom_` prefix isolation + Shadow Monitoring dual-track | `validate_migration.py` numerical diff report |
+| **Risk-Free Migration** | `migrate_rule.py` v4 AST engine + `custom_` prefix isolation + Shadow Monitoring dual-track | `validate_migration.py` numerical diff ≤ 5% |
 | **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
 | **Full Lifecycle Governance** | `scaffold_tenant.py` onboard → `patch_config.py` operate → `deprecate_rule.py` / `offboard_tenant.py` offboard | Every tool has `--dry-run` or pre-check mode |
 | **Live Verifiability** | `make demo-full` end-to-end: real load injection → alert fires → cleanup → auto-recovery | Full cycle < 5 minutes, visually observable |
+| **Multi-DB Ecosystem** | 9 Rule Packs covering 7 database types (MariaDB / Redis / MongoDB / ES / Oracle / DB2 / ClickHouse) + K8s + Platform self-monitoring | `scaffold_tenant.py --catalog` lists all supported DB types |
 
 ---
 
@@ -126,7 +147,7 @@ graph LR
         T2_new[Tenant B<br>YAML only] --> TE
         TN_new[Tenant N<br>YAML only] --> TE
         TE --> P_new[Prometheus<br>M Rules only]
-        RP[6 Rule Packs<br>Projected Volume] --> P_new
+        RP[9 Rule Packs<br>Projected Volume] --> P_new
     end
 ```
 
@@ -142,7 +163,7 @@ graph TD
 
     subgraph PL["Platform Layer"]
         TE["threshold-exporter x2 HA<br/>Directory Scanner / Hot-Reload<br/>Three-State / SHA-256 Hash"]
-        RP["Projected Volume<br/>6 Independent Rule Packs<br/>mariadb | kubernetes | redis<br/>mongodb | elasticsearch | platform"]
+        RP["Projected Volume<br/>9 Independent Rule Packs<br/>mariadb | kubernetes | redis | mongodb<br/>elasticsearch | oracle | db2 | clickhouse | platform"]
     end
 
     subgraph PE["Prometheus Engine"]
@@ -198,7 +219,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | Document | Description | Target Audience |
 |----------|-------------|-----------------|
 | [Architecture and Design](docs/architecture-and-design.en.md) | O(M) derivation, HA design, Projected Volume deep-dive | Platform Engineers, SREs |
-| [Rule Packs Directory](rule-packs/README.md) | 6 Rule Pack specifications, structure templates, exporter links | Everyone |
+| [Rule Packs Directory](rule-packs/README.md) | 9 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
 | [BYOP Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
 | [Migration Guide](docs/migration-guide.md) | Frictionless onboarding, scaffold tools, 5 hands-on scenarios | Tenants, DevOps |
@@ -210,7 +231,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ## Rule Packs Directory
 
-6 Rule Packs are pre-loaded in Prometheus via Kubernetes **Projected Volume**, each with its own independent ConfigMap, maintained separately by different teams:
+9 Rule Packs are pre-loaded in Prometheus via Kubernetes **Projected Volume**, each with its own independent ConfigMap (`optional: true`), maintained separately by different teams:
 
 | Rule Pack | Exporter | Rules | Status |
 |-----------|----------|-------|--------|
@@ -219,9 +240,12 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | redis | oliver006/redis_exporter | 7R + 6A | Pre-loaded |
 | mongodb | percona/mongodb_exporter | 7R + 6A | Pre-loaded |
 | elasticsearch | elasticsearch_exporter | 7R + 7A | Pre-loaded |
+| oracle | oracledb_exporter | 6R + 7A | Pre-loaded |
+| db2 | db2_exporter | 7R + 7A | Pre-loaded |
+| clickhouse | clickhouse_exporter | 7R + 7A | Pre-loaded |
 | platform | threshold-exporter self-monitoring | 0R + 4A | Pre-loaded |
 
-**Note:** R=Recording Rules, A=Alert Rules. Evaluation cost of unused rule packs is near zero.
+**Note:** R=Recording Rules, A=Alert Rules. Total: 53R + 56A = 109 rules. Evaluation cost of unused rule packs is near zero.
 
 ---
 
@@ -230,7 +254,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | Tool | Purpose |
 |------|---------|
 | `scaffold_tenant.py` | Interactive configuration generator for new tenants |
-| `migrate_rule.py` | Auto-convert legacy rules (v3: Triage CSV + Prefix isolation + Metric Dictionary) |
+| `migrate_rule.py` | AST migration engine (v4: AST precision + Triage CSV + Prefix isolation + Dictionary + tenant label injection) |
 | `validate_migration.py` | Shadow Monitoring value diff (Recording Rule comparison) |
 | `patch_config.py` | Safe partial ConfigMap updates |
 | `check_alert.py` | Query tenant alert status |
@@ -243,10 +267,13 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 **Usage Examples:**
 
 ```bash
-# New tenant: Interactive config generator
+# View supported DB types
+python3 scripts/tools/scaffold_tenant.py --catalog
+
+# New tenant: Interactive config generator (supports 8 DB types)
 python3 scripts/tools/scaffold_tenant.py
 
-# Existing alert rules: Auto-convert to dynamic
+# Existing alert rules: Auto-convert with AST engine
 python3 scripts/tools/migrate_rule.py <your-legacy-rules.yml>
 
 # End-to-end demo
@@ -323,7 +350,7 @@ make help               # Show help message
 ├── k8s/
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
-│       ├── configmap-rules-*.yaml  # 6 independent Rule Pack ConfigMaps (including platform)
+│       ├── configmap-rules-*.yaml  # 9 independent Rule Pack ConfigMaps (including platform)
 │       └── deployment-prometheus.yaml  # Projected Volume architecture
 ├── rule-packs/                 # Modular Prometheus rule packs (authoritative reference)
 │   └── README.md               # Rule Pack specifications and templates
@@ -393,7 +420,7 @@ The Platform Rule Pack (`configmap-rules-platform.yaml`) provides 4 self-monitor
 
 ## Key Design Decisions
 
-- **Projected Volume**: 6 Rule Pack ConfigMaps (including Platform self-monitoring) are merged and mounted to `/etc/prometheus/rules/` via projected volume, with each team maintaining their own pack independently and zero PR conflicts.
+- **Projected Volume**: 9 Rule Pack ConfigMaps (including Platform self-monitoring) are merged and mounted to `/etc/prometheus/rules/` via projected volume, with each team maintaining their own pack independently and zero PR conflicts.
 - **GitOps Directory Mode**: threshold-exporter uses `-config-dir` to scan `conf.d/`, supporting `_defaults.yaml` + per-tenant YAML split.
 - **PVC (not emptyDir)**: MariaDB data uses Kind's built-in StorageClass; data persists after Pod restarts.
 - **Sidecar Pattern**: mysqld_exporter and MariaDB in the same Pod, connected via `localhost:3306`.

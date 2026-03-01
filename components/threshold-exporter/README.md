@@ -1,4 +1,4 @@
-# Threshold Exporter (v0.12.0)
+# Threshold Exporter (v1.0.0)
 
 > **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤 + regex 維度 + 排程式閾值。
 >
@@ -43,13 +43,13 @@ tenants:
   db-a:
     mysql_connections: "70"
     container_cpu: "70"
-    # Phase 2B: 維度標籤 (YAML key 需加引號)
+    # 維度標籤 (YAML key 需加引號)
     "redis_queue_length{queue='tasks'}": "500"
     "redis_queue_length{queue='events', priority='high'}": "1000:critical"
     "redis_db_keys{db='db0'}": "disable"
 ```
 
-### 維度標籤 (Dimensional Labels, Phase 2B)
+### 維度標籤 (Dimensional Labels)
 
 支援在 metric key 中指定額外的 Prometheus 標籤，用於 Redis DB、ES Index 等多維度場景：
 
@@ -63,7 +63,7 @@ tenants:
 - 不支援 `_critical` 後綴，改用 `"value:critical"` 語法覆寫 severity
 - Prometheus 輸出會包含額外標籤：`user_threshold{..., queue="tasks", priority="high"} 500`
 
-### Regex 維度標籤 (Phase 11 B1)
+### Regex 維度標籤
 
 支援在 metric key 中使用 `=~` 運算子指定 regex 匹配模式：
 
@@ -78,7 +78,7 @@ tenants:
 - 可混合使用 exact (`=`) 和 regex (`=~`) label matcher
 - Exporter 不進行實際 regex 匹配，僅輸出 pattern
 
-### 排程式閾值 (Phase 11 B4)
+### 排程式閾值 (Scheduled Thresholds)
 
 支援在特定 UTC 時間窗口覆蓋閾值，適用於備份窗口等場景：
 
@@ -134,7 +134,7 @@ tenants:
 user_threshold{tenant="db-a",component="mysql",metric="connections",severity="warning"} 70
 user_threshold{tenant="db-a",component="mysql",metric="cpu",severity="warning"} 80
 user_threshold{tenant="db-b",component="mysql",metric="cpu",severity="critical"} 40
-# Phase 2B: 維度標籤 — 額外 label 自動附加在標準 label 之後
+# 維度標籤 — 額外 label 自動附加在標準 label 之後
 user_threshold{tenant="redis-prod",component="redis",metric="queue_length",severity="critical",queue="tasks"} 500
 user_threshold{tenant="es-prod",component="es",metric="index_store_size_bytes",severity="warning",index="logs-prod"} 107374182400
 ```
@@ -152,7 +152,7 @@ Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯�
 - record: tenant:alert_threshold:redis_queue_length
   expr: max by(tenant, queue) (user_threshold{metric="redis_queue_length"})
 
-# Regex 維度閾值 (B1) — 透過 label_replace 將 _re pattern 轉為實際匹配
+# Regex 維度閾值 — 透過 label_replace 將 _re pattern 轉為實際匹配
 # Step 1: 提取 regex pattern
 - record: tenant:alert_threshold:tablespace
   expr: max by(tenant, tablespace_re) (user_threshold{metric="tablespace", tablespace_re!=""})
@@ -163,9 +163,9 @@ Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯�
 # 具體實現需根據實際 metric label 結構設計 recording rule chain
 ```
 
-> **重要**: 當租戶使用維度標籤時，對應的 Recording Rule 與 Alert Rule 都必須在 `by()` / `on()` 中包含該維度 label。詳見 [migration-guide.md §11 平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
+> **重要**: 當租戶使用維度標籤時，對應的 Recording Rule 與 Alert Rule 都必須在 `by()` / `on()` 中包含該維度 label。詳見 [migration-guide.md §7 平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
 
-> **B4 排程式閾值**: Recording rules 不需要特別調整。`ScheduledValue` 的時間窗口在每次 scrape 時由 exporter 即時解析，recording rule 自動取得當下有效的閾值。
+> **排程式閾值**: Recording rules 不需要特別調整。`ScheduledValue` 的時間窗口在每次 scrape 時由 exporter 即時解析，recording rule 自動取得當下有效的閾值。
 
 Service Discovery 透過 `prometheus.io/scrape: "true"` annotation 自動發現。
 
@@ -177,9 +177,6 @@ make component-build COMP=threshold-exporter
 
 # Deploy
 make component-deploy COMP=threshold-exporter ENV=local
-
-# Verify
-make component-test COMP=threshold-exporter
 
 # View metrics
 curl http://localhost:8080/metrics | grep user_threshold

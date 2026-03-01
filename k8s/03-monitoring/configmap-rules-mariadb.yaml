@@ -20,8 +20,8 @@ data:
           - record: tenant:mysql_cpu_usage:rate5m
             expr: sum by(tenant) (rate(mysql_global_status_threads_running[5m]))
 
-          - record: tenant:mysql_threads_connected:sum
-            expr: sum by(tenant) (mysql_global_status_threads_connected)
+          - record: tenant:mysql_threads_connected:max
+            expr: max by(tenant) (mysql_global_status_threads_connected)
 
           - record: tenant:mysql_connection_usage:ratio
             expr: |
@@ -82,7 +82,7 @@ data:
           - alert: MariaDBHighConnections
             expr: |
               (
-                tenant:mysql_threads_connected:sum
+                tenant:mysql_threads_connected:max
                 > on(tenant) group_left
                 tenant:alert_threshold:connections
               )
@@ -90,7 +90,7 @@ data:
               (user_state_filter{filter="maintenance"} == 1)
               unless on(tenant)
               (
-                tenant:mysql_threads_connected:sum
+                tenant:mysql_threads_connected:max
                 > on(tenant) group_left
                 tenant:alert_threshold:connections_critical
               )
@@ -104,7 +104,7 @@ data:
           - alert: MariaDBHighConnectionsCritical
             expr: |
               (
-                tenant:mysql_threads_connected:sum
+                tenant:mysql_threads_connected:max
                 > on(tenant) group_left
                 tenant:alert_threshold:connections_critical
               )
@@ -121,7 +121,7 @@ data:
             expr: |
               (
                 (
-                  tenant:mysql_threads_connected:sum
+                  tenant:mysql_threads_connected:max
                   > on(tenant) group_left
                   tenant:alert_threshold:connections
                 )

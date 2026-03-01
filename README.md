@@ -2,7 +2,7 @@
 
 > **Language / 語言：** [English](README.en.md) | **中文（當前）**
 
-> **企業級多租戶動態警報平台** — 配置驅動閾值、租戶零 PromQL、GitOps 目錄模式、HA 部署、6 個預載規則包 (Projected Volume)。
+> **企業級多租戶監控治理平台** v1.0.0 — 配置驅動閾值、租戶零 PromQL、9 個預載規則包 (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform)、AST 遷移引擎、三層治理模型、Regex 維度閾值、排程式時間窗口、HA 部署。
 
 ---
 
@@ -49,9 +49,9 @@ tenants:
 
 | 指標 | 動態（現行） | 傳統 @ 100 租戶 |
 |------|-------------|-----------------|
-| 警報規則數 | 35（固定） | 3,500（35×100） |
-| 規則總數 | 85 | 3,500 |
-| 每週期評估時間 | ~20.8ms | ~850ms+（線性增長） |
+| 警報規則數 | 56（固定） | 5,600（56×100） |
+| 規則總數 | 141（9 Rule Packs） | 5,600+ |
+| **每週期評估時間** | **~20ms**（5 輪 mean ± 1.9ms） | **~800ms+**（線性增長） |
 | 未使用規則包成本 | 近乎零 | N/A |
 
 詳細效能分析：見 [架構與設計文件](docs/architecture-and-design.md)
@@ -74,7 +74,7 @@ tenants:
 所有規則塞在一個巨型 ConfigMap 中。每次閾值修改 = PR → CI/CD → Prometheus reload。多團隊編輯 = merge conflicts。
 
 **✅ 我們的方案：**
-6 個獨立 Rule Pack ConfigMap，透過 Projected Volume 掛載。各團隊（DBA、SRE、K8s）獨立維護自己的規則包。SHA-256 hash 熱重載 — 不需重啟 Prometheus。目錄模式（`conf.d/`）支援 per-tenant YAML 檔案。
+9 個獨立 Rule Pack ConfigMap，透過 Projected Volume 掛載。各團隊（DBA、SRE、K8s、Analytics）獨立維護自己的規則包。SHA-256 hash 熱重載 — 不需重啟 Prometheus。目錄模式（`conf.d/`）支援 per-tenant YAML 檔案。
 
 ---
 
@@ -84,7 +84,7 @@ tenants:
 維護窗口 = 警報風暴。非關鍵的 Redis queue alert = P0 呼叫。
 
 **✅ 我們的方案：**
-內建維護模式（`_state_maintenance: enable` 透過 `unless` 抑制所有警報）。多層嚴重度（`_critical` 後綴）。維度閾值（`redis_queue_length{queue="email"}: 1000`）。三態邏輯：每個租戶的每個指標支援 custom / default / disable。
+內建維護模式（`_state_maintenance: enable` 透過 `unless` 抑制所有警報）。多層嚴重度（`_critical` 後綴）。維度閾值（`redis_queue_length{queue="email"}: 1000`）。三態邏輯：每個租戶的每個指標支援 custom / default / disable。**排程式閾值**：支援時間窗口自動切換（如 `22:00-06:00` 夜間放寬閾值），減少非工作時段的誤報。
 
 ---
 
@@ -94,7 +94,27 @@ tenants:
 誰改了什麼閾值？沒有稽核軌跡。沒有權責分離。
 
 **✅ 我們的方案：**
-Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台團隊管控（權責分離）。邊界規則防止租戶覆蓋平台設定。透過 Git 權限實現檔案級 RBAC。
+Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台團隊管控（權責分離）。邊界規則防止租戶覆蓋平台設定。透過 Git 權限實現檔案級 RBAC。**三層治理模型**：Platform Team 管理全域預設 → Domain Experts 定義黃金標準 → Tenant Tech Leads 調整業務閾值，搭配 CI deny-list linting 確保合規。
+
+---
+
+### 2.6 舊規則遷移風險
+
+**❌ 傳統痛點：**
+數百條手寫 PromQL 規則無法自動轉換。手動遷移耗時數週，且一次性切換風險極高——切換失敗意味著監控盲區。
+
+**✅ 我們的方案：**
+`migrate_rule.py` v4 搭載 **AST 遷移引擎**（`promql-parser` Rust PyO3），精準辨識 metric name 與 label matcher。`custom_` prefix 隔離避免命名衝突。`--triage` 模式產出 CSV 清單分類每條規則的遷移策略。**Shadow Monitoring** 雙軌並行——`validate_migration.py` 驗證遷移前後數值一致（容差 ≤ 5%），零風險漸進式切換。
+
+---
+
+### 2.7 維度精細控制
+
+**❌ 傳統痛點：**
+同一指標只能設定單一閾值。Oracle DBA 需要對 `USERS` tablespace 設 85%、對 `SYSTEM` tablespace 設 95%，傳統方案必須寫兩條獨立規則。
+
+**✅ 我們的方案：**
+**Regex 維度閾值**：支援 `=~` 運算子（如 `tablespace=~"SYS.*"`），在 YAML 中直接指定維度級別的閾值。Exporter 將 regex pattern 輸出為 `_re` 後綴 label，PromQL recording rules 在查詢時完成匹配。租戶仍然零 PromQL。
 
 ---
 
@@ -102,10 +122,11 @@ Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台�
 
 | 價值 | 機制 | 可驗證性 |
 |------|------|----------|
-| **零摩擦遷移 (Risk-Free Migration)** | `migrate_rule.py --triage` 分桶 + `custom_` Prefix 隔離 + Shadow Monitoring 雙軌並行 | `validate_migration.py` 數值 diff 報告 |
+| **零摩擦遷移 (Risk-Free Migration)** | `migrate_rule.py` v4 AST 引擎 + `custom_` Prefix 隔離 + Shadow Monitoring 雙軌並行 | `validate_migration.py` 數值 diff ≤ 5% |
 | **零崩潰退出 (Zero-Crash Opt-Out)** | Projected Volume `optional: true` — 刪除 ConfigMap 不影響 Prometheus 運行 | `kubectl delete cm prometheus-rules-<type>` 立即可測 |
 | **全生命週期治理 (Full Lifecycle)** | `scaffold_tenant.py` 導入 → `patch_config.py` 營運 → `deprecate_rule.py` / `offboard_tenant.py` 下架 | 每個工具皆具 `--dry-run` 或 Pre-check 模式 |
 | **即時可驗證 (Live Verifiability)** | `make demo-full` 端對端展演：真實負載注入 → alert 觸發 → 清除 → 自動恢復 | 完整循環 < 5 分鐘，肉眼可見 |
+| **Multi-DB 生態系 (Multi-DB Ecosystem)** | 9 個 Rule Pack 涵蓋 7 種資料庫（MariaDB / Redis / MongoDB / ES / Oracle / DB2 / ClickHouse）+ K8s + Platform 自監控 | `scaffold_tenant.py --catalog` 列出所有支援的 DB 類型 |
 
 ---
 
@@ -126,7 +147,7 @@ graph LR
         T2_new[Tenant B<br>YAML only] --> TE
         TN_new[Tenant N<br>YAML only] --> TE
         TE --> P_new[Prometheus<br>M Rules only]
-        RP[6 Rule Packs<br>Projected Volume] --> P_new
+        RP[9 Rule Packs<br>Projected Volume] --> P_new
     end
 ```
 
@@ -142,11 +163,11 @@ graph TD
 
     subgraph PL["Platform Layer"]
         TE["threshold-exporter x2 HA<br/>Directory Scanner / Hot-Reload<br/>Three-State / SHA-256 Hash"]
-        RP["Projected Volume<br/>6 Independent Rule Packs<br/>mariadb | kubernetes | redis<br/>mongodb | elasticsearch | platform"]
+        RP["Projected Volume<br/>9 Independent Rule Packs<br/>mariadb | kubernetes | redis | mongodb<br/>elasticsearch | oracle | db2 | clickhouse | platform"]
     end
 
     subgraph PE["Prometheus Engine"]
-        PROM["Prometheus<br/>Vector Matching: group_left<br/>85 Rules / 18 Groups / ~20ms per cycle"]
+        PROM["Prometheus<br/>Vector Matching: group_left<br/>141 Rules / 27 Groups / ~20ms per cycle"]
     end
 
     D --> TE
@@ -198,7 +219,7 @@ make port-forward
 | 文件 | 說明 | 目標讀者 |
 |------|------|---------|
 | [架構與設計](docs/architecture-and-design.md) | O(M) 推導、HA 設計、Projected Volume 深度解析 | Platform Engineers、SREs |
-| [規則包目錄](rule-packs/README.md) | 6 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
+| [規則包目錄](rule-packs/README.md) | 9 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
 | [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
 | [BYOP 整合指南](docs/byo-prometheus-integration.md) | 企業現有 Prometheus / Thanos 叢集的最小整合步驟 | Platform Engineers、SREs |
 | [遷移指南](docs/migration-guide.md) | 零摩擦導入、scaffold 工具、5 個實戰場景 | 租戶、DevOps |
@@ -210,18 +231,21 @@ make port-forward
 
 ## 規則包目錄
 
-6 個 Rule Pack 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap，由不同團隊獨立維護：
+9 個 Rule Pack 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap（`optional: true`），由不同團隊獨立維護：
 
 | 規則包 | Exporter | 規則數 | 狀態 |
 |--------|----------|--------|------|
-| mariadb | mysqld_exporter (Percona) | 7R + 8A | 預載 |
-| kubernetes | cAdvisor + kube-state-metrics | 5R + 4A | 預載 |
-| redis | oliver006/redis_exporter | 7R + 6A | 預載 |
-| mongodb | percona/mongodb_exporter | 7R + 6A | 預載 |
-| elasticsearch | elasticsearch_exporter | 7R + 7A | 預載 |
+| mariadb | mysqld_exporter (Percona) | 11R + 8A | 預載 |
+| kubernetes | cAdvisor + kube-state-metrics | 7R + 4A | 預載 |
+| redis | oliver006/redis_exporter | 11R + 6A | 預載 |
+| mongodb | percona/mongodb_exporter | 10R + 6A | 預載 |
+| elasticsearch | elasticsearch_exporter | 11R + 7A | 預載 |
+| oracle | oracledb_exporter | 11R + 7A | 預載 |
+| db2 | db2_exporter | 12R + 7A | 預載 |
+| clickhouse | clickhouse_exporter | 12R + 7A | 預載 |
 | platform | threshold-exporter 自我監控 | 0R + 4A | 預載 |
 
-**備註：** R=Recording Rules、A=Alert Rules。未使用的規則包評估成本近乎零。
+**備註：** R=Recording Rules（含 Normalization + Threshold Normalization）、A=Alert Rules。共 85R + 56A = 141 條規則。未使用的規則包評估成本近乎零。
 
 ---
 
@@ -230,7 +254,7 @@ make port-forward
 | 工具 | 用途 |
 |------|------|
 | `scaffold_tenant.py` | 新租戶互動式配置產生器 |
-| `migrate_rule.py` | 自動轉換傳統規則（v3: Triage CSV + Prefix 隔離 + Metric Dictionary） |
+| `migrate_rule.py` | AST 遷移引擎（v4: AST 精準辨識 + Triage CSV + Prefix 隔離 + Dictionary + tenant label 注入） |
 | `validate_migration.py` | Shadow Monitoring 數值差異比對（Recording Rule diff） |
 | `patch_config.py` | 安全局部更新 ConfigMap |
 | `check_alert.py` | 查詢租戶警報狀態 |
@@ -243,10 +267,13 @@ make port-forward
 **使用範例：**
 
 ```bash
-# New tenant: Interactive config generator
+# View supported DB types
+python3 scripts/tools/scaffold_tenant.py --catalog
+
+# New tenant: Interactive config generator (supports 8 DB types)
 python3 scripts/tools/scaffold_tenant.py
 
-# Existing alert rules: Auto-convert to dynamic
+# Existing alert rules: Auto-convert with AST engine
 python3 scripts/tools/migrate_rule.py <your-legacy-rules.yml>
 
 # End-to-end demo
@@ -323,7 +350,7 @@ make help               # 顯示說明
 ├── k8s/
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
-│       ├── configmap-rules-*.yaml  # 6 獨立 Rule Pack ConfigMaps (含 platform)
+│       ├── configmap-rules-*.yaml  # 9 獨立 Rule Pack ConfigMaps (含 platform)
 │       └── deployment-prometheus.yaml  # Projected Volume 架構
 ├── rule-packs/                 # 模組化 Prometheus 規則包 (權威參考)
 │   └── README.md               # Rule Pack 規格與範本
@@ -393,7 +420,7 @@ Platform Rule Pack（`configmap-rules-platform.yaml`）提供 4 條自我監控�
 
 ## 關鍵設計決策
 
-- **Projected Volume**：6 個 Rule Pack ConfigMap（含 Platform 自我監控）透過 projected volume 合併掛載至 `/etc/prometheus/rules/`，各團隊獨立維護、零 PR 衝突。
+- **Projected Volume**：9 個 Rule Pack ConfigMap（含 Platform 自我監控）透過 projected volume 合併掛載至 `/etc/prometheus/rules/`，各團隊獨立維護、零 PR 衝突。
 - **GitOps 目錄模式**：threshold-exporter 使用 `-config-dir` 掃描 `conf.d/`，支援 `_defaults.yaml` + per-tenant YAML 拆分。
 - **PVC（非 emptyDir）**：MariaDB 資料使用 Kind 內建 StorageClass，Pod 重啟後資料保留。
 - **Sidecar 模式**：mysqld_exporter 與 MariaDB 在同一 Pod，透過 `localhost:3306` 連線。
