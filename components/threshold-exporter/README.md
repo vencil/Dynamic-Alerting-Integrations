@@ -1,4 +1,4 @@
-# Threshold Exporter (v1.0.1)
+# Threshold Exporter (v1.1.0)
 
 > **核心 Component** — 集中式、config-driven 的 Prometheus metric exporter，將使用者設定的動態閾值轉換為 Prometheus metrics，實現 Scenario A–D + 多 DB 維度標籤 + regex 維度 + 排程式閾值。
 >
@@ -190,13 +190,13 @@ Service Discovery 透過 `prometheus.io/scrape: "true"` annotation 自動發現�
 ```bash
 # 首次安裝 (OCI registry — 推薦)
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 
 # 升級 (含 config 變更)
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0 \
   -n monitoring \
   -f values-override.yaml
 ```
@@ -227,7 +227,7 @@ docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.0.0 \
 
 # 3. Helm upgrade — ConfigMap 自動更新，exporter hot-reload
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.0.1 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0 \
   -n monitoring -f values-override.yaml
 ```
 

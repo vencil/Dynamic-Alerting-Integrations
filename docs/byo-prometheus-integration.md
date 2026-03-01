@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v1.0.1
+> **版本**：v1.1.0
 
 ---
 
@@ -362,17 +362,17 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 
 # ① 確認特定 alert 的狀態
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.0.0 check-alert MariaDBHighConnections db-a
+  ghcr.io/vencil/da-tools:1.1.0 check-alert MariaDBHighConnections db-a
 
 # ② 觀測現有指標，取得閾值建議
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.0.0 baseline --tenant db-a --duration 300
+  ghcr.io/vencil/da-tools:1.1.0 baseline --tenant db-a --duration 300
 
 # ③ 啟動 Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.0.0 validate --mapping /data/mapping.csv --watch --rounds 5
+  ghcr.io/vencil/da-tools:1.1.0 validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
 > **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull` 即可使用。詳見 [da-tools README](../components/da-tools/README.md)。

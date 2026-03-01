@@ -52,7 +52,7 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.0.0 \
+  ghcr.io/vencil/da-tools:1.1.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -80,7 +80,7 @@ spec:
     spec:
       containers:
         - name: validator
-          image: ghcr.io/vencil/da-tools:1.0.0
+          image: ghcr.io/vencil/da-tools:1.1.0
           env:
             - name: PROMETHEUS_URL
               value: http://prometheus.monitoring.svc.cluster.local:9090
@@ -151,7 +151,7 @@ kubectl logs job/shadow-monitor -n monitoring --tail=50
 
 ```bash
 # 1. 確認具體哪些 tenant/metric 不一致
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.0.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.1.0 \
   validate --old "<old_query>" --new "<new_query>" \
   --prometheus http://localhost:9090
 
@@ -243,7 +243,7 @@ kubectl delete job shadow-monitor -n monitoring
 # 4. 移除 Alertmanager 的 shadow 攔截 route
 
 # 5. 驗證切換後 alert 正常觸發
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.0.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.1.0 \
   check-alert MariaDBHighConnections db-a
 
 # 租戶健康總檢（需叢集存取，僅限本地 Python 執行）
@@ -261,7 +261,7 @@ kubectl apply -f old-recording-rules.yaml
 # 3. 重啟 Shadow Monitor，重新進入觀察
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.0.0 \
+  ghcr.io/vencil/da-tools:1.1.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -275,7 +275,7 @@ rm -rf migration_output/
 rm -rf validation_output/
 
 # 若不再需要 custom_ prefix 規則
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.0.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.1.0 \
   deprecate custom_mysql_connections --execute
 ```
 

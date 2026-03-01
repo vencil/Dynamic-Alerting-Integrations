@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.0.1 — Configuration-driven thresholds, zero PromQL for tenants, 9 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.1.0 — Configuration-driven thresholds, zero PromQL for tenants, 9 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, HA deployment.
 
 ---
 
