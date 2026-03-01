@@ -18,15 +18,15 @@ Dynamic Alerting 平台的核心價值在於 **O(M) 複雜度**：定義 M 種�
 
 ```mermaid
 flowchart TD
-    A["我需要一個新的告警"] --> B{"現有指標 +\n不同閾值？"}
-    B -- YES --> T1["Tier 1 — Standard\n修改 tenant.yaml\n覆蓋率 ~80-85%"]
-    B -- NO --> C{"現有指標的\n複合條件？"}
-    C -- YES --> D{"有對應的\nPre-packaged Scenario？"}
-    D -- YES --> T2a["Tier 2 — Pre-packaged\n啟用該 Scenario"]
+    A["我需要一個新的告警"] --> B{"現有指標 +<br/>不同閾值？"}
+    B -- YES --> T1["Tier 1 — Standard<br/>修改 tenant.yaml<br/>覆蓋率 ~80-85%"]
+    B -- NO --> C{"現有指標的<br/>複合條件？"}
+    C -- YES --> D{"有對應的<br/>Pre-packaged Scenario？"}
+    D -- YES --> T2a["Tier 2 — Pre-packaged<br/>啟用該 Scenario"]
     D -- NO --> E{"具共性？"}
-    E -- YES --> T2b["Tier 2 — Pre-packaged\nDomain Expert 建立新 Scenario\n覆蓋率 ~10-15%"]
-    E -- NO --> T3["Tier 3 — Custom\nChange Request 流程\n目標 ≤5% of rules"]
-    C -- NO --> F["評估是否為\n平台應涵蓋的範疇"]
+    E -- YES --> T2b["Tier 2 — Pre-packaged<br/>Domain Expert 建立新 Scenario<br/>覆蓋率 ~10-15%"]
+    E -- NO --> T3["Tier 3 — Custom<br/>Change Request 流程<br/>目標 ≤5% of rules"]
+    C -- NO --> F["評估是否為<br/>平台應涵蓋的範疇"]
 
     style T1 fill:#d4edda,stroke:#28a745
     style T2a fill:#cce5ff,stroke:#007bff
@@ -223,17 +223,17 @@ Deny-list 方式限制的是每條 Rule 的「計算重量」，而非 Rule 數�
 
 ```mermaid
 flowchart TD
-    A["Tier 3 Custom Rule\n季度 Review"] --> B{"多個 Tenant\n提出相似需求？"}
-    B -- YES --> C["Domain Expert 評估\n抽象為 Tier 2 Scenario"]
+    A["Tier 3 Custom Rule<br/>季度 Review"] --> B{"多個 Tenant<br/>提出相似需求？"}
+    B -- YES --> C["Domain Expert 評估<br/>抽象為 Tier 2 Scenario"]
     C --> C1["撰寫業務語義文件"]
     C1 --> C2["移入對應 Rule Pack"]
-    C2 --> C3["原 Tier 3 標記 deprecated\n設定 expiry"]
-    B -- NO --> D{"已過\nexpiry date？"}
+    C2 --> C3["原 Tier 3 標記 deprecated<br/>設定 expiry"]
+    B -- NO --> D{"已過<br/>expiry date？"}
     D -- YES --> E["通知 Tenant owner"]
-    E --> E1["14 天未回應\n→ 自動停用"]
-    D -- NO --> F{"evaluation duration\n持續偏高？"}
+    E --> E1["14 天未回應<br/>→ 自動停用"]
+    D -- NO --> F{"evaluation duration<br/>持續偏高？"}
     F -- YES --> G["Platform Engineering 通知 Tenant"]
-    G --> G1["30 天未優化\n→ 強制下架"]
+    G --> G1["30 天未優化<br/>→ 強制下架"]
     F -- NO --> H["保留至下次 Review"]
 ```
 

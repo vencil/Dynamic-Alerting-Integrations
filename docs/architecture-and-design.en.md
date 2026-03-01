@@ -29,24 +29,24 @@ This document provides Platform Engineers and Site Reliability Engineers (SREs) 
 
 ```mermaid
 graph TB
-    PT["👤 Platform Team\nManages _defaults.yaml\nMaintains Rule Packs"]
-    TT["👤 Tenant Team\nManages tenant YAML\nConfigures thresholds"]
-    Git["📂 Git Repository\nconf.d/ + rule-packs/"]
+    PT["👤 Platform Team<br/>Manages _defaults.yaml<br/>Maintains Rule Packs"]
+    TT["👤 Tenant Team<br/>Manages tenant YAML<br/>Configures thresholds"]
+    Git["📂 Git Repository<br/>conf.d/ + rule-packs/"]
 
     subgraph DAP["Dynamic Alerting Platform"]
-        TE["threshold-exporter\n×2 HA"]
-        PM["Prometheus\n+ 9 Rule Packs"]
-        CM["ConfigMap\nthreshold-config"]
+        TE["threshold-exporter<br/>×2 HA"]
+        PM["Prometheus<br/>+ 9 Rule Packs"]
+        CM["ConfigMap<br/>threshold-config"]
     end
 
-    AM["📟 Alertmanager\n→ Slack / PagerDuty"]
+    AM["📟 Alertmanager<br/>→ Slack / PagerDuty"]
 
-    PT -->|"PR: _defaults.yaml\n+ Rule Pack YAML"| Git
-    TT -->|"PR: tenant YAML\n(threshold config)"| Git
-    Git -->|"GitOps sync\n(ArgoCD/Flux)"| CM
-    CM -->|"SHA-256\nhot-reload"| TE
-    TE -->|"Prometheus\nmetrics :8080"| PM
-    PM -->|"Alert rules\nevaluation"| AM
+    PT -->|"PR: _defaults.yaml<br/>+ Rule Pack YAML"| Git
+    TT -->|"PR: tenant YAML<br/>(threshold config)"| Git
+    Git -->|"GitOps sync<br/>(ArgoCD/Flux)"| CM
+    CM -->|"SHA-256<br/>hot-reload"| TE
+    TE -->|"Prometheus<br/>metrics :8080"| PM
+    PM -->|"Alert rules<br/>evaluation"| AM
 
     style DAP fill:#e8f4fd,stroke:#1a73e8
     style Git fill:#f0f0f0,stroke:#666
@@ -59,26 +59,26 @@ graph TB
 graph TB
     subgraph Cluster["Kind Cluster: dynamic-alerting-cluster"]
         subgraph TenantA["Namespace: db-a (Tenant A)"]
-            ExpA["Tenant A Exporter\n(MariaDB, Redis, etc.)"]
+            ExpA["Tenant A Exporter<br/>(MariaDB, Redis, etc.)"]
         end
 
         subgraph TenantB["Namespace: db-b (Tenant B)"]
-            ExpB["Tenant B Exporter\n(MongoDB, Elasticsearch, etc.)"]
+            ExpB["Tenant B Exporter<br/>(MongoDB, Elasticsearch, etc.)"]
         end
 
         subgraph Monitoring["Namespace: monitoring"]
             subgraph Config["ConfigMap Volume Mounts"]
-                CfgDefault["_defaults.yaml\n(Platform Defaults)"]
-                CfgTenantA["db-a.yaml\n(Tenant A Overrides)"]
-                CfgTenantB["db-b.yaml\n(Tenant B Overrides)"]
+                CfgDefault["_defaults.yaml<br/>(Platform Defaults)"]
+                CfgTenantA["db-a.yaml<br/>(Tenant A Overrides)"]
+                CfgTenantB["db-b.yaml<br/>(Tenant B Overrides)"]
             end
 
-            subgraph Export["threshold-exporter\n(×2 HA Replicas)"]
-                TE1["Replica 1\nport 8080"]
-                TE2["Replica 2\nport 8080"]
+            subgraph Export["threshold-exporter<br/>(×2 HA Replicas)"]
+                TE1["Replica 1<br/>port 8080"]
+                TE2["Replica 2<br/>port 8080"]
             end
 
-            subgraph Rules["Projected Volume\nRule Packs (×9)"]
+            subgraph Rules["Projected Volume<br/>Rule Packs (×9)"]
                 RP1["configmap-rules-mariadb.yaml"]
                 RP2["configmap-rules-kubernetes.yaml"]
                 RP3["configmap-rules-redis.yaml"]
@@ -90,17 +90,17 @@ graph TB
                 RP6["configmap-rules-platform.yaml"]
             end
 
-            Prom["Prometheus\n(Scrape: TE, Rule Evaluation)"]
-            AM["Alertmanager\n(Routing, Dedup, Grouping)"]
-            Slack["Slack / Email\n(Notifications)"]
+            Prom["Prometheus<br/>(Scrape: TE, Rule Evaluation)"]
+            AM["Alertmanager<br/>(Routing, Dedup, Grouping)"]
+            Slack["Slack / Email<br/>(Notifications)"]
         end
     end
 
-    Git["Git Repository\n(Source of Truth)"]
-    Scanner["Directory Scanner\n(conf.d/)"]
+    Git["Git Repository<br/>(Source of Truth)"]
+    Scanner["Directory Scanner<br/>(conf.d/)"]
 
     Git -->|Pull| Scanner
-    Scanner -->|Hot-reload\nSHA-256 hash| Config
+    Scanner -->|Hot-reload<br/>SHA-256 hash| Config
     Config -->|Mount| Export
     ExpA -->|Scrape| Prom
     ExpB -->|Scrape| Prom
@@ -109,7 +109,7 @@ graph TB
     TE1 -->|Expose metrics| Prom
     TE2 -->|Expose metrics| Prom
     Rules -->|Mount| Prom
-    Prom -->|Evaluate rules\ngroup_left matching| Prom
+    Prom -->|Evaluate rules<br/>group_left matching| Prom
     Prom -->|Fire alerts| AM
     AM -->|Route & Deduplicate| Slack
 ```
@@ -1025,12 +1025,12 @@ v0.11.0 implemented `migrate_rule.py` v4, upgrading the migration tool's core fr
 
 ```mermaid
 flowchart LR
-    A["Original PromQL\nstring"] --> B["promql_parser\n.parse()"]
-    B -->|"read-only AST"| C["walk_ast()\nCollect VectorSelector\nnodes"]
-    C --> D["rewrite_expr()\n1. custom_ prefix\n2. tenant label"]
-    D --> E["Reparse +\nprettify()"]
-    E -->|"✅ Valid"| F["Output\nRewritten PromQL"]
-    B -->|"❌ Parse fails"| G["Fallback\nRegex path"]
+    A["Original PromQL<br/>string"] --> B["promql_parser<br/>.parse()"]
+    B -->|"read-only AST"| C["walk_ast()<br/>Collect VectorSelector<br/>nodes"]
+    C --> D["rewrite_expr()<br/>1. custom_ prefix<br/>2. tenant label"]
+    D --> E["Reparse +<br/>prettify()"]
+    E -->|"✅ Valid"| F["Output<br/>Rewritten PromQL"]
+    B -->|"❌ Parse fails"| G["Fallback<br/>Regex path"]
     E -->|"❌ Reparse fails"| G
 
     style F fill:#c8e6c9,stroke:#2e7d32

@@ -17,14 +17,14 @@
 
 ```mermaid
 flowchart TD
-    Start["開始遷移"] --> Q1{"有既有\nPrometheus\nalert rules?"}
-    Q1 -->|"沒有"| S1["scaffold_tenant.py\n互動式產生配置"]
+    Start["開始遷移"] --> Q1{"有既有<br/>Prometheus<br/>alert rules?"}
+    Q1 -->|"沒有"| S1["scaffold_tenant.py<br/>互動式產生配置"]
     Q1 -->|"有"| Q2{"規則數量?"}
-    Q2 -->|"< 100 條"| S2["migrate_rule.py\n--dry-run 預覽"]
-    Q2 -->|"100+ 條"| S3["migrate_rule.py\n--triage 分類"]
-    S2 --> D1["檢視輸出 →\nkubectl apply"]
-    S3 --> S4["Shadow Monitoring\nvalidate_migration.py"]
-    S4 --> S5["漸進切換\n(數週並行觀察)"]
+    Q2 -->|"< 100 條"| S2["migrate_rule.py<br/>--dry-run 預覽"]
+    Q2 -->|"100+ 條"| S3["migrate_rule.py<br/>--triage 分類"]
+    S2 --> D1["檢視輸出 →<br/>kubectl apply"]
+    S3 --> S4["Shadow Monitoring<br/>validate_migration.py"]
+    S4 --> S5["漸進切換<br/>(數週並行觀察)"]
     S1 --> Done["✅ 完成"]
     D1 --> Done
     S5 --> Done

@@ -18,15 +18,15 @@ In practice, however, some tenant alerting requirements go beyond simple thresho
 
 ```mermaid
 flowchart TD
-    A["I need a new alert"] --> B{"Existing metric +\ndifferent threshold?"}
-    B -- YES --> T1["Tier 1 — Standard\nModify tenant.yaml\nCoverage ~80-85%"]
-    B -- NO --> C{"Compound condition\non existing metrics?"}
-    C -- YES --> D{"Matching\nPre-packaged Scenario?"}
-    D -- YES --> T2a["Tier 2 — Pre-packaged\nEnable that Scenario"]
+    A["I need a new alert"] --> B{"Existing metric +<br/>different threshold?"}
+    B -- YES --> T1["Tier 1 — Standard<br/>Modify tenant.yaml<br/>Coverage ~80-85%"]
+    B -- NO --> C{"Compound condition<br/>on existing metrics?"}
+    C -- YES --> D{"Matching<br/>Pre-packaged Scenario?"}
+    D -- YES --> T2a["Tier 2 — Pre-packaged<br/>Enable that Scenario"]
     D -- NO --> E{"Common need?"}
-    E -- YES --> T2b["Tier 2 — Pre-packaged\nDomain Expert creates new Scenario\nCoverage ~10-15%"]
-    E -- NO --> T3["Tier 3 — Custom\nChange Request process\nTarget ≤5% of rules"]
-    C -- NO --> F["Evaluate whether it falls\nwithin platform scope"]
+    E -- YES --> T2b["Tier 2 — Pre-packaged<br/>Domain Expert creates new Scenario<br/>Coverage ~10-15%"]
+    E -- NO --> T3["Tier 3 — Custom<br/>Change Request process<br/>Target ≤5% of rules"]
+    C -- NO --> F["Evaluate whether it falls<br/>within platform scope"]
 
     style T1 fill:#d4edda,stroke:#28a745
     style T2a fill:#cce5ff,stroke:#007bff
@@ -223,17 +223,17 @@ Quarterly Custom Rule Review (recommended to combine with quarterly SLA review).
 
 ```mermaid
 flowchart TD
-    A["Tier 3 Custom Rule\nQuarterly Review"] --> B{"Multiple tenants\nrequesting similar\nfunctionality?"}
-    B -- YES --> C["Domain Expert evaluates\nabstraction into Tier 2"]
+    A["Tier 3 Custom Rule<br/>Quarterly Review"] --> B{"Multiple tenants<br/>requesting similar<br/>functionality?"}
+    B -- YES --> C["Domain Expert evaluates<br/>abstraction into Tier 2"]
     C --> C1["Write business semantics docs"]
     C1 --> C2["Move into appropriate Rule Pack"]
-    C2 --> C3["Mark original Tier 3 as deprecated\nSet expiry"]
-    B -- NO --> D{"Past\nexpiry date?"}
+    C2 --> C3["Mark original Tier 3 as deprecated<br/>Set expiry"]
+    B -- NO --> D{"Past<br/>expiry date?"}
     D -- YES --> E["Notify tenant owner"]
-    E --> E1["No response in 14 days\n→ Auto-disable"]
-    D -- NO --> F{"Evaluation duration\nconsistently elevated?"}
+    E --> E1["No response in 14 days<br/>→ Auto-disable"]
+    D -- NO --> F{"Evaluation duration<br/>consistently elevated?"}
     F -- YES --> G["Platform Engineering notifies tenant"]
-    G --> G1["Not optimized in 30 days\n→ Forced removal"]
+    G --> G1["Not optimized in 30 days<br/>→ Forced removal"]
     F -- NO --> H["Retain until next review"]
 ```
 

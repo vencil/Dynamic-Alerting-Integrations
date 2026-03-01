@@ -23,22 +23,22 @@
 ```mermaid
 graph LR
     subgraph YP["Your Existing Prometheus"]
-        P["Prometheus\nServer"]
+        P["Prometheus<br/>Server"]
     end
 
     subgraph NS["Your Namespaces"]
-        T1["Tenant A\n(namespace)"]
-        T2["Tenant B\n(namespace)"]
+        T1["Tenant A<br/>(namespace)"]
+        T2["Tenant B<br/>(namespace)"]
     end
 
     subgraph DA["Dynamic Alerting (新增)"]
-        TE["threshold-exporter\n×2 HA :8080"]
-        RP["9 Rule Pack\nConfigMaps"]
+        TE["threshold-exporter<br/>×2 HA :8080"]
+        RP["9 Rule Pack<br/>ConfigMaps"]
     end
 
-    NS -->|"① relabel_configs\nnamespace → tenant"| P
-    TE -->|"② scrape job\n/metrics"| P
-    RP -->|"③ projected volume\n掛載至 /etc/prometheus/rules/"| P
+    NS -->|"① relabel_configs<br/>namespace → tenant"| P
+    TE -->|"② scrape job<br/>/metrics"| P
+    RP -->|"③ projected volume<br/>掛載至 /etc/prometheus/rules/"| P
 
     style DA fill:#e8f4fd,stroke:#1a73e8
     style YP fill:#f5f5f5,stroke:#666
