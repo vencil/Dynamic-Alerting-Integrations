@@ -37,17 +37,21 @@ COMMAND_MAP = {
     # Group A: Prometheus API only (portable)
     "check-alert": "check_alert.py",
     "baseline": "baseline_discovery.py",
+    "diagnose": "diagnose.py",
     "validate": "validate_migration.py",
+    # Group B: Prometheus + file system (config generation)
+    "generate-routes": "generate_alertmanager_routes.py",
     # Group C: File system only (offline)
     "migrate": "migrate_rule.py",
     "scaffold": "scaffold_tenant.py",
     "offboard": "offboard_tenant.py",
     "deprecate": "deprecate_rule.py",
     "lint": "lint_custom_rules.py",
+    "bump-docs": "bump_docs.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
-PROMETHEUS_COMMANDS = {"check-alert", "baseline", "validate"}
+PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate"}
 
 
 def print_usage():

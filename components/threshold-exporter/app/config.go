@@ -79,22 +79,47 @@ type ScheduledValue struct {
 }
 
 // UnmarshalYAML implements custom YAML unmarshalling for ScheduledValue.
-// Supports scalar strings (backward compatible) and mapping with default+overrides.
+// Supports three forms:
+//  1. Scalar string (backward compatible): "80"
+//  2. Structured mapping with default+overrides: {default: "80", overrides: [...]}
+//  3. Arbitrary mapping (e.g., _routing): {receiver: "...", group_wait: "30s"}
+//     → serialized back to YAML string and stored in Default for downstream parsing
 func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.ScalarNode {
 		sv.Default = value.Value
 		return nil
 	}
 	if value.Kind == yaml.MappingNode {
-		var structured struct {
-			Default   string              `yaml:"default"`
-			Overrides []TimeWindowOverride `yaml:"overrides"`
+		// Check if this mapping has a "default" key (structured ScheduledValue)
+		hasDefault := false
+		for i := 0; i < len(value.Content)-1; i += 2 {
+			if value.Content[i].Value == "default" {
+				hasDefault = true
+				break
+			}
 		}
-		if err := value.Decode(&structured); err != nil {
+		if hasDefault {
+			var structured struct {
+				Default   string              `yaml:"default"`
+				Overrides []TimeWindowOverride `yaml:"overrides"`
+			}
+			if err := value.Decode(&structured); err != nil {
+				return err
+			}
+			sv.Default = structured.Default
+			sv.Overrides = structured.Overrides
+			return nil
+		}
+		// Arbitrary mapping (e.g., _routing): serialize back to YAML string
+		var raw interface{}
+		if err := value.Decode(&raw); err != nil {
 			return err
 		}
-		sv.Default = structured.Default
-		sv.Overrides = structured.Overrides
+		out, err := yaml.Marshal(raw)
+		if err != nil {
+			return fmt.Errorf("ScheduledValue: failed to re-serialize mapping: %w", err)
+		}
+		sv.Default = string(out)
 		return nil
 	}
 	return fmt.Errorf("ScheduledValue: unsupported YAML node kind %d", value.Kind)
@@ -501,8 +526,12 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 
 // RoutingConfig represents a tenant's alert routing preferences.
 // Used by generate_alertmanager_routes.py to produce Alertmanager route/receiver fragments.
-// The Go exporter validates guardrails but does NOT emit metrics — routing config is
-// consumed by the external tooling, not by Prometheus.
+//
+// NOTE: ResolveRouting() is currently not called by the exporter (routing config is
+// consumed by the Python tooling, not by Prometheus). It is retained as:
+//   - Guardrail reference implementation (must stay consistent with Python's GUARDRAILS)
+//   - Foundation for potential future routing metrics (e.g., user_routing_configured{tenant})
+//   - Validation test coverage (TestResolveRouting_* tests verify YAML round-trip fidelity)
 //
 // Tenant config:
 //
@@ -661,9 +690,8 @@ func parsePromDuration(s string) (time.Duration, error) {
 
 // formatDuration formats a time.Duration as a human-readable Prometheus-style string.
 func formatDuration(d time.Duration) string {
-	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
-		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
-	}
+	// NOTE: Prometheus/Alertmanager duration format only supports s/m/h (not d/w/y).
+	// Do NOT convert to days even if evenly divisible.
 	if d >= time.Hour && d%time.Hour == 0 {
 		return fmt.Sprintf("%dh", int(d/time.Hour))
 	}

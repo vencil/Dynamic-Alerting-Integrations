@@ -2042,6 +2042,77 @@ func TestResolveAt_SkipsRoutingKey(t *testing.T) {
 	}
 }
 
+// TestScheduledValue_RoutingMapRoundTrip verifies that _routing nested maps
+// survive YAML unmarshalling → ScheduledValue → ResolveRouting pipeline.
+// This is the integration path: YAML file → UnmarshalYAML → ResolveRouting.
+func TestScheduledValue_RoutingMapRoundTrip(t *testing.T) {
+	yamlInput := `
+defaults:
+  mysql_connections: 80
+tenants:
+  db-a:
+    mysql_connections: "70"
+    _routing:
+      receiver: "https://webhook.example.com/alerts"
+      group_wait: "30s"
+      group_by: ["alertname", "tenant"]
+      repeat_interval: "4h"
+`
+	var cfg ThresholdConfig
+	if err := yaml.Unmarshal([]byte(yamlInput), &cfg); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	sv, exists := cfg.Tenants["db-a"]["_routing"]
+	if !exists {
+		t.Fatal("_routing key not found after unmarshal")
+	}
+	if sv.Default == "" {
+		t.Fatal("_routing ScheduledValue.Default is empty — nested map was lost during unmarshalling")
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 routing config, got %d", len(resolved))
+	}
+
+	rc := resolved[0]
+	if rc.Receiver != "https://webhook.example.com/alerts" {
+		t.Errorf("receiver = %q, want https://webhook.example.com/alerts", rc.Receiver)
+	}
+	if rc.GroupWait != "30s" {
+		t.Errorf("group_wait = %q, want 30s", rc.GroupWait)
+	}
+	if rc.RepeatInterval != "4h" {
+		t.Errorf("repeat_interval = %q, want 4h", rc.RepeatInterval)
+	}
+	if len(rc.GroupBy) != 2 || rc.GroupBy[0] != "alertname" || rc.GroupBy[1] != "tenant" {
+		t.Errorf("group_by = %v, want [alertname tenant]", rc.GroupBy)
+	}
+}
+
+// TestFormatDuration_NoDay verifies formatDuration never outputs "d" suffix
+// (Prometheus/Alertmanager only supports s/m/h).
+func TestFormatDuration_NoDay(t *testing.T) {
+	tests := []struct {
+		input time.Duration
+		want  string
+	}{
+		{72 * time.Hour, "72h"},
+		{24 * time.Hour, "24h"},
+		{48 * time.Hour, "48h"},
+		{1 * time.Hour, "1h"},
+		{5 * time.Minute, "5m"},
+		{30 * time.Second, "30s"},
+	}
+	for _, tt := range tests {
+		got := formatDuration(tt.input)
+		if got != tt.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 // ============================================================
 // Helpers
 // ============================================================

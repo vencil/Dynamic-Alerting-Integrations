@@ -52,10 +52,10 @@ class TestBuildRules(unittest.TestCase):
         self.assertTrue(any("da-tools" in f for f in tool_files))
 
     def test_platform_rules_reference_chart(self):
-        """Platform 規則應包含 Chart.yaml。"""
+        """Chart.yaml 版號規則應存在於 exporter rules（chart 版號 = exporter 版號）。"""
         rules = bump_docs._build_rules()
-        plat_files = [r["file"] for r in rules["platform"]]
-        self.assertTrue(any("Chart.yaml" in f for f in plat_files))
+        exporter_files = [r["file"] for r in rules["exporter"]]
+        self.assertTrue(any("Chart.yaml" in f for f in exporter_files))
 
 
 class TestApplyRulesCheckOnly(unittest.TestCase):

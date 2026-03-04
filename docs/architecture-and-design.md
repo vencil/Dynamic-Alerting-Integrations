@@ -406,12 +406,18 @@ tenants:
 
 ```yaml
 inhibit_rules:
-  # Severity Dedup: critical 觸發時壓制同 metric_group 的 warning 通知
+  # Severity Dedup: per-tenant inhibit rules (由 generate_alertmanager_routes.py 產出)
+  # 僅 _severity_dedup: "enable" (預設) 的 tenant 會產出規則
+  # _severity_dedup: "disable" 的 tenant 不會有對應規則 → 兩種通知都收到
   - source_matchers:
       - severity="critical"
+      - metric_group=~".+"
+      - tenant="db-a"
     target_matchers:
       - severity="warning"
-    equal: ["tenant", "metric_group"]
+      - metric_group=~".+"
+      - tenant="db-a"
+    equal: ["metric_group"]
 
   # Silent Mode: 壓制 warning 通知
   - source_matchers:
@@ -434,6 +440,15 @@ v1.2.0 新增 **Severity Dedup**，解決「critical 觸發時 warning 的 TSDB 
 
 **設計變更**：Auto-Suppression 從 PromQL 層（`unless critical`）移至 Alertmanager 層（`inhibit_rules`）。TSDB 永遠同時記錄 warning 和 critical，dedup 只控制通知行為。
 
+**Per-Tenant 控制機制**
+
+v1.2.0 採用 per-tenant inhibit rules 實現可選化：
+
+1. `generate_alertmanager_routes.py` 掃描所有 tenant YAML 的 `_severity_dedup` 設定
+2. 對每個 dedup enabled 的 tenant 產出一條專屬 inhibit rule（帶 `tenant="<name>"` matcher）
+3. `_severity_dedup: "disable"` 的 tenant 不產出 rule → 兩種通知都收到
+4. Exporter 仍輸出 `user_severity_dedup{tenant, mode}` metric → Prometheus sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示各 tenant dedup 狀態
+
 **行為矩陣**
 
 | 設定 | TSDB warning | TSDB critical | Warning 通知 | Critical 通知 |
@@ -441,7 +456,7 @@ v1.2.0 新增 **Severity Dedup**，解決「critical 觸發時 warning 的 TSDB 
 | `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "connections"`。
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"` 確保無 `metric_group` 的 alert（如 `MariaDBDown`）不會參與 dedup。
 
 **Tenant 配置**
 
@@ -452,9 +467,18 @@ tenants:
     _severity_dedup: "disable"           # 兩種通知都收到
 ```
 
+**產出 Alertmanager 設定**
+
+```bash
+python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+# 輸出包含 per-tenant inhibit_rules section，合併至 Alertmanager config
+```
+
 ### 2.9 Alert Routing 客製化 (Config-Driven Routing)
 
-Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver YAML fragment。
+Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver + inhibit_rules YAML fragment。
+
+> **v1.2.0 限制**：目前 receiver 僅支援 `webhook_configs`。Slack、Email、Teams 等 native receiver types 規劃於 v1.3.0 擴充。
 
 **Schema**
 

@@ -7,8 +7,8 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
 - **Prometheus**: Projected Volume 掛載 10 個 Rule Pack (`optional: true`)。Threshold normalization 用 `max by(tenant)` 防 HA 翻倍；Data normalization 依語義選擇聚合方式（connections 用 `max`，rate/ratio 用 `sum`）
 - **三態運營模式**: Normal（預設）/ Silent（`_silent_mode`，TSDB 有紀錄但不通知）/ Maintenance（`_state_maintenance`，完全不觸發）
-- **Severity Dedup**: Alertmanager inhibit（非 PromQL unless）。`metric_group` label 配對 warning/critical，sentinel `TenantSeverityDedupEnabled` 控制啟停。TSDB 永遠完整
-- **Alert Routing**: Tenant YAML `_routing` section → `generate_alertmanager_routes.py` 產出 Alertmanager config fragment。Timing guardrails 平台強制
+- **Severity Dedup**: Per-tenant Alertmanager inhibit（非 PromQL unless）。`metric_group` label 配對 warning/critical，`generate_alertmanager_routes.py` 產出 per-tenant inhibit rules。Sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示。TSDB 永遠完整
+- **Alert Routing**: Tenant YAML `_routing` section → `generate_alertmanager_routes.py` 產出 Alertmanager route + receiver + inhibit_rules fragment。Timing guardrails 平台強制。v1.2.0 僅支援 `webhook_configs`
 - **Enterprise**: Prefix 隔離 (`custom_`)、Metric Dictionary、Triage Mode、Shadow Monitoring
 - **Distribution**: OCI registry (`oci://ghcr.io/vencil/charts/threshold-exporter`) + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`)
 - **Load Injection**: `run_load.sh` 支援 connections / cpu / stress-ng / composite 四種負載類型，整合進 demo + scenario
@@ -22,16 +22,15 @@ v1.2.0 三大 User Feedback 功能已全部實作完成：
 | 代號 | 功能 | 狀態 | 關鍵變更 |
 |------|------|------|----------|
 | F1 | Tenant-NS 彈性映射 | ✅ Docs only | `architecture-and-design.md` §2.3 + `byo-prometheus-integration.md`。結論：只需 relabel_configs，不需改 code |
-| F2a | Severity Dedup 可選化 | ✅ Code + Docs | PromQL `unless critical` → Alertmanager `inhibit_rules`。8 個 rule pack 已清除 unless + 加入 `metric_group` label |
-| F3 | Alert Routing 客製化 | ✅ Code + Docs | `_routing` config → Go ResolveRouting() + `generate_alertmanager_routes.py` |
+| F2a | Severity Dedup 可選化 | ✅ Code + Docs | PromQL `unless critical` → per-tenant Alertmanager `inhibit_rules`。`generate_alertmanager_routes.py` 掃描 `_severity_dedup` 產出 per-tenant rules |
+| F3 | Alert Routing 客製化 | ✅ Code + Docs | `_routing` config → `generate_alertmanager_routes.py` 產出 route + receiver + inhibit_rules。v1.2.0 限 webhook |
 
 **待完成項目**：
-- Go test 需在 Dev Container 執行 `go test ./...` 驗證（Cowork VM 無 Go 環境）
 - F2b：Silent Mode 行為需與終端用戶再確認（Owner 已表示「可以，但要給 user 再確認」）
 
 ### v1.2.0 關鍵技術決策
 
-1. **Severity Dedup 架構**：dedup 從 PromQL 移到 Alertmanager，TSDB 永遠有完整 warning+critical 紀錄。機制：exporter 輸出 `user_severity_dedup` metric → Prometheus sentinel alert → Alertmanager inhibit source
+1. **Severity Dedup 架構**：dedup 從 PromQL 移到 Alertmanager，TSDB 永遠有完整 warning+critical 紀錄。機制：`generate_alertmanager_routes.py` 掃描 `_severity_dedup` → 產出 per-tenant inhibit rules（帶 `tenant="<name>"` + `metric_group=~".+"` matcher）。Sentinel `TenantSeverityDedupEnabled` 保留供 Grafana 面板顯示
 2. **metric_group label**：warning 和 critical 的 alertname 不同，Alertmanager `equal: ["alertname"]` 無法配對，改用 `metric_group` label（如 `connections`, `cpu`）
 3. **Routing Guardrails**：`group_wait` 5s–5m、`group_interval` 5s–5m、`repeat_interval` 1m–72h，Go + Python 兩端一致
 4. **Sentinel Alert 模式**：exporter flag metric → Prometheus fires sentinel → Alertmanager inhibit。已用於 silent mode (`TenantSilentMode`) 和 severity dedup (`TenantSeverityDedupEnabled`)
@@ -82,7 +81,7 @@ v1.2.0 三大 User Feedback 功能已全部實作完成：
 - `baseline_discovery.py <--tenant NAME> [--duration S --interval S --metrics LIST]`: 負載觀測 + 閾值建議
 - `bump_docs.py [--platform VER] [--exporter VER] [--tools VER] [--check]`: 版號一致性管理 (三條版號線批次更新 + CI lint)
 - `lint_custom_rules.py <path...> [--policy FILE] [--ci]`: Custom Rule deny-list linter (治理合規檢查)
-- `generate_alertmanager_routes.py --config-dir <dir> [-o FILE] [--dry-run]`: Tenant YAML → Alertmanager route+receiver fragment
+- `generate_alertmanager_routes.py --config-dir <dir> [-o FILE] [--dry-run]`: Tenant YAML → Alertmanager route+receiver+inhibit_rules fragment（含 per-tenant severity dedup inhibit rules）
 - `metric-dictionary.yaml`: 啟發式指標對照字典
 
 ## 共用函式庫 (scripts/_lib.sh)

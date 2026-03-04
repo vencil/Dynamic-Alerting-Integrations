@@ -700,19 +700,19 @@ class TestAutoSuppression(unittest.TestCase):
         return [warn_r, crit_r]
 
     def test_basic_pairing(self):
-        """基本配對: warning + critical → warning 應有雙層 unless。"""
+        """基本配對: warning + critical → 兩者都應有 metric_group label。"""
         results = self._make_pair()
         n = migrate_rule.apply_auto_suppression(results)
         self.assertEqual(n, 1)
 
+        # v1.2.0: 不再修改 PromQL，只加 metric_group label
+        warn_labels = results[0].alert_rules[0]["labels"]
+        crit_labels = results[1].alert_rules[0]["labels"]
+        self.assertEqual(warn_labels["metric_group"], "connections")
+        self.assertEqual(crit_labels["metric_group"], "connections")
+        # PromQL 不應被修改（仍只有 maintenance unless）
         warn_expr = results[0].alert_rules[0]["expr"]
-        # 應有兩個 unless
-        self.assertEqual(warn_expr.count("unless on(tenant)"), 2)
-        # 第一個 unless 是 maintenance
-        self.assertIn('user_state_filter{filter="maintenance"}', warn_expr)
-        # 第二個 unless 引用 critical threshold
-        self.assertIn("alert_threshold:custom_mysql_connections_critical",
-                       warn_expr)
+        self.assertEqual(warn_expr.count("unless on(tenant)"), 1)
 
     def test_critical_not_modified(self):
         """critical 的 expr 不應被修改。"""
@@ -774,7 +774,7 @@ class TestAutoSuppression(unittest.TestCase):
         self.assertEqual(n, 0)
 
     def test_multiple_pairs(self):
-        """多組配對: 各自獨立配對。"""
+        """多組配對: 各自獨立配對，各有 metric_group label。"""
         results = (
             self._make_pair(base_metric="metric_a", warn_val="10", crit_val="20")
             + self._make_pair(base_metric="metric_b", warn_val="30", crit_val="60")
@@ -782,33 +782,32 @@ class TestAutoSuppression(unittest.TestCase):
         n = migrate_rule.apply_auto_suppression(results)
         self.assertEqual(n, 2)
 
-        # 兩個 warning 都有雙層 unless
+        # v1.2.0: 所有 warning+critical 都應有 metric_group label
+        groups_seen = set()
         for r in results:
-            if r.severity == "warning":
-                self.assertEqual(
-                    r.alert_rules[0]["expr"].count("unless on(tenant)"), 2
-                )
+            mg = r.alert_rules[0]["labels"].get("metric_group")
+            self.assertIsNotNone(mg, f"{r.alert_name} missing metric_group")
+            groups_seen.add(mg)
+        self.assertEqual(groups_seen, {"a", "b"})
 
     def test_operator_preserved(self):
-        """< 運算子: suppression 子句應使用相同運算子。"""
+        """< 運算子: metric_group label 與運算子無關，仍應正確配對。"""
         results = self._make_pair(op="<", warn_val="100", crit_val="50")
-        migrate_rule.apply_auto_suppression(results)
+        n = migrate_rule.apply_auto_suppression(results)
+        self.assertEqual(n, 1)
+        # v1.2.0: 只驗證 metric_group label 被加上
+        warn_labels = results[0].alert_rules[0]["labels"]
+        self.assertEqual(warn_labels["metric_group"], "connections")
+        # PromQL 仍只有原始的 1 個 unless (maintenance)
         warn_expr = results[0].alert_rules[0]["expr"]
-        # 應有 "< on(tenant) group_left" 在 suppression 子句
-        lines = warn_expr.split("\n")
-        # 尋找 suppression 區塊中的運算子
-        suppression_ops = [l.strip() for l in lines
-                           if "on(tenant) group_left" in l]
-        # 第一個是原始 alert expr，第二個是 suppression
-        self.assertEqual(len(suppression_ops), 2)
-        self.assertTrue(suppression_ops[1].startswith("<"))
+        self.assertEqual(warn_expr.count("unless on(tenant)"), 1)
 
     def test_notes_added(self):
-        """配對後 warning result 應有 Auto-Suppression 備註。"""
+        """配對後 warning result 應有 Severity Dedup 備註。"""
         results = self._make_pair()
         migrate_rule.apply_auto_suppression(results)
         notes = results[0].notes
-        self.assertTrue(any("Auto-Suppression" in n for n in notes))
+        self.assertTrue(any("Severity Dedup" in n for n in notes))
 
     def test_unparseable_skipped(self):
         """unparseable 規則不參與配對。"""
@@ -825,7 +824,7 @@ class TestAutoSuppression(unittest.TestCase):
         self.assertEqual(n, 0)
 
     def test_write_outputs_with_suppression(self):
-        """端到端: write_outputs 產出的 alert YAML 包含雙層 unless。"""
+        """端到端: write_outputs 產出的 alert YAML 包含 metric_group label。"""
         import tempfile
 
         results = self._make_pair()
@@ -838,11 +837,10 @@ class TestAutoSuppression(unittest.TestCase):
             with open(alert_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # warning alert 應有雙層 unless
-            self.assertIn("alert_threshold:custom_mysql_connections_critical",
-                          content)
-            self.assertEqual(content.count("unless on(tenant)"), 3)
-            # 3 = warning(2) + critical(1)
+            # v1.2.0: alert YAML 應包含 metric_group label
+            self.assertIn("metric_group: connections", content)
+            # unless 數量: warning(1 maintenance) + critical(1 maintenance) = 2
+            self.assertEqual(content.count("unless on(tenant)"), 2)
 
     def test_dry_run_with_suppression(self):
         """dry-run path: print_dry_run 不應因 suppressed expr 而崩潰。"""
@@ -863,12 +861,13 @@ class TestAutoSuppression(unittest.TestCase):
         self.assertIn("TestHighConnCritical", output)
 
     def test_no_prefix_pairing(self):
-        """prefix="" 時也能正確配對。"""
+        """prefix="" 時也能正確配對，metric_group label 仍被加上。"""
         results = self._make_pair(prefix="")
         n = migrate_rule.apply_auto_suppression(results)
         self.assertEqual(n, 1)
-        warn_expr = results[0].alert_rules[0]["expr"]
-        self.assertIn("alert_threshold:mysql_connections_critical", warn_expr)
+        # v1.2.0: 驗證 metric_group label（不再檢查 PromQL 修改）
+        warn_labels = results[0].alert_rules[0]["labels"]
+        self.assertEqual(warn_labels["metric_group"], "connections")
 
 
 if __name__ == "__main__":

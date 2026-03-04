@@ -11,22 +11,23 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **`_silent_mode` tenant 配置**：新增 `"warning"` / `"critical"` / `"all"` / `"disable"` 四個值。Alert 照常觸發（TSDB 有 ALERTS 紀錄），但 Alertmanager 攔截通知。
 * **`user_silent_mode` 新指標**：`user_silent_mode{tenant, target_severity}` flag gauge，由 threshold-exporter 輸出。
 * **`rule-pack-operational.yaml` 新 Rule Pack**：`TenantSilentWarning` + `TenantSilentCritical` + `TenantSeverityDedupEnabled` sentinel alerts。
-* **Alertmanager inhibit_rules**：Silent Mode + Severity Dedup 共四條 inhibit rules。
+* **Alertmanager inhibit_rules**：Silent Mode inhibit（sentinel-based）+ Severity Dedup inhibit（per-tenant generated）。
 
 ### 🔀 Severity Dedup (F2a — Auto-Suppression 可選化)
 
 * **問題**：v1.1.0 的 PromQL `unless critical` 在 critical 觸發時消滅 warning 的 TSDB 紀錄，TSDB 完全無紀錄。
 * **解法**：Dedup 從 PromQL 層移到 Alertmanager 層。TSDB 永遠完整，dedup 只控制通知行為。
+* **Per-Tenant 控制**：`generate_alertmanager_routes.py` 掃描所有 tenant 的 `_severity_dedup` 設定，為每個 enabled tenant 產出專屬 inhibit rule（帶 `tenant="<name>"` + `metric_group=~".+"` matcher）。`_severity_dedup: "disable"` 的 tenant 不產出 rule → 兩種通知都收到。
 * **`_severity_dedup` tenant 配置**：`"enable"`（預設）/ `"disable"`。
-* **`user_severity_dedup` 新指標**：`user_severity_dedup{tenant, mode}` flag gauge。
-* **`metric_group` label**：Alert rule 新增 `metric_group` label，讓 Alertmanager 正確配對 warning/critical（因 alertname 不同）。
+* **`user_severity_dedup` 新指標**：`user_severity_dedup{tenant, mode}` flag gauge，Sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示。
+* **`metric_group` label**：Alert rule 新增 `metric_group` label，讓 per-tenant inhibit rules 正確配對 warning/critical（因 alertname 不同）。
 * **Rule Pack 更新**：MariaDB rule pack 移除 PromQL `unless critical` 子句，改為 `metric_group` label 配對。
 
 ### 🔔 Alert Routing (F3 — Config-Driven Routing)
 
 * **`_routing` tenant 配置**：receiver (webhook URL) + group_by + group_wait + group_interval + repeat_interval。
 * **Timing Guardrails**：group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h，超限自動 clamp。
-* **`generate_alertmanager_routes.py` 新工具**：讀取 conf.d/ 所有 tenant YAML，產出 Alertmanager route tree + receivers YAML fragment。
+* **`generate_alertmanager_routes.py` 新工具**：讀取 conf.d/ 所有 tenant YAML，產出 Alertmanager route + receiver + per-tenant severity dedup inhibit_rules YAML fragment。
 * **Silent Mode bypass**：inhibit_rules 在 route evaluation 之前攔截，silent tenant 的 routing 自動 bypass。
 
 ### 🛠️ Tooling
