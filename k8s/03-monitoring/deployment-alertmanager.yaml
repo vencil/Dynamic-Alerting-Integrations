@@ -21,6 +21,7 @@ spec:
           args:
             - "--config.file=/etc/alertmanager/alertmanager.yml"
             - "--storage.path=/alertmanager"
+            - "--web.enable-lifecycle"
           ports:
             - containerPort: 9093
               name: http

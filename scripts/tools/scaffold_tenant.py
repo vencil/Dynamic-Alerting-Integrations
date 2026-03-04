@@ -247,7 +247,7 @@ def generate_defaults(selected_dbs):
     return {"defaults": defaults, "state_filters": state_filters}
 
 
-def generate_tenant(tenant_name, selected_dbs, overrides, interactive=False):
+def generate_tenant(tenant_name, selected_dbs, interactive=False):
     """Generate tenant YAML content."""
     tenant_config = {}
 
@@ -301,26 +301,43 @@ def generate_tenant(tenant_name, selected_dbs, overrides, interactive=False):
     # Alert routing: tenant-managed notification destination
     if interactive:
         print("\n  告警路由 (Alert Routing):")
-        print("    設定通知目的地 (webhook URL)，空白跳過使用平台預設")
-        receiver = input("  Webhook URL (例如 https://hooks.slack.com/...): ").strip()
-        if receiver:
-            routing = {"receiver": receiver}
+        print("    設定通知目的地，空白跳過使用平台預設")
+        print("    支援類型: webhook | email | slack | teams")
+        receiver_type = input("  Receiver type (預設 webhook): ").strip().lower() or "webhook"
+        receiver_obj = None
+        if receiver_type == "webhook":
+            url = input("  Webhook URL: ").strip()
+            if url:
+                receiver_obj = {"type": "webhook", "url": url}
+        elif receiver_type == "email":
+            to = input("  Email to (逗號分隔): ").strip()
+            smarthost = input("  SMTP smarthost (例如 smtp.example.com:587): ").strip()
+            if to and smarthost:
+                receiver_obj = {"type": "email", "to": [t.strip() for t in to.split(",")],
+                                "smarthost": smarthost}
+        elif receiver_type == "slack":
+            api_url = input("  Slack API URL: ").strip()
+            if api_url:
+                receiver_obj = {"type": "slack", "api_url": api_url}
+                channel = input("  Channel (例如 #alerts，選填): ").strip()
+                if channel:
+                    receiver_obj["channel"] = channel
+        elif receiver_type == "teams":
+            webhook_url = input("  Teams Webhook URL: ").strip()
+            if webhook_url:
+                receiver_obj = {"type": "teams", "webhook_url": webhook_url}
+        else:
+            print(f"  WARN: unknown type '{receiver_type}', skipping routing")
+
+        if receiver_obj:
+            routing = {"receiver": receiver_obj}
 
             group_by = input("  Group by labels (逗號分隔，預設 alertname,tenant): ").strip()
-            if group_by:
-                routing["group_by"] = [g.strip() for g in group_by.split(",")]
-
-            group_wait = input("  Group wait (例如 30s，範圍 5s-5m，預設 30s): ").strip()
-            if group_wait:
-                routing["group_wait"] = group_wait
-
-            group_interval = input("  Group interval (例如 5m，範圍 5s-5m，預設 5m): ").strip()
-            if group_interval:
-                routing["group_interval"] = group_interval
-
-            repeat_interval = input("  Repeat interval (例如 4h，範圍 1m-72h，預設 4h): ").strip()
-            if repeat_interval:
-                routing["repeat_interval"] = repeat_interval
+            routing["group_by"] = ([g.strip() for g in group_by.split(",")]
+                                   if group_by else ["alertname", "tenant"])
+            routing["group_wait"] = input("  Group wait (預設 30s，範圍 5s-5m): ").strip() or "30s"
+            routing["group_interval"] = input("  Group interval (預設 5m，範圍 5s-5m): ").strip() or "5m"
+            routing["repeat_interval"] = input("  Repeat interval (預設 4h，範圍 1m-72h): ").strip() or "4h"
 
             tenant_config["_routing"] = routing
 
@@ -458,7 +475,7 @@ def run_interactive(output_dir):
     # Generate
     print("\n⚙️  正在生成...")
     defaults_data = generate_defaults(selected_dbs)
-    tenant_data = generate_tenant(tenant_name, selected_dbs, {}, interactive=interactive_thresholds)
+    tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=interactive_thresholds)
     report = generate_report(tenant_name, selected_dbs, output_dir)
 
     # Write
@@ -489,7 +506,7 @@ def run_non_interactive(args):
 
     print(f"⚙️  生成 {tenant_name} config (DBs: {', '.join(selected_dbs)})...")
     defaults_data = generate_defaults(selected_dbs)
-    tenant_data = generate_tenant(tenant_name, selected_dbs, {}, interactive=False)
+    tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=False)
 
     # Apply --silent-mode if specified
     silent_mode = getattr(args, "silent_mode", None)
@@ -506,7 +523,18 @@ def run_non_interactive(args):
     # ensuring generated config is complete for generate_alertmanager_routes.py
     routing_receiver = getattr(args, "routing_receiver", None)
     if routing_receiver:
-        routing = {"receiver": routing_receiver}
+        receiver_type = getattr(args, "routing_receiver_type", "webhook")
+        receiver_obj = {"type": receiver_type}
+        if receiver_type == "webhook":
+            receiver_obj["url"] = routing_receiver
+        elif receiver_type == "email":
+            receiver_obj["to"] = [t.strip() for t in routing_receiver.split(",")]
+            receiver_obj["smarthost"] = getattr(args, "routing_smarthost", None) or "localhost:25"
+        elif receiver_type == "slack":
+            receiver_obj["api_url"] = routing_receiver
+        elif receiver_type == "teams":
+            receiver_obj["webhook_url"] = routing_receiver
+        routing = {"receiver": receiver_obj}
 
         # group_by: use explicit value or platform default
         routing_group_by = getattr(args, "routing_group_by", None)
@@ -553,7 +581,12 @@ def main():
     parser.add_argument("--severity-dedup", choices=["enable", "disable"], default="enable",
                         help="Severity dedup: suppress warning notification when critical fires (default: enable)")
     parser.add_argument("--routing-receiver",
-                        help="Alert routing webhook URL (e.g., https://hooks.slack.com/...)")
+                        help="Alert routing receiver address (URL or email list depending on type)")
+    parser.add_argument("--routing-receiver-type", default="webhook",
+                        choices=["webhook", "email", "slack", "teams"],
+                        help="Receiver type (default: webhook)")
+    parser.add_argument("--routing-smarthost",
+                        help="SMTP smarthost for email receiver (e.g., smtp.example.com:587)")
     parser.add_argument("--routing-group-by",
                         help="Comma-separated group_by labels (e.g., alertname,severity)")
     parser.add_argument("--routing-group-wait",

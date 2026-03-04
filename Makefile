@@ -170,6 +170,10 @@ load-demo: ## 負載注入: 完整 Demo (stress-ng + connections → alert → c
 baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: make baseline-discovery TENANT=db-a)
 	@python3 ./scripts/tools/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
 
+validate-routes: ## 驗證 Alertmanager route config (CI lint 用)
+	@python3 ./scripts/tools/generate_alertmanager_routes.py \
+		--config-dir components/threshold-exporter/config/conf.d/ --validate
+
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/bump_docs.py --check
 

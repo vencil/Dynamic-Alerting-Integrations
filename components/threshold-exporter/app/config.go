@@ -533,21 +533,32 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 //   - Foundation for potential future routing metrics (e.g., user_routing_configured{tenant})
 //   - Validation test coverage (TestResolveRouting_* tests verify YAML round-trip fidelity)
 //
-// Tenant config:
+// Tenant config (v1.3.0 structured receiver):
 //
 //	_routing:
-//	  receiver: "https://webhook.example.com/alerts"
+//	  receiver:
+//	    type: "webhook"
+//	    url: "https://webhook.example.com/alerts"
 //	  group_by: ["alertname", "severity"]
 //	  group_wait: "30s"
 //	  group_interval: "1m"
 //	  repeat_interval: "4h"
 type RoutingConfig struct {
 	Tenant         string
-	Receiver       string            // webhook URL (required)
-	GroupBy        []string          // optional, platform default if absent
-	GroupWait      string            // optional, guardrail 5s–5m
-	GroupInterval  string            // optional, guardrail 5s–5m
-	RepeatInterval string            // optional, guardrail 1m–72h
+	ReceiverType   string                 // "webhook" | "email" | "slack" | "teams"
+	ReceiverConfig map[string]interface{} // type-specific config fields
+	GroupBy        []string               // optional, platform default if absent
+	GroupWait      string                 // optional, guardrail 5s–5m
+	GroupInterval  string                 // optional, guardrail 5s–5m
+	RepeatInterval string                 // optional, guardrail 1m–72h
+}
+
+// validReceiverTypes lists supported receiver types (must match Python RECEIVER_TYPES).
+var validReceiverTypes = map[string]bool{
+	"webhook": true,
+	"email":   true,
+	"slack":   true,
+	"teams":   true,
 }
 
 // Timing guardrail bounds for routing config.
@@ -594,11 +605,33 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 
 		rc := RoutingConfig{Tenant: tenant}
 
-		// Extract receiver (required)
-		if recv, ok := routingMap["receiver"].(string); ok && recv != "" {
-			rc.Receiver = recv
-		} else {
+		// Extract receiver (required, must be a map with 'type')
+		recvRaw, hasRecv := routingMap["receiver"]
+		if !hasRecv {
 			log.Printf("WARN: _routing for tenant=%s missing required 'receiver' field, skipping", tenant)
+			continue
+		}
+		recvMap, ok := recvRaw.(map[interface{}]interface{})
+		if !ok {
+			// Try map[string]interface{} (depends on YAML parser)
+			if rm, ok2 := recvRaw.(map[string]interface{}); ok2 {
+				rc.ReceiverConfig = rm
+			} else {
+				log.Printf("WARN: _routing for tenant=%s: 'receiver' must be a map with 'type', skipping", tenant)
+				continue
+			}
+		} else {
+			rc.ReceiverConfig = make(map[string]interface{}, len(recvMap))
+			for k, v := range recvMap {
+				if ks, ok := k.(string); ok {
+					rc.ReceiverConfig[ks] = v
+				}
+			}
+		}
+		if rtype, ok := rc.ReceiverConfig["type"].(string); ok && validReceiverTypes[rtype] {
+			rc.ReceiverType = rtype
+		} else {
+			log.Printf("WARN: _routing for tenant=%s: invalid or missing receiver 'type', skipping", tenant)
 			continue
 		}
 

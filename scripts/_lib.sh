@@ -12,6 +12,7 @@
 #   Port-forward — setup_port_forwards, cleanup_port_forwards
 #   Prometheus   — prom_query_value, get_alert_status, wait_for_alert
 #   Exporter     — get_exporter_metric, wait_exporter
+#   Alertmanager — reload_alertmanager
 #   環境檢查     — require_services
 # ============================================================
 
@@ -247,9 +248,6 @@ wait_exporter() {
 # 預設檢查: threshold-exporter, prometheus
 require_services() {
   local services=("${@:-threshold-exporter prometheus}")
-  if [ $# -eq 0 ]; then
-    services=(threshold-exporter prometheus)
-  fi
   for svc in "${services[@]}"; do
     if ! kubectl get pods -n monitoring -l "app=${svc}" 2>/dev/null | grep -q Running; then
       err "${svc} is not running. Run 'make setup' first."
@@ -257,4 +255,18 @@ require_services() {
     fi
   done
   log "✓ All required services are running"
+}
+
+# ── Alertmanager Reload ─────────────────────────────────────────
+# Requires --web.enable-lifecycle flag on Alertmanager (v1.3.0+)
+# and port-forward to localhost:9093.
+reload_alertmanager() {
+  local url="${1:-http://localhost:9093}"
+  log "Reloading Alertmanager at ${url}..."
+  if curl -sf -X POST "${url}/-/reload"; then
+    log "✓ Alertmanager reloaded"
+  else
+    err "✗ Alertmanager reload failed (is --web.enable-lifecycle enabled?)"
+    return 1
+  fi
 }

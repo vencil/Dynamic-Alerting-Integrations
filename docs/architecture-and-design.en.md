@@ -4,12 +4,12 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.2.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.3.0).
 
 **This document covers:**
 - System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
 - Config-driven configuration workflow
-- Governance model for Projected Volume and 9 Rule Packs
+- Governance model for Projected Volume and 10 Rule Packs
 - Performance analysis and scalability proof (including under-load benchmarks and Go micro-benchmarks)
 - High availability (HA) design
 - Governance, audit, and security compliance
@@ -35,7 +35,7 @@ graph TB
 
     subgraph DAP["Dynamic Alerting Platform"]
         TE["threshold-exporter<br/>×2 HA"]
-        PM["Prometheus<br/>+ 9 Rule Packs"]
+        PM["Prometheus<br/>+ 10 Rule Packs"]
         CM["ConfigMap<br/>threshold-config"]
     end
 
@@ -117,7 +117,7 @@ graph TB
 **Architecture highlights:**
 1. **Directory Scanner** scans the `conf.d/` directory, automatically discovering `_defaults.yaml` and tenant configuration files
 2. **threshold-exporter × 2 HA Replicas** read ConfigMap and output three-state Prometheus metrics
-3. **Projected Volume** mounts 9 independent rule packs, zero PR conflicts, each team independently owns their rules
+3. **Projected Volume** mounts 10 independent rule packs, zero PR conflicts, each team independently owns their rules
 4. **Prometheus** uses `group_left` vector matching to join with user thresholds, achieving O(M) complexity
 
 ---
@@ -1165,6 +1165,6 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v1.2.0 — 2026-03-01
+**Document version:** v1.3.0 — 2026-03-01
 **Last updated:** v1.0.0 GA Release — Document restructuring: completed features moved to main body (§2.4 Regex Dimensions, §2.5 Scheduled Thresholds, §4.7 Under-Load Benchmarks, §10 AST Migration Engine), Future Roadmap streamlined to unrealized items only. §4 Benchmark data updated to multi-round statistical measurements (idle ×5, scaling-curve ×3, Go micro-bench ×5).
 **Maintainer:** Platform Engineering Team

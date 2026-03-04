@@ -4,12 +4,12 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.2.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.3.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
 - Config-driven 配置驅動的工作流程
-- Projected Volume 與 9 個規則包 (Rule Packs) 的治理模型
+- Projected Volume 與 10 個規則包 (Rule Packs) 的治理模型
 - 性能分析與擴展性証明（含 Under-Load 基準測試與 Go Micro-Benchmark）
 - 高可用性 (HA) 設計
 - 治理、稽核、安全性合規
@@ -35,7 +35,7 @@ graph TB
 
     subgraph DAP["Dynamic Alerting Platform"]
         TE["threshold-exporter<br/>×2 HA"]
-        PM["Prometheus<br/>+ 9 Rule Packs"]
+        PM["Prometheus<br/>+ 10 Rule Packs"]
         CM["ConfigMap<br/>threshold-config"]
     end
 
@@ -478,7 +478,7 @@ python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry
 
 Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver + inhibit_rules YAML fragment。
 
-> **v1.2.0 限制**：目前 receiver 僅支援 `webhook_configs`。Slack、Email、Teams 等 native receiver types 規劃於 v1.3.0 擴充。
+> v1.3.0 起支援 webhook / email / slack / teams 四種 receiver type。Receiver 為結構化物件（`{type, ...fields}`），由 `generate_alertmanager_routes.py` 驗證必要欄位並產出對應 Alertmanager config。
 
 **Schema**
 
@@ -1377,6 +1377,6 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 ---
 
-**文件版本：** v1.2.0 — 2026-03-01
+**文件版本：** v1.3.0 — 2026-03-01
 **最後更新：** v1.0.0 GA Release — 文件重構 + 基準數據更新：§4 性能分析全面改為多輪統計量測（idle-state ×5, scaling-curve ×3, Go micro-benchmark ×5），報告 mean ± stddev / median (range)
 **維護者：** Platform Engineering Team

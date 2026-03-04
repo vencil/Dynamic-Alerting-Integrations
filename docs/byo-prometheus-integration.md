@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v1.2.0
+> **版本**：v1.3.0
 
 ---
 
@@ -18,7 +18,7 @@
 | 2 | 抓取 `threshold-exporter` | ~2 分鐘 |
 | 3 | 掛載黃金規則包 (Rule Packs) | ~5 分鐘 |
 
-整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 9 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
+整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 10 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
 
 ```mermaid
 graph LR
@@ -33,7 +33,7 @@ graph LR
 
     subgraph DA["Dynamic Alerting (新增)"]
         TE["threshold-exporter<br/>×2 HA :8080"]
-        RP["9 Rule Pack<br/>ConfigMaps"]
+        RP["10 Rule Pack<br/>ConfigMaps"]
     end
 
     NS -->|"① relabel_configs<br/>namespace → tenant"| P
@@ -378,17 +378,17 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 
 # ① 確認特定 alert 的狀態
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.2.0 check-alert MariaDBHighConnections db-a
+  ghcr.io/vencil/da-tools:1.3.0 check-alert MariaDBHighConnections db-a
 
 # ② 觀測現有指標，取得閾值建議
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.2.0 baseline --tenant db-a --duration 300
+  ghcr.io/vencil/da-tools:1.3.0 baseline --tenant db-a --duration 300
 
 # ③ 啟動 Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.2.0 validate --mapping /data/mapping.csv --watch --rounds 5
+  ghcr.io/vencil/da-tools:1.3.0 validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
 > **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull` 即可使用。詳見 [da-tools README](../components/da-tools/README.md)。

@@ -1845,7 +1845,9 @@ func TestResolveAt_SkipsSeverityDedupKey(t *testing.T) {
 // ============================================================
 
 func TestResolveRouting_ValidConfig(t *testing.T) {
-	routingYAML := `receiver: "https://webhook.example.com/alerts"
+	routingYAML := `receiver:
+  type: "webhook"
+  url: "https://webhook.example.com/alerts"
 group_by: ["alertname", "severity"]
 group_wait: "30s"
 group_interval: "1m"
@@ -1869,8 +1871,11 @@ repeat_interval: "4h"`
 	if rc.Tenant != "db-a" {
 		t.Errorf("expected tenant db-a, got %s", rc.Tenant)
 	}
-	if rc.Receiver != "https://webhook.example.com/alerts" {
-		t.Errorf("expected receiver URL, got %s", rc.Receiver)
+	if rc.ReceiverType != "webhook" {
+		t.Errorf("expected receiver type webhook, got %s", rc.ReceiverType)
+	}
+	if rc.ReceiverConfig["url"] != "https://webhook.example.com/alerts" {
+		t.Errorf("expected receiver url, got %v", rc.ReceiverConfig["url"])
 	}
 	if len(rc.GroupBy) != 2 || rc.GroupBy[0] != "alertname" || rc.GroupBy[1] != "severity" {
 		t.Errorf("unexpected group_by: %v", rc.GroupBy)
@@ -1888,7 +1893,9 @@ repeat_interval: "4h"`
 
 func TestResolveRouting_GuardrailClamp(t *testing.T) {
 	// group_wait below minimum (5s), repeat_interval above maximum (72h)
-	routingYAML := `receiver: "https://webhook.example.com/alerts"
+	routingYAML := `receiver:
+  type: "webhook"
+  url: "https://webhook.example.com/alerts"
 group_wait: "1s"
 repeat_interval: "100h"`
 
@@ -1950,10 +1957,14 @@ func TestResolveRouting_NoRoutingKey(t *testing.T) {
 }
 
 func TestResolveRouting_MultiTenant(t *testing.T) {
-	routingA := `receiver: "https://webhook-a.example.com/alerts"
+	routingA := `receiver:
+  type: "webhook"
+  url: "https://webhook-a.example.com/alerts"
 group_wait: "10s"`
 
-	routingB := `receiver: "https://webhook-b.example.com/alerts"
+	routingB := `receiver:
+  type: "webhook"
+  url: "https://webhook-b.example.com/alerts"
 repeat_interval: "2h"`
 
 	cfg := &ThresholdConfig{
@@ -1982,16 +1993,18 @@ repeat_interval: "2h"`
 		return resolved[i].Tenant < resolved[j].Tenant
 	})
 
-	if resolved[0].Tenant != "db-a" || resolved[0].Receiver != "https://webhook-a.example.com/alerts" {
+	if resolved[0].Tenant != "db-a" || resolved[0].ReceiverType != "webhook" {
 		t.Errorf("unexpected db-a config: %+v", resolved[0])
 	}
-	if resolved[1].Tenant != "db-b" || resolved[1].Receiver != "https://webhook-b.example.com/alerts" {
+	if resolved[1].Tenant != "db-b" || resolved[1].ReceiverType != "webhook" {
 		t.Errorf("unexpected db-b config: %+v", resolved[1])
 	}
 }
 
 func TestResolveRouting_MinimalConfig(t *testing.T) {
-	routingYAML := `receiver: "https://webhook.example.com/alerts"`
+	routingYAML := `receiver:
+  type: "webhook"
+  url: "https://webhook.example.com/alerts"`
 
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -2008,8 +2021,11 @@ func TestResolveRouting_MinimalConfig(t *testing.T) {
 	}
 
 	rc := resolved[0]
-	if rc.Receiver != "https://webhook.example.com/alerts" {
-		t.Errorf("expected receiver URL, got %s", rc.Receiver)
+	if rc.ReceiverType != "webhook" {
+		t.Errorf("expected receiver type webhook, got %s", rc.ReceiverType)
+	}
+	if rc.ReceiverConfig["url"] != "https://webhook.example.com/alerts" {
+		t.Errorf("expected receiver url, got %v", rc.ReceiverConfig["url"])
 	}
 	// Optional fields should be empty
 	if rc.GroupWait != "" || rc.GroupInterval != "" || rc.RepeatInterval != "" {
@@ -2053,7 +2069,9 @@ tenants:
   db-a:
     mysql_connections: "70"
     _routing:
-      receiver: "https://webhook.example.com/alerts"
+      receiver:
+        type: "webhook"
+        url: "https://webhook.example.com/alerts"
       group_wait: "30s"
       group_by: ["alertname", "tenant"]
       repeat_interval: "4h"
@@ -2077,8 +2095,8 @@ tenants:
 	}
 
 	rc := resolved[0]
-	if rc.Receiver != "https://webhook.example.com/alerts" {
-		t.Errorf("receiver = %q, want https://webhook.example.com/alerts", rc.Receiver)
+	if rc.ReceiverType != "webhook" {
+		t.Errorf("receiver type = %q, want webhook", rc.ReceiverType)
 	}
 	if rc.GroupWait != "30s" {
 		t.Errorf("group_wait = %q, want 30s", rc.GroupWait)

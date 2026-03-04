@@ -1,6 +1,6 @@
-# BYO Alertmanager 整合指南（藍圖）
+# BYO Alertmanager 整合指南
 
-> **版本**：v1.2.0（藍圖框架，v1.3.0 補完）
+> **版本**：v1.3.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -14,15 +14,33 @@ Dynamic Alerting 平台透過 Alertmanager 實現三大通知行為控制：
 |------|------|----------|
 | **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知 | Tenant YAML `_silent_mode` |
 | **Severity Dedup** | Per-tenant inhibit_rules（`metric_group` 配對） | Tenant YAML `_severity_dedup` |
-| **Alert Routing** | Per-tenant route + receiver | Tenant YAML `_routing` |
+| **Alert Routing** | Per-tenant route + receiver（webhook/email/slack/teams） | Tenant YAML `_routing` |
 
 所有 Alertmanager 配置 fragment 由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出。
 
 ---
 
-## 2. 最小整合步驟（概要）
+## 2. 整合步驟
 
-### Step 1: 確保 Alertmanager 已與 Prometheus 連接
+### Step 1: 啟用 Alertmanager Lifecycle API
+
+在 Alertmanager deployment 加入 `--web.enable-lifecycle` flag：
+
+```yaml
+args:
+  - "--config.file=/etc/alertmanager/alertmanager.yml"
+  - "--storage.path=/alertmanager"
+  - "--web.enable-lifecycle"
+```
+
+驗證：
+
+```bash
+kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
+curl -sf http://localhost:9093/-/ready && echo "OK"
+```
+
+### Step 2: 確保 Prometheus 連接 Alertmanager
 
 ```yaml
 # prometheus.yml
@@ -33,28 +51,48 @@ alerting:
             - "alertmanager.monitoring.svc.cluster.local:9093"
 ```
 
-### Step 2: 產出 Alertmanager Fragment
+### Step 3: 設定 Tenant Routing Config
 
-使用 `da-tools generate-routes` 從 tenant 配置目錄產出 route + receiver + inhibit_rules：
+在 tenant YAML 中定義 `_routing` section（v1.3.0 結構化 receiver）：
+
+```yaml
+# conf.d/db-a.yaml
+tenants:
+  db-a:
+    mysql_connections: "70"
+    _routing:
+      receiver:
+        type: "webhook"
+        url: "https://webhook.example.com/alerts"
+      group_by: ["alertname", "severity"]
+      group_wait: "30s"
+      repeat_interval: "4h"
+```
+
+### Step 4: 產出 Alertmanager Fragment
 
 ```bash
 # da-tools 容器方式
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.2.0 \
+  ghcr.io/vencil/da-tools:1.3.0 \
   generate-routes --config-dir /data/conf.d -o /data/alertmanager-routes.yaml
 
 # 本地 Python 方式
 python3 scripts/tools/generate_alertmanager_routes.py \
   --config-dir config/conf.d/ -o alertmanager-routes.yaml
+
+# 驗證產出
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir config/conf.d/ --validate
 ```
 
 產出內容包含：
 - `route.routes[]`: Per-tenant 路由（含 `tenant="<name>"` matcher + timing guardrails）
-- `receivers[]`: Per-tenant webhook receiver（v1.2.0 僅支援 `webhook_configs`）
-- `inhibit_rules[]`: Per-tenant severity dedup rules + silent mode rules
+- `receivers[]`: Per-tenant receiver（webhook/email/slack/teams）
+- `inhibit_rules[]`: Per-tenant severity dedup rules
 
-### Step 3: 合併至 Alertmanager ConfigMap
+### Step 5: 合併至 Alertmanager ConfigMap
 
 將產出的 fragment 合併至 Alertmanager 主配置：
 
@@ -65,14 +103,14 @@ kubectl create configmap alertmanager-config \
   -n monitoring --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### Step 4: 重載 Alertmanager
+### Step 6: 重載 Alertmanager
 
 ```bash
-# 目前方式：rolling restart
-kubectl rollout restart deployment/alertmanager -n monitoring
+# HTTP reload（需 Step 1 的 --web.enable-lifecycle）
+curl -X POST http://localhost:9093/-/reload
 
-# v1.3.0 目標：HTTP reload（需 --web.enable-lifecycle）
-# curl -X POST http://alertmanager:9093/-/reload
+# 驗證 reload 成功
+curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 ```
 
 ---
@@ -82,6 +120,14 @@ kubectl rollout restart deployment/alertmanager -n monitoring
 ### 功能
 
 讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出合法的 Alertmanager YAML fragment。
+
+### 模式
+
+| Flag | 說明 |
+|------|------|
+| `--dry-run` | 輸出至 stdout，不寫入檔案 |
+| `-o FILE` | 寫入指定檔案 |
+| `--validate` | 驗證配置合法性（exit 0/1，適合 CI） |
 
 ### Timing Guardrails
 
@@ -93,63 +139,191 @@ kubectl rollout restart deployment/alertmanager -n monitoring
 | `group_interval` | 5s | 5m | 5m |
 | `repeat_interval` | 1m | 72h | 4h |
 
-### Dry-run 模式
+---
+
+## 4. 動態 Reload
+
+### 機制
+
+v1.3.0 透過 Alertmanager 原生的 `--web.enable-lifecycle` flag 實現 HTTP reload：
 
 ```bash
-da-tools generate-routes --config-dir /data/conf.d --dry-run
-# 輸出至 stdout，不寫入檔案
+# 更新 ConfigMap 後
+curl -X POST http://alertmanager:9093/-/reload
+```
+
+### 自動化選項
+
+| 方案 | 說明 | 適用場景 |
+|------|------|----------|
+| **HTTP reload** | `curl -X POST /-/reload`（v1.3.0 預設） | 最小侵入，適合自管 Alertmanager |
+| **ConfigMap Watcher Sidecar** | 類似 `prometheus-config-reloader` | 全自動，適合生產環境 |
+| **CI Pipeline 整合** | GitOps: `generate-routes --validate` + apply + reload | 適合 GitOps 工作流 |
+| **Alertmanager Operator** | `kube-prometheus-stack` 的 AlertmanagerConfig CRD | 適合已使用 Operator 的環境 |
+
+### _lib.sh Helper
+
+```bash
+source scripts/_lib.sh
+reload_alertmanager  # 預設 http://localhost:9093
+reload_alertmanager "http://alertmanager.monitoring.svc.cluster.local:9093"
 ```
 
 ---
 
-## 4. 動態 Reload 藍圖（v1.3.0）
+## 5. Receiver 類型
 
-### 現況（v1.2.0）
+v1.3.0 支援四種 receiver 類型：
 
-- Alertmanager ConfigMap 變更後需 rolling restart 才能生效
-- 與 Prometheus 的 `--web.enable-lifecycle` + `curl /-/reload` 體驗不一致
+### Webhook
 
-### 目標
+```yaml
+_routing:
+  receiver:
+    type: "webhook"
+    url: "https://webhook.example.com/alerts"
+```
 
-讓 Alertmanager 配置變更達到與 Prometheus 相同的「改設定不重啟」體驗。
+### Email
 
-### 候選方案
+```yaml
+_routing:
+  receiver:
+    type: "email"
+    to: ["team@example.com", "oncall@example.com"]
+    smarthost: "smtp.example.com:587"
+    from: "alertmanager@example.com"
+    require_tls: true
+```
 
-| 方案 | 說明 | 適用場景 |
-|------|------|----------|
-| **A. Lifecycle API** | Alertmanager 加入 `--web.enable-lifecycle`，ConfigMap 更新後 `curl -X POST /-/reload` | 最小侵入，適合自管 Alertmanager |
-| **B. ConfigMap Watcher Sidecar** | 類似 `prometheus-config-reloader`，偵測 ConfigMap 變更後自動 POST reload | 全自動，適合生產環境 |
-| **C. CI Pipeline 整合** | `generate_alertmanager_routes.py` 整合至 GitOps pipeline，ConfigMap update + reload 一步完成 | 適合 GitOps 工作流 |
-| **D. Alertmanager Operator** | 使用 `kube-prometheus-stack` 的 AlertmanagerConfig CRD | 適合已使用 Operator 的環境 |
+### Slack
 
-### 推薦路徑
+```yaml
+_routing:
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/T.../B.../xxx"
+    channel: "#alerts"
+```
 
-v1.3.0 先實作方案 A（最小侵入），同時提供方案 B 的 sidecar 參考配置。方案 C/D 作為文件指引。
+### Microsoft Teams
+
+```yaml
+_routing:
+  receiver:
+    type: "teams"
+    webhook_url: "https://outlook.office.com/webhook/..."
+```
+
+### 共通選填欄位
+
+所有 receiver 類型都支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
+
+### 訊息模板（Go Template）
+
+Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager 原生的 Go template 語法，可引用 alert 的 labels、annotations、status：
+
+**Slack 客製化範例：**
+
+```yaml
+_routing:
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/..."
+    channel: "#db-alerts"
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+    text: >-
+      *Tenant*: {{ .CommonLabels.tenant }}
+      *Severity*: {{ .CommonLabels.severity }}
+      {{ range .Alerts }}
+        - {{ .Annotations.summary }}
+      {{ end }}
+```
+
+**Email HTML 模板範例：**
+
+```yaml
+_routing:
+  receiver:
+    type: "email"
+    to: ["team@example.com"]
+    smarthost: "smtp.example.com:587"
+    html: |
+      <h2>{{ .CommonLabels.alertname }}</h2>
+      <p>Tenant: {{ .CommonLabels.tenant }} | Severity: {{ .CommonLabels.severity }}</p>
+      <ul>
+      {{ range .Alerts }}
+        <li>{{ .Annotations.description }}</li>
+      {{ end }}
+      </ul>
+```
+
+**可用的 Go template 變數：**
+
+| 變數 | 說明 |
+|------|------|
+| `.CommonLabels.alertname` | Alert 名稱 |
+| `.CommonLabels.tenant` | Tenant 名稱 |
+| `.CommonLabels.severity` | 嚴重度（warning / critical） |
+| `.CommonAnnotations.summary` | Alert 摘要 |
+| `.CommonAnnotations.description` | Alert 描述 |
+| `.Status` | 狀態（firing / resolved） |
+| `.Alerts` | Alert 列表（可 `{{ range }}` 迴圈） |
+| `{{ .Alerts \| len }}` | Alert 數量 |
+
+> 完整語法參考：[Alertmanager Notification Template Reference](https://prometheus.io/docs/alerting/latest/notifications/)
 
 ---
 
-## 5. Receiver 類型擴充方向（v1.3.0）
+## 6. 驗證 Checklist
 
-v1.2.0 僅支援 `webhook_configs`。v1.3.0 計畫擴充：
+### 工具驗證
 
-| Receiver 類型 | 優先級 | 說明 |
-|---------------|--------|------|
-| `webhook_configs` | ✅ 已支援 | Generic webhook（GoAlert、PagerDuty webhook 等） |
-| `email_configs` | 高 | 直接整合 SMTP |
-| `slack_configs` | 高 | Slack Incoming Webhook |
-| `msteams_configs` | 中 | Microsoft Teams（v0.27.0+ 原生支援） |
-| `opsgenie_configs` | 低 | OpsGenie API |
+```bash
+# 1. 產出 fragment（dry-run 預覽）
+da-tools generate-routes --config-dir /data/conf.d --dry-run
 
-擴充策略：`generate_alertmanager_routes.py` 的 `_routing` section 新增 `receiver_type` 欄位，預設 `webhook`。
+# 2. 驗證配置合法性
+da-tools generate-routes --config-dir /data/conf.d --validate
 
----
+# 3. 檢查 Alertmanager 狀態
+curl -sf http://localhost:9093/-/ready
 
-## 6. 驗證 Checklist（概要）
+# 4. 查看當前 alert 狀態
+curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
+```
 
-- [ ] `da-tools generate-routes --config-dir conf.d/ --dry-run` 產出合法 YAML
+### 功能驗證
+
+- [ ] `generate-routes --validate` exit code 0
 - [ ] Alertmanager 載入合併後的配置無錯誤
+- [ ] `curl -X POST /-/reload` 回傳 200
 - [ ] Silent Mode tenant 的 alert 不發送通知
 - [ ] Severity Dedup enabled tenant 的 warning 在 critical 觸發時被抑制
-- [ ] Custom routing tenant 的 alert 送達指定 webhook
+- [ ] Custom routing tenant 的 alert 送達指定 receiver
 
-> 完整 step-by-step 驗證流程將於 v1.3.0 補齊。
+---
+
+## Appendix: Alertmanager Operator 路徑
+
+如果使用 `kube-prometheus-stack`（Prometheus Operator），可透過 `AlertmanagerConfig` CRD 管理路由：
+
+```yaml
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: tenant-db-a
+  namespace: monitoring
+spec:
+  route:
+    matchers:
+      - name: tenant
+        value: db-a
+    receiver: tenant-db-a
+  receivers:
+    - name: tenant-db-a
+      webhookConfigs:
+        - url: "https://webhook.db-a.example.com/alerts"
+```
+
+此路徑與 `generate_alertmanager_routes.py` 的 ConfigMap 方式互斥。選擇 Operator 路徑的用戶不需要使用 `generate-routes` 工具。

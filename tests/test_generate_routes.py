@@ -151,11 +151,14 @@ tenants:
   db-a:
     mysql_connections: "70"
     _routing:
-      receiver: "https://webhook.example.com/alerts"
+      receiver:
+        type: "webhook"
+        url: "https://webhook.example.com/alerts"
       group_wait: "30s"
 """)
             routing, dedup = gen.load_tenant_configs(d)
-            self.assertEqual(routing["db-a"]["receiver"], "https://webhook.example.com/alerts")
+            self.assertEqual(routing["db-a"]["receiver"]["type"], "webhook")
+            self.assertEqual(routing["db-a"]["receiver"]["url"], "https://webhook.example.com/alerts")
             self.assertEqual(dedup["db-a"], "enable")
 
     def test_no_routing_still_tracks_dedup(self):
@@ -172,15 +175,15 @@ tenants:
 
     def test_multiple_files(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _routing:\n      receiver: 'https://a.example.com'\n")
-            _write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _routing:\n      receiver: 'https://b.example.com'\n")
+            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://a.example.com'\n")
+            _write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://b.example.com'\n")
             routing, dedup = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 2)
             self.assertEqual(len(dedup), 2)
 
     def test_skips_dotfiles(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, ".hidden.yaml", "tenants:\n  hidden:\n    _routing:\n      receiver: 'x'\n")
+            _write_yaml(d, ".hidden.yaml", "tenants:\n  hidden:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'x'\n")
             routing, dedup = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             self.assertEqual(len(dedup), 0)
@@ -225,14 +228,24 @@ tenants:
             rules, _ = gen.generate_inhibit_rules(dedup)
             self.assertEqual(len(rules), 1)
 
+    def test_old_string_receiver_rejected(self):
+        """v1.2.0 舊格式 (receiver: URL string) 在 generate_routes 應被跳過。"""
+        cfg = {"db-a": {"receiver": "https://example.com", "group_wait": "30s"}}
+        routes, _, warnings = gen.generate_routes(cfg)
+        self.assertEqual(len(routes), 0)
+        self.assertTrue(any("must be an object" in w for w in warnings))
+
 
 # ── 4. generate_routes() ─────────────────────────────────────────
 
 class TestGenerateRoutes(unittest.TestCase):
     """generate_routes() — route + receiver 結構。"""
 
+    def _webhook(self, url="https://example.com"):
+        return {"type": "webhook", "url": url}
+
     def test_basic_route_and_receiver(self):
-        cfg = {"db-a": {"receiver": "https://example.com", "group_wait": "30s"}}
+        cfg = {"db-a": {"receiver": self._webhook(), "group_wait": "30s"}}
         routes, receivers, warnings = gen.generate_routes(cfg)
         self.assertEqual(len(routes), 1)
         self.assertEqual(routes[0]["receiver"], "tenant-db-a")
@@ -245,22 +258,129 @@ class TestGenerateRoutes(unittest.TestCase):
         self.assertTrue(any("missing required" in w for w in warnings))
 
     def test_group_by_passed_through(self):
-        cfg = {"db-a": {"receiver": "https://example.com", "group_by": ["alertname", "severity"]}}
+        cfg = {"db-a": {"receiver": self._webhook(), "group_by": ["alertname", "severity"]}}
         routes, _, _ = gen.generate_routes(cfg)
         self.assertEqual(routes[0]["group_by"], ["alertname", "severity"])
 
     def test_timing_guardrails_applied(self):
-        cfg = {"db-a": {"receiver": "https://example.com", "group_wait": "1s", "repeat_interval": "100h"}}
+        cfg = {"db-a": {"receiver": self._webhook(), "group_wait": "1s", "repeat_interval": "100h"}}
         routes, _, warnings = gen.generate_routes(cfg)
         self.assertEqual(routes[0]["group_wait"], "5s")
         self.assertEqual(routes[0]["repeat_interval"], "72h")
         self.assertGreaterEqual(len(warnings), 2)
 
     def test_multi_tenant_sorted(self):
-        cfg = {"db-b": {"receiver": "https://b.example.com"}, "db-a": {"receiver": "https://a.example.com"}}
+        cfg = {"db-b": {"receiver": self._webhook("https://b.example.com")},
+               "db-a": {"receiver": self._webhook("https://a.example.com")}}
         routes, _, _ = gen.generate_routes(cfg)
         self.assertEqual(routes[0]["receiver"], "tenant-db-a")
         self.assertEqual(routes[1]["receiver"], "tenant-db-b")
+
+
+# ── 4b. build_receiver_config() + receiver types ─────────────────
+
+class TestBuildReceiverConfig(unittest.TestCase):
+    """build_receiver_config() — per-type receiver 解析 + 驗證。"""
+
+    def test_webhook_basic(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "webhook", "url": "https://example.com"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("webhook_configs", cfg)
+        self.assertEqual(cfg["webhook_configs"][0]["url"], "https://example.com")
+
+    def test_email_basic(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "email", "to": ["a@b.com"], "smarthost": "smtp:587"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("email_configs", cfg)
+        self.assertEqual(cfg["email_configs"][0]["to"], ["a@b.com"])
+        self.assertEqual(cfg["email_configs"][0]["smarthost"], "smtp:587")
+
+    def test_slack_basic(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "slack", "api_url": "https://hooks.slack.com/x"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("slack_configs", cfg)
+        self.assertEqual(cfg["slack_configs"][0]["api_url"], "https://hooks.slack.com/x")
+
+    def test_teams_basic(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "teams", "webhook_url": "https://outlook.office.com/x"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("msteams_configs", cfg)
+
+    def test_webhook_with_optional_fields(self):
+        cfg, _ = gen.build_receiver_config(
+            {"type": "webhook", "url": "https://x.com", "send_resolved": True}, "t")
+        self.assertTrue(cfg["webhook_configs"][0]["send_resolved"])
+
+    def test_email_with_optional_fields(self):
+        cfg, _ = gen.build_receiver_config(
+            {"type": "email", "to": ["a@b.com"], "smarthost": "s:587",
+             "from": "x@y.com", "require_tls": True}, "t")
+        self.assertEqual(cfg["email_configs"][0]["from"], "x@y.com")
+        self.assertTrue(cfg["email_configs"][0]["require_tls"])
+
+    def test_missing_type(self):
+        cfg, warnings = gen.build_receiver_config({"url": "https://x.com"}, "t")
+        self.assertIsNone(cfg)
+        self.assertTrue(any("missing required 'receiver.type'" in w for w in warnings))
+
+    def test_unknown_type(self):
+        cfg, warnings = gen.build_receiver_config({"type": "pagerduty"}, "t")
+        self.assertIsNone(cfg)
+        self.assertTrue(any("unknown receiver type" in w for w in warnings))
+
+    def test_missing_required_field(self):
+        cfg, warnings = gen.build_receiver_config({"type": "webhook"}, "t")
+        self.assertIsNone(cfg)
+        self.assertTrue(any("requires 'url'" in w for w in warnings))
+
+    def test_email_missing_smarthost(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "email", "to": ["a@b.com"]}, "t")
+        self.assertIsNone(cfg)
+        self.assertTrue(any("requires 'smarthost'" in w for w in warnings))
+
+    def test_not_a_dict(self):
+        cfg, warnings = gen.build_receiver_config("https://url.com", "t")
+        self.assertIsNone(cfg)
+        self.assertTrue(any("must be an object" in w for w in warnings))
+
+    def test_type_case_insensitive(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "Webhook", "url": "https://x.com"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("webhook_configs", cfg)
+
+    def test_slack_with_go_template(self):
+        """Slack receiver 支援 Go template 語法的 title/text。"""
+        cfg, _ = gen.build_receiver_config({
+            "type": "slack",
+            "api_url": "https://hooks.slack.com/x",
+            "channel": "#alerts",
+            "title": '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}',
+            "text": '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}',
+        }, "t")
+        entry = cfg["slack_configs"][0]
+        self.assertIn("{{ .Status", entry["title"])
+        self.assertIn("{{ range .Alerts }}", entry["text"])
+
+    def test_email_with_html_template(self):
+        """Email receiver 支援 html body template。"""
+        cfg, _ = gen.build_receiver_config({
+            "type": "email",
+            "to": ["team@example.com"],
+            "smarthost": "smtp:587",
+            "html": '<h2>{{ .CommonLabels.alertname }}</h2>',
+        }, "t")
+        self.assertIn("{{ .CommonLabels.alertname }}", cfg["email_configs"][0]["html"])
+
+    def test_all_supported_types(self):
+        """RECEIVER_TYPES 常數包含所有四種 type。"""
+        self.assertEqual(sorted(gen.RECEIVER_TYPES.keys()),
+                         ["email", "slack", "teams", "webhook"])
 
 
 # ── 5. generate_inhibit_rules() ──────────────────────────────────

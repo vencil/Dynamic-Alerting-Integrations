@@ -2,6 +2,44 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.3.0] - Alertmanager 動態化 & Receiver 擴充 (2026-03-04)
+
+Alertmanager 動態 Reload + 多類型 Receiver 支援 + Routing CI 驗證，回應 user feedback「最後一哩路」。
+
+### 🔄 Alertmanager 動態 Reload
+
+* **`--web.enable-lifecycle`**：Alertmanager deployment 新增 lifecycle API flag，支援 `curl -X POST /-/reload` 免重啟更新配置。
+* **`_lib.sh` 新增 `reload_alertmanager()`**：共用函式庫新增 Alertmanager reload helper。
+
+### 📡 Receiver 類型擴充（Breaking Change）
+
+* **結構化 `receiver` 物件**：`_routing.receiver` 從純 URL 字串改為結構化物件（含 `type` 欄位）。**不向後相容** v1.2.0 格式。
+* **四種 Receiver 類型**：`webhook`（既有）、`email`（SMTP）、`slack`（Incoming Webhook）、`teams`（MS Teams v0.27.0+）。
+* **訊息模板（Go Template）**：Slack/Teams/Email 的 `title` / `text` / `html` 欄位支援 Alertmanager Go template 語法，可引用 `.CommonLabels`、`.Annotations`、`.Status` 等變數。
+* **`build_receiver_config()`**：新增 Python 函式，依 type 驗證必要欄位並產出對應 Alertmanager receiver 結構。
+* **Go `RoutingConfig` 更新**：`Receiver string` → `ReceiverType string` + `ReceiverConfig map[string]interface{}`，含 `validReceiverTypes` 驗證。
+
+### ✅ Routing CI Validation
+
+* **`generate_alertmanager_routes.py --validate`**：新增驗證模式，exit code 0/1 供 CI pipeline 使用。
+* **`make validate-routes`**：Makefile target，一鍵驗證 conf.d/ 所有 tenant routing config。
+
+### 🛠️ Tooling
+
+* **`scaffold_tenant.py`**：互動模式新增 receiver type 選擇（webhook/email/slack/teams）；非互動模式新增 `--routing-receiver-type` + `--routing-smarthost` 參數。
+* **`generate_alertmanager_routes.py`**：`RECEIVER_TYPES` 常數定義四種 type 的必要/選填欄位 + AM config key 映射。
+
+### 📄 Documentation
+
+* **`byo-alertmanager-integration.md`**：從 v1.2.0 藍圖框架升級為完整整合指引（6 步驟 + 動態 reload + 4 種 receiver 範例 + 驗證 checklist + Operator appendix）。
+
+### 🧪 Testing
+
+* **16 個新 Python 測試**（`TestBuildReceiverConfig`）：四種 type 基本/選填欄位、缺少 type、未知 type、缺少必要欄位、舊格式拒絕、case insensitive。
+* **Go test 更新**：所有 `TestResolveRouting_*` + `TestScheduledValue_RoutingMapRoundTrip` 遷移至結構化 receiver 格式。
+
+---
+
 ## [v1.2.0] - Silent Mode, Severity Dedup & Alert Routing (2026-03-03)
 
 三態運營模式 + Severity Dedup 可選化 + Config-Driven Alert Routing，回應 user feedback「還給 tenant 合理的自理權」。

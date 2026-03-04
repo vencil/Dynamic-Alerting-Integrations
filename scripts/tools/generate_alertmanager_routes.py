@@ -40,6 +40,35 @@ PLATFORM_DEFAULTS = {
     "repeat_interval": "4h",
 }
 
+# ============================================================
+# Receiver Types
+# ============================================================
+# Each type maps to: (alertmanager_config_key, required_fields, optional_fields)
+RECEIVER_TYPES = {
+    "webhook": {
+        "am_key": "webhook_configs",
+        "required": ["url"],
+        "optional": ["send_resolved", "http_config"],
+    },
+    "email": {
+        "am_key": "email_configs",
+        "required": ["to", "smarthost"],
+        "optional": ["from", "auth_username", "auth_password", "require_tls",
+                      "html", "text", "headers", "send_resolved"],
+    },
+    "slack": {
+        "am_key": "slack_configs",
+        "required": ["api_url"],
+        "optional": ["channel", "title", "text", "title_link", "icon_emoji",
+                      "send_resolved"],
+    },
+    "teams": {
+        "am_key": "msteams_configs",
+        "required": ["webhook_url"],
+        "optional": ["title", "text", "send_resolved"],
+    },
+}
+
 
 def parse_duration_seconds(value):
     """Parse a Prometheus-style duration string to seconds.
@@ -157,6 +186,53 @@ def load_tenant_configs(config_dir):
     return routing_configs, dedup_configs
 
 
+def build_receiver_config(receiver_obj, tenant):
+    """Build Alertmanager receiver config from structured receiver object.
+
+    Args:
+        receiver_obj: dict with 'type' and type-specific fields.
+        tenant: tenant name for error messages.
+
+    Returns:
+        (am_config_dict, warnings) where am_config_dict is e.g.
+        {"webhook_configs": [{"url": "..."}]} or None on error.
+    """
+    warnings = []
+
+    if not isinstance(receiver_obj, dict):
+        warnings.append(f"  WARN: {tenant}: 'receiver' must be an object with 'type', skipping")
+        return None, warnings
+
+    rtype = receiver_obj.get("type")
+    if not rtype or not isinstance(rtype, str):
+        warnings.append(f"  WARN: {tenant}: missing required 'receiver.type', skipping")
+        return None, warnings
+
+    rtype = rtype.strip().lower()
+    if rtype not in RECEIVER_TYPES:
+        supported = ", ".join(sorted(RECEIVER_TYPES.keys()))
+        warnings.append(f"  WARN: {tenant}: unknown receiver type '{rtype}' "
+                        f"(supported: {supported}), skipping")
+        return None, warnings
+
+    spec = RECEIVER_TYPES[rtype]
+
+    # Validate required fields
+    for field in spec["required"]:
+        if field not in receiver_obj or not receiver_obj[field]:
+            warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' requires "
+                            f"'{field}', skipping")
+            return None, warnings
+
+    # Build AM config — include required + present optional fields
+    am_entry = {}
+    for field in spec["required"] + spec["optional"]:
+        if field in receiver_obj:
+            am_entry[field] = receiver_obj[field]
+
+    return {spec["am_key"]: [am_entry]}, warnings
+
+
 def generate_routes(routing_configs):
     """Generate Alertmanager route tree + receivers from routing configs.
 
@@ -169,10 +245,16 @@ def generate_routes(routing_configs):
     for tenant in sorted(routing_configs.keys()):
         cfg = routing_configs[tenant]
 
-        # Validate receiver (required)
-        receiver_url = cfg.get("receiver")
-        if not receiver_url:
+        # Validate receiver (required, must be dict with type)
+        receiver_obj = cfg.get("receiver")
+        if not receiver_obj:
             all_warnings.append(f"  WARN: {tenant}: missing required 'receiver', skipping")
+            continue
+
+        # Build receiver config from structured object
+        am_config, recv_warnings = build_receiver_config(receiver_obj, tenant)
+        all_warnings.extend(recv_warnings)
+        if am_config is None:
             continue
 
         # Receiver name derived from tenant
@@ -200,13 +282,9 @@ def generate_routes(routing_configs):
 
         routes.append(route)
 
-        # Build receiver entry (webhook_configs for now, extensible)
-        receiver = {
-            "name": receiver_name,
-            "webhook_configs": [
-                {"url": receiver_url},
-            ],
-        }
+        # Build receiver entry
+        receiver = {"name": receiver_name}
+        receiver.update(am_config)
         receivers.append(receiver)
 
     return routes, receivers, all_warnings
@@ -288,6 +366,8 @@ def main():
                         help="Output file path (default: stdout)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview output without writing file")
+    parser.add_argument("--validate", action="store_true",
+                        help="Validate generated config (exit 0 if valid, 1 if errors)")
 
     args = parser.parse_args()
 
@@ -321,6 +401,21 @@ def main():
     if not routes and not inhibit_rules:
         print("No valid routes or inhibit rules generated.")
         sys.exit(1)
+
+    # Validate mode: check for errors and exit
+    if args.validate:
+        errors = [w for w in all_warnings if "WARN" in w and "skipping" in w]
+        route_count = len(routes)
+        inhibit_count = len(inhibit_rules)
+        print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "
+              f"{inhibit_count} inhibit rule(s)")
+        if errors:
+            print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
+            for e in errors:
+                print(e, file=sys.stderr)
+            sys.exit(1)
+        print("OK: all configs valid")
+        sys.exit(0)
 
     # Render output
     header = (
