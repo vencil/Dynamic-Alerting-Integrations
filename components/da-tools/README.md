@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs、Tenants (DevOps)
 > **Image**：`ghcr.io/vencil/da-tools`
-> **版本**：1.1.0（獨立版號，與 threshold-exporter 脫鉤）
+> **版本**：1.2.0（獨立版號，與 threshold-exporter 脫鉤）
 
 ---
 
@@ -26,13 +26,13 @@
 cd components/da-tools/app && ./build.sh 0.4.0
 
 # 或從 registry 拉取（需 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:1.1.0
+docker pull ghcr.io/vencil/da-tools:1.2.0
 
 # 查看說明
-docker run --rm ghcr.io/vencil/da-tools:1.1.0 --help
+docker run --rm ghcr.io/vencil/da-tools:1.2.0 --help
 
 # 查看版本
-docker run --rm ghcr.io/vencil/da-tools:1.1.0 --version
+docker run --rm ghcr.io/vencil/da-tools:1.2.0 --version
 ```
 
 ---
@@ -48,6 +48,12 @@ docker run --rm ghcr.io/vencil/da-tools:1.1.0 --version
 | `check-alert` | 查詢特定 tenant 的 alert 狀態 | `<alert_name> <tenant>` |
 | `baseline` | 觀測指標 + 推薦閾值 | `--tenant <name>` |
 | `validate` | Shadow Monitoring 雙軌比對 | `--mapping <file>` 或 `--old <query> --new <query>` |
+
+### Config 產出工具（讀取 tenant YAML，產出 Alertmanager fragment）
+
+| 命令 | 用途 | 最小參數 |
+|------|------|----------|
+| `generate-routes` | Tenant YAML → Alertmanager route + receiver + inhibit_rules fragment | `--config-dir <dir>` |
 
 ### 檔案系統工具（離線可用，不需網路）
 
@@ -76,20 +82,20 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 # 1. 確認 alert 狀態
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.1.0 \
+  ghcr.io/vencil/da-tools:1.2.0 \
   check-alert MariaDBHighConnections db-a
 
 # 2. 觀測指標並取得閾值建議
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.1.0 \
+  ghcr.io/vencil/da-tools:1.2.0 \
   baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.1.0 \
+  ghcr.io/vencil/da-tools:1.2.0 \
   validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
@@ -100,7 +106,7 @@ docker run --rm --network=host \
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/my-rules.yml \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:1.1.0 \
+  ghcr.io/vencil/da-tools:1.2.0 \
   migrate /data/my-rules.yml -o /data/output --dry-run --triage
 
 # 產出：
@@ -114,8 +120,25 @@ docker run --rm \
 # 非互動式產生 tenant 配置
 docker run --rm \
   -v $(pwd)/configs:/data/configs \
-  ghcr.io/vencil/da-tools:1.1.0 \
+  ghcr.io/vencil/da-tools:1.2.0 \
   scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/configs
+```
+
+### 場景四：產出 Alertmanager Route Fragment
+
+```bash
+# 從 tenant YAML 產出 Alertmanager route + receiver + inhibit_rules fragment
+docker run --rm \
+  -v $(pwd)/conf.d:/data/conf.d \
+  ghcr.io/vencil/da-tools:1.2.0 \
+  generate-routes --config-dir /data/conf.d --dry-run
+
+# 寫入檔案
+docker run --rm \
+  -v $(pwd)/conf.d:/data/conf.d \
+  -v $(pwd)/output:/data/output \
+  ghcr.io/vencil/da-tools:1.2.0 \
+  generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml
 ```
 
 ---
@@ -163,7 +186,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:1.1.0
+          image: ghcr.io/vencil/da-tools:1.2.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"
@@ -176,13 +199,13 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v1.1.0+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v1.2.0+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v1.1.0 | `v1.0.0` | GA Release — 文件重構 + 9 Rule Packs |
-| threshold-exporter | v1.1.0 | `exporter/v1.1.0` | Go binary |
-| **da-tools** | **v1.1.0** | **`tools/v1.1.0`** | **Python CLI 工具集** |
+| 平台文件 | v1.2.0 | `v1.2.0` | Silent Mode + Severity Dedup + Alert Routing |
+| threshold-exporter | v1.2.0 | `exporter/v1.2.0` | Go binary |
+| **da-tools** | **v1.2.0** | **`tools/v1.2.0`** | **Python CLI 工具集（新增 generate-routes）** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。
 
@@ -200,6 +223,7 @@ CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變
 | `offboard_tenant.py` | `offboard` | `scripts/tools/` |
 | `deprecate_rule.py` | `deprecate` | `scripts/tools/` |
 | `lint_custom_rules.py` | `lint` | `scripts/tools/` |
+| `generate_alertmanager_routes.py` | `generate-routes` | `scripts/tools/` |
 | `metric-dictionary.yaml` | （migrate 內部參照） | `scripts/tools/` |
 
 > **未收錄**：`diagnose.py` 和 `patch_config.py` 需要 kubectl 叢集存取，屬於集群內操作工具，不適合「帶回家驗證」的場景。

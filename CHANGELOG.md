@@ -35,6 +35,9 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 * **`scaffold_tenant.py`**：互動模式新增靜音模式、severity dedup、alert routing 選項；非互動模式新增 `--silent-mode`、`--severity-dedup`、`--routing-receiver` 等參數。
 * **`migrate_rule.py`**：Auto-Suppression 改為 Alertmanager-based dedup（不再注入 PromQL `unless`，改加 `metric_group` label）。
 * **`diagnose.py`**：健康檢查新增 `operational_mode` 欄位（normal / silent:warning / silent:all / maintenance）。
+* **da-tools v1.2.0**：
+  * 新增 `generate-routes` 命令（`generate_alertmanager_routes.py` 收錄至容器 image）
+  * 移除 `bump-docs` 命令（開發者內部工具，對使用者無意義）
 
 ### 📄 Documentation
 
@@ -45,6 +48,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
   * §2.7 三態運營模式（行為矩陣、資料流、配置範例、Alertmanager 範本）
   * §3.1 Rule Pack 表格更新（9→10 packs，新增 Operational）
 * **`byo-prometheus-integration.md`**：新增彈性 Tenant-Namespace 映射 section (F1)
+* **`byo-alertmanager-integration.md`**：新增 Alertmanager 整合藍圖（框架），含動態 reload 方向、receiver 擴充規劃、generate-routes 工具使用概要
 * **`migration-guide.md`**：§5 新增 Config-Driven Routing 說明 (F3)
 
 ---

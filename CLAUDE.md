@@ -15,34 +15,24 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 版本歷程詳見 `CHANGELOG.md`。v1.0.0 為 GA Release，後續版本視社群/客戶回饋決定。
 
-## v1.2.0 現況（Code Complete）
+## v1.2.0 關鍵技術決策
 
-v1.2.0 三大 User Feedback 功能已全部實作完成：
+v1.2.0 完整變更詳見 `CHANGELOG.md`。以下為需長期參照的架構決策：
 
-| 代號 | 功能 | 狀態 | 關鍵變更 |
-|------|------|------|----------|
-| F1 | Tenant-NS 彈性映射 | ✅ Docs only | `architecture-and-design.md` §2.3 + `byo-prometheus-integration.md`。結論：只需 relabel_configs，不需改 code |
-| F2a | Severity Dedup 可選化 | ✅ Code + Docs | PromQL `unless critical` → per-tenant Alertmanager `inhibit_rules`。`generate_alertmanager_routes.py` 掃描 `_severity_dedup` 產出 per-tenant rules |
-| F3 | Alert Routing 客製化 | ✅ Code + Docs | `_routing` config → `generate_alertmanager_routes.py` 產出 route + receiver + inhibit_rules。v1.2.0 限 webhook |
-
-**待完成項目**：
-- F2b：Silent Mode 行為需與終端用戶再確認（Owner 已表示「可以，但要給 user 再確認」）
-
-### v1.2.0 關鍵技術決策
-
-1. **Severity Dedup 架構**：dedup 從 PromQL 移到 Alertmanager，TSDB 永遠有完整 warning+critical 紀錄。機制：`generate_alertmanager_routes.py` 掃描 `_severity_dedup` → 產出 per-tenant inhibit rules（帶 `tenant="<name>"` + `metric_group=~".+"` matcher）。Sentinel `TenantSeverityDedupEnabled` 保留供 Grafana 面板顯示
-2. **metric_group label**：warning 和 critical 的 alertname 不同，Alertmanager `equal: ["alertname"]` 無法配對，改用 `metric_group` label（如 `connections`, `cpu`）
+1. **Severity Dedup 架構**：dedup 從 PromQL 移到 Alertmanager，TSDB 永遠有完整 warning+critical 紀錄。`generate_alertmanager_routes.py` 掃描 `_severity_dedup` → 產出 per-tenant inhibit rules（`tenant="<name>"` + `metric_group=~".+"` matcher）
+2. **metric_group label**：warning/critical alertname 不同，Alertmanager `equal: ["alertname"]` 無法配對，改用 `metric_group` label（如 `connections`, `cpu`）
 3. **Routing Guardrails**：`group_wait` 5s–5m、`group_interval` 5s–5m、`repeat_interval` 1m–72h，Go + Python 兩端一致
 4. **Sentinel Alert 模式**：exporter flag metric → Prometheus fires sentinel → Alertmanager inhibit。已用於 silent mode (`TenantSilentMode`) 和 severity dedup (`TenantSeverityDedupEnabled`)
 
 ## v1.3.0 規劃方向
 
-以「還給 tenant 合理的自理權」為核心原則，候選項目：
+以「還給 tenant 合理的自理權」為核心原則：
 
-1. **Receiver 類型擴充**：v1.2.0 僅支援 webhook_configs，v1.3.0 擴充 GoAlert / email / Slack / Teams 等 native receiver types
-2. **F2b Silent Mode 確認**：依用戶回饋決定是否調整 Silent Mode 的 TSDB 行為或通知粒度
-3. **Routing UI/Validation**：`generate_alertmanager_routes.py` 產出的 fragment 需要整合進 CI pipeline 自動驗證
-4. **其餘社群/客戶回饋**：持續收集，依影響範圍排序
+1. **Alertmanager 動態 Reload**：加入 `--web.enable-lifecycle` + ConfigMap watcher sidecar，達成「改設定不重啟」。詳見 `docs/byo-alertmanager-integration.md` §4
+2. **Receiver 類型擴充**：v1.2.0 僅支援 webhook_configs，擴充 email / Slack / Teams 等 native receiver types
+3. **byo-alertmanager-integration.md 完整化**：從藍圖框架補齊為完整 step-by-step 整合指引
+4. **F2b Silent Mode 確認**：依用戶回饋決定是否調整 Silent Mode 的 TSDB 行為或通知粒度
+5. **Routing CI Validation**：`generate_alertmanager_routes.py` 產出 fragment 整合進 CI pipeline 自動驗證
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
@@ -61,6 +51,7 @@ v1.2.0 三大 User Feedback 功能已全部實作完成：
 | `docs/architecture-and-design.md` | Platform Engineers | §2.3 Tenant-NS 映射、§2.8 Severity Dedup、§2.9 Alert Routing、§4.1–4.2 Benchmark |
 | `docs/migration-guide.md` | Tenants, DevOps | §5 含 config-driven routing 說明 |
 | `docs/byo-prometheus-integration.md` | Platform Engineers, SREs | BYOP 最小整合 + Tenant-NS mapping patterns |
+| `docs/byo-alertmanager-integration.md` | Platform Engineers, SREs | Alertmanager 整合藍圖（v1.2.0 框架，v1.3.0 補完） |
 | `docs/custom-rule-governance.md` | Platform Leads, Domain Experts, Tenant Tech Leads | 三層治理模型 + RnR 權責 + SLA 切割 + CI Linting |
 | `components/da-tools/README.md` | All | 可攜帶 CLI 容器：驗證整合、遷移規則、scaffold tenant |
 | `docs/shadow-monitoring-sop.md` | SRE, Platform Engineers | Shadow Monitoring 完整 SOP runbook |

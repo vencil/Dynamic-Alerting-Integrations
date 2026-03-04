@@ -22,6 +22,7 @@
 #       ├── offboard_tenant.py
 #       ├── deprecate_rule.py
 #       ├── lint_custom_rules.py
+#       ├── generate_alertmanager_routes.py
 #       └── metric-dictionary.yaml
 set -euo pipefail
 
@@ -54,6 +55,7 @@ TOOL_FILES=(
     offboard_tenant.py
     deprecate_rule.py
     lint_custom_rules.py
+    generate_alertmanager_routes.py
     metric-dictionary.yaml
 )
 

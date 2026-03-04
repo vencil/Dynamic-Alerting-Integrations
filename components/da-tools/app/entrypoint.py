@@ -47,7 +47,6 @@ COMMAND_MAP = {
     "offboard": "offboard_tenant.py",
     "deprecate": "deprecate_rule.py",
     "lint": "lint_custom_rules.py",
-    "bump-docs": "bump_docs.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)

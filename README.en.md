@@ -68,7 +68,7 @@ Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are p
 
 ```bash
 # No clone needed — just pull and run
-docker run --rm -it ghcr.io/vencil/da-tools:1.1.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools:1.2.0 scaffold --tenant my-app --db mariadb,redis
 ```
 
 ---
@@ -86,7 +86,7 @@ On the deployment side: the Helm chart is published to an **OCI registry** — o
 ```bash
 # One-command deploy — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.2.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -137,8 +137,8 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 
 | Value | Mechanism | Verifiability |
 |-------|-----------|---------------|
-| **One-Command Deploy** | Helm chart published to OCI registry with pre-bound image version. Base chart `tenants: {}` + overlay separation | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.1.0` |
-| **Portable Toolchain** | `da-tools` container packages 9 CLI tools — `docker pull` and go, no clone or Python needed | `docker run --rm ghcr.io/vencil/da-tools:1.1.0 --help` |
+| **One-Command Deploy** | Helm chart published to OCI registry with pre-bound image version. Base chart `tenants: {}` + overlay separation | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.2.0` |
+| **Portable Toolchain** | `da-tools` container packages 9 CLI tools — `docker pull` and go, no clone or Python needed | `docker run --rm ghcr.io/vencil/da-tools:1.2.0 --help` |
 | **Risk-Free Migration** | AST migration engine + `custom_` prefix isolation + Shadow Monitoring dual-track | `da-tools validate` numerical diff ≤ 5% |
 | **Smart Alert Suppression** | Auto-Suppression (Critical ↔ Warning pairing) + maintenance mode + scheduled thresholds + three-state toggle | Critical fires → Warning auto-silenced, zero manual intervention |
 | **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
@@ -239,7 +239,9 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | [Architecture and Design](docs/architecture-and-design.en.md) | O(M) derivation, HA design, Projected Volume deep-dive | Platform Engineers, SREs |
 | [Rule Packs Directory](rule-packs/README.md) | 10 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
-| [BYOP Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
+| [BYOP Prometheus Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
+| [BYOA Alertmanager Integration Blueprint](docs/byo-alertmanager-integration.md) | Alertmanager integration framework, dynamic reload roadmap, receiver expansion | Platform Engineers, SREs |
+| [BYOA Alertmanager Integration Blueprint](docs/byo-alertmanager-integration.md) | Alertmanager integration framework, dynamic reload roadmap, receiver expansion | Platform Engineers, SREs |
 | [Migration Guide](docs/migration-guide.md) | Frictionless onboarding, scaffold tools, 5 hands-on scenarios | Tenants, DevOps |
 | [Custom Rule Governance](docs/custom-rule-governance.md) | 3-Tier governance model, RnR definitions, SLA boundaries, CI linting | Platform Leads, Domain Experts |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
@@ -286,17 +288,17 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ```bash
 # View supported DB types
-docker run --rm ghcr.io/vencil/da-tools:1.1.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.2.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.1.0 scaffold
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.2.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.1.0 migrate /data/legacy-rules.yml
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.2.0 migrate /data/legacy-rules.yml
 
 # Shadow Monitoring validation
 docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.1.0 validate --mapping /data/prefix-mapping.yaml
+  ghcr.io/vencil/da-tools:1.2.0 validate --mapping /data/prefix-mapping.yaml
 ```
 
 > **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.
