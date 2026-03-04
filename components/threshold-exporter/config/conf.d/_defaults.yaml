@@ -2,7 +2,7 @@
 # ⚠️  此檔為開發參考範本，不會被包含在發布的 Helm chart 或 Docker image 中。
 #     生產環境請透過 Helm values 或 GitOps 注入。
 # Loaded first (underscore prefix sorts before letters).
-# Only this file should contain 'defaults' and 'state_filters'.
+# Only this file should contain 'defaults', 'state_filters', and '_routing_defaults'.
 defaults:
   mysql_connections: 80
   mysql_cpu: 80
@@ -20,3 +20,16 @@ state_filters:
     reasons: []
     severity: "info"
     default_state: "disable"
+
+# v1.4.0 Routing Defaults: domain expert sets default notification config.
+# Tenants inherit these defaults unless they override with _routing in their YAML.
+# {{tenant}} placeholder is replaced with the tenant name at merge time.
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["dba-oncall@example.com"]
+    smarthost: "smtp.example.com:587"
+  group_by: ["alertname", "tenant"]
+  group_wait: "30s"
+  group_interval: "5m"
+  repeat_interval: "4h"

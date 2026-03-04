@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.3.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.4.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), HA deployment.
 
 ---
 
@@ -68,7 +68,7 @@ Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are p
 
 ```bash
 # No clone needed — just pull and run
-docker run --rm -it ghcr.io/vencil/da-tools:1.3.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools:1.4.0 scaffold --tenant my-app --db mariadb,redis
 ```
 
 ---
@@ -86,7 +86,7 @@ On the deployment side: the Helm chart is published to an **OCI registry** — o
 ```bash
 # One-command deploy — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.3.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.4.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -137,8 +137,8 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 
 | Value | Mechanism | Verifiability |
 |-------|-----------|---------------|
-| **One-Command Deploy** | Helm chart published to OCI registry with pre-bound image version. Base chart `tenants: {}` + overlay separation | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.3.0` |
-| **Portable Toolchain** | `da-tools` container packages 10 CLI tools — `docker pull` and go, no clone or Python needed | `docker run --rm ghcr.io/vencil/da-tools:1.3.0 --help` |
+| **One-Command Deploy** | Helm chart published to OCI registry with pre-bound image version. Base chart `tenants: {}` + overlay separation | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.4.0` |
+| **Portable Toolchain** | `da-tools` container packages 10 CLI tools — `docker pull` and go, no clone or Python needed | `docker run --rm ghcr.io/vencil/da-tools:1.4.0 --help` |
 | **Risk-Free Migration** | AST migration engine + `custom_` prefix isolation + Shadow Monitoring dual-track | `da-tools validate` numerical diff ≤ 5% |
 | **Smart Alert Suppression** | Auto-Suppression (Critical ↔ Warning pairing) + maintenance mode + scheduled thresholds + three-state toggle | Critical fires → Warning auto-silenced, zero manual intervention |
 | **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
@@ -288,17 +288,17 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ```bash
 # View supported DB types
-docker run --rm ghcr.io/vencil/da-tools:1.3.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.4.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.3.0 scaffold
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.4.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.3.0 migrate /data/legacy-rules.yml
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.4.0 migrate /data/legacy-rules.yml
 
 # Shadow Monitoring validation
 docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.3.0 validate --mapping /data/prefix-mapping.yaml
+  ghcr.io/vencil/da-tools:1.4.0 validate --mapping /data/prefix-mapping.yaml
 ```
 
 > **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.

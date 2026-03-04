@@ -328,7 +328,7 @@ class TestBuildReceiverConfig(unittest.TestCase):
         self.assertTrue(any("missing required 'receiver.type'" in w for w in warnings))
 
     def test_unknown_type(self):
-        cfg, warnings = gen.build_receiver_config({"type": "pagerduty"}, "t")
+        cfg, warnings = gen.build_receiver_config({"type": "discord"}, "t")
         self.assertIsNone(cfg)
         self.assertTrue(any("unknown receiver type" in w for w in warnings))
 
@@ -378,9 +378,191 @@ class TestBuildReceiverConfig(unittest.TestCase):
         self.assertIn("{{ .CommonLabels.alertname }}", cfg["email_configs"][0]["html"])
 
     def test_all_supported_types(self):
-        """RECEIVER_TYPES 常數包含所有四種 type。"""
+        """RECEIVER_TYPES 常數包含所有六種 type。"""
         self.assertEqual(sorted(gen.RECEIVER_TYPES.keys()),
-                         ["email", "slack", "teams", "webhook"])
+                         ["email", "pagerduty", "rocketchat", "slack", "teams", "webhook"])
+
+
+# ── 4c. Rocket.Chat + PagerDuty receiver types ───────────────────
+
+class TestNewReceiverTypes(unittest.TestCase):
+    """Rocket.Chat + PagerDuty receiver type 驗證。"""
+
+    def test_rocketchat_basic(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "rocketchat", "url": "https://chat.example.com/hooks/x/y"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("webhook_configs", cfg)
+        self.assertEqual(cfg["webhook_configs"][0]["url"], "https://chat.example.com/hooks/x/y")
+
+    def test_rocketchat_metadata_not_in_am(self):
+        """Rocket.Chat metadata (channel/username) 不傳給 AM config。"""
+        cfg, _ = gen.build_receiver_config(
+            {"type": "rocketchat", "url": "https://chat.example.com/hooks/x/y",
+             "channel": "#alerts", "username": "PrometheusBot"}, "t")
+        entry = cfg["webhook_configs"][0]
+        self.assertNotIn("channel", entry)
+        self.assertNotIn("username", entry)
+
+    def test_pagerduty_basic(self):
+        cfg, warnings = gen.build_receiver_config(
+            {"type": "pagerduty", "service_key": "abc123"}, "t")
+        self.assertEqual(warnings, [])
+        self.assertIn("pagerduty_configs", cfg)
+        self.assertEqual(cfg["pagerduty_configs"][0]["service_key"], "abc123")
+
+    def test_pagerduty_with_optional(self):
+        cfg, _ = gen.build_receiver_config(
+            {"type": "pagerduty", "service_key": "abc", "severity": "critical",
+             "client": "Dynamic Alerting"}, "t")
+        entry = cfg["pagerduty_configs"][0]
+        self.assertEqual(entry["severity"], "critical")
+        self.assertEqual(entry["client"], "Dynamic Alerting")
+
+    def test_pagerduty_missing_service_key(self):
+        cfg, warnings = gen.build_receiver_config({"type": "pagerduty"}, "t")
+        self.assertIsNone(cfg)
+        self.assertTrue(any("requires 'service_key'" in w for w in warnings))
+
+
+# ── 4d. Routing Defaults + {{tenant}} substitution ───────────────
+
+class TestRoutingDefaults(unittest.TestCase):
+    """_routing_defaults 三態合併 + {{tenant}} 替換。"""
+
+    def test_tenant_inherits_defaults(self):
+        """無 _routing 的 tenant 繼承 _routing_defaults。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["team@example.com"]
+    smarthost: "smtp:587"
+  group_wait: "30s"
+tenants:
+  db-a:
+    mysql_connections: "70"
+""")
+            routing, _ = gen.load_tenant_configs(d)
+            self.assertIn("db-a", routing)
+            self.assertEqual(routing["db-a"]["receiver"]["type"], "email")
+            self.assertEqual(routing["db-a"]["group_wait"], "30s")
+
+    def test_tenant_overrides_receiver(self):
+        """有 _routing 的 tenant 覆寫 receiver，timing 從 defaults。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["default@example.com"]
+    smarthost: "smtp:587"
+  group_wait: "30s"
+  repeat_interval: "4h"
+""")
+            _write_yaml(d, "db-b.yaml", """
+tenants:
+  db-b:
+    _routing:
+      receiver:
+        type: "slack"
+        api_url: "https://hooks.slack.com/x"
+""")
+            routing, _ = gen.load_tenant_configs(d)
+            self.assertEqual(routing["db-b"]["receiver"]["type"], "slack")
+            self.assertEqual(routing["db-b"]["group_wait"], "30s")
+            self.assertEqual(routing["db-b"]["repeat_interval"], "4h")
+
+    def test_tenant_disables_routing(self):
+        """_routing: "disable" → 不產出路由。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["team@example.com"]
+    smarthost: "smtp:587"
+""")
+            _write_yaml(d, "db-c.yaml", """
+tenants:
+  db-c:
+    _routing: "disable"
+""")
+            routing, _ = gen.load_tenant_configs(d)
+            self.assertNotIn("db-c", routing)
+
+    def test_tenant_template_substitution(self):
+        """{{tenant}} 在 receiver fields 被替換為 tenant name。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+_routing_defaults:
+  receiver:
+    type: "rocketchat"
+    url: "https://chat.example.com/hooks/x/y"
+    channel: "#alerts-{{tenant}}"
+  group_wait: "30s"
+tenants:
+  db-a:
+    mysql_connections: "70"
+""")
+            routing, _ = gen.load_tenant_configs(d)
+            # channel is in the receiver dict (metadata, not AM config)
+            self.assertEqual(routing["db-a"]["receiver"]["channel"], "#alerts-db-a")
+
+    def test_disabled_routing_still_tracks_dedup(self):
+        """_routing: disable の tenant でも dedup は追跡される。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "db-c.yaml", """
+tenants:
+  db-c:
+    _routing: "disable"
+    _severity_dedup: "enable"
+""")
+            routing, dedup = gen.load_tenant_configs(d)
+            self.assertNotIn("db-c", routing)  # routing disabled
+            self.assertEqual(dedup["db-c"], "enable")  # dedup still tracked
+
+    def test_no_defaults_no_routing(self):
+        """無 _routing_defaults 也無 _routing → 不產出路由。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            routing, dedup = gen.load_tenant_configs(d)
+            self.assertEqual(len(routing), 0)
+            self.assertEqual(dedup["db-a"], "enable")
+
+    def test_defaults_boundary_warning(self):
+        """_routing_defaults 在 tenant 檔案中會被忽略並警告。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "db-a.yaml", """
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["bad@example.com"]
+    smarthost: "smtp:587"
+tenants:
+  db-a:
+    mysql_connections: "70"
+""")
+            routing, _ = gen.load_tenant_configs(d)
+            # db-a should NOT have routing from its own _routing_defaults
+            self.assertEqual(len(routing), 0)
+
+    def test_template_in_email_to(self):
+        """{{tenant}} 在 email to list 被替換。"""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+_routing_defaults:
+  receiver:
+    type: "email"
+    to: ["{{tenant}}-team@example.com"]
+    smarthost: "smtp:587"
+tenants:
+  db-a:
+    mysql_connections: "70"
+""")
+            routing, _ = gen.load_tenant_configs(d)
+            self.assertEqual(routing["db-a"]["receiver"]["to"], ["db-a-team@example.com"])
 
 
 # ── 5. generate_inhibit_rules() ──────────────────────────────────

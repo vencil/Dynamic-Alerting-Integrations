@@ -16,7 +16,9 @@ Usage:
   python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
 """
 import argparse
+import json
 import os
+import subprocess
 import sys
 import textwrap
 
@@ -66,6 +68,18 @@ RECEIVER_TYPES = {
         "am_key": "msteams_configs",
         "required": ["webhook_url"],
         "optional": ["title", "text", "send_resolved"],
+    },
+    "rocketchat": {
+        "am_key": "webhook_configs",
+        "required": ["url"],
+        "optional": ["send_resolved"],
+        "metadata": ["channel", "username", "icon_url"],  # documented but not passed to AM
+    },
+    "pagerduty": {
+        "am_key": "pagerduty_configs",
+        "required": ["service_key"],
+        "optional": ["routing_key", "severity", "description", "client",
+                      "client_url", "send_resolved"],
     },
 }
 
@@ -136,15 +150,51 @@ def validate_and_clamp(param, value, tenant):
     return value, warnings
 
 
+def _substitute_tenant(obj, tenant_name):
+    """Replace {{tenant}} placeholders in all string values recursively."""
+    if isinstance(obj, str):
+        return obj.replace("{{tenant}}", tenant_name)
+    if isinstance(obj, dict):
+        return {k: _substitute_tenant(v, tenant_name) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_tenant(item, tenant_name) for item in obj]
+    return obj
+
+
+def merge_routing_with_defaults(defaults, tenant_routing, tenant_name):
+    """Merge _routing_defaults with tenant _routing.
+
+    Rules:
+    - Tenant values override defaults (shallow merge)
+    - {{tenant}} in string values is replaced with tenant_name
+    - Lists (e.g., group_by) are replaced, not concatenated
+    """
+    merged = dict(defaults)
+    if isinstance(tenant_routing, dict):
+        for key, value in tenant_routing.items():
+            merged[key] = value
+    return _substitute_tenant(merged, tenant_name)
+
+
 def load_tenant_configs(config_dir):
     """Load all tenant YAML files from a config directory.
 
     Returns tuple of:
       - routing_configs: {tenant_name: routing_config} for tenants that have _routing
       - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
+
+    Supports _routing_defaults in _defaults.yaml (v1.4.0):
+      - Tenants without _routing inherit from _routing_defaults
+      - Tenants with _routing get defaults merged (tenant wins)
+      - _routing: "disable" → skip tenant
+      - {{tenant}} placeholder substituted in all string values
     """
     routing_configs = {}
     dedup_configs = {}
+    routing_defaults = {}
+    explicit_routing = {}  # track which tenants have explicit _routing
+    disabled_tenants = set()
+    all_tenants = []
 
     if not os.path.isdir(config_dir):
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
@@ -163,25 +213,61 @@ def load_tenant_configs(config_dir):
                 print(f"  WARN: skip unparseable {fname}: {e}", file=sys.stderr)
                 continue
 
-        if not data or "tenants" not in data:
+        if not data:
+            continue
+
+        # Extract _routing_defaults (only from _ prefixed files)
+        is_defaults_file = os.path.basename(fname).startswith("_")
+        if "_routing_defaults" in data:
+            if is_defaults_file:
+                routing_defaults = data["_routing_defaults"]
+            else:
+                print(f"  WARN: _routing_defaults in {fname} ignored "
+                      "(only allowed in _ prefixed files)", file=sys.stderr)
+
+        if "tenants" not in data:
             continue
 
         for tenant, overrides in data.get("tenants", {}).items():
             if not isinstance(overrides, dict):
                 continue
 
-            # Routing (optional)
-            routing = overrides.get("_routing")
-            if routing and isinstance(routing, dict):
-                routing_configs[tenant] = routing
+            all_tenants.append(tenant)
 
             # Severity dedup: default "enable", explicit "disable" to opt out
+            # (tracked before routing disable check — dedup is independent of routing)
             raw_dedup = overrides.get("_severity_dedup", "enable")
             dedup_val = str(raw_dedup).strip().lower()
             if dedup_val in ("disable", "disabled", "off", "false"):
                 dedup_configs[tenant] = "disable"
             else:
                 dedup_configs[tenant] = "enable"
+
+            # Routing: "disable" string → skip routing (dedup still tracked above)
+            routing = overrides.get("_routing")
+            if isinstance(routing, str) and routing.strip().lower() in (
+                    "disable", "disabled", "off", "false"):
+                disabled_tenants.add(tenant)
+                continue
+
+            if routing and isinstance(routing, dict):
+                explicit_routing[tenant] = routing
+
+    # Merge routing defaults with tenant configs
+    seen_tenants = set()
+    for tenant in sorted(set(all_tenants)):
+        if tenant in disabled_tenants or tenant in seen_tenants:
+            continue
+        seen_tenants.add(tenant)
+
+        if tenant in explicit_routing:
+            # Tenant has explicit _routing → merge with defaults
+            routing_configs[tenant] = merge_routing_with_defaults(
+                routing_defaults, explicit_routing[tenant], tenant)
+        elif routing_defaults:
+            # No explicit _routing but defaults exist → inherit defaults
+            routing_configs[tenant] = merge_routing_with_defaults(
+                routing_defaults, {}, tenant)
 
     return routing_configs, dedup_configs
 
@@ -349,6 +435,95 @@ def render_output(routes, receivers, inhibit_rules=None):
     return yaml.dump(fragment, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+def apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name):
+    """Merge generated fragment into existing Alertmanager ConfigMap and reload.
+
+    Steps:
+    1. kubectl get cm → extract alertmanager.yml
+    2. Merge routes, receivers, inhibit_rules into existing config
+    3. kubectl apply updated ConfigMap
+    4. curl POST /-/reload
+    """
+    # 1. Read existing ConfigMap
+    result = subprocess.run(
+        ["kubectl", "get", "configmap", configmap_name, "-n", namespace,
+         "-o", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}",
+              file=sys.stderr)
+        return False
+
+    cm = json.loads(result.stdout)
+    existing_yml = cm.get("data", {}).get("alertmanager.yml", "")
+    if not existing_yml:
+        print("ERROR: ConfigMap has no 'alertmanager.yml' key", file=sys.stderr)
+        return False
+
+    existing = yaml.safe_load(existing_yml)
+
+    # 2. Merge fragment into existing config
+    if routes:
+        if "route" not in existing:
+            existing["route"] = {}
+        existing["route"]["routes"] = routes
+
+    if receivers:
+        # Keep default receiver, replace tenant receivers
+        existing_names = {r["name"] for r in receivers}
+        kept = [r for r in existing.get("receivers", [])
+                if r["name"] not in existing_names]
+        existing["receivers"] = kept + receivers
+
+    if inhibit_rules:
+        # Keep non-generated inhibit rules (e.g., Silent Mode sentinel rules)
+        # Generated rules have metric_group matcher; silent mode rules don't
+        kept_rules = [r for r in existing.get("inhibit_rules", [])
+                      if not any('metric_group' in m for m in r.get("source_matchers", []))]
+        existing["inhibit_rules"] = kept_rules + inhibit_rules
+
+    merged_yml = yaml.dump(existing, default_flow_style=False,
+                           allow_unicode=True, sort_keys=False)
+
+    # 3. Apply updated ConfigMap
+    apply_result = subprocess.run(
+        ["kubectl", "create", "configmap", configmap_name,
+         f"--from-literal=alertmanager.yml={merged_yml}",
+         "-n", namespace, "--dry-run=client", "-o", "yaml"],
+        capture_output=True, text=True
+    )
+    if apply_result.returncode != 0:
+        print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}",
+              file=sys.stderr)
+        return False
+
+    pipe_result = subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=apply_result.stdout, capture_output=True, text=True
+    )
+    if pipe_result.returncode != 0:
+        print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
+        return False
+
+    print(f"ConfigMap {namespace}/{configmap_name} updated")
+
+    # 4. Reload Alertmanager
+    svc_url = f"http://alertmanager.{namespace}.svc.cluster.local:9093"
+    reload_result = subprocess.run(
+        ["curl", "-sf", "-X", "POST", f"{svc_url}/-/reload"],
+        capture_output=True, text=True
+    )
+    if reload_result.returncode != 0:
+        print(f"WARN: Alertmanager reload failed (is --web.enable-lifecycle enabled?)",
+              file=sys.stderr)
+        print("ConfigMap was updated — Alertmanager will pick up changes on next restart")
+        return True
+
+    print("Alertmanager reloaded")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate Alertmanager route + receiver config from tenant YAML",
@@ -368,6 +543,14 @@ def main():
                         help="Preview output without writing file")
     parser.add_argument("--validate", action="store_true",
                         help="Validate generated config (exit 0 if valid, 1 if errors)")
+    parser.add_argument("--apply", action="store_true",
+                        help="Apply: merge into Alertmanager ConfigMap + reload")
+    parser.add_argument("--namespace", default="monitoring",
+                        help="K8s namespace for --apply (default: monitoring)")
+    parser.add_argument("--configmap", default="alertmanager-config",
+                        help="ConfigMap name for --apply (default: alertmanager-config)")
+    parser.add_argument("--yes", action="store_true",
+                        help="Skip confirmation prompt for --apply")
 
     args = parser.parse_args()
 
@@ -416,6 +599,22 @@ def main():
             sys.exit(1)
         print("OK: all configs valid")
         sys.exit(0)
+
+    # Apply mode: merge into ConfigMap + reload
+    if args.apply:
+        route_count = len(routes)
+        inhibit_count = len(inhibit_rules)
+        print(f"\nApply: {route_count} route(s), {len(receivers)} receiver(s), "
+              f"{inhibit_count} inhibit rule(s)")
+        print(f"Target: {args.namespace}/{args.configmap}")
+        if not args.yes:
+            confirm = input("Proceed? [y/N] ").strip().lower()
+            if confirm not in ("y", "yes"):
+                print("Aborted.")
+                sys.exit(0)
+        success = apply_to_configmap(routes, receivers, inhibit_rules,
+                                     args.namespace, args.configmap)
+        sys.exit(0 if success else 1)
 
     # Render output
     header = (

@@ -27,10 +27,7 @@ spec:
               name: http
           volumeMounts:
             - name: config
-              mountPath: /etc/alertmanager/alertmanager.yml
-              subPath: alertmanager.yml
-            - name: data
-              mountPath: /alertmanager
+              mountPath: /etc/alertmanager
           resources:
             requests:
               cpu: 50m
@@ -50,6 +47,22 @@ spec:
               port: 9093
             initialDelaySeconds: 10
             periodSeconds: 10
+        - name: config-reloader
+          image: ghcr.io/jimmidyson/configmap-reload:v0.14.0
+          args:
+            - "--volume-dir=/etc/alertmanager"
+            - "--webhook-url=http://localhost:9093/-/reload"
+            - "--webhook-method=POST"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
       volumes:
         - name: config
           configMap:

@@ -10,7 +10,7 @@ tenants:
     # Options: "warning" | "critical" | "all" | "disable"
     _silent_mode: "warning"
     # v1.3.0 Alert Routing: tenant-managed notification destination
-    # Receiver types: webhook | email | slack | teams
+    # Receiver types: webhook | email | slack | teams | rocketchat | pagerduty
     # Use generate_alertmanager_routes.py to produce Alertmanager config fragment
     _routing:
       receiver:

@@ -75,7 +75,7 @@ tenants:
 # da-tools 容器方式
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.3.0 \
+  ghcr.io/vencil/da-tools:1.4.0 \
   generate-routes --config-dir /data/conf.d -o /data/alertmanager-routes.yaml
 
 # 本地 Python 方式

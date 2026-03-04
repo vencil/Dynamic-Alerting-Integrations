@@ -2,6 +2,39 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.4.0] - Routing Defaults, 6 Receiver Types & Auto-Reload (2026-03-04)
+
+三態 Routing Defaults + Rocket.Chat / PagerDuty receiver + `--apply` 一站式部署 + ConfigMap Watcher Sidecar 自動 reload。
+
+### 🎯 Routing Defaults (三態延伸)
+
+* **`_routing_defaults` in `_defaults.yaml`**：Domain expert 設定預設 receiver + timing，tenant 三態（繼承/覆寫/disable）。
+* **`{{tenant}}` Template Substitution**：receiver 欄位支援 `{{tenant}}` 佔位符，merge 時自動替換為 tenant 名稱（如 `#alerts-{{tenant}}` → `#alerts-db-a`）。
+* **Default receiver 允許**：無 `_routing` 的 tenant 自動繼承 `_routing_defaults`，不需每個 tenant 都寫 receiver。
+
+### 📡 Receiver 類型擴充
+
+* **Rocket.Chat**：以 `webhook_configs` 包裝，`channel`/`username`/`icon_url` 作為 metadata 記錄。
+* **PagerDuty**：原生 `pagerduty_configs` 映射，`service_key` 為必要欄位。
+* **v1.4.0 支援 6 種 receiver**：webhook / email / slack / teams / rocketchat / pagerduty。
+
+### 🚀 generate-routes --apply
+
+* **一站式部署**：`--apply` flag 自動讀取現有 ConfigMap → merge fragment → kubectl apply → curl reload。
+* **安全機制**：需明確 `--namespace` + `--configmap` + 互動確認（`--yes` 跳過）。
+
+### 🔄 ConfigMap Watcher Sidecar
+
+* **`configmap-reload` sidecar**：Alertmanager deployment 新增 `ghcr.io/jimmidyson/configmap-reload:v0.14.0` sidecar，偵測 ConfigMap 變更後自動 POST `/-/reload`。
+* **Volume mount 調整**：從 `subPath` 改為目錄掛載，支援 ConfigMap live update。
+
+### 🧪 Testing
+
+* **12 個新 Python 測試**：`TestRoutingDefaults`（7 tests，三態合併 + `{{tenant}}` 替換 + boundary warning）+ `TestNewReceiverTypes`（5 tests，rocketchat/pagerduty 驗證）。
+* **Go `validReceiverTypes` 更新**：新增 rocketchat + pagerduty。
+
+---
+
 ## [v1.3.0] - Alertmanager 動態化 & Receiver 擴充 (2026-03-04)
 
 Alertmanager 動態 Reload + 多類型 Receiver 支援 + Routing CI 驗證，回應 user feedback「最後一哩路」。

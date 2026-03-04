@@ -555,10 +555,12 @@ type RoutingConfig struct {
 
 // validReceiverTypes lists supported receiver types (must match Python RECEIVER_TYPES).
 var validReceiverTypes = map[string]bool{
-	"webhook": true,
-	"email":   true,
-	"slack":   true,
-	"teams":   true,
+	"webhook":    true,
+	"email":      true,
+	"slack":      true,
+	"teams":      true,
+	"rocketchat": true,
+	"pagerduty":  true,
 }
 
 // Timing guardrail bounds for routing config.
