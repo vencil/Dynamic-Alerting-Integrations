@@ -142,5 +142,11 @@ spec:
                   items:
                     - key: platform-alert.yml
                       path: platform-alert.yml
+              - configMap:
+                  name: prometheus-rules-operational
+                  optional: true
+                  items:
+                    - key: operational-alert.yml
+                      path: operational-alert.yml
         - name: data
           emptyDir: {}

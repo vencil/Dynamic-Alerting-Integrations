@@ -151,6 +151,13 @@ user_threshold{tenant="db-b",component="mysql",metric="cpu",severity="critical"}
 # 維度標籤 — 額外 label 自動附加在標準 label 之後
 user_threshold{tenant="redis-prod",component="redis",metric="queue_length",severity="critical",queue="tasks"} 500
 user_threshold{tenant="es-prod",component="es",metric="index_store_size_bytes",severity="warning",index="logs-prod"} 107374182400
+
+# Silent mode — per-tenant 通知靜音 (v1.2.0)
+# HELP user_silent_mode Silent mode flag (1=active)
+# TYPE user_silent_mode gauge
+user_silent_mode{tenant="db-b",target_severity="warning"} 1
+user_silent_mode{tenant="db-c",target_severity="warning"} 1
+user_silent_mode{tenant="db-c",target_severity="critical"} 1
 ```
 
 ## Prometheus 整合

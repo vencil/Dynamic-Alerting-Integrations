@@ -35,7 +35,7 @@ flowchart TD
 
 ## Zero-Friction 導入
 
-本平台已預載 **9 個核心 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
+本平台已預載 **10 個核心 Rule Pack** (MariaDB、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Platform 自我監控、Operational)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
 
 **未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)**。新增 exporter 後，只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
 
@@ -511,6 +511,30 @@ route:
 ```
 
 以 `tenant` 為第一維度分派，支援嵌套路由實現嚴重度分層。
+
+### Config-Driven Routing（v1.2.0+）
+
+v1.2.0 起，Tenant 可在自己的 YAML 中設定 `_routing` section，由平台工具自動產出 Alertmanager route + receiver config：
+
+```yaml
+# tenant YAML (conf.d/db-a.yaml)
+tenants:
+  db-a:
+    mysql_connections: "70"
+    _routing:
+      receiver: "https://hooks.slack.com/services/T00/B00/xxx"
+      group_by: ["alertname", "severity"]
+      group_wait: "30s"
+      repeat_interval: "4h"
+```
+
+```bash
+# 自動產出 Alertmanager fragment
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir conf.d/ -o alertmanager-routes.yaml
+```
+
+平台對時序參數設有 guardrails（group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h），超限值自動 clamp。詳見 [Architecture §2.9](architecture-and-design.md#29-alert-routing-客製化-config-driven-routing)。
 
 ---
 

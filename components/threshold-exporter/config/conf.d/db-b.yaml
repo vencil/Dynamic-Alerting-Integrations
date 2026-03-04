@@ -6,3 +6,13 @@ tenants:
     mysql_cpu: "60"
     container_memory: "90"
     _state_container_crashloop: "disable"
+    # v1.2.0 Silent Mode: alerts fire (TSDB records) but notifications suppressed
+    # Options: "warning" | "critical" | "all" | "disable"
+    _silent_mode: "warning"
+    # v1.2.0 Alert Routing: tenant-managed notification destination
+    # Use generate_alertmanager_routes.py to produce Alertmanager config fragment
+    _routing:
+      receiver: "https://webhook.db-b.example.com/alerts"
+      group_by: ["alertname", "severity"]
+      group_wait: "30s"
+      repeat_interval: "4h"

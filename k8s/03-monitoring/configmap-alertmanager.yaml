@@ -9,7 +9,7 @@ data:
       resolve_timeout: 5m
 
     route:
-      group_by: ["alertname", "instance"]
+      group_by: ["alertname", "tenant"]
       group_wait: 10s
       group_interval: 10s
       repeat_interval: 12h
@@ -21,8 +21,29 @@ data:
         # (移除 localhost:5001 webhook 避免 Connection refused 噪音)
 
     inhibit_rules:
+      # v1.2.0 Severity Dedup: critical 觸發時壓制同 metric_group 的 warning 通知
+      # 前提: TenantSeverityDedupEnabled sentinel 必須 firing (即 tenant 的 dedup 為 enable)
+      # TSDB 不受影響 — warning + critical 都有紀錄，僅壓制 warning 通知
+      # Tenant 可設 _severity_dedup: "disable" 取消此行為
       - source_matchers:
           - severity="critical"
         target_matchers:
           - severity="warning"
-        equal: ["alertname", "instance"]
+        equal: ["tenant", "metric_group"]
+
+      # v1.2.0 Silent Mode: 壓制 warning 通知
+      # TenantSilentWarning sentinel 觸發時，該 tenant 的 warning alert 不通知
+      # alert 仍寫入 TSDB（Grafana 可查），僅攔截 Alertmanager 通知
+      - source_matchers:
+          - alertname="TenantSilentWarning"
+        target_matchers:
+          - severity="warning"
+        equal: ["tenant"]
+
+      # v1.2.0 Silent Mode: 壓制 critical 通知
+      # TenantSilentCritical sentinel 觸發時，該 tenant 的 critical alert 不通知
+      - source_matchers:
+          - alertname="TenantSilentCritical"
+        target_matchers:
+          - severity="critical"
+        equal: ["tenant"]

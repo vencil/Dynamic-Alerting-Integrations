@@ -135,3 +135,28 @@ func BenchmarkResolveAt_NightWindow_1000Tenants(b *testing.B) {
 		cfg.ResolveAt(now)
 	}
 }
+
+// buildSilentConfig creates a ThresholdConfig with N tenants, each with
+// a mix of silent mode settings for benchmarking ResolveSilentModes.
+func buildSilentConfig(numTenants int) *ThresholdConfig {
+	modes := []string{"warning", "critical", "all", "disable"}
+	tenants := make(map[string]map[string]ScheduledValue, numTenants)
+	for i := 0; i < numTenants; i++ {
+		name := fmt.Sprintf("tenant-%04d", i)
+		tenants[name] = map[string]ScheduledValue{
+			"_silent_mode": SV(modes[i%len(modes)]),
+		}
+	}
+	return &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants:  tenants,
+	}
+}
+
+func BenchmarkResolveSilentModes_1000(b *testing.B) {
+	cfg := buildSilentConfig(1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cfg.ResolveSilentModes()
+	}
+}

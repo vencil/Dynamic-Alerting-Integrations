@@ -101,6 +101,42 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+
+	// Silent mode: per-tenant notification suppression flags.
+	// Alerts still fire in Prometheus (TSDB records exist), but Alertmanager
+	// uses sentinel alerts + inhibit_rules to suppress notifications.
+	// Distinct from maintenance mode which suppresses at PromQL level (no TSDB records).
+	silentDesc := prometheus.NewDesc(
+		"user_silent_mode",
+		"Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.",
+		[]string{"tenant", "target_severity"},
+		nil,
+	)
+	for _, sm := range cfg.ResolveSilentModes() {
+		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
+		if err != nil {
+			continue
+		}
+		ch <- m
+	}
+
+	// Severity dedup: per-tenant warning↔critical notification deduplication.
+	// When enabled (default), Alertmanager inhibit rules suppress warning notifications
+	// when critical fires for the same tenant+metric_group.
+	// Both alerts ALWAYS fire in TSDB regardless of this setting — dedup only controls notifications.
+	dedupDesc := prometheus.NewDesc(
+		"user_severity_dedup",
+		"Severity dedup flag (1=enabled). Warning notifications suppressed when critical fires for same metric_group. v1.2.0+",
+		[]string{"tenant", "mode"},
+		nil,
+	)
+	for _, sd := range cfg.ResolveSeverityDedup() {
+		m, err := prometheus.NewConstMetric(dedupDesc, prometheus.GaugeValue, 1.0, sd.Tenant, sd.Mode)
+		if err != nil {
+			continue
+		}
+		ch <- m
+	}
 }
 
 // MetricsHandler returns an HTTP handler that serves /metrics

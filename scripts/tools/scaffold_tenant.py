@@ -277,6 +277,53 @@ def generate_tenant(tenant_name, selected_dbs, overrides, interactive=False):
         if enable_maint == "y":
             tenant_config["_state_maintenance"] = "enable"
 
+    # Silent mode: alerts fire (TSDB records) but notifications suppressed
+    if interactive:
+        print("\n  靜音模式 (Silent Mode):")
+        print("    1. Normal — 不靜音 (預設)")
+        print("    2. Warning — 只靜音 warning 通知")
+        print("    3. Critical — 只靜音 critical 通知")
+        print("    4. All — 靜音所有通知")
+        silent_choice = input("  選擇 [1-4] (預設 1): ").strip()
+        silent_map = {"2": "warning", "3": "critical", "4": "all"}
+        if silent_choice in silent_map:
+            tenant_config["_silent_mode"] = silent_map[silent_choice]
+
+    # Severity dedup: control warning↔critical notification deduplication
+    if interactive:
+        print("\n  嚴重度去重 (Severity Dedup):")
+        print("    1. Enable — critical 觸發時壓制 warning 通知 (預設)")
+        print("    2. Disable — warning 和 critical 通知都發送")
+        dedup_choice = input("  選擇 [1-2] (預設 1): ").strip()
+        if dedup_choice == "2":
+            tenant_config["_severity_dedup"] = "disable"
+
+    # Alert routing: tenant-managed notification destination
+    if interactive:
+        print("\n  告警路由 (Alert Routing):")
+        print("    設定通知目的地 (webhook URL)，空白跳過使用平台預設")
+        receiver = input("  Webhook URL (例如 https://hooks.slack.com/...): ").strip()
+        if receiver:
+            routing = {"receiver": receiver}
+
+            group_by = input("  Group by labels (逗號分隔，預設 alertname,tenant): ").strip()
+            if group_by:
+                routing["group_by"] = [g.strip() for g in group_by.split(",")]
+
+            group_wait = input("  Group wait (例如 30s，範圍 5s-5m，預設 30s): ").strip()
+            if group_wait:
+                routing["group_wait"] = group_wait
+
+            group_interval = input("  Group interval (例如 5m，範圍 5s-5m，預設 5m): ").strip()
+            if group_interval:
+                routing["group_interval"] = group_interval
+
+            repeat_interval = input("  Repeat interval (例如 4h，範圍 1m-72h，預設 4h): ").strip()
+            if repeat_interval:
+                routing["repeat_interval"] = repeat_interval
+
+            tenant_config["_routing"] = routing
+
     return {"tenants": {tenant_name: tenant_config}} if tenant_config else {"tenants": {tenant_name: {}}}
 
 
@@ -443,6 +490,35 @@ def run_non_interactive(args):
     print(f"⚙️  生成 {tenant_name} config (DBs: {', '.join(selected_dbs)})...")
     defaults_data = generate_defaults(selected_dbs)
     tenant_data = generate_tenant(tenant_name, selected_dbs, {}, interactive=False)
+
+    # Apply --silent-mode if specified
+    silent_mode = getattr(args, "silent_mode", None)
+    if silent_mode and silent_mode != "disable":
+        tenant_data["tenants"][tenant_name]["_silent_mode"] = silent_mode
+
+    # Apply --severity-dedup if specified (only write if not default)
+    severity_dedup = getattr(args, "severity_dedup", "enable")
+    if severity_dedup == "disable":
+        tenant_data["tenants"][tenant_name]["_severity_dedup"] = "disable"
+
+    # Apply --routing-receiver if specified
+    routing_receiver = getattr(args, "routing_receiver", None)
+    if routing_receiver:
+        routing = {"receiver": routing_receiver}
+        routing_group_by = getattr(args, "routing_group_by", None)
+        if routing_group_by:
+            routing["group_by"] = [g.strip() for g in routing_group_by.split(",")]
+        routing_group_wait = getattr(args, "routing_group_wait", None)
+        if routing_group_wait:
+            routing["group_wait"] = routing_group_wait
+        routing_group_interval = getattr(args, "routing_group_interval", None)
+        if routing_group_interval:
+            routing["group_interval"] = routing_group_interval
+        routing_repeat_interval = getattr(args, "routing_repeat_interval", None)
+        if routing_repeat_interval:
+            routing["repeat_interval"] = routing_repeat_interval
+        tenant_data["tenants"][tenant_name]["_routing"] = routing
+
     report = generate_report(tenant_name, selected_dbs, output_dir)
 
     print(f"\n📁 輸出至 {output_dir}/")
@@ -468,6 +544,20 @@ def main():
     parser.add_argument("-o", "--output-dir", default="scaffold_output", help="Output directory (default: scaffold_output)")
     parser.add_argument("--catalog", action="store_true", help="顯示支援的 exporter 清單")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts (requires --tenant and --db)")
+    parser.add_argument("--silent-mode", choices=["warning", "critical", "all", "disable"],
+                        help="Silent mode: alerts fire (TSDB records) but notifications suppressed")
+    parser.add_argument("--severity-dedup", choices=["enable", "disable"], default="enable",
+                        help="Severity dedup: suppress warning notification when critical fires (default: enable)")
+    parser.add_argument("--routing-receiver",
+                        help="Alert routing webhook URL (e.g., https://hooks.slack.com/...)")
+    parser.add_argument("--routing-group-by",
+                        help="Comma-separated group_by labels (e.g., alertname,severity)")
+    parser.add_argument("--routing-group-wait",
+                        help="Group wait duration (e.g., 30s, range: 5s-5m)")
+    parser.add_argument("--routing-group-interval",
+                        help="Group interval duration (e.g., 5m, range: 5s-5m)")
+    parser.add_argument("--routing-repeat-interval",
+                        help="Repeat interval duration (e.g., 4h, range: 1m-72h)")
 
     args = parser.parse_args()
 

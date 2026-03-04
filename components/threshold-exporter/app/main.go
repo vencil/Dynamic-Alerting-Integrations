@@ -172,6 +172,15 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 			}
 		}
 
+		// Show silent mode status
+		silentModes := cfg.ResolveSilentModes()
+		if len(silentModes) > 0 {
+			fmt.Fprintf(w, "\nSilent modes (%d):\n", len(silentModes))
+			for _, sm := range silentModes {
+				fmt.Fprintf(w, "  tenant=%s target_severity=%s\n", sm.Tenant, sm.TargetSeverity)
+			}
+		}
+
 		// Show resolved state at the determined time
 		fmt.Fprintf(w, "\nResolved thresholds:\n")
 		resolved := cfg.ResolveAt(resolveTime)

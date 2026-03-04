@@ -34,6 +34,18 @@ type ResolvedStateFilter struct {
 	Severity   string
 }
 
+// ResolvedSilentMode is the resolved silent mode for one tenant.
+// Exposed as user_silent_mode{tenant, target_severity} = 1.0 (flag gauge).
+// Silent mode: alerts fire (TSDB records exist) but Alertmanager notifications are suppressed.
+// This is distinct from maintenance mode which suppresses alerts at PromQL level (no TSDB records).
+//
+// Tenant config: _silent_mode: "warning" | "critical" | "all" | "disable"
+// Default (absent): Normal — no silent mode, all notifications delivered.
+type ResolvedSilentMode struct {
+	Tenant         string
+	TargetSeverity string // "warning" or "critical" — one struct per severity
+}
+
 // TimeWindowOverride defines a UTC time window with an override value.
 // Window format: "HH:MM-HH:MM" (UTC-only, cross-midnight supported).
 //
@@ -216,7 +228,11 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 	for tenant, overrides := range c.Tenants {
 		for metricKey, defaultValue := range c.Defaults {
 			// Skip _state_ prefixed keys — handled by ResolveStateFilters()
-			if strings.HasPrefix(metricKey, "_state_") {
+			// Skip _silent_ prefixed keys — handled by ResolveSilentModes()
+			// Skip _severity_dedup — handled by ResolveSeverityDedup()
+			// Skip _routing — handled by ResolveRouting() (Phase 4)
+			if strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
+				metricKey == "_severity_dedup" || strings.HasPrefix(metricKey, "_routing") {
 				continue
 			}
 
@@ -270,7 +286,7 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 		// Multi-tier severity: scan for <metricKey>_critical overrides.
 		// These produce an additional threshold with severity=critical.
 		for key, sv := range overrides {
-			if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") {
+			if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
 				continue
 			}
 
@@ -310,7 +326,8 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 			if !strings.Contains(key, "{") {
 				continue // not a dimensional key
 			}
-			if strings.HasPrefix(key, "_state_") {
+			if strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
+				key == "_severity_dedup" || strings.HasPrefix(key, "_routing") {
 				continue
 			}
 
@@ -399,6 +416,261 @@ func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
 	}
 
 	return result
+}
+
+// ResolveSilentModes resolves silent mode preferences for all tenants.
+// Tenants set _silent_mode in their config: "warning", "critical", "all", or "disable".
+// Default (absent): Normal — no silent mode entries produced.
+//
+// Returns one ResolvedSilentMode per tenant+severity combination.
+// "all" expands to two entries: one for "warning" and one for "critical".
+func (c *ThresholdConfig) ResolveSilentModes() []ResolvedSilentMode {
+	var result []ResolvedSilentMode
+
+	for tenant, overrides := range c.Tenants {
+		sv, exists := overrides["_silent_mode"]
+		if !exists {
+			continue // Normal mode (default) — no silent entries
+		}
+
+		val := strings.TrimSpace(strings.ToLower(sv.Default))
+		if isDisabled(val) || val == "" {
+			continue // Explicitly disabled or empty
+		}
+
+		switch val {
+		case "warning":
+			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "warning"})
+		case "critical":
+			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "critical"})
+		case "all":
+			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "warning"})
+			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "critical"})
+		default:
+			log.Printf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: warning, critical, all, disable)", val, tenant)
+		}
+	}
+
+	return result
+}
+
+// ResolvedSeverityDedup represents a tenant's severity deduplication preference.
+// When mode="enable", Alertmanager inhibit rules suppress warning notifications
+// when critical fires for the same tenant+metric_group.
+// When mode="disable" or absent, both warning and critical notifications are sent.
+//
+// Default (absent): "enable" — backward compatible, suppress warning when critical fires.
+// Tenant config: _severity_dedup: "enable" | "disable"
+type ResolvedSeverityDedup struct {
+	Tenant string
+	Mode   string // "enable" or "disable"
+}
+
+// ResolveSeverityDedup resolves severity deduplication preferences for all tenants.
+// Default: "enable" (backward compatible — suppress warning notification when critical fires).
+// Tenants can set _severity_dedup: "disable" to receive both notifications.
+//
+// Returns one ResolvedSeverityDedup per tenant where mode="enable".
+// Tenants with "disable" produce no entry (sentinel alert won't fire → no inhibit).
+func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
+	var result []ResolvedSeverityDedup
+
+	for tenant, overrides := range c.Tenants {
+		sv, exists := overrides["_severity_dedup"]
+		if !exists {
+			// Default: enable (backward compatible)
+			result = append(result, ResolvedSeverityDedup{Tenant: tenant, Mode: "enable"})
+			continue
+		}
+
+		val := strings.TrimSpace(strings.ToLower(sv.Default))
+		switch val {
+		case "enable", "enabled", "on", "true":
+			result = append(result, ResolvedSeverityDedup{Tenant: tenant, Mode: "enable"})
+		case "disable", "disabled", "off", "false":
+			// No entry → sentinel won't fire → no inhibit → both notifications sent
+			continue
+		default:
+			log.Printf("WARN: unknown severity_dedup value %q for tenant=%s, defaulting to enable (valid: enable, disable)", val, tenant)
+			result = append(result, ResolvedSeverityDedup{Tenant: tenant, Mode: "enable"})
+		}
+	}
+
+	return result
+}
+
+// RoutingConfig represents a tenant's alert routing preferences.
+// Used by generate_alertmanager_routes.py to produce Alertmanager route/receiver fragments.
+// The Go exporter validates guardrails but does NOT emit metrics — routing config is
+// consumed by the external tooling, not by Prometheus.
+//
+// Tenant config:
+//
+//	_routing:
+//	  receiver: "https://webhook.example.com/alerts"
+//	  group_by: ["alertname", "severity"]
+//	  group_wait: "30s"
+//	  group_interval: "1m"
+//	  repeat_interval: "4h"
+type RoutingConfig struct {
+	Tenant         string
+	Receiver       string            // webhook URL (required)
+	GroupBy        []string          // optional, platform default if absent
+	GroupWait      string            // optional, guardrail 5s–5m
+	GroupInterval  string            // optional, guardrail 5s–5m
+	RepeatInterval string            // optional, guardrail 1m–72h
+}
+
+// Timing guardrail bounds for routing config.
+var routingGuardrails = map[string][2]time.Duration{
+	"group_wait":      {5 * time.Second, 5 * time.Minute},
+	"group_interval":  {5 * time.Second, 5 * time.Minute},
+	"repeat_interval": {1 * time.Minute, 72 * time.Hour},
+}
+
+// ResolveRouting resolves alert routing configurations for all tenants.
+// Tenants set _routing as a structured map in their config.
+// Returns one RoutingConfig per tenant that has a valid _routing section.
+//
+// Guardrails:
+//   - group_wait: 5s–5m (clamped with warning)
+//   - group_interval: 5s–5m (clamped with warning)
+//   - repeat_interval: 1m–72h (clamped with warning)
+//   - receiver is required; skip tenant if missing
+func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
+	var result []RoutingConfig
+
+	for tenant, overrides := range c.Tenants {
+		sv, exists := overrides["_routing"]
+		if !exists {
+			continue
+		}
+
+		// _routing is stored as a YAML string in ScheduledValue.Default
+		// but it's actually a structured map. We need to re-parse it.
+		raw := sv.Default
+		if raw == "" {
+			continue
+		}
+
+		// Parse the routing config from the raw YAML value.
+		// In directory mode, _routing is a nested map that gets serialized
+		// as a ScheduledValue. We parse it from the original YAML structure.
+		var routingMap map[string]interface{}
+		if err := yaml.Unmarshal([]byte(raw), &routingMap); err != nil {
+			// If it's not valid YAML, it might be a simple string — skip
+			log.Printf("WARN: invalid _routing config for tenant=%s: %v", tenant, err)
+			continue
+		}
+
+		rc := RoutingConfig{Tenant: tenant}
+
+		// Extract receiver (required)
+		if recv, ok := routingMap["receiver"].(string); ok && recv != "" {
+			rc.Receiver = recv
+		} else {
+			log.Printf("WARN: _routing for tenant=%s missing required 'receiver' field, skipping", tenant)
+			continue
+		}
+
+		// Extract group_by (optional)
+		if gb, ok := routingMap["group_by"].([]interface{}); ok {
+			for _, v := range gb {
+				if s, ok := v.(string); ok {
+					rc.GroupBy = append(rc.GroupBy, s)
+				}
+			}
+		}
+
+		// Extract and validate timing parameters with guardrails
+		if gw, ok := routingMap["group_wait"].(string); ok && gw != "" {
+			rc.GroupWait = clampDuration(gw, "group_wait", tenant)
+		}
+		if gi, ok := routingMap["group_interval"].(string); ok && gi != "" {
+			rc.GroupInterval = clampDuration(gi, "group_interval", tenant)
+		}
+		if ri, ok := routingMap["repeat_interval"].(string); ok && ri != "" {
+			rc.RepeatInterval = clampDuration(ri, "repeat_interval", tenant)
+		}
+
+		result = append(result, rc)
+	}
+
+	return result
+}
+
+// clampDuration validates a duration string against guardrails.
+// Returns the original string if within bounds, or the clamped value with a warning.
+func clampDuration(value, param, tenant string) string {
+	bounds, ok := routingGuardrails[param]
+	if !ok {
+		return value
+	}
+
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		// Try Prometheus-style duration (e.g., "30s", "5m", "4h")
+		d, err = parsePromDuration(value)
+		if err != nil {
+			log.Printf("WARN: invalid %s %q for tenant=%s, ignoring", param, value, tenant)
+			return ""
+		}
+	}
+
+	if d < bounds[0] {
+		clamped := formatDuration(bounds[0])
+		log.Printf("WARN: %s %q for tenant=%s below minimum %s, clamping to %s", param, value, tenant, formatDuration(bounds[0]), clamped)
+		return clamped
+	}
+	if d > bounds[1] {
+		clamped := formatDuration(bounds[1])
+		log.Printf("WARN: %s %q for tenant=%s above maximum %s, clamping to %s", param, value, tenant, formatDuration(bounds[1]), clamped)
+		return clamped
+	}
+
+	return value
+}
+
+// parsePromDuration parses Prometheus-style duration strings like "30s", "5m", "4h".
+func parsePromDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 {
+		return 0, fmt.Errorf("duration too short: %q", s)
+	}
+
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number in duration %q: %w", s, err)
+	}
+
+	switch unit {
+	case 's':
+		return time.Duration(num * float64(time.Second)), nil
+	case 'm':
+		return time.Duration(num * float64(time.Minute)), nil
+	case 'h':
+		return time.Duration(num * float64(time.Hour)), nil
+	case 'd':
+		return time.Duration(num * 24 * float64(time.Hour)), nil
+	default:
+		return 0, fmt.Errorf("unknown duration unit %q in %q", string(unit), s)
+	}
+}
+
+// formatDuration formats a time.Duration as a human-readable Prometheus-style string.
+func formatDuration(d time.Duration) string {
+	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	}
+	if d >= time.Hour && d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	}
+	if d >= time.Minute && d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
 }
 
 // isDisabled checks if a value string means "disabled".
@@ -555,8 +827,9 @@ func (m *ConfigManager) Load() error {
 
 	resolved := cfg.Resolve()
 	resolvedState := cfg.ResolveStateFilters()
-	log.Printf("Config loaded (%s): %d defaults, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters",
-		m.Mode(), len(cfg.Defaults), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState))
+	resolvedSilent := cfg.ResolveSilentModes()
+	log.Printf("Config loaded (%s): %d defaults, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters, %d silent modes",
+		m.Mode(), len(cfg.Defaults), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState), len(resolvedSilent))
 
 	return nil
 }

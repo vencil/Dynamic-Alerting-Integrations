@@ -130,6 +130,22 @@ curl -s 'http://<your-prometheus>:9090/api/v1/targets' \
 
 **✅ 通過條件**：每個 tenant 的指標都帶有正確的 `tenant` 標籤值。
 
+### 進階：彈性 Tenant-Namespace 映射
+
+上述方案 A 假設 1:1（一個 namespace = 一個 tenant）。平台也支援其他映射模式：
+
+- **N:1（多 Namespace → 一個 Tenant）**：例如 `db-a-read` 和 `db-a-write` 統一為 `db-a`。使用 regex 擷取 tenant 前綴：
+  ```yaml
+  - source_labels: [__meta_kubernetes_namespace]
+    target_label: tenant
+    regex: "(db-[^-]+).*"
+    replacement: "$1"
+  ```
+
+- **1:N（一個 Namespace → 多個 Tenant）**：共享 namespace 場景，使用方案 B 的 Service label/annotation 區分 tenant。
+
+**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[架構文件 §2.3](architecture-and-design.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)。
+
 ---
 
 ## 步驟 2：抓取 threshold-exporter

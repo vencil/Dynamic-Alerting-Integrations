@@ -627,12 +627,14 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
 # ============================================================
 
 def apply_auto_suppression(results):
-    """配對 warning/critical 規則，為 warning 注入第二層 unless (auto-suppression)。
+    """配對 warning/critical 規則，為兩者加上 metric_group label。
 
-    當同一 base metric key 同時有 warning 和 critical 結果時，warning alert
-    的 expr 會自動追加 unless 子句，確保 critical 觸發時抑制 warning。
+    v1.2.0 起，Auto-Suppression 從 PromQL 層移至 Alertmanager 層：
+    - Warning 和 Critical 都在 TSDB 留下紀錄（不再用 PromQL unless 消滅 warning）
+    - Alertmanager inhibit_rules 依 tenant + metric_group 配對，壓制 warning 通知
+    - Tenant 可設 _severity_dedup: "disable" 取消壓制，同時收到兩種通知
 
-    修改 results 中 warning MigrationResult 的 alert_rules[0]["expr"]（in-place）。
+    修改 results 中 warning + critical MigrationResult 的 alert_rules labels（in-place）。
     回傳配對成功的數量。
     """
     # 建立 base_key → {severity: result} 映射
@@ -665,29 +667,27 @@ def apply_auto_suppression(results):
         if not warn_r.alert_rules or len(crit_r.recording_rules) < 2:
             continue
 
-        # 取得 warning 的 data recording rule name (第一條)
-        record_name = warn_r.recording_rules[0]["record"]
-        # 取得 critical 的 threshold recording rule name (第二條)
-        crit_threshold = crit_r.recording_rules[1]["record"]
-        # 運算子取自 warning result
-        op = warn_r.op or ">"
+        # 從 base_key 推導 metric_group（取最後一段作為 group name）
+        # 例: mysql_connections → connections, container_cpu → cpu
+        parts = base_key.split("_")
+        metric_group = parts[-1] if parts else base_key
 
-        suppression_clause = (
-            f"\nunless on(tenant)\n"
-            f"(\n"
-            f"  {record_name}\n"
-            f"  {op} on(tenant) group_left\n"
-            f"  {crit_threshold}\n"
-            f")"
-        )
-
-        # 修改 warning alert 的 expr（in-place）
+        # 為 warning 和 critical alert 加上 metric_group label
         for ar in warn_r.alert_rules:
-            ar["expr"] += suppression_clause
+            if "labels" not in ar:
+                ar["labels"] = {}
+            ar["labels"]["metric_group"] = metric_group
+
+        for ar in crit_r.alert_rules:
+            if "labels" not in ar:
+                ar["labels"] = {}
+            ar["labels"]["metric_group"] = metric_group
 
         warn_r.notes.append(
-            f"Auto-Suppression: 已配對 critical ({crit_r.alert_name})，"
-            f"warning 觸發時若同時超過 critical 閾值則自動抑制"
+            f"Severity Dedup: 已配對 critical ({crit_r.alert_name})，"
+            f"metric_group=\"{metric_group}\"。"
+            f"Alertmanager inhibit 預設壓制 warning 通知 "
+            f"(tenant 可設 _severity_dedup: \"disable\" 取消)"
         )
         paired += 1
 

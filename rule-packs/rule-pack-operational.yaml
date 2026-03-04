@@ -1,0 +1,62 @@
+# ============================================================
+# Rule Pack: Operational Mode — Sentinel Alerts for Alertmanager
+# 預設啟用 — 提供 Silent Mode + Severity Dedup 的 Alertmanager 聯動
+#
+# 不需要額外 exporter — 讀取 threshold-exporter 的指標:
+#   - user_silent_mode     → Silent Mode sentinel
+#   - user_severity_dedup  → Severity Dedup sentinel
+#
+# === Silent Mode ===
+# alert 照常在 Prometheus 觸發 (TSDB 有 ALERTS 紀錄)，
+# Alertmanager 透過 inhibit_rules 攔截通知。
+# 與 Maintenance Mode 不同: maintenance 在 PromQL 層消滅 alert (無 TSDB 紀錄)。
+#
+# Tenant 配置:
+#   _silent_mode: "warning" | "critical" | "all" | "disable"
+#
+# === Severity Dedup ===
+# 當 critical 觸發時，選擇是否壓制同 metric_group 的 warning 通知。
+# TSDB 永遠同時記錄 warning + critical，dedup 只控制通知行為。
+#
+# Tenant 配置:
+#   _severity_dedup: "enable" (預設) | "disable"
+#
+# 搭配的 Alertmanager inhibit_rules:
+#   - source: TenantSilentWarning         → target: severity="warning"
+#   - source: TenantSilentCritical        → target: severity="critical"
+#   - source: TenantSeverityDedupEnabled  → target: severity="warning" (同 metric_group)
+# ============================================================
+groups:
+  - name: operational-mode-sentinel
+    rules:
+      # Sentinel alert: fires when a tenant has silent mode active for warning.
+      # Used as inhibit_rules source to suppress warning notifications.
+      - alert: TenantSilentWarning
+        expr: user_silent_mode{target_severity="warning"} == 1
+        labels:
+          severity: none
+        annotations:
+          summary: "Silent mode (warning) active for {{ $labels.tenant }}"
+          description: "Warning alerts for tenant {{ $labels.tenant }} will be recorded in TSDB but notifications suppressed."
+
+      # Sentinel alert: fires when a tenant has silent mode active for critical.
+      # Used as inhibit_rules source to suppress critical notifications.
+      - alert: TenantSilentCritical
+        expr: user_silent_mode{target_severity="critical"} == 1
+        labels:
+          severity: none
+        annotations:
+          summary: "Silent mode (critical) active for {{ $labels.tenant }}"
+          description: "Critical alerts for tenant {{ $labels.tenant }} will be recorded in TSDB but notifications suppressed."
+
+      # Sentinel alert: fires when severity dedup is enabled for a tenant (default).
+      # Used by Alertmanager inhibit_rules to suppress warning notifications
+      # when critical fires for the same tenant+metric_group.
+      # Tenants with _severity_dedup: "disable" won't trigger this → both notifications sent.
+      - alert: TenantSeverityDedupEnabled
+        expr: user_severity_dedup{mode="enable"} == 1
+        labels:
+          severity: none
+        annotations:
+          summary: "Severity dedup enabled for {{ $labels.tenant }}"
+          description: "Warning notifications for {{ $labels.tenant }} will be suppressed when critical fires for the same metric_group."

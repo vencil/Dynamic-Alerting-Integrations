@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.1.0 — Configuration-driven thresholds, zero PromQL for tenants, 9 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.2.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), HA deployment.
 
 ---
 
@@ -50,7 +50,7 @@ tenants:
 | Metric | Dynamic (Current) | Traditional @ 100 Tenants |
 |--------|-------------------|---------------------------|
 | Alert Rules | 56 (fixed) | 5,600 (56×100) |
-| Total Rules | 141 (9 Rule Packs) | 5,600+ |
+| Total Rules | 141 (10 Rule Packs) | 5,600+ |
 | **Evaluation Time per Cycle** | **~20ms** (5-round mean ± 1.9ms) | **~800ms+** (linear growth) |
 | Cost of Unused Rule Packs | Near zero | N/A |
 
@@ -144,7 +144,7 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 | **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
 | **Full Lifecycle Governance** | `da-tools scaffold` onboard → `patch_config.py` operate → `da-tools deprecate` / `da-tools offboard` offboard | Every tool has `--dry-run` or pre-check mode |
 | **Live Verifiability** | `make demo-full` end-to-end: real load injection → alert fires → cleanup → auto-recovery | Full cycle < 5 minutes, visually observable |
-| **Multi-DB Ecosystem** | 9 Rule Packs covering 7 database types + K8s + Platform self-monitoring | `da-tools scaffold --catalog` lists all supported DB types |
+| **Multi-DB Ecosystem** | 10 Rule Packs covering 7 database types + K8s + Platform self-monitoring | `da-tools scaffold --catalog` lists all supported DB types |
 
 ---
 
@@ -165,7 +165,7 @@ graph LR
         T2_new[Tenant B<br>YAML only] --> TE
         TN_new[Tenant N<br>YAML only] --> TE
         TE --> P_new[Prometheus<br>M Rules only]
-        RP[9 Rule Packs<br>Projected Volume] --> P_new
+        RP[10 Rule Packs<br>Projected Volume] --> P_new
     end
 ```
 
@@ -237,7 +237,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | Document | Description | Target Audience |
 |----------|-------------|-----------------|
 | [Architecture and Design](docs/architecture-and-design.en.md) | O(M) derivation, HA design, Projected Volume deep-dive | Platform Engineers, SREs |
-| [Rule Packs Directory](rule-packs/README.md) | 9 Rule Pack specifications, structure templates, exporter links | Everyone |
+| [Rule Packs Directory](rule-packs/README.md) | 10 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
 | [BYOP Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
 | [Migration Guide](docs/migration-guide.md) | Frictionless onboarding, scaffold tools, 5 hands-on scenarios | Tenants, DevOps |
@@ -249,7 +249,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ## Rule Packs Directory
 
-9 Rule Packs are pre-loaded in Prometheus via Kubernetes **Projected Volume**, each with its own independent ConfigMap (`optional: true`), maintained separately by different teams:
+10 Rule Packs are pre-loaded in Prometheus via Kubernetes **Projected Volume**, each with its own independent ConfigMap (`optional: true`), maintained separately by different teams:
 
 | Rule Pack | Exporter | Rules | Status |
 |-----------|----------|-------|--------|
@@ -441,7 +441,7 @@ The Platform Rule Pack (`configmap-rules-platform.yaml`) provides 4 self-monitor
 
 ## Key Design Decisions
 
-- **Projected Volume**: 9 Rule Pack ConfigMaps (including Platform self-monitoring) are merged and mounted to `/etc/prometheus/rules/` via projected volume, with each team maintaining their own pack independently and zero PR conflicts.
+- **Projected Volume**: 10 Rule Pack ConfigMaps (including Platform self-monitoring) are merged and mounted to `/etc/prometheus/rules/` via projected volume, with each team maintaining their own pack independently and zero PR conflicts.
 - **GitOps Directory Mode**: threshold-exporter uses `-config-dir` to scan `conf.d/`, supporting `_defaults.yaml` + per-tenant YAML split.
 - **PVC (not emptyDir)**: MariaDB data uses Kind's built-in StorageClass; data persists after Pod restarts.
 - **Sidecar Pattern**: mysqld_exporter and MariaDB in the same Pod, connected via `localhost:3306`.

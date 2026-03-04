@@ -1571,6 +1571,478 @@ tenants:
 }
 
 // ============================================================
+// Silent Mode Tests
+// ============================================================
+
+func TestResolveSilentModes_Default(t *testing.T) {
+	// No _silent_mode set → Normal mode → empty result
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"mysql_connections": SV("70")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	if len(result) != 0 {
+		t.Errorf("expected 0 silent modes, got %d", len(result))
+	}
+}
+
+func TestResolveSilentModes_Warning(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("warning")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].Tenant != "db-a" || result[0].TargetSeverity != "warning" {
+		t.Errorf("unexpected: %+v", result[0])
+	}
+}
+
+func TestResolveSilentModes_Critical(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("critical")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].TargetSeverity != "critical" {
+		t.Errorf("expected critical, got %s", result[0].TargetSeverity)
+	}
+}
+
+func TestResolveSilentModes_All(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("all")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	if len(result) != 2 {
+		t.Fatalf("expected 2 (warning+critical), got %d", len(result))
+	}
+	severities := map[string]bool{}
+	for _, r := range result {
+		severities[r.TargetSeverity] = true
+	}
+	if !severities["warning"] || !severities["critical"] {
+		t.Errorf("expected warning+critical, got %v", severities)
+	}
+}
+
+func TestResolveSilentModes_Disable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("disable")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	if len(result) != 0 {
+		t.Errorf("expected 0 for disable, got %d", len(result))
+	}
+}
+
+func TestResolveSilentModes_InvalidFallback(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("invalid_value")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	if len(result) != 0 {
+		t.Errorf("expected 0 for invalid value, got %d", len(result))
+	}
+}
+
+func TestResolveSilentModes_CaseInsensitive(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("WARNING")},
+			"db-b": {"_silent_mode": SV("All")},
+			"db-c": {"_silent_mode": SV(" Critical ")},
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	// db-a: 1 (warning), db-b: 2 (all), db-c: 1 (critical) = 4
+	if len(result) != 4 {
+		t.Errorf("expected 4, got %d", len(result))
+	}
+}
+
+func TestResolveAt_SkipsSilentKey(t *testing.T) {
+	// _silent_mode must NOT produce a user_threshold metric
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"mysql_connections": SV("70"),
+				"_silent_mode":     SV("warning"),
+			},
+		},
+	}
+	resolved := cfg.Resolve()
+	for _, r := range resolved {
+		if r.Metric == "mode" || r.Component == "silent" {
+			t.Errorf("_silent_mode leaked into thresholds: %+v", r)
+		}
+	}
+	if len(resolved) != 1 {
+		t.Errorf("expected 1 threshold (mysql_connections), got %d", len(resolved))
+	}
+}
+
+func TestResolveSilentModes_MixedTenants(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("warning")},
+			"db-b": {"_silent_mode": SV("all")},
+			"db-c": {"_silent_mode": SV("disable")},
+			"db-d": {"mysql_connections": SV("70")}, // no silent_mode → Normal
+		},
+	}
+	result := cfg.ResolveSilentModes()
+	// db-a: 1, db-b: 2, db-c: 0, db-d: 0 = 3
+	if len(result) != 3 {
+		t.Errorf("expected 3, got %d", len(result))
+	}
+
+	tenantSev := map[string][]string{}
+	for _, r := range result {
+		tenantSev[r.Tenant] = append(tenantSev[r.Tenant], r.TargetSeverity)
+	}
+	if len(tenantSev["db-a"]) != 1 || tenantSev["db-a"][0] != "warning" {
+		t.Errorf("db-a: expected [warning], got %v", tenantSev["db-a"])
+	}
+	sort.Strings(tenantSev["db-b"])
+	if len(tenantSev["db-b"]) != 2 {
+		t.Errorf("db-b: expected 2, got %v", tenantSev["db-b"])
+	}
+	if _, ok := tenantSev["db-c"]; ok {
+		t.Errorf("db-c should not appear (disabled)")
+	}
+	if _, ok := tenantSev["db-d"]; ok {
+		t.Errorf("db-d should not appear (no silent mode)")
+	}
+}
+
+// ============================================================
+// v1.2.0 Severity Dedup Tests
+// ============================================================
+
+func TestResolveSeverityDedup_DefaultEnable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {}, // No explicit setting → default enable
+		},
+	}
+	resolved := cfg.ResolveSeverityDedup()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 entry for default enable, got %d", len(resolved))
+	}
+	if resolved[0].Tenant != "db-a" || resolved[0].Mode != "enable" {
+		t.Errorf("expected db-a/enable, got %s/%s", resolved[0].Tenant, resolved[0].Mode)
+	}
+}
+
+func TestResolveSeverityDedup_ExplicitEnable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_severity_dedup": SV("enable"),
+			},
+		},
+	}
+	resolved := cfg.ResolveSeverityDedup()
+	if len(resolved) != 1 || resolved[0].Mode != "enable" {
+		t.Fatalf("expected 1 entry with mode=enable, got %+v", resolved)
+	}
+}
+
+func TestResolveSeverityDedup_ExplicitDisable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_severity_dedup": SV("disable"),
+			},
+		},
+	}
+	resolved := cfg.ResolveSeverityDedup()
+	if len(resolved) != 0 {
+		t.Fatalf("expected 0 entries for disable, got %d: %+v", len(resolved), resolved)
+	}
+}
+
+func TestResolveSeverityDedup_MultiTenant(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {},                                        // default enable
+			"db-b": {"_severity_dedup": SV("disable")},       // explicit disable
+			"db-c": {"_severity_dedup": SV("enable")},        // explicit enable
+		},
+	}
+	resolved := cfg.ResolveSeverityDedup()
+	// Should have 2: db-a (default) and db-c (explicit enable)
+	if len(resolved) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(resolved), resolved)
+	}
+	tenants := map[string]bool{}
+	for _, r := range resolved {
+		tenants[r.Tenant] = true
+	}
+	if !tenants["db-a"] || !tenants["db-c"] {
+		t.Errorf("expected db-a and db-c, got %v", tenants)
+	}
+	if tenants["db-b"] {
+		t.Errorf("db-b should not appear (disabled)")
+	}
+}
+
+func TestResolveSeverityDedup_CaseInsensitive(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_severity_dedup": SV("DISABLE")},
+			"db-b": {"_severity_dedup": SV("Enable")},
+		},
+	}
+	resolved := cfg.ResolveSeverityDedup()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %+v", len(resolved), resolved)
+	}
+	if resolved[0].Tenant != "db-b" {
+		t.Errorf("expected db-b, got %s", resolved[0].Tenant)
+	}
+}
+
+func TestResolveAt_SkipsSeverityDedupKey(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_severity_dedup": SV("enable"),
+			},
+		},
+	}
+	resolved := cfg.Resolve()
+	for _, r := range resolved {
+		if r.Metric == "severity_dedup" || r.Metric == "dedup" {
+			t.Errorf("_severity_dedup leaked into threshold metrics: %+v", r)
+		}
+	}
+	// Should only have 1 metric: mysql_connections (from defaults)
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 threshold metric, got %d", len(resolved))
+	}
+}
+
+// ============================================================
+// ResolveRouting Tests
+// ============================================================
+
+func TestResolveRouting_ValidConfig(t *testing.T) {
+	routingYAML := `receiver: "https://webhook.example.com/alerts"
+group_by: ["alertname", "severity"]
+group_wait: "30s"
+group_interval: "1m"
+repeat_interval: "4h"`
+
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_routing": SV(routingYAML),
+			},
+		},
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 routing config, got %d", len(resolved))
+	}
+
+	rc := resolved[0]
+	if rc.Tenant != "db-a" {
+		t.Errorf("expected tenant db-a, got %s", rc.Tenant)
+	}
+	if rc.Receiver != "https://webhook.example.com/alerts" {
+		t.Errorf("expected receiver URL, got %s", rc.Receiver)
+	}
+	if len(rc.GroupBy) != 2 || rc.GroupBy[0] != "alertname" || rc.GroupBy[1] != "severity" {
+		t.Errorf("unexpected group_by: %v", rc.GroupBy)
+	}
+	if rc.GroupWait != "30s" {
+		t.Errorf("expected group_wait 30s, got %s", rc.GroupWait)
+	}
+	if rc.GroupInterval != "1m" {
+		t.Errorf("expected group_interval 1m, got %s", rc.GroupInterval)
+	}
+	if rc.RepeatInterval != "4h" {
+		t.Errorf("expected repeat_interval 4h, got %s", rc.RepeatInterval)
+	}
+}
+
+func TestResolveRouting_GuardrailClamp(t *testing.T) {
+	// group_wait below minimum (5s), repeat_interval above maximum (72h)
+	routingYAML := `receiver: "https://webhook.example.com/alerts"
+group_wait: "1s"
+repeat_interval: "100h"`
+
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_routing": SV(routingYAML),
+			},
+		},
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 routing config, got %d", len(resolved))
+	}
+
+	rc := resolved[0]
+	if rc.GroupWait != "5s" {
+		t.Errorf("expected group_wait clamped to 5s, got %s", rc.GroupWait)
+	}
+	if rc.RepeatInterval != "72h" {
+		t.Errorf("expected repeat_interval clamped to 72h, got %s", rc.RepeatInterval)
+	}
+}
+
+func TestResolveRouting_MissingReceiver(t *testing.T) {
+	routingYAML := `group_wait: "30s"`
+
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_routing": SV(routingYAML),
+			},
+		},
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 0 {
+		t.Fatalf("expected 0 routing configs (missing receiver), got %d", len(resolved))
+	}
+}
+
+func TestResolveRouting_NoRoutingKey(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"mysql_connections": SV("70"),
+			},
+		},
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 0 {
+		t.Fatalf("expected 0 routing configs, got %d", len(resolved))
+	}
+}
+
+func TestResolveRouting_MultiTenant(t *testing.T) {
+	routingA := `receiver: "https://webhook-a.example.com/alerts"
+group_wait: "10s"`
+
+	routingB := `receiver: "https://webhook-b.example.com/alerts"
+repeat_interval: "2h"`
+
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_routing": SV(routingA),
+			},
+			"db-b": {
+				"_routing": SV(routingB),
+			},
+			"db-c": {
+				"mysql_connections": SV("70"),
+				// No routing
+			},
+		},
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 2 {
+		t.Fatalf("expected 2 routing configs, got %d", len(resolved))
+	}
+
+	// Sort for deterministic test
+	sort.Slice(resolved, func(i, j int) bool {
+		return resolved[i].Tenant < resolved[j].Tenant
+	})
+
+	if resolved[0].Tenant != "db-a" || resolved[0].Receiver != "https://webhook-a.example.com/alerts" {
+		t.Errorf("unexpected db-a config: %+v", resolved[0])
+	}
+	if resolved[1].Tenant != "db-b" || resolved[1].Receiver != "https://webhook-b.example.com/alerts" {
+		t.Errorf("unexpected db-b config: %+v", resolved[1])
+	}
+}
+
+func TestResolveRouting_MinimalConfig(t *testing.T) {
+	routingYAML := `receiver: "https://webhook.example.com/alerts"`
+
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_routing": SV(routingYAML),
+			},
+		},
+	}
+
+	resolved := cfg.ResolveRouting()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 routing config, got %d", len(resolved))
+	}
+
+	rc := resolved[0]
+	if rc.Receiver != "https://webhook.example.com/alerts" {
+		t.Errorf("expected receiver URL, got %s", rc.Receiver)
+	}
+	// Optional fields should be empty
+	if rc.GroupWait != "" || rc.GroupInterval != "" || rc.RepeatInterval != "" {
+		t.Errorf("expected empty timing params, got wait=%s interval=%s repeat=%s",
+			rc.GroupWait, rc.GroupInterval, rc.RepeatInterval)
+	}
+	if len(rc.GroupBy) != 0 {
+		t.Errorf("expected empty group_by, got %v", rc.GroupBy)
+	}
+}
+
+func TestResolveAt_SkipsRoutingKey(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_routing":         SV(`receiver: "https://example.com"`),
+				"mysql_connections": SV("70"),
+			},
+		},
+	}
+	resolved := cfg.Resolve()
+	for _, r := range resolved {
+		if r.Metric == "routing" || r.Component == "_routing" {
+			t.Errorf("_routing leaked into threshold metrics: %+v", r)
+		}
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 threshold metric, got %d", len(resolved))
+	}
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 

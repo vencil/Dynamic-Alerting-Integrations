@@ -2,6 +2,52 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.2.0] - Silent Mode, Severity Dedup & Alert Routing (2026-03-03)
+
+三態運營模式 + Severity Dedup 可選化 + Config-Driven Alert Routing，回應 user feedback「還給 tenant 合理的自理權」。
+
+### 🔇 Silent Mode (核心功能)
+
+* **`_silent_mode` tenant 配置**：新增 `"warning"` / `"critical"` / `"all"` / `"disable"` 四個值。Alert 照常觸發（TSDB 有 ALERTS 紀錄），但 Alertmanager 攔截通知。
+* **`user_silent_mode` 新指標**：`user_silent_mode{tenant, target_severity}` flag gauge，由 threshold-exporter 輸出。
+* **`rule-pack-operational.yaml` 新 Rule Pack**：`TenantSilentWarning` + `TenantSilentCritical` + `TenantSeverityDedupEnabled` sentinel alerts。
+* **Alertmanager inhibit_rules**：Silent Mode + Severity Dedup 共四條 inhibit rules。
+
+### 🔀 Severity Dedup (F2a — Auto-Suppression 可選化)
+
+* **問題**：v1.1.0 的 PromQL `unless critical` 在 critical 觸發時消滅 warning 的 TSDB 紀錄，TSDB 完全無紀錄。
+* **解法**：Dedup 從 PromQL 層移到 Alertmanager 層。TSDB 永遠完整，dedup 只控制通知行為。
+* **`_severity_dedup` tenant 配置**：`"enable"`（預設）/ `"disable"`。
+* **`user_severity_dedup` 新指標**：`user_severity_dedup{tenant, mode}` flag gauge。
+* **`metric_group` label**：Alert rule 新增 `metric_group` label，讓 Alertmanager 正確配對 warning/critical（因 alertname 不同）。
+* **Rule Pack 更新**：MariaDB rule pack 移除 PromQL `unless critical` 子句，改為 `metric_group` label 配對。
+
+### 🔔 Alert Routing (F3 — Config-Driven Routing)
+
+* **`_routing` tenant 配置**：receiver (webhook URL) + group_by + group_wait + group_interval + repeat_interval。
+* **Timing Guardrails**：group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h，超限自動 clamp。
+* **`generate_alertmanager_routes.py` 新工具**：讀取 conf.d/ 所有 tenant YAML，產出 Alertmanager route tree + receivers YAML fragment。
+* **Silent Mode bypass**：inhibit_rules 在 route evaluation 之前攔截，silent tenant 的 routing 自動 bypass。
+
+### 🛠️ Tooling
+
+* **`scaffold_tenant.py`**：互動模式新增靜音模式、severity dedup、alert routing 選項；非互動模式新增 `--silent-mode`、`--severity-dedup`、`--routing-receiver` 等參數。
+* **`migrate_rule.py`**：Auto-Suppression 改為 Alertmanager-based dedup（不再注入 PromQL `unless`，改加 `metric_group` label）。
+* **`diagnose.py`**：健康檢查新增 `operational_mode` 欄位（normal / silent:warning / silent:all / maintenance）。
+
+### 📄 Documentation
+
+* **`architecture-and-design.md`**：
+  * 新增 §2.3 Tenant-Namespace 映射模式（1:1 / N:1 / 1:N + relabel_configs 範例）(F1)
+  * 新增 §2.8 Severity Dedup（行為矩陣、metric_group 配對機制）(F2a)
+  * 新增 §2.9 Alert Routing 客製化（Schema、Guardrails、工具鏈）(F3)
+  * §2.7 三態運營模式（行為矩陣、資料流、配置範例、Alertmanager 範本）
+  * §3.1 Rule Pack 表格更新（9→10 packs，新增 Operational）
+* **`byo-prometheus-integration.md`**：新增彈性 Tenant-Namespace 映射 section (F1)
+* **`migration-guide.md`**：§5 新增 Config-Driven Routing 說明 (F3)
+
+---
+
 ## [v1.1.0] - OCI Chart Publishing, da-tools Priority & Doc Polish (2026-03-01)
 
 Helm chart OCI 發佈、da-tools 容器優先敘述、Config 分離、Auto-Suppression、全 repo 文件一致性修正。

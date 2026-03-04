@@ -217,6 +217,98 @@ func TestCollector_MixedExactAndRegexLabels(t *testing.T) {
 	}
 }
 
+// ============================================================
+// v1.2.0 Silent Mode Collector Tests
+// ============================================================
+
+func TestCollector_SilentMode_Warning(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_silent_mode": SV("warning"),
+			},
+		},
+	}
+
+	manager := newTestManager(cfg)
+	collector := NewThresholdCollector(manager)
+
+	expected := `
+		# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
+		# TYPE user_silent_mode gauge
+		user_silent_mode{target_severity="warning",tenant="db-a"} 1
+	`
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "user_silent_mode"); err != nil {
+		t.Errorf("silent mode (warning) output mismatch: %v", err)
+	}
+}
+
+func TestCollector_SilentMode_All(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_silent_mode": SV("all"),
+			},
+		},
+	}
+
+	manager := newTestManager(cfg)
+	collector := NewThresholdCollector(manager)
+
+	// "all" expands to warning + critical — expect 2 metrics
+	count := testutil.CollectAndCount(collector, "user_silent_mode")
+	if count != 2 {
+		t.Errorf("expected 2 metrics for 'all' mode, got %d", count)
+	}
+}
+
+func TestCollector_SilentMode_Disable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_silent_mode": SV("disable"),
+			},
+		},
+	}
+
+	manager := newTestManager(cfg)
+	collector := NewThresholdCollector(manager)
+
+	// "disable" should produce no user_silent_mode metrics
+	count := testutil.CollectAndCount(collector, "user_silent_mode")
+	if count != 0 {
+		t.Errorf("expected 0 metrics for 'disable' mode, got %d", count)
+	}
+}
+
+func TestCollector_SilentMode_NoLeakToThreshold(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_silent_mode": SV("warning"),
+			},
+		},
+	}
+
+	manager := newTestManager(cfg)
+	collector := NewThresholdCollector(manager)
+
+	// _silent_mode should NOT appear as a user_threshold metric;
+	// only the default mysql_connections should appear
+	expected := `
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# TYPE user_threshold gauge
+		user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 80
+	`
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "user_threshold"); err != nil {
+		t.Errorf("silent mode leaked into threshold metrics: %v", err)
+	}
+}
+
 func TestCollector_StateFilter(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},

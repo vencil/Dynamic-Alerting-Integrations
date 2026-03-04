@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.1.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.2.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
@@ -216,7 +216,50 @@ ghi789... conf.d/db-b.yaml
 - Kubernetes ConfigMap 會建立符號鏈接層，ModTime 不可靠
 - 內容相同 = 雜湊相同，避免不必要的重新加載
 
-### 2.3 多層嚴重度 (Multi-tier Severity)
+### 2.3 Tenant-Namespace 映射模式 (Tenant-Namespace Mapping)
+
+平台的 `tenant` 是**邏輯身分**，由兩個獨立來源決定：
+
+1. **閾值側**：threshold-exporter 從 YAML config key（`tenants.db-a`）取得 tenant，與 K8s namespace 零耦合
+2. **資料側**：Prometheus `relabel_configs` 將抓取到的指標注入 `tenant` 標籤
+
+兩側的 `tenant` 值必須精確匹配，但**來源可以不同**。這使得以下三種映射模式都可行：
+
+| 映射模式 | 說明 | Prometheus relabel 策略 | 適用場景 |
+|---------|------|------------------------|---------|
+| **1:1**（標準） | 一個 Namespace = 一個 Tenant | `source_labels: [__meta_kubernetes_namespace]` → `target_label: tenant` | 大多數部署 |
+| **N:1** | 多個 Namespace 視為同一 Tenant | 多個 namespace 的指標 relabel 到同一個 tenant 值 | 讀寫分離（`db-a-read` + `db-a-write` → `db-a`） |
+| **1:N** | 一個 Namespace 內多個 Tenant | 以 Service label/annotation 而非 namespace 作為 tenant 來源 | 共享 namespace 的多租戶架構 |
+
+**N:1 relabel 範例**（多 namespace → 一個 tenant）：
+
+```yaml
+relabel_configs:
+  - source_labels: [__meta_kubernetes_namespace]
+    action: keep
+    regex: "db-a-(read|write)"
+  # 統一映射為 db-a
+  - source_labels: [__meta_kubernetes_namespace]
+    target_label: tenant
+    regex: "(db-[^-]+).*"    # 擷取第一段作為 tenant
+    replacement: "$1"
+```
+
+**1:N relabel 範例**（一個 namespace → 多個 tenant）：
+
+```yaml
+relabel_configs:
+  - source_labels: [__meta_kubernetes_namespace]
+    action: keep
+    regex: "shared-db"
+  # 從 Service annotation 讀取 tenant 身分
+  - source_labels: [__meta_kubernetes_service_annotation_alerting_tenant]
+    target_label: tenant
+```
+
+**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](byo-prometheus-integration.md)。
+
+### 2.4 多層嚴重度 (Multi-tier Severity)
 
 支援 `_critical` 後綴與 `"value:severity"` 兩種語法：
 
@@ -262,7 +305,7 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 - 連線數 ≥ 150 (critical)：warning 被第二層 `unless` 抑制，只觸發 critical 警報
 - 連線數 100–150 (warning only)：第二層 `unless` 不成立，正常觸發 warning 警報
 
-### 2.4 Regex 維度閾值 (Regex Dimension Thresholds)
+### 2.5 Regex 維度閾值 (Regex Dimension Thresholds)
 
 v0.12.0 起，Config parser 支援 `=~` 運算子，允許以 regex 模式精細匹配維度標籤。此設計在不引入外部資料依賴的前提下，讓閾值配置可針對特定維度子集生效。
 
@@ -286,7 +329,7 @@ tenants:
 2. **Recording Rule 層**：PromQL 使用 `label_replace` + `=~` 在查詢時完成實際匹配
 3. **設計原則**：Exporter 保持為純 config→metric 轉換器，匹配邏輯完全由 Prometheus 原生向量運算執行
 
-### 2.5 排程式閾值 (Scheduled Thresholds)
+### 2.6 排程式閾值 (Scheduled Thresholds)
 
 v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換不同閾值。典型場景：夜間維護窗口放寬閾值、尖峰時段收緊閾值。
 
@@ -310,11 +353,156 @@ tenants:
 - **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）
 - **45 個測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
 
+### 2.7 三態運營模式 (Operational Modes)
+
+v1.2.0 新增 **Silent Mode**，與既有的 Maintenance Mode 形成三態運營模式，解決「使用者把 Maintenance Mode 當靜音用」的問題。
+
+**行為矩陣**
+
+| 運營狀態 | 語義 | Alert 觸發 | TSDB 紀錄 | 通知 | 控制層 |
+|---------|------|-----------|----------|------|--------|
+| Normal | 正常運行 | ✅ | ✅ | ✅ | — |
+| Silent | 靜音 | ✅ | ✅ | ❌ | Alertmanager |
+| Maintenance | 真正維護 | ❌ | ❌ | ❌ | Prometheus (PromQL) |
+
+**設計原則**：Prometheus 管「什麼該 alert」，Alertmanager 管「要不要通知」。
+
+- **Maintenance Mode**（既有）：在 PromQL 層透過 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 消滅 alert。Alert 不觸發，TSDB 無紀錄，無通知。
+- **Silent Mode**（v1.2.0）：Alert 在 Prometheus 正常觸發（TSDB 有 `ALERTS` 紀錄），但 Alertmanager 透過 `inhibit_rules` 攔截通知。
+
+**Silent Mode 資料流**
+
+```
+tenant YAML: _silent_mode: "warning"
+    ↓
+threshold-exporter: user_silent_mode{tenant="db-a", target_severity="warning"} 1
+    ↓
+Prometheus alert rule (rule-pack-operational.yaml):
+    TenantSilentWarning{tenant="db-a"} fires
+    ↓
+Alertmanager inhibit_rules:
+    source: alertname="TenantSilentWarning"
+    target: severity="warning", equal: ["tenant"]
+    ↓
+結果: db-a 的 warning alert 照常觸發（TSDB 有紀錄），但通知被攔截
+```
+
+**Tenant 配置**
+
+```yaml
+tenants:
+  db-a:
+    _silent_mode: "warning"    # 只靜音 warning 通知
+  db-b:
+    _silent_mode: "all"        # 靜音 warning + critical 通知
+  db-c:
+    _state_maintenance: "enable"  # 真正維護，完全不觸發 alert
+  db-d: {}                        # Normal — 預設行為
+```
+
+可用的 `_silent_mode` 值：`warning`、`critical`、`all`、`disable`。未設定等同 Normal。
+
+**Alertmanager inhibit_rules 範本**
+
+```yaml
+inhibit_rules:
+  # Severity Dedup: critical 觸發時壓制同 metric_group 的 warning 通知
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ["tenant", "metric_group"]
+
+  # Silent Mode: 壓制 warning 通知
+  - source_matchers:
+      - alertname="TenantSilentWarning"
+    target_matchers:
+      - severity="warning"
+    equal: ["tenant"]
+
+  # Silent Mode: 壓制 critical 通知
+  - source_matchers:
+      - alertname="TenantSilentCritical"
+    target_matchers:
+      - severity="critical"
+    equal: ["tenant"]
+```
+
+### 2.8 Severity Dedup（嚴重度去重）
+
+v1.2.0 新增 **Severity Dedup**，解決「critical 觸發時 warning 的 TSDB 紀錄被消滅」的問題。
+
+**設計變更**：Auto-Suppression 從 PromQL 層（`unless critical`）移至 Alertmanager 層（`inhibit_rules`）。TSDB 永遠同時記錄 warning 和 critical，dedup 只控制通知行為。
+
+**行為矩陣**
+
+| 設定 | TSDB warning | TSDB critical | Warning 通知 | Critical 通知 |
+|------|-------------|--------------|-------------|--------------|
+| `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
+| `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
+
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "connections"`。
+
+**Tenant 配置**
+
+```yaml
+tenants:
+  db-a: {}                                # 預設 enable — warning 被壓制
+  db-b:
+    _severity_dedup: "disable"           # 兩種通知都收到
+```
+
+### 2.9 Alert Routing 客製化 (Config-Driven Routing)
+
+Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver YAML fragment。
+
+**Schema**
+
+```yaml
+tenants:
+  db-a:
+    _routing:
+      receiver: "https://webhook.db-a.svc/alerts"    # required
+      group_by: ["alertname", "severity"]              # optional
+      group_wait: "30s"                                 # optional, guardrail 5s–5m
+      group_interval: "1m"                              # optional, guardrail 5s–5m
+      repeat_interval: "4h"                             # optional, guardrail 1m–72h
+```
+
+**Timing Guardrails**
+
+平台對時序參數設定硬性上下界，超限值自動 clamp 並發出 WARN log：
+
+| 參數 | 最小值 | 最大值 | 預設值 |
+|------|--------|--------|--------|
+| `group_wait` | 5s | 5m | 30s |
+| `group_interval` | 5s | 5m | 5m |
+| `repeat_interval` | 1m | 72h | 4h |
+
+**與 Silent Mode 的交互**
+
+Silent Mode 天然 bypass routing：Alertmanager 的 inhibit_rules 在 route evaluation 之前攔截通知。因此即使 tenant 配置了自訂 routing，silent 的 alert 仍不會送出通知。
+
+**工具鏈**
+
+```bash
+# 產出 Alertmanager route + receiver fragment
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir components/threshold-exporter/config/conf.d/ \
+  -o alertmanager-routes.yaml
+
+# 預覽模式
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir conf.d/ --dry-run
+```
+
+產出的 YAML fragment 需合併至 Alertmanager 的 `route.routes` 和 `receivers` sections。Receiver 目前輸出 `webhook_configs`，未來可擴充至 GoAlert、email、通訊軟體等 channel。
+
 ---
 
 ## 3. Projected Volume 架構 (Rule Packs)
 
-### 3.1 九個獨立規則包
+### 3.1 十個獨立規則包
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|---------|-----------------|----------------|-------------|
@@ -327,7 +515,8 @@ tenants:
 | DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
 | ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
 | Platform | Platform | `prometheus-rules-platform` | 0 | 4 |
-| **總計** | | | **85** | **56** |
+| Operational | Platform | `prometheus-rules-operational` | 0 | 3 |
+| **總計** | | | **85** | **59** |
 
 ### 3.2 自包含三部分結構
 

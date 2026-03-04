@@ -79,20 +79,49 @@ def check(tenant, prom_url):
     except Exception:
         errors.append("Metrics check failed")
 
-    # 3. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
+    # 3. 查詢運營模式 (Silent Mode / Maintenance)
+    operational_mode = "normal"
+    try:
+        maint_res = query_prometheus(prom_url, f'user_state_filter{{tenant="{tenant}",filter="maintenance"}}')
+        if maint_res and '"value"' in maint_res:
+            data = json.loads(maint_res)
+            if data.get("data", {}).get("result"):
+                operational_mode = "maintenance"
+
+        if operational_mode == "normal":
+            silent_res = query_prometheus(prom_url, f'user_silent_mode{{tenant="{tenant}"}}')
+            if silent_res and '"value"' in silent_res:
+                data = json.loads(silent_res)
+                results = data.get("data", {}).get("result", [])
+                if results:
+                    severities = [r.get("metric", {}).get("target_severity", "") for r in results]
+                    if "warning" in severities and "critical" in severities:
+                        operational_mode = "silent:all"
+                    elif severities:
+                        operational_mode = f"silent:{severities[0]}"
+    except Exception:
+        pass  # Non-fatal: mode query failure doesn't affect health status
+
+    # 4. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
     if not errors:
-        print(json.dumps({"status": "healthy", "tenant": tenant}))
+        result = {"status": "healthy", "tenant": tenant}
+        if operational_mode != "normal":
+            result["operational_mode"] = operational_mode
+        print(json.dumps(result))
     else:
         # 只有異常時，嘗試抓取最近的 error log
         logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb", "--tail=20"])
         error_logs = [line for line in logs.split('\n') if 'ERROR' in line] if logs else []
 
-        print(json.dumps({
+        result = {
             "status": "error",
             "tenant": tenant,
             "issues": errors,
-            "recent_logs": error_logs[:3]  # 只回傳最後 3 行錯誤
-        }, ensure_ascii=False))
+            "recent_logs": error_logs[:3],  # 只回傳最後 3 行錯誤
+        }
+        if operational_mode != "normal":
+            result["operational_mode"] = operational_mode
+        print(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == "__main__":

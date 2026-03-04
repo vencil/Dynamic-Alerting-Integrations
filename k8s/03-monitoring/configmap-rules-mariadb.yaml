@@ -88,15 +88,10 @@ data:
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
-              unless on(tenant)
-              (
-                tenant:mysql_threads_connected:max
-                > on(tenant) group_left
-                tenant:alert_threshold:connections_critical
-              )
             for: 30s
             labels:
               severity: warning
+              metric_group: "connections"
             annotations:
               summary: "High connections on {{ $labels.tenant }}"
               description: "{{ $value }} threads connected (warning threshold exceeded)"
@@ -113,6 +108,7 @@ data:
             for: 30s
             labels:
               severity: critical
+              metric_group: "connections"
             annotations:
               summary: "Critical connections on {{ $labels.tenant }}"
               description: "{{ $value }} threads connected (critical threshold exceeded)"
