@@ -29,6 +29,17 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 import lint_custom_rules  # noqa: E402
 
 
+# ── Shared Base ───────────────────────────────────────────────────
+
+class BaseLintTest(unittest.TestCase):
+    """Base class for lint tests that need DEFAULT_POLICY."""
+
+    def setUp(self):
+        self.policy = lint_custom_rules.DEFAULT_POLICY.copy()
+
+
+# ── 1. Duration parsing ──────────────────────────────────────────
+
 class TestParseDuration(unittest.TestCase):
     """測試 Prometheus duration 解析。"""
 
@@ -54,11 +65,8 @@ class TestParseDuration(unittest.TestCase):
         self.assertIsNone(lint_custom_rules.parse_duration_seconds(""))
 
 
-class TestLintExprDeniedFunctions(unittest.TestCase):
+class TestLintExprDeniedFunctions(BaseLintTest):
     """測試 denied function 偵測。"""
-
-    def setUp(self):
-        self.policy = lint_custom_rules.DEFAULT_POLICY.copy()
 
     def test_holt_winters_detected(self):
         results = lint_custom_rules.lint_expr(
@@ -90,11 +98,8 @@ class TestLintExprDeniedFunctions(unittest.TestCase):
         self.assertEqual(len(func_errors), 0)
 
 
-class TestLintExprDeniedPatterns(unittest.TestCase):
+class TestLintExprDeniedPatterns(BaseLintTest):
     """測試 denied pattern 偵測 (含 whitespace 變體)。"""
-
-    def setUp(self):
-        self.policy = lint_custom_rules.DEFAULT_POLICY.copy()
 
     def test_wildcard_regex_detected(self):
         results = lint_custom_rules.lint_expr(
@@ -134,11 +139,8 @@ class TestLintExprDeniedPatterns(unittest.TestCase):
         self.assertEqual(len(pat_errors), 0)
 
 
-class TestLintExprRangeDuration(unittest.TestCase):
+class TestLintExprRangeDuration(BaseLintTest):
     """測試 range vector duration 超限。"""
-
-    def setUp(self):
-        self.policy = lint_custom_rules.DEFAULT_POLICY.copy()
 
     def test_exceeds_max_range(self):
         results = lint_custom_rules.lint_expr(
@@ -162,11 +164,8 @@ class TestLintExprRangeDuration(unittest.TestCase):
         self.assertEqual(len(range_errors), 0)
 
 
-class TestLintLabels(unittest.TestCase):
+class TestLintLabels(BaseLintTest):
     """測試 required label 檢查。"""
-
-    def setUp(self):
-        self.policy = lint_custom_rules.DEFAULT_POLICY.copy()
 
     def test_missing_tenant_label(self):
         results = lint_custom_rules.lint_labels(

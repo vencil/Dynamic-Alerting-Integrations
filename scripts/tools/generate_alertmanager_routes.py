@@ -16,13 +16,20 @@ Usage:
   python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
 """
 import argparse
+import fnmatch
 import json
 import os
 import subprocess
 import sys
 import textwrap
+from urllib.parse import urlparse
 
 import yaml
+
+from _lib_python import (  # noqa: E402
+    is_disabled as _is_disabled,
+    parse_duration_seconds,
+)
 
 # ============================================================
 # Timing Guardrails
@@ -84,30 +91,82 @@ RECEIVER_TYPES = {
 }
 
 
-def parse_duration_seconds(value):
-    """Parse a Prometheus-style duration string to seconds.
+# ============================================================
+# Webhook Domain Allowlist (v1.5.0 — SSRF prevention)
+# ============================================================
+# Maps receiver type → list of fields that contain URLs to validate
+RECEIVER_URL_FIELDS = {
+    "webhook":    ["url"],
+    "email":      ["smarthost"],      # host:port format
+    "slack":      ["api_url"],
+    "teams":      ["webhook_url"],
+    "rocketchat": ["url"],
+    "pagerduty":  [],                 # service_key only, no URL
+}
 
-    Supports: 5s, 30s, 1m, 5m, 1h, 4h, 72h, 1d, etc.
-    Returns seconds as int, or None if invalid.
+
+def _extract_host(value):
+    """Extract hostname from a URL or host:port string.
+
+    Returns hostname (lowercase) or None if unparseable.
     """
     if not value or not isinstance(value, str):
         return None
-
     value = value.strip()
-    if len(value) < 2:
-        return None
+    # host:port format (e.g., smtp.example.com:587)
+    if "://" not in value:
+        return value.split(":")[0].lower() or None
+    parsed = urlparse(value)
+    return parsed.hostname
 
-    unit = value[-1]
-    try:
-        num = float(value[:-1])
-    except ValueError:
-        return None
 
-    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    if unit not in multipliers:
-        return None
+def validate_receiver_domains(receiver_obj, tenant, allowed_domains):
+    """Validate receiver URL fields against a domain allowlist.
 
-    return int(num * multipliers[unit])
+    Args:
+        receiver_obj: dict with 'type' and type-specific fields.
+        tenant: tenant name for messages.
+        allowed_domains: list of allowed domain patterns (fnmatch).
+
+    Returns:
+        list of warning strings (empty if all valid).
+    """
+    warnings = []
+    if not allowed_domains or not isinstance(receiver_obj, dict):
+        return warnings
+
+    rtype = receiver_obj.get("type", "")
+    if isinstance(rtype, str):
+        rtype = rtype.strip().lower()
+
+    url_fields = RECEIVER_URL_FIELDS.get(rtype, [])
+    for field in url_fields:
+        raw = receiver_obj.get(field)
+        if not raw:
+            continue
+        host = _extract_host(raw)
+        if not host:
+            warnings.append(
+                f"  WARN: {tenant}: cannot parse host from receiver "
+                f"{field}='{raw}', skipping domain check")
+            continue
+        if not any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):
+            warnings.append(
+                f"  WARN: {tenant}: receiver {field} host '{host}' "
+                f"not in allowed_domains, skipping")
+    return warnings
+
+
+def load_policy(policy_path):
+    """Load policy YAML and return allowed_domains list (may be empty)."""
+    if not policy_path or not os.path.isfile(policy_path):
+        return []
+    with open(policy_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    domains = data.get("allowed_domains", [])
+    if not isinstance(domains, list):
+        return []
+    return [d for d in domains if isinstance(d, str)]
 
 
 def format_duration(seconds):
@@ -176,6 +235,41 @@ def merge_routing_with_defaults(defaults, tenant_routing, tenant_name):
     return _substitute_tenant(merged, tenant_name)
 
 
+VALID_RESERVED_KEYS = {"_silent_mode", "_severity_dedup"}
+VALID_RESERVED_PREFIXES = ("_state_", "_routing")
+
+
+def validate_tenant_keys(tenant, keys, defaults_keys):
+    """Check tenant config keys for typos / unknown reserved keys.
+
+    Returns list of warning strings.
+    """
+    warnings = []
+    for key in keys:
+        if key in VALID_RESERVED_KEYS:
+            continue
+        if any(key.startswith(p) for p in VALID_RESERVED_PREFIXES):
+            continue
+        if key in defaults_keys:
+            continue
+        # _critical suffix → check base
+        if key.endswith("_critical"):
+            base = key.removesuffix("_critical")
+            if base in defaults_keys:
+                continue
+        # Dimensional key with {labels}
+        if "{" in key:
+            base = key.split("{")[0]
+            if base in defaults_keys:
+                continue
+        # Unknown key
+        if key.startswith("_"):
+            warnings.append(f"  WARN: {tenant}: unknown reserved key '{key}' (typo?)")
+        else:
+            warnings.append(f"  WARN: {tenant}: unknown key '{key}' not in defaults")
+    return warnings
+
+
 def load_tenant_configs(config_dir):
     """Load all tenant YAML files from a config directory.
 
@@ -195,6 +289,8 @@ def load_tenant_configs(config_dir):
     explicit_routing = {}  # track which tenants have explicit _routing
     disabled_tenants = set()
     all_tenants = []
+    defaults_keys = set()    # keys from defaults section (for schema validation)
+    tenant_keys = {}         # {tenant: set of keys} for schema validation
 
     if not os.path.isdir(config_dir):
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
@@ -216,6 +312,10 @@ def load_tenant_configs(config_dir):
         if not data:
             continue
 
+        # Collect defaults keys for schema validation
+        if isinstance(data.get("defaults"), dict):
+            defaults_keys.update(data["defaults"].keys())
+
         # Extract _routing_defaults (only from _ prefixed files)
         is_defaults_file = os.path.basename(fname).startswith("_")
         if "_routing_defaults" in data:
@@ -234,19 +334,23 @@ def load_tenant_configs(config_dir):
 
             all_tenants.append(tenant)
 
+            # Collect tenant keys for schema validation
+            if tenant not in tenant_keys:
+                tenant_keys[tenant] = set()
+            tenant_keys[tenant].update(overrides.keys())
+
             # Severity dedup: default "enable", explicit "disable" to opt out
             # (tracked before routing disable check — dedup is independent of routing)
             raw_dedup = overrides.get("_severity_dedup", "enable")
             dedup_val = str(raw_dedup).strip().lower()
-            if dedup_val in ("disable", "disabled", "off", "false"):
+            if _is_disabled(dedup_val):
                 dedup_configs[tenant] = "disable"
             else:
                 dedup_configs[tenant] = "enable"
 
             # Routing: "disable" string → skip routing (dedup still tracked above)
             routing = overrides.get("_routing")
-            if isinstance(routing, str) and routing.strip().lower() in (
-                    "disable", "disabled", "off", "false"):
+            if isinstance(routing, str) and _is_disabled(routing):
                 disabled_tenants.add(tenant)
                 continue
 
@@ -269,7 +373,12 @@ def load_tenant_configs(config_dir):
             routing_configs[tenant] = merge_routing_with_defaults(
                 routing_defaults, {}, tenant)
 
-    return routing_configs, dedup_configs
+    # Schema validation: check tenant keys against defaults
+    schema_warnings = []
+    for tenant, keys in sorted(tenant_keys.items()):
+        schema_warnings.extend(validate_tenant_keys(tenant, keys, defaults_keys))
+
+    return routing_configs, dedup_configs, schema_warnings
 
 
 def build_receiver_config(receiver_obj, tenant):
@@ -319,7 +428,7 @@ def build_receiver_config(receiver_obj, tenant):
     return {spec["am_key"]: [am_entry]}, warnings
 
 
-def generate_routes(routing_configs):
+def generate_routes(routing_configs, allowed_domains=None):
     """Generate Alertmanager route tree + receivers from routing configs.
 
     Returns (routes_yaml_dict, receivers_list, all_warnings).
@@ -342,6 +451,14 @@ def generate_routes(routing_configs):
         all_warnings.extend(recv_warnings)
         if am_config is None:
             continue
+
+        # Domain allowlist check (SSRF prevention)
+        if allowed_domains:
+            domain_warnings = validate_receiver_domains(
+                receiver_obj, tenant, allowed_domains)
+            all_warnings.extend(domain_warnings)
+            if any("not in allowed_domains" in w for w in domain_warnings):
+                continue
 
         # Receiver name derived from tenant
         receiver_name = f"tenant-{tenant}"
@@ -549,13 +666,20 @@ def main():
                         help="K8s namespace for --apply (default: monitoring)")
     parser.add_argument("--configmap", default="alertmanager-config",
                         help="ConfigMap name for --apply (default: alertmanager-config)")
+    parser.add_argument("--policy", default=None,
+                        help="Policy YAML with allowed_domains for webhook URL validation")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
 
     args = parser.parse_args()
 
-    # Load tenant configs (routing + dedup)
-    routing_configs, dedup_configs = load_tenant_configs(args.config_dir)
+    # Load policy (webhook domain allowlist)
+    allowed_domains = load_policy(args.policy)
+    if allowed_domains:
+        print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
+
+    # Load tenant configs (routing + dedup + schema warnings)
+    routing_configs, dedup_configs, schema_warnings = load_tenant_configs(args.config_dir)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -571,13 +695,14 @@ def main():
           f"{', '.join(sorted(dedup_configs.keys()))}")
 
     # Generate routes + receivers
-    routes, receivers, route_warnings = generate_routes(routing_configs)
+    routes, receivers, route_warnings = generate_routes(
+        routing_configs, allowed_domains=allowed_domains)
 
     # Generate per-tenant severity dedup inhibit rules
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
 
     # Collect all warnings
-    all_warnings = route_warnings + dedup_warnings
+    all_warnings = schema_warnings + route_warnings + dedup_warnings
     for w in all_warnings:
         print(w, file=sys.stderr)
 

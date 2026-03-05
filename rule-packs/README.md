@@ -31,7 +31,7 @@
 
 ### 為什麼全部預載？
 
-- **成本**: 沒有對應 metric 的 recording rule 會回傳空結果集，不佔 CPU/memory。
+- **成本**: 沒有對應 metric 的 recording rule 會回傳空結果集，CPU 額外開銷 < 0.1%，evaluation 時間幾乎無增長。
 - **簡化**: 新增 exporter 後只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
 - **安全**: 唯一的風險是 `absent()` — 目前只有 mariadb (已部署) 使用 `absent(mysql_up)`，其他 pack 都不含 `absent()`。
 

@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v1.4.0)
+## 專案概覽 (v1.5.0)
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
@@ -25,29 +25,20 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 4. **Routing Defaults 三態延伸**：`_routing_defaults` in `_defaults.yaml`，tenant 三態（繼承/覆寫/disable）。`{{tenant}}` 佔位符 merge 時替換
 5. **Routing Guardrails**：`group_wait` 5s–5m、`group_interval` 5s–5m、`repeat_interval` 1m–72h，Go + Python 兩端一致
 6. **Alertmanager 動態化**：`--web.enable-lifecycle` + `configmap-reload` sidecar 自動 reload。`--apply` 一站式 ConfigMap merge + reload
+7. **Webhook Domain Allowlist**：`--policy` 載入 `allowed_domains`，`--validate` 時檢查 receiver URL host（fnmatch 萬用字元）。空清單 = 不限制（向後相容）
+8. **Tenant Config Schema Validation**：Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` 警告未知/typo key。`load_tenant_configs()` 回傳 3-tuple 含 schema warnings
+9. **Cardinality Guard**：Go `ResolveAt()` per-tenant metric 計數上限（`max_metrics_per_tenant`，default 500）。超限 truncate + log ERROR
+10. **共用 Python 函式庫**：`scripts/tools/_lib_python.py` 提供 `parse_duration_seconds()`、`is_disabled()`、`load_yaml_file()`，消除 Python 工具間重複實作
 
-## v1.5.0 規劃方向
+## v1.6.0 規劃方向
 
-**加固 + 品質提升**，v1.0–v1.4 快速迭代後的收斂：
+按優先序：
 
-安全護欄：
-1. **Webhook Domain Allowlist**：延伸 lint policy，`--validate` 時檢查 receiver URL（防 SSRF）
-2. **Tenant Config Schema Validation**：`--validate` 檢查 `_routing` / `_silent_mode` 等 key 合法性（防 typo 靜默失敗）
-3. **Cardinality 防爆**：Go exporter per-tenant metric 計數上限，超限 log error + skip
+1. **GitOps RBAC 演進**：CODEOWNERS 範例 + CI pipeline（`conf.d/*.yaml` → ConfigMap 自動組裝）+ ArgoCD/Flux 部署指南。低成本高價值，現有架構自然延伸
+2. **生態系擴展**：新增 Rule Pack（PostgreSQL / Kafka / RabbitMQ），接入模式標準化（每個 pack ~半天）。有具體 DB 需求時優先
+3. **收斂 review**：文件一致性掃描 + 痛點敘述 review + CLAUDE.md 整理（同 v1.5.0 模式）
 
-程式碼品質：
-4. **架構重構**：Go/Python 模組邊界清理、重複邏輯收斂、命名一致性
-5. **測試重構**：測試覆蓋率補齊、測試命名與結構統一、移除冗餘 fixture
-
-文件品質：
-6. **文件一致性消除**：跨文件版號/計數/術語/範例格式統一掃描 + 修正
-7. **文件完整性**：各 user-facing 文件對齊 v1.4.0 現況，補齊缺漏章節
-8. **文件簡潔與可讀性**：冗長段落精簡、結構重排、讀者旅程優化
-
-功能確認：
-9. **F2b Silent Mode 確認**：依用戶回饋決定是否調整 TSDB 行為或通知粒度
-
-長期方向（GitOps RBAC、CRD/Operator、Prometheus Federation、生態系擴展）見 `docs/architecture-and-design.md` §11 Future Roadmap。
+長期展望（Federation、CRD/Operator）見 `docs/architecture-and-design.md` §11。CRD/Operator 在 GitOps RBAC 能滿足需求的階段引入複雜度 > 價值，待 50+ tenant 直接操作 K8s 的規模化需求明確再評估。
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
@@ -87,7 +78,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - `baseline_discovery.py <--tenant NAME> [--duration S --interval S --metrics LIST]`: 負載觀測 + 閾值建議
 - `bump_docs.py [--platform VER] [--exporter VER] [--tools VER] [--check]`: 版號一致性管理 (三條版號線批次更新 + CI lint)
 - `lint_custom_rules.py <path...> [--policy FILE] [--ci]`: Custom Rule deny-list linter (治理合規檢查)
-- `generate_alertmanager_routes.py --config-dir <dir> [-o FILE] [--dry-run] [--validate] [--apply]`: Tenant YAML → Alertmanager route+receiver+inhibit_rules fragment（含 per-tenant severity dedup inhibit rules）。`--validate` 供 CI pipeline 驗證（exit 0/1）
+- `generate_alertmanager_routes.py --config-dir <dir> [-o FILE] [--dry-run] [--validate] [--apply] [--policy FILE]`: Tenant YAML → Alertmanager route+receiver+inhibit_rules fragment（含 per-tenant severity dedup inhibit rules）。`--validate` 供 CI pipeline 驗證（exit 0/1）。`--policy` 載入 `allowed_domains` 做 webhook URL 檢查
 - `metric-dictionary.yaml`: 啟發式指標對照字典
 
 ## 共用函式庫 (scripts/_lib.sh)

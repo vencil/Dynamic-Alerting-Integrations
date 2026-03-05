@@ -209,10 +209,15 @@ func parseHHMM(s string) (int, int, error) {
 //	  db-b:
 //	    mysql_connections: "disable"
 //	    _state_container_crashloop: "disable"
+// DefaultMaxMetricsPerTenant is the default cardinality limit per tenant.
+// 0 means no limit (backward compatible).
+const DefaultMaxMetricsPerTenant = 500
+
 type ThresholdConfig struct {
-	Defaults     map[string]float64                  `yaml:"defaults"`
-	StateFilters map[string]StateFilter              `yaml:"state_filters"`
-	Tenants      map[string]map[string]ScheduledValue `yaml:"tenants"`
+	Defaults            map[string]float64                  `yaml:"defaults"`
+	StateFilters        map[string]StateFilter              `yaml:"state_filters"`
+	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
+	MaxMetricsPerTenant int                                 `yaml:"max_metrics_per_tenant"`
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
@@ -250,7 +255,16 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 	var result []ResolvedThreshold
 
+	// Cardinality limit per tenant (0 = no limit)
+	limit := c.MaxMetricsPerTenant
+	if limit == 0 {
+		limit = DefaultMaxMetricsPerTenant
+	}
+	tenantCount := make(map[string]int)
+
 	for tenant, overrides := range c.Tenants {
+		startIdx := len(result) // track where this tenant's metrics start
+
 		for metricKey, defaultValue := range c.Defaults {
 			// Skip _state_ prefixed keys — handled by ResolveStateFilters()
 			// Skip _silent_ prefixed keys — handled by ResolveSilentModes()
@@ -393,6 +407,14 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 				RegexLabels:  regexLabels,
 			})
 		}
+
+		// Cardinality guard: enforce per-tenant metric limit (v1.5.0)
+		count := len(result) - startIdx
+		tenantCount[tenant] = count
+		if limit > 0 && count > limit {
+			log.Printf("ERROR: tenant=%s produced %d metrics (limit=%d), truncating to limit", tenant, count, limit)
+			result = result[:startIdx+limit]
+		}
 	}
 
 	return result
@@ -522,6 +544,88 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 	}
 
 	return result
+}
+
+// validReservedKeys lists tenant config keys with special meaning.
+// Any key not matching these patterns AND not in defaults is suspicious.
+var validReservedKeys = map[string]bool{
+	"_silent_mode":   true,
+	"_severity_dedup": true,
+}
+
+// validReservedPrefixes lists prefixes for tenant config keys with special meaning.
+var validReservedPrefixes = []string{
+	"_state_",
+	"_routing",
+}
+
+// ValidateTenantKeys checks all tenant config keys against known defaults and
+// reserved patterns. Returns a list of warning messages for unknown keys.
+// This helps catch typos like "_silence_mode" that would be silently ignored.
+func (c *ThresholdConfig) ValidateTenantKeys() []string {
+	var warnings []string
+
+	for tenant, overrides := range c.Tenants {
+		for key := range overrides {
+			// Known reserved key
+			if validReservedKeys[key] {
+				continue
+			}
+
+			// Known reserved prefix
+			reserved := false
+			for _, prefix := range validReservedPrefixes {
+				if strings.HasPrefix(key, prefix) {
+					reserved = true
+					break
+				}
+			}
+			if reserved {
+				continue
+			}
+
+			// Dimensional key with {labels}
+			if strings.Contains(key, "{") {
+				baseKey, _, _ := parseKeyWithLabels(key)
+				if _, exists := c.Defaults[baseKey]; exists {
+					continue
+				}
+				// Unknown base key in dimensional key
+				warnings = append(warnings, fmt.Sprintf(
+					"WARN: tenant=%s: unknown base metric %q in dimensional key %q",
+					tenant, baseKey, key))
+				continue
+			}
+
+			// _critical suffix → check base exists
+			if strings.HasSuffix(key, "_critical") {
+				baseKey := strings.TrimSuffix(key, "_critical")
+				if _, exists := c.Defaults[baseKey]; exists {
+					continue
+				}
+				// Already warned by ResolveAt, skip here
+				continue
+			}
+
+			// Normal metric key → must exist in defaults
+			if _, exists := c.Defaults[key]; exists {
+				continue
+			}
+
+			// Underscore-prefixed but not reserved → likely typo
+			if strings.HasPrefix(key, "_") {
+				warnings = append(warnings, fmt.Sprintf(
+					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, key))
+				continue
+			}
+
+			// Not in defaults, not reserved → unknown metric key
+			warnings = append(warnings, fmt.Sprintf(
+				"WARN: tenant=%s: unknown key %q not in defaults", tenant, key))
+		}
+	}
+
+	return warnings
 }
 
 // RoutingConfig represents a tenant's alert routing preferences.
@@ -893,6 +997,13 @@ func (m *ConfigManager) Load() error {
 	resolvedSilent := cfg.ResolveSilentModes()
 	log.Printf("Config loaded (%s): %d defaults, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters, %d silent modes",
 		m.Mode(), len(cfg.Defaults), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState), len(resolvedSilent))
+
+	// Schema validation: warn on unknown tenant config keys (v1.5.0)
+	if warnings := cfg.ValidateTenantKeys(); len(warnings) > 0 {
+		for _, w := range warnings {
+			log.Printf("%s", w)
+		}
+	}
 
 	return nil
 }

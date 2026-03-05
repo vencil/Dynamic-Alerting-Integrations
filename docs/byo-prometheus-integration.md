@@ -8,9 +8,9 @@
 
 ## 概述
 
-本平台採用**非侵入式 (Non-invasive)** 設計。如果你的組織已經擁有自建的 Prometheus、Thanos 或 VictoriaMetrics 叢集，**你不需要替換它**。
+本平台採用**非侵入式 (Non-invasive)** 設計。如果你的組織已經擁有自建的 Prometheus、Thanos 或 VictoriaMetrics 叢集，**你不需要替換它**——現有的 scrape config、recording rule、dashboard 完全保留，不需要重訓練團隊或重建運維流程。
 
-只要完成以下 **3 個最小整合步驟**，你的現有監控基礎設施就能無縫啟用動態閾值警報引擎：
+只要完成以下 **3 個最小整合步驟**（合計約 12 分鐘），你的現有監控基礎設施就能啟用動態閾值警報引擎：
 
 | 步驟 | 動作 | 耗時估計 |
 |------|------|----------|
@@ -57,7 +57,7 @@ tenant:mysql_threads_connected:max
 tenant:alert_threshold:connections
 ```
 
-這要求兩邊的指標**都必須帶有相同的 `tenant` 標籤**。`threshold-exporter` 吐出的 `user_threshold` 指標天生自帶 `tenant`，Recording Rule 也會將其歸一化為 `tenant:alert_threshold:*` 系列。但你的資料庫 exporter（如 mysqld_exporter、redis_exporter）吐出的指標**預設沒有 `tenant`**。如果 `tenant` 標籤不匹配，`group_left` 會靜默返回空向量，所有警報都不會觸發。
+這要求兩邊的指標**都必須帶有相同的 `tenant` 標籤**。`threshold-exporter` 吐出的 `user_threshold` 指標天生自帶 `tenant`，Recording Rule 也會將其歸一化為 `tenant:alert_threshold:*` 系列。但你的資料庫 exporter（如 mysqld_exporter、redis_exporter）吐出的指標**預設沒有 `tenant`**。如果 `tenant` 標籤不匹配，`group_left` 會靜默返回空向量——沒有錯誤訊息、沒有警告，所有警報都不會觸發。這是最難診斷的故障模式：一切看似正常，直到真正需要告警時才發現。
 
 ---
 
@@ -235,7 +235,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_state_filter' \
 | `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 4A |
 
-> **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。
+> **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。未使用的規則包即使掛載，因無對應 metric，evaluation 成本近乎零——但選擇性掛載可保持配置清晰。
 
 ### 設定：直接掛載 ConfigMap
 

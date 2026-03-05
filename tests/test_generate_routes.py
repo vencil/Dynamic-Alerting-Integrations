@@ -156,7 +156,7 @@ tenants:
         url: "https://webhook.example.com/alerts"
       group_wait: "30s"
 """)
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(routing["db-a"]["receiver"]["type"], "webhook")
             self.assertEqual(routing["db-a"]["receiver"]["url"], "https://webhook.example.com/alerts")
             self.assertEqual(dedup["db-a"], "enable")
@@ -169,7 +169,7 @@ tenants:
   db-b:
     mysql_connections: "80"
 """)
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             self.assertEqual(dedup["db-b"], "enable")
 
@@ -177,21 +177,21 @@ tenants:
         with tempfile.TemporaryDirectory() as d:
             _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://a.example.com'\n")
             _write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://b.example.com'\n")
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 2)
             self.assertEqual(len(dedup), 2)
 
     def test_skips_dotfiles(self):
         with tempfile.TemporaryDirectory() as d:
             _write_yaml(d, ".hidden.yaml", "tenants:\n  hidden:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'x'\n")
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             self.assertEqual(len(dedup), 0)
 
     def test_dedup_disable_explicit(self):
         with tempfile.TemporaryDirectory() as d:
             _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _severity_dedup: 'disable'\n")
-            _, dedup = gen.load_tenant_configs(d)
+            _, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(dedup["db-a"], "disable")
 
     def test_dedup_mixed_tenants(self):
@@ -199,7 +199,7 @@ tenants:
         with tempfile.TemporaryDirectory() as d:
             _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
             _write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _severity_dedup: 'disable'\n")
-            _, dedup = gen.load_tenant_configs(d)
+            _, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(dedup["db-a"], "enable")
             self.assertEqual(dedup["db-b"], "disable")
 
@@ -215,7 +215,7 @@ tenants:
   t3:
     _severity_dedup: "false"
 """)
-            _, dedup = gen.load_tenant_configs(d)
+            _, dedup, _sw = gen.load_tenant_configs(d)
             for t in ("t1", "t2", "t3"):
                 self.assertEqual(dedup[t], "disable", msg=t)
 
@@ -223,7 +223,7 @@ tenants:
         """無 _routing 的 tenant 仍可產出 inhibit rule（E2E 驗證）。"""
         with tempfile.TemporaryDirectory() as d:
             _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             rules, _ = gen.generate_inhibit_rules(dedup)
             self.assertEqual(len(rules), 1)
@@ -444,7 +444,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-            routing, _ = gen.load_tenant_configs(d)
+            routing, _, _sw = gen.load_tenant_configs(d)
             self.assertIn("db-a", routing)
             self.assertEqual(routing["db-a"]["receiver"]["type"], "email")
             self.assertEqual(routing["db-a"]["group_wait"], "30s")
@@ -469,7 +469,7 @@ tenants:
         type: "slack"
         api_url: "https://hooks.slack.com/x"
 """)
-            routing, _ = gen.load_tenant_configs(d)
+            routing, _, _sw = gen.load_tenant_configs(d)
             self.assertEqual(routing["db-b"]["receiver"]["type"], "slack")
             self.assertEqual(routing["db-b"]["group_wait"], "30s")
             self.assertEqual(routing["db-b"]["repeat_interval"], "4h")
@@ -489,7 +489,7 @@ tenants:
   db-c:
     _routing: "disable"
 """)
-            routing, _ = gen.load_tenant_configs(d)
+            routing, _, _sw = gen.load_tenant_configs(d)
             self.assertNotIn("db-c", routing)
 
     def test_tenant_template_substitution(self):
@@ -506,7 +506,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-            routing, _ = gen.load_tenant_configs(d)
+            routing, _, _sw = gen.load_tenant_configs(d)
             # channel is in the receiver dict (metadata, not AM config)
             self.assertEqual(routing["db-a"]["receiver"]["channel"], "#alerts-db-a")
 
@@ -519,7 +519,7 @@ tenants:
     _routing: "disable"
     _severity_dedup: "enable"
 """)
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertNotIn("db-c", routing)  # routing disabled
             self.assertEqual(dedup["db-c"], "enable")  # dedup still tracked
 
@@ -527,7 +527,7 @@ tenants:
         """無 _routing_defaults 也無 _routing → 不產出路由。"""
         with tempfile.TemporaryDirectory() as d:
             _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-            routing, dedup = gen.load_tenant_configs(d)
+            routing, dedup, _sw = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             self.assertEqual(dedup["db-a"], "enable")
 
@@ -544,7 +544,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-            routing, _ = gen.load_tenant_configs(d)
+            routing, _, _sw = gen.load_tenant_configs(d)
             # db-a should NOT have routing from its own _routing_defaults
             self.assertEqual(len(routing), 0)
 
@@ -561,8 +561,221 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-            routing, _ = gen.load_tenant_configs(d)
+            routing, _, _sw = gen.load_tenant_configs(d)
             self.assertEqual(routing["db-a"]["receiver"]["to"], ["db-a-team@example.com"])
+
+
+# ── 3b. Tenant Config Schema Validation (v1.5.0) ─────────────────
+
+class TestTenantConfigSchemaValidation(unittest.TestCase):
+    """validate_tenant_keys() + load_tenant_configs() schema warnings。"""
+
+    def test_valid_keys_no_warnings(self):
+        """All valid keys → no warnings."""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+defaults:
+  mysql_connections: 70
+  redis_memory: 80
+tenants:
+  db-a:
+    mysql_connections: "60"
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hook.example.com"
+    _silent_mode: "warning"
+    _severity_dedup: "enable"
+""")
+            _, _, schema_warnings = gen.load_tenant_configs(d)
+            self.assertEqual(schema_warnings, [])
+
+    def test_typo_reserved_key(self):
+        """_silence_mode (typo) → warning."""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+defaults:
+  mysql_connections: 70
+tenants:
+  db-a:
+    _silence_mode: "warning"
+""")
+            _, _, schema_warnings = gen.load_tenant_configs(d)
+            self.assertEqual(len(schema_warnings), 1)
+            self.assertIn("unknown reserved key", schema_warnings[0])
+            self.assertIn("_silence_mode", schema_warnings[0])
+
+    def test_unknown_metric_key(self):
+        """Key not in defaults → warning."""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+defaults:
+  mysql_connections: 70
+tenants:
+  db-a:
+    postgres_connections: "60"
+""")
+            _, _, schema_warnings = gen.load_tenant_configs(d)
+            self.assertEqual(len(schema_warnings), 1)
+            self.assertIn("not in defaults", schema_warnings[0])
+            self.assertIn("postgres_connections", schema_warnings[0])
+
+    def test_critical_suffix_valid(self):
+        """mysql_connections_critical → valid if mysql_connections in defaults."""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", """
+defaults:
+  mysql_connections: 70
+tenants:
+  db-a:
+    mysql_connections_critical: "90"
+""")
+            _, _, schema_warnings = gen.load_tenant_configs(d)
+            self.assertEqual(schema_warnings, [])
+
+    def test_state_prefix_valid(self):
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "_defaults.yaml", "tenants:\n  db-a:\n    _state_maintenance: 'enable'\n")
+            _, _, schema_warnings = gen.load_tenant_configs(d)
+            self.assertEqual(schema_warnings, [])
+
+    def test_no_defaults_all_metric_keys_warn(self):
+        """No defaults section → any non-reserved tenant key warns."""
+        with tempfile.TemporaryDirectory() as d:
+            _write_yaml(d, "t.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            _, _, schema_warnings = gen.load_tenant_configs(d)
+            self.assertEqual(len(schema_warnings), 1)
+            self.assertIn("not in defaults", schema_warnings[0])
+
+    def test_validate_tenant_keys_function(self):
+        """Direct unit test of validate_tenant_keys()."""
+        defaults_keys = {"mysql_connections", "redis_memory"}
+        keys = {"mysql_connections", "_silent_mode", "_routing", "_state_maintenance",
+                "redis_memory_critical", "_silence_mode", "unknown_metric"}
+        warnings = gen.validate_tenant_keys("t1", keys, defaults_keys)
+        self.assertEqual(len(warnings), 2)
+        typo_warnings = [w for w in warnings if "typo" in w]
+        metric_warnings = [w for w in warnings if "not in defaults" in w]
+        self.assertEqual(len(typo_warnings), 1)
+        self.assertIn("_silence_mode", typo_warnings[0])
+        self.assertEqual(len(metric_warnings), 1)
+        self.assertIn("unknown_metric", metric_warnings[0])
+
+
+# ── 4e. Webhook Domain Allowlist (v1.5.0) ─────────────────────────
+
+class TestWebhookDomainAllowlist(unittest.TestCase):
+    """validate_receiver_domains() + generate_routes() domain filtering。"""
+
+    # — _extract_host() —
+
+    def test_extract_host_https(self):
+        self.assertEqual(gen._extract_host("https://webhook.example.com/alerts"), "webhook.example.com")
+
+    def test_extract_host_http(self):
+        self.assertEqual(gen._extract_host("http://internal.corp:8080/hook"), "internal.corp")
+
+    def test_extract_host_hostport(self):
+        """host:port (SMTP smarthost) → hostname only。"""
+        self.assertEqual(gen._extract_host("smtp.example.com:587"), "smtp.example.com")
+
+    def test_extract_host_none(self):
+        self.assertIsNone(gen._extract_host(None))
+        self.assertIsNone(gen._extract_host(""))
+
+    # — validate_receiver_domains() —
+
+    def test_allowed_domain_no_warning(self):
+        receiver = {"type": "webhook", "url": "https://webhook.example.com/alerts"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["*.example.com"])
+        self.assertEqual(warnings, [])
+
+    def test_blocked_domain_warning(self):
+        receiver = {"type": "webhook", "url": "https://evil.attacker.com/ssrf"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["*.example.com"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not in allowed_domains", warnings[0])
+        self.assertIn("evil.attacker.com", warnings[0])
+
+    def test_exact_domain_match(self):
+        receiver = {"type": "slack", "api_url": "https://hooks.slack.com/services/x"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["hooks.slack.com"])
+        self.assertEqual(warnings, [])
+
+    def test_wildcard_domain_match(self):
+        receiver = {"type": "teams", "webhook_url": "https://outlook.office.com/webhook/x"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["*.office.com"])
+        self.assertEqual(warnings, [])
+
+    def test_email_smarthost_validated(self):
+        receiver = {"type": "email", "to": ["a@b.com"], "smarthost": "smtp.example.com:587"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["*.example.com"])
+        self.assertEqual(warnings, [])
+
+    def test_email_smarthost_blocked(self):
+        receiver = {"type": "email", "to": ["a@b.com"], "smarthost": "rogue.evil.com:25"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["*.example.com"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not in allowed_domains", warnings[0])
+
+    def test_pagerduty_no_url_fields(self):
+        """PagerDuty 無 URL field → 不檢查，永遠 pass。"""
+        receiver = {"type": "pagerduty", "service_key": "abc123"}
+        warnings = gen.validate_receiver_domains(receiver, "t", ["*.example.com"])
+        self.assertEqual(warnings, [])
+
+    def test_empty_allowlist_skips_check(self):
+        """空 allowed_domains → 向後相容，不限制。"""
+        receiver = {"type": "webhook", "url": "https://anything.anywhere.com"}
+        warnings = gen.validate_receiver_domains(receiver, "t", [])
+        self.assertEqual(warnings, [])
+
+    def test_none_allowlist_skips_check(self):
+        warnings = gen.validate_receiver_domains(
+            {"type": "webhook", "url": "https://x.com"}, "t", None)
+        self.assertEqual(warnings, [])
+
+    # — generate_routes() with allowed_domains —
+
+    def test_blocked_domain_skips_route(self):
+        """Domain not in allowlist → route not generated。"""
+        cfg = {"db-a": {"receiver": {"type": "webhook", "url": "https://evil.com/x"}}}
+        routes, receivers, warnings = gen.generate_routes(cfg, allowed_domains=["*.example.com"])
+        self.assertEqual(len(routes), 0)
+        self.assertTrue(any("not in allowed_domains" in w for w in warnings))
+
+    def test_allowed_domain_generates_route(self):
+        cfg = {"db-a": {"receiver": {"type": "webhook", "url": "https://hook.example.com/x"}}}
+        routes, receivers, _ = gen.generate_routes(cfg, allowed_domains=["*.example.com"])
+        self.assertEqual(len(routes), 1)
+
+    def test_no_policy_no_filtering(self):
+        """No allowed_domains → backward compatible, all pass。"""
+        cfg = {"db-a": {"receiver": {"type": "webhook", "url": "https://any.com/x"}}}
+        routes, _, _ = gen.generate_routes(cfg, allowed_domains=None)
+        self.assertEqual(len(routes), 1)
+
+    # — load_policy() —
+
+    def test_load_policy_from_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "policy.yaml")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("allowed_domains:\n  - '*.example.com'\n  - hooks.slack.com\n")
+            os.chmod(path, 0o600)
+            domains = gen.load_policy(path)
+            self.assertEqual(domains, ["*.example.com", "hooks.slack.com"])
+
+    def test_load_policy_missing_file(self):
+        self.assertEqual(gen.load_policy("/nonexistent/policy.yaml"), [])
+
+    def test_load_policy_no_key(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "policy.yaml")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("denied_functions:\n  - holt_winters\n")
+            os.chmod(path, 0o600)
+            self.assertEqual(gen.load_policy(path), [])
 
 
 # ── 5. generate_inhibit_rules() ──────────────────────────────────

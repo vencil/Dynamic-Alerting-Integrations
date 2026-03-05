@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -2128,6 +2130,161 @@ func TestFormatDuration_NoDay(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("formatDuration(%v) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// ============================================================
+// Cardinality Guard (v1.5.0)
+// ============================================================
+
+func TestCardinalityGuard_UnderLimit(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults:            map[string]float64{"mysql_connections": 70, "redis_memory": 80},
+		Tenants:             map[string]map[string]ScheduledValue{"db-a": {}},
+		MaxMetricsPerTenant: 10,
+	}
+	result := cfg.Resolve()
+	if len(result) != 2 {
+		t.Errorf("expected 2 metrics, got %d", len(result))
+	}
+}
+
+func TestCardinalityGuard_AtLimit(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults:            map[string]float64{"m1": 1, "m2": 2},
+		Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+		MaxMetricsPerTenant: 2,
+	}
+	result := cfg.Resolve()
+	if len(result) != 2 {
+		t.Errorf("expected 2 metrics, got %d", len(result))
+	}
+}
+
+func TestCardinalityGuard_OverLimitTruncated(t *testing.T) {
+	// Create many defaults to exceed a low limit
+	defaults := make(map[string]float64)
+	for i := 0; i < 20; i++ {
+		defaults[fmt.Sprintf("metric_%d", i)] = float64(i)
+	}
+	cfg := ThresholdConfig{
+		Defaults:            defaults,
+		Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+		MaxMetricsPerTenant: 5,
+	}
+	result := cfg.Resolve()
+	if len(result) != 5 {
+		t.Errorf("expected 5 metrics (truncated), got %d", len(result))
+	}
+}
+
+func TestCardinalityGuard_DefaultLimit(t *testing.T) {
+	// MaxMetricsPerTenant = 0 → uses DefaultMaxMetricsPerTenant (500)
+	cfg := ThresholdConfig{
+		Defaults: map[string]float64{"m1": 1},
+		Tenants:  map[string]map[string]ScheduledValue{"t": {}},
+	}
+	result := cfg.Resolve()
+	if len(result) != 1 {
+		t.Errorf("expected 1 metric, got %d", len(result))
+	}
+}
+
+func TestCardinalityGuard_MultiTenantIndependent(t *testing.T) {
+	defaults := make(map[string]float64)
+	for i := 0; i < 10; i++ {
+		defaults[fmt.Sprintf("m_%d", i)] = float64(i)
+	}
+	cfg := ThresholdConfig{
+		Defaults: defaults,
+		Tenants: map[string]map[string]ScheduledValue{
+			"t1": {},
+			"t2": {},
+		},
+		MaxMetricsPerTenant: 3,
+	}
+	result := cfg.Resolve()
+	// Each tenant should be truncated to 3, total 6
+	if len(result) != 6 {
+		t.Errorf("expected 6 metrics (3 per tenant), got %d", len(result))
+	}
+}
+
+// ============================================================
+// ValidateTenantKeys (v1.5.0)
+// ============================================================
+
+func TestValidateTenantKeys_NoWarningsForValidKeys(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 70, "redis_memory": 80},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"mysql_connections":          {Default: "60"},
+				"mysql_connections_critical":  {Default: "90"},
+				"_silent_mode":               {Default: "warning"},
+				"_severity_dedup":            {Default: "enable"},
+				"_state_maintenance":         {Default: "enable"},
+				"_routing":                   {Default: "receiver: ..."},
+			},
+		},
+	}
+	warnings := cfg.ValidateTenantKeys()
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
+	}
+}
+
+func TestValidateTenantKeys_TypoReservedKey(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 70},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"_silence_mode": {Default: "warning"},
+			},
+		},
+	}
+	warnings := cfg.ValidateTenantKeys()
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "unknown reserved key") {
+		t.Errorf("expected 'unknown reserved key', got %q", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "_silence_mode") {
+		t.Errorf("expected warning to mention '_silence_mode', got %q", warnings[0])
+	}
+}
+
+func TestValidateTenantKeys_UnknownMetricKey(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 70},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"postgres_connections": {Default: "60"},
+			},
+		},
+	}
+	warnings := cfg.ValidateTenantKeys()
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "not in defaults") {
+		t.Errorf("expected 'not in defaults', got %q", warnings[0])
+	}
+}
+
+func TestValidateTenantKeys_CriticalSuffixValid(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 70},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"mysql_connections_critical": {Default: "90"},
+			},
+		},
+	}
+	warnings := cfg.ValidateTenantKeys()
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
 	}
 }
 

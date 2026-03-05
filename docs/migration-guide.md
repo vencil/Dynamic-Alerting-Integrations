@@ -518,7 +518,7 @@ Tenant 可在自己的 YAML 中設定 `_routing` section，由平台工具自動
 
 > **v1.3.0 Breaking Change**：`receiver` 從純 URL 字串改為結構化物件（含 `type` 欄位）。v1.2.0 格式不再相容。
 
-支援四種 receiver 類型：`webhook`、`email`、`slack`、`teams`。
+支援六種 receiver 類型：`webhook`、`email`、`slack`、`teams`、`rocketchat`、`pagerduty`。
 
 ```yaml
 # tenant YAML (conf.d/db-a.yaml)

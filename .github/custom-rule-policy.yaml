@@ -18,3 +18,13 @@ required_labels:
 
 max_range_duration: 1h     # 禁止超長 range vector (如 [7d])
 max_evaluation_interval: 60s  # Custom Rule Group interval 上限
+
+# Webhook Domain Allowlist (v1.5.0)
+# generate_alertmanager_routes.py --validate --policy 時檢查 receiver URL
+# 支援 fnmatch 萬用字元 (e.g., *.example.com)
+# 空清單 = 不限制（向後相容）
+allowed_domains:
+  - "*.example.com"          # 預設企業域名
+  - "hooks.slack.com"        # Slack incoming webhooks
+  - "outlook.office.com"     # Microsoft Teams
+  - "events.pagerduty.com"   # PagerDuty

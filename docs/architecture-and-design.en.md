@@ -416,7 +416,7 @@ Example: 100 tenants, 35 alert rules
 
 ### 4.2 Actual Benchmark Data (Kind Cluster Measurement)
 
-**Current setup: 2 tenants, 141 rules (9 Rule Packs), 27 rule groups**
+**Current setup: 2 tenants, 141 rules (10 Rule Packs), 27 rule groups**
 
 > Data below from **5 independent rounds** (Kind single-node cluster, 45s intervals between rounds), reporting mean ± stddev.
 
@@ -442,7 +442,7 @@ Total evaluation time (per cycle): 20.3 ± 1.9ms  (range: 17.7–22.8ms, n=5)
 
 ### 4.3 Empty Vector Zero-Cost
 
-9 rule packs are pre-loaded. Packs without deployed exporters are evaluated against empty vectors.
+10 rule packs are pre-loaded. Packs without deployed exporters are evaluated against empty vectors.
 
 **Kind cluster actual measurement:**
 
@@ -469,7 +469,7 @@ Single threshold-exporter pod (measured):
 - Scrape Duration: 4.1 ± 1.2ms
 
 × 2 HA Replicas: ~4.8MB total
-+ Prometheus RSS: 142.7 ± 1.4MB (9 Rule Packs, 141 rules)
++ Prometheus RSS: 142.7 ± 1.4MB (10 Rule Packs, 141 rules)
 = Cluster overhead: ~148MB
 
 vs. Traditional approach (100 tenants, 5,600 rules):
@@ -479,7 +479,7 @@ vs. Traditional approach (100 tenants, 5,600 rules):
 
 ### 4.5 Resource Usage Baseline
 
-Kind single-node cluster, 5-round measurements (2 tenants, 141 rules, 9 Rule Packs, mean ± stddev):
+Kind single-node cluster, 5-round measurements (2 tenants, 141 rules, 10 Rule Packs, mean ± stddev):
 
 | Metric | Component | Value (n=5) | Purpose |
 |--------|-----------|-------|---------|
@@ -586,7 +586,7 @@ Each tier waits for at least 2 Prometheus evaluation cycles before sampling. All
 
 > **Measurement note:** Each round involves removing Rule Packs → restarting Prometheus → waiting for stabilization → sampling, so per-cycle values are affected by Prometheus restart warm-up, resulting in higher variance than idle-state measurements. Median best represents stable behavior.
 
-**Conclusion:** From 3→6→9 Rule Packs, eval time median grows from 7.7→17.3→22.7ms — approximately linear (~+5–10ms per 3 packs added). Average eval time per group remains stable at ~0.8ms, unaffected by other groups. This confirms the horizontal scalability of the Projected Volume architecture — the marginal cost of adding Rule Packs is predictable and constant.
+**Conclusion:** From 3→6→10 Rule Packs, eval time median grows from 7.7→17.3→22.7ms — approximately linear (~+5–10ms per 3 packs added). Average eval time per group remains stable at ~0.8ms, unaffected by other groups. This confirms the horizontal scalability of the Projected Volume architecture — the marginal cost of adding Rule Packs is predictable and constant.
 
 ---
 

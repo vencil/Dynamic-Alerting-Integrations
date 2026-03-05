@@ -1,6 +1,6 @@
 # BYO Alertmanager 整合指南
 
-> **版本**：v1.3.0
+> **版本**：v1.4.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -8,13 +8,13 @@
 
 ## 1. 概述
 
-Dynamic Alerting 平台透過 Alertmanager 實現三大通知行為控制：
+告警疲勞的三大根因：(1) 備份/維護期間無法靜音 → 假陽性風暴；(2) Warning 與 Critical 同時通知 → 重複告警；(3) 通知目的地寫死在中央配置 → 租戶無法自主管理 on-call。Dynamic Alerting 平台透過 Alertmanager 的三大機制逐一解決：
 
 | 功能 | 機制 | 配置來源 |
 |------|------|----------|
 | **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知 | Tenant YAML `_silent_mode` |
 | **Severity Dedup** | Per-tenant inhibit_rules（`metric_group` 配對） | Tenant YAML `_severity_dedup` |
-| **Alert Routing** | Per-tenant route + receiver（webhook/email/slack/teams） | Tenant YAML `_routing` |
+| **Alert Routing** | Per-tenant route + receiver（webhook/email/slack/teams/rocketchat/pagerduty） | Tenant YAML `_routing` |
 
 所有 Alertmanager 配置 fragment 由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出。
 
@@ -85,11 +85,15 @@ python3 scripts/tools/generate_alertmanager_routes.py \
 # 驗證產出
 python3 scripts/tools/generate_alertmanager_routes.py \
   --config-dir config/conf.d/ --validate
+
+# 驗證 + webhook domain allowlist 檢查（v1.5.0）
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir config/conf.d/ --validate --policy .github/custom-rule-policy.yaml
 ```
 
 產出內容包含：
 - `route.routes[]`: Per-tenant 路由（含 `tenant="<name>"` matcher + timing guardrails）
-- `receivers[]`: Per-tenant receiver（webhook/email/slack/teams）
+- `receivers[]`: Per-tenant receiver（webhook/email/slack/teams/rocketchat/pagerduty）
 - `inhibit_rules[]`: Per-tenant severity dedup rules
 
 ### Step 5: 合併至 Alertmanager ConfigMap
@@ -97,7 +101,11 @@ python3 scripts/tools/generate_alertmanager_routes.py \
 將產出的 fragment 合併至 Alertmanager 主配置：
 
 ```bash
-# 手動合併後 apply
+# 一站式自動合併 + apply + reload（v1.4.0 推薦）
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir config/conf.d/ --apply --yes
+
+# 或手動合併後 apply
 kubectl create configmap alertmanager-config \
   --from-file=alertmanager.yml=alertmanager-merged.yml \
   -n monitoring --dry-run=client -o yaml | kubectl apply -f -
@@ -173,7 +181,7 @@ reload_alertmanager "http://alertmanager.monitoring.svc.cluster.local:9093"
 
 ## 5. Receiver 類型
 
-v1.3.0 支援四種 receiver 類型：
+v1.4.0 支援六種 receiver 類型：
 
 ### Webhook
 
@@ -213,6 +221,28 @@ _routing:
   receiver:
     type: "teams"
     webhook_url: "https://outlook.office.com/webhook/..."
+```
+
+### Rocket.Chat
+
+```yaml
+_routing:
+  receiver:
+    type: "rocketchat"
+    url: "https://chat.example.com/hooks/xxx/yyy"
+    channel: "#alerts"        # metadata（不傳入 AM config）
+    username: "PrometheusBot" # metadata（不傳入 AM config）
+```
+
+### PagerDuty
+
+```yaml
+_routing:
+  receiver:
+    type: "pagerduty"
+    service_key: "your-integration-key"
+    severity: "critical"
+    client: "Dynamic Alerting Platform"
 ```
 
 ### 共通選填欄位

@@ -2,6 +2,37 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.5.0] - Security Hardening & Quality Consolidation (2026-03-05)
+
+Post v1.0–v1.4 rapid iteration convergence: security guardrails, code/test quality, documentation consistency.
+
+### Security Guardrails
+
+* **Webhook Domain Allowlist** — `--policy` flag loads `allowed_domains` from policy YAML; `--validate` checks receiver URL hosts via fnmatch wildcards. Empty list = no restriction (backward compatible). Prevents SSRF via tenant-controlled webhook URLs.
+* **Tenant Config Schema Validation** — Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` warn on unknown/typo tenant config keys (e.g., `_silence_mode` instead of `_silent_mode`). `load_tenant_configs()` now returns 3-tuple including schema warnings.
+* **Cardinality Guard** — Go `ResolveAt()` enforces per-tenant metric count limit (`max_metrics_per_tenant`, default 500). Exceeding the limit truncates output and logs ERROR.
+
+### Code Quality
+
+* **Shared Python Library** — `scripts/tools/_lib_python.py` provides canonical `parse_duration_seconds()`, `is_disabled()`, `load_yaml_file()`. Eliminates duplicate implementations across `generate_alertmanager_routes.py` and `lint_custom_rules.py`.
+* **Test Refactoring** — `BaseLintTest` shared fixture for lint test classes. New `test_lib_python.py` (13 tests). Total: **154 Python tests**, all Go tests pass.
+
+### Documentation Quality
+
+* **Consistency fixes** — Receiver count 4→6, Rule Pack count 9→10, version references v1.3.0→v1.4.0 unified across 6 documentation files.
+* **Completeness** — `byo-alertmanager-integration.md`: added `--apply` one-command deployment, RocketChat/PagerDuty receiver examples, `--policy` webhook validation.
+* **Pain point descriptions strengthened** — README.md/README.en.md: quantified consequences in all 7 pain points, consolidated value table from 9→6 rows with "problem solved" column. Docs: added failure mode explanations and quantified impact.
+
+### Test Coverage
+
+| Component | Before | After |
+|-----------|--------|-------|
+| Python tests | 88 | 154 (+75%) |
+| Go tests | All pass | All pass (+9 new) |
+| New test files | — | `test_lib_python.py` |
+
+---
+
 ## [v1.4.0] - Routing Defaults, 6 Receiver Types & Auto-Reload (2026-03-04)
 
 三態 Routing Defaults + Rocket.Chat / PagerDuty receiver + `--apply` 一站式部署 + ConfigMap Watcher Sidecar 自動 reload。

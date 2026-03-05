@@ -11,7 +11,7 @@
 ### 2.1 Rule Explosion and Performance Bottlenecks
 
 **❌ Traditional Pain Points:**
-100 tenants × 50 rules = 5,000 independent PromQL evaluations every 15 seconds. Prometheus CPU spikes, rule evaluation latency impacts SLA.
+100 tenants × 50 rules = 5,000 independent PromQL evaluations every 15 seconds. Prometheus CPU spikes, rule evaluation latency impacts SLA. Each new tenant adds linearly — works at 50 tenants, requires horizontal Prometheus scaling at 200.
 
 **✅ Our Solution:**
 Vector matching with `group_left`. Platform maintains a fixed set of M rules. Prometheus evaluates once and matches all tenants' `user_threshold` vectors simultaneously. Complexity: O(N×M) → O(M).
@@ -61,7 +61,7 @@ Detailed performance analysis: see [Architecture and Design Document](docs/archi
 ### 2.2 Tenant Onboarding Friction
 
 **❌ Traditional Pain Points:**
-Tenants must learn PromQL (`rate`, `sum by`, `group_left`). A single label typo = silent failure. Platform team debugs PromQL for tenants. Onboarding tools are scattered across the repo — new tenants must clone the project and install dependencies first.
+Tenants must learn PromQL (`rate`, `sum by`, `group_left`). A single label typo = silent failure — alert never fires and nobody notices. Platform team spends significant time debugging PromQL for tenants instead of improving the platform. Onboarding tools are scattered across the repo — onboarding a single tenant often takes 1-2 days of hand-holding.
 
 **✅ Our Solution:**
 Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are packaged in the **`da-tools` container** — `docker pull` and go, no cloning or Python dependencies needed. `da-tools scaffold` generates configuration interactively; `da-tools migrate` auto-converts legacy rules with intelligent aggregation inference.
@@ -76,7 +76,7 @@ docker run --rm -it ghcr.io/vencil/da-tools:1.4.0 scaffold --tenant my-app --db 
 ### 2.3 Platform Maintenance and Deployment Nightmare
 
 **❌ Traditional Pain Points:**
-All rules packed in a single giant ConfigMap. Every threshold change = PR → CI/CD → Prometheus reload. Multi-team editing = merge conflicts. Deployment requires cloning the repo, manually managing chart paths and image tag alignment.
+All rules packed in a single giant ConfigMap. Every threshold change = PR → review → CI/CD → Prometheus reload — an urgent threshold adjustment averages 2-4 hours to land, far too slow during an incident. Multi-team editing the same file = merge conflicts. Deployment requires cloning the repo, manually managing chart paths and image tag alignment.
 
 **✅ Our Solution:**
 10 independent Rule Pack ConfigMaps mounted via Projected Volume. Each team (DBA, SRE, K8s, Analytics) maintains their own rule pack independently. SHA-256 hash hot-reload — no Prometheus restart needed. Directory mode (`conf.d/`) supports per-tenant YAML files.
@@ -96,7 +96,7 @@ helm install threshold-exporter \
 ### 2.4 Alert Fatigue
 
 **❌ Traditional Pain Points:**
-Maintenance window = alert storm. Non-critical Redis queue alert = P0 on-call. Warning and Critical fire simultaneously = duplicate notifications.
+Maintenance window = alert storm (a single scheduled maintenance can trigger dozens of duplicate alerts). Non-critical Redis queue alert at 3 AM wakes up the on-call engineer. Warning and Critical fire simultaneously = two notifications for the same problem. Result: on-call starts muting channels, and real P0s get buried.
 
 **✅ Our Solution:**
 Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-layer severity (`_critical` suffix) with **Auto-Suppression** — when Critical fires, the corresponding Warning is automatically suppressed, eliminating duplicate alerts. Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable. **Scheduled thresholds**: time-window auto-switching (e.g., `22:00-06:00` relaxed nighttime thresholds), reducing off-hours false positives.
@@ -106,7 +106,7 @@ Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts vi
 ### 2.5 Governance and Auditing
 
 **❌ Traditional Pain Points:**
-Who changed which threshold? No audit trail. No separation of duties.
+Who changed which threshold? No audit trail — post-incident review means scrolling through Slack history. No separation of duties — anyone can modify global rules, one mistake affects all tenants.
 
 **✅ Our Solution:**
 Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by platform team (separation of duties). Boundary rules prevent tenants from overriding platform settings. File-level RBAC via Git permissions. **Three-tier governance model**: Platform Team manages global defaults → Domain Experts define golden standards → Tenant Tech Leads tune business thresholds, with CI deny-list linting for compliance.
@@ -116,7 +116,7 @@ Per-tenant YAML in Git = natural audit trail. `_defaults.yaml` controlled by pla
 ### 2.6 Legacy Rule Migration Risk
 
 **❌ Traditional Pain Points:**
-Hundreds of hand-written PromQL rules with no automated conversion path. Manual migration takes weeks, and a big-bang cutover carries extreme risk — a failed switch means monitoring blind spots.
+Hundreds of hand-written PromQL rules with no automated conversion path. Manual migration takes weeks and is error-prone. A big-bang cutover carries extreme risk — a failed switch means monitoring blind spots until someone notices alerts aren't firing when they should.
 
 **✅ Our Solution:**
 `migrate_rule.py` v4 with **AST migration engine** (`promql-parser` Rust PyO3) precisely identifies metric names and label matchers. `custom_` prefix isolation prevents naming conflicts. `--triage` mode produces a CSV inventory categorizing each rule's migration strategy. **Shadow Monitoring** dual-track — `da-tools validate` verifies numerical consistency before and after migration (tolerance ≤ 5%), enabling zero-risk progressive cutover. All tools are available via the `da-tools` container — no local environment setup required.
@@ -126,7 +126,7 @@ Hundreds of hand-written PromQL rules with no automated conversion path. Manual 
 ### 2.7 Fine-Grained Dimension Control
 
 **❌ Traditional Pain Points:**
-Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 95% for `SYSTEM` tablespace — traditional approach requires two separate rules.
+Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 95% for `SYSTEM` tablespace — traditional approach requires two separate PromQL rules. N dimensions = N rules, right back to rule explosion.
 
 **✅ Our Solution:**
 **Regex dimension thresholds**: support `=~` operator (e.g., `tablespace=~"SYS.*"`), specifying dimension-level thresholds directly in YAML. The exporter outputs regex patterns as `_re` suffixed labels, and PromQL recording rules perform matching at query time. Tenants still write zero PromQL.
@@ -135,17 +135,14 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 
 ### Enterprise Value Propositions
 
-| Value | Mechanism | Verifiability |
-|-------|-----------|---------------|
-| **One-Command Deploy** | Helm chart published to OCI registry with pre-bound image version. Base chart `tenants: {}` + overlay separation | `helm install oci://ghcr.io/vencil/charts/threshold-exporter --version 1.4.0` |
-| **Portable Toolchain** | `da-tools` container packages 10 CLI tools — `docker pull` and go, no clone or Python needed | `docker run --rm ghcr.io/vencil/da-tools:1.4.0 --help` |
-| **Risk-Free Migration** | AST migration engine + `custom_` prefix isolation + Shadow Monitoring dual-track | `da-tools validate` numerical diff ≤ 5% |
-| **Smart Alert Suppression** | Auto-Suppression (Critical ↔ Warning pairing) + maintenance mode + scheduled thresholds + three-state toggle | Critical fires → Warning auto-silenced, zero manual intervention |
-| **Zero-Crash Opt-Out** | Projected Volume `optional: true` — deleting a ConfigMap won't crash Prometheus | `kubectl delete cm prometheus-rules-<type>` instantly testable |
-| **Full Lifecycle Governance** | `da-tools scaffold` onboard → `patch_config.py` operate → `da-tools deprecate` / `da-tools offboard` offboard | Every tool has `--dry-run` or pre-check mode |
-| **Live Verifiability** | `make demo-full` end-to-end: real load injection → alert fires → cleanup → auto-recovery | Full cycle < 5 minutes, visually observable |
-| **Config-Driven Routing** | 4 receiver types (webhook/email/slack/teams) + Go template message customization + CI validation (`--validate`) | `da-tools generate-routes --config-dir conf.d/ --validate` |
-| **Multi-DB Ecosystem** | 10 Rule Packs covering 7 database types + K8s + Platform self-monitoring | `da-tools scaffold --catalog` lists all supported DB types |
+| Value | Problem Solved | Mechanism | Verifiability |
+|-------|---------------|-----------|---------------|
+| **Risk-Free Migration** | Hundreds of legacy rules can't be safely converted → migration stalls for months | AST engine auto-converts PromQL → YAML. `custom_` prefix isolates old/new rules side-by-side. Shadow Monitoring validates numerical consistency (tolerance ≤ 5%) | `da-tools validate --mapping rules.csv` |
+| **Zero Alert Fatigue** | Maintenance storms + duplicate notifications → on-call mutes channels → real P0s get buried | Auto-Suppression (Critical fires → Warning auto-silenced) + maintenance mode + scheduled thresholds (auto-relax at night) + three-state toggle | `make demo-full` end-to-end verification < 5 min |
+| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 10 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.4.0 scaffold` |
+| **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate → `deprecate` / `offboard` retire. Three-tier governance model + CI deny-list linting. Every tool has `--dry-run` | `da-tools offboard <tenant> --dry-run` |
+| **Config-Driven Routing** | Notification targets hardcoded in Alertmanager config → changing one webhook requires editing central config | Tenant YAML `_routing` for self-service management of 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty) + Go template customization + CI validation | `da-tools generate-routes --validate` |
+| **7 DB Types Out-of-the-Box** | Writing monitoring rules from scratch for each database type → reinventing the wheel | 10 Rule Packs covering MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse + K8s + Platform self-monitoring. Projected Volume `optional: true` — unused packs cost nothing | `da-tools scaffold --catalog` |
 
 ---
 

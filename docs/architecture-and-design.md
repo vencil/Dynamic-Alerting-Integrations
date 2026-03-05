@@ -117,8 +117,8 @@ graph TB
 **架構要點：**
 1. **Directory Scanner** 掃描 `conf.d/` 目錄，自動發現 `_defaults.yaml` 和租戶配置文件
 2. **threshold-exporter × 2 HA Replicas** 讀取 ConfigMap，輸出三態 Prometheus 指標
-3. **Projected Volume** 掛載 9 個獨立規則包，零 PR 衝突，各團隊獨立擁有
-4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度
+3. **Projected Volume** 掛載 10 個獨立規則包，零 PR 衝突，各團隊獨立擁有
+4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度（相比傳統 O(M×N)：100 metric × 50 tenant = 5,000 條規則 vs 固定 100 條）
 
 ---
 
@@ -478,7 +478,7 @@ python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry
 
 Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver + inhibit_rules YAML fragment。
 
-> v1.3.0 起支援 webhook / email / slack / teams 四種 receiver type。Receiver 為結構化物件（`{type, ...fields}`），由 `generate_alertmanager_routes.py` 驗證必要欄位並產出對應 Alertmanager config。
+> v1.4.0 支援 webhook / email / slack / teams / rocketchat / pagerduty 六種 receiver type。Receiver 為結構化物件（`{type, ...fields}`），由 `generate_alertmanager_routes.py` 驗證必要欄位並產出對應 Alertmanager config。
 
 **Schema**
 
@@ -1299,7 +1299,7 @@ flowchart LR
 
 ## 11. 未來擴展路線 (Future Roadmap)
 
-以下項目為尚未實現的技術方向，依預期影響排列。
+以下項目為尚未實現的技術方向，依預期影響排列。v1.6.0 優先推進 §11.1 GitOps RBAC（低成本高價值）與 §11.3 生態系擴展（有具體需求時）。
 
 ### 11.1 治理架構演進 (Governance Evolution)
 
@@ -1321,7 +1321,9 @@ flowchart LR
 
 #### 終極藍圖：CRD + Operator
 
-當平台擴展至需要自動擴縮、drift reconciliation、跨叢集管理時，可引入 `ThresholdConfig` CRD 與 Operator，將租戶配置提升為 Kubernetes first-class resource。K8s 原生 RBAC 即可在 per-CR 層級精確控制存取，同時與 GitOps 工具鏈無縫整合。此路線需要額外的 Operator 開發與維運投資，適合在產品進入規模化階段時評估。
+當平台擴展至需要自動擴縮、drift reconciliation、跨叢集管理時，可引入 `ThresholdConfig` CRD 與 Operator，將租戶配置提升為 Kubernetes first-class resource。K8s 原生 RBAC 即可在 per-CR 層級精確控制存取，同時與 GitOps 工具鏈無縫整合。
+
+**v1.5.0 決策**：在 GitOps RBAC 能滿足需求的階段，CRD/Operator 引入的複雜度（+1 Operator Deployment、reconcile loop 與 GitOps 競爭、版本管理負擔）大於其帶來的價值。CRD/Operator 解決的核心問題——K8s 原生 per-tenant RBAC——在企業環境中反而應避免（租戶直接 `kubectl apply` 繞過 Git = 沒有 review、沒有 CI 驗證）。待 50+ tenant 直接操作 K8s 的規模化需求明確再評估。
 
 ### 11.2 Prometheus 聯邦 (Federation)
 

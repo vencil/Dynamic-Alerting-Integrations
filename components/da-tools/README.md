@@ -8,14 +8,14 @@
 
 ## 概述
 
-`da-tools` 是一個輕量的 CLI 容器工具，打包了 Dynamic Alerting 平台的驗證與遷移工具。它讓你**不需要 clone 整個專案**，就能完成以下工作：
+`da-tools` 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證與遷移工具。**不需要 clone 整個專案、不需安裝 Python 依賴**——`docker pull` 即可使用，將整合驗證與規則遷移從小時級縮短到分鐘級：
 
-- 驗證 BYOP 整合是否正確（alert 狀態、閾值查詢、向量匹配）
+- 驗證 BYOP 整合是否正確（防止 tenant label 不匹配、threshold-exporter unreachable 等靜默失敗）
 - 觀測現有指標並取得閾值建議（baseline discovery）
-- 將既有 Prometheus 規則轉換為動態格式
-- 產生新 tenant 配置、下架 tenant 或棄用指標
+- 將既有 Prometheus 規則自動轉換為動態格式（AST 引擎，非 regex 替換）
+- 產生新 tenant 配置、下架 tenant 或棄用指標（全生命週期）
 
-**Image 大小**：~60 MB（Python 3.12 Alpine + PyYAML + promql-parser）
+**Image 大小**：~60 MB（Python 3.12 Alpine + PyYAML + promql-parser），秒級拉取
 
 ---
 
@@ -23,7 +23,7 @@
 
 ```bash
 # 本地建構（見下方「本地建構」章節）
-cd components/da-tools/app && ./build.sh 1.3.0
+cd components/da-tools/app && ./build.sh 1.4.0
 
 # 或從 registry 拉取（需 CI/CD 已推送）
 docker pull ghcr.io/vencil/da-tools:1.4.0

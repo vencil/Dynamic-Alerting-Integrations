@@ -32,6 +32,8 @@ from pathlib import Path
 
 import yaml
 
+from _lib_python import parse_duration_seconds  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
 # ---------------------------------------------------------------------------
@@ -51,22 +53,6 @@ DEFAULT_POLICY = {
     "max_range_duration": "1h",
     "max_evaluation_interval": "60s",
 }
-
-# ---------------------------------------------------------------------------
-# Duration parsing
-# ---------------------------------------------------------------------------
-DURATION_RE = re.compile(r"^(\d+)([smhd])$")
-DURATION_MULTIPLIERS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-
-
-def parse_duration_seconds(val):
-    """Parse Prometheus duration string to seconds. Returns None on failure."""
-    if isinstance(val, (int, float)):
-        return int(val)
-    m = DURATION_RE.match(str(val).strip())
-    if not m:
-        return None
-    return int(m.group(1)) * DURATION_MULTIPLIERS[m.group(2)]
 
 
 # ---------------------------------------------------------------------------
