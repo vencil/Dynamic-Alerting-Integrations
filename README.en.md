@@ -440,12 +440,12 @@ The Platform Rule Pack (`configmap-rules-platform.yaml`) provides 4 self-monitor
 
 ## Key Design Decisions
 
-- **Projected Volume**: 10 Rule Pack ConfigMaps (including Platform self-monitoring) are merged and mounted to `/etc/prometheus/rules/` via projected volume, with each team maintaining their own pack independently and zero PR conflicts.
-- **GitOps Directory Mode**: threshold-exporter uses `-config-dir` to scan `conf.d/`, supporting `_defaults.yaml` + per-tenant YAML split.
-- **PVC (not emptyDir)**: MariaDB data uses Kind's built-in StorageClass; data persists after Pod restarts.
-- **Sidecar Pattern**: mysqld_exporter and MariaDB in the same Pod, connected via `localhost:3306`.
-- **Annotation Auto-discovery**: `prometheus.io/scrape: "true"` enables auto-discovery; adding components doesn't require Prometheus configuration changes.
-- **Cross-platform Scripts**: `_lib.sh` provides cross-platform utility functions; all scripts run on Linux/macOS/Dev Container environments.
+- **O(M) Rule Complexity**: All alert rules use `group_left` vector matching — rule count depends only on metric types (M), not tenant count (N). 100 tenants add zero rules.
+- **TSDB Completeness First**: Severity Dedup is implemented at the Alertmanager inhibit layer (not PromQL `unless`), so TSDB always retains complete warning + critical records. Observability is never sacrificed for notification simplification.
+- **Projected Volume Isolation**: 10 Rule Pack ConfigMaps mounted independently (`optional: true`), each team maintains their own pack with zero PR conflicts. Deleting any ConfigMap does not affect Prometheus operation.
+- **Config-Driven Full Chain**: From thresholds (YAML) → routing (`_routing`) → notifications (Alertmanager receiver) → behavior control (Silent/Maintenance) — everything is driven by tenant YAML. No need to touch PromQL or Alertmanager config.
+- **Dual-Side Consistency**: Go exporter and Python tools share identical constants (`RECEIVER_TYPES`, `GUARDRAILS`, `isDisabled` semantics), ensuring cross-language validation consistency.
+- **Security Guardrails Built-in**: Webhook Domain Allowlist (SSRF prevention), Tenant Key Schema Validation (typo silent-failure prevention), Cardinality Guard (metric explosion prevention) — all platform-level defaults, not optional add-ons.
 
 ---
 
