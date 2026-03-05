@@ -28,9 +28,26 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## v1.5.0 規劃方向
 
-1. **F2b Silent Mode 確認**：依用戶回饋決定是否調整 Silent Mode 的 TSDB 行為或通知粒度
-2. **Receiver 類型擴充**：opsgenie / pagerduty 等 native receiver types
-3. **其餘社群/客戶回饋**：持續收集，依影響範圍排序
+**加固 + 品質提升**，v1.0–v1.4 快速迭代後的收斂：
+
+安全護欄：
+1. **Webhook Domain Allowlist**：延伸 lint policy，`--validate` 時檢查 receiver URL（防 SSRF）
+2. **Tenant Config Schema Validation**：`--validate` 檢查 `_routing` / `_silent_mode` 等 key 合法性（防 typo 靜默失敗）
+3. **Cardinality 防爆**：Go exporter per-tenant metric 計數上限，超限 log error + skip
+
+程式碼品質：
+4. **架構重構**：Go/Python 模組邊界清理、重複邏輯收斂、命名一致性
+5. **測試重構**：測試覆蓋率補齊、測試命名與結構統一、移除冗餘 fixture
+
+文件品質：
+6. **文件一致性消除**：跨文件版號/計數/術語/範例格式統一掃描 + 修正
+7. **文件完整性**：各 user-facing 文件對齊 v1.4.0 現況，補齊缺漏章節
+8. **文件簡潔與可讀性**：冗長段落精簡、結構重排、讀者旅程優化
+
+功能確認：
+9. **F2b Silent Mode 確認**：依用戶回饋決定是否調整 TSDB 行為或通知粒度
+
+長期方向（GitOps RBAC、CRD/Operator、Prometheus Federation、生態系擴展）見 `docs/architecture-and-design.md` §11 Future Roadmap。
 
 ## 開發規範
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
