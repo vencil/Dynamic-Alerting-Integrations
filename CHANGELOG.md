@@ -2,34 +2,34 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
-## [v1.5.0] - Security Hardening & Quality Consolidation (2026-03-05)
+## [v1.5.0] - 安全護欄 + 品質加固 (2026-03-05)
 
-Post v1.0–v1.4 rapid iteration convergence: security guardrails, code/test quality, documentation consistency.
+v1.0–v1.4 快速迭代後的收斂：安全護欄、程式碼/測試品質、文件一致性。
 
-### Security Guardrails
+### 🛡️ 安全護欄
 
-* **Webhook Domain Allowlist** — `--policy` flag loads `allowed_domains` from policy YAML; `--validate` checks receiver URL hosts via fnmatch wildcards. Empty list = no restriction (backward compatible). Prevents SSRF via tenant-controlled webhook URLs.
-* **Tenant Config Schema Validation** — Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` warn on unknown/typo tenant config keys (e.g., `_silence_mode` instead of `_silent_mode`). `load_tenant_configs()` now returns 3-tuple including schema warnings.
-* **Cardinality Guard** — Go `ResolveAt()` enforces per-tenant metric count limit (`max_metrics_per_tenant`, default 500). Exceeding the limit truncates output and logs ERROR.
+* **Webhook Domain Allowlist**：`--policy` 載入 `allowed_domains`，`--validate` 時以 fnmatch 萬用字元檢查 receiver URL host。空清單 = 不限制（向後相容）。防止租戶透過 webhook URL 發動 SSRF
+* **Tenant Config Schema Validation**：Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` 雙端驗證，警告未知/typo tenant key（如 `_silence_mode`）。`load_tenant_configs()` 回傳 3-tuple 含 schema warnings
+* **Cardinality Guard**：Go `ResolveAt()` per-tenant metric 計數上限（`max_metrics_per_tenant`，default 500）。超限 truncate + log ERROR
 
-### Code Quality
+### 🔧 程式碼品質
 
-* **Shared Python Library** — `scripts/tools/_lib_python.py` provides canonical `parse_duration_seconds()`, `is_disabled()`, `load_yaml_file()`. Eliminates duplicate implementations across `generate_alertmanager_routes.py` and `lint_custom_rules.py`.
-* **Test Refactoring** — `BaseLintTest` shared fixture for lint test classes. New `test_lib_python.py` (13 tests). Total: **154 Python tests**, all Go tests pass.
+* **共用 Python 函式庫**：`scripts/tools/_lib_python.py` 提供 `parse_duration_seconds()`、`is_disabled()`、`load_yaml_file()`，消除 `generate_alertmanager_routes.py` 與 `lint_custom_rules.py` 間的重複實作
+* **測試重構**：`BaseLintTest` 共用 fixture、新增 `test_lib_python.py`（13 tests）。合計：**154 Python tests**，全 Go tests pass
 
-### Documentation Quality
+### 📄 文件品質
 
-* **Consistency fixes** — Receiver count 4→6, Rule Pack count 9→10, version references v1.3.0→v1.4.0 unified across 6 documentation files.
-* **Completeness** — `byo-alertmanager-integration.md`: added `--apply` one-command deployment, RocketChat/PagerDuty receiver examples, `--policy` webhook validation.
-* **Pain point descriptions strengthened** — README.md/README.en.md: quantified consequences in all 7 pain points, consolidated value table from 9→6 rows with "problem solved" column. Docs: added failure mode explanations and quantified impact.
+* **一致性修正**：receiver 4→6、rule pack 9→10、版號 v1.3.0→v1.4.0，跨 6 個文件統一
+* **完整性補齊**：`byo-alertmanager-integration.md` 新增 `--apply` 一站式部署、RocketChat/PagerDuty receiver 範例、`--policy` webhook 驗證
+* **痛點敘述強化**：README.md/README.en.md 全 7 個痛點加入量化後果，價值表 9→6 行收斂並新增「解決什麼問題」欄位。各技術文件補充故障模式與影響量化
 
-### Test Coverage
+### 📊 測試覆蓋
 
-| Component | Before | After |
-|-----------|--------|-------|
+| 元件 | 改動前 | 改動後 |
+|------|--------|--------|
 | Python tests | 88 | 154 (+75%) |
-| Go tests | All pass | All pass (+9 new) |
-| New test files | — | `test_lib_python.py` |
+| Go tests | 全 pass | 全 pass (+9 new) |
+| 新增測試檔 | — | `test_lib_python.py` |
 
 ---
 
