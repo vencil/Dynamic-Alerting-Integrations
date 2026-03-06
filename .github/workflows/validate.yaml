@@ -1,0 +1,87 @@
+# validate.yaml — PR validation pipeline
+#
+# Runs on every PR that touches tenant configs, routing, rule packs,
+# or Python/Go source code. Catches issues before merge.
+#
+# Checks:
+#   1. Python tests (154+ tests)
+#   2. Go tests (threshold-exporter)
+#   3. Tenant config validation (schema + routing + policy)
+#   4. Custom rule linting (deny-list)
+#   5. Version consistency (bump_docs --check)
+
+name: Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "components/threshold-exporter/config/**"
+      - "components/threshold-exporter/app/**"
+      - "rule-packs/**"
+      - "scripts/tools/**"
+      - "tests/**"
+      - ".github/custom-rule-policy.yaml"
+      - ".github/workflows/validate.yaml"
+
+jobs:
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install pyyaml
+      - run: python -m pytest tests/ -v
+
+  go-tests:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: components/threshold-exporter/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go test -v ./...
+
+  validate-config:
+    name: Validate Tenant Config & Routes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install pyyaml
+
+      # Schema validation + routing validation + webhook domain allowlist
+      - name: Validate alertmanager routes
+        run: |
+          python scripts/tools/generate_alertmanager_routes.py \
+            --config-dir components/threshold-exporter/config/conf.d/ \
+            --validate \
+            --policy .github/custom-rule-policy.yaml
+
+      # Custom rule deny-list linting
+      - name: Lint custom rules
+        run: |
+          python scripts/tools/lint_custom_rules.py \
+            rule-packs/ \
+            --policy .github/custom-rule-policy.yaml \
+            --ci
+
+  version-check:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install pyyaml
+      - run: python scripts/tools/bump_docs.py --check

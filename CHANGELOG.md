@@ -2,6 +2,34 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.6.0] - GitOps RBAC + Platform Dashboard (2026-03-06)
+
+GitOps 閉環落地：CODEOWNERS 檔案級 RBAC、CI 自動驗證 pipeline、ConfigMap 組裝、ArgoCD/Flux 部署指南。新增平台級 Grafana Dashboard 提供租戶狀態全域視覺化。
+
+### 🔐 GitOps RBAC
+
+* **CODEOWNERS**：`.github/CODEOWNERS` 四層分明 — `_defaults.yaml` 歸 Platform Team、`conf.d/<tenant>.yaml` 歸各 tenant team、Rule Pack 歸 Domain Expert、CI/docs 歸 Platform Team。搭配 Branch Protection Rules 實現 Git-native RBAC
+* **CI 驗證 pipeline**：`.github/workflows/validate.yaml` PR 觸發 5 個 check — Python tests、Go tests、tenant config schema + routing + webhook policy 驗證、custom rule deny-list linting、版號一致性。所有 check 通過 + CODEOWNERS reviewer approve → 允許 merge
+* **ConfigMap 組裝**：`make configmap-assemble` 將 `conf.d/*.yaml` 轉為單一 ConfigMap YAML（`.build/threshold-config.yaml`），供 GitOps sync 使用
+* **GitOps 部署指南**：`docs/gitops-deployment.md` — ArgoCD Application + Flux Kustomization 完整範例、三層變更流程（Standard / Break-Glass / Drift Reconciliation）、新增租戶 checklist
+
+### 📊 Grafana Dashboard
+
+* **Platform Overview Dashboard**：`k8s/03-monitoring/dynamic-alerting-overview.json` + 獨立 ConfigMap（`configmap-grafana-da-overview.yaml`）。11 個面板：
+  * 全域概覽（Active Tenants / Total Thresholds / Warning-Critical 比例）
+  * 三態狀態卡片（Silent Mode / Maintenance Mode / Dedup Disabled）
+  * Tenant State Overview 全寬表格（每 tenant 的 threshold 數 + silent + maintenance + dedup 狀態）
+  * 配置分佈（by Component / by Tenant，含 cardinality 500 紅線）
+  * 運維洞察（Active State Filters 表格 + Threshold Changes 時序圖）
+
+### 📄 文件收斂
+
+* **版號修正**：`byo-alertmanager-integration.md` 版號 v1.4.0 → v1.5.0（v1.5.0 漏更新）
+* **文件架構表更新**：CLAUDE.md 新增 `gitops-deployment.md`、`.github/CODEOWNERS`、`validate.yaml`、dashboard JSON
+* **文件導覽更新**：README.md / README.en.md 新增 GitOps 部署指南連結
+
+---
+
 ## [v1.5.0] - 安全護欄 + 品質加固 (2026-03-05)
 
 v1.0–v1.4 快速迭代後的收斂：安全護欄、程式碼/測試品質、文件一致性。

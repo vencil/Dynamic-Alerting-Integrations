@@ -170,6 +170,14 @@ load-demo: ## 負載注入: 完整 Demo (stress-ng + connections → alert → c
 baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: make baseline-discovery TENANT=db-a)
 	@python3 ./scripts/tools/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
 
+CONFDIR := components/threshold-exporter/config/conf.d
+
+configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync）
+	@kubectl create configmap threshold-config \
+		$(shell for f in $(CONFDIR)/*.yaml; do echo "--from-file=$$(basename $$f)=$$f"; done) \
+		-n monitoring --dry-run=client -o yaml > .build/threshold-config.yaml
+	@echo "✓ .build/threshold-config.yaml ($(shell ls $(CONFDIR)/*.yaml | wc -l) files)"
+
 validate-routes: ## 驗證 Alertmanager route config (CI lint 用)
 	@python3 ./scripts/tools/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate
@@ -202,6 +210,20 @@ chart-package: ## 打包 Helm chart (.tgz)
 chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker login ghcr.io)
 	@helm push .build/threshold-exporter-$(CHART_VER).tgz oci://$(OCI_REGISTRY)/charts
 	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
+
+# ----------------------------------------------------------
+# Release Tag（防止版號不一致）
+# ----------------------------------------------------------
+.PHONY: release-tag
+release-tag: version-check ## 從 Chart.yaml 推導 tag 並推送（防止手動打錯 tag）
+	@echo "Chart.yaml version: $(CHART_VER)"
+	@if git rev-parse "v$(CHART_VER)" >/dev/null 2>&1; then \
+		echo "ERROR: tag v$(CHART_VER) already exists"; exit 1; \
+	fi
+	@echo "Creating tag v$(CHART_VER)..."
+	@git tag "v$(CHART_VER)"
+	@echo "✅ Tag v$(CHART_VER) created locally."
+	@echo "Run 'git push origin v$(CHART_VER)' to trigger release workflow."
 
 .PHONY: help
 help: ## 顯示說明

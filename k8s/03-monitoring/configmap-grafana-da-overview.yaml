@@ -1,0 +1,181 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-da-overview
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  dynamic-alerting-overview.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Active Tenants",
+          "description": "Number of distinct tenants with at least one threshold configured",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+          "targets": [{ "expr": "count(count by(tenant) (user_threshold))", "legendFormat": "" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+        },
+        {
+          "title": "Total Thresholds",
+          "description": "Total number of threshold metric series across all tenants",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+          "targets": [{ "expr": "count(user_threshold)", "legendFormat": "" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+        },
+        {
+          "title": "Warning / Critical",
+          "description": "Threshold count by severity level",
+          "type": "piechart",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+          "targets": [
+            { "expr": "count(user_threshold{severity=\"warning\"})", "legendFormat": "Warning" },
+            { "expr": "count(user_threshold{severity=\"critical\"})", "legendFormat": "Critical" }
+          ],
+          "fieldConfig": {
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Warning" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "right" }, "pieType": "donut" }
+        },
+        {
+          "title": "Silent Mode",
+          "description": "Tenants with notification suppression active (TSDB preserved, notifications inhibited)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+          "targets": [{ "expr": "count(user_silent_mode) or vector(0)", "legendFormat": "" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+        },
+        {
+          "title": "Maintenance Mode",
+          "description": "Tenants with maintenance state filter active (alerts suppressed at PromQL level, no TSDB records)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+          "targets": [{ "expr": "count(user_state_filter{filter=\"maintenance\"}) or vector(0)", "legendFormat": "" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+        },
+        {
+          "title": "Dedup Disabled",
+          "description": "Tenants that explicitly disabled severity dedup (both warning + critical notifications sent)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+          "targets": [{ "expr": "count(user_severity_dedup{mode=\"disable\"}) or vector(0)", "legendFormat": "" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "blue", "value": 1 }] }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+        },
+        {
+          "title": "Tenant State Overview",
+          "description": "Per-tenant operational state: threshold count, silent mode, maintenance, severity dedup",
+          "type": "table",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+          "targets": [
+            { "expr": "count by(tenant) (user_threshold)", "format": "table", "instant": true, "refId": "Thresholds" },
+            { "expr": "user_silent_mode", "format": "table", "instant": true, "refId": "Silent" },
+            { "expr": "user_state_filter{filter=\"maintenance\"}", "format": "table", "instant": true, "refId": "Maintenance" },
+            { "expr": "user_severity_dedup", "format": "table", "instant": true, "refId": "Dedup" }
+          ],
+          "transformations": [
+            { "id": "merge", "options": {} },
+            { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true }, "renameByName": { "tenant": "Tenant", "Value #Thresholds": "Thresholds", "Value #Silent": "Silent Mode", "target_severity": "Silent Severity", "Value #Maintenance": "Maintenance", "mode": "Dedup Mode", "Value #Dedup": "Dedup" } } }
+          ],
+          "options": { "showHeader": true, "footer": { "enablePagination": true } }
+        },
+        {
+          "title": "Thresholds by Component",
+          "description": "Distribution of configured thresholds across database/component types",
+          "type": "barchart",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "targets": [{ "expr": "count by(component) (user_threshold)", "legendFormat": "{{ component }}" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+          "options": { "orientation": "horizontal", "showValue": "always", "barWidth": 0.7 }
+        },
+        {
+          "title": "Thresholds per Tenant",
+          "description": "Number of threshold series per tenant. Cardinality guard limit: 500 per tenant (default).",
+          "type": "barchart",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "targets": [{ "expr": "count by(tenant) (user_threshold)", "legendFormat": "{{ tenant }}" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 400 }, { "color": "red", "value": 500 }] },
+              "custom": { "thresholdsStyle": { "mode": "line" } }
+            }
+          },
+          "options": { "orientation": "horizontal", "showValue": "always", "barWidth": 0.7 }
+        },
+        {
+          "title": "Active State Filters",
+          "description": "State-based monitoring filters currently active across tenants",
+          "type": "table",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+          "targets": [{ "expr": "user_state_filter", "format": "table", "instant": true }],
+          "transformations": [
+            { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "Value": true, "job": true, "instance": true }, "renameByName": { "tenant": "Tenant", "filter": "Filter", "severity": "Severity" } } }
+          ],
+          "options": { "showHeader": true, "footer": { "enablePagination": true } }
+        },
+        {
+          "title": "Threshold Changes (10m window)",
+          "description": "Configuration reload activity — spikes indicate config updates via SHA-256 hot-reload",
+          "type": "timeseries",
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+          "targets": [{ "expr": "sum by(tenant) (changes(user_threshold[10m]))", "legendFormat": "{{ tenant }}" }],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "fillOpacity": 20, "lineWidth": 2, "drawStyle": "line", "pointSize": 5 }
+            }
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["dynamic-alerting", "platform", "multi-tenant"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "",
+      "title": "Dynamic Alerting — Platform Overview",
+      "uid": "dynamic-alerting-overview",
+      "version": 1
+    }

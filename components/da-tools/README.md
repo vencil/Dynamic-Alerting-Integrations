@@ -199,12 +199,12 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v1.5.0+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v1.6.0+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v1.5.0 | `v1.3.0` | Alertmanager 動態化 + Receiver 擴充 |
-| threshold-exporter | v1.5.0 | `exporter/v1.5.0` | Go binary |
+| 平台文件 | v1.6.0 | `v1.3.0` | Alertmanager 動態化 + Receiver 擴充 |
+| threshold-exporter | v1.6.0 | `exporter/v1.6.0` | Go binary |
 | **da-tools** | **v1.5.0** | **`tools/v1.5.0`** | **Python CLI 工具集（新增 generate-routes）** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。

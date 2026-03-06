@@ -1,6 +1,6 @@
 # BYO Alertmanager 整合指南
 
-> **版本**：v1.4.0
+> **版本**：v1.5.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 

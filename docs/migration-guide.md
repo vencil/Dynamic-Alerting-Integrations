@@ -98,7 +98,7 @@ scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-expor
 # 方式 A (推薦): Helm values 覆寫 — OCI registry
 #   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.6.0 \
   -n monitoring -f values-override.yaml
 
 # 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
@@ -234,7 +234,7 @@ kubectl create configmap prometheus-rules-custom \
 ```bash
 # 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.6.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```

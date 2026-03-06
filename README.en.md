@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.5.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), security guardrails (SSRF prevention + schema validation + cardinality limits), HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.6.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), security guardrails (SSRF prevention + schema validation + cardinality limits), HA deployment.
 
 ---
 
@@ -86,7 +86,7 @@ On the deployment side: the Helm chart is published to an **OCI registry** — o
 ```bash
 # One-command deploy — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.6.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -243,6 +243,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | [Custom Rule Governance](docs/custom-rule-governance.md) | 3-Tier governance model, RnR definitions, SLA boundaries, CI linting | Platform Leads, Domain Experts |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
 | [da-tools CLI](components/da-tools/README.md) | Portable verification toolkit — validate integration without cloning | Everyone |
+| [GitOps Deployment Guide](docs/gitops-deployment.md) | GitOps workflow (ArgoCD/Flux), CODEOWNERS RBAC, CI auto-validation | Platform Engineers, DevOps |
 
 ---
 

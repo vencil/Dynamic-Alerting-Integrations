@@ -1,0 +1,52 @@
+# CODEOWNERS — Dynamic Alerting Platform
+#
+# GitHub 使用此檔案在 PR 自動指派 reviewer。
+# 搭配 Branch Protection Rules 可實現 GitOps RBAC：
+#   - Platform Team 擁有 _defaults.yaml 與平台設定
+#   - 各 Tenant Team 擁有自己的 conf.d/<tenant>.yaml
+#   - Rule Pack 由對應 Domain Expert 團隊擁有
+#
+# 語法：pattern  @owner1 @owner2
+# 參考：https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ============================================================
+# Platform-level config (requires Platform Team approval)
+# ============================================================
+components/threshold-exporter/config/conf.d/_defaults.yaml  @platform-team
+components/threshold-exporter/Chart.yaml                     @platform-team
+components/threshold-exporter/values.yaml                    @platform-team
+.github/custom-rule-policy.yaml                              @platform-team
+
+# ============================================================
+# Tenant configs (each team owns their own file)
+# ============================================================
+# Tenant Team A owns db-a.yaml
+components/threshold-exporter/config/conf.d/db-a.yaml        @team-db-a
+
+# Tenant Team B owns db-b.yaml
+components/threshold-exporter/config/conf.d/db-b.yaml        @team-db-b
+
+# New tenants: add a line here following the pattern:
+# components/threshold-exporter/config/conf.d/<tenant>.yaml   @team-<tenant>
+
+# ============================================================
+# Rule Packs (Domain Expert ownership)
+# ============================================================
+rule-packs/rule-pack-mariadb*.yaml       @dba-team
+rule-packs/rule-pack-redis*.yaml         @dba-team
+rule-packs/rule-pack-mongodb*.yaml       @dba-team
+rule-packs/rule-pack-elasticsearch*.yaml @search-team
+rule-packs/rule-pack-oracle*.yaml        @dba-team
+rule-packs/rule-pack-db2*.yaml           @dba-team
+rule-packs/rule-pack-clickhouse*.yaml    @analytics-team
+rule-packs/rule-pack-kubernetes*.yaml    @k8s-infra-team
+rule-packs/rule-pack-platform*.yaml      @platform-team
+rule-packs/rule-pack-operational*.yaml   @platform-team
+
+# ============================================================
+# CI / tooling / docs (Platform Team)
+# ============================================================
+.github/workflows/       @platform-team
+scripts/tools/           @platform-team
+docs/                    @platform-team
+CLAUDE.md                @platform-team

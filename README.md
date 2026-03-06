@@ -2,7 +2,7 @@
 
 > **Language / 語言：** [English](README.en.md) | **中文（當前）**
 
-> **企業級多租戶監控治理平台** v1.5.0 — 配置驅動閾值、租戶零 PromQL、10 個預載規則包 (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational)、AST 遷移引擎、三層治理模型、Regex 維度閾值、排程式時間窗口、三態運營模式 (Normal / Silent / Maintenance)、安全護欄（SSRF 防護 + Schema 驗證 + Cardinality 限制）、HA 部署。
+> **企業級多租戶監控治理平台** v1.6.0 — 配置驅動閾值、租戶零 PromQL、10 個預載規則包 (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational)、AST 遷移引擎、三層治理模型、Regex 維度閾值、排程式時間窗口、三態運營模式 (Normal / Silent / Maintenance)、安全護欄（SSRF 防護 + Schema 驗證 + Cardinality 限制）、HA 部署。
 
 ---
 
@@ -86,7 +86,7 @@ docker run --rm -it ghcr.io/vencil/da-tools:1.5.0 scaffold --tenant my-app --db 
 ```bash
 # 一行部署 — 不需 clone repo
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.6.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -243,6 +243,7 @@ make port-forward
 | [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、RnR 權責定義、SLA 切割、CI Linting | Platform Leads、Domain Experts |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、巡檢、收斂判定、切換退出 | SREs、Platform Engineers |
 | [da-tools CLI](components/da-tools/README.md) | 可攜帶驗證工具容器 — 不需 clone 專案即可驗證整合 | 全體 |
+| [GitOps 部署指南](docs/gitops-deployment.md) | GitOps 工作流（ArgoCD/Flux）、CODEOWNERS RBAC、CI 自動驗證 | Platform Engineers、DevOps |
 
 ---
 
