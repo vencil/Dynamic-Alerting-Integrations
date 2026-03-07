@@ -161,6 +161,25 @@ $headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.gith
 
 詳見 [GitHub Release Playbook](github-release-playbook.md)。
 
+### 長 Body 的 File Staging 模式
+
+Windows MCP Shell 有 timeout 限制，inline 長 body 容易超時。用 Desktop Commander 寫暫存檔再讀入更可靠：
+
+```powershell
+# Step 1: Desktop Commander write_file 寫 body 到暫存路徑
+#   C:/Users/<user>/AppData/Local/Temp/release-body.txt
+
+# Step 2: PowerShell 讀檔 + API 呼叫
+$bodyText = Get-Content "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Raw
+$payload = @{ name = "title"; body = $bodyText } | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Uri $url -Method Patch -Headers $headers `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
+    -ContentType "application/json; charset=utf-8"
+
+# Step 3: 清理
+Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
+```
+
 ## 已知陷阱速查
 
 | # | 陷阱 | 解法 |
@@ -181,6 +200,8 @@ $headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.gith
 | 14 | PS JSON body CJK 亂碼 | `ConvertTo-Json` + `[System.Text.Encoding]::UTF8.GetBytes()` + `charset=utf-8` |
 | 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline |
 | 16 | PAT push `.github/workflows/` 被 reject | PAT 需含 Workflows scope（詳見 [GitHub Release Playbook](github-release-playbook.md)） |
+| 17 | Windows MCP Shell 長 REST body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 完成後 `Remove-Item` |
+| 18 | GitHub Release `already_exists` 422 | tag 推送後 GitHub 可能自動建 release；改用 PATCH 更新（GET tag → 取 id → PATCH body） |
 
 ## 指令快速參考
 

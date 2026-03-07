@@ -175,3 +175,18 @@ git push origin "tools/v<VERSION>"
 | 11 | PAT 缺 `workflow` scope → push `.github/workflows/` 被 reject | PAT 需含 Workflows: Read and write |
 | 12 | `v*` tag 觸發 exporter build 但版號不匹配 | 已修正：`v*` 不再觸發 CI；exporter 改用 `exporter/v*` tag |
 | 13 | `replace_all` 批次改版號誤改跨元件版號 | 改完後 `bump_docs.py --check` 驗證；手動確認 exporter 版號未被誤改 |
+| 14 | Release `already_exists`（tag 已被 CI 或先前操作建立） | 先 GET `/releases/tags/<tag>` 取 `id`，再 PATCH `/releases/<id>` 更新 name + body |
+| 15 | Windows MCP Shell 長 body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 結束後刪暫存 |
+| 16 | 合併版號時遺漏語義更新 | 全局 sed 改版號後，需手動校正：CHANGELOG（合併 section）、da-tools 版號表（Git Tag + 說明）、architecture 底部版本戳（日期 + 功能摘要 + CLI 命令數） |
+
+## 版號合併流程
+
+多版本未對外釋出時可合併為單一版號。步驟：
+
+1. **CHANGELOG**: 合併 section 為一個條目（feature 按邏輯分組、da-tools CLI 命令數累加、測試數取最終值）
+2. **全局替換**: `sed -i 's/OLD/NEW/g'` 所有 `.md`、VERSION 檔案（排除 CHANGELOG，需手動合併）
+3. **語義校正**（sed 無法自動處理）：
+   - da-tools README 版號策略表：Platform Git Tag、da-tools 說明（累加新命令）
+   - architecture-and-design 底部版本戳：日期、功能摘要、CLI 命令數區間
+   - CHANGELOG 測試表：基線版對齊前一版（如 v1.9.0 → v1.10.0，非 v1.10.0 → v1.10.0）
+4. **驗證**: `grep -rn "OLD_VERSION"` → 0 命中；`bump_docs.py --check` → ✅

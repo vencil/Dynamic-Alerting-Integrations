@@ -244,3 +244,64 @@ python3 scripts/tools/bump_docs.py --check
 | Python 編碼 | `open()` 帶 `encoding="utf-8"` | `grep -rn "open(" scripts/tools/ \| grep -v encoding` (期望: 0) |
 
 新增 Python 工具寫檔時，每個 `open(..., "w")` 後必須接 `os.chmod(path, 0o600)`。
+
+## conf.d/ YAML 格式陷阱
+
+### tenants: wrapper 格式
+
+`conf.d/` 實際使用 **wrapped format**，所有新工具必須處理：
+
+```yaml
+# ✅ 實際格式（conf.d/db-a.yaml）
+tenants:
+  db-a:
+    mysql_connections: "70"
+    _routing:
+      receiver: { type: "webhook", url: "..." }
+
+# ❌ flat 格式（僅用於簡化測試或文件範例）
+mysql_connections: "70"
+```
+
+**偵測方法：** 載入 YAML 後檢查 `"tenants" in data and isinstance(data["tenants"], dict)`，若存在則 drill into nested structure。
+
+**測試要求：** 每個讀取 conf.d/ 的工具至少需要兩組測試：`test_*_flat()` 和 `test_*_wrapped()`。已知踩坑工具：`config_diff.py`、`blind_spot_discovery.py`（v1.10.0 修正）。
+
+### 字串匹配：segment vs substring
+
+Job name 到 DB type 的推斷不能用 substring matching：
+
+```python
+# ❌ "es" in "prometheus" → True（誤判為 elasticsearch）
+# ❌ "db" in "dashboard-backend" → True（誤判為 db2）
+
+# ✅ Segment matching — 以 -_./空格 切割後做完整匹配
+segments = set(re.split(r'[-_.\s/]+', job_lower))
+for keyword, db_type in JOB_DB_MAP.items():
+    if keyword in segments:
+        return db_type
+```
+
+**回歸測試必備：** 加一個 false-positive case（如 `"prometheus"` → `"unknown"`）防止未來改動退化。
+
+## 自檢方法論
+
+新功能完成後執行兩輪自檢：
+
+**第一輪（正確性）：**
+1. 逐檔重讀原始碼 — 聚焦實際 conf.d/ 格式是否對齊
+2. 重讀測試 — 確認測試用的 fixture 與真實格式一致
+3. 交叉比對 CLAUDE.md 工具表、CHANGELOG 計數、README 工具數
+
+**第二輪（完整性）：**
+1. 測試覆蓋盲區 — edge case（timeout、空輸入、格式混合）
+2. 跨文件一致性 — `grep -rn` 搜尋版號、工具數、§ 交叉引用
+3. `bump_docs.py --check` + `pytest -v` 全套驗證
+
+## 文件敘述風格
+
+### da-tools 容器優先
+
+所有面向使用者的文件（byo-*、migration-guide、shadow-monitoring-sop）中的工具用法，以 `docker run ghcr.io/vencil/da-tools:<ver>` 為主要範例。raw `python3 scripts/tools/...` 寫法僅在「本地開發」或「CI pipeline」上下文使用。
+
+**檢查方式：** `grep -rn "python3 scripts/tools/" docs/` — 面向使用者的文件中不應出現（`docs/internal/` 例外）。
