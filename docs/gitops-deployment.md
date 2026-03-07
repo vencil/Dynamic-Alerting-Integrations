@@ -1,6 +1,6 @@
 # GitOps 部署指南
 
-> **版本**：v1.8.0
+> **版本**：v1.9.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 

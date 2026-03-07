@@ -1,0 +1,45 @@
+name: Threshold Backtest
+on:
+  pull_request:
+    paths:
+      - 'conf.d/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need HEAD~1 for git diff
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run backtest
+        id: backtest
+        env:
+          PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
+        run: |
+          python3 scripts/tools/backtest_threshold.py \
+            --git-diff \
+            --prometheus "${PROMETHEUS_URL:-http://localhost:9090}" \
+            --skip-if-unavailable \
+            --markdown-output /tmp/backtest-comment.md \
+            --output /tmp/backtest-report.json
+        continue-on-error: true
+
+      - name: Comment PR
+        if: hashFiles('/tmp/backtest-comment.md') != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: /tmp/backtest-comment.md
+          header: threshold-backtest

@@ -12,11 +12,15 @@ Usage:
 Commands (Prometheus API — portable):
     check-alert       Query alert firing status for a tenant
     diagnose          Tenant health check (config + metric + alert status)
+    batch-diagnose    Multi-tenant parallel health report (post-cutover)
     baseline          Observe metrics and recommend thresholds
     validate          Compare old vs new recording rules (Shadow Monitoring)
+    backtest          Backtest threshold changes against historical data
 
 Commands (Config Generation — reads tenant YAML):
     generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
+    patch-config      Patch threshold-config ConfigMap (with --diff preview)
+    analyze-gaps      Rule Pack gap analysis for custom rules
 
 Commands (File System — offline):
     migrate           Convert legacy Prometheus rules to dynamic format
@@ -44,6 +48,8 @@ COMMAND_MAP = {
     "baseline": "baseline_discovery.py",
     "diagnose": "diagnose.py",
     "validate": "validate_migration.py",
+    "batch-diagnose": "batch_diagnose.py",
+    "backtest": "backtest_threshold.py",
     # Group B: Prometheus + file system (config generation)
     "generate-routes": "generate_alertmanager_routes.py",
     # Group C: File system only (offline)
@@ -54,10 +60,13 @@ COMMAND_MAP = {
     "lint": "lint_custom_rules.py",
     "onboard": "onboard_platform.py",
     "validate-config": "validate_config.py",
+    "analyze-gaps": "analyze_rule_pack_gaps.py",
+    "patch-config": "patch_config.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
-PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate"}
+PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
+                       "batch-diagnose", "backtest"}
 
 
 def print_usage():

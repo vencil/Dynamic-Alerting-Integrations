@@ -132,6 +132,30 @@ kubectl apply --server-side --force-conflicts --field-manager=helm \
 helm upgrade threshold-exporter components/threshold-exporter/ -n monitoring
 ```
 
+## PowerShell REST API（GitHub 等）
+
+Windows MCP PowerShell 是 Cowork VM 無法直連的 API（如 `api.github.com`）的橋樑。
+
+**JSON body 最佳實踐：**
+
+```powershell
+# ✅ 單行字串賦值 — 最可靠
+$b = '{"tag_name":"v1.8.0","name":"v1.8.0","body":"notes","draft":false}'
+Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $b
+
+# ❌ @{} + ConvertTo-Json — & 字元問題、型別轉換不穩定
+# ❌ Heredoc / 多行字串 — quote mangling
+# ❌ 外部 .ps1 腳本 — OneDrive 路徑含空格找不到
+```
+
+**Headers 模板：**
+
+```powershell
+$headers = @{ "Authorization" = "Bearer $token"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28"; "Content-Type" = "application/json" }
+```
+
+詳見 [GitHub Release Playbook](github-release-playbook.md)。
+
 ## 已知陷阱速查
 
 | # | 陷阱 | 解法 |
@@ -149,6 +173,8 @@ helm upgrade threshold-exporter components/threshold-exporter/ -n monitoring
 | 11 | `set -euo pipefail` + 未初始化變數 | 所有條件路徑都要有 default 值 |
 | 12 | 彩色輸出 / ANSI 碼污染 JSON | `--json` 模式避免 source `_lib.sh`，或 `2>/dev/null` + 過濾 ANSI |
 | 13 | 版號 drift | `make version-check`；修正用 `make bump-docs` |
+| 14 | PS `ConvertTo-Json` / heredoc 產 JSON 失敗 | 用 `$b = '{"k":"v"}'` 單行字串（見上方 REST API 章節） |
+| 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline 單行 |
 
 ## 指令快速參考
 

@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.8.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs (MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), security guardrails (SSRF prevention + schema validation + cardinality limits), HA deployment, enterprise migration tools.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.9.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
 
 ---
 
@@ -68,7 +68,7 @@ Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are p
 
 ```bash
 # No clone needed — just pull and run
-docker run --rm -it ghcr.io/vencil/da-tools:1.8.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools:1.9.0 scaffold --tenant my-app --db mariadb,redis
 ```
 
 ---
@@ -137,12 +137,13 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 
 | Value | Problem Solved | Mechanism | Verifiability |
 |-------|---------------|-----------|---------------|
-| **Risk-Free Migration** | Hundreds of legacy rules can't be safely converted → migration stalls for months | AST engine auto-converts PromQL → YAML. `custom_` prefix isolates old/new rules side-by-side. Shadow Monitoring validates numerical consistency (tolerance ≤ 5%) | `da-tools validate --mapping rules.csv` |
+| **Full Migration Automation** | Hundreds of legacy rules to migrate → weeks of manual analysis, fear of missing something, no rollback confidence | Onboard reverse-analyzes existing config → Scaffold auto-fills tenant YAML → Shadow Monitoring compares → Auto-Convergence detects stability → Batch Health Report → Gap Analysis finds uncovered metrics | `da-tools onboard --alertmanager-config am.yml` → `scaffold --from-onboard hints.json` → `validate --auto-detect-convergence` → `batch-diagnose` |
+| **Change Confidence** | Changing thresholds with unknown blast radius → PR reviews are pure guesswork → nobody dares change anything | `--diff` preview shows before/after + affected alerts. PR auto-triggers `backtest` replaying 7 days of historical data → HIGH/MEDIUM/LOW risk rating | `da-tools patch-config --diff db-a mysql_connections 50` |
 | **Zero Alert Fatigue** | Maintenance storms + duplicate notifications → on-call mutes channels → real P0s get buried | Auto-Suppression (Critical fires → Warning auto-silenced) + maintenance mode + scheduled thresholds (auto-relax at night) + three-state toggle | `make demo-full` end-to-end verification < 5 min |
-| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 10 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.8.0 scaffold` |
-| **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate → `deprecate` / `offboard` retire. Three-tier governance model + CI deny-list linting. Every tool has `--dry-run` | `da-tools offboard <tenant> --dry-run` |
+| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 16 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.9.0 scaffold` |
+| **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate (with `--diff` preview) → `deprecate` / `offboard` retire. Three-tier governance + CI deny-list linting + PR backtest | `da-tools offboard <tenant> --dry-run` |
 | **Config-Driven Routing** | Notification targets hardcoded in Alertmanager config → changing one webhook requires editing central config | Tenant YAML `_routing` for self-service management of 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty) + Go template customization + CI validation | `da-tools generate-routes --validate` |
-| **12 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database/MQ type → reinventing the wheel | Covers 9 DB/MQ types (MariaDB / PostgreSQL / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kafka / RabbitMQ) + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing | `da-tools scaffold --catalog` |
+| **12 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database/MQ type → reinventing the wheel | Covers 9 DB/MQ + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing. `analyze-gaps` auto-maps custom rules to official Rule Packs | `da-tools analyze-gaps --config-dir conf.d/` |
 
 ---
 
@@ -167,6 +168,23 @@ graph LR
     end
 ```
 
+### Migration Lifecycle
+
+```mermaid
+graph LR
+    OB["da-tools onboard<br/>Reverse-analyze configs"] --> SC["da-tools scaffold<br/>--from-onboard<br/>Auto-generate tenant YAML"]
+    SC --> MIG["da-tools migrate<br/>AST-convert legacy rules"]
+    MIG --> VAL["da-tools validate<br/>--auto-detect-convergence<br/>Shadow compare to stability"]
+    VAL --> CUT["Cutover<br/>Switch traffic"]
+    CUT --> BD["da-tools batch-diagnose<br/>Multi-tenant health report"]
+    BD --> GAP["da-tools analyze-gaps<br/>Rule Pack coverage analysis"]
+
+    classDef auto fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    class OB,SC,MIG,VAL,BD,GAP auto
+    classDef manual fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    class CUT manual
+```
+
 ### Data Flow Architecture
 
 ```mermaid
@@ -186,19 +204,27 @@ graph TD
         PROM["Prometheus<br/>Vector Matching: group_left<br/>141 Rules / 27 Groups / ~20ms per cycle"]
     end
 
+    subgraph CI["CI Safety Net"]
+        BT["PR Backtest Bot<br/>7-day historical replay<br/>Risk: HIGH/MEDIUM/LOW"]
+    end
+
     D --> TE
     T1 --> TE
     T2 --> TE
     TE -->|"Expose user_threshold<br/>gauge metrics<br/>(max by tenant)"| PROM
     RP -->|"Recording Rules +<br/>Alert Rules"| PROM
     PROM --> AM["Alertmanager<br/>Route by tenant label"]
+    T1 -.->|"PR modifies conf.d/"| BT
+    BT -.->|"Prometheus range_query<br/>backtest firing delta"| PROM
 
     classDef tenant fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef platform fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef engine fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef ci fill:#fce4ec,stroke:#c62828,stroke-width:2px
     class D,T1,T2 tenant
     class TE,RP platform
     class PROM,AM engine
+    class BT ci
 ```
 
 ---
@@ -274,33 +300,39 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 | Tool | Purpose |
 |------|---------|
-| `onboard_platform.py` | Reverse analysis of existing configs — auto-convert Alertmanager / Rule files / scrape configs |
-| `scaffold_tenant.py` | Interactive configuration generator for new tenants |
+| `onboard_platform.py` | Reverse analysis of existing configs — auto-convert Alertmanager / Rule files / scrape configs. Outputs `onboard-hints.json` for scaffold pipeline |
+| `scaffold_tenant.py` | Tenant config generator (interactive / CLI / `--from-onboard` auto-fill) |
 | `migrate_rule.py` | AST migration engine (v4: AST precision + Triage CSV + Prefix isolation + Dictionary + tenant label injection) |
-| `validate_migration.py` | Shadow Monitoring value diff (Recording Rule comparison) |
-| `patch_config.py` | Safe partial ConfigMap updates |
+| `validate_migration.py` | Shadow Monitoring value diff + `--auto-detect-convergence` automatic stability detection |
+| `batch_diagnose.py` | Multi-tenant parallel health report (post-cutover) — auto-discovers tenants + parallel diagnostics |
+| `analyze_rule_pack_gaps.py` | Custom Rule → official Rule Pack coverage analysis (Exact / Prefix / Fuzzy three-tier matching) |
+| `patch_config.py` | Safe partial ConfigMap updates + `--diff` preview (terraform plan analogy) |
+| `backtest_threshold.py` | Threshold change historical backtest — replays 7 days of Prometheus data for old/new firing delta → risk rating |
 | `check_alert.py` | Query tenant alert status |
-| `diagnose.py` | Tenant health check |
+| `diagnose.py` | Single-tenant health check |
 | `offboard_tenant.py` | Safe tenant removal (pre-check + cross-reference cleanup) |
 | `deprecate_rule.py` | Graceful rule/metric deprecation (3-step automation) |
 | `baseline_discovery.py` | Load observation + threshold suggestions (p95/p99 stats → recommendations) |
+| `lint_custom_rules.py` | CI deny-list linter — custom rule governance compliance |
+| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment (route + receiver + inhibit) + `--apply` + `--validate` |
+| `validate_config.py` | All-in-one config validation (YAML + schema + routes + policy + versions) |
 | `lint_custom_rules.py` | CI deny-list linter — validates Custom Rule governance compliance |
 
 **Usage Examples (da-tools container — no clone needed):**
 
 ```bash
 # View supported DB types
-docker run --rm ghcr.io/vencil/da-tools:1.8.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.9.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.8.0 scaffold
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.9.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.8.0 migrate /data/legacy-rules.yml
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.9.0 migrate /data/legacy-rules.yml
 
 # Shadow Monitoring validation
 docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.8.0 validate --mapping /data/prefix-mapping.yaml
+  ghcr.io/vencil/da-tools:1.9.0 validate --mapping /data/prefix-mapping.yaml
 ```
 
 > **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.

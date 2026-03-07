@@ -2,6 +2,44 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.9.0] — 遷移全鏈自動化與配置安全 (Migration Automation & Config Safety) (2026-03-07)
+
+全鏈遷移自動化（Onboard→Scaffold pipeline、Auto-Convergence 偵測、Post-cutover Health Report、Rule Pack Gap Analysis）、Config Diff Preview、PR 歷史回測 Bot、da-tools 16 個 CLI 命令。
+
+### 🔄 Migration Automation
+
+- **`batch_diagnose.py`**: 多租戶並行健康報告。自動從 ConfigMap 發現 tenants，`ThreadPoolExecutor` 並行診斷，輸出 health score + remediation steps
+- **`validate_migration.py` — Auto-Convergence**: `ConvergenceTracker` 追蹤每 metric pair 跨輪穩定性，`--auto-detect-convergence` + `--stability-window N` 達穩態自動停止，輸出 cutover-readiness JSON
+- **Onboard→Scaffold Pipeline**: `onboard_platform.py` 分析完產出 `onboard-hints.json`（tenants + DB types + routing hints），`scaffold_tenant.py --from-onboard` 自動填充配置
+- **`analyze_rule_pack_gaps.py`**: Custom Rule 對官方 Rule Pack 覆蓋分析。三層匹配：Exact → Prefix → Token Overlap（Jaccard）
+
+### 🛡️ Config Safety
+
+- **`patch_config.py --diff`**: 變更預覽（terraform plan 類比）。顯示 before/after + 受影響 alert + 不 apply
+- **`backtest_threshold.py`**: 閾值變更歷史回測。從 git diff 或目錄比對提取變更 → Prometheus `range_query` 7 天數據 → 模擬 old/new firing count → HIGH/MEDIUM/LOW 風險等級。支援 `--skip-if-unavailable`（CI-friendly）。輸出 JSON + Markdown（可貼 PR comment）
+- **`.github/workflows/backtest.yaml`**: PR 修改 `conf.d/**` 自動觸發回測 → sticky PR comment
+
+### 📦 da-tools CLI 擴充
+
+- 新增命令: `batch-diagnose`, `backtest`, `analyze-gaps`, `patch-config`
+- COMMAND_MAP: 11 → 16 個命令
+- da-tools 版號: 1.8.0 → 1.9.0
+
+### 📊 測試
+
+| 項目 | v1.8.0 | v1.9.0 | 變化 |
+|------|--------|--------|------|
+| Python tests | 569 | 632 | +63 |
+| 新增測試檔 | — | `test_batch_diagnose.py`, `test_backtest_threshold.py`, `test_analyze_gaps.py`, `test_patch_config.py` | 4 files |
+
+### 📄 文件
+
+- README 重寫：痛點表新增「全鏈遷移自動化」+「變更信心保證」；Mermaid 新增遷移生命週期圖 + CI 回測節點
+- 工具表：11 → 16 個工具
+- architecture-and-design §11 roadmap: P1 三項標記 ✅ Completed v1.9.0
+
+---
+
 ## [v1.8.0] — 生態系擴張與無縫遷移 (Onboarding & Ecosystem Expansion) (2026-03-07)
 
 既有配置反向遷移工具、N:1 Tenant Mapping、Per-rule Routing Overrides、Kafka/RabbitMQ Rule Pack（10→12）、Benchmark 三維擴充（Routing Scaling / Alertmanager / Reload E2E）、文件與 Playbook 收斂。

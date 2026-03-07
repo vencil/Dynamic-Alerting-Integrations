@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v1.8.0)
+## 專案概覽 (v1.9.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -70,13 +70,16 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 | 工具 | 用途 |
 |------|------|
-| `patch_config.py` | ConfigMap 局部更新 |
+| `patch_config.py` | ConfigMap 局部更新 + `--diff` preview |
 | `check_alert.py` | Alert 狀態查詢 |
-| `diagnose.py` | 租戶健康檢查 |
-| `onboard_platform.py` | 既有配置反向分析（Alertmanager / Rule / Scrape） |
+| `diagnose.py` | 單租戶健康檢查 |
+| `batch_diagnose.py` | 多租戶並行健康報告（Post-cutover） |
+| `onboard_platform.py` | 既有配置反向分析 + `onboard-hints.json` 產出 |
 | `migrate_rule.py` | 傳統規則遷移（AST + Triage + Prefix + Dictionary） |
-| `scaffold_tenant.py` | 互動式 Tenant 配置產生器 |
-| `validate_migration.py` | Shadow Monitoring 數值 diff |
+| `scaffold_tenant.py` | Tenant 配置產生器（互動 / CLI / `--from-onboard`） |
+| `validate_migration.py` | Shadow Monitoring 數值 diff + Auto-Convergence 偵測 |
+| `analyze_rule_pack_gaps.py` | Custom Rule → Rule Pack 覆蓋分析 |
+| `backtest_threshold.py` | 閾值變更歷史回測（Prometheus 7d replay） |
 | `offboard_tenant.py` | Tenant 下架 |
 | `deprecate_rule.py` | Rule/Metric 下架 |
 | `baseline_discovery.py` | 負載觀測 + 閾值建議 |

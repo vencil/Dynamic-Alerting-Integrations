@@ -47,6 +47,7 @@ from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     format_duration,
     validate_and_clamp,
+    write_onboard_hints,
     RECEIVER_TYPES,
     GUARDRAILS,
     PLATFORM_DEFAULTS,
@@ -888,7 +889,62 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
             "summary": summary,
         }
 
+    # Write onboard hints for scaffold pipeline (--auto-scaffold)
+    if not dry_run and not json_output:
+        hints = _build_onboard_hints(phase1_results, phase2_results, phase3_results)
+        if hints.get("tenants"):
+            hints_path = write_onboard_hints(output_dir, hints)
+            report["files_written"].append(hints_path)
+            report["onboard_hints"] = hints
+
     return report
+
+
+def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
+    """Build onboard hints dict from analysis results for scaffold consumption."""
+    hints = {"tenants": [], "db_types": {}, "routing_hints": {}}
+
+    # From Phase 1: tenant names + routing info
+    if phase1_results:
+        tenant_routings, _ = phase1_results
+        for tenant, routing in tenant_routings.items():
+            if tenant not in hints["tenants"]:
+                hints["tenants"].append(tenant)
+            recv = routing.get("receiver", {})
+            hints["routing_hints"][tenant] = {
+                "receiver_type": recv.get("type", "webhook"),
+                "group_wait": routing.get("group_wait"),
+                "group_interval": routing.get("group_interval"),
+                "repeat_interval": routing.get("repeat_interval"),
+            }
+
+    # From Phase 2: DB types inferred from rule metric prefixes
+    if phase2_results:
+        candidates, _, summary = phase2_results
+        db_prefix_map = {
+            "mysql_": "mariadb", "mariadb_": "mariadb",
+            "pg_": "postgresql", "postgres_": "postgresql",
+            "redis_": "redis", "mongodb_": "mongodb",
+            "elasticsearch_": "elasticsearch", "es_": "elasticsearch",
+            "oracle_": "oracle", "db2_": "db2",
+            "clickhouse_": "clickhouse", "kafka_": "kafka",
+            "rabbitmq_": "rabbitmq",
+        }
+        for c in candidates:
+            metric = c.get("alert", c.get("record", "")).lower()
+            for prefix, db_type in db_prefix_map.items():
+                if prefix in metric:
+                    # Associate with all known tenants
+                    for t in hints["tenants"]:
+                        hints["db_types"].setdefault(t, set()).add(db_type)
+                    break
+
+        # Convert sets to lists for JSON serialization
+        for t in hints["db_types"]:
+            hints["db_types"][t] = sorted(hints["db_types"][t])
+
+    hints["tenants"] = sorted(hints["tenants"])
+    return hints
 
 
 # ============================================================

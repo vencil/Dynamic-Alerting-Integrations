@@ -49,6 +49,8 @@ import time
 import argparse
 import urllib.request
 import urllib.parse
+from datetime import datetime, timezone
+
 import yaml
 
 
@@ -241,6 +243,94 @@ def write_csv_report(all_results, output_dir):
     return csv_path
 
 
+class ConvergenceTracker:
+    """Track metric pair convergence across watch rounds.
+
+    Records per-pair status ("match" / "mixed" / "error") each round.
+    Reports cutover readiness when all pairs are stable for N consecutive rounds.
+    """
+
+    def __init__(self, stability_window=5):
+        self.stability_window = stability_window
+        self.pair_history = {}  # {label: [status, status, ...]}
+        self.round_count = 0
+
+    def record_round(self, all_results):
+        """Record results from one polling round."""
+        self.round_count += 1
+        for result in all_results:
+            if result is None:
+                continue
+            label = result["label"]
+            statuses = [d["status"] for d in result["diffs"]]
+            if all(s == "match" for s in statuses):
+                agg = "match"
+            elif any(s == "mismatch" for s in statuses):
+                agg = "mismatch"
+            else:
+                agg = "mixed"  # missing or empty
+            self.pair_history.setdefault(label, []).append(agg)
+
+    def is_converged(self, label):
+        """Check if a single pair has been stable for stability_window rounds."""
+        history = self.pair_history.get(label, [])
+        if len(history) < self.stability_window:
+            return False
+        recent = history[-self.stability_window:]
+        return all(s == "match" for s in recent)
+
+    def compute_report(self):
+        """Return cutover readiness assessment."""
+        if self.round_count < 2:
+            return {
+                "ready": False,
+                "reason": f"Insufficient rounds ({self.round_count}, need >= 2)",
+                "round_count": self.round_count,
+            }
+
+        total = len(self.pair_history)
+        if total == 0:
+            return {"ready": False, "reason": "No pairs tracked", "round_count": self.round_count}
+
+        converged = []
+        unconverged = []
+        for label in sorted(self.pair_history):
+            if self.is_converged(label):
+                converged.append(label)
+            else:
+                unconverged.append(label)
+
+        pct = 100.0 * len(converged) / total
+        ready = len(unconverged) == 0
+
+        return {
+            "ready": ready,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "convergence_percentage": round(pct, 1),
+            "converged_count": len(converged),
+            "total_pairs": total,
+            "converged_pairs": converged,
+            "unconverged_pairs": unconverged,
+            "round_count": self.round_count,
+            "stability_window": self.stability_window,
+            "recommendation": "Safe to cutover" if ready
+                else f"{len(unconverged)} pair(s) not yet stable",
+        }
+
+    def print_status(self):
+        """Print convergence status to stdout."""
+        report = self.compute_report()
+        pct = report["convergence_percentage"]
+        conv = report["converged_count"]
+        total = report["total_pairs"]
+        print(f"\n  Convergence: {conv}/{total} pairs stable ({pct:.0f}%)")
+        if report["unconverged_pairs"]:
+            print(f"  Unconverged: {', '.join(report['unconverged_pairs'])}")
+        if report["ready"]:
+            print("\n  *** CUTOVER READY ***")
+        return report
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Shadow Monitoring 驗證工具 — 比對新舊 Recording Rule 數值",
@@ -266,6 +356,12 @@ def main():
                         help="監控間隔秒數 (預設: 60)")
     parser.add_argument("--rounds", type=int, default=10,
                         help="監控輪數 (預設: 10)")
+    parser.add_argument("--auto-detect-convergence", action="store_true",
+                        help="Track convergence across rounds; auto-stop when cutover ready")
+    parser.add_argument("--stability-window", type=int, default=5,
+                        help="Consecutive match rounds required for convergence (default: 5)")
+    parser.add_argument("--convergence-output",
+                        help="Write cutover readiness report JSON to file")
 
     args = parser.parse_args()
 
@@ -302,15 +398,53 @@ def main():
         return all_results
 
     if args.watch:
-        print(f"\n👁️  持續監控模式: 每 {args.interval} 秒比對一次，共 {args.rounds} 輪\n")
+        tracker = None
+        if args.auto_detect_convergence:
+            tracker = ConvergenceTracker(stability_window=args.stability_window)
+
+        print(f"\n  Watch mode: every {args.interval}s, up to {args.rounds} rounds")
+        if tracker:
+            print(f"  Convergence detection: stability window = {args.stability_window} rounds\n")
+
+        csv_path = None
         for i in range(args.rounds):
-            print(f"\n--- 第 {i+1}/{args.rounds} 輪 ({time.strftime('%H:%M:%S')}) ---")
+            print(f"\n--- Round {i+1}/{args.rounds} ({time.strftime('%H:%M:%S')}) ---")
             all_results = run_once()
             print_summary(all_results)
             csv_path = write_csv_report(all_results, args.output_dir)
+
+            if tracker:
+                tracker.record_round(all_results)
+                report = tracker.print_status()
+                if report["ready"]:
+                    # Write convergence report and stop
+                    conv_path = args.convergence_output or os.path.join(
+                        args.output_dir, "cutover-readiness.json"
+                    )
+                    os.makedirs(os.path.dirname(conv_path) if os.path.dirname(conv_path) else ".", exist_ok=True)
+                    with open(conv_path, "w", encoding="utf-8") as f:
+                        json.dump(report, f, indent=2, ensure_ascii=False)
+                    os.chmod(conv_path, 0o600)
+                    print(f"\n  Cutover readiness report: {conv_path}")
+                    break
+
             if i < args.rounds - 1:
                 time.sleep(args.interval)
-        print(f"\n📁 最終報告: {csv_path}")
+
+        if tracker and not tracker.compute_report()["ready"]:
+            print(f"\n  Watch completed ({args.rounds} rounds) without full convergence.")
+            final = tracker.compute_report()
+            conv_path = args.convergence_output or os.path.join(
+                args.output_dir, "cutover-readiness.json"
+            )
+            os.makedirs(os.path.dirname(conv_path) if os.path.dirname(conv_path) else ".", exist_ok=True)
+            with open(conv_path, "w", encoding="utf-8") as f:
+                json.dump(final, f, indent=2, ensure_ascii=False)
+            os.chmod(conv_path, 0o600)
+            print(f"  Partial convergence report: {conv_path}")
+
+        if csv_path:
+            print(f"\n  CSV report: {csv_path}")
     else:
         all_results = run_once()
         print_summary(all_results)

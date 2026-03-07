@@ -22,7 +22,7 @@ import yaml
 
 import sys as _sys
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib_python import VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES  # noqa: E402
+from _lib_python import VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES, read_onboard_hints  # noqa: E402
 
 # ============================================================
 # Rule Pack catalog — metric keys, defaults, descriptions
@@ -755,6 +755,55 @@ def run_non_interactive(args):
     print("\n✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)")
 
 
+def run_from_onboard(args):
+    """Auto-scaffold tenants from onboard-hints.json.
+
+    Reads hints produced by onboard_platform.py and generates config
+    for each tenant with pre-filled DB types and routing hints.
+    """
+    hints = read_onboard_hints(args.from_onboard)
+    if not hints:
+        print(f"ERROR: Cannot read onboard hints: {args.from_onboard}", file=sys.stderr)
+        sys.exit(1)
+
+    tenants = hints.get("tenants", [])
+    if not tenants:
+        print("No tenants found in onboard hints.", file=sys.stderr)
+        sys.exit(1)
+
+    output_dir = args.output_dir
+    print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")
+
+    for tenant_name in tenants:
+        # Resolve DB types from hints, fallback to kubernetes only
+        db_list = hints.get("db_types", {}).get(tenant_name, [])
+        selected_dbs = ["kubernetes"] + [db for db in db_list if db in RULE_PACKS]
+
+        print(f"\n  {tenant_name}: DBs={', '.join(selected_dbs)}")
+        defaults_data = generate_defaults(selected_dbs)
+        tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=False)
+
+        # Apply routing hints if available
+        routing_hint = hints.get("routing_hints", {}).get(tenant_name, {})
+        if routing_hint and routing_hint.get("receiver_type"):
+            # Routing hints provide structure but receivers need actual URLs
+            # which onboard can extract from Alertmanager config
+            routing = {}
+            if routing_hint.get("group_wait"):
+                routing["group_wait"] = routing_hint["group_wait"]
+            if routing_hint.get("group_interval"):
+                routing["group_interval"] = routing_hint["group_interval"]
+            if routing_hint.get("repeat_interval"):
+                routing["repeat_interval"] = routing_hint["repeat_interval"]
+            if routing:
+                tenant_data["tenants"][tenant_name].setdefault("_routing", {}).update(routing)
+
+        report = generate_report(tenant_name, selected_dbs, output_dir)
+        write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report)
+
+    print(f"\n  Scaffolded {len(tenants)} tenants to {output_dir}/")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Interactive tenant config generator for Dynamic Alerting",
@@ -794,6 +843,8 @@ def main():
                         help="Group interval duration (e.g., 5m, range: 5s-5m)")
     parser.add_argument("--routing-repeat-interval",
                         help="Repeat interval duration (e.g., 4h, range: 1m-72h)")
+    parser.add_argument("--from-onboard",
+                        help="Path to onboard-hints.json (auto-scaffold from onboard results)")
 
     args = parser.parse_args()
 
@@ -801,7 +852,9 @@ def main():
         print_catalog()
         sys.exit(0)
 
-    if args.non_interactive or (args.tenant and args.db):
+    if args.from_onboard:
+        run_from_onboard(args)
+    elif args.non_interactive or (args.tenant and args.db):
         if not args.tenant or not args.db:
             print("錯誤: --non-interactive 模式需要 --tenant 和 --db 參數")
             sys.exit(1)

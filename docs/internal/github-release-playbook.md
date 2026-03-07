@@ -80,46 +80,51 @@ git push origin v<VERSION>
 
 ### Step 4: 建立 GitHub Release（透過 Windows MCP）
 
-因 Cowork VM 無法存取 `api.github.com`，透過 Windows MCP PowerShell 建立：
+因 Cowork VM 無法存取 `api.github.com`，透過 Windows MCP PowerShell 建立。
+
+**⚠️ Repo 名稱：** GitHub 已從 `vibe-k8s-lab` 重導至 `Dynamic-Alerting-Integrations`。git push 有自動重導，但 **API URL 必須用新名稱**，否則回空結果。
+
+**⚠️ PowerShell JSON：** 用單行字串賦值，**不要用** `@{} | ConvertTo-Json`（`&` 字元問題）或 heredoc（quote mangling）。
 
 ```powershell
-$token = "<TOKEN>"   # 從 VM 環境變數取得，不 hardcode
-$headers = @{
-    "Authorization" = "Bearer $token"
-    "Accept" = "application/vnd.github+json"
-}
-$body = @{
-    tag_name = "v1.8.0"
-    name = "v1.8.0 — Release Title"
-    body = "Release notes in markdown..."
-    draft = $false
-    prerelease = $false
-} | ConvertTo-Json -Depth 10
-
-Invoke-RestMethod -Uri "https://api.github.com/repos/vencil/vibe-k8s-lab/releases" `
-    -Method Post -Headers $headers -Body $body -ContentType "application/json"
+$token = "<TOKEN>"
+$headers = @{ "Authorization" = "Bearer $token"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28"; "Content-Type" = "application/json" }
+$b = '{"tag_name":"v1.8.0","name":"v1.8.0 — Release Title","body":"Release notes...","draft":false,"prerelease":false}'
+Invoke-RestMethod -Uri "https://api.github.com/repos/vencil/Dynamic-Alerting-Integrations/releases" -Method Post -Headers $headers -Body $b
 ```
 
 ### Step 5: 驗證
 
-```bash
-# CI workflow 狀態
-# → 在 Windows MCP 查詢：
-# Invoke-RestMethod "https://api.github.com/repos/vencil/vibe-k8s-lab/actions/runs?per_page=3"
+```powershell
+# CI workflow 狀態（Windows MCP）
+Invoke-RestMethod -Uri "https://api.github.com/repos/vencil/Dynamic-Alerting-Integrations/actions/runs?per_page=3" -Headers $headers
 
 # Release 確認
-# → 在 Windows MCP 查詢：
-# Invoke-RestMethod "https://api.github.com/repos/vencil/vibe-k8s-lab/releases/latest"
+Invoke-RestMethod -Uri "https://api.github.com/repos/vencil/Dynamic-Alerting-Integrations/releases/latest" -Headers $headers
+
+# ⚠️ Packages 查詢需要 PAT 有 packages:read scope
+# 若 403 "Resource not accessible"，package 仍可能已成功推送（CI 用 GITHUB_TOKEN 有 packages:write）
+# → 直接在瀏覽器 https://github.com/vencil?tab=packages 驗證
 ```
 
 ## da-tools 獨立 Release
 
-da-tools 有獨立版號線（`tools/v*`），與 platform 脫鉤：
+da-tools 有獨立版號線（`tools/v*`），與 platform 脫鉤。
+
+**⚠️ `bump_docs.py` 陷阱：** `bump_docs.py` 會把所有文件中的 `da-tools:<OLD>` 替換為新版號，但**不會自動建立 `tools/v*` tag**。若 da-tools 有 code change（`entrypoint.py`、新命令映射等），必須手動推 tag，否則文件引用指向不存在的 image。
+
+**檢查清單（每次 platform release 後）：**
 
 ```bash
-# 更新 components/da-tools/VERSION
+# 1. 檢查 da-tools 自上次 tools/v* tag 以來是否有 code change
+git diff $(git tag -l 'tools/v*' --sort=-v:refname | head -1)..HEAD -- components/da-tools/app/
+
+# 2. 若有變更 → 推 tag
 git tag "tools/v<VERSION>"
 git push origin "tools/v<VERSION>"
+
+# 3. 驗證 CI（tools/v* 會同時觸發 Release + Publish da-tools 兩個 workflow，
+#    其中 release-exporter 正確 skip，build-and-push-image 應 success）
 ```
 
 ## 已知陷阱
@@ -132,3 +137,7 @@ git push origin "tools/v<VERSION>"
 | 4 | CI 未觸發 | 確認 tag 格式為 `v*`（非 `V*` 或其他） |
 | 5 | Chart.yaml 版號不匹配 tag | CI 有 version gate；先 `make version-check` |
 | 6 | Token 洩漏到 repo | **嚴格禁止** — 只存 `~/.git-credentials`，session 結束消失 |
+| 7 | API URL 用舊 repo 名 `vibe-k8s-lab` | git push 有重導，但 **REST API 必須用 `Dynamic-Alerting-Integrations`** |
+| 8 | PowerShell `@{} \| ConvertTo-Json` 出錯 | 用單行 `$b = '{"key":"value"}'` 字串賦值 |
+| 9 | PAT 無 `packages:read` → 查不到 packages | 不代表 push 失敗（CI 用 `GITHUB_TOKEN`）；瀏覽器驗證 |
+| 10 | `bump_docs.py` 更新 da-tools 版號但沒推 tag | 每次 release 後用 `git diff` 檢查 da-tools code change（見上方檢查清單） |

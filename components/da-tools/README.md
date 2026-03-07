@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs、Tenants (DevOps)
 > **Image**：`ghcr.io/vencil/da-tools`
-> **版本**：1.8.0（獨立版號，與 threshold-exporter 脫鉤）
+> **版本**：1.9.0（獨立版號，與 threshold-exporter 脫鉤）
 
 ---
 
@@ -23,16 +23,16 @@
 
 ```bash
 # 本地建構（見下方「本地建構」章節）
-cd components/da-tools/app && ./build.sh 1.8.0
+cd components/da-tools/app && ./build.sh 1.9.0
 
 # 或從 registry 拉取（需 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:1.8.0
+docker pull ghcr.io/vencil/da-tools:1.9.0
 
 # 查看說明
-docker run --rm ghcr.io/vencil/da-tools:1.8.0 --help
+docker run --rm ghcr.io/vencil/da-tools:1.9.0 --help
 
 # 查看版本
-docker run --rm ghcr.io/vencil/da-tools:1.8.0 --version
+docker run --rm ghcr.io/vencil/da-tools:1.9.0 --version
 ```
 
 ---
@@ -48,13 +48,17 @@ docker run --rm ghcr.io/vencil/da-tools:1.8.0 --version
 | `check-alert` | 查詢特定 tenant 的 alert 狀態 | `<alert_name> <tenant>` |
 | `diagnose` | Tenant 健康檢查（config + metric + alert 狀態） | `<tenant>` |
 | `baseline` | 觀測指標 + 推薦閾值 | `--tenant <name>` |
-| `validate` | Shadow Monitoring 雙軌比對 | `--mapping <file>` 或 `--old <query> --new <query>` |
+| `validate` | Shadow Monitoring 雙軌比對（含 auto-convergence） | `--mapping <file>` 或 `--old <query> --new <query>` |
+| `batch-diagnose` | 批次租戶健康檢查（auto-discover + 並行診斷） | （自動探索 tenants） |
+| `backtest` | PR threshold 變更歷史回測 | `--git-diff` 或 `--config-dir <dir> --baseline <dir>` |
+| `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--config <path>` |
 
 ### Config 產出工具（讀取 tenant YAML，產出 Alertmanager fragment）
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `generate-routes` | Tenant YAML → Alertmanager route + receiver + inhibit_rules fragment | `--config-dir <dir>` |
+| `patch-config` | ConfigMap 局部更新（含 `--diff` preview 模式） | `<tenant> <metric> <value>` 或 `--diff` |
 
 ### 檔案系統工具（離線可用，不需網路）
 
@@ -84,20 +88,20 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 # 1. 確認 alert 狀態
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   check-alert MariaDBHighConnections db-a
 
 # 2. 觀測指標並取得閾值建議
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
@@ -108,7 +112,7 @@ docker run --rm --network=host \
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/my-rules.yml \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   migrate /data/my-rules.yml -o /data/output --dry-run --triage
 
 # 產出：
@@ -122,7 +126,7 @@ docker run --rm \
 # 非互動式產生 tenant 配置
 docker run --rm \
   -v $(pwd)/configs:/data/configs \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/configs
 ```
 
@@ -132,14 +136,14 @@ docker run --rm \
 # 從 tenant YAML 產出 Alertmanager route + receiver + inhibit_rules fragment
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   generate-routes --config-dir /data/conf.d --dry-run
 
 # 寫入檔案
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml
 ```
 
@@ -167,7 +171,7 @@ cd components/da-tools/app
 ./build.sh
 
 # 建構指定版本
-./build.sh 1.8.0
+./build.sh 1.9.0
 
 # 載入到 Kind cluster（如需要在 K8s Job 中使用）
 kind load docker-image da-tools:dev --name dynamic-alerting-cluster
@@ -188,7 +192,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:1.8.0
+          image: ghcr.io/vencil/da-tools:1.9.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"
@@ -201,13 +205,13 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v1.8.0+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v1.9.0+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v1.8.0 | `v1.8.0` | Per-rule Routing Overrides + Kafka/RabbitMQ + N:1 Mapping |
+| 平台文件 | v1.9.0 | `v1.9.0` | 遷移全鏈自動化 + Config Safety |
 | threshold-exporter | v1.8.0 | `exporter/v1.8.0` | Go binary |
-| **da-tools** | **v1.8.0** | **`tools/v1.8.0`** | **Python CLI 工具集（新增 generate-routes + onboard）** |
+| **da-tools** | **v1.9.0** | **`tools/v1.9.0`** | **Python CLI 工具集（16 命令，新增 batch-diagnose / backtest / analyze-gaps / patch-config）** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。
 
@@ -228,6 +232,10 @@ CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變
 | `lint_custom_rules.py` | `lint` | `scripts/tools/` |
 | `generate_alertmanager_routes.py` | `generate-routes` | `scripts/tools/` |
 | `onboard_platform.py` | `onboard` | `scripts/tools/` |
+| `batch_diagnose.py` | `batch-diagnose` | `scripts/tools/` |
+| `backtest_threshold.py` | `backtest` | `scripts/tools/` |
+| `analyze_rule_pack_gaps.py` | `analyze-gaps` | `scripts/tools/` |
+| `patch_config.py` | `patch-config` | `scripts/tools/` |
 | `metric-dictionary.yaml` | （migrate 內部參照） | `scripts/tools/` |
 
-> **未收錄**：`patch_config.py` 需要 kubectl 叢集存取權限來直接 patch ConfigMap，屬於集群內操作工具，不適合「帶回家驗證」的場景。`validate_config.py` 的功能可透過個別命令組合達成。
+> **未收錄**：`validate_config.py` 的功能可透過個別命令組合達成。

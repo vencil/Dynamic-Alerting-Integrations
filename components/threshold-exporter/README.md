@@ -1,4 +1,4 @@
-# Threshold Exporter (v1.8.0)
+# Threshold Exporter (v1.9.0)
 
 > **核心 Component** — config-driven 的 Prometheus metric exporter，將 YAML 閾值設定轉換為 Prometheus metrics。相比硬寫 PromQL 規則（修改需重啟 Prometheus、規則數隨 tenant × metric 線性增長），threshold-exporter 以 YAML 驅動實現零停機更新、租戶級隔離、固定 O(M) 規則複雜度。
 >
@@ -226,7 +226,7 @@ Helm chart 會自動建立：Deployment (2 replicas + PDB)、Service (含 Promet
 
 ```bash
 # 1. da-tools 產出 tenant config
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.8.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.9.0 \
   scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/output
 
 # 2. 將產出的 tenant config 合併至 values override file
@@ -286,7 +286,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:1.8.0
+          image: ghcr.io/vencil/da-tools:1.9.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

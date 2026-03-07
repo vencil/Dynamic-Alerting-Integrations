@@ -76,7 +76,7 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -104,7 +104,7 @@ spec:
     spec:
       containers:
         - name: validator
-          image: ghcr.io/vencil/da-tools:1.8.0
+          image: ghcr.io/vencil/da-tools:1.9.0
           env:
             - name: PROMETHEUS_URL
               value: http://prometheus.monitoring.svc.cluster.local:9090
@@ -160,7 +160,7 @@ grep "mismatch" validation_output/validation-report.csv | wc -l
 kubectl logs job/shadow-monitor -n monitoring --tail=50
 
 # 4. 租戶健康檢查（確認 exporter 正常 + 運營模式）
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
   diagnose db-a
 ```
 
@@ -183,7 +183,7 @@ docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 \
 
 ```bash
 # 單筆 query 比對
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
   validate --old "<old_query>" --new "<new_query>" \
   --prometheus http://localhost:9090
 
@@ -253,8 +253,8 @@ awk -F',' 'NR>1 {tenants[$2]++} END {for(t in tenants) print t, tenants[t]}' \
   validation_output/validation-report.csv
 
 # 確認 tenant 運營模式
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 diagnose db-a
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 diagnose db-b
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 diagnose db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 diagnose db-b
 ```
 
 ## 7. 退出 Shadow Monitoring
@@ -274,11 +274,11 @@ kubectl delete job shadow-monitor -n monitoring
 # 4. 移除 Alertmanager 的 shadow 攔截 route
 
 # 5. 驗證切換後 alert 正常觸發
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
   check-alert MariaDBHighConnections db-a
 
 # 6. 租戶健康總檢
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.8.0 diagnose db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 diagnose db-a
 ```
 
 ### 7.2 回退（如有問題）
@@ -292,7 +292,7 @@ kubectl apply -f old-recording-rules.yaml
 # 3. 重啟 Shadow Monitor
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.8.0 \
+  ghcr.io/vencil/da-tools:1.9.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -306,17 +306,24 @@ rm -rf migration_output/
 rm -rf validation_output/
 
 # 批次下架不再需要的 custom_ prefix 規則
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.8.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.9.0 \
   deprecate custom_mysql_connections custom_mysql_replication_lag --execute
 ```
 
-## 8. 自動化展望
+## 8. 自動化工具（v1.9.0 新增）
 
-以下為規劃中的改進，將進一步減少 Shadow Monitoring 的人工操作：
+以下工具已在 v1.9.0 實作，減少 Shadow Monitoring 的人工操作：
+
+| 工具 | 用法 | 效果 |
+|------|------|------|
+| **Auto-convergence** ✅ | `validate --auto-detect-convergence --stability-window 5` | 追蹤每個 metric pair 的跨 round 狀態，所有 pairs 連續 N 輪 match 後自動產出 `cutover-readiness.json` 並停止 watch |
+| **Batch health report** ✅ | `batch-diagnose`（da-tools CLI） | 切換後自動發現 tenants → 並行 `diagnose` → health score + remediation steps |
+| **Threshold backtest** ✅ | `backtest --git-diff --prometheus <url>` | PR 修改 threshold 時回測 7 天歷史數據，CI 自動產出風險評估 |
+
+### 尚在規劃中
 
 | 項目 | 說明 |
 |------|------|
-| Auto-convergence 偵測 | `validate --converged` 內建收斂判定，達標自動產出 ready-to-cut 報告 |
 | Shadow Dashboard | Grafana 面板即時顯示 mismatch 趨勢、per-tenant 收斂狀態 |
 | One-command cutover | 單一指令完成 §7.1 所有步驟（停止 Job → 移除舊規則 → 去 label → 驗證） |
 
@@ -330,11 +337,11 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.8.0 \
 │       ↓                                                       │
 │  da-tools migrate → 新規則部署 → Alertmanager 攔截            │
 │       ↓                                                       │
-│  da-tools validate --watch (--tolerance 0.001)                │
+│  da-tools validate --watch --auto-detect-convergence          │
 │       ↓                                                       │
-│  日常巡檢 + da-tools diagnose (1-2 週)                        │
+│  日常巡檢 + da-tools diagnose / batch-diagnose (1-2 週)       │
 │       ↓                                                       │
-│  收斂判定 (7 天 0 mismatch + normal mode)                     │
+│  收斂判定 (自動: cutover-readiness.json / 手動: 7天0 mismatch)│
 │       ↓                                                       │
 │  切換：移除舊規則 + 移除 shadow label + check-alert 驗證      │
 │       ↓                                                       │

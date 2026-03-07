@@ -1,6 +1,6 @@
 # Federation Integration Guide
 
-> **v1.8.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
+> **v1.9.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
 
 ## 1. 概覽
 

@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.8.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.9.0).
 
 **This document covers:**
 - System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
@@ -1216,69 +1216,72 @@ The complete migration path integrates the AST engine, Shadow Monitoring, and Tr
 
 ## 11. Future Roadmap
 
-The following items represent technical directions not yet implemented, listed by expected impact.
+The following items are listed by expected impact. For completed items, see [CHANGELOG.md](../CHANGELOG.md).
 
-### 11.1 Governance Evolution
+```
+P2 Medium-term              P3 Long-term
+(customer-validated)        (scale-driven)
+┌────────────────┐     ┌───────────────┐
+│ Rule Pack Exp  │     │ CRD + Operator│
+│ Federation B   │     │ Log-to-Metric │
+│ AM GitOps      │     │               │
+│ 1:N Mapping    │     │               │
+│ Blind Spot Scan│     │               │
+│ Directory Diff │     │               │
+└────────────────┘     └───────────────┘
+```
 
-Currently all tenant configs reside in a single `threshold-config` ConfigMap, and K8s native RBAC can only control access at the resource level, not at the key level. Splitting into multiple ConfigMaps is feasible but projected volumes require each ConfigMap name to be hardcoded in the Pod Spec — adding a new tenant would require a Deployment change and trigger a Pod restart, breaking the core hot-reload mechanism.
+### P2 — Medium-term Evolution
 
-#### Current Best Practice: GitOps-Driven RBAC
+#### 11.1 Ecosystem Rule Pack Expansion
 
-The recommended approach is to shift configuration changes from `kubectl patch` to Git commit → GitOps sync (ArgoCD / Flux). The permission boundary moves up to the Git layer:
-
-- **CODEOWNERS / Branch Protection**: Restrict Tenant A's team to only modify `conf.d/db-a.yaml`, while only the Platform Team can modify `_defaults.yaml`
-- **CI/CD Pipeline**: Assembles the `conf.d/` directory into a single `threshold-config` ConfigMap and applies it, preserving hot-reload performance
-- **Audit Trail**: Git history natively provides complete who / when / what change records
-
-In practice, configuration changes operate at three levels:
-
-1. **Standard Pathway**: All changes go through Git PR → review → merge → GitOps sync. Complete RBAC audit trail, suitable for routine threshold tuning and new tenant onboarding.
-2. **Emergency Break-Glass**: During P0 incidents, SREs can use `patch_config.py` to directly runtime-patch the K8s ConfigMap for minimum MTTR.
-3. **Drift Reconciliation**: After a break-glass patch, SREs must submit a follow-up PR to sync the change back to Git. Otherwise, the next GitOps sync will overwrite the K8s configuration back to the Git version — this self-healing property naturally prevents "forgot to update the code after firefighting" from becoming permanent technical debt.
-
-#### Future Blueprint: CRD + Operator Architecture
-
-When the platform scales to require auto-scaling, drift reconciliation, and cross-cluster management, a `ThresholdConfig` CRD and Operator can be introduced, elevating tenant configurations to Kubernetes first-class resources. K8s native RBAC would then provide precise per-CR access control, integrating seamlessly with GitOps toolchains. This path requires additional Operator development and operational investment, and is best evaluated when the product enters its scaling phase.
-
-### 11.2 Prometheus Federation
-
-Support multi-cluster architecture:
-- Edge clusters each collect tenant metrics and run threshold-exporter
-- Central cluster performs global alert evaluation via federation or remote-write
-- Cross-cluster SLA monitoring and unified dashboards
-
-### 11.3 Ecosystem Expansion
-
-The platform currently covers database types (MariaDB, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse) as its primary scope. The architecture itself is not limited to databases — any component that exports Prometheus metrics can be managed by adding a new Rule Pack.
-
-The onboarding pattern for each new domain is identical to existing DB Rule Packs: Normalization → Threshold Normalization → Alert Rules three-part structure, paired with `scaffold_tenant.py` for automatic configuration generation. The following table outlines concrete integration paths:
+v1.8.0 already covers 11 DB/MQ types (including Kafka, RabbitMQ). Next-wave candidates:
 
 | Domain | Recommended Exporter | Key Metrics for Threshold Management | Integration Pattern |
 |--------|---------------------|-------------------------------------|-------------------|
-| **Kafka** | [danielqsj/kafka_exporter](https://github.com/danielqsj/kafka_exporter) | `kafka_consumergroup_lag`, `kafka_brokers`, `kafka_topic_partition_current_offset` | Standard three-part — lag/broker count use `max by(tenant)`, throughput uses `sum by(tenant)` |
-| **RabbitMQ** | [kbudde/rabbitmq_exporter](https://github.com/kbudde/rabbitmq_exporter) | `rabbitmq_queue_messages_ready`, `rabbitmq_queue_consumers`, `rabbitmq_connections` | Standard three-part — queue depth suits regex dimensions (per-queue thresholds) |
-| **JVM** | [prometheus/jmx_exporter](https://github.com/prometheus/jmx_exporter) | `jvm_gc_pause_seconds_sum`, `jvm_memory_used_bytes`, `jvm_threads_current` | Standard three-part — GC pause suits scheduled thresholds (different tolerances for peak vs. off-peak) |
-| **Nginx** | [nginxinc/nginx-prometheus-exporter](https://github.com/nginxinc/nginx-prometheus-exporter) | `nginx_connections_active`, `nginx_http_requests_total` rate, `nginx_connections_waiting` | Standard three-part — active connections use `max by(tenant)` |
-| **AWS RDS** | [percona/rds_exporter](https://github.com/percona/rds_exporter) or [YACE](https://github.com/nerdswords/yet-another-cloudwatch-exporter) | `rds_cpu_utilization`, `rds_free_storage_space`, `rds_database_connections` | Standard three-part — CloudWatch metrics converted to Prometheus format via exporter, fully compatible with this platform |
+| **JVM** | [prometheus/jmx_exporter](https://github.com/prometheus/jmx_exporter) | `jvm_gc_pause_seconds_sum`, `jvm_memory_used_bytes`, `jvm_threads_current` | Standard three-part — GC pause suits scheduled thresholds |
+| **Nginx** | [nginxinc/nginx-prometheus-exporter](https://github.com/nginxinc/nginx-prometheus-exporter) | `nginx_connections_active`, `nginx_http_requests_total` rate | Standard three-part — active connections use `max by(tenant)` |
+| **AWS RDS** | [percona/rds_exporter](https://github.com/percona/rds_exporter) / [YACE](https://github.com/nerdswords/yet-another-cloudwatch-exporter) | `rds_cpu_utilization`, `rds_free_storage_space`, `rds_database_connections` | CloudWatch → Prometheus → this platform |
 
-### 11.4 Log-to-Metric Bridge
+#### 11.2 Federation Scenario B: Rule Pack Layering
+
+Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts). To be pursued after Scenario A is deployed and clear customer demand exists.
+
+#### 11.3 Alertmanager Configuration GitOps Loop
+
+`generate_alertmanager_routes.py --output-configmap` mode: outputs complete Alertmanager ConfigMap YAML for Git PR flow, replacing the current `--apply` direct ConfigMap operation approach. Aligns with `make configmap-assemble` methodology.
+
+#### 11.4 1:N Tenant Mapping Advanced Support
+
+Multiple logical tenants within a single namespace (differentiated by Service annotation / Pod label). Requires `scaffold_tenant.py --shared-namespace --tenant-source annotation` mode and `_tenant_mappings` config section. §2.3 already has relabel examples; tooling awaits requirement confirmation.
+
+#### 11.5 Blind Spot Discovery
+
+Scans Prometheus Targets / ServiceMonitors in the cluster and cross-references against `conf.d/` tenant configurations to identify instances that exist in the cluster but are not managed by this platform. Complements `analyze_rule_pack_gaps.py` (which analyzes custom rule coverage against Rule Packs) — Blind Spot analyzes infrastructure coverage against tenant config. Example output: "Scan found 5 PostgreSQL instances in the cluster, but only 2 have threshold monitoring enabled in tenant config."
+
+#### 11.6 Directory-level Config Diff
+
+Compares two `conf.d/` directories and produces a Markdown report listing the blast radius of all changes across tenants — which tenants, which metrics, tighter or looser thresholds. Suited for GitOps PR review scenarios where reviewers need to assess the full scope of a batch configuration change at a glance. Complements the existing `patch_config.py --diff` (single-metric live ConfigMap preview).
+
+### P3 — Long-term Blueprint
+
+#### 11.7 CRD + Operator
+
+**Background**: Currently all tenant configs reside in a single `threshold-config` ConfigMap. K8s native RBAC can only control access at the resource level, not at the key level. Splitting into multiple ConfigMaps is feasible but projected volumes require each ConfigMap name to be hardcoded in the Pod Spec — adding a new tenant would require a Deployment change and trigger a Pod restart, breaking the core hot-reload mechanism. The current approach uses GitOps-Driven RBAC (CODEOWNERS + CI + `make configmap-assemble`) for permission control.
+
+**Capacity ceiling**: A single ConfigMap has a 1MB hard limit. Each tenant YAML is approximately 1-2KB, so a single ConfigMap can accommodate 500+ tenants. The `-config-dir` directory scanner mode introduced in v1.5.0 splits configs into multiple files (one YAML per tenant) mounted via projected volumes, effectively removing this constraint in practice. The driver for CRD should be "cross-cluster management + drift reconciliation," not ConfigMap size.
+
+When the platform scales to require auto-scaling, drift reconciliation, and cross-cluster management, a `ThresholdConfig` CRD and Operator can be introduced, elevating tenant configurations to Kubernetes first-class resources.
+
+**Current decision**: The complexity introduced by CRD/Operator (+1 Operator Deployment, reconcile loop competing with GitOps, version management overhead) exceeds its value. The core problem CRD solves — K8s native per-tenant RBAC — should actually be avoided in enterprise environments (tenants directly `kubectl apply` bypassing Git = no review, no CI validation). To be re-evaluated when 50+ tenant direct K8s operation at scale becomes a clear requirement.
+
+#### 11.8 Log-to-Metric Bridge
 
 This platform's design boundary is the **Prometheus metrics layer** — it manages thresholds and alerts, and does not directly process logs. For scenarios requiring log-based alerting (e.g., Oracle ORA-600 fatal errors, MySQL slow query log analysis), the recommended ecosystem approach is:
 
-**Architecture pattern:**
 ```
 Application Log → grok_exporter / mtail → Prometheus metric → Platform threshold management
 ```
-
-| Tool | Use Case | Description |
-|------|----------|-------------|
-| [grok_exporter](https://github.com/fstab/grok_exporter) | Structured logs (syslog, access log) | Parses log lines with Grok patterns, outputs as Prometheus counter/gauge/histogram |
-| [mtail](https://github.com/google/mtail) | High-throughput real-time log streams | Google open-source, programmatic log pattern → metric definitions, suitable for large-scale deployments |
-
-**Integration example (ORA-600):**
-1. grok_exporter monitors Oracle alert log, increments `oracle_fatal_errors_total{instance="..."}` for each `ORA-600` match
-2. Platform `_defaults.yaml` sets `oracle_fatal_errors_rate: "0"` (alert on any error)
-3. Recording rule: `tenant:oracle_fatal_errors:rate5m` → Alert rule fires
 
 This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture.
 
@@ -1294,6 +1297,6 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v1.8.0 — 2026-03-07
-**Last updated:** v1.8.0 — Per-rule Routing Overrides, N:1 Tenant Mapping automation, Kafka/RabbitMQ Rule Packs (10→12)
+**Document version:** v1.9.0 — 2026-03-07
+**Last updated:** v1.9.0 — Migration Automation (Onboard→Scaffold pipeline, Auto-Convergence, Batch Health Report, Gap Analysis), Config Diff Preview, PR Backtest Bot, da-tools CLI 11→16 commands
 **Maintainer:** Platform Engineering Team

@@ -169,6 +169,34 @@ RECEIVER_URL_FIELDS = {
 # ============================================================
 # Timing Guardrail Enforcement
 # ============================================================
+# ============================================================
+# Onboard Hints (pipeline state between onboard → scaffold)
+# ============================================================
+ONBOARD_HINTS_FILENAME = "onboard-hints.json"
+
+
+def write_onboard_hints(output_dir, hints):
+    """Write onboard hints JSON for scaffold consumption.
+
+    hints: dict with keys like tenants, db_types, routing_hints.
+    """
+    import json
+    path = os.path.join(output_dir, ONBOARD_HINTS_FILENAME)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(hints, f, indent=2, ensure_ascii=False)
+    os.chmod(path, 0o600)
+    return path
+
+
+def read_onboard_hints(path):
+    """Read onboard hints JSON. Returns dict or None."""
+    import json
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def validate_and_clamp(param, value, tenant):
     """Validate a timing parameter against guardrails. Returns clamped value + warnings."""
     warnings = []
