@@ -221,18 +221,17 @@ chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker l
 	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
 
 # ----------------------------------------------------------
-# Release Tag（防止版號不一致）
+# Release Tag（三線版號策略）
 # ----------------------------------------------------------
-.PHONY: release-tag
-release-tag: version-check ## 從 Chart.yaml 推導 tag 並推送（防止手動打錯 tag）
+.PHONY: release-tag-exporter
+release-tag-exporter: version-check ## 從 Chart.yaml 推導 exporter tag（觸發 image + Helm build）
 	@echo "Chart.yaml version: $(CHART_VER)"
-	@if git rev-parse "v$(CHART_VER)" >/dev/null 2>&1; then \
-		echo "ERROR: tag v$(CHART_VER) already exists"; exit 1; \
+	@if git rev-parse "exporter/v$(CHART_VER)" >/dev/null 2>&1; then \
+		echo "ERROR: tag exporter/v$(CHART_VER) already exists"; exit 1; \
 	fi
-	@echo "Creating tag v$(CHART_VER)..."
-	@git tag "v$(CHART_VER)"
-	@echo "✅ Tag v$(CHART_VER) created locally."
-	@echo "Run 'git push origin v$(CHART_VER)' to trigger release workflow."
+	@git tag "exporter/v$(CHART_VER)"
+	@echo "✅ Tag exporter/v$(CHART_VER) created locally."
+	@echo "Run: git push origin exporter/v$(CHART_VER)"
 
 .PHONY: help
 help: ## 顯示說明

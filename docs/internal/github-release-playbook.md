@@ -72,26 +72,25 @@ git push origin main
 
 三條版號線各有對應 tag：
 
-| 版號線 | Tag 格式 | 建立方式 | CI 觸發 |
+| 版號線 | Tag 格式 | 建立方式 | CI 觸發（release.yaml） |
 |--------|---------|---------|---------|
-| Platform (docs) | `v1.9.0` | `git tag -a v1.9.0 -m "..."` | release.yaml（需 Chart.yaml 版號一致才 build image） |
-| Exporter (Go) | `exporter/v1.8.0` | `make release-tag`（從 Chart.yaml 推導） | release.yaml → Docker image + Helm chart |
-| da-tools (Python) | `tools/v1.9.0` | `git tag -a tools/v1.9.0 -m "..."` | build-and-push-image workflow |
+| Platform (docs) | `v1.9.0` | `git tag v1.9.0` | **不觸發 build**（僅作 GitHub Release 錨點） |
+| Exporter (Go) | `exporter/v1.8.0` | `make release-tag-exporter`（從 Chart.yaml 推導） | `release-exporter` job → Docker image + Helm chart |
+| da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image |
 
-**關鍵：** `make release-tag` 從 Chart.yaml `version` 推導，只適用於 exporter 有變更的情況。若 release 只有 platform docs + da-tools（exporter 未變），手動建 `v*` 和 `tools/v*` tag，**不推 exporter tag**。
+**Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
 
 ```bash
 # 情況 A：三線全升（exporter 有 code change）
-make release-tag          # 自動建 v<VERSION> tag
-git push origin v<VERSION>
-git tag -a tools/v<VERSION> -m "..."
-git push origin tools/v<VERSION>
+git tag v<PLATFORM>
+make release-tag-exporter   # 自動建 exporter/v<CHART_VER> tag
+git tag tools/v<TOOLS>
+git push origin v<PLATFORM> exporter/v<CHART_VER> tools/v<TOOLS>
 
 # 情況 B：僅 platform + da-tools（exporter 未變，如 v1.9.0）
-git tag -a v<PLATFORM_VERSION> -m "..."
-git tag -a tools/v<TOOLS_VERSION> -m "..."
-git push origin v<PLATFORM_VERSION>
-git push origin tools/v<TOOLS_VERSION>
+git tag v<PLATFORM>
+git tag tools/v<TOOLS>
+git push origin v<PLATFORM> tools/v<TOOLS>
 # ⚠️ 不推 exporter tag — Chart.yaml 版號不變
 ```
 
@@ -156,8 +155,7 @@ git diff $(git tag -l 'tools/v*' --sort=-v:refname | head -1)..HEAD -- component
 git tag "tools/v<VERSION>"
 git push origin "tools/v<VERSION>"
 
-# 3. 驗證 CI（tools/v* 會同時觸發 Release + Publish da-tools 兩個 workflow，
-#    其中 release-exporter 正確 skip，build-and-push-image 應 success）
+# 3. 驗證 CI（tools/v* 觸發 release.yaml 的 release-da-tools job）
 ```
 
 ## 已知陷阱
@@ -167,13 +165,13 @@ git push origin "tools/v<VERSION>"
 | 1 | Cowork VM 無法存取 `api.github.com` | GitHub API 操作改走 Windows MCP |
 | 2 | `gh` CLI 無法安裝（github.com 403） | 用 Windows MCP PowerShell 直接呼叫 REST API |
 | 3 | PAT 權限不足 push | Fine-grained PAT 需要 Contents: Read and write + Workflows: Read and write |
-| 4 | CI 未觸發 | 確認 tag 格式為 `v*`（非 `V*` 或其他） |
-| 5 | Chart.yaml 版號不匹配 tag | CI 有 version gate；先 `make version-check` |
+| 4 | CI 未觸發 | 確認 tag 格式：`exporter/v*`（exporter）、`tools/v*`（da-tools）。`v*` 不觸發 build |
+| 5 | Chart.yaml 版號不匹配 exporter tag | CI 有 version gate；先 `make version-check` |
 | 6 | Token 洩漏到 repo | **嚴格禁止** — 只存 `~/.git-credentials`，session 結束消失 |
 | 7 | API URL 用舊 repo 名 `vibe-k8s-lab` | git push 有重導，但 **REST API 必須用 `Dynamic-Alerting-Integrations`** |
 | 8 | PowerShell JSON body 編碼問題 | 短 body 用單行字串；長 body / CJK 用 `ConvertTo-Json` + `UTF8.GetBytes()` |
 | 9 | PAT 無 `packages:read` → 查不到 packages | 不代表 push 失敗（CI 用 `GITHUB_TOKEN`）；瀏覽器驗證 |
 | 10 | `bump_docs.py` 更新 da-tools 版號但沒推 tag | 每次 release 後用 `git diff` 檢查 da-tools code change（見上方檢查清單） |
 | 11 | PAT 缺 `workflow` scope → push `.github/workflows/` 被 reject | PAT 需含 Workflows: Read and write |
-| 12 | `make release-tag` 在 exporter 未變時不適用 | 三線版號分離時手動 `git tag`（見 Step 3 情況 B） |
+| 12 | `v*` tag 觸發 exporter build 但版號不匹配 | 已修正：`v*` 不再觸發 CI；exporter 改用 `exporter/v*` tag |
 | 13 | `replace_all` 批次改版號誤改跨元件版號 | 改完後 `bump_docs.py --check` 驗證；手動確認 exporter 版號未被誤改 |

@@ -44,7 +44,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`
 5. **SAST**: Go `ReadHeaderTimeout`; Python `os.chmod(path, 0o600)` + `encoding="utf-8"`; `subprocess` 禁止 `shell=True`
 6. **推銷語言不進 repo**: README 保持客觀工程語言
-7. **版號治理**: `make version-check` → `make bump-docs` → `make release-tag`（禁止手動 `git tag`）
+7. **版號治理**: `make version-check` → `make bump-docs` → 三線 tag（`v*` platform / `exporter/v*` / `tools/v*`）
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
 
 ## 文件導覽
@@ -101,15 +101,19 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `make validate-config` | 一站式配置驗證 |
 | `make chart-package` / `chart-push` | Helm OCI 打包推送 |
 | `make version-check` / `bump-docs` | 版號治理 |
+| `make release-tag-exporter` | 從 Chart.yaml 推導 `exporter/v*` tag |
 
 完整目標見 `make help`。
 
-## Release 流程
+## Release 流程（三線版號）
 
-1. `make bump-docs EXPORTER=X.Y.Z` → 更新版號
+1. `make bump-docs PLATFORM=X.Y.Z EXPORTER=X.Y.Z TOOLS=X.Y.Z` → 更新版號（只傳有變更的 flag）
 2. `make version-check` → 驗證一致性
-3. `make release-tag` → 從 Chart.yaml 推導 tag（禁止手動 `git tag`）
-4. `git push origin v<VERSION>` → CI 自動 build + push
+3. 建立 tag（依實際變更決定哪些要推）：
+   - `git tag v<PLATFORM>` → GitHub Release 錨點（不觸發 build）
+   - `make release-tag-exporter` → exporter image + Helm chart（僅 exporter 有 code change 時）
+   - `git tag tools/v<TOOLS>` → da-tools image（僅 da-tools 有 code change 時）
+4. `git push origin <tag>` → CI 自動 build + push
 
 ## AI Agent 環境
 
