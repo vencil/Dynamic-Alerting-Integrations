@@ -265,6 +265,7 @@ make port-forward
 | [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
 | [BYOP Prometheus 整合指南](docs/byo-prometheus-integration.md) | 企業現有 Prometheus / Thanos 叢集的最小整合步驟 | Platform Engineers、SREs |
 | [BYOA Alertmanager 整合藍圖](docs/byo-alertmanager-integration.md) | Alertmanager 整合框架、動態 Reload 藍圖、Receiver 擴充方向 | Platform Engineers、SREs |
+| [Federation 整合藍圖](docs/federation-integration.md) | 多叢集場景：中央 Exporter + 邊緣 Prometheus 架構藍圖 | Platform Engineers |
 | [遷移指南](docs/migration-guide.md) | 零摩擦導入、scaffold 工具、5 個實戰場景 | 租戶、DevOps |
 | [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、RnR 權責定義、SLA 切割、CI Linting | Platform Leads、Domain Experts |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、巡檢、收斂判定、切換退出 | SREs、Platform Engineers |

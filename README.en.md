@@ -265,6 +265,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
 | [BYOP Prometheus Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
 | [BYOA Alertmanager Integration Blueprint](docs/byo-alertmanager-integration.md) | Alertmanager integration framework, dynamic reload roadmap, receiver expansion | Platform Engineers, SREs |
+| [Federation Integration Blueprint](docs/federation-integration.md) | Multi-cluster scenario: central Exporter + edge Prometheus architecture | Platform Engineers |
 | [Migration Guide](docs/migration-guide.md) | Frictionless onboarding, scaffold tools, 5 hands-on scenarios | Tenants, DevOps |
 | [Custom Rule Governance](docs/custom-rule-governance.md) | 3-Tier governance model, RnR definitions, SLA boundaries, CI linting | Platform Leads, Domain Experts |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | Dual-track SOP: startup, inspection, convergence criteria, cutover & exit | SREs, Platform Engineers |
