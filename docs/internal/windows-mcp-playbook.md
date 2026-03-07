@@ -136,22 +136,27 @@ helm upgrade threshold-exporter components/threshold-exporter/ -n monitoring
 
 Windows MCP PowerShell 是 Cowork VM 無法直連的 API（如 `api.github.com`）的橋樑。
 
-**JSON body 最佳實踐：**
+**JSON body 兩種可靠做法：**
 
 ```powershell
-# ✅ 單行字串賦值 — 最可靠
+# 方法 A：單行字串 — 適合短 body、純 ASCII
 $b = '{"tag_name":"v1.8.0","name":"v1.8.0","body":"notes","draft":false}'
 Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $b
 
-# ❌ @{} + ConvertTo-Json — & 字元問題、型別轉換不穩定
-# ❌ Heredoc / 多行字串 — quote mangling
+# 方法 B：ConvertTo-Json + UTF8 Bytes — 適合長 body、CJK 字元
+$payload = @{ tag_name = "v1.9.0"; name = "title"; body = $longText } | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
+    -ContentType "application/json; charset=utf-8"
+# ⚠️ 必須用 UTF8.GetBytes()，否則 CJK 字元亂碼
+
 # ❌ 外部 .ps1 腳本 — OneDrive 路徑含空格找不到
 ```
 
 **Headers 模板：**
 
 ```powershell
-$headers = @{ "Authorization" = "Bearer $token"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28"; "Content-Type" = "application/json" }
+$headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.github+json" }
 ```
 
 詳見 [GitHub Release Playbook](github-release-playbook.md)。
@@ -173,8 +178,9 @@ $headers = @{ "Authorization" = "Bearer $token"; "Accept" = "application/vnd.git
 | 11 | `set -euo pipefail` + 未初始化變數 | 所有條件路徑都要有 default 值 |
 | 12 | 彩色輸出 / ANSI 碼污染 JSON | `--json` 模式避免 source `_lib.sh`，或 `2>/dev/null` + 過濾 ANSI |
 | 13 | 版號 drift | `make version-check`；修正用 `make bump-docs` |
-| 14 | PS `ConvertTo-Json` / heredoc 產 JSON 失敗 | 用 `$b = '{"k":"v"}'` 單行字串（見上方 REST API 章節） |
-| 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline 單行 |
+| 14 | PS JSON body CJK 亂碼 | `ConvertTo-Json` + `[System.Text.Encoding]::UTF8.GetBytes()` + `charset=utf-8` |
+| 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline |
+| 16 | PAT push `.github/workflows/` 被 reject | PAT 需含 Workflows scope（詳見 [GitHub Release Playbook](github-release-playbook.md)） |
 
 ## 指令快速參考
 

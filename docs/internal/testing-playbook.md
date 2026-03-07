@@ -216,6 +216,24 @@ CI workflow 與 build script 的工具清單容易 drift。用守衛測試自動
 
 CHANGELOG / CLAUDE.md 的測試計數必須在 `pytest -v` 執行後才寫入。先跑 pytest → 逐 class 加總交叉驗證 → 再更新文件。
 
+### 三線版號管理
+
+Platform、Exporter、da-tools 三條版號線獨立演進。Release 自檢流程：
+
+```bash
+# 1. 先用 bump_docs.py 批次更新（只升有變的版號線）
+python3 scripts/tools/bump_docs.py --platform 1.9.0 --tools 1.9.0
+# ⚠️ 不加 --exporter 則 exporter 版號不動
+
+# 2. 驗證一致性
+python3 scripts/tools/bump_docs.py --check
+
+# 3. ⚠️ 避免 replace_all 批次改版號
+#    用 Edit tool 的 replace_all 把 "1.8.0" 全改 "1.9.0" 會誤改跨元件版號
+#    例：da-tools README 的 exporter 版號被意外升版
+#    正確做法：用 bump_docs.py 按版號線分別處理，改完後 --check 驗證
+```
+
 ## SAST 合規
 
 | 項目 | 規則 | 驗證 |
