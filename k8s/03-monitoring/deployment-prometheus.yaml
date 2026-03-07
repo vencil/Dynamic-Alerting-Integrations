@@ -145,6 +145,22 @@ spec:
                     - key: postgresql-alert.yml
                       path: postgresql-alert.yml
               - configMap:
+                  name: prometheus-rules-kafka
+                  optional: true
+                  items:
+                    - key: kafka-recording.yml
+                      path: kafka-recording.yml
+                    - key: kafka-alert.yml
+                      path: kafka-alert.yml
+              - configMap:
+                  name: prometheus-rules-rabbitmq
+                  optional: true
+                  items:
+                    - key: rabbitmq-recording.yml
+                      path: rabbitmq-recording.yml
+                    - key: rabbitmq-alert.yml
+                      path: rabbitmq-alert.yml
+              - configMap:
                   name: prometheus-rules-platform
                   optional: true
                   items:

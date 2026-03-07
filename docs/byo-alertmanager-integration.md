@@ -1,6 +1,6 @@
 # BYO Alertmanager 整合指南
 
-> **版本**：v1.5.0
+> **版本**：v1.8.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -8,15 +8,51 @@
 
 ## 1. 概述
 
-告警疲勞的三大根因：(1) 備份/維護期間無法靜音 → 假陽性風暴；(2) Warning 與 Critical 同時通知 → 重複告警；(3) 通知目的地寫死在中央配置 → 租戶無法自主管理 on-call。Dynamic Alerting 平台透過 Alertmanager 的三大機制逐一解決：
+告警疲勞的四大根因與對應解法：
 
-| 功能 | 機制 | 配置來源 |
-|------|------|----------|
-| **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知 | Tenant YAML `_silent_mode` |
-| **Severity Dedup** | Per-tenant inhibit_rules（`metric_group` 配對） | Tenant YAML `_severity_dedup` |
-| **Alert Routing** | Per-tenant route + receiver（webhook/email/slack/teams/rocketchat/pagerduty） | Tenant YAML `_routing` |
+| 根因 | 解法 | 機制 | 配置來源 |
+|------|------|------|----------|
+| 備份/維護期間假陽性風暴 | **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知（TSDB 有紀錄） | `_silent_mode` |
+| 計畫性維護忘記關閉 | **Maintenance Mode** | PromQL 層完全不觸發（可設 `expires` 自動失效） | `_state_maintenance` |
+| Warning + Critical 重複告警 | **Severity Dedup** | Per-tenant inhibit_rules（`metric_group` 配對） | `_severity_dedup` |
+| 通知目的地寫死在中央 | **Alert Routing** | Per-tenant route + receiver（6 種 type） | `_routing` |
 
-所有 Alertmanager 配置 fragment 由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出。
+Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`（ISO 8601）自動失效和 `reason` 欄位，防止「設了忘記關」。
+
+所有 Alertmanager 配置 fragment 由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出：
+
+```mermaid
+graph LR
+    subgraph TY["Tenant YAML (conf.d/)"]
+        R["_routing"]
+        S["_severity_dedup"]
+        SM["_silent_mode"]
+    end
+
+    subgraph PL["Platform (_defaults.yaml)"]
+        RD["_routing_defaults"]
+        RE["_routing_enforced"]
+    end
+
+    GEN["generate_alertmanager_routes.py"]
+
+    TY --> GEN
+    PL --> GEN
+
+    subgraph AM["Alertmanager Fragment"]
+        RT["route.routes[]<br/>Per-tenant 路由"]
+        RC["receivers[]<br/>Per-tenant receiver"]
+        IR["inhibit_rules[]<br/>Severity dedup + Silent mode"]
+    end
+
+    GEN --> AM
+
+    AM -->|"merge + reload"| ALM["Alertmanager"]
+
+    style TY fill:#e8f4fd,stroke:#1a73e8
+    style PL fill:#fff3e0,stroke:#e65100
+    style AM fill:#f1f8e9,stroke:#33691e
+```
 
 ---
 
@@ -75,7 +111,7 @@ tenants:
 # da-tools 容器方式
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.4.0 \
+  ghcr.io/vencil/da-tools:1.8.0 \
   generate-routes --config-dir /data/conf.d -o /data/alertmanager-routes.yaml
 
 # 本地 Python 方式
@@ -136,6 +172,8 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 | `--dry-run` | 輸出至 stdout，不寫入檔案 |
 | `-o FILE` | 寫入指定檔案 |
 | `--validate` | 驗證配置合法性（exit 0/1，適合 CI） |
+| `--policy FILE` | 載入 `allowed_domains` 做 webhook URL 合規檢查 |
+| `--apply [--yes]` | 自動合併至 Alertmanager ConfigMap + reload（`--yes` 跳過確認） |
 
 ### Timing Guardrails
 
@@ -325,12 +363,93 @@ curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
 
 ### 功能驗證
 
+- [ ] `validate-config --config-dir conf.d/` 通過（一站式檢查）
 - [ ] `generate-routes --validate` exit code 0
 - [ ] Alertmanager 載入合併後的配置無錯誤
 - [ ] `curl -X POST /-/reload` 回傳 200
 - [ ] Silent Mode tenant 的 alert 不發送通知
+- [ ] Maintenance Mode tenant 的 alert 不觸發
+- [ ] Silent/Maintenance 的 `expires` 到期後自動恢復
 - [ ] Severity Dedup enabled tenant 的 warning 在 critical 觸發時被抑制
 - [ ] Custom routing tenant 的 alert 送達指定 receiver
+- [ ] Per-rule override 的 alert 送達指定的 override receiver
+
+---
+
+## 7. Per-Rule Routing Overrides（v1.8.0）
+
+在進階場景中，某些特定警報可能需要不同的路由策略。Tenant YAML 的 `_routing.overrides[]` 支援 per-alertname 或 per-metric_group 指定自訂 receiver：
+
+### 配置範例
+
+```yaml
+# conf.d/db-a.yaml
+tenants:
+  db-a:
+    mysql_connections: "70"
+    _routing:
+      receiver:
+        type: "slack"
+        api_url: "https://hooks.slack.com/services/.../default"
+        channel: "#db-alerts"
+
+      # 特定警報的路由覆寫
+      overrides:
+        - alertname: "MariaDBHighConnections"
+          receiver:
+            type: "pagerduty"
+            service_key: "urgency-key-123"
+
+        - metric_group: "replication"
+          receiver:
+            type: "email"
+            to: ["dba-team@example.com"]
+```
+
+### 優先級
+
+1. **Exact alertname match** — 若指定 `alertname`，該警報優先使用 override receiver
+2. **Metric group match** — 若指定 `metric_group`，該群組內警報使用 override receiver
+3. **Tenant default** — 無 override 時，使用租戶預設 receiver
+
+`generate_alertmanager_routes.py` 自動展開 overrides 為 Alertmanager 的嵌套 subroute，確保優先級正確套用。
+
+---
+
+## 8. Platform Enforced Routing（v1.7.0）
+
+Platform Team 可在 `_defaults.yaml` 設定強制路由，確保 NOC 必收所有 tenant 的告警（與 tenant 自訂路由並行，雙軌通知）：
+
+```yaml
+# conf.d/_defaults.yaml
+_routing_enforced:
+  enabled: true
+  receiver:
+    type: "webhook"
+    url: "https://noc.example.com/alerts"
+  match:
+    severity: "critical"
+```
+
+`generate_alertmanager_routes.py` 會在所有 tenant route 之前插入 platform route（帶 `continue: true`），實現「NOC 必收 + tenant 也收」。預設不啟用。
+
+---
+
+## 9. 一站式配置驗證
+
+v1.7.0 新增 `validate_config.py`，一次檢查 YAML syntax、schema、routes、policy、custom rules、版號一致性：
+
+```bash
+# da-tools 容器方式
+docker run --rm -v $(pwd)/conf.d:/data/conf.d \
+  ghcr.io/vencil/da-tools:1.8.0 validate-config --config-dir /data/conf.d
+
+# CI pipeline 使用 JSON 輸出
+python3 scripts/tools/validate_config.py \
+  --config-dir config/conf.d/ --policy .github/custom-rule-policy.yaml --json
+```
+
+建議在 `generate-routes --apply` 前先執行 `validate-config`，確保配置完整正確。
 
 ---
 

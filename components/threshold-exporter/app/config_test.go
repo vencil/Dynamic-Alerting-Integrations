@@ -2288,6 +2288,22 @@ func TestValidateTenantKeys_CriticalSuffixValid(t *testing.T) {
 	}
 }
 
+func TestValidateTenantKeys_NamespacesReservedKey(t *testing.T) {
+	cfg := ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 70},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {
+				"mysql_connections": {Default: "60"},
+				"_namespaces":      {Default: "[\"ns-a\", \"ns-b\"]"},
+			},
+		},
+	}
+	warnings := cfg.ValidateTenantKeys()
+	if len(warnings) != 0 {
+		t.Errorf("_namespaces should be a valid reserved key, got warnings: %v", warnings)
+	}
+}
+
 // ============================================================
 // Structured Silent Mode Tests (v1.7.0)
 // ============================================================

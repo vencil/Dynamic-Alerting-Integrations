@@ -293,3 +293,123 @@ ClickHouseProfileEvents_FailedQuery:
   golden_rule: ClickHouseHighFailedQueryRate
   rule_pack: clickhouse
   note: "Failed query rate — rate() 指標, 固定閾值 (無 user override)"
+
+# ────────────────────────────────────────
+# Apache Kafka (danielqsj/kafka-exporter)
+# ────────────────────────────────────────
+kafka_consumergroup_lag_sum:
+  maps_to: kafka_consumer_lag
+  golden_rule: KafkaHighConsumerLag
+  rule_pack: kafka
+  note: "Consumer lag — max by(tenant) 聚合"
+
+kafka_consumergroup_lag:
+  maps_to: kafka_consumer_lag
+  golden_rule: KafkaHighConsumerLag
+  rule_pack: kafka
+  note: "Consumer lag per partition — 由 normalization rule 聚合"
+
+kafka_topic_partition_under_replicated_partition:
+  maps_to: kafka_under_replicated_partitions
+  golden_rule: KafkaUnderReplicatedPartitions
+  rule_pack: kafka
+  note: "Under-replicated partitions — max by(tenant), 預期值 0"
+
+kafka_controller_active_controller_count:
+  maps_to: kafka_active_controllers
+  golden_rule: KafkaNoActiveController
+  rule_pack: kafka
+  note: "Active controller count — max by(tenant), 預期 >= 1"
+
+kafka_brokers:
+  maps_to: kafka_broker_count
+  golden_rule: KafkaLowBrokerCount
+  rule_pack: kafka
+  note: "Broker count — max by(tenant), 反轉閾值 (<)"
+
+kafka_server_brokertopicmetrics_messagesin_total:
+  maps_to: kafka_request_rate
+  golden_rule: KafkaHighRequestRate
+  rule_pack: kafka
+  note: "Message-in rate — sum by(tenant) rate() 聚合"
+
+kafka_topic_partitions:
+  maps_to: kafka_topic_partitions
+  golden_rule: null
+  rule_pack: kafka
+  note: "Topic partition count — 參考指標, 無對應 alert"
+
+kafka_consumer_group_current_offset:
+  maps_to: kafka_consumer_offset
+  golden_rule: null
+  rule_pack: kafka
+  note: "Consumer group offset — 參考指標, lag 由 lag_sum 計算"
+
+kafka_topic_partition_current_offset:
+  maps_to: kafka_topic_offset
+  golden_rule: null
+  rule_pack: kafka
+  note: "Topic partition offset — 參考指標"
+
+# ────────────────────────────────────────
+# RabbitMQ (kbudde/rabbitmq_exporter)
+# ────────────────────────────────────────
+rabbitmq_queue_messages_ready:
+  maps_to: rabbitmq_queue_messages
+  golden_rule: RabbitMQHighQueueDepth
+  rule_pack: rabbitmq
+  note: "Ready messages — max by(tenant), 支援 per-queue Regex 維度"
+
+rabbitmq_queue_messages:
+  maps_to: rabbitmq_queue_messages
+  golden_rule: RabbitMQHighQueueDepth
+  rule_pack: rabbitmq
+  note: "Total queue messages — 包含 ready + unacked"
+
+rabbitmq_queue_consumers:
+  maps_to: rabbitmq_consumers
+  golden_rule: RabbitMQLowConsumers
+  rule_pack: rabbitmq
+  note: "Consumer count per queue — max by(tenant)"
+
+rabbitmq_connections:
+  maps_to: rabbitmq_connections
+  golden_rule: RabbitMQHighConnections
+  rule_pack: rabbitmq
+  note: "Total connections — max by(tenant)"
+
+rabbitmq_node_mem_used:
+  maps_to: rabbitmq_node_mem_percent
+  golden_rule: RabbitMQHighMemory
+  rule_pack: rabbitmq
+  note: "Node memory used — 由 normalization rule 計算 % (mem_used / mem_limit)"
+
+rabbitmq_node_mem_limit:
+  maps_to: rabbitmq_node_mem_limit
+  golden_rule: null
+  rule_pack: rabbitmq
+  note: "Node memory limit — 用於 ratio 計算的分母"
+
+rabbitmq_queue_messages_unacked:
+  maps_to: rabbitmq_unacked_messages
+  golden_rule: RabbitMQHighUnackedMessages
+  rule_pack: rabbitmq
+  note: "Unacked messages — max by(tenant), 固定閾值 > 10000"
+
+rabbitmq_identity_info:
+  maps_to: rabbitmq_up
+  golden_rule: RabbitMQExporterAbsent
+  rule_pack: rabbitmq
+  note: "Exporter identity — absent() 偵測 exporter 離線"
+
+rabbitmq_queue_messages_published_total:
+  maps_to: rabbitmq_publish_rate
+  golden_rule: null
+  rule_pack: rabbitmq
+  note: "Publish rate — rate() 參考指標"
+
+rabbitmq_queue_messages_delivered_total:
+  maps_to: rabbitmq_deliver_rate
+  golden_rule: null
+  rule_pack: rabbitmq
+  note: "Deliver rate — rate() 參考指標"

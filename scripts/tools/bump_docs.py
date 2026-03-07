@@ -56,6 +56,8 @@ def _build_rules():
     # --- da-tools image tag rules ---
     da_tools_image_files = [
         "components/da-tools/README.md",
+        "components/threshold-exporter/README.md",
+        "docs/byo-alertmanager-integration.md",
         "docs/byo-prometheus-integration.md",
         "docs/migration-guide.md",
         "docs/custom-rule-governance.md",
@@ -81,6 +83,14 @@ def _build_rules():
         "pattern": r"^[0-9]+\.[0-9]+\.[0-9]+\s*$",
         "replacement": lambda v: f"{v}\n",
         "whole_file": True,
+    })
+
+    # da-tools README build.sh version
+    tools_rules.append({
+        "file": "components/da-tools/README.md",
+        "desc": "da-tools build.sh version",
+        "pattern": r"\./build\.sh [0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"./build.sh {v}",
     })
 
     # da-tools README version header
@@ -145,6 +155,12 @@ def _build_rules():
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
+            "file": "docs/gitops-deployment.md",
+            "desc": "OCI chart --version in gitops deployment guide",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
             "file": "components/da-tools/README.md",
             "desc": "exporter version in da-tools strategy table",
             "pattern": r"\| threshold-exporter \| v[0-9]+\.[0-9]+\.[0-9]+",
@@ -189,10 +205,16 @@ def _build_rules():
         "replacement": lambda v: f"(v{v}).",
     })
 
-    # BYOP guide version header
+    # BYO guides version headers
     platform_rules.append({
         "file": "docs/byo-prometheus-integration.md",
         "desc": "BYOP guide version",
+        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**版本**：v{v}",
+    })
+    platform_rules.append({
+        "file": "docs/byo-alertmanager-integration.md",
+        "desc": "BYO Alertmanager guide version",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
         "replacement": lambda v: f"**版本**：v{v}",
     })
@@ -209,6 +231,22 @@ def _build_rules():
         "desc": "governance doc (en) version header",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
         "replacement": lambda v: f"**Version**: v{v}",
+    })
+
+    # GitOps deployment guide version header
+    platform_rules.append({
+        "file": "docs/gitops-deployment.md",
+        "desc": "gitops-deployment.md version header",
+        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**版本**：v{v}",
+    })
+
+    # Federation integration guide version header
+    platform_rules.append({
+        "file": "docs/federation-integration.md",
+        "desc": "federation-integration.md version header",
+        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*",
+        "replacement": lambda v: f"> **v{v}**",
     })
 
     # threshold-exporter README title

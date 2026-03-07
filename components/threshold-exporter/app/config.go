@@ -769,9 +769,11 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 
 // validReservedKeys lists tenant config keys with special meaning.
 // Any key not matching these patterns AND not in defaults is suspicious.
+// Source of truth (Python): scripts/tools/_lib_python.py — keep in sync.
 var validReservedKeys = map[string]bool{
-	"_silent_mode":   true,
+	"_silent_mode":    true,
 	"_severity_dedup": true,
+	"_namespaces":     true,  // v1.8.0: metadata for N:1 tenant mapping tooling
 }
 
 // validReservedPrefixes lists prefixes for tenant config keys with special meaning.

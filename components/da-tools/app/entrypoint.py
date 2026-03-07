@@ -11,8 +11,12 @@ Usage:
 
 Commands (Prometheus API — portable):
     check-alert       Query alert firing status for a tenant
+    diagnose          Tenant health check (config + metric + alert status)
     baseline          Observe metrics and recommend thresholds
     validate          Compare old vs new recording rules (Shadow Monitoring)
+
+Commands (Config Generation — reads tenant YAML):
+    generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
 
 Commands (File System — offline):
     migrate           Convert legacy Prometheus rules to dynamic format
@@ -20,6 +24,7 @@ Commands (File System — offline):
     offboard          Pre-check and remove a tenant configuration
     deprecate         Mark metrics as disabled across configs
     lint              Validate custom rules against governance deny-list
+    onboard           Analyze existing Alertmanager/Prometheus configs for migration
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -47,6 +52,8 @@ COMMAND_MAP = {
     "offboard": "offboard_tenant.py",
     "deprecate": "deprecate_rule.py",
     "lint": "lint_custom_rules.py",
+    "onboard": "onboard_platform.py",
+    "validate-config": "validate_config.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
@@ -64,6 +71,8 @@ def print_usage():
     print("  da-tools migrate legacy-rules.yml --dry-run --triage")
     print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
     print("  da-tools lint /path/to/custom-rules/ --ci")
+    print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
+    print("  da-tools validate-config --config-dir conf.d/")
     print()
     print("Environment:")
     print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")

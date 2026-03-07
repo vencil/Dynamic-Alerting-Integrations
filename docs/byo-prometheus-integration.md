@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v1.7.0
+> **版本**：v1.8.0
 
 ---
 
@@ -18,7 +18,7 @@
 | 2 | 抓取 `threshold-exporter` | ~2 分鐘 |
 | 3 | 掛載黃金規則包 (Rule Packs) | ~5 分鐘 |
 
-整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 10 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
+整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 13 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
 
 ```mermaid
 graph LR
@@ -33,7 +33,7 @@ graph LR
 
     subgraph DA["Dynamic Alerting (新增)"]
         TE["threshold-exporter<br/>×2 HA :8080"]
-        RP["10 Rule Pack<br/>ConfigMaps"]
+        RP["12 Rule Pack<br/>ConfigMaps"]
     end
 
     NS -->|"① relabel_configs<br/>namespace → tenant"| P
@@ -226,6 +226,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_state_filter' \
 | ConfigMap 名稱 | 內容 | 規則數 |
 |----------------|------|--------|
 | `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 8A |
+| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 11R + 8A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 7R + 4A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 11R + 6A |
 | `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 6A |
@@ -233,6 +234,9 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_state_filter' \
 | `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
 | `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 12R + 7A |
 | `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
+| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 11R + 10A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 11R + 10A |
+| `prometheus-rules-operational` | `operational-alert.yml` | 0R + 2A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 4A |
 
 > **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。未使用的規則包即使掛載，因無對應 metric，evaluation 成本近乎零——但選擇性掛載可保持配置清晰。
@@ -378,17 +382,26 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 
 # ① 確認特定 alert 的狀態
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.6.0 check-alert MariaDBHighConnections db-a
+  ghcr.io/vencil/da-tools:1.8.0 check-alert MariaDBHighConnections db-a
 
 # ② 觀測現有指標，取得閾值建議
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.6.0 baseline --tenant db-a --duration 300
+  ghcr.io/vencil/da-tools:1.8.0 baseline --tenant db-a --duration 300
 
-# ③ 啟動 Shadow Monitoring 雙軌比對
+# ③ 租戶健康檢查（exporter 狀態 + 運營模式）
+docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
+  ghcr.io/vencil/da-tools:1.8.0 diagnose db-a
+
+# ④ 一站式配置驗證（YAML + schema + routes + custom rules）
+docker run --rm \
+  -v $(pwd)/conf.d:/data/conf.d \
+  ghcr.io/vencil/da-tools:1.8.0 validate-config --config-dir /data/conf.d
+
+# ⑤ 啟動 Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.6.0 validate --mapping /data/mapping.csv --watch --rounds 5
+  ghcr.io/vencil/da-tools:1.8.0 validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
 > **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull` 即可使用。詳見 [da-tools README](../components/da-tools/README.md)。

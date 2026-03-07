@@ -37,7 +37,7 @@ verify: ## 驗證 Prometheus 指標抓取
 	@./scripts/verify.sh
 
 .PHONY: benchmark
-benchmark: ## 效能基準測試 (使用: make benchmark 或 make benchmark ARGS=--json)
+benchmark: ## 效能基準測試 (使用: make benchmark ARGS="--routing-bench --alertmanager-bench --reload-bench --json")
 	@bash scripts/benchmark.sh $(ARGS)
 
 .PHONY: test-alert
@@ -187,6 +187,9 @@ validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + cus
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check
+
+onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
+	@python3 scripts/tools/onboard_platform.py $(ARGS)
 
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/bump_docs.py --check

@@ -1,6 +1,6 @@
 # GitOps 部署指南
 
-> **版本**：v1.6.0
+> **版本**：v1.8.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -74,7 +74,7 @@ steps:
 
 ```bash
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.8.0 \
   -n monitoring \
   -f values-override.yaml
 ```
@@ -137,24 +137,35 @@ spec:
 
 ## 6. 三層變更流程
 
-### 常規流程 (Standard Pathway)
-
 ```
-Tenant 修改 conf.d/db-a.yaml
-  → Git PR
-  → CI validate (自動)
-  → CODEOWNERS reviewer approve
-  → Merge to main
-  → ArgoCD/Flux sync (自動)
-  → ConfigMap 更新
-  → threshold-exporter SHA-256 hot-reload (自動)
+                    ┌─────────────────────────────────────────┐
+                    │          ① Standard Pathway              │
+                    │                                          │
+  Tenant/Platform   │   conf.d/*.yaml                          │
+  修改 YAML ───────►│── Git PR ──► CI validate ──► merge ─┐   │
+                    │                                      │   │
+                    └──────────────────────────────────────┼───┘
+                                                           │
+                            ArgoCD / Flux sync (自動)      │
+                                                           ▼
+               ┌──────────────┐                   ┌────────────────┐
+               │ ② Break-Glass│   patch_config.py │   ConfigMap    │
+  P0 事故 ────►│  SRE 直接     ├──────────────────►│   (K8s)        │
+  緊急 bypass  │  runtime patch│                   └───────┬────────┘
+               └──────┬───────┘                            │
+                      │                          SHA-256 hot-reload
+                      │                                    ▼
+               ┌──────▼───────┐                   ┌────────────────┐
+               │ ③ Drift      │                   │ threshold-     │
+               │  Reconcile   │                   │ exporter       │
+               │  事後補 PR    │                   │ 套用新配置      │
+               │  同步回 Git   │                   └────────────────┘
+               └──────────────┘
 ```
 
-平均落地時間：PR merge 後 < 2 分鐘。
+**① 常規流程 (Standard Pathway)** — Tenant 修改 YAML → PR → CI → merge → GitOps sync → ConfigMap → hot-reload。平均落地時間：PR merge 後 < 2 分鐘。
 
-### 緊急破窗 (Break-Glass)
-
-P0 事故期間，SRE 可直接 runtime patch：
+**② 緊急破窗 (Break-Glass)** — P0 事故期間，SRE 可跳過 Git 直接 runtime patch：
 
 ```bash
 python3 scripts/tools/patch_config.py <tenant> <key> <value>
@@ -162,13 +173,27 @@ python3 scripts/tools/patch_config.py <tenant> <key> <value>
 
 ConfigMap 立即更新，threshold-exporter 在下一個 reload 週期（30-60s）自動套用。
 
-### 飄移收斂 (Drift Reconciliation)
+**③ 飄移收斂 (Drift Reconciliation)** — 破窗修改後，SRE **必須**事後補 PR 同步回 Git。否則下一次 GitOps sync 會將 K8s 配置覆蓋回 Git 版本——這正是 GitOps 的自癒特性，天然防止「急救後忘記改程式碼」造成永久技術債。
 
-破窗修改後，SRE **必須**在事後補發 PR 將變更同步回 Git。否則下一次 GitOps sync 會將 K8s 上的配置覆蓋回 Git 版本——這正是 GitOps 的自癒特性，天然防止「急救後忘記改程式碼」造成永久技術債。
+## 7. Tenant 自助設定範圍
 
-## 7. 新增租戶 Checklist
+GitOps 工作流下，Tenant 可在自己的 YAML 中自行管理以下設定（無需 Platform Team 介入）：
 
-1. `da-tools scaffold --tenant <name> --db <type>` 產生 YAML
+| 設定 | 說明 | 範例 |
+|------|------|------|
+| 閾值三態 | 自訂值 / 省略用預設 / `"disable"` | `mysql_connections: "70"` |
+| `_critical` 後綴 | 多層嚴重度 | `mysql_connections_critical: "95"` |
+| `_routing` | 通知路由（6 種 receiver type） | `receiver: {type: "webhook", url: "..."}` |
+| `_routing.overrides[]` | 特定 alert 使用不同 receiver | `alertname: "..."`，`receiver: {type: "email", ...}` |
+| `_silent_mode` | 靜默模式（TSDB 有紀錄但不通知） | `{target: "all", expires: "2026-04-01T00:00:00Z"}` |
+| `_state_maintenance` | 維護模式（完全不觸發） | 同上，支援 `expires` 自動失效 |
+| `_severity_dedup` | 嚴重度去重 | `enabled: true` |
+
+Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routing_defaults`、`_routing_enforced`（雙軌通知）。
+
+## 8. 新增租戶 Checklist
+
+1. `da-tools scaffold --tenant <name> --db <type>` 產生 YAML（多 namespace 加 `--namespaces ns1,ns2`）
 2. 將產出放入 `conf.d/<tenant>.yaml`
 3. 更新 `.github/CODEOWNERS` 加入 `@team-<tenant>`
-4. 發 PR → CI 驗證 → merge → 自動部署
+4. 發 PR → CI 驗證（`validate-config` 一站式檢查） → merge → 自動部署

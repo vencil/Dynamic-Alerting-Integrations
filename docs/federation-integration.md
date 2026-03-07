@@ -1,6 +1,6 @@
 # Federation Integration Guide
 
-> **v1.7.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
+> **v1.8.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
 
 ## 1. 概覽
 
@@ -117,10 +117,10 @@ scrape_configs:
 
 ### 3.3 適用的 Exporter
 
-邊緣叢集只需部署資料庫 exporter，不需要 threshold-exporter：
+邊緣叢集只需部署對應的 exporter，不需要 threshold-exporter：
 
-| DB 類型 | Exporter | 關鍵指標前綴 |
-|---------|----------|-------------|
+| 類型 | Exporter | 關鍵指標前綴 |
+|------|----------|-------------|
 | PostgreSQL | postgres_exporter | `pg_*` |
 | MariaDB/MySQL | mysqld_exporter | `mysql_*` |
 | Redis | redis_exporter | `redis_*` |
@@ -128,6 +128,20 @@ scrape_configs:
 | Oracle | oracledb_exporter | `oracledb_*` |
 | DB2 | db2_exporter | `db2_*` |
 | ClickHouse | clickhouse_exporter | `ClickHouse*` |
+| Kafka | kafka_exporter | `kafka_*` |
+| RabbitMQ | rabbitmq_exporter | `rabbitmq_*` |
+
+### 3.4 N:1 Namespace-Tenant 映射
+
+當一個邊緣叢集內多個 namespace 對應同一個 tenant 時，可使用 scaffold 工具自動產出 relabel 片段：
+
+```bash
+# 自動產出 Prometheus relabel_configs snippet
+python3 scripts/tools/scaffold_tenant.py \
+  --tenant db-a --db postgresql --namespaces ns-prod,ns-staging
+```
+
+產出的 YAML 包含 `_namespaces` 元資料欄位和對應的 `relabel_configs` snippet，直接貼入邊緣 Prometheus 的 scrape_configs 即可。詳見 `architecture-and-design.md` §2.3。
 
 ## 4. 中央叢集配置
 
@@ -257,37 +271,39 @@ tenants:
     → Alertmanager → 依據 db-a 的 _routing 通知
 ```
 
-## 5. Helm Chart Federation 支援
+## 5. Prometheus Helm 整合建議
+
+若使用 Helm 管理 Prometheus（如 kube-prometheus-stack），以下為推薦的 values 設定。本節描述的是顧客自帶的 Prometheus Helm chart 配置，非 threshold-exporter chart 本身。
 
 ### 5.1 externalLabels 注入
 
-Helm chart `values.yaml` 支援 `externalLabels` 設定，自動注入到 Prometheus `global.external_labels`：
-
 ```yaml
-# values.yaml
+# values.yaml (kube-prometheus-stack 或同類 chart)
 prometheus:
-  externalLabels:
-    cluster: "central-prod"
-    region: "us-east-1"
+  prometheusSpec:
+    externalLabels:
+      cluster: "central-prod"
+      region: "us-east-1"
 ```
-
-此設定對應 `--set prometheus.externalLabels.cluster=central-prod`，Helm template 會在 Prometheus ConfigMap 中注入 `external_labels` 區塊。
 
 ### 5.2 Federation Scrape 注入
 
 ```yaml
 # values.yaml
 prometheus:
-  additionalScrapeConfigs:
-    - job_name: "federation-edge-1"
-      honor_labels: true
-      metrics_path: "/federate"
-      params:
-        "match[]":
-          - '{tenant!=""}'
-      static_configs:
-        - targets: ["edge-1.example.com:9090"]
+  prometheusSpec:
+    additionalScrapeConfigs:
+      - job_name: "federation-edge-1"
+        honor_labels: true
+        metrics_path: "/federate"
+        params:
+          "match[]":
+            - '{tenant!=""}'
+        static_configs:
+          - targets: ["edge-1.example.com:9090"]
 ```
+
+若使用 K8s ConfigMap 直接管理 Prometheus，將上述 `external_labels` 和 `scrape_configs` 段落直接加入 `prometheus.yml` ConfigMap 即可（參考 §4.1 範例）。
 
 ## 6. 驗證 Checklist
 

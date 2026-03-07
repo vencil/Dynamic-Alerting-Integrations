@@ -2,13 +2,20 @@
 # ============================================================
 # benchmark.sh — 自動化效能基準測試
 # Usage: ./scripts/benchmark.sh [--json] [--under-load [--tenants N]] [--scaling-curve]
+#        [--routing-bench [--tenants N]] [--alertmanager-bench] [--reload-bench]
 #
 # Modes:
-#   (default)        Idle-state benchmark — collect current cluster metrics
-#   --under-load     Generate N synthetic tenants, inject load, measure perf
-#                    Includes scrape duration, reload latency, memory delta
-#   --tenants N      Number of synthetic tenants (default: 100, max: 2000)
-#   --scaling-curve  Measure rule evaluation time at 3/6/9 Rule Packs
+#   (default)          Idle-state benchmark — collect current cluster metrics
+#   --under-load       Generate N synthetic tenants, inject load, measure perf
+#                      Includes scrape duration, reload latency, memory delta
+#   --tenants N        Number of synthetic tenants (default: 100, max: 2000)
+#   --scaling-curve    Measure rule evaluation time at 3/6/9 Rule Packs
+#   --routing-bench    Route generation scaling — scaffold N tenants, measure
+#                      generate_alertmanager_routes.py wall time + output size
+#   --alertmanager-bench  Alertmanager notification latency under load — measure
+#                         route matching + inhibit rule evaluation overhead
+#   --reload-bench     Alertmanager config reload E2E latency — ConfigMap patch
+#                      → configmap-reload detect → /-/reload → new routes active
 # ============================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,12 +25,18 @@ source "${SCRIPT_DIR}/_lib.sh"
 JSON_MODE=false
 UNDER_LOAD=false
 SCALING_CURVE=false
+ROUTING_BENCH=false
+ALERTMANAGER_BENCH=false
+RELOAD_BENCH=false
 SYNTH_TENANTS=100
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON_MODE=true; shift ;;
     --under-load) UNDER_LOAD=true; shift ;;
     --scaling-curve) SCALING_CURVE=true; shift ;;
+    --routing-bench) ROUTING_BENCH=true; shift ;;
+    --alertmanager-bench) ALERTMANAGER_BENCH=true; shift ;;
+    --reload-bench) RELOAD_BENCH=true; shift ;;
     --tenants) SYNTH_TENANTS="${2:-100}"; shift 2 ;;
     *) shift ;;
   esac
@@ -31,9 +44,12 @@ done
 
 # --- Cleanup ---
 PF_PID=""
+AM_PF_PID=""
 cleanup() {
   [[ -n "${PF_PID}" ]] && kill "${PF_PID}" 2>/dev/null || true
+  [[ -n "${AM_PF_PID}" ]] && kill "${AM_PF_PID}" 2>/dev/null || true
   kill_port 9090
+  kill_port 9093
 }
 trap cleanup EXIT
 
@@ -433,6 +449,308 @@ print(json.dumps(data))
 fi
 
 # ============================================================
+# Routing Bench: scaffold N synthetic tenants → generate routes
+# ============================================================
+RB_STATUS="skipped"
+RB_DATA=""
+
+if [[ "${ROUTING_BENCH}" == true ]]; then
+  log "Routing bench: measuring route generation for 2/${SYNTH_TENANTS} tenants..."
+
+  CONF_DIR="${SCRIPT_DIR}/../components/threshold-exporter/config/conf.d"
+  TOOLS_DIR="${SCRIPT_DIR}/tools"
+  RB_TMPDIR=$(mktemp -d)
+  trap "rm -rf ${RB_TMPDIR}; cleanup" EXIT
+
+  RB_RESULTS=()
+  for N_TENANTS in 2 10 50 ${SYNTH_TENANTS}; do
+    # Deduplicate: skip if SYNTH_TENANTS is in {2,10,50}
+    if [[ "${N_TENANTS}" -ne 2 && "${N_TENANTS}" -ne 10 && "${N_TENANTS}" -ne 50 && "${N_TENANTS}" -eq "${SYNTH_TENANTS}" ]] || \
+       [[ "${N_TENANTS}" -eq 2 || "${N_TENANTS}" -eq 10 || "${N_TENANTS}" -eq 50 ]]; then
+
+      RB_TENANT_DIR="${RB_TMPDIR}/conf-${N_TENANTS}"
+      mkdir -p "${RB_TENANT_DIR}"
+
+      # Copy defaults
+      cp "${CONF_DIR}/_defaults.yaml" "${RB_TENANT_DIR}/"
+
+      # Generate N synthetic tenant YAMLs with routing + severity_dedup
+      python3 -c "
+import yaml, os, stat
+RECEIVER_TYPES = ['webhook', 'email', 'slack', 'teams', 'rocketchat', 'pagerduty']
+for i in range(${N_TENANTS}):
+    name = f'bench-{i:04d}'
+    rtype = RECEIVER_TYPES[i % len(RECEIVER_TYPES)]
+    tenant = {
+        'mysql_connections': str(50 + i % 100),
+        'mysql_cpu': str(60 + i % 40),
+        '_routing': {
+            'receiver': {'type': rtype},
+            'group_by': ['alertname', 'severity'],
+            'group_wait': '30s',
+            'group_interval': '5m',
+            'repeat_interval': '4h',
+        },
+        '_severity_dedup': {'mysql': True},
+    }
+    # Add receiver-specific fields
+    if rtype == 'webhook':
+        tenant['_routing']['receiver']['url'] = f'https://hooks.bench.local/{name}'
+    elif rtype == 'email':
+        tenant['_routing']['receiver']['to'] = [f'{name}@bench.local']
+        tenant['_routing']['receiver']['smarthost'] = 'smtp.bench.local:587'
+    elif rtype in ('slack', 'teams', 'rocketchat'):
+        tenant['_routing']['receiver']['url'] = f'https://{rtype}.bench.local/{name}'
+    elif rtype == 'pagerduty':
+        tenant['_routing']['receiver']['service_key'] = f'pk-bench-{i:04d}'
+
+    # Add routing overrides for every 5th tenant
+    if i % 5 == 0:
+        tenant['_routing']['overrides'] = [
+            {'alertname': 'MariaDBHighConnections', 'receiver': {'type': 'webhook', 'url': f'https://escalation.bench.local/{name}'}},
+        ]
+
+    data = {'tenants': {name: tenant}}
+    path = '${RB_TENANT_DIR}/' + f'{name}.yaml'
+    with open(path, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False)
+    os.chmod(path, 0o600)
+print(f'Generated ${N_TENANTS} tenant configs → ${RB_TENANT_DIR}/')
+" 2>/dev/null
+
+      # Measure route generation (5 rounds, report median)
+      RB_TIMES=""
+      RB_LINES=0
+      RB_ROUTES=0
+      RB_INHIBITS=0
+      for round in $(seq 1 5); do
+        RB_START=$(date +%s%N)
+        RB_OUTPUT=$(python3 "${TOOLS_DIR}/generate_alertmanager_routes.py" --config-dir "${RB_TENANT_DIR}" --dry-run 2>/dev/null)
+        RB_END=$(date +%s%N)
+        RB_ELAPSED_MS=$(python3 -c "print(f'{(${RB_END} - ${RB_START}) / 1e6:.1f}')" 2>/dev/null || echo "0")
+        RB_TIMES="${RB_TIMES} ${RB_ELAPSED_MS}"
+
+        if [[ "${round}" -eq 1 ]]; then
+          RB_LINES=$(echo "${RB_OUTPUT}" | wc -l)
+          # Parse counts from summary line: "--- N route(s), M receiver(s), K inhibit rule(s) ---"
+          local summary_line
+          summary_line=$(echo "${RB_OUTPUT}" | grep -E '--- [0-9]+ route' || echo "")
+          if [[ -n "${summary_line}" ]]; then
+            RB_ROUTES=$(echo "${summary_line}" | grep -oP '(\d+) route' | grep -oP '\d+')
+            RB_INHIBITS=$(echo "${summary_line}" | grep -oP '(\d+) inhibit' | grep -oP '\d+')
+          else
+            RB_ROUTES=$(echo "${RB_OUTPUT}" | grep -c '  - matchers:' 2>/dev/null || echo "0")
+            RB_INHIBITS=$(echo "${RB_OUTPUT}" | grep -c 'target_matchers:' 2>/dev/null || echo "0")
+          fi
+        fi
+      done
+
+      RB_MEDIAN=$(python3 -c "
+vals = sorted([float(x) for x in '${RB_TIMES}'.split()])
+n = len(vals)
+print(f'{vals[n//2]:.1f}')
+" 2>/dev/null || echo "N/A")
+
+      RB_RESULTS+=("{\"tenants\": ${N_TENANTS}, \"wall_time_ms\": ${RB_MEDIAN}, \"output_lines\": ${RB_LINES}, \"routes\": ${RB_ROUTES}, \"inhibit_rules\": ${RB_INHIBITS}}")
+      info "  N=${N_TENANTS}: ${RB_MEDIAN}ms, ${RB_LINES} lines, ${RB_ROUTES} routes, ${RB_INHIBITS} inhibit rules"
+    fi
+  done
+
+  RB_DATA=$(python3 -c "
+import json
+items = [$(IFS=,; echo "${RB_RESULTS[*]}")]
+print(json.dumps(items))
+" 2>/dev/null || echo "[]")
+
+  RB_STATUS="completed"
+  log "Routing bench complete."
+fi
+
+# ============================================================
+# Alertmanager Bench: notification latency + inhibit overhead
+# ============================================================
+AM_STATUS="skipped"
+AM_NOTIFICATION_LATENCY_MS="N/A"
+AM_ALERTS_RECEIVED=0
+AM_NOTIFICATIONS_SENT=0
+AM_INHIBITED=0
+AM_ROUTE_MATCH_P99_MS="N/A"
+
+if [[ "${ALERTMANAGER_BENCH}" == true ]]; then
+  log "Alertmanager bench: measuring notification latency and inhibit overhead..."
+
+  # Port-forward to Alertmanager
+  kill_port 9093
+  sleep 1
+  AM_POD=$(kubectl get pods -n monitoring -l app=alertmanager -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [[ -z "${AM_POD}" ]]; then
+    warn "Alertmanager pod not found, skipping alertmanager-bench"
+  else
+    kubectl port-forward -n monitoring "pod/${AM_POD}" 9093:9093 &>/dev/null &
+    AM_PF_PID=$!
+
+    # Wait for Alertmanager
+    for i in $(seq 1 10); do
+      curl -sf -o /dev/null http://localhost:9093/-/ready 2>/dev/null && break
+      sleep 2
+    done
+
+    if curl -sf -o /dev/null http://localhost:9093/-/ready 2>/dev/null; then
+      # Collect Alertmanager internal metrics via Prometheus
+      # (Alertmanager metrics are scraped by Prometheus if configured,
+      #  otherwise fall back to direct Alertmanager /metrics endpoint)
+
+      # --- Notification latency ---
+      AM_LATENCY_S=$(prom_scalar \
+        'histogram_quantile(0.99, sum(rate(alertmanager_notification_latency_seconds_bucket[5m])) by (le))' '0')
+      AM_NOTIFICATION_LATENCY_MS=$(python3 -c "
+v = float('${AM_LATENCY_S}')
+print(f'{v*1000:.1f}' if v > 0 else 'N/A')
+" 2>/dev/null || echo "N/A")
+
+      # --- Alerts received vs notifications sent ---
+      AM_ALERTS_RECEIVED=$(prom_scalar \
+        'sum(increase(alertmanager_alerts_received_total[5m]))' '0')
+      AM_ALERTS_RECEIVED=$(python3 -c "print(int(float('${AM_ALERTS_RECEIVED}')))" 2>/dev/null || echo "0")
+
+      AM_NOTIFICATIONS_SENT=$(prom_scalar \
+        'sum(increase(alertmanager_notifications_total[5m]))' '0')
+      AM_NOTIFICATIONS_SENT=$(python3 -c "print(int(float('${AM_NOTIFICATIONS_SENT}')))" 2>/dev/null || echo "0")
+
+      AM_NOTIFICATIONS_FAILED=$(prom_scalar \
+        'sum(increase(alertmanager_notifications_failed_total[5m]))' '0')
+      AM_NOTIFICATIONS_FAILED=$(python3 -c "print(int(float('${AM_NOTIFICATIONS_FAILED}')))" 2>/dev/null || echo "0")
+
+      # --- Inhibited alerts (from Alertmanager /api/v2/alerts) ---
+      AM_INHIBITED=$(curl -sf http://localhost:9093/api/v2/alerts 2>/dev/null | python3 -c "
+import sys, json
+try:
+    alerts = json.load(sys.stdin)
+    print(sum(1 for a in alerts if a.get('status', {}).get('state') == 'suppressed'))
+except: print(0)
+" 2>/dev/null || echo "0")
+
+      # --- Active inhibit rules count (from config) ---
+      AM_INHIBIT_RULES=$(curl -sf http://localhost:9093/api/v2/status 2>/dev/null | python3 -c "
+import sys, json
+try:
+    status = json.load(sys.stdin)
+    cfg = status.get('config', {}).get('original', '')
+    import yaml
+    parsed = yaml.safe_load(cfg)
+    rules = parsed.get('inhibit_rules', [])
+    print(len(rules))
+except: print(0)
+" 2>/dev/null || echo "0")
+
+      # --- Alertmanager peer mesh info ---
+      AM_CLUSTER_PEERS=$(prom_scalar 'alertmanager_cluster_members' '0')
+      AM_CLUSTER_PEERS=$(python3 -c "print(int(float('${AM_CLUSTER_PEERS}')))" 2>/dev/null || echo "0")
+
+      AM_STATUS="completed"
+      log "Alertmanager bench complete."
+    else
+      warn "Alertmanager not reachable after 20s, skipping"
+    fi
+  fi
+fi
+
+# ============================================================
+# Reload Bench: Alertmanager config reload E2E latency
+# ============================================================
+RL_STATUS="skipped"
+RL_LATENCIES=""
+RL_MEDIAN_MS="N/A"
+RL_ROUNDS=5
+
+if [[ "${RELOAD_BENCH}" == true ]]; then
+  log "Reload bench: measuring Alertmanager config reload E2E latency (${RL_ROUNDS} rounds)..."
+
+  # Port-forward to Alertmanager if not already
+  if [[ -z "${AM_PF_PID}" ]]; then
+    kill_port 9093
+    sleep 1
+    AM_POD=$(kubectl get pods -n monitoring -l app=alertmanager -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -n "${AM_POD}" ]]; then
+      kubectl port-forward -n monitoring "pod/${AM_POD}" 9093:9093 &>/dev/null &
+      AM_PF_PID=$!
+      for i in $(seq 1 10); do
+        curl -sf -o /dev/null http://localhost:9093/-/ready 2>/dev/null && break
+        sleep 2
+      done
+    fi
+  fi
+
+  if curl -sf -o /dev/null http://localhost:9093/-/ready 2>/dev/null; then
+    CONF_DIR="${SCRIPT_DIR}/../components/threshold-exporter/config/conf.d"
+    TOOLS_DIR="${SCRIPT_DIR}/tools"
+
+    # Get current Alertmanager config reload timestamp
+    RL_BASE_TS=$(prom_scalar 'alertmanager_config_last_reload_success_timestamp_seconds' '0')
+
+    for round in $(seq 1 ${RL_ROUNDS}); do
+      # Snapshot: last successful reload timestamp (from Alertmanager /metrics)
+      RL_BEFORE_TS=$(curl -sf http://localhost:9093/metrics 2>/dev/null | \
+        grep 'alertmanager_config_last_reload_success_timestamp_seconds' | \
+        grep -oP '\d+\.?\d*$' || echo "0")
+
+      # Touch ConfigMap to trigger reload — add a harmless annotation
+      RL_PATCH_START=$(date +%s%N)
+      kubectl annotate configmap alertmanager-config -n monitoring \
+        "benchmark.reload-bench/round=${round}-$(date +%s)" --overwrite >/dev/null 2>&1
+
+      # Trigger explicit reload via lifecycle API
+      curl -sf -X POST http://localhost:9093/-/reload >/dev/null 2>&1
+
+      # Poll for reload success (configmap-reload sidecar or explicit reload)
+      RL_RELOAD_OK=false
+      for poll in $(seq 1 20); do
+        RL_AFTER_TS=$(curl -sf http://localhost:9093/metrics 2>/dev/null | \
+          grep 'alertmanager_config_last_reload_success_timestamp_seconds' | \
+          grep -oP '\d+\.?\d*$' || echo "0")
+        if python3 -c "exit(0 if float('${RL_AFTER_TS}') > float('${RL_BEFORE_TS}') else 1)" 2>/dev/null; then
+          RL_RELOAD_OK=true
+          break
+        fi
+        sleep 0.5
+      done
+
+      RL_PATCH_END=$(date +%s%N)
+      if [[ "${RL_RELOAD_OK}" == true ]]; then
+        RL_ELAPSED_MS=$(python3 -c "print(f'{(${RL_PATCH_END} - ${RL_PATCH_START}) / 1e6:.1f}')" 2>/dev/null || echo "N/A")
+        RL_LATENCIES="${RL_LATENCIES} ${RL_ELAPSED_MS}"
+      else
+        warn "Round ${round}: reload not confirmed within 10s"
+        RL_LATENCIES="${RL_LATENCIES} N/A"
+      fi
+    done
+
+    RL_MEDIAN_MS=$(python3 -c "
+vals = sorted([float(x) for x in '${RL_LATENCIES}'.split() if x != 'N/A'])
+if vals:
+    print(f'{vals[len(vals)//2]:.1f}')
+else:
+    print('N/A')
+" 2>/dev/null || echo "N/A")
+
+    # Also measure generate_alertmanager_routes.py --apply E2E (if cluster has routes)
+    RL_APPLY_MS="N/A"
+    if [[ -d "${CONF_DIR}" ]]; then
+      RL_APPLY_START=$(date +%s%N)
+      python3 "${TOOLS_DIR}/generate_alertmanager_routes.py" \
+        --config-dir "${CONF_DIR}" --apply --yes --namespace monitoring >/dev/null 2>&1 || true
+      RL_APPLY_END=$(date +%s%N)
+      RL_APPLY_MS=$(python3 -c "print(f'{(${RL_APPLY_END} - ${RL_APPLY_START}) / 1e6:.1f}')" 2>/dev/null || echo "N/A")
+    fi
+
+    RL_STATUS="completed"
+    log "Reload bench complete. Median: ${RL_MEDIAN_MS}ms, --apply E2E: ${RL_APPLY_MS}ms"
+  else
+    warn "Alertmanager not reachable, skipping reload-bench"
+  fi
+fi
+
+# ============================================================
 # Output
 # ============================================================
 if [[ "${JSON_MODE}" == true ]]; then
@@ -479,7 +797,24 @@ data = {
     'user_threshold_series': int('${UL_UT_SERIES_AFTER}'),
     'active_series': int(float('${UL_ACTIVE_SERIES_AFTER}')) if '${UL_ACTIVE_SERIES_AFTER}' != '0' else None
   } if '${UL_STATUS}' != 'skipped' else None,
-  'scaling_curve': json.loads('${SC_DATA}') if '${SC_STATUS}' != 'skipped' else None
+  'scaling_curve': json.loads('${SC_DATA}') if '${SC_STATUS}' != 'skipped' else None,
+  'routing_bench': json.loads('${RB_DATA}') if '${RB_STATUS}' != 'skipped' else None,
+  'alertmanager_bench': {
+    'status': '${AM_STATUS}',
+    'notification_latency_p99_ms': float('${AM_NOTIFICATION_LATENCY_MS}') if '${AM_NOTIFICATION_LATENCY_MS}' != 'N/A' else None,
+    'alerts_received_5m': int('${AM_ALERTS_RECEIVED}'),
+    'notifications_sent_5m': int('${AM_NOTIFICATIONS_SENT}'),
+    'notifications_failed_5m': int('${AM_NOTIFICATIONS_FAILED}'),
+    'inhibited_alerts': int('${AM_INHIBITED}'),
+    'active_inhibit_rules': int('${AM_INHIBIT_RULES}'),
+    'cluster_peers': int('${AM_CLUSTER_PEERS}')
+  } if '${AM_STATUS}' != 'skipped' else None,
+  'reload_bench': {
+    'status': '${RL_STATUS}',
+    'reload_latency_median_ms': float('${RL_MEDIAN_MS}') if '${RL_MEDIAN_MS}' != 'N/A' else None,
+    'apply_e2e_ms': float('${RL_APPLY_MS}') if '${RL_APPLY_MS}' != 'N/A' else None,
+    'rounds': int('${RL_ROUNDS}')
+  } if '${RL_STATUS}' != 'skipped' else None
 }
 print(json.dumps(data, indent=2))
 "
@@ -536,6 +871,38 @@ for row in json.loads('${SC_DATA}'):
     et = f\"{row['eval_time_ms']}ms\" if row['eval_time_ms'] is not None else 'N/A'
     print(f\"    {row['rule_packs']:<14} {row['rule_groups']:<14} {row['total_rules']:<14} {et}\")
 " 2>/dev/null
+  fi
+
+  if [[ "${RB_STATUS}" != "skipped" ]]; then
+    echo ""
+    echo "  Route Generation Scaling"
+    printf "    %-12s %-16s %-14s %-12s %s\n" "Tenants" "Wall Time" "Output Lines" "Routes" "Inhibit Rules"
+    printf "    %-12s %-16s %-14s %-12s %s\n" "-------" "---------" "------------" "------" "-------------"
+    python3 -c "
+import json
+for row in json.loads('${RB_DATA}'):
+    wt = f\"{row['wall_time_ms']}ms\"
+    print(f\"    {row['tenants']:<12} {wt:<16} {row['output_lines']:<14} {row['routes']:<12} {row['inhibit_rules']}\")
+" 2>/dev/null
+  fi
+
+  if [[ "${AM_STATUS}" != "skipped" ]]; then
+    echo ""
+    echo "  Alertmanager Notification Performance"
+    printf "    %-30s %s\n" "Notification Latency (p99)" "${AM_NOTIFICATION_LATENCY_MS}ms"
+    printf "    %-30s %s\n" "Alerts Received (5m)" "${AM_ALERTS_RECEIVED}"
+    printf "    %-30s %s\n" "Notifications Sent (5m)" "${AM_NOTIFICATIONS_SENT}"
+    printf "    %-30s %s\n" "Notifications Failed (5m)" "${AM_NOTIFICATIONS_FAILED}"
+    printf "    %-30s %s\n" "Inhibited Alerts (current)" "${AM_INHIBITED}"
+    printf "    %-30s %s\n" "Active Inhibit Rules" "${AM_INHIBIT_RULES}"
+    printf "    %-30s %s\n" "Cluster Peers" "${AM_CLUSTER_PEERS}"
+  fi
+
+  if [[ "${RL_STATUS}" != "skipped" ]]; then
+    echo ""
+    echo "  Alertmanager Config Reload Latency (${RL_ROUNDS} rounds)"
+    printf "    %-30s %sms\n" "Reload Latency (median)" "${RL_MEDIAN_MS}"
+    printf "    %-30s %sms\n" "--apply E2E (generate+merge)" "${RL_APPLY_MS}"
   fi
 
   echo ""

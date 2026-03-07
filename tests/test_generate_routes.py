@@ -2,13 +2,15 @@
 """test_generate_routes.py — generate_alertmanager_routes.py 測試套件。
 
 驗證核心功能:
-  1. Duration 解析與格式化 (parse_duration_seconds / format_duration)
-  2. Guardrail clamp 邏輯 + 常數一致性
-  3. load_tenant_configs() — routing + severity_dedup 讀取
-  4. generate_routes() — route + receiver 結構
-  5. generate_inhibit_rules() — per-tenant severity dedup inhibit rules
-  6. render_output() — YAML 片段組合
-  7. SAST: open() 必須帶 encoding="utf-8"
+  1. Guardrail clamp 邏輯 + 常數一致性
+  2. load_tenant_configs() — routing + severity_dedup 讀取
+  3. generate_routes() — route + receiver 結構
+  4. generate_inhibit_rules() — per-tenant severity dedup inhibit rules
+  5. render_output() — YAML 片段組合
+  6. SAST: open() 必須帶 encoding="utf-8"
+
+NOTE: Duration parsing/formatting tests are in test_lib_python.py
+      (TestParseDurationSeconds / TestFormatDuration).
 
 用法:
   python3 -m pytest tests/test_generate_routes.py -v
@@ -17,7 +19,6 @@
 import inspect
 import os
 import re
-import stat
 import sys
 import tempfile
 import unittest
@@ -27,60 +28,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import generate_alertmanager_routes as gen  # noqa: E402
+from conftest import write_yaml  # noqa: E402
 
 
-# ── Shared helper ──────────────────────────────────────────────────
-
-def _write_yaml(tmpdir, filename, content):
-    """Write a YAML file into tmpdir with secure permissions."""
-    path = os.path.join(tmpdir, filename)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-
-
-# ── 1. Duration parsing + formatting ──────────────────────────────
-
-class TestDuration(unittest.TestCase):
-    """parse_duration_seconds() + format_duration() 測試。"""
-
-    # — parse —
-
-    def test_parse_seconds(self):
-        self.assertEqual(gen.parse_duration_seconds("30s"), 30)
-
-    def test_parse_minutes(self):
-        self.assertEqual(gen.parse_duration_seconds("5m"), 300)
-
-    def test_parse_hours(self):
-        self.assertEqual(gen.parse_duration_seconds("4h"), 14400)
-
-    def test_parse_days(self):
-        self.assertEqual(gen.parse_duration_seconds("1d"), 86400)
-
-    def test_parse_invalid(self):
-        """Invalid / edge-case inputs all return None."""
-        for bad in ("abc", "", None, "5x", "s"):
-            self.assertIsNone(gen.parse_duration_seconds(bad), msg=f"input={bad!r}")
-
-    # — format —
-
-    def test_format_seconds(self):
-        self.assertEqual(gen.format_duration(30), "30s")
-
-    def test_format_minutes(self):
-        self.assertEqual(gen.format_duration(300), "5m")
-
-    def test_format_hours(self):
-        self.assertEqual(gen.format_duration(3600), "1h")
-
-    def test_format_no_day_suffix(self):
-        """Prometheus 不支援 'd' 格式，大時數仍用 'h'。"""
-        self.assertEqual(gen.format_duration(86400), "24h")
-        self.assertEqual(gen.format_duration(259200), "72h")
-
-
-# ── 2. Guardrails ─────────────────────────────────────────────────
+# ── 1. Guardrails ─────────────────────────────────────────────────
 
 class TestValidateAndClamp(unittest.TestCase):
     """validate_and_clamp() guardrail 測試 + 常數一致性。"""
@@ -146,7 +97,7 @@ class TestLoadTenantConfigs(unittest.TestCase):
     def test_routing_and_default_dedup(self):
         """有 _routing → routing dict 有值; 無 _severity_dedup → default enable。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", """
+            write_yaml(d, "db-a.yaml", """
 tenants:
   db-a:
     mysql_connections: "70"
@@ -164,7 +115,7 @@ tenants:
     def test_no_routing_still_tracks_dedup(self):
         """無 _routing 的 tenant 仍出現在 dedup dict 中。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-b.yaml", """
+            write_yaml(d, "db-b.yaml", """
 tenants:
   db-b:
     mysql_connections: "80"
@@ -175,30 +126,30 @@ tenants:
 
     def test_multiple_files(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://a.example.com'\n")
-            _write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://b.example.com'\n")
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://a.example.com'\n")
+            write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://b.example.com'\n")
             routing, dedup, _sw, _er = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 2)
             self.assertEqual(len(dedup), 2)
 
     def test_skips_dotfiles(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, ".hidden.yaml", "tenants:\n  hidden:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'x'\n")
+            write_yaml(d, ".hidden.yaml", "tenants:\n  hidden:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'x'\n")
             routing, dedup, _sw, _er = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             self.assertEqual(len(dedup), 0)
 
     def test_dedup_disable_explicit(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _severity_dedup: 'disable'\n")
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _severity_dedup: 'disable'\n")
             _, dedup, _sw, _er = gen.load_tenant_configs(d)
             self.assertEqual(dedup["db-a"], "disable")
 
     def test_dedup_mixed_tenants(self):
         """enable (default) + disable → dedup dict 正確區分。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-            _write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _severity_dedup: 'disable'\n")
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            write_yaml(d, "db-b.yaml", "tenants:\n  db-b:\n    _severity_dedup: 'disable'\n")
             _, dedup, _sw, _er = gen.load_tenant_configs(d)
             self.assertEqual(dedup["db-a"], "enable")
             self.assertEqual(dedup["db-b"], "disable")
@@ -206,7 +157,7 @@ tenants:
     def test_dedup_disable_synonyms(self):
         """disabled / off / false 全視同 disable（與 Go 行為一致）。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "t.yaml", """
+            write_yaml(d, "t.yaml", """
 tenants:
   t1:
     _severity_dedup: "disabled"
@@ -222,7 +173,7 @@ tenants:
     def test_dedup_only_no_routing_produces_inhibit(self):
         """無 _routing 的 tenant 仍可產出 inhibit rule（E2E 驗證）。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
             routing, dedup, _sw, _er = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             rules, _ = gen.generate_inhibit_rules(dedup)
@@ -433,7 +384,7 @@ class TestRoutingDefaults(unittest.TestCase):
     def test_tenant_inherits_defaults(self):
         """無 _routing 的 tenant 繼承 _routing_defaults。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_defaults:
   receiver:
     type: "email"
@@ -452,7 +403,7 @@ tenants:
     def test_tenant_overrides_receiver(self):
         """有 _routing 的 tenant 覆寫 receiver，timing 從 defaults。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_defaults:
   receiver:
     type: "email"
@@ -461,7 +412,7 @@ _routing_defaults:
   group_wait: "30s"
   repeat_interval: "4h"
 """)
-            _write_yaml(d, "db-b.yaml", """
+            write_yaml(d, "db-b.yaml", """
 tenants:
   db-b:
     _routing:
@@ -477,14 +428,14 @@ tenants:
     def test_tenant_disables_routing(self):
         """_routing: "disable" → 不產出路由。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_defaults:
   receiver:
     type: "email"
     to: ["team@example.com"]
     smarthost: "smtp:587"
 """)
-            _write_yaml(d, "db-c.yaml", """
+            write_yaml(d, "db-c.yaml", """
 tenants:
   db-c:
     _routing: "disable"
@@ -495,7 +446,7 @@ tenants:
     def test_tenant_template_substitution(self):
         """{{tenant}} 在 receiver fields 被替換為 tenant name。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_defaults:
   receiver:
     type: "rocketchat"
@@ -513,7 +464,7 @@ tenants:
     def test_disabled_routing_still_tracks_dedup(self):
         """_routing: disable の tenant でも dedup は追跡される。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-c.yaml", """
+            write_yaml(d, "db-c.yaml", """
 tenants:
   db-c:
     _routing: "disable"
@@ -526,7 +477,7 @@ tenants:
     def test_no_defaults_no_routing(self):
         """無 _routing_defaults 也無 _routing → 不產出路由。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
             routing, dedup, _sw, _er = gen.load_tenant_configs(d)
             self.assertEqual(len(routing), 0)
             self.assertEqual(dedup["db-a"], "enable")
@@ -534,7 +485,7 @@ tenants:
     def test_defaults_boundary_warning(self):
         """_routing_defaults 在 tenant 檔案中會被忽略並警告。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", """
+            write_yaml(d, "db-a.yaml", """
 _routing_defaults:
   receiver:
     type: "email"
@@ -551,7 +502,7 @@ tenants:
     def test_template_in_email_to(self):
         """{{tenant}} 在 email to list 被替換。"""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_defaults:
   receiver:
     type: "email"
@@ -573,7 +524,7 @@ class TestTenantConfigSchemaValidation(unittest.TestCase):
     def test_valid_keys_no_warnings(self):
         """All valid keys → no warnings."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 defaults:
   mysql_connections: 70
   redis_memory: 80
@@ -593,7 +544,7 @@ tenants:
     def test_typo_reserved_key(self):
         """_silence_mode (typo) → warning."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 defaults:
   mysql_connections: 70
 tenants:
@@ -608,7 +559,7 @@ tenants:
     def test_unknown_metric_key(self):
         """Key not in defaults → warning."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 defaults:
   mysql_connections: 70
 tenants:
@@ -623,7 +574,7 @@ tenants:
     def test_critical_suffix_valid(self):
         """mysql_connections_critical → valid if mysql_connections in defaults."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 defaults:
   mysql_connections: 70
 tenants:
@@ -635,14 +586,14 @@ tenants:
 
     def test_state_prefix_valid(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", "tenants:\n  db-a:\n    _state_maintenance: 'enable'\n")
+            write_yaml(d, "_defaults.yaml", "tenants:\n  db-a:\n    _state_maintenance: 'enable'\n")
             _, _, schema_warnings, _er = gen.load_tenant_configs(d)
             self.assertEqual(schema_warnings, [])
 
     def test_no_defaults_all_metric_keys_warn(self):
         """No defaults section → any non-reserved tenant key warns."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "t.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
+            write_yaml(d, "t.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
             _, _, schema_warnings, _er = gen.load_tenant_configs(d)
             self.assertEqual(len(schema_warnings), 1)
             self.assertIn("not in defaults", schema_warnings[0])
@@ -861,7 +812,7 @@ class TestPlatformEnforcedRouting(unittest.TestCase):
     def test_enforced_route_loaded_from_defaults(self):
         """_routing_enforced in _ prefixed file → loaded."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_enforced:
   enabled: true
   receiver:
@@ -881,7 +832,7 @@ tenants:
     def test_enforced_disabled_returns_none(self):
         """_routing_enforced with enabled: false → None."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_enforced:
   enabled: false
   receiver:
@@ -897,7 +848,7 @@ tenants:
     def test_enforced_ignored_in_tenant_file(self):
         """_routing_enforced in non-_ file → ignored with warning."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "db-a.yaml", """
+            write_yaml(d, "db-a.yaml", """
 _routing_enforced:
   enabled: true
   receiver:
@@ -989,7 +940,7 @@ tenants:
     def test_enforced_e2e_from_config_dir(self):
         """End-to-end: load from config dir → generate routes with enforced first."""
         with tempfile.TemporaryDirectory() as d:
-            _write_yaml(d, "_defaults.yaml", """
+            write_yaml(d, "_defaults.yaml", """
 _routing_enforced:
   enabled: true
   receiver:
@@ -1022,6 +973,198 @@ tenants:
             # Tenant routes sorted
             self.assertEqual(routes[1]["receiver"], "tenant-db-a")
             self.assertEqual(routes[2]["receiver"], "tenant-db-b")
+
+
+# ── 6c. Per-rule Routing Overrides (v1.8.0) ────────────────────────
+
+class TestRoutingOverrides(unittest.TestCase):
+    """v1.8.0 _routing.overrides[] — per-rule receiver overrides."""
+
+    def _webhook(self, url="https://example.com"):
+        return {"type": "webhook", "url": url}
+
+    def test_routing_override_alertname(self):
+        """Override with alertname matcher generates correct sub-route."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {
+                        "alertname": "MariaDBHighConnections",
+                        "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"},
+                    },
+                ],
+            },
+        }
+        routes, receivers, warnings = gen.generate_routes(cfg)
+        # Override sub-route + main tenant route = 2
+        self.assertEqual(len(routes), 2)
+        # Override comes BEFORE main route
+        self.assertEqual(routes[0]["receiver"], "tenant-db-a-override-0")
+        self.assertIn('alertname="MariaDBHighConnections"', routes[0]["matchers"])
+        self.assertIn('tenant="db-a"', routes[0]["matchers"])
+        # Main route is second
+        self.assertEqual(routes[1]["receiver"], "tenant-db-a")
+
+    def test_routing_override_metric_group(self):
+        """Override with metric_group matcher generates correct sub-route."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {
+                        "metric_group": "pg_replication_lag",
+                        "receiver": {"type": "email", "to": "dba@example.com", "smarthost": "smtp:587"},
+                    },
+                ],
+            },
+        }
+        routes, receivers, _ = gen.generate_routes(cfg)
+        self.assertEqual(len(routes), 2)
+        self.assertIn('metric_group="pg_replication_lag"', routes[0]["matchers"])
+
+    def test_routing_override_multiple(self):
+        """Multiple overrides generate multiple sub-routes in order."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {"alertname": "Alert1", "receiver": self._webhook("https://a.example.com")},
+                    {"alertname": "Alert2", "receiver": self._webhook("https://b.example.com")},
+                ],
+            },
+        }
+        routes, receivers, _ = gen.generate_routes(cfg)
+        self.assertEqual(len(routes), 3)  # 2 overrides + 1 main
+        self.assertEqual(routes[0]["receiver"], "tenant-db-a-override-0")
+        self.assertEqual(routes[1]["receiver"], "tenant-db-a-override-1")
+        self.assertEqual(routes[2]["receiver"], "tenant-db-a")
+
+    def test_routing_override_receiver_validation(self):
+        """Override with invalid receiver is skipped with warning."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {"alertname": "Alert1", "receiver": {"type": "webhook"}},  # missing url
+                ],
+            },
+        }
+        routes, _, warnings = gen.generate_routes(cfg)
+        # Only main route, override skipped
+        self.assertEqual(len(routes), 1)
+        self.assertTrue(any("requires 'url'" in w for w in warnings))
+
+    def test_routing_override_sub_route_ordering(self):
+        """Override sub-routes appear BEFORE main tenant route in routes list."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {"alertname": "SpecificAlert", "receiver": self._webhook("https://specific.example.com")},
+                ],
+            },
+        }
+        routes, _, _ = gen.generate_routes(cfg)
+        # First route should be the override (more specific match first)
+        self.assertIn("override", routes[0]["receiver"])
+        # Last route is the general tenant route
+        self.assertEqual(routes[-1]["receiver"], "tenant-db-a")
+
+    def test_routing_override_empty_list(self):
+        """Empty overrides list is a no-op."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [],
+            },
+        }
+        routes, receivers, warnings = gen.generate_routes(cfg)
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]["receiver"], "tenant-db-a")
+
+    def test_routing_override_both_match_rejected(self):
+        """Override with both alertname and metric_group is rejected."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {
+                        "alertname": "Alert1",
+                        "metric_group": "mysql_connections",
+                        "receiver": self._webhook("https://both.example.com"),
+                    },
+                ],
+            },
+        }
+        routes, _, warnings = gen.generate_routes(cfg)
+        # Only main route, override rejected
+        self.assertEqual(len(routes), 1)
+        self.assertTrue(any("both 'alertname' and 'metric_group'" in w for w in warnings))
+
+    def test_routing_override_inherits_timing(self):
+        """Override without timing uses no explicit timing (inherits from parent)."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "group_wait": "15s",
+                "overrides": [
+                    {"alertname": "Alert1", "receiver": self._webhook("https://a.example.com")},
+                ],
+            },
+        }
+        routes, _, _ = gen.generate_routes(cfg)
+        override_route = routes[0]
+        # Override doesn't explicitly set timing (inherits from parent route)
+        self.assertNotIn("group_wait", override_route)
+
+    def test_routing_override_explicit_timing(self):
+        """Override with explicit timing applies guardrails."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {
+                        "alertname": "Alert1",
+                        "receiver": self._webhook("https://a.example.com"),
+                        "group_wait": "1s",   # below min → clamped to 5s
+                    },
+                ],
+            },
+        }
+        routes, _, warnings = gen.generate_routes(cfg)
+        self.assertEqual(routes[0]["group_wait"], "5s")
+        self.assertTrue(any("below minimum" in w for w in warnings))
+
+    def test_routing_override_domain_policy_blocks(self):
+        """Override receiver blocked by domain policy → skipped."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook("https://ok.example.com/alerts"),
+                "overrides": [
+                    {"alertname": "Alert1", "receiver": self._webhook("https://evil.com/x")},
+                ],
+            },
+        }
+        routes, _, warnings = gen.generate_routes(cfg, allowed_domains=["*.example.com"])
+        # Main route passes, override blocked
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]["receiver"], "tenant-db-a")
+        self.assertTrue(any("not in allowed_domains" in w for w in warnings))
+
+    def test_routing_override_no_match_skipped(self):
+        """Override with neither alertname nor metric_group is skipped."""
+        cfg = {
+            "db-a": {
+                "receiver": self._webhook(),
+                "overrides": [
+                    {"receiver": self._webhook("https://no-match.example.com")},
+                ],
+            },
+        }
+        routes, _, warnings = gen.generate_routes(cfg)
+        self.assertEqual(len(routes), 1)
+        self.assertTrue(any("must have either" in w for w in warnings))
 
 
 # ── 7. SAST ──────────────────────────────────────────────────────

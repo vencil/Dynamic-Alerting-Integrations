@@ -2,6 +2,75 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.8.0] — 生態系擴張與無縫遷移 (Onboarding & Ecosystem Expansion) (2026-03-07)
+
+既有配置反向遷移工具、N:1 Tenant Mapping、Per-rule Routing Overrides、Kafka/RabbitMQ Rule Pack（10→12）、Benchmark 三維擴充（Routing Scaling / Alertmanager / Reload E2E）、文件與 Playbook 收斂。
+
+### 🔄 既有配置反向分析工具 (`onboard_platform.py`)
+
+* **Phase 1：Alertmanager config 反向分析**：攤平巢狀 route tree → per-tenant `_routing` YAML，自動推導 receiver / timing（group_wait / group_interval / repeat_interval）
+* **Phase 2：Rule file 批次 AST 分析**：掃描傳統 Prometheus alert rules → migration plan（CSV report + `_defaults.yaml` fragment + tenant overlays），復用 `migrate_rule.py` AST 引擎
+* **Phase 3：Prometheus scrape config 分析**：抽取 `__meta_kubernetes_namespace` / `__meta_kubernetes_pod_label_*` relabel 邏輯 → relabel_configs 建議片段，供手動審核
+* **企業適配**：`--tenant-label` 參數支援自訂 tenant 標籤名稱（default：`tenant`），適應各企業不同命名慣例
+* **與現有工具整合**：復用 `migrate_rule.py` 的 AST engine + dictionary、`generate_alertmanager_routes.py` 的 RECEIVER_TYPES / GUARDRAILS 常數
+
+### 🎯 N:1 Tenant Mapping 自動化
+
+* **`scaffold_tenant.py --namespaces` 擴充**：`--namespaces ns1,ns2,ns3` 自動產出 Prometheus relabel_configs snippet，支援 regex matching + dedup
+* **Tenant YAML `_namespaces` 元資料**：新增 reserved key（工具參考用，不影響 metric 邏輯），記錄 tenant 對應的 K8s namespace 清單
+* **`generate_relabel_snippet()` 函式**：支援自訂 `tenant_label` 參數，輸出 fnmatch-safe relabel block
+* **Go config.go + Python 兩端同步**：`_namespaces` 列入 reserved keys 驗證清單
+
+### 🔗 Per-rule Routing Overrides
+
+* **`_routing.overrides[]` 新欄位**：支援 per-alertname 或 per-metric_group 指定特定 alert 走不同 receiver（如 critical alert 走 PagerDuty，warning 走 Slack）
+* **結構化陣列**：`[{match: {alertname: "pattern"}, receiver: {...}}, ...]`，每個 override 精確一個 match criterion（alertname 或 metric_group，不可併用）
+* **`expand_routing_overrides()` 函式**：產出 Alertmanager 子路由，inserted before main tenant route，每個 override 走同一個 `build_receiver_config()` 驗證 + domain allowlist 檢查
+* **反向相容**：無 `overrides` 欄位的配置保持現狀，不影響既有租戶
+
+### 📦 Kafka / RabbitMQ Rule Pack (10→12)
+
+* **rule-pack-kafka.yaml**：標準三件式（Normalization → Threshold Normalization → Alerts），5 alert + `_critical` 變體
+  * Config Keys：`kafka_consumer_lag`、`kafka_under_replicated_partitions`、`kafka_broker_count`、`kafka_active_controllers`、`kafka_request_rate`
+  * Alerts：KafkaHighConsumerLag / KafkaUnderReplicatedPartitions / KafkaNoActiveController / KafkaLowBrokerCount / KafkaHighRequestRate
+  * Exporter：`danielqsj/kafka-exporter` (9308 port 預設)
+* **rule-pack-rabbitmq.yaml**：同結構，5 alert + `_critical` 變體
+  * Config Keys：`rabbitmq_queue_messages`、`rabbitmq_node_mem_percent`、`rabbitmq_connections`、`rabbitmq_consumers`、`rabbitmq_unacked_messages`
+  * Alerts：RabbitMQHighQueueDepth / RabbitMQLowConsumers / RabbitMQHighConnections / RabbitMQHighMemory / RabbitMQHighUnackedMessages
+  * Exporter：`kbudde/rabbitmq_exporter` (15692 port 預設)
+* **ConfigMap 整合**：新增 `configmap-rule-pack-kafka.yaml` + `configmap-rule-pack-rabbitmq.yaml`
+* **deployment-prometheus.yaml 更新**：Projected Volume 掛載調整至 12 個 rule pack（`optional: true`），向下相容舊版 9 個 pack
+* **scaffold_tenant.py 更新**：RULE_PACKS catalog 新增 kafka / rabbitmq entries（同 MySQL/PostgreSQL 交互式選項）
+* **metric-dictionary.yaml**：新增 ~20 entries（10 Kafka + 10 RabbitMQ）
+
+### 📊 Benchmark 三維擴充
+
+* **`benchmark.sh --routing-bench`**：Route Generation Scaling — 合成 N 個 tenant（2/10/50/100/200），量測 `generate_alertmanager_routes.py` wall time。純 Python，不需 K8s 環境
+* **`benchmark.sh --alertmanager-bench`**：Alertmanager Notification Performance — 收集 notification latency p99、alerts received/sent/failed、inhibited alerts、active inhibit rules
+* **`benchmark.sh --reload-bench`**：Config Reload E2E — `/-/reload` API latency + `--apply` E2E（route generation + kubectl patch + reload）
+* **Kind 實測數據**（`docs/architecture-and-design.md` §4.9–§4.11）：
+  * Route generation：N=2 94ms → N=200 397ms（線性，~1.5ms/tenant）
+  * `--apply` E2E：763ms median（瓶頸在 kubectl API ~600ms，非 route generation ~94ms 或 reload <1ms）
+  * configmap-reload sidecar 監聽 Projected Volume **檔案內容**變更，非 annotation
+
+### 📄 文件與 Playbook 收斂
+
+* **CLAUDE.md 重寫**：移除已完成 feature 列表，改為架構速查表 + 文件導覽，精簡至導航用途
+* **testing-playbook.md 更新**：Projected Volume 9→13、新增 configmap-reload sidecar 行為章節、Benchmark 方法論新增 routing/alertmanager/reload 三類型注意事項
+* **windows-mcp-playbook.md 更新**：新增「cmd 優先於 PowerShell」章節、Alertmanager port-forward 模式、環境概覽表
+* **architecture-and-design.md/.en.md**：§4.9–§4.11 從預期值更新為 Kind 叢集實測數據
+* **benchmark.sh 修正**：routing-bench route 計數改用 summary line 解析（取代不穩定的 YAML grep）
+
+### 📊 測試覆蓋
+
+| 元件 | 改動前 | 改動後 |
+|------|--------|--------|
+| Python tests | 451 | 569 (+118) |
+| Go tests | 全 pass | 全 pass (+8 new) |
+| 新增測試檔 | — | `test_onboard_platform.py` (64 tests)、`test_scaffold_db.py` +37 tests、`test_generate_routes.py` +12 tests |
+
+---
+
 ## [v1.7.0] - 企業防護網 + 生態系擴張 (2026-03-07)
 
 企業級防護網：Silent/Maintenance Mode 自動失效、Platform Enforced Routing 雙軌通知、PostgreSQL Rule Pack。開發者體驗：`validate-config` 一站式檢查、Federation 架構文件。

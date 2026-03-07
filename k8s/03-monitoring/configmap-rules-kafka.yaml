@@ -1,0 +1,209 @@
+# ============================================================
+# Kafka Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-kafka.yaml
+# Maintained by: Platform Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-kafka
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: kafka
+data:
+  kafka-recording.yml: |
+    groups:
+      - name: kafka-normalization
+        interval: 15s
+        rules:
+          - record: tenant:kafka_consumer_lag:max
+            expr: max by(tenant) (kafka_consumergroup_lag_sum)
+
+          - record: tenant:kafka_under_replicated_partitions:max
+            expr: max by(tenant) (kafka_topic_partition_under_replicated_partition)
+
+          - record: tenant:kafka_active_controllers:max
+            expr: max by(tenant) (kafka_controller_active_controller_count)
+
+          - record: tenant:kafka_broker_count:max
+            expr: max by(tenant) (kafka_brokers)
+
+          - record: tenant:kafka_request_rate:sum
+            expr: sum by(tenant) (rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))
+
+      - name: kafka-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:kafka_consumer_lag
+            expr: max by(tenant) (user_threshold{metric="kafka_consumer_lag", severity="warning"})
+
+          - record: tenant:alert_threshold:kafka_consumer_lag_critical
+            expr: max by(tenant) (user_threshold{metric="kafka_consumer_lag", severity="critical"})
+
+          - record: tenant:alert_threshold:kafka_under_replicated_partitions
+            expr: max by(tenant) (user_threshold{metric="kafka_under_replicated_partitions", severity="warning"})
+
+          - record: tenant:alert_threshold:kafka_under_replicated_partitions_critical
+            expr: max by(tenant) (user_threshold{metric="kafka_under_replicated_partitions", severity="critical"})
+
+          - record: tenant:alert_threshold:kafka_broker_count
+            expr: max by(tenant) (user_threshold{metric="kafka_broker_count", severity="warning"})
+
+          - record: tenant:alert_threshold:kafka_active_controllers
+            expr: max by(tenant) (user_threshold{metric="kafka_active_controllers", severity="warning"})
+
+          - record: tenant:alert_threshold:kafka_request_rate
+            expr: max by(tenant) (user_threshold{metric="kafka_request_rate", severity="warning"})
+
+          - record: tenant:alert_threshold:kafka_request_rate_critical
+            expr: max by(tenant) (user_threshold{metric="kafka_request_rate", severity="critical"})
+
+  kafka-alert.yml: |
+    groups:
+      - name: kafka-alerts
+        rules:
+          - alert: KafkaExporterAbsent
+            expr: absent(kafka_brokers{job="tenant-exporters"})
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Kafka exporter target missing"
+              description: "No kafka_brokers metric found for 30s"
+
+          - alert: KafkaHighConsumerLag
+            expr: |
+              (
+                tenant:kafka_consumer_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_consumer_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "kafka_consumer_lag"
+            annotations:
+              summary: "High Kafka consumer lag on {{ $labels.tenant }}"
+              description: "Consumer lag: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
+
+          - alert: KafkaHighConsumerLagCritical
+            expr: |
+              (
+                tenant:kafka_consumer_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_consumer_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+              metric_group: "kafka_consumer_lag"
+            annotations:
+              summary: "Critical Kafka consumer lag on {{ $labels.tenant }}"
+              description: "Consumer lag: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
+
+          - alert: KafkaUnderReplicatedPartitions
+            expr: |
+              (
+                tenant:kafka_under_replicated_partitions:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_under_replicated_partitions
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "kafka_under_replicated_partitions"
+            annotations:
+              summary: "Under-replicated partitions detected on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (warning threshold exceeded)"
+
+          - alert: KafkaUnderReplicatedPartitionsCritical
+            expr: |
+              (
+                tenant:kafka_under_replicated_partitions:max
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_under_replicated_partitions_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+              metric_group: "kafka_under_replicated_partitions"
+            annotations:
+              summary: "Critical under-replicated partitions on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (critical threshold exceeded)"
+
+          - alert: KafkaNoActiveController
+            expr: |
+              (
+                tenant:kafka_active_controllers:max
+                < on(tenant) group_left
+                tenant:alert_threshold:kafka_active_controllers
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+              metric_group: "kafka_active_controllers"
+            annotations:
+              summary: "No active Kafka controller on {{ $labels.tenant }}"
+              description: "Active controllers: {{ $value | printf \"%.0f\" }} (expected at least 1)"
+
+          - alert: KafkaLowBrokerCount
+            expr: |
+              (
+                tenant:kafka_broker_count:max
+                < on(tenant) group_left
+                tenant:alert_threshold:kafka_broker_count
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "kafka_broker_count"
+            annotations:
+              summary: "Low Kafka broker count on {{ $labels.tenant }}"
+              description: "Active brokers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
+
+          - alert: KafkaHighRequestRate
+            expr: |
+              (
+                tenant:kafka_request_rate:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_request_rate
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "kafka_request_rate"
+            annotations:
+              summary: "High Kafka request rate on {{ $labels.tenant }}"
+              description: "Message rate: {{ $value | printf \"%.1f\" }} msg/s (warning threshold exceeded)"
+
+          - alert: KafkaHighRequestRateCritical
+            expr: |
+              (
+                tenant:kafka_request_rate:sum
+                > on(tenant) group_left
+                tenant:alert_threshold:kafka_request_rate_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+              metric_group: "kafka_request_rate"
+            annotations:
+              summary: "Critical Kafka request rate on {{ $labels.tenant }}"
+              description: "Message rate: {{ $value | printf \"%.1f\" }} msg/s (critical threshold exceeded)"

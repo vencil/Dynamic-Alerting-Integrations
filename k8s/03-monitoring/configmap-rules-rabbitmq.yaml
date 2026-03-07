@@ -1,0 +1,192 @@
+# ============================================================
+# RabbitMQ Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-rabbitmq.yaml
+# Maintained by: Platform Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-rabbitmq
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: rabbitmq
+data:
+  rabbitmq-recording.yml: |
+    groups:
+      - name: rabbitmq-normalization
+        interval: 15s
+        rules:
+          - record: tenant:rabbitmq_queue_messages:max
+            expr: max by(tenant) (rabbitmq_queue_messages_ready)
+
+          - record: tenant:rabbitmq_consumers:max
+            expr: max by(tenant) (rabbitmq_queue_consumers)
+
+          - record: tenant:rabbitmq_connections:max
+            expr: max by(tenant) (rabbitmq_connections)
+
+          - record: tenant:rabbitmq_node_mem_percent:ratio
+            expr: |
+              100 * max by(tenant) (rabbitmq_node_mem_used)
+              / on(tenant)
+              clamp_min(max by(tenant) (rabbitmq_node_mem_limit), 1)
+
+          - record: tenant:rabbitmq_unacked_messages:max
+            expr: max by(tenant) (rabbitmq_queue_messages_unacked)
+
+      - name: rabbitmq-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:rabbitmq_queue_messages
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_queue_messages", severity="warning"})
+
+          - record: tenant:alert_threshold:rabbitmq_queue_messages_critical
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_queue_messages", severity="critical"})
+
+          - record: tenant:alert_threshold:rabbitmq_node_mem_percent
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_node_mem_percent", severity="warning"})
+
+          - record: tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_node_mem_percent", severity="critical"})
+
+          - record: tenant:alert_threshold:rabbitmq_connections
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_connections", severity="warning"})
+
+          - record: tenant:alert_threshold:rabbitmq_consumers
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_consumers", severity="warning"})
+
+          - record: tenant:alert_threshold:rabbitmq_unacked_messages
+            expr: max by(tenant) (user_threshold{metric="rabbitmq_unacked_messages", severity="warning"})
+
+  rabbitmq-alert.yml: |
+    groups:
+      - name: rabbitmq-alerts
+        rules:
+          - alert: RabbitMQExporterAbsent
+            expr: absent(rabbitmq_identity_info{job="tenant-exporters"})
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "RabbitMQ exporter target missing"
+              description: "No rabbitmq_identity_info metric found for 30s"
+
+          - alert: RabbitMQHighQueueDepth
+            expr: |
+              (
+                tenant:rabbitmq_queue_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_queue_messages
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "rabbitmq_queue_messages"
+            annotations:
+              summary: "High RabbitMQ queue depth on {{ $labels.tenant }}"
+              description: "Messages ready: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
+
+          - alert: RabbitMQHighQueueDepthCritical
+            expr: |
+              (
+                tenant:rabbitmq_queue_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_queue_messages_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+              metric_group: "rabbitmq_queue_messages"
+            annotations:
+              summary: "Critical RabbitMQ queue depth on {{ $labels.tenant }}"
+              description: "Messages ready: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
+
+          - alert: RabbitMQHighMemory
+            expr: |
+              (
+                tenant:rabbitmq_node_mem_percent:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_node_mem_percent
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "rabbitmq_node_mem_percent"
+            annotations:
+              summary: "High RabbitMQ memory usage on {{ $labels.tenant }}"
+              description: "Memory used: {{ $value | printf \"%.1f\" }}% of limit (warning threshold exceeded)"
+
+          - alert: RabbitMQHighMemoryCritical
+            expr: |
+              (
+                tenant:rabbitmq_node_mem_percent:ratio
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: critical
+              metric_group: "rabbitmq_node_mem_percent"
+            annotations:
+              summary: "Critical RabbitMQ memory usage on {{ $labels.tenant }}"
+              description: "Memory used: {{ $value | printf \"%.1f\" }}% of limit (critical threshold exceeded)"
+
+          - alert: RabbitMQHighConnections
+            expr: |
+              (
+                tenant:rabbitmq_connections:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_connections
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "rabbitmq_connections"
+            annotations:
+              summary: "High RabbitMQ connection count on {{ $labels.tenant }}"
+              description: "Active connections: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
+
+          - alert: RabbitMQLowConsumers
+            expr: |
+              (
+                tenant:rabbitmq_consumers:max
+                < on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_consumers
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 30s
+            labels:
+              severity: warning
+              metric_group: "rabbitmq_consumers"
+            annotations:
+              summary: "Low RabbitMQ consumer count on {{ $labels.tenant }}"
+              description: "Active consumers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
+
+          - alert: RabbitMQHighUnackedMessages
+            expr: |
+              (
+                tenant:rabbitmq_unacked_messages:max
+                > on(tenant) group_left
+                tenant:alert_threshold:rabbitmq_unacked_messages
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "rabbitmq_unacked_messages"
+            annotations:
+              summary: "High unacknowledged messages on {{ $labels.tenant }}"
+              description: "{{ $value | printf \"%.0f\" }} messages awaiting acknowledgment (consumer lag indicator)"

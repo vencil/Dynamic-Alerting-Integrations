@@ -11,6 +11,7 @@ Usage:
   python3 scripts/tools/scaffold_tenant.py
   python3 scripts/tools/scaffold_tenant.py --tenant db-c --db mariadb,redis -o output/
   python3 scripts/tools/scaffold_tenant.py --non-interactive --tenant db-c --db mariadb
+  python3 scripts/tools/scaffold_tenant.py --tenant db-c --db mariadb --namespaces ns1,ns2,ns3
 """
 import argparse
 import os
@@ -18,6 +19,10 @@ import sys
 import textwrap
 
 import yaml
+
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _lib_python import VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES  # noqa: E402
 
 # ============================================================
 # Rule Pack catalog — metric keys, defaults, descriptions
@@ -188,6 +193,49 @@ RULE_PACKS = {
             "clickhouse_max_part_count{database=~\"prod_.*\"}": "200",
         },
     },
+    "kafka": {
+        "display": "Apache Kafka (danielqsj/kafka-exporter)",
+        "exporter": "danielqsj/kafka-exporter",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-kafka.yaml",
+        "defaults": {
+            "kafka_consumer_lag": {"value": 1000, "unit": "messages", "desc": "Consumer lag warning"},
+            "kafka_under_replicated_partitions": {"value": 0, "unit": "count", "desc": "Under-replicated partitions (should be 0)"},
+            "kafka_broker_count": {"value": 3, "unit": "count", "desc": "Minimum broker count warning"},
+            "kafka_active_controllers": {"value": 1, "unit": "count", "desc": "Minimum active controllers (should be 1)"},
+            "kafka_request_rate": {"value": 10000, "unit": "msg/s", "desc": "Message rate warning (5m)"},
+        },
+        "optional_overrides": {
+            "kafka_consumer_lag_critical": {"value": 10000, "unit": "messages", "desc": "Consumer lag critical"},
+            "kafka_under_replicated_partitions_critical": {"value": 1, "unit": "count", "desc": "Under-replicated critical"},
+            "kafka_request_rate_critical": {"value": 50000, "unit": "msg/s", "desc": "Message rate critical"},
+        },
+        "dimensional_example": {
+            "kafka_consumer_lag{group=\"order-processing\"}": "5000",
+            "kafka_consumer_lag{group=\"analytics\"}": "50000",
+        },
+    },
+    "rabbitmq": {
+        "display": "RabbitMQ (kbudde/rabbitmq_exporter)",
+        "exporter": "kbudde/rabbitmq_exporter or built-in Prometheus plugin",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-rabbitmq.yaml",
+        "defaults": {
+            "rabbitmq_queue_messages": {"value": 100000, "unit": "messages", "desc": "Queue depth warning"},
+            "rabbitmq_node_mem_percent": {"value": 80, "unit": "%", "desc": "Node memory usage warning"},
+            "rabbitmq_connections": {"value": 1000, "unit": "count", "desc": "Connection count warning"},
+            "rabbitmq_consumers": {"value": 5, "unit": "count", "desc": "Minimum consumer count warning"},
+            "rabbitmq_unacked_messages": {"value": 10000, "unit": "messages", "desc": "Unacknowledged messages warning"},
+        },
+        "optional_overrides": {
+            "rabbitmq_queue_messages_critical": {"value": 500000, "unit": "messages", "desc": "Queue depth critical"},
+            "rabbitmq_node_mem_percent_critical": {"value": 95, "unit": "%", "desc": "Node memory critical"},
+        },
+        "dimensional_example": {
+            "rabbitmq_queue_messages{queue=\"payment-events\"}": "50000",
+            "rabbitmq_queue_messages{queue=\"bulk-processing\"}": "500000",
+        },
+    },
 }
 
 
@@ -337,7 +385,7 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
     if interactive:
         print("\n  告警路由 (Alert Routing):")
         print("    設定通知目的地，空白跳過使用平台預設")
-        print("    支援類型: webhook | email | slack | teams")
+        print("    支援類型: webhook | email | slack | teams | rocketchat | pagerduty")
         receiver_type = input("  Receiver type (預設 webhook): ").strip().lower() or "webhook"
         receiver_obj = None
         if receiver_type == "webhook":
@@ -361,6 +409,14 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
             webhook_url = input("  Teams Webhook URL: ").strip()
             if webhook_url:
                 receiver_obj = {"type": "teams", "webhook_url": webhook_url}
+        elif receiver_type == "rocketchat":
+            url = input("  Rocket.Chat Webhook URL: ").strip()
+            if url:
+                receiver_obj = {"type": "rocketchat", "url": url}
+        elif receiver_type == "pagerduty":
+            service_key = input("  PagerDuty Service Key: ").strip()
+            if service_key:
+                receiver_obj = {"type": "pagerduty", "service_key": service_key}
         else:
             print(f"  WARN: unknown type '{receiver_type}', skipping routing")
 
@@ -379,7 +435,7 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
     return {"tenants": {tenant_name: tenant_config}} if tenant_config else {"tenants": {tenant_name: {}}}
 
 
-def generate_report(tenant_name, selected_dbs, output_dir):
+def generate_report(tenant_name, selected_dbs, output_dir, namespaces=None):
     """Generate scaffold report with deployment instructions."""
     lines = [
         f"# Scaffold Report — {tenant_name}",
@@ -388,12 +444,18 @@ def generate_report(tenant_name, selected_dbs, output_dir):
         "## 生成檔案",
         f"  - {output_dir}/{tenant_name}.yaml (tenant 閾值設定)",
         f"  - {output_dir}/_defaults.yaml (平台預設值)",
+    ]
+
+    if namespaces:
+        lines.append(f"  - {output_dir}/relabel_configs-{tenant_name}.yaml (Prometheus relabel snippet)")
+
+    lines.extend([
         "",
         "## Rule Packs (已預載於平台)",
         "  所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台中。",
         "  未部署 exporter 的 pack 不會產生 metrics，alert 不會誤觸發。",
         "",
-    ]
+    ])
 
     for db in selected_dbs:
         pack = RULE_PACKS.get(db)
@@ -409,6 +471,22 @@ def generate_report(tenant_name, selected_dbs, output_dir):
     lines.append("  -n monitoring \\")
     lines.append("  -f environments/local/threshold-exporter.yaml")
     lines.append("```")
+
+    # Prometheus relabel_configs (if namespaces provided)
+    if namespaces:
+        lines.extend([
+            "",
+            "## Prometheus N:1 Tenant Mapping",
+            "",
+            f"Relabel configs have been generated for namespace mapping: {namespaces}",
+            "",
+            "```bash",
+            "# Add to your Prometheus scrape_configs[] section:",
+            f"cat {output_dir}/relabel_configs-{tenant_name}.yaml",
+            "```",
+            "",
+            "Then apply to scrape_configs in your Prometheus configuration.",
+        ])
 
     # ConfigMap patching
     lines.extend([
@@ -434,7 +512,7 @@ def generate_report(tenant_name, selected_dbs, output_dir):
     return "\n".join(lines)
 
 
-def write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report):
+def write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report, relabel_snippet=None):
     """Write all output files."""
     os.makedirs(output_dir, exist_ok=True)
 
@@ -457,6 +535,14 @@ def write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report):
     os.chmod(tenant_path, 0o600)
     print(f"  📄 {tenant_path}")
 
+    # Write relabel_configs if provided
+    if relabel_snippet:
+        relabel_path = os.path.join(output_dir, f"relabel_configs-{tenant_name}.yaml")
+        with open(relabel_path, "w", encoding="utf-8") as f:
+            f.write(relabel_snippet)
+        os.chmod(relabel_path, 0o600)
+        print(f"  📄 {relabel_path}")
+
     # Write report
     report_path = os.path.join(output_dir, "scaffold-report.txt")
     with open(report_path, "w", encoding="utf-8") as f:
@@ -478,6 +564,57 @@ def print_catalog():
         print(f"║   Rule Pack: {pack['rule_pack_file']:<43}║")
         print("╠══════════════════════════════════════════════════════════════╣")
     print("╚══════════════════════════════════════════════════════════════╝")
+
+
+def generate_relabel_snippet(tenant, namespaces, tenant_label="tenant"):
+    """
+    Generate Prometheus relabel_configs snippet for N:1 tenant mapping.
+
+    Args:
+        tenant: Tenant name
+        namespaces: List of K8s namespace names (or comma-separated string)
+        tenant_label: Label name to set (default: "tenant")
+
+    Returns:
+        YAML string with relabel_configs section
+    """
+    # Parse namespaces if string
+    if isinstance(namespaces, str):
+        ns_list = [ns.strip() for ns in namespaces.split(",") if ns.strip()]
+    else:
+        ns_list = list(namespaces)
+
+    if not ns_list:
+        return ""
+
+    # Build regex from namespace list
+    ns_regex = "|".join(ns_list)
+
+    relabel_config = {
+        "relabel_configs": [
+            {
+                "source_labels": ["__meta_kubernetes_namespace"],
+                "action": "keep",
+                "regex": ns_regex,
+            },
+            {
+                "source_labels": ["__meta_kubernetes_namespace"],
+                "regex": ns_regex,
+                "target_label": tenant_label,
+                "replacement": tenant,
+            },
+        ]
+    }
+
+    # Generate YAML with comment header
+    yaml_lines = [
+        "# Prometheus relabel_configs for N:1 tenant mapping",
+        "# Add to scrape_configs[].relabel_configs",
+        "",
+    ]
+    yaml_lines.append(yaml.dump(relabel_config, default_flow_style=False, allow_unicode=True, sort_keys=False).rstrip())
+
+    return "\n".join(yaml_lines)
 
 
 def run_interactive(output_dir):
@@ -507,15 +644,27 @@ def run_interactive(output_dir):
     customize = input("\n🔧 自訂閾值? (y=逐項設定 / N=使用預設值): ").strip().lower()
     interactive_thresholds = customize == "y"
 
+    # Step 4: N:1 tenant mapping (optional)
+    namespaces = None
+    ns_input = input("\n📍 K8s 命名空間 (逗號分隔，例如 ns1,ns2,ns3，空白跳過): ").strip()
+    if ns_input:
+        namespaces = ns_input
+
     # Generate
     print("\n⚙️  正在生成...")
     defaults_data = generate_defaults(selected_dbs)
     tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=interactive_thresholds)
-    report = generate_report(tenant_name, selected_dbs, output_dir)
+
+    # Add _namespaces metadata if provided
+    if namespaces:
+        tenant_data["tenants"][tenant_name]["_namespaces"] = [ns.strip() for ns in namespaces.split(",")]
+
+    relabel_snippet = generate_relabel_snippet(tenant_name, namespaces) if namespaces else None
+    report = generate_report(tenant_name, selected_dbs, output_dir, namespaces=namespaces)
 
     # Write
     print(f"\n📁 輸出至 {output_dir}/")
-    write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report)
+    write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report, relabel_snippet=relabel_snippet)
 
     # Summary
     print("\n" + "=" * 60)
@@ -569,6 +718,10 @@ def run_non_interactive(args):
             receiver_obj["api_url"] = routing_receiver
         elif receiver_type == "teams":
             receiver_obj["webhook_url"] = routing_receiver
+        elif receiver_type == "rocketchat":
+            receiver_obj["url"] = routing_receiver
+        elif receiver_type == "pagerduty":
+            receiver_obj["service_key"] = routing_receiver
         routing = {"receiver": receiver_obj}
 
         # group_by: use explicit value or platform default
@@ -586,10 +739,18 @@ def run_non_interactive(args):
 
         tenant_data["tenants"][tenant_name]["_routing"] = routing
 
-    report = generate_report(tenant_name, selected_dbs, output_dir)
+    # Apply --namespaces if specified
+    namespaces = getattr(args, "namespaces", None)
+    relabel_snippet = None
+    if namespaces:
+        ns_list = [ns.strip() for ns in namespaces.split(",")]
+        tenant_data["tenants"][tenant_name]["_namespaces"] = ns_list
+        relabel_snippet = generate_relabel_snippet(tenant_name, namespaces)
+
+    report = generate_report(tenant_name, selected_dbs, output_dir, namespaces=namespaces)
 
     print(f"\n📁 輸出至 {output_dir}/")
-    write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report)
+    write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report, relabel_snippet=relabel_snippet)
 
     print("\n✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)")
 
@@ -600,10 +761,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
             Examples:
-              %(prog)s                                    # 互動模式
-              %(prog)s --catalog                          # 顯示支援的 exporter 清單
-              %(prog)s --tenant db-c --db mariadb,redis   # 非互動模式
-              %(prog)s --tenant db-c --db mariadb -o out/ # 指定輸出目錄
+              %(prog)s                                                      # 互動模式
+              %(prog)s --catalog                                            # 顯示支援的 exporter 清單
+              %(prog)s --tenant db-c --db mariadb,redis                     # 非互動模式
+              %(prog)s --tenant db-c --db mariadb -o out/                   # 指定輸出目錄
+              %(prog)s --tenant db-c --db mariadb --namespaces ns1,ns2,ns3  # 含 N:1 tenant mapping
         """),
     )
     parser.add_argument("--tenant", help="Tenant namespace name (e.g., db-c)")
@@ -611,6 +773,8 @@ def main():
     parser.add_argument("-o", "--output-dir", default="scaffold_output", help="Output directory (default: scaffold_output)")
     parser.add_argument("--catalog", action="store_true", help="顯示支援的 exporter 清單")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts (requires --tenant and --db)")
+    parser.add_argument("--namespaces",
+                        help="Comma-separated K8s namespace names for N:1 tenant mapping (e.g., ns1,ns2,ns3)")
     parser.add_argument("--silent-mode", choices=["warning", "critical", "all", "disable"],
                         help="Silent mode: alerts fire (TSDB records) but notifications suppressed")
     parser.add_argument("--severity-dedup", choices=["enable", "disable"], default="enable",
@@ -618,7 +782,7 @@ def main():
     parser.add_argument("--routing-receiver",
                         help="Alert routing receiver address (URL or email list depending on type)")
     parser.add_argument("--routing-receiver-type", default="webhook",
-                        choices=["webhook", "email", "slack", "teams"],
+                        choices=["webhook", "email", "slack", "teams", "rocketchat", "pagerduty"],
                         help="Receiver type (default: webhook)")
     parser.add_argument("--routing-smarthost",
                         help="SMTP smarthost for email receiver (e.g., smtp.example.com:587)")

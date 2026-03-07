@@ -29,80 +29,15 @@ import yaml
 from _lib_python import (  # noqa: E402
     is_disabled as _is_disabled,
     parse_duration_seconds,
+    format_duration,
+    validate_and_clamp,
+    GUARDRAILS,
+    PLATFORM_DEFAULTS,
+    RECEIVER_TYPES,
+    RECEIVER_URL_FIELDS,
+    VALID_RESERVED_KEYS,
+    VALID_RESERVED_PREFIXES,
 )
-
-# ============================================================
-# Timing Guardrails
-# ============================================================
-# Format: (min_seconds, max_seconds, description)
-GUARDRAILS = {
-    "group_wait": (5, 300, "5s–5m"),
-    "group_interval": (5, 300, "5s–5m"),
-    "repeat_interval": (60, 259200, "1m–72h"),
-}
-
-# Platform defaults (used when tenant doesn't specify)
-PLATFORM_DEFAULTS = {
-    "group_by": ["alertname", "tenant"],
-    "group_wait": "30s",
-    "group_interval": "5m",
-    "repeat_interval": "4h",
-}
-
-# ============================================================
-# Receiver Types
-# ============================================================
-# Each type maps to: (alertmanager_config_key, required_fields, optional_fields)
-RECEIVER_TYPES = {
-    "webhook": {
-        "am_key": "webhook_configs",
-        "required": ["url"],
-        "optional": ["send_resolved", "http_config"],
-    },
-    "email": {
-        "am_key": "email_configs",
-        "required": ["to", "smarthost"],
-        "optional": ["from", "auth_username", "auth_password", "require_tls",
-                      "html", "text", "headers", "send_resolved"],
-    },
-    "slack": {
-        "am_key": "slack_configs",
-        "required": ["api_url"],
-        "optional": ["channel", "title", "text", "title_link", "icon_emoji",
-                      "send_resolved"],
-    },
-    "teams": {
-        "am_key": "msteams_configs",
-        "required": ["webhook_url"],
-        "optional": ["title", "text", "send_resolved"],
-    },
-    "rocketchat": {
-        "am_key": "webhook_configs",
-        "required": ["url"],
-        "optional": ["send_resolved"],
-        "metadata": ["channel", "username", "icon_url"],  # documented but not passed to AM
-    },
-    "pagerduty": {
-        "am_key": "pagerduty_configs",
-        "required": ["service_key"],
-        "optional": ["routing_key", "severity", "description", "client",
-                      "client_url", "send_resolved"],
-    },
-}
-
-
-# ============================================================
-# Webhook Domain Allowlist (v1.5.0 — SSRF prevention)
-# ============================================================
-# Maps receiver type → list of fields that contain URLs to validate
-RECEIVER_URL_FIELDS = {
-    "webhook":    ["url"],
-    "email":      ["smarthost"],      # host:port format
-    "slack":      ["api_url"],
-    "teams":      ["webhook_url"],
-    "rocketchat": ["url"],
-    "pagerduty":  [],                 # service_key only, no URL
-}
 
 
 def _extract_host(value):
@@ -169,44 +104,25 @@ def load_policy(policy_path):
     return [d for d in domains if isinstance(d, str)]
 
 
-def format_duration(seconds):
-    """Format seconds back to a Prometheus-compatible duration string.
+def _apply_timing_params(source_dict, context_name):
+    """Apply timing parameters with guardrails to a route dict.
 
-    NOTE: Prometheus/Alertmanager only supports s/m/h (not d/w/y).
-    Do NOT convert to days even if evenly divisible.
+    Reads group_wait, group_interval, repeat_interval from source_dict,
+    validates each against GUARDRAILS, and returns applied values + warnings.
+
+    Returns:
+        (timing_dict, warnings_list) — timing_dict has clamped param values.
     """
-    if seconds >= 3600 and seconds % 3600 == 0:
-        return f"{seconds // 3600}h"
-    if seconds >= 60 and seconds % 60 == 0:
-        return f"{seconds // 60}m"
-    return f"{seconds}s"
-
-
-def validate_and_clamp(param, value, tenant):
-    """Validate a timing parameter against guardrails. Returns clamped value + warnings."""
+    timing = {}
     warnings = []
-
-    if param not in GUARDRAILS:
-        return value, warnings
-
-    min_sec, max_sec, desc = GUARDRAILS[param]
-    seconds = parse_duration_seconds(value)
-
-    if seconds is None:
-        warnings.append(f"  WARN: {tenant}: invalid {param} '{value}', using platform default")
-        return PLATFORM_DEFAULTS.get(param, value), warnings
-
-    if seconds < min_sec:
-        clamped = format_duration(min_sec)
-        warnings.append(f"  WARN: {tenant}: {param} '{value}' below minimum ({desc}), clamped to {clamped}")
-        return clamped, warnings
-
-    if seconds > max_sec:
-        clamped = format_duration(max_sec)
-        warnings.append(f"  WARN: {tenant}: {param} '{value}' above maximum ({desc}), clamped to {clamped}")
-        return clamped, warnings
-
-    return value, warnings
+    for param in ("group_wait", "group_interval", "repeat_interval"):
+        val = source_dict.get(param)
+        if val:
+            clamped, param_warnings = validate_and_clamp(param, str(val), context_name)
+            warnings.extend(param_warnings)
+            if clamped:
+                timing[param] = clamped
+    return timing, warnings
 
 
 def _substitute_tenant(obj, tenant_name):
@@ -233,10 +149,6 @@ def merge_routing_with_defaults(defaults, tenant_routing, tenant_name):
         for key, value in tenant_routing.items():
             merged[key] = value
     return _substitute_tenant(merged, tenant_name)
-
-
-VALID_RESERVED_KEYS = {"_silent_mode", "_severity_dedup"}
-VALID_RESERVED_PREFIXES = ("_state_", "_routing")
 
 
 def validate_tenant_keys(tenant, keys, defaults_keys):
@@ -451,12 +363,128 @@ def build_receiver_config(receiver_obj, tenant):
     return {spec["am_key"]: [am_entry]}, warnings
 
 
+def expand_routing_overrides(tenant, routing_config, allowed_domains=None):
+    """Expand per-rule routing overrides into sub-routes.
+
+    v1.8.0: Supports per-alertname or per-metric_group receiver overrides.
+    Each override generates a sub-route that matches before the main tenant route.
+
+    Args:
+        tenant: tenant name for error messages and matchers.
+        routing_config: dict containing optional 'overrides' list.
+        allowed_domains: domain allowlist for webhook validation (may be None).
+
+    Returns:
+        (sub_routes, override_receivers, warnings) where:
+        - sub_routes: list of Alertmanager route dicts (prepended before main tenant route)
+        - override_receivers: list of receiver dicts to append to receivers list
+        - warnings: list of warning/error strings
+    """
+    sub_routes = []
+    override_receivers = []
+    warnings = []
+
+    overrides = routing_config.get("overrides", [])
+    if not overrides:
+        return sub_routes, override_receivers, warnings
+
+    if not isinstance(overrides, list):
+        warnings.append(f"  WARN: {tenant}: 'overrides' must be a list, skipping")
+        return sub_routes, override_receivers, warnings
+
+    for idx, override in enumerate(overrides):
+        if not isinstance(override, dict):
+            warnings.append(f"  WARN: {tenant}: override[{idx}] must be a dict, skipping")
+            continue
+
+        # Validate exactly one of alertname or metric_group is set
+        has_alertname = "alertname" in override and override["alertname"]
+        has_metric_group = "metric_group" in override and override["metric_group"]
+
+        if not has_alertname and not has_metric_group:
+            warnings.append(
+                f"  WARN: {tenant}: override[{idx}] must have either "
+                "'alertname' or 'metric_group', skipping")
+            continue
+
+        if has_alertname and has_metric_group:
+            warnings.append(
+                f"  WARN: {tenant}: override[{idx}] has both 'alertname' and "
+                "'metric_group' (exactly one required), skipping")
+            continue
+
+        # Build matcher based on override type
+        if has_alertname:
+            alertname = override["alertname"]
+            matchers = [
+                f'tenant="{tenant}"',
+                f'alertname="{alertname}"',
+            ]
+        else:  # has_metric_group
+            metric_group = override["metric_group"]
+            matchers = [
+                f'tenant="{tenant}"',
+                f'metric_group="{metric_group}"',
+            ]
+
+        # Validate and build receiver config
+        receiver_obj = override.get("receiver")
+        if not receiver_obj:
+            warnings.append(
+                f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping")
+            continue
+
+        am_config, recv_warnings = build_receiver_config(receiver_obj, f"{tenant}-override-{idx}")
+        warnings.extend(recv_warnings)
+        if am_config is None:
+            continue
+
+        # Domain allowlist check (SSRF prevention)
+        if allowed_domains:
+            domain_warnings = validate_receiver_domains(
+                receiver_obj, f"{tenant}-override-{idx}", allowed_domains)
+            warnings.extend(domain_warnings)
+            if any("not in allowed_domains" in w for w in domain_warnings):
+                continue
+
+        # Receiver name for this override
+        receiver_name = f"tenant-{tenant}-override-{idx}"
+
+        # Build sub-route with specific matchers
+        sub_route = {
+            "matchers": matchers,
+            "receiver": receiver_name,
+        }
+
+        # Optional: group_by from override
+        group_by = override.get("group_by")
+        if group_by and isinstance(group_by, list):
+            sub_route["group_by"] = group_by
+
+        # Optional: timing parameters with guardrails
+        timing, timing_warnings = _apply_timing_params(override, f"{tenant}-override-{idx}")
+        warnings.extend(timing_warnings)
+        sub_route.update(timing)
+
+        sub_routes.append(sub_route)
+
+        # Build receiver entry
+        receiver = {"name": receiver_name}
+        receiver.update(am_config)
+        override_receivers.append(receiver)
+
+    return sub_routes, override_receivers, warnings
+
+
 def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None):
     """Generate Alertmanager route tree + receivers from routing configs.
 
     v1.7.0: When enforced_routing is provided and enabled, a platform-level route
     is inserted BEFORE all tenant routes with continue: true. This ensures the
     platform NOC always receives notifications regardless of tenant routing config.
+
+    v1.8.0: Tenant routes may have 'overrides' list for per-rule receiver overrides.
+    Override sub-routes are inserted before the main tenant route.
 
     Returns (routes_yaml_dict, receivers_list, all_warnings).
     """
@@ -500,14 +528,10 @@ def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None
                     route["group_by"] = group_by
 
                 # Timing parameters with guardrails
-                for param in ("group_wait", "group_interval", "repeat_interval"):
-                    val = enforced_routing.get(param)
-                    if val:
-                        clamped, warnings = validate_and_clamp(
-                            param, str(val), "platform-enforced")
-                        all_warnings.extend(warnings)
-                        if clamped:
-                            route[param] = clamped
+                timing, timing_warnings = _apply_timing_params(
+                    enforced_routing, "platform-enforced")
+                all_warnings.extend(timing_warnings)
+                route.update(timing)
 
                 routes.append(route)
 
@@ -539,6 +563,13 @@ def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None
             if any("not in allowed_domains" in w for w in domain_warnings):
                 continue
 
+        # v1.8.0: Expand per-rule routing overrides (inserted before main tenant route)
+        override_sub_routes, override_receivers, override_warnings = \
+            expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains)
+        all_warnings.extend(override_warnings)
+        routes.extend(override_sub_routes)
+        receivers.extend(override_receivers)
+
         # Receiver name derived from tenant
         receiver_name = f"tenant-{tenant}"
 
@@ -554,13 +585,9 @@ def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None
             route["group_by"] = group_by
 
         # Timing parameters with guardrails
-        for param in ("group_wait", "group_interval", "repeat_interval"):
-            val = cfg.get(param)
-            if val:
-                clamped, warnings = validate_and_clamp(param, str(val), tenant)
-                all_warnings.extend(warnings)
-                if clamped:
-                    route[param] = clamped
+        timing, timing_warnings = _apply_timing_params(cfg, tenant)
+        all_warnings.extend(timing_warnings)
+        route.update(timing)
 
         routes.append(route)
 
