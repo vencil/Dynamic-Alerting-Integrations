@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.9.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.10.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
 
 ---
 
@@ -68,7 +68,7 @@ Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are p
 
 ```bash
 # No clone needed — just pull and run
-docker run --rm -it ghcr.io/vencil/da-tools:1.9.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools:1.10.0 scaffold --tenant my-app --db mariadb,redis
 ```
 
 ---
@@ -140,7 +140,7 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 | **Full Migration Automation** | Hundreds of legacy rules to migrate → weeks of manual analysis, fear of missing something, no rollback confidence | Onboard reverse-analyzes existing config → Scaffold auto-fills tenant YAML → Shadow Monitoring compares → Auto-Convergence detects stability → Batch Health Report → Gap Analysis finds uncovered metrics | `da-tools onboard --alertmanager-config am.yml` → `scaffold --from-onboard hints.json` → `validate --auto-detect-convergence` → `batch-diagnose` |
 | **Change Confidence** | Changing thresholds with unknown blast radius → PR reviews are pure guesswork → nobody dares change anything | `--diff` preview shows before/after + affected alerts. PR auto-triggers `backtest` replaying 7 days of historical data → HIGH/MEDIUM/LOW risk rating | `da-tools patch-config --diff db-a mysql_connections 50` |
 | **Zero Alert Fatigue** | Maintenance storms + duplicate notifications → on-call mutes channels → real P0s get buried | Auto-Suppression (Critical fires → Warning auto-silenced) + maintenance mode + scheduled thresholds (auto-relax at night) + three-state toggle | `make demo-full` end-to-end verification < 5 min |
-| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 16 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.9.0 scaffold` |
+| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 19 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.10.0 scaffold` |
 | **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate (with `--diff` preview) → `deprecate` / `offboard` retire. Three-tier governance + CI deny-list linting + PR backtest | `da-tools offboard <tenant> --dry-run` |
 | **Config-Driven Routing** | Notification targets hardcoded in Alertmanager config → changing one webhook requires editing central config | Tenant YAML `_routing` for self-service management of 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty) + Go template customization + CI validation | `da-tools generate-routes --validate` |
 | **12 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database/MQ type → reinventing the wheel | Covers 9 DB/MQ + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing. `analyze-gaps` auto-maps custom rules to official Rule Packs | `da-tools analyze-gaps --config-dir conf.d/` |
@@ -323,17 +323,17 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ```bash
 # View supported DB types
-docker run --rm ghcr.io/vencil/da-tools:1.9.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.10.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.9.0 scaffold
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.10.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.9.0 migrate /data/legacy-rules.yml
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 migrate /data/legacy-rules.yml
 
 # Shadow Monitoring validation
 docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.9.0 validate --mapping /data/prefix-mapping.yaml
+  ghcr.io/vencil/da-tools:1.10.0 validate --mapping /data/prefix-mapping.yaml
 ```
 
 > **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.

@@ -11,9 +11,10 @@ Severity Dedup (per-tenant):
   Mechanism: per-tenant inhibit_rules with tenant="<name>" + metric_group matchers
 
 Usage:
-  python3 scripts/tools/generate_alertmanager_routes.py --config-dir components/threshold-exporter/config/conf.d/
+  python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/
   python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ -o alertmanager-routes.yaml
   python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+  python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
 """
 import argparse
 import fnmatch
@@ -658,6 +659,81 @@ def render_output(routes, receivers, inhibit_rules=None):
     return yaml.dump(fragment, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+# ── §11.3 AM GitOps: --output-configmap ────────────────────────────
+
+# Minimal inline defaults when --base-config is not provided
+_DEFAULT_BASE_CONFIG = {
+    "global": {"resolve_timeout": "5m"},
+    "route": {
+        "group_by": ["alertname", "tenant"],
+        "group_wait": "10s",
+        "group_interval": "10s",
+        "repeat_interval": "12h",
+        "receiver": "default",
+    },
+    "receivers": [{"name": "default"}],
+    "inhibit_rules": [],
+}
+
+
+def load_base_config(path):
+    """Load base Alertmanager config from YAML file.
+
+    Returns dict with global, route, receivers, inhibit_rules.
+    Falls back to _DEFAULT_BASE_CONFIG on any error.
+    """
+    if not path or not os.path.isfile(path):
+        return dict(_DEFAULT_BASE_CONFIG)
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    # Ensure required keys exist
+    for key in ("global", "route", "receivers", "inhibit_rules"):
+        if key not in data:
+            data[key] = _DEFAULT_BASE_CONFIG[key]
+    return data
+
+
+def assemble_configmap(base, routes, receivers, inhibit_rules,
+                       namespace="monitoring", configmap_name="alertmanager-config"):
+    """Merge tenant fragments into base config and wrap as K8s ConfigMap YAML.
+
+    Returns the complete ConfigMap YAML string.
+    """
+    merged = dict(base)
+
+    # Merge routes into base route
+    merged_route = dict(merged.get("route", {}))
+    merged_route["routes"] = routes
+    merged["route"] = merged_route
+
+    # Merge receivers: keep base receivers, append tenant receivers
+    base_names = {r["name"] for r in merged.get("receivers", [])}
+    tenant_receivers = [r for r in receivers if r["name"] not in base_names]
+    merged["receivers"] = list(merged.get("receivers", [])) + tenant_receivers
+
+    # Merge inhibit_rules: keep base rules, append tenant rules
+    merged["inhibit_rules"] = list(merged.get("inhibit_rules", [])) + list(inhibit_rules or [])
+
+    # Render alertmanager.yml content
+    am_yml = yaml.dump(merged, default_flow_style=False,
+                       allow_unicode=True, sort_keys=False)
+
+    # Wrap in ConfigMap structure
+    configmap = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": configmap_name,
+            "namespace": namespace,
+        },
+        "data": {
+            "alertmanager.yml": am_yml,
+        },
+    }
+    return yaml.dump(configmap, default_flow_style=False,
+                     allow_unicode=True, sort_keys=False)
+
+
 def apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name):
     """Merge generated fragment into existing Alertmanager ConfigMap and reload.
 
@@ -766,12 +842,17 @@ def main():
                         help="Preview output without writing file")
     parser.add_argument("--validate", action="store_true",
                         help="Validate generated config (exit 0 if valid, 1 if errors)")
-    parser.add_argument("--apply", action="store_true",
-                        help="Apply: merge into Alertmanager ConfigMap + reload")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--apply", action="store_true",
+                            help="Apply: merge into Alertmanager ConfigMap + reload")
+    mode_group.add_argument("--output-configmap", action="store_true",
+                            help="Output complete Alertmanager ConfigMap YAML (for GitOps PR flow)")
+    parser.add_argument("--base-config", default=None,
+                        help="Base Alertmanager YAML for --output-configmap (global + defaults)")
     parser.add_argument("--namespace", default="monitoring",
-                        help="K8s namespace for --apply (default: monitoring)")
+                        help="K8s namespace for --apply/--output-configmap (default: monitoring)")
     parser.add_argument("--configmap", default="alertmanager-config",
-                        help="ConfigMap name for --apply (default: alertmanager-config)")
+                        help="ConfigMap name for --apply/--output-configmap (default: alertmanager-config)")
     parser.add_argument("--policy", default=None,
                         help="Policy YAML with allowed_domains for webhook URL validation")
     parser.add_argument("--yes", action="store_true",
@@ -850,6 +931,33 @@ def main():
         success = apply_to_configmap(routes, receivers, inhibit_rules,
                                      args.namespace, args.configmap)
         sys.exit(0 if success else 1)
+
+    # Output-configmap mode: produce complete ConfigMap YAML for GitOps
+    if args.output_configmap:
+        base = load_base_config(args.base_config)
+        cm_yaml = assemble_configmap(
+            base, routes, receivers, inhibit_rules,
+            namespace=args.namespace, configmap_name=args.configmap)
+
+        route_count = len(routes)
+        inhibit_count = len(inhibit_rules)
+
+        if args.dry_run:
+            print("\n--- DRY RUN: ConfigMap YAML ---")
+            print(cm_yaml)
+            print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
+                  f"{inhibit_count} inhibit rule(s) ---")
+            return
+
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(cm_yaml)
+            os.chmod(args.output, 0o600)
+            print(f"Written to {args.output} ({route_count} routes, "
+                  f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
+        else:
+            print(cm_yaml)
+        return
 
     # Render output
     header = (

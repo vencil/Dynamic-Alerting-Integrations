@@ -14,15 +14,26 @@
 #   ├── entrypoint.py
 #   ├── VERSION
 #   └── tools/              ← copied from scripts/tools/
+#       ├── _lib_python.py           (shared library)
 #       ├── check_alert.py
+#       ├── diagnose.py
+#       ├── batch_diagnose.py
 #       ├── baseline_discovery.py
 #       ├── validate_migration.py
+#       ├── backtest_threshold.py
 #       ├── migrate_rule.py
 #       ├── scaffold_tenant.py
+#       ├── onboard_platform.py
 #       ├── offboard_tenant.py
 #       ├── deprecate_rule.py
+#       ├── cutover_tenant.py
+#       ├── blind_spot_discovery.py
 #       ├── lint_custom_rules.py
+#       ├── config_diff.py
 #       ├── generate_alertmanager_routes.py
+#       ├── validate_config.py
+#       ├── analyze_rule_pack_gaps.py
+#       ├── patch_config.py
 #       └── metric-dictionary.yaml
 set -euo pipefail
 
@@ -47,15 +58,31 @@ mkdir -p "$SCRIPT_DIR/tools"
 
 # Copy only the tools we package (not test scripts or other artifacts)
 TOOL_FILES=(
+    # Shared library (imported by multiple tools)
+    _lib_python.py
+    # Prometheus API tools (portable)
     check_alert.py
+    diagnose.py
+    batch_diagnose.py
     baseline_discovery.py
     validate_migration.py
+    backtest_threshold.py
+    cutover_tenant.py
+    blind_spot_discovery.py
+    # Config generation tools
+    generate_alertmanager_routes.py
+    validate_config.py
+    analyze_rule_pack_gaps.py
+    patch_config.py
+    # File system tools (offline)
     migrate_rule.py
+    config_diff.py
     scaffold_tenant.py
+    onboard_platform.py
     offboard_tenant.py
     deprecate_rule.py
     lint_custom_rules.py
-    generate_alertmanager_routes.py
+    # Data files
     metric-dictionary.yaml
 )
 

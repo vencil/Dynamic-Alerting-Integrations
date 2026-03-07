@@ -1,6 +1,6 @@
 # GitOps 部署指南
 
-> **版本**：v1.9.0
+> **版本**：v1.10.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -47,18 +47,51 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @team-db-b
 | Webhook URL 合規 | `--policy .github/custom-rule-policy.yaml` | URL 不在 allowed_domains |
 | Custom rule deny-list | `lint_custom_rules.py --ci` | 禁用函式 / 破壞 tenant 隔離 |
 | 版號一致性 | `bump_docs.py --check` | 跨文件版號不一致 |
+| **配置變更 blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment 顯示受影響 tenant/metric（v1.10.0） |
+| **閾值歷史回測** | `backtest --git-diff --prometheus <url>` | 風險等級報告貼 PR comment（v1.9.0） |
 
 所有檢查通過 + CODEOWNERS 指定的 reviewer approve → 允許 merge。
 
+### PR Review 變更影響分析（v1.10.0）
+
+當 PR 修改 `conf.d/` 下的 tenant 配置時，CI 可自動執行 `config-diff` 產出 blast radius 報告，讓 reviewer 一眼看出變更影響範圍：
+
+```yaml
+# .github/workflows/config-review.yaml (摘要)
+- name: Config diff
+  run: |
+    # 從 base branch checkout 舊配置
+    git show origin/${{ github.base_ref }}:conf.d/ > /tmp/old-conf.d/ || true
+
+    docker run --rm \
+      -v /tmp/old-conf.d:/data/old \
+      -v $(pwd)/conf.d:/data/new \
+      ghcr.io/vencil/da-tools:1.10.0 \
+      config-diff --old-dir /data/old --new-dir /data/new \
+    > /tmp/config-diff.md
+
+- name: Post PR comment
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const diff = fs.readFileSync('/tmp/config-diff.md', 'utf8');
+      github.rest.issues.createComment({
+        issue_number: context.issue.number,
+        body: `## Config Diff Report\n${diff}`
+      });
+```
+
+報告內容包括：每個受影響 tenant 的變更清單、變更分類（tighter / looser / added / removed / toggled）、推斷受影響的 alert name。詳見 [da-tools README 場景八](../components/da-tools/README.md#場景八配置目錄級差異比對v1110)。
+
 ## 3. ConfigMap 組裝
 
-GitOps sync 需要將 `conf.d/` 目錄轉為 K8s ConfigMap。兩種方式：
+GitOps sync 需要將 `conf.d/` 目錄轉為 K8s ConfigMap。
 
-### 方式 A：Makefile target（推薦）
+### 方式 A：Makefile target（threshold-config）
 
 ```bash
 make configmap-assemble
-# 產出: .build/threshold-config.yaml
+# 產出: .build/threshold-config.yaml（threshold-exporter 用的 tenant 配置）
 ```
 
 在 CI pipeline 中使用：
@@ -78,6 +111,22 @@ helm upgrade threshold-exporter \
   -n monitoring \
   -f values-override.yaml
 ```
+
+### 方式 C：`--output-configmap`（Alertmanager ConfigMap，v1.10.0）
+
+如果 Alertmanager 的路由配置也走 GitOps，可用 `generate-routes --output-configmap` 產出完整 Alertmanager ConfigMap YAML：
+
+```bash
+# CI 中自動產出 Alertmanager ConfigMap
+python3 scripts/tools/generate_alertmanager_routes.py \
+  --config-dir config/conf.d/ --output-configmap \
+  --base-config deploy/base-alertmanager.yaml \
+  -o deploy/alertmanager-configmap.yaml
+```
+
+產出的 YAML 可直接 `kubectl apply` 或由 ArgoCD/Flux 自動 sync。與方式 A（threshold-config）搭配使用，實現 threshold-exporter 和 Alertmanager 配置的完整 GitOps 閉環。
+
+不提供 `--base-config` 時使用內建預設值。需要自訂 `global`（如 SMTP 設定）、default receiver、或 inhibit_rules 基礎規則時，建議維護一份 `base-alertmanager.yaml` 作為輸入。詳見 [BYO Alertmanager 整合指南 Step 5](byo-alertmanager-integration.md#step-5-合併至-alertmanager-configmap)。
 
 ## 4. ArgoCD 範例
 

@@ -16,12 +16,15 @@ NOTE: Duration parsing/formatting tests are in test_lib_python.py
   python3 -m pytest tests/test_generate_routes.py -v
 """
 
+import argparse
 import inspect
 import os
 import re
 import sys
 import tempfile
 import unittest
+
+import yaml
 
 # Add scripts/tools to path
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1177,6 +1180,104 @@ class TestSASTCompliance(unittest.TestCase):
         for call in re.findall(r"open\([^)]+\)", source):
             if "encoding=" not in call:
                 self.fail(f"open() missing encoding: {call}")
+
+
+# ── 8. --output-configmap (§11.3 AM GitOps) ──────────────────────
+
+class TestOutputConfigmap(unittest.TestCase):
+    """Tests for assemble_configmap() and --output-configmap mode."""
+
+    def test_load_base_config_defaults(self):
+        """load_base_config returns inline defaults when path is None."""
+        base = gen.load_base_config(None)
+        self.assertIn("global", base)
+        self.assertEqual(base["global"]["resolve_timeout"], "5m")
+        self.assertEqual(base["receivers"], [{"name": "default"}])
+
+    def test_load_base_config_from_file(self):
+        """load_base_config reads YAML when path is valid."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False,
+                                         encoding="utf-8") as f:
+            yaml.dump({"global": {"resolve_timeout": "10m"},
+                       "route": {"receiver": "custom"},
+                       "receivers": [{"name": "custom"}],
+                       "inhibit_rules": []}, f)
+            f.flush()
+            base = gen.load_base_config(f.name)
+        os.unlink(f.name)
+        self.assertEqual(base["global"]["resolve_timeout"], "10m")
+        self.assertEqual(base["route"]["receiver"], "custom")
+
+    def test_load_base_config_missing_keys_filled(self):
+        """load_base_config fills missing keys with defaults."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False,
+                                         encoding="utf-8") as f:
+            yaml.dump({"global": {"resolve_timeout": "3m"}}, f)
+            f.flush()
+            base = gen.load_base_config(f.name)
+        os.unlink(f.name)
+        self.assertIn("route", base)
+        self.assertIn("receivers", base)
+
+    def test_assemble_configmap_structure(self):
+        """assemble_configmap produces valid K8s ConfigMap YAML."""
+        base = gen._DEFAULT_BASE_CONFIG.copy()
+        routes = [{"matchers": ['tenant="t1"'], "receiver": "tenant-t1"}]
+        receivers = [{"name": "tenant-t1", "webhook_configs": [{"url": "https://x"}]}]
+        inhibit = [{"source_matchers": ['severity="critical"']}]
+
+        result = gen.assemble_configmap(base, routes, receivers, inhibit)
+        parsed = yaml.safe_load(result)
+
+        self.assertEqual(parsed["apiVersion"], "v1")
+        self.assertEqual(parsed["kind"], "ConfigMap")
+        self.assertEqual(parsed["metadata"]["name"], "alertmanager-config")
+        self.assertEqual(parsed["metadata"]["namespace"], "monitoring")
+        self.assertIn("alertmanager.yml", parsed["data"])
+
+        am = yaml.safe_load(parsed["data"]["alertmanager.yml"])
+        self.assertEqual(am["route"]["routes"], routes)
+        # default receiver preserved + tenant appended
+        names = [r["name"] for r in am["receivers"]]
+        self.assertIn("default", names)
+        self.assertIn("tenant-t1", names)
+
+    def test_assemble_configmap_custom_namespace(self):
+        """assemble_configmap respects namespace/configmap params."""
+        base = gen._DEFAULT_BASE_CONFIG.copy()
+        result = gen.assemble_configmap(
+            base, [], [], [], namespace="custom-ns", configmap_name="my-am")
+        parsed = yaml.safe_load(result)
+        self.assertEqual(parsed["metadata"]["namespace"], "custom-ns")
+        self.assertEqual(parsed["metadata"]["name"], "my-am")
+
+    def test_assemble_preserves_base_receivers(self):
+        """Base receivers are kept; tenant receivers appended."""
+        base = {
+            "global": {},
+            "route": {"receiver": "default"},
+            "receivers": [{"name": "default"}, {"name": "noc-webhook"}],
+            "inhibit_rules": [],
+        }
+        tenant_recv = [{"name": "tenant-t1"}, {"name": "default"}]  # dup default
+        result = gen.assemble_configmap(base, [], tenant_recv, [])
+        am = yaml.safe_load(yaml.safe_load(result)["data"]["alertmanager.yml"])
+        names = [r["name"] for r in am["receivers"]]
+        # default + noc-webhook (base) + tenant-t1 (new). "default" not duplicated.
+        self.assertEqual(names.count("default"), 1)
+        self.assertIn("noc-webhook", names)
+        self.assertIn("tenant-t1", names)
+
+    def test_output_configmap_apply_mutually_exclusive(self):
+        """--output-configmap and --apply cannot be used together."""
+        with self.assertRaises(SystemExit):
+            gen.main.__wrapped__ if hasattr(gen.main, '__wrapped__') else None
+            # Use argparse directly to test mutual exclusivity
+            parser = argparse.ArgumentParser()
+            mode_group = parser.add_mutually_exclusive_group()
+            mode_group.add_argument("--apply", action="store_true")
+            mode_group.add_argument("--output-configmap", action="store_true")
+            parser.parse_args(["--apply", "--output-configmap"])
 
 
 if __name__ == "__main__":

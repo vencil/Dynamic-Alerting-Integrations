@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.9.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.10.0).
 
 **This document covers:**
 - System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
@@ -1224,10 +1224,7 @@ P2 Medium-term              P3 Long-term
 ┌────────────────┐     ┌───────────────┐
 │ Rule Pack Exp  │     │ CRD + Operator│
 │ Federation B   │     │ Log-to-Metric │
-│ AM GitOps      │     │               │
 │ 1:N Mapping    │     │               │
-│ Blind Spot Scan│     │               │
-│ Directory Diff │     │               │
 └────────────────┘     └───────────────┘
 ```
 
@@ -1247,25 +1244,13 @@ v1.8.0 already covers 11 DB/MQ types (including Kafka, RabbitMQ). Next-wave cand
 
 Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts). To be pursued after Scenario A is deployed and clear customer demand exists.
 
-#### 11.3 Alertmanager Configuration GitOps Loop
-
-`generate_alertmanager_routes.py --output-configmap` mode: outputs complete Alertmanager ConfigMap YAML for Git PR flow, replacing the current `--apply` direct ConfigMap operation approach. Aligns with `make configmap-assemble` methodology.
-
-#### 11.4 1:N Tenant Mapping Advanced Support
+#### 11.3 1:N Tenant Mapping Advanced Support
 
 Multiple logical tenants within a single namespace (differentiated by Service annotation / Pod label). Requires `scaffold_tenant.py --shared-namespace --tenant-source annotation` mode and `_tenant_mappings` config section. §2.3 already has relabel examples; tooling awaits requirement confirmation.
 
-#### 11.5 Blind Spot Discovery
-
-Scans Prometheus Targets / ServiceMonitors in the cluster and cross-references against `conf.d/` tenant configurations to identify instances that exist in the cluster but are not managed by this platform. Complements `analyze_rule_pack_gaps.py` (which analyzes custom rule coverage against Rule Packs) — Blind Spot analyzes infrastructure coverage against tenant config. Example output: "Scan found 5 PostgreSQL instances in the cluster, but only 2 have threshold monitoring enabled in tenant config."
-
-#### 11.6 Directory-level Config Diff
-
-Compares two `conf.d/` directories and produces a Markdown report listing the blast radius of all changes across tenants — which tenants, which metrics, tighter or looser thresholds. Suited for GitOps PR review scenarios where reviewers need to assess the full scope of a batch configuration change at a glance. Complements the existing `patch_config.py --diff` (single-metric live ConfigMap preview).
-
 ### P3 — Long-term Blueprint
 
-#### 11.7 CRD + Operator
+#### 11.4 CRD + Operator
 
 **Background**: Currently all tenant configs reside in a single `threshold-config` ConfigMap. K8s native RBAC can only control access at the resource level, not at the key level. Splitting into multiple ConfigMaps is feasible but projected volumes require each ConfigMap name to be hardcoded in the Pod Spec — adding a new tenant would require a Deployment change and trigger a Pod restart, breaking the core hot-reload mechanism. The current approach uses GitOps-Driven RBAC (CODEOWNERS + CI + `make configmap-assemble`) for permission control.
 
@@ -1275,7 +1260,7 @@ When the platform scales to require auto-scaling, drift reconciliation, and cros
 
 **Current decision**: The complexity introduced by CRD/Operator (+1 Operator Deployment, reconcile loop competing with GitOps, version management overhead) exceeds its value. The core problem CRD solves — K8s native per-tenant RBAC — should actually be avoided in enterprise environments (tenants directly `kubectl apply` bypassing Git = no review, no CI validation). To be re-evaluated when 50+ tenant direct K8s operation at scale becomes a clear requirement.
 
-#### 11.8 Log-to-Metric Bridge
+#### 11.5 Log-to-Metric Bridge
 
 This platform's design boundary is the **Prometheus metrics layer** — it manages thresholds and alerts, and does not directly process logs. For scenarios requiring log-based alerting (e.g., Oracle ORA-600 fatal errors, MySQL slow query log analysis), the recommended ecosystem approach is:
 
@@ -1297,6 +1282,6 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v1.9.0 — 2026-03-07
-**Last updated:** v1.9.0 — Migration Automation (Onboard→Scaffold pipeline, Auto-Convergence, Batch Health Report, Gap Analysis), Config Diff Preview, PR Backtest Bot, da-tools CLI 11→16 commands
+**Document version:** v1.10.0 — 2026-03-08
+**Last updated:** v1.10.0 — Shadow Monitoring Automation + AM GitOps loop + Blind Spot Discovery + Config Diff, da-tools CLI 16→19 commands
 **Maintainer:** Platform Engineering Team

@@ -76,7 +76,7 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.9.0 \
+  ghcr.io/vencil/da-tools:1.10.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -104,7 +104,7 @@ spec:
     spec:
       containers:
         - name: validator
-          image: ghcr.io/vencil/da-tools:1.9.0
+          image: ghcr.io/vencil/da-tools:1.10.0
           env:
             - name: PROMETHEUS_URL
               value: http://prometheus.monitoring.svc.cluster.local:9090
@@ -160,7 +160,7 @@ grep "mismatch" validation_output/validation-report.csv | wc -l
 kubectl logs job/shadow-monitor -n monitoring --tail=50
 
 # 4. 租戶健康檢查（確認 exporter 正常 + 運營模式）
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 \
   diagnose db-a
 ```
 
@@ -183,7 +183,7 @@ docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
 
 ```bash
 # 單筆 query 比對
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 \
   validate --old "<old_query>" --new "<new_query>" \
   --prometheus http://localhost:9090
 
@@ -253,13 +253,63 @@ awk -F',' 'NR>1 {tenants[$2]++} END {for(t in tenants) print t, tenants[t]}' \
   validation_output/validation-report.csv
 
 # 確認 tenant 運營模式
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 diagnose db-a
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 diagnose db-b
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 diagnose db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 diagnose db-b
 ```
 
 ## 7. 退出 Shadow Monitoring
 
-### 7.1 切換步驟
+### 7.1 自動化切換（推薦）
+
+v1.10.0 提供 `da-tools cutover`，單一指令自動完成以下全部步驟：
+
+```bash
+# Step 1: Dry run — 預覽切換步驟，不做任何變更
+docker run --rm --network=host \
+  -v $(pwd)/validation_output:/data \
+  -e PROMETHEUS_URL=http://localhost:9090 \
+  ghcr.io/vencil/da-tools:1.10.0 \
+  cutover --readiness-json /data/cutover-readiness.json \
+    --tenant db-a --dry-run
+
+# 預期輸出：
+#   [DRY RUN] Would delete job shadow-monitor in namespace monitoring
+#   [DRY RUN] Would remove old recording rules for tenant db-a
+#   [DRY RUN] Would remove migration_status:shadow label
+#   [DRY RUN] Would remove Alertmanager shadow route for db-a
+#   [DRY RUN] Would verify alerts via check-alert + diagnose
+
+# Step 2: 執行切換
+docker run --rm --network=host \
+  -v $(pwd)/validation_output:/data \
+  -e PROMETHEUS_URL=http://localhost:9090 \
+  ghcr.io/vencil/da-tools:1.10.0 \
+  cutover --readiness-json /data/cutover-readiness.json --tenant db-a
+
+# Step 3: 批次切換多個 tenant（逐一執行）
+for tenant in db-a db-b db-c; do
+  docker run --rm --network=host \
+    -v $(pwd)/validation_output:/data \
+    -e PROMETHEUS_URL=http://localhost:9090 \
+    ghcr.io/vencil/da-tools:1.10.0 \
+    cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
+done
+```
+
+**`--force` 的使用時機：**
+
+| 情境 | 是否用 `--force` | 說明 |
+|------|-----------------|------|
+| 有 `cutover-readiness.json` | 不需要 | readiness JSON 已證明收斂 |
+| 手動分析 CSV 確認收斂 | 用 `--force` | 繞過 readiness 檢查 |
+| 測試環境快速驗證 | 用 `--force` | 測試用途不需嚴格收斂 |
+| 生產環境未確認收斂 | **不要用** | 風險過高，先完成收斂確認 |
+
+> **注意**：`--force` 跳過的是 readiness 檢查，不會跳過切換後的 `check-alert` / `diagnose` 健康驗證。如果切換後驗證失敗，工具會報錯但不會自動回退——需手動執行 §7.2 回退步驟。
+
+### 7.1b 手動切換步驟
+
+如不使用自動化工具，手動依序執行：
 
 ```bash
 # 1. 停止 Shadow Monitor Job
@@ -274,11 +324,11 @@ kubectl delete job shadow-monitor -n monitoring
 # 4. 移除 Alertmanager 的 shadow 攔截 route
 
 # 5. 驗證切換後 alert 正常觸發
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 \
   check-alert MariaDBHighConnections db-a
 
 # 6. 租戶健康總檢
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.9.0 diagnose db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 diagnose db-a
 ```
 
 ### 7.2 回退（如有問題）
@@ -292,7 +342,7 @@ kubectl apply -f old-recording-rules.yaml
 # 3. 重啟 Shadow Monitor
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.9.0 \
+  ghcr.io/vencil/da-tools:1.10.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -306,26 +356,53 @@ rm -rf migration_output/
 rm -rf validation_output/
 
 # 批次下架不再需要的 custom_ prefix 規則
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.9.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
   deprecate custom_mysql_connections custom_mysql_replication_lag --execute
 ```
 
-## 8. 自動化工具（v1.9.0 新增）
+## 8. 自動化工具
 
-以下工具已在 v1.9.0 實作，減少 Shadow Monitoring 的人工操作：
+以下工具減少 Shadow Monitoring 的人工操作：
 
 | 工具 | 用法 | 效果 |
 |------|------|------|
 | **Auto-convergence** ✅ | `validate --auto-detect-convergence --stability-window 5` | 追蹤每個 metric pair 的跨 round 狀態，所有 pairs 連續 N 輪 match 後自動產出 `cutover-readiness.json` 並停止 watch |
 | **Batch health report** ✅ | `batch-diagnose`（da-tools CLI） | 切換後自動發現 tenants → 並行 `diagnose` → health score + remediation steps |
 | **Threshold backtest** ✅ | `backtest --git-diff --prometheus <url>` | PR 修改 threshold 時回測 7 天歷史數據，CI 自動產出風險評估 |
+| **Shadow Dashboard** ✅ | Grafana 掛載 `shadow-monitoring-dashboard.json`（見下方 §8.1） | 即時顯示 shadow rule 數量、per-tenant 狀態、old/new metric 對比趨勢、delta 收斂圖 |
+| **One-command cutover** ✅ | `da-tools cutover --readiness-json <path> --tenant <t>`（見 §7.1） | 單一指令完成切換全流程。支援 `--dry-run` 預覽、`--force` 跳過 readiness 檢查 |
 
-### 尚在規劃中
+### 8.1 Shadow Dashboard 部署與使用
 
-| 項目 | 說明 |
-|------|------|
-| Shadow Dashboard | Grafana 面板即時顯示 mismatch 趨勢、per-tenant 收斂狀態 |
-| One-command cutover | 單一指令完成 §7.1 所有步驟（停止 Job → 移除舊規則 → 去 label → 驗證） |
+**Dashboard 檔案位置：** `k8s/03-monitoring/shadow-monitoring-dashboard.json`
+
+**匯入方式：**
+
+```bash
+# 方式 A：Grafana UI 手動匯入
+# 1. 開啟 Grafana → 左側選單 → Dashboards → Import
+# 2. 上傳 shadow-monitoring-dashboard.json
+# 3. 選擇 Prometheus data source → Import
+
+# 方式 B：ConfigMap 自動掛載（搭配 Grafana sidecar）
+kubectl create configmap shadow-dashboard \
+  --from-file=shadow-monitoring-dashboard.json=k8s/03-monitoring/shadow-monitoring-dashboard.json \
+  -n monitoring
+kubectl label configmap shadow-dashboard grafana_dashboard=1 -n monitoring
+# Grafana sidecar 會自動偵測並載入（需部署時已啟用 sidecar）
+```
+
+**5 個 Panel 解讀：**
+
+| Panel | 看什麼 | 正常狀態 | 需關注 |
+|-------|--------|---------|--------|
+| **Shadow Rules Active** | 目前活躍的 shadow rule 數量 | 遷移中 > 0；切換後 = 0 | 切換後仍 > 0 表示有殘留 |
+| **Per-Tenant Status** | 每個 tenant 的 shadow 狀態 | 所有 tenant 列為 `active` 或 `converged` | 某 tenant `stale`（長時間無更新） |
+| **Old vs New Comparison** | old/new metric 數值疊圖 | 兩線重合 | 兩線持續偏離（需調查原因） |
+| **Delta Trend** | old-new 差值趨勢 | 趨近 0 並穩定 | 持續非零或震盪 |
+| **Inhibited Shadow Alerts** | 被 Alertmanager 攔截的 shadow alert 數量 | 低且穩定 | 突然飆升（新規則可能有誤報） |
+
+> **Panel 3/4 配置提示**：「Old vs New Comparison」和「Delta Trend」需要手動填入 Template Variables `$old_metric` 和 `$new_metric`（Prometheus metric 名稱）。其餘 Panel 零配置即可使用。
 
 ## 9. 快速參考卡
 
@@ -343,7 +420,7 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.9.0 \
 │       ↓                                                       │
 │  收斂判定 (自動: cutover-readiness.json / 手動: 7天0 mismatch)│
 │       ↓                                                       │
-│  切換：移除舊規則 + 移除 shadow label + check-alert 驗證      │
+│  da-tools cutover --readiness-json ... --tenant ... (§7.1)   │
 │       ↓                                                       │
 │  清理：da-tools deprecate (支援批次) / rm 產物                │
 └─────────────────────────────────────────────────────────────┘

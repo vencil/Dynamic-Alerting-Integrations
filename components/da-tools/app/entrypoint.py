@@ -16,6 +16,8 @@ Commands (Prometheus API — portable):
     baseline          Observe metrics and recommend thresholds
     validate          Compare old vs new recording rules (Shadow Monitoring)
     backtest          Backtest threshold changes against historical data
+    cutover           One-command Shadow Monitoring cutover (§7.1 all steps)
+    blind-spot        Scan cluster targets and find unmonitored instances
 
 Commands (Config Generation — reads tenant YAML):
     generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
@@ -29,6 +31,7 @@ Commands (File System — offline):
     deprecate         Mark metrics as disabled across configs
     lint              Validate custom rules against governance deny-list
     onboard           Analyze existing Alertmanager/Prometheus configs for migration
+    config-diff       Directory-level config diff for GitOps PR review
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -50,6 +53,8 @@ COMMAND_MAP = {
     "validate": "validate_migration.py",
     "batch-diagnose": "batch_diagnose.py",
     "backtest": "backtest_threshold.py",
+    "cutover": "cutover_tenant.py",
+    "blind-spot": "blind_spot_discovery.py",
     # Group B: Prometheus + file system (config generation)
     "generate-routes": "generate_alertmanager_routes.py",
     # Group C: File system only (offline)
@@ -62,11 +67,12 @@ COMMAND_MAP = {
     "validate-config": "validate_config.py",
     "analyze-gaps": "analyze_rule_pack_gaps.py",
     "patch-config": "patch_config.py",
+    "config-diff": "config_diff.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
 PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
-                       "batch-diagnose", "backtest"}
+                       "batch-diagnose", "backtest", "cutover", "blind-spot"}
 
 
 def print_usage():

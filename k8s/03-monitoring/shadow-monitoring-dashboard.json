@@ -1,0 +1,215 @@
+{
+  "annotations": { "list": [] },
+  "description": "Shadow Monitoring 即時狀態面板。追蹤遷移期間新舊 Recording Rule 的收斂進度。切換完成後可安全移除此 Dashboard。",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "icon": "dashboard",
+      "title": "Dynamic Alerting Overview",
+      "type": "link",
+      "url": "/d/dynamic-alerting-overview/dynamic-alerting-overview"
+    }
+  ],
+  "panels": [
+    {
+      "title": "Shadow Rules Active",
+      "description": "Number of recording rule series currently tagged with migration_status=shadow. Reaches 0 after cutover.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "count({migration_status=\"shadow\"}) or vector(0)",
+        "legendFormat": ""
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Per-Tenant Shadow Status",
+      "description": "Shadow rule count per tenant. Use to verify all tenants have shadow rules deployed before starting comparison.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 10, "x": 6, "y": 0 },
+      "targets": [{
+        "expr": "count by(tenant) ({migration_status=\"shadow\"})",
+        "legendFormat": "",
+        "format": "table",
+        "instant": true
+      }],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": {
+              "tenant": "Tenant",
+              "Value": "Shadow Rules"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Shadow Rules" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "color-background" },
+              { "id": "color", "value": { "mode": "thresholds" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "blue", "value": 1 }] } }
+            ]
+          }
+        ]
+      },
+      "options": { "showHeader": true, "footer": { "enablePagination": true } }
+    },
+    {
+      "title": "Inhibited Shadow Alerts",
+      "description": "Shadow alerts being suppressed by Alertmanager inhibit rules. Should be > 0 during shadow period (alerts intentionally silenced).",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [{
+        "expr": "count(ALERTS{migration_status=\"shadow\", alertstate=\"pending\"}) or vector(0)",
+        "legendFormat": "Pending"
+      },
+      {
+        "expr": "count(ALERTS{migration_status=\"shadow\", alertstate=\"firing\"}) or vector(0)",
+        "legendFormat": "Firing"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "title": "Old vs New Metric Comparison",
+      "description": "Compare old and new recording rule outputs over time. Configure $old_metric and $new_metric variables to match your migration. Converging lines indicate successful migration.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "$old_metric{tenant=~\"$tenant\"}",
+          "legendFormat": "old: {{tenant}}"
+        },
+        {
+          "expr": "$new_metric{tenant=~\"$tenant\"}",
+          "legendFormat": "new: {{tenant}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Delta Trend (|old - new|)",
+      "description": "Absolute difference between old and new metrics. Should trend toward 0 as rules converge. Sustained delta > 0 indicates mismatch requiring investigation.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{
+        "expr": "abs($old_metric{tenant=~\"$tenant\"} - $new_metric{tenant=~\"$tenant\"})",
+        "legendFormat": "delta: {{tenant}}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.1 }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme"
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["shadow-monitoring", "migration", "dynamic-alerting"],
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values({migration_status=\"shadow\"}, tenant)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2
+      },
+      {
+        "name": "old_metric",
+        "label": "Old Metric",
+        "description": "Old recording rule metric name (e.g., mysql_global_status_threads_connected)",
+        "type": "textbox",
+        "current": { "text": "", "value": "" }
+      },
+      {
+        "name": "new_metric",
+        "label": "New Metric",
+        "description": "New recording rule metric name (e.g., tenant:custom_mysql_global_status_threads_connected:max)",
+        "type": "textbox",
+        "current": { "text": "", "value": "" }
+      },
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Shadow Monitoring Progress",
+  "uid": "shadow-monitoring-v1",
+  "version": 1
+}

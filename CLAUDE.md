@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v1.9.0)
+## 專案概覽 (v1.10.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -85,8 +85,11 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `baseline_discovery.py` | 負載觀測 + 閾值建議 |
 | `bump_docs.py` | 版號一致性管理 |
 | `lint_custom_rules.py` | Custom Rule 治理 linter |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment（含 `--apply` / `--validate`） |
+| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment（含 `--apply` / `--validate` / `--output-configmap`） |
 | `validate_config.py` | 一站式配置驗證（YAML + schema + routes + policy + versions） |
+| `cutover_tenant.py` | Shadow Monitoring 一鍵切換（§7.1 全步驟自動化） |
+| `blind_spot_discovery.py` | Cluster targets 盲區掃描（Prometheus targets × tenant config 交叉比對） |
+| `config_diff.py` | 目錄級配置差異比對（GitOps PR review blast radius 報告） |
 
 共用函式庫：`scripts/tools/_lib_python.py`（Python 工具間共用）、`scripts/_lib.sh`（Shell scenario/benchmark 共用）。
 
@@ -126,5 +129,5 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## 長期展望
 
-Federation 場景 B Rule Pack 拆分、CRD/Operator、Config Diff Preview、PR 回測 Bot。
+Federation 場景 B Rule Pack 拆分、1:N Tenant Mapping、CRD/Operator、Log-to-Metric Bridge。
 詳見 `docs/architecture-and-design.md` §11。
