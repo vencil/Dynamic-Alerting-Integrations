@@ -5,14 +5,25 @@
 # 不需要額外 exporter — 讀取 threshold-exporter 的指標:
 #   - user_silent_mode     → Silent Mode sentinel
 #   - user_severity_dedup  → Severity Dedup sentinel
+#   - da_config_event      → Config lifecycle events (v1.7.0+)
 #
 # === Silent Mode ===
 # alert 照常在 Prometheus 觸發 (TSDB 有 ALERTS 紀錄)，
 # Alertmanager 透過 inhibit_rules 攔截通知。
 # 與 Maintenance Mode 不同: maintenance 在 PromQL 層消滅 alert (無 TSDB 紀錄)。
 #
-# Tenant 配置:
+# Tenant 配置 (scalar，向後相容):
 #   _silent_mode: "warning" | "critical" | "all" | "disable"
+#
+# Tenant 配置 (structured，v1.7.0+):
+#   _silent_mode:
+#     target: "warning" | "critical" | "all"
+#     expires: "2026-04-01T00:00:00Z"   # ISO 8601, optional
+#     reason: "Planned DB migration"     # optional
+#
+# === Maintenance Mode 自動失效 (v1.7.0+) ===
+# _state_maintenance 同樣支援 structured format with expires。
+# 過期後 user_state_filter metric 消失 → PromQL 中 maintenance 相關 alert 恢復觸發。
 #
 # === Severity Dedup ===
 # 當 critical 觸發時，選擇是否壓制同 metric_group 的 warning 通知。
@@ -60,3 +71,17 @@ groups:
         annotations:
           summary: "Severity dedup enabled for {{ $labels.tenant }}"
           description: "Warning notifications for {{ $labels.tenant }} will be suppressed when critical fires for the same metric_group."
+
+      # v1.7.0: Config lifecycle event — fires immediately (for: 0s) when a timed
+      # config (silent mode or maintenance mode) has expired.
+      # da_config_event metric is emitted by threshold-exporter as long as the expired
+      # YAML config remains — once tenant updates/removes the config, the metric disappears.
+      # This alert notifies operators to clean up stale configs.
+      - alert: TenantConfigEvent
+        expr: da_config_event == 1
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Config expired for {{ $labels.tenant }}: {{ $labels.event }}"
+          description: "Timed config for tenant {{ $labels.tenant }} has expired and auto-deactivated. Event: {{ $labels.event }}. Reason: {{ $labels.reason }}. Please update or remove the expired config entry."

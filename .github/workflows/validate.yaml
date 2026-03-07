@@ -4,7 +4,7 @@
 # or Python/Go source code. Catches issues before merge.
 #
 # Checks:
-#   1. Python tests (154+ tests)
+#   1. Python tests (450+ tests)
 #   2. Go tests (threshold-exporter)
 #   3. Tenant config validation (schema + routing + policy)
 #   4. Custom rule linting (deny-list)

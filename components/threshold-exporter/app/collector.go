@@ -106,14 +106,62 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	// Alerts still fire in Prometheus (TSDB records exist), but Alertmanager
 	// uses sentinel alerts + inhibit_rules to suppress notifications.
 	// Distinct from maintenance mode which suppresses at PromQL level (no TSDB records).
+	//
+	// v1.7.0: expired entries (Expired=true) do NOT emit user_silent_mode —
+	// sentinel metric disappears → Alertmanager inhibit stops → notifications resume.
+	// Instead, expired entries emit da_config_event for notification purposes.
 	silentDesc := prometheus.NewDesc(
 		"user_silent_mode",
 		"Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.",
 		[]string{"tenant", "target_severity"},
 		nil,
 	)
+	// da_config_event: ephemeral gauge emitted when a timed config (silent/maintenance)
+	// has expired. Used by TenantConfigEvent alert rule (for: 0s) to notify operators.
+	// The metric is emitted as long as the expired config YAML remains — once the tenant
+	// removes or updates the config, this metric disappears (stale marker).
+	configEventDesc := prometheus.NewDesc(
+		"da_config_event",
+		"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
+		[]string{"tenant", "event", "reason"},
+		nil,
+	)
 	for _, sm := range cfg.ResolveSilentModes() {
+		if sm.Expired {
+			// Expired: emit config event instead of sentinel metric
+			reason := sm.Reason
+			if reason == "" {
+				reason = "silent_mode expired for " + sm.TargetSeverity
+			}
+			m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
+				sm.Tenant, "silence_expired", reason)
+			if err != nil {
+				continue
+			}
+			ch <- m
+			continue
+		}
 		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
+		if err != nil {
+			continue
+		}
+		ch <- m
+	}
+
+	// Maintenance mode expiry events (v1.7.0).
+	// When structured _state_maintenance with expires is past, the state filter
+	// metric already stops emitting (handled in ResolveStateFiltersAt).
+	// Here we emit da_config_event to notify that maintenance auto-deactivated.
+	for _, me := range cfg.ResolveMaintenanceExpiries() {
+		if !me.Expired {
+			continue // Still active, no event needed
+		}
+		reason := me.Reason
+		if reason == "" {
+			reason = "maintenance_mode expired"
+		}
+		m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
+			me.Tenant, "maintenance_expired", reason)
 		if err != nil {
 			continue
 		}

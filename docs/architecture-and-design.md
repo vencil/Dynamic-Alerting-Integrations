@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.6.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.7.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
@@ -1299,7 +1299,7 @@ flowchart LR
 
 ## 11. 未來擴展路線 (Future Roadmap)
 
-以下項目為尚未實現的技術方向，依預期影響排列。v1.6.0 優先推進 §11.1 GitOps RBAC（低成本高價值）與 §11.3 生態系擴展（有具體需求時）。
+以下項目為尚未實現或尚在觀察的技術方向。v1.7.0/v1.8.0 確定實作項目見 `CLAUDE.md`；本節列出更長期的方向，待需求明確或 v1.7.0/v1.8.0 完成後再評估。
 
 ### 11.1 治理架構演進 (Governance Evolution)
 
@@ -1367,6 +1367,26 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力，而不需要在核心架構中引入日誌處理邏輯。
 
+### 11.5 PR 回測 Bot (CI Threshold Backtesting)
+
+CI 閾值變更回測 — PR 修改 threshold 時用歷史 Prometheus 數據驗證告警影響（「這個閾值如果上週就套用，會觸發幾次 alert？」）。前提：CI runner 需連到 Prometheus API（企業環境限制待評估）。目前 `baseline_discovery.py` 為手動替代。
+
+### 11.6 Config Diff Preview
+
+`patch_config.py --diff` 模式，顯示 patch 前後的 metric 變化（類似 `terraform plan`）：新增/移除哪些 metric series、影響哪些 alert rule。降低配置變更的心理門檻。
+
+### 11.7 Federation 場景 B：Rule Pack 分層
+
+場景 B 需要邊緣 Prometheus 透過 federation 或 remote-write 將 recording rule 結果送到中央。Rule Pack 需拆成兩層——邊緣用 Part 1（data normalization），中央用 Part 2 + Part 3（threshold normalization + alerts）。待場景 A 文件穩定且有明確客戶需求後再推進。
+
+### 11.8 1:N Tenant Mapping 進階支援
+
+一個 Namespace 內多個邏輯 Tenant（透過 Service annotation/Pod label 區分）。需要 `scaffold_tenant.py --shared-namespace --tenant-source annotation` 模式及 `_tenant_mappings` 配置 section。目前 §2.3 已有 relabel 範例，工具化待需求確認。
+
+### 11.9 Alertmanager 配置 GitOps 閉環
+
+`generate_alertmanager_routes.py --output-configmap` 模式，產出完整 Alertmanager ConfigMap YAML 進 Git 走 PR flow，取代目前 `--apply` 直接操作 ConfigMap 的方式。與 `make configmap-assemble` 思路一致。
+
 ---
 
 ## 參考資源
@@ -1379,6 +1399,6 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 ---
 
-**文件版本：** v1.6.0 — 2026-03-01
+**文件版本：** v1.7.0 — 2026-03-01
 **最後更新：** v1.0.0 GA Release — 文件重構 + 基準數據更新：§4 性能分析全面改為多輪統計量測（idle-state ×5, scaling-curve ×3, Go micro-benchmark ×5），報告 mean ± stddev / median (range)
 **維護者：** Platform Engineering Team

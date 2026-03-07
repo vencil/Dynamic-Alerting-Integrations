@@ -151,6 +151,51 @@ elasticsearch_cluster_health_status:
   note: "Cluster health — 0=green, 1=yellow, 2=red"
 
 # ────────────────────────────────────────
+# PostgreSQL
+# ────────────────────────────────────────
+pg_stat_activity_count:
+  maps_to: pg_connections
+  golden_rule: PostgreSQLHighConnections
+  rule_pack: postgresql
+  note: "連線使用率 — 搭配 pg_settings_max_connections 計算百分比"
+
+pg_settings_max_connections:
+  maps_to: pg_connections
+  golden_rule: PostgreSQLHighConnections
+  rule_pack: postgresql
+  note: "max_connections 設定 — 黃金標準已整合為百分比 Recording Rule"
+
+pg_replication_lag:
+  maps_to: pg_replication_lag
+  golden_rule: PostgreSQLHighReplicationLag
+  rule_pack: postgresql
+  note: "Replication lag — max by(tenant) 聚合"
+
+pg_stat_database_deadlocks:
+  maps_to: pg_deadlocks
+  golden_rule: PostgreSQLHighDeadlocks
+  rule_pack: postgresql
+  note: "Deadlocks — rate() 指標, sum by(tenant) 聚合"
+
+pg_stat_database_xact_commit:
+  maps_to: pg_transactions
+  golden_rule: PostgreSQLHighRollbackRatio
+  rule_pack: postgresql
+  note: "Committed transactions — 搭配 rollback 計算比率"
+
+pg_stat_database_xact_rollback:
+  maps_to: pg_transactions
+  golden_rule: PostgreSQLHighRollbackRatio
+  rule_pack: postgresql
+  note: "Rolled back transactions — 搭配 commit 計算回滾比率"
+
+pg_postmaster_start_time_seconds:
+  maps_to: null
+  golden_rule: PostgreSQLRecentRestart
+  rule_pack: postgresql
+  note: "啟動時間 — 黃金標準計算 uptime (< 5m 觸發 info alert)"
+
+# ────────────────────────────────────────
 # Oracle Database
 # ────────────────────────────────────────
 oracledb_sessions_active:

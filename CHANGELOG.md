@@ -2,6 +2,53 @@
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v1.7.0] - 企業防護網 + 生態系擴張 (2026-03-07)
+
+企業級防護網：Silent/Maintenance Mode 自動失效、Platform Enforced Routing 雙軌通知、PostgreSQL Rule Pack。開發者體驗：`validate-config` 一站式檢查、Federation 架構文件。
+
+### 🛡️ Silent/Maintenance Mode 自動失效
+
+* **結構化物件升級**：`_silent_mode` / `_state_maintenance` 支援 `{target, expires (ISO8601), reason}` 結構（向後相容純量字串）
+* **Go 引擎過期判定**：`time.Now().After(expires)` — 過期即停止 emit sentinel metric，alert 自動恢復
+* **失效通知**：瞬時 gauge `da_config_event{event="silence_expired"|"maintenance_expired"}` + TTL（emit 數個 scrape 週期後停止），搭配 `TenantConfigEvent` alert rule（`for: 0s`）
+* **Maintenance 同步支援 `expires`**：比 silent mode 更需要防失憶——Maintenance 在 PromQL 層消滅 alert，TSDB 無紀錄
+
+### 🔀 Platform Enforced Routing
+
+* **`_routing_enforced` in `_defaults.yaml`**：`enabled`、`receiver`、`match` 三欄位。Platform Team 按需開啟
+* **雙軌通知**：`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route，帶 `continue: true` 實現「NOC 必收 + tenant 也收」
+* **預設不啟用**：向後相容，不影響現有租戶 routing
+
+### 🐘 PostgreSQL Rule Pack
+
+* **標準三件式**：Normalization → Threshold Normalization → Alerts，涵蓋 connections / replication_lag / deadlocks / rollback_ratio / uptime
+* **除零防護**：`clamp_min(..., 1)` 防護 connection ratio 及 rollback ratio 的除零 NaN
+* **`humanizePercentage`**：rollback ratio alert description 使用 Prometheus 原生格式函式
+* **scaffold_tenant.py 更新**：RULE_PACKS catalog 新增 PostgreSQL（含 `optional_overrides`：`pg_connections_critical`、`pg_replication_lag_critical`）
+* **metric-dictionary.yaml**：新增 7 筆 PostgreSQL 指標對照
+
+### ✅ validate-config 一站式檢查
+
+* **`validate_config.py`**：封裝 6 項檢查 — YAML syntax、schema、routes、policy、custom rules、versions
+* **統一報告**：pass / warn / fail 三態，`--json` 供 CI 直接消費
+* **`make validate-config`**：Makefile 一行完成全套驗證
+
+### 📄 Federation 架構文件
+
+* **`docs/federation-integration.md`**：場景 A（中央 threshold-exporter + 多邊緣 Prometheus scrape）完整架構藍圖
+* **方案比較**：federation vs remote-write 優劣對比表
+* **驗證 checklist**：edge → central 連通性、metric relabel、threshold-exporter 配置
+
+### 📊 測試覆蓋
+
+| 元件 | 改動前 | 改動後 |
+|------|--------|--------|
+| Python tests | 426 | 451 (+25) |
+| Go tests | 全 pass | 全 pass (+17 new) |
+| 新增測試 | — | `test_validate_config.py`、PostgreSQL scaffold/rule-pack tests |
+
+---
+
 ## [v1.6.0] - GitOps RBAC + Platform Dashboard (2026-03-06)
 
 GitOps 閉環落地：CODEOWNERS 檔案級 RBAC、CI 自動驗證 pipeline、ConfigMap 組裝、ArgoCD/Flux 部署指南。新增平台級 Grafana Dashboard 提供租戶狀態全域視覺化。

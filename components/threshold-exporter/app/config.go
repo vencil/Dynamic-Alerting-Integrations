@@ -39,11 +39,48 @@ type ResolvedStateFilter struct {
 // Silent mode: alerts fire (TSDB records exist) but Alertmanager notifications are suppressed.
 // This is distinct from maintenance mode which suppresses alerts at PromQL level (no TSDB records).
 //
-// Tenant config: _silent_mode: "warning" | "critical" | "all" | "disable"
+// Tenant config (scalar, backward compatible):
+//
+//	_silent_mode: "warning" | "critical" | "all" | "disable"
+//
+// Tenant config (structured, v1.7.0+):
+//
+//	_silent_mode:
+//	  target: "warning" | "critical" | "all"
+//	  expires: "2026-04-01T00:00:00Z"  # ISO 8601, optional
+//	  reason: "Planned DB migration"    # optional
+//
 // Default (absent): Normal — no silent mode, all notifications delivered.
+// When expires is set and past, the silent mode is treated as expired — sentinel metric stops emitting.
 type ResolvedSilentMode struct {
 	Tenant         string
-	TargetSeverity string // "warning" or "critical" — one struct per severity
+	TargetSeverity string    // "warning" or "critical" — one struct per severity
+	Expires        time.Time // zero value = no expiry
+	Reason         string    // human-readable reason (optional)
+	Expired        bool      // true if expires is set and past
+}
+
+// ResolvedMaintenanceExpiry tracks maintenance mode expiry state for a tenant.
+// Used to emit da_config_event metric when maintenance mode expires.
+type ResolvedMaintenanceExpiry struct {
+	Tenant  string
+	Expires time.Time
+	Reason  string
+	Expired bool
+}
+
+// silentModeStructured is the intermediate struct for parsing structured _silent_mode YAML.
+type silentModeStructured struct {
+	Target  string `yaml:"target"`
+	Expires string `yaml:"expires"`
+	Reason  string `yaml:"reason"`
+}
+
+// maintenanceModeStructured is the intermediate struct for parsing structured _state_maintenance YAML.
+type maintenanceModeStructured struct {
+	Target  string `yaml:"target"`  // "enable" (default if omitted)
+	Expires string `yaml:"expires"` // ISO 8601
+	Reason  string `yaml:"reason"`
 }
 
 // TimeWindowOverride defines a UTC time window with an override value.
@@ -424,8 +461,16 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 // For each state filter defined in config, each tenant gets an enabled flag
 // unless explicitly disabled via _state_<filter_name>: "disable" in tenants map.
 //
+// v1.7.0: _state_maintenance supports structured format with expires.
+// When expires is past, the filter is treated as disabled (maintenance auto-deactivates).
+//
 // Returns the list of enabled state filters to expose as Prometheus metrics.
 func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
+	return c.ResolveStateFiltersAt(time.Now())
+}
+
+// ResolveStateFiltersAt is the time-parameterized version for testability.
+func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFilter {
 	var result []ResolvedStateFilter
 
 	if len(c.StateFilters) == 0 {
@@ -445,11 +490,32 @@ func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
 		for tenant, overrides := range c.Tenants {
 			stateKey := "_state_" + filterName
 			if sv, exists := overrides[stateKey]; exists {
-				lower := strings.TrimSpace(strings.ToLower(sv.Default))
+				val := strings.TrimSpace(sv.Default)
+				lower := strings.TrimSpace(strings.ToLower(val))
+
 				if isDisabled(lower) {
 					continue // 明確停用
 				}
-				// 明確啟用 (任何非 disable 的值，如 "enable")
+
+				// v1.7.0: Check for structured format with expires (maintenance mode)
+				if filterName == "maintenance" && strings.Contains(val, "expires:") {
+					parsed := maintenanceModeStructured{}
+					if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
+						log.Printf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+						continue
+					}
+					if parsed.Expires != "" {
+						t, err := time.Parse(time.RFC3339, parsed.Expires)
+						if err != nil {
+							log.Printf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v", parsed.Expires, tenant, err)
+							// Can't parse → treat as no expiry → still active
+						} else if now.After(t) {
+							continue // Expired → maintenance auto-deactivated
+						}
+					}
+				}
+
+				// 明確啟用 (任何非 disable 的值，如 "enable" or structured object)
 			} else if !defaultEnabled {
 				continue // 無覆寫 + 預設關閉 = 跳過
 			}
@@ -466,12 +532,21 @@ func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
 }
 
 // ResolveSilentModes resolves silent mode preferences for all tenants.
-// Tenants set _silent_mode in their config: "warning", "critical", "all", or "disable".
-// Default (absent): Normal — no silent mode entries produced.
+// Supports both scalar format ("warning"/"critical"/"all"/"disable") and
+// structured format ({target, expires, reason}).
+//
+// When expires is set and in the past (relative to `now`), the entry is marked Expired=true
+// and the sentinel metric should NOT be emitted (silent mode auto-deactivates).
+// The caller (collector) uses Expired entries to emit da_config_event instead.
 //
 // Returns one ResolvedSilentMode per tenant+severity combination.
 // "all" expands to two entries: one for "warning" and one for "critical".
 func (c *ThresholdConfig) ResolveSilentModes() []ResolvedSilentMode {
+	return c.ResolveSilentModesAt(time.Now())
+}
+
+// ResolveSilentModesAt is the time-parameterized version for testability.
+func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMode {
 	var result []ResolvedSilentMode
 
 	for tenant, overrides := range c.Tenants {
@@ -480,25 +555,171 @@ func (c *ThresholdConfig) ResolveSilentModes() []ResolvedSilentMode {
 			continue // Normal mode (default) — no silent entries
 		}
 
-		val := strings.TrimSpace(strings.ToLower(sv.Default))
-		if isDisabled(val) || val == "" {
-			continue // Explicitly disabled or empty
+		val := strings.TrimSpace(sv.Default)
+
+		// Try structured format: check if the value looks like YAML mapping
+		// ScheduledValue.UnmarshalYAML serializes mappings back to YAML string
+		if strings.Contains(val, "target:") {
+			parsed := silentModeStructured{}
+			if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
+				log.Printf("WARN: failed to parse structured _silent_mode for tenant=%s: %v", tenant, err)
+				continue
+			}
+			target := strings.TrimSpace(strings.ToLower(parsed.Target))
+			if isDisabled(target) || target == "" {
+				continue
+			}
+
+			var expires time.Time
+			var expired bool
+			if parsed.Expires != "" {
+				t, err := time.Parse(time.RFC3339, parsed.Expires)
+				if err != nil {
+					log.Printf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v (expected RFC3339/ISO8601)", parsed.Expires, tenant, err)
+				} else {
+					expires = t
+					expired = now.After(t)
+				}
+			}
+
+			entries := resolveSilentTarget(tenant, target, expires, parsed.Reason, expired)
+			result = append(result, entries...)
+			continue
 		}
 
-		switch val {
-		case "warning":
-			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "warning"})
-		case "critical":
-			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "critical"})
-		case "all":
-			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "warning"})
-			result = append(result, ResolvedSilentMode{Tenant: tenant, TargetSeverity: "critical"})
-		default:
-			log.Printf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: warning, critical, all, disable)", val, tenant)
+		// Scalar format (backward compatible)
+		lower := strings.TrimSpace(strings.ToLower(val))
+		if isDisabled(lower) || lower == "" {
+			continue
 		}
+
+		entries := resolveSilentTarget(tenant, lower, time.Time{}, "", false)
+		if len(entries) == 0 {
+			log.Printf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: warning, critical, all, disable)", lower, tenant)
+		}
+		result = append(result, entries...)
 	}
 
 	return result
+}
+
+// resolveSilentTarget expands a target string into ResolvedSilentMode entries.
+func resolveSilentTarget(tenant, target string, expires time.Time, reason string, expired bool) []ResolvedSilentMode {
+	base := ResolvedSilentMode{
+		Tenant:  tenant,
+		Expires: expires,
+		Reason:  reason,
+		Expired: expired,
+	}
+	switch target {
+	case "warning":
+		e := base
+		e.TargetSeverity = "warning"
+		return []ResolvedSilentMode{e}
+	case "critical":
+		e := base
+		e.TargetSeverity = "critical"
+		return []ResolvedSilentMode{e}
+	case "all":
+		w := base
+		w.TargetSeverity = "warning"
+		c := base
+		c.TargetSeverity = "critical"
+		return []ResolvedSilentMode{w, c}
+	default:
+		return nil
+	}
+}
+
+// ResolveMaintenanceExpiries resolves maintenance mode expiry state for all tenants.
+// Only returns entries for tenants with structured _state_maintenance that have an expires field.
+// Used by the collector to emit da_config_event when maintenance mode expires.
+func (c *ThresholdConfig) ResolveMaintenanceExpiries() []ResolvedMaintenanceExpiry {
+	return c.ResolveMaintenanceExpiriesAt(time.Now())
+}
+
+// ResolveMaintenanceExpiriesAt is the time-parameterized version for testability.
+func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []ResolvedMaintenanceExpiry {
+	var result []ResolvedMaintenanceExpiry
+
+	for tenant, overrides := range c.Tenants {
+		// Check all _state_* keys for maintenance filter specifically
+		sv, exists := overrides["_state_maintenance"]
+		if !exists {
+			continue
+		}
+
+		val := strings.TrimSpace(sv.Default)
+		// Only structured format supports expires
+		if !strings.Contains(val, "expires:") {
+			continue
+		}
+
+		parsed := maintenanceModeStructured{}
+		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
+			log.Printf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+			continue
+		}
+
+		if parsed.Expires == "" {
+			continue
+		}
+
+		t, err := time.Parse(time.RFC3339, parsed.Expires)
+		if err != nil {
+			log.Printf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v", parsed.Expires, tenant, err)
+			continue
+		}
+
+		result = append(result, ResolvedMaintenanceExpiry{
+			Tenant:  tenant,
+			Expires: t,
+			Reason:  parsed.Reason,
+			Expired: now.After(t),
+		})
+	}
+
+	return result
+}
+
+// IsMaintenanceActive checks if a structured _state_maintenance is currently active (not expired).
+// For scalar "enable" values (no expires), it always returns true.
+// For structured values with expires in the past, it returns false.
+func (c *ThresholdConfig) IsMaintenanceActive(tenant string, now time.Time) bool {
+	overrides, exists := c.Tenants[tenant]
+	if !exists {
+		return false
+	}
+	sv, exists := overrides["_state_maintenance"]
+	if !exists {
+		return false
+	}
+
+	val := strings.TrimSpace(sv.Default)
+	lower := strings.TrimSpace(strings.ToLower(val))
+
+	// Scalar "disable" — not active
+	if isDisabled(lower) || lower == "" {
+		return false
+	}
+
+	// Structured format with expires
+	if strings.Contains(val, "expires:") {
+		parsed := maintenanceModeStructured{}
+		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
+			return false
+		}
+		if parsed.Expires != "" {
+			t, err := time.Parse(time.RFC3339, parsed.Expires)
+			if err != nil {
+				return true // can't parse → treat as no expiry → active
+			}
+			return !now.After(t)
+		}
+	}
+
+	// Scalar "enable" or structured without expires — active
+	return true
 }
 
 // ResolvedSeverityDedup represents a tenant's severity deduplication preference.

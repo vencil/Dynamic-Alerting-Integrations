@@ -182,6 +182,12 @@ validate-routes: ## 驗證 Alertmanager route config (CI lint 用)
 	@python3 ./scripts/tools/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate
 
+validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions)
+	@python3 ./scripts/tools/validate_config.py \
+		--config-dir components/threshold-exporter/config/conf.d/ \
+		--rule-packs rule-packs/ \
+		--version-check
+
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/bump_docs.py --check
 

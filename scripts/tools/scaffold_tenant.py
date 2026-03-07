@@ -51,6 +51,23 @@ RULE_PACKS = {
             },
         },
     },
+    "postgresql": {
+        "display": "PostgreSQL (postgres_exporter)",
+        "exporter": "prometheus-community/postgres_exporter",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-postgresql.yaml",
+        "defaults": {
+            "pg_connections": {"value": 80, "unit": "% of max_connections", "desc": "Connection usage % warning"},
+            "pg_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replication lag warning"},
+        },
+        "optional_overrides": {
+            "pg_connections_critical": {"value": 90, "unit": "% of max_connections", "desc": "Critical tier connections"},
+            "pg_replication_lag_critical": {"value": 60, "unit": "seconds", "desc": "Critical tier replication lag"},
+        },
+        "dimensional_example": {
+            "pg_stat_activity_count{datname=\"orders\"}": "50",
+        },
+    },
     "mariadb": {
         "display": "MariaDB / MySQL (mysqld_exporter)",
         "exporter": "prom/mysqld-exporter or Percona",
@@ -272,12 +289,22 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
                     tenant_config[key] = val
 
     # Always add maintenance state control (disabled by default)
+    # v1.7.0: supports structured format with expires for auto-deactivation
     if interactive:
         enable_maint = input("\n  啟用維護模式? (y/N): ").strip().lower()
         if enable_maint == "y":
-            tenant_config["_state_maintenance"] = "enable"
+            expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
+            if expires_str:
+                reason_str = input("  原因 (選填): ").strip()
+                maint_obj = {"target": "enable", "expires": expires_str}
+                if reason_str:
+                    maint_obj["reason"] = reason_str
+                tenant_config["_state_maintenance"] = maint_obj
+            else:
+                tenant_config["_state_maintenance"] = "enable"
 
     # Silent mode: alerts fire (TSDB records) but notifications suppressed
+    # v1.7.0: supports structured format with expires for auto-deactivation
     if interactive:
         print("\n  靜音模式 (Silent Mode):")
         print("    1. Normal — 不靜音 (預設)")
@@ -287,7 +314,15 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
         silent_choice = input("  選擇 [1-4] (預設 1): ").strip()
         silent_map = {"2": "warning", "3": "critical", "4": "all"}
         if silent_choice in silent_map:
-            tenant_config["_silent_mode"] = silent_map[silent_choice]
+            expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
+            if expires_str:
+                reason_str = input("  原因 (選填): ").strip()
+                silent_obj = {"target": silent_map[silent_choice], "expires": expires_str}
+                if reason_str:
+                    silent_obj["reason"] = reason_str
+                tenant_config["_silent_mode"] = silent_obj
+            else:
+                tenant_config["_silent_mode"] = silent_map[silent_choice]
 
     # Severity dedup: control warning↔critical notification deduplication
     if interactive:

@@ -36,6 +36,34 @@ class TestRulePacksCatalogue(unittest.TestCase):
 
     REQUIRED_KEYS = {"display", "exporter", "default_on", "rule_pack_file", "defaults"}
 
+    def test_postgresql_in_rule_packs(self):
+        """PostgreSQL entry exists in RULE_PACKS."""
+        self.assertIn("postgresql", scaffold_tenant.RULE_PACKS)
+
+    def test_postgresql_has_required_keys(self):
+        """PostgreSQL entry has all required keys."""
+        entry = scaffold_tenant.RULE_PACKS["postgresql"]
+        for key in self.REQUIRED_KEYS:
+            self.assertIn(key, entry, f"PostgreSQL missing key: {key}")
+
+    def test_postgresql_not_default_on(self):
+        """PostgreSQL should not be default_on."""
+        self.assertFalse(scaffold_tenant.RULE_PACKS["postgresql"]["default_on"])
+
+    def test_postgresql_has_defaults(self):
+        """PostgreSQL defaults include key metrics."""
+        defaults = scaffold_tenant.RULE_PACKS["postgresql"]["defaults"]
+        self.assertIn("pg_connections", defaults)
+        self.assertIn("pg_replication_lag", defaults)
+
+    def test_postgresql_has_dimensional_example(self):
+        """PostgreSQL has dimensional_example."""
+        entry = scaffold_tenant.RULE_PACKS["postgresql"]
+        self.assertIn("dimensional_example", entry)
+        dim = entry["dimensional_example"]
+        has_datname = any("datname" in k for k in dim)
+        self.assertTrue(has_datname, "PostgreSQL dimensional_example missing datname example")
+
     def test_oracle_in_rule_packs(self):
         """Oracle entry exists in RULE_PACKS."""
         self.assertIn("oracle", scaffold_tenant.RULE_PACKS)
@@ -121,9 +149,9 @@ class TestRulePacksCatalogue(unittest.TestCase):
         has_regex = any("=~" in k or "database" in k for k in dim)
         self.assertTrue(has_regex, "ClickHouse dimensional_example missing regex database")
 
-    def test_rule_pack_count_is_8(self):
-        """Total RULE_PACKS should be 8 (kubernetes + 5 DB + oracle + db2 + clickhouse; platform excluded)."""
-        self.assertGreaterEqual(len(scaffold_tenant.RULE_PACKS), 8)
+    def test_rule_pack_count_is_9(self):
+        """Total RULE_PACKS should be 9 (kubernetes + postgresql + mariadb + redis + mongodb + elasticsearch + oracle + db2 + clickhouse; platform excluded)."""
+        self.assertGreaterEqual(len(scaffold_tenant.RULE_PACKS), 9)
 
 
 # ── Non-Interactive Generation ───────────────────────────────────────
@@ -213,6 +241,30 @@ class TestNonInteractiveGeneration(unittest.TestCase):
             content = f.read()
         self.assertIn("DB2", content)
 
+    def test_postgresql_generates_tenant_yaml(self):
+        """PostgreSQL-only scaffold creates tenant YAML."""
+        self._run_scaffold("test-pg", "postgresql")
+        path = os.path.join(self.tmpdir, "test-pg.yaml")
+        self.assertTrue(os.path.isfile(path), f"Missing {path}")
+
+    def test_postgresql_defaults_contain_pg_metrics(self):
+        """_defaults.yaml includes PostgreSQL metric keys."""
+        self._run_scaffold("test-pg", "postgresql")
+        path = os.path.join(self.tmpdir, "_defaults.yaml")
+        with open(path) as f:
+            content = f.read()
+        self.assertIn("pg_connections", content)
+        self.assertIn("pg_replication_lag", content)
+
+    def test_postgresql_scaffold_report_mentions_postgresql(self):
+        """scaffold-report.txt mentions PostgreSQL."""
+        self._run_scaffold("test-pg", "postgresql")
+        path = os.path.join(self.tmpdir, "scaffold-report.txt")
+        self.assertTrue(os.path.isfile(path), f"Missing {path}")
+        with open(path) as f:
+            content = f.read()
+        self.assertIn("PostgreSQL", content)
+
     def test_clickhouse_generates_tenant_yaml(self):
         """ClickHouse-only scaffold creates tenant YAML."""
         self._run_scaffold("test-ch", "clickhouse")
@@ -291,6 +343,81 @@ class TestRulePackYAML(unittest.TestCase):
         self.assertIn(f"{db_prefix}-normalization", group_names)
         self.assertIn(f"{db_prefix}-threshold-normalization", group_names)
         self.assertIn(f"{db_prefix}-alerts", group_names)
+
+    def test_postgresql_rule_pack_exists(self):
+        """rule-packs/rule-pack-postgresql.yaml exists."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        self.assertTrue(os.path.isfile(path))
+
+    def test_postgresql_configmap_exists(self):
+        """k8s/03-monitoring/configmap-rules-postgresql.yaml exists."""
+        path = os.path.join(self.K8S_DIR, "configmap-rules-postgresql.yaml")
+        self.assertTrue(os.path.isfile(path))
+
+    def test_postgresql_rule_pack_three_groups(self):
+        """PostgreSQL rule pack has the three-group structure."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        data = self._load_yaml(path)
+        self._validate_rule_pack_structure(data["groups"], "postgresql")
+
+    def test_postgresql_configmap_has_label(self):
+        """PostgreSQL ConfigMap has rule-pack: postgresql label."""
+        path = os.path.join(self.K8S_DIR, "configmap-rules-postgresql.yaml")
+        data = self._load_yaml(path)
+        self.assertEqual(data["metadata"]["labels"]["rule-pack"], "postgresql")
+
+    def test_postgresql_uses_max_by_tenant(self):
+        """PostgreSQL threshold normalization uses max by(tenant)."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        with open(path) as f:
+            content = f.read()
+        self.assertIn("max by(tenant)", content)
+
+    def test_postgresql_alerts_have_maintenance_unless(self):
+        """PostgreSQL alert rules use 'unless on(tenant)' maintenance filter."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        with open(path) as f:
+            content = f.read()
+        self.assertIn('unless on(tenant)', content)
+
+    def test_postgresql_has_metric_group_labels(self):
+        """PostgreSQL alerts have metric_group for severity dedup pairing."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        with open(path) as f:
+            content = f.read()
+        self.assertIn('metric_group: "pg_connections"', content)
+        self.assertIn('metric_group: "pg_replication_lag"', content)
+
+    def test_postgresql_division_by_zero_protection(self):
+        """PostgreSQL recording rules use clamp_min to prevent division by zero."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        with open(path) as f:
+            content = f.read()
+        # connection_usage:ratio divides by max_connections — must clamp
+        # rollback_ratio divides by total transactions — must clamp
+        clamp_count = content.count("clamp_min")
+        self.assertGreaterEqual(clamp_count, 2,
+                                f"Expected at least 2 clamp_min guards, found {clamp_count}")
+
+    def test_postgresql_rollback_uses_humanize_percentage(self):
+        """PostgreSQLHighRollbackRatio description uses humanizePercentage (not printf)."""
+        path = os.path.join(self.RULE_PACKS_DIR, "rule-pack-postgresql.yaml")
+        with open(path) as f:
+            content = f.read()
+        # Find the rollback ratio alert section
+        lines = content.split("\n")
+        in_rollback = False
+        found_humanize = False
+        for line in lines:
+            if "PostgreSQLHighRollbackRatio" in line:
+                in_rollback = True
+            if in_rollback and "humanizePercentage" in line:
+                found_humanize = True
+                break
+            if in_rollback and line.strip().startswith("- alert:") and "RollbackRatio" not in line:
+                break
+        self.assertTrue(found_humanize,
+                        "PostgreSQLHighRollbackRatio should use humanizePercentage")
 
     def test_oracle_rule_pack_exists(self):
         """rule-packs/rule-pack-oracle.yaml exists."""

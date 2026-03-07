@@ -137,6 +137,14 @@ spec:
                     - key: clickhouse-alert.yml
                       path: clickhouse-alert.yml
               - configMap:
+                  name: prometheus-rules-postgresql
+                  optional: true
+                  items:
+                    - key: postgresql-recording.yml
+                      path: postgresql-recording.yml
+                    - key: postgresql-alert.yml
+                      path: postgresql-alert.yml
+              - configMap:
                   name: prometheus-rules-platform
                   optional: true
                   items:

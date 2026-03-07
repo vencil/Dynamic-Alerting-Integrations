@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.6.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), security guardrails (SSRF prevention + schema validation + cardinality limits), HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.7.0 — Configuration-driven thresholds, zero PromQL for tenants, 10 pre-loaded rule packs (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse / Kubernetes / Platform / Operational), AST migration engine, three-tier governance model, regex dimension thresholds, scheduled time windows, three operational modes (Normal / Silent / Maintenance), security guardrails (SSRF prevention + schema validation + cardinality limits), HA deployment.
 
 ---
 
@@ -68,7 +68,7 @@ Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are p
 
 ```bash
 # No clone needed — just pull and run
-docker run --rm -it ghcr.io/vencil/da-tools:1.5.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools:1.6.0 scaffold --tenant my-app --db mariadb,redis
 ```
 
 ---
@@ -86,7 +86,7 @@ On the deployment side: the Helm chart is published to an **OCI registry** — o
 ```bash
 # One-command deploy — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.6.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.7.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -139,7 +139,7 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 |-------|---------------|-----------|---------------|
 | **Risk-Free Migration** | Hundreds of legacy rules can't be safely converted → migration stalls for months | AST engine auto-converts PromQL → YAML. `custom_` prefix isolates old/new rules side-by-side. Shadow Monitoring validates numerical consistency (tolerance ≤ 5%) | `da-tools validate --mapping rules.csv` |
 | **Zero Alert Fatigue** | Maintenance storms + duplicate notifications → on-call mutes channels → real P0s get buried | Auto-Suppression (Critical fires → Warning auto-silenced) + maintenance mode + scheduled thresholds (auto-relax at night) + three-state toggle | `make demo-full` end-to-end verification < 5 min |
-| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 10 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.5.0 scaffold` |
+| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 10 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.6.0 scaffold` |
 | **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate → `deprecate` / `offboard` retire. Three-tier governance model + CI deny-list linting. Every tool has `--dry-run` | `da-tools offboard <tenant> --dry-run` |
 | **Config-Driven Routing** | Notification targets hardcoded in Alertmanager config → changing one webhook requires editing central config | Tenant YAML `_routing` for self-service management of 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty) + Go template customization + CI validation | `da-tools generate-routes --validate` |
 | **10 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database type → reinventing the wheel | Covers 7 DB types (MariaDB / Redis / MongoDB / Elasticsearch / Oracle / DB2 / ClickHouse) + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing | `da-tools scaffold --catalog` |
@@ -286,17 +286,17 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ```bash
 # View supported DB types
-docker run --rm ghcr.io/vencil/da-tools:1.5.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.6.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.5.0 scaffold
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.6.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.5.0 migrate /data/legacy-rules.yml
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.6.0 migrate /data/legacy-rules.yml
 
 # Shadow Monitoring validation
 docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.5.0 validate --mapping /data/prefix-mapping.yaml
+  ghcr.io/vencil/da-tools:1.6.0 validate --mapping /data/prefix-mapping.yaml
 ```
 
 > **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.

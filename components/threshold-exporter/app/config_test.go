@@ -2289,6 +2289,269 @@ func TestValidateTenantKeys_CriticalSuffixValid(t *testing.T) {
 }
 
 // ============================================================
+// Structured Silent Mode Tests (v1.7.0)
+// ============================================================
+
+func TestResolveSilentModes_StructuredWithExpires_Active(t *testing.T) {
+	// Structured _silent_mode with future expires → active (not expired)
+	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveSilentModesAt(time.Now())
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].Tenant != "db-a" || result[0].TargetSeverity != "warning" {
+		t.Errorf("unexpected: %+v", result[0])
+	}
+	if result[0].Expired {
+		t.Error("should not be expired (future)")
+	}
+	if result[0].Reason != "Planned DB migration" {
+		t.Errorf("expected reason 'Planned DB migration', got %q", result[0].Reason)
+	}
+}
+
+func TestResolveSilentModes_StructuredWithExpires_Expired(t *testing.T) {
+	// Structured _silent_mode with past expires → expired
+	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + past + "\nreason: DB migration done\ntarget: all\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveSilentModesAt(time.Now())
+	if len(result) != 2 {
+		t.Fatalf("expected 2 (warning+critical, both expired), got %d", len(result))
+	}
+	for _, r := range result {
+		if !r.Expired {
+			t.Errorf("expected expired for %s, got not expired", r.TargetSeverity)
+		}
+	}
+}
+
+func TestResolveSilentModes_StructuredNoExpires(t *testing.T) {
+	// Structured _silent_mode without expires → always active
+	yamlStr := "reason: Long-term silencing\ntarget: critical\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveSilentModesAt(time.Now())
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].Expired {
+		t.Error("should not be expired (no expires set)")
+	}
+	if result[0].Expires != (time.Time{}) {
+		t.Error("expires should be zero value")
+	}
+}
+
+func TestResolveSilentModes_StructuredDisable(t *testing.T) {
+	// Structured with target: "disable" → no entries
+	yamlStr := "target: disable\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveSilentModesAt(time.Now())
+	if len(result) != 0 {
+		t.Errorf("expected 0 for disable, got %d", len(result))
+	}
+}
+
+func TestResolveSilentModes_ScalarBackwardCompat(t *testing.T) {
+	// Scalar strings must still work exactly as before
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_silent_mode": SV("warning")},
+			"db-b": {"_silent_mode": SV("all")},
+		},
+	}
+	result := cfg.ResolveSilentModesAt(time.Now())
+	// db-a: 1, db-b: 2 = 3
+	if len(result) != 3 {
+		t.Errorf("expected 3, got %d", len(result))
+	}
+	for _, r := range result {
+		if r.Expired {
+			t.Error("scalar should never be expired")
+		}
+		if !r.Expires.IsZero() {
+			t.Error("scalar should have zero expires")
+		}
+	}
+}
+
+// ============================================================
+// Structured Maintenance Mode Tests (v1.7.0)
+// ============================================================
+
+func TestResolveMaintenanceExpiries_NoMaintenance(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"mysql_connections": SV("70")},
+		},
+	}
+	result := cfg.ResolveMaintenanceExpiries()
+	if len(result) != 0 {
+		t.Errorf("expected 0, got %d", len(result))
+	}
+}
+
+func TestResolveMaintenanceExpiries_ScalarEnable(t *testing.T) {
+	// Scalar "enable" has no expires → no expiry entry
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV("enable")},
+		},
+	}
+	result := cfg.ResolveMaintenanceExpiries()
+	if len(result) != 0 {
+		t.Errorf("expected 0 (scalar has no expires), got %d", len(result))
+	}
+}
+
+func TestResolveMaintenanceExpiries_StructuredActive(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveMaintenanceExpiriesAt(time.Now())
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].Expired {
+		t.Error("should not be expired")
+	}
+	if result[0].Reason != "Scheduled upgrade" {
+		t.Errorf("expected reason 'Scheduled upgrade', got %q", result[0].Reason)
+	}
+}
+
+func TestResolveMaintenanceExpiries_StructuredExpired(t *testing.T) {
+	past := time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveMaintenanceExpiriesAt(time.Now())
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if !result[0].Expired {
+		t.Error("should be expired")
+	}
+}
+
+func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
+	// When structured _state_maintenance has expired, the state filter should NOT be emitted
+	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + past + "\ntarget: enable\n"
+	cfg := &ThresholdConfig{
+		StateFilters: map[string]StateFilter{
+			"maintenance": {Severity: "warning", DefaultState: "disable"},
+		},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveStateFiltersAt(time.Now())
+	if len(result) != 0 {
+		t.Errorf("expected 0 (maintenance expired → filter disabled), got %d", len(result))
+	}
+}
+
+func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
+	// When structured _state_maintenance has future expires, the state filter should be emitted
+	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + future + "\ntarget: enable\n"
+	cfg := &ThresholdConfig{
+		StateFilters: map[string]StateFilter{
+			"maintenance": {Severity: "warning", DefaultState: "disable"},
+		},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV(yamlStr)},
+		},
+	}
+	result := cfg.ResolveStateFiltersAt(time.Now())
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].Tenant != "db-a" || result[0].FilterName != "maintenance" {
+		t.Errorf("unexpected: %+v", result[0])
+	}
+}
+
+func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
+	// Scalar "enable" should still work as before
+	cfg := &ThresholdConfig{
+		StateFilters: map[string]StateFilter{
+			"maintenance": {Severity: "warning", DefaultState: "disable"},
+		},
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV("enable")},
+		},
+	}
+	result := cfg.ResolveStateFiltersAt(time.Now())
+	if len(result) != 1 {
+		t.Errorf("expected 1, got %d", len(result))
+	}
+}
+
+func TestIsMaintenanceActive_ScalarEnable(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV("enable")},
+		},
+	}
+	if !cfg.IsMaintenanceActive("db-a", time.Now()) {
+		t.Error("scalar enable should be active")
+	}
+}
+
+func TestIsMaintenanceActive_Expired(t *testing.T) {
+	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + past + "\ntarget: enable\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV(yamlStr)},
+		},
+	}
+	if cfg.IsMaintenanceActive("db-a", time.Now()) {
+		t.Error("should not be active (expired)")
+	}
+}
+
+func TestIsMaintenanceActive_NotExpiredYet(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	yamlStr := "expires: " + future + "\ntarget: enable\n"
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"db-a": {"_state_maintenance": SV(yamlStr)},
+		},
+	}
+	if !cfg.IsMaintenanceActive("db-a", time.Now()) {
+		t.Error("should be active (not expired yet)")
+	}
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 

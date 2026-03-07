@@ -6,6 +6,8 @@
 defaults:
   mysql_connections: 80
   mysql_cpu: 80
+  pg_connections: 80
+  pg_replication_lag: 30
   container_cpu: 80
   container_memory: 85
 
@@ -33,3 +35,17 @@ _routing_defaults:
   group_wait: "30s"
   group_interval: "5m"
   repeat_interval: "4h"
+
+# v1.7.0 Platform Enforced Routing: NOC always receives critical alerts.
+# Inserted BEFORE tenant routes with continue: true — tenants cannot override.
+# Set enabled: false (or remove) to disable.
+# _routing_enforced:
+#   enabled: true
+#   receiver:
+#     type: "webhook"
+#     url: "https://noc.example.com/alerts"
+#   match:
+#     - 'severity="critical"'
+#   group_by: ["alertname", "tenant"]
+#   group_wait: "15s"
+#   repeat_interval: "1h"
