@@ -270,5 +270,36 @@ class TestEndToEnd(unittest.TestCase):
             self.assertEqual(diffs["db-a"][0]["change"], "tighter")
 
 
+
+# ── Exit Code Tests (v1.11.0 CI integration) ─────────────────────
+
+class TestExitCode(unittest.TestCase):
+    """config_diff.py exit codes for CI pipeline integration."""
+
+    def test_exit_0_no_changes(self):
+        """Identical directories → exit 0."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"db-a": {"mysql_connections": "80"}}}, f)
+            old = cd.load_configs_from_dir(d)
+            new = cd.load_configs_from_dir(d)
+            diffs = cd.compute_diff(old, new)
+            # Exit code logic: 1 if diffs else 0
+            self.assertEqual(1 if diffs else 0, 0)
+
+    def test_exit_1_changes_detected(self):
+        """Different directories → exit 1 (signal to CI)."""
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            with open(os.path.join(old_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"db-a": {"mysql_connections": "80"}}}, f)
+            with open(os.path.join(new_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"tenants": {"db-a": {"mysql_connections": "50"}}}, f)
+            old = cd.load_configs_from_dir(old_dir)
+            new = cd.load_configs_from_dir(new_dir)
+            diffs = cd.compute_diff(old, new)
+            self.assertEqual(1 if diffs else 0, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -95,12 +95,16 @@ groups:
       - alert: OracleHighActiveSessions
         expr: |
           (
-            tenant:oracle_sessions_active:max
-            > on(tenant) group_left
-            tenant:alert_threshold:oracle_sessions_active
+            (
+              tenant:oracle_sessions_active:max
+              > on(tenant) group_left
+              tenant:alert_threshold:oracle_sessions_active
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -108,15 +112,22 @@ groups:
           summary: "Oracle high active sessions on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.0f\" }} active sessions"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: OracleTablespaceAlmostFull
         expr: |
           (
-            tenant:oracle_tablespace_used_percent:max
-            > on(tenant) group_left
-            tenant:alert_threshold:oracle_tablespace_used_percent
+            (
+              tenant:oracle_tablespace_used_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:oracle_tablespace_used_percent
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -124,15 +135,22 @@ groups:
           summary: "Oracle tablespace nearing capacity on {{ $labels.tenant }}"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: OracleHighWaitTime
         expr: |
           (
-            tenant:oracle_wait_time:rate5m
-            > on(tenant) group_left
-            tenant:alert_threshold:oracle_wait_time_rate
+            (
+              tenant:oracle_wait_time:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:oracle_wait_time_rate
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -140,15 +158,22 @@ groups:
           summary: "Oracle high wait time on {{ $labels.tenant }}"
           description: "Wait time rate: {{ $value | printf \"%.1f\" }}s/s"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: OracleHighProcessCount
         expr: |
           (
-            tenant:oracle_process_count:max
-            > on(tenant) group_left
-            tenant:alert_threshold:oracle_process_count
+            (
+              tenant:oracle_process_count:max
+              > on(tenant) group_left
+              tenant:alert_threshold:oracle_process_count
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -156,15 +181,22 @@ groups:
           summary: "Oracle high process count on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.0f\" }} active processes"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: OracleHighPGAUsage
         expr: |
           (
-            tenant:oracle_pga_allocated_bytes:max
-            > on(tenant) group_left
-            tenant:alert_threshold:oracle_pga_allocated_bytes
+            (
+              tenant:oracle_pga_allocated_bytes:max
+              > on(tenant) group_left
+              tenant:alert_threshold:oracle_pga_allocated_bytes
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 10m
         labels:
           severity: warning
@@ -172,14 +204,25 @@ groups:
           summary: "Oracle high PGA usage on {{ $labels.tenant }}"
           description: "PGA allocated: {{ $value | humanize1024 }}B"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: OracleHighSessionUtilization
         expr: |
-          tenant:oracle_session_utilization:ratio > 0.85
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:oracle_session_utilization:ratio > 0.85
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Oracle session limit approaching on {{ $labels.tenant }}"
           description: "Session utilization: {{ $value | printf \"%.0f\" }}%"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

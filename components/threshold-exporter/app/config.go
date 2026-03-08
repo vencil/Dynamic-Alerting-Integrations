@@ -78,9 +78,38 @@ type silentModeStructured struct {
 
 // maintenanceModeStructured is the intermediate struct for parsing structured _state_maintenance YAML.
 type maintenanceModeStructured struct {
-	Target  string `yaml:"target"`  // "enable" (default if omitted)
-	Expires string `yaml:"expires"` // ISO 8601
-	Reason  string `yaml:"reason"`
+	Target    string              `yaml:"target"`    // "enable" (default if omitted)
+	Expires   string              `yaml:"expires"`   // ISO 8601
+	Reason    string              `yaml:"reason"`
+	Recurring []RecurringSchedule `yaml:"recurring"` // v1.11.0: periodic maintenance windows
+}
+
+// RecurringSchedule defines a periodic maintenance window (v1.11.0).
+// Used by da-tools maintenance-scheduler CronJob to create Alertmanager silences.
+// The Go exporter stores this data but does not act on it — the CronJob reads
+// conf.d/ and evaluates cron expressions at runtime.
+type RecurringSchedule struct {
+	Cron     string `yaml:"cron"`     // Standard 5-field cron expression
+	Duration string `yaml:"duration"` // Go-style duration (e.g., "4h", "30m")
+	Reason   string `yaml:"reason"`   // Human-readable reason (optional)
+}
+
+// TenantMetadata holds optional metadata labels for a tenant.
+// Exposed as tenant_metadata_info{tenant, runbook_url, owner, tier} = 1 (info metric).
+// Unconditionally emitted for ALL tenants — unset fields default to empty string.
+// This guarantees PromQL group_left joins always succeed (no False Negatives).
+type TenantMetadata struct {
+	RunbookURL string `yaml:"runbook_url"`
+	Owner      string `yaml:"owner"`
+	Tier       string `yaml:"tier"`
+}
+
+// ResolvedMetadata is the resolved metadata for one tenant.
+type ResolvedMetadata struct {
+	Tenant     string
+	RunbookURL string
+	Owner      string
+	Tier       string
 }
 
 // TimeWindowOverride defines a UTC time window with an override value.
@@ -767,13 +796,49 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 	return result
 }
 
+// ResolveMetadata returns metadata for ALL tenants unconditionally.
+// Tenants without _metadata get empty strings — this guarantees PromQL
+// group_left joins never fail (no False Negatives from missing info metric).
+//
+// _metadata is stored as a re-serialized YAML string in ScheduledValue.Default
+// (arbitrary mapping path in UnmarshalYAML). We parse it back into TenantMetadata.
+func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
+	var result []ResolvedMetadata
+
+	for tenant, overrides := range c.Tenants {
+		meta := ResolvedMetadata{Tenant: tenant}
+
+		sv, exists := overrides["_metadata"]
+		if exists && sv.Default != "" {
+			var tm TenantMetadata
+			if err := yaml.Unmarshal([]byte(sv.Default), &tm); err != nil {
+				log.Printf("WARN: tenant=%s: failed to parse _metadata: %v", tenant, err)
+			} else {
+				meta.RunbookURL = tm.RunbookURL
+				meta.Owner = tm.Owner
+				meta.Tier = tm.Tier
+			}
+		}
+
+		result = append(result, meta)
+	}
+
+	// Sort by tenant name for deterministic output
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Tenant < result[j].Tenant
+	})
+
+	return result
+}
+
 // validReservedKeys lists tenant config keys with special meaning.
 // Any key not matching these patterns AND not in defaults is suspicious.
 // Source of truth (Python): scripts/tools/_lib_python.py — keep in sync.
 var validReservedKeys = map[string]bool{
 	"_silent_mode":    true,
 	"_severity_dedup": true,
-	"_namespaces":     true,  // v1.8.0: metadata for N:1 tenant mapping tooling
+	"_namespaces":     true, // v1.8.0: metadata for N:1 tenant mapping tooling
+	"_metadata":       true, // v1.11.0: tenant metadata (runbook_url, owner, tier) → tenant_metadata_info metric
 }
 
 // validReservedPrefixes lists prefixes for tenant config keys with special meaning.

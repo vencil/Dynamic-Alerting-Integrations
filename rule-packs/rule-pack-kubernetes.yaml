@@ -97,12 +97,16 @@ groups:
       - alert: PodContainerHighCPU
         expr: |
           (
-            max by(tenant) (tenant:pod_weakest_cpu_percent:max)
-            > on(tenant) group_left
-            tenant:alert_threshold:container_cpu
+            (
+              max by(tenant) (tenant:pod_weakest_cpu_percent:max)
+              > on(tenant) group_left
+              tenant:alert_threshold:container_cpu
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 60s
         labels:
           severity: warning
@@ -110,15 +114,22 @@ groups:
           summary: "High container CPU in {{ $labels.tenant }}"
           description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: PodContainerHighMemory
         expr: |
           (
-            max by(tenant) (tenant:pod_weakest_memory_percent:max)
-            > on(tenant) group_left
-            tenant:alert_threshold:container_memory
+            (
+              max by(tenant) (tenant:pod_weakest_memory_percent:max)
+              > on(tenant) group_left
+              tenant:alert_threshold:container_memory
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 60s
         labels:
           severity: warning
@@ -126,6 +137,9 @@ groups:
           summary: "High container memory in {{ $labels.tenant }}"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
   # -------------------------------------------------------
   # Alert Rules: Pod state alerts (State/String Matching)
   # -------------------------------------------------------
@@ -135,13 +149,17 @@ groups:
         expr: |
           (
             (
-              tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
-              * on(tenant) group_left
-              user_state_filter{filter="container_crashloop"}
-            ) > 0
+              (
+                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                * on(tenant) group_left
+                user_state_filter{filter="container_crashloop"}
+              ) > 0
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: critical
@@ -149,20 +167,31 @@ groups:
           summary: "Container crash loop detected in {{ $labels.tenant }}"
           description: "{{ $value }} container(s) in CrashLoopBackOff state"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: ContainerImagePullFailure
         expr: |
           (
             (
-              tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
-              * on(tenant) group_left
-              user_state_filter{filter="container_imagepull"}
-            ) > 0
+              (
+                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                * on(tenant) group_left
+                user_state_filter{filter="container_imagepull"}
+              ) > 0
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
         annotations:
           summary: "Image pull failure detected in {{ $labels.tenant }}"
           description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

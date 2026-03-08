@@ -95,12 +95,16 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            tenant:mysql_threads_connected:max
-            > on(tenant) group_left
-            tenant:alert_threshold:connections
+            (
+              tenant:mysql_threads_connected:max
+              > on(tenant) group_left
+              tenant:alert_threshold:connections
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -109,16 +113,23 @@ groups:
           summary: "High connections on {{ $labels.tenant }}"
           description: "{{ $value }} threads connected (warning threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Critical tier
       - alert: MariaDBHighConnectionsCritical
         expr: |
           (
-            tenant:mysql_threads_connected:max
-            > on(tenant) group_left
-            tenant:alert_threshold:connections_critical
+            (
+              tenant:mysql_threads_connected:max
+              > on(tenant) group_left
+              tenant:alert_threshold:connections_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: critical
@@ -127,24 +138,31 @@ groups:
           summary: "Critical connections on {{ $labels.tenant }}"
           description: "{{ $value }} threads connected (critical threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Composite alert: connections AND CPU both exceeded
       - alert: MariaDBSystemBottleneck
         expr: |
           (
             (
-              tenant:mysql_threads_connected:max
-              > on(tenant) group_left
-              tenant:alert_threshold:connections
+              (
+                tenant:mysql_threads_connected:max
+                > on(tenant) group_left
+                tenant:alert_threshold:connections
+              )
+              and on(tenant)
+              (
+                tenant:mysql_cpu_usage:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:cpu
+              )
             )
-            and on(tenant)
-            (
-              tenant:mysql_cpu_usage:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:cpu
-            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 60s
         labels:
           severity: critical
@@ -152,6 +170,9 @@ groups:
           summary: "System bottleneck on {{ $labels.tenant }}"
           description: "Both connections AND CPU thresholds exceeded simultaneously"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: MariaDBRecentRestart
         expr: mysql_global_status_uptime < 300
         for: 0s
@@ -164,9 +185,13 @@ groups:
       # Percona-inspired: High slow queries rate
       - alert: MariaDBHighSlowQueries
         expr: |
-          tenant:mysql_slow_queries:rate5m > 1
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:mysql_slow_queries:rate5m > 1
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -174,15 +199,26 @@ groups:
           summary: "High slow query rate on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.2f\" }} slow queries/sec"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Percona-inspired: High aborted connections
       - alert: MariaDBHighAbortedConnections
         expr: |
-          tenant:mysql_aborted_connections:rate5m > 5
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:mysql_aborted_connections:rate5m > 5
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "High aborted connections on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.2f\" }} aborted connections/sec"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

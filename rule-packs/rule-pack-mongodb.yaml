@@ -90,12 +90,16 @@ groups:
       - alert: MongoDBHighConnections
         expr: |
           (
-            tenant:mongodb_connections_current:max
-            > on(tenant) group_left
-            tenant:alert_threshold:mongodb_connections_current
+            (
+              tenant:mongodb_connections_current:max
+              > on(tenant) group_left
+              tenant:alert_threshold:mongodb_connections_current
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -103,15 +107,22 @@ groups:
           summary: "MongoDB high connection count on {{ $labels.tenant }}"
           description: "{{ $value }} current connections"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: MongoDBReplicationLag
         expr: |
           (
-            tenant:mongodb_replication_lag:max
-            > on(tenant) group_left
-            tenant:alert_threshold:mongodb_replication_lag
+            (
+              tenant:mongodb_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:mongodb_replication_lag
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 2m
         labels:
           severity: warning
@@ -119,15 +130,22 @@ groups:
           summary: "MongoDB replication lag on {{ $labels.tenant }}"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s behind primary"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: MongoDBHighOperations
         expr: |
           (
-            tenant:mongodb_opcounters:rate5m
-            > on(tenant) group_left
-            tenant:alert_threshold:mongodb_opcounters_rate
+            (
+              tenant:mongodb_opcounters:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:mongodb_opcounters_rate
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -135,11 +153,18 @@ groups:
           summary: "MongoDB high operation rate on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.0f\" }} ops/sec"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: MongoDBHighPageFaults
         expr: |
-          tenant:mongodb_page_faults:rate5m > 100
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:mongodb_page_faults:rate5m > 100
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -147,14 +172,25 @@ groups:
           summary: "MongoDB high page faults on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }} page faults/sec — check memory"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: MongoDBConnectionSaturation
         expr: |
-          tenant:mongodb_connection_usage:ratio > 0.8
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:mongodb_connection_usage:ratio > 0.8
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.0f\" }}% of connections used"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

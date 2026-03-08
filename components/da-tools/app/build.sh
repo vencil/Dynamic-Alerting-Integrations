@@ -28,6 +28,7 @@
 #       ├── deprecate_rule.py
 #       ├── cutover_tenant.py
 #       ├── blind_spot_discovery.py
+#       ├── maintenance_scheduler.py
 #       ├── lint_custom_rules.py
 #       ├── config_diff.py
 #       ├── generate_alertmanager_routes.py
@@ -69,6 +70,7 @@ TOOL_FILES=(
     backtest_threshold.py
     cutover_tenant.py
     blind_spot_discovery.py
+    maintenance_scheduler.py
     # Config generation tools
     generate_alertmanager_routes.py
     validate_config.py

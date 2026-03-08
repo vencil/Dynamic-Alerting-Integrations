@@ -4,7 +4,7 @@
 
 ## 簡介
 
-本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.10.0 的技術架構。
+本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) v1.11.0 的技術架構。
 
 **本文涵蓋內容：**
 - 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
@@ -586,7 +586,7 @@ tenants:
 Platform Team 可在 `_defaults.yaml` 設定 `_routing_enforced`，在所有 tenant route 之前插入平台路由（帶 `continue: true`），實現「NOC 必收 + tenant 也收」雙軌通知：
 
 ```yaml
-# _defaults.yaml
+# _defaults.yaml — 模式 A：統一 NOC 接收
 _routing_enforced:
   enabled: true
   receiver:
@@ -596,7 +596,19 @@ _routing_enforced:
     severity: "critical"    # 僅 critical 送 NOC
 ```
 
-`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](byo-alertmanager-integration.md#8-platform-enforced-routingv170)。
+**Per-tenant Enforced Channel（v1.10.0）：** 若 receiver 欄位包含 `{{tenant}}`，系統自動為每個 tenant 建立獨立的 enforced route，讓 Platform 可 by-tenant 建立各自的通知通道，tenant 無法拒絕也無法覆寫：
+
+```yaml
+# _defaults.yaml — 模式 B：per-tenant 獨立通道
+_routing_enforced:
+  enabled: true
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/T/B/x"
+    channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
+```
+
+`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](byo-alertmanager-integration.md#8-platform-enforced-routingv170)。
 
 ---
 
@@ -1279,7 +1291,7 @@ tenants:
 
 ### 9.2 企業級測試覆蓋矩陣 (Enterprise Test Coverage Matrix)
 
-測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，750+ 測試案例）。
+測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，790+ 測試案例）。
 
 #### E2E Scenario Tests（`make test-scenario-*`）
 
@@ -1295,7 +1307,7 @@ tenants:
 
 #### Unit/Integration Tests（`make test` / `pytest`）
 
-v1.7.0–v1.10.0 新增大量企業功能，其測試覆蓋集中在 unit/integration 層：
+v1.7.0–v1.11.0 新增大量企業功能，其測試覆蓋集中在 unit/integration 層：
 
 | 功能域 | 企業防護需求 | 覆蓋範圍 | 測試數 |
 |--------|-------------|----------|--------|
@@ -1313,8 +1325,9 @@ v1.7.0–v1.10.0 新增大量企業功能，其測試覆蓋集中在 unit/integr
 | **Blind Spot Discovery** | 叢集盲區偵測 | targets 解析、segment 匹配、wrapped YAML 格式 | ~25 |
 | **Config Diff** | 配置差異 blast radius | wrapped/flat 格式載入、變更分類、Markdown 產出 | ~20 |
 | **AM GitOps ConfigMap** | 完整 ConfigMap 產出 | base-config 載入、互斥驗證、YAML 結構 | ~30 |
+| **Recurring Maintenance** | 排程式維護窗口自動化 | parse_duration（含 `d`）、is_in_window cron 判定、silence CRUD + extend、Pushgateway 指標推送 | ~55 |
 
-> 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 750+ passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。
+> 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 790+ passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。
 
 #### 斷言細節補充
 
@@ -1511,15 +1524,20 @@ flowchart LR
 
 以下為按優先序排列的技術方向。已完成項目請查閱 [CHANGELOG.md](../CHANGELOG.md)。
 
+```mermaid
+graph LR
+    subgraph P2["P2 中期演進 (需客戶驗證)"]
+        RP["Rule Pack 擴展"]
+        FB["Federation B"]
+        NM["1:N Mapping"]
+    end
+    subgraph P3["P3 長期藍圖 (規模化需求驅動)"]
+        CRD["CRD + Operator"]
+        LM["Log-to-Metric"]
+    end
 ```
-P2 中期演進                P3 長期藍圖
-(需客戶驗證)               (規模化需求驅動)
-┌────────────────┐     ┌───────────────┐
-│ Rule Pack 擴展  │     │ CRD + Operator│
-│ Federation B   │     │ Log-to-Metric │
-│ 1:N Mapping    │     │               │
-└────────────────┘     └───────────────┘
-```
+
+> **v1.11.0 已完成：** Dynamic Runbook Injection（`tenant_metadata_info` info metric + Rule Pack `group_left` join）、Recurring Maintenance Schedules（`maintenance_scheduler.py` + CronJob）、Config Drift CI（GitHub Actions + GitLab CI 模板）。詳見 [CHANGELOG.md](../CHANGELOG.md)。
 
 ### P2 — 中期演進
 
@@ -1575,6 +1593,6 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 ---
 
-**文件版本：** v1.10.0 — 2026-03-08
-**最後更新：** v1.10.0 — Shadow Monitoring 自動化 + AM GitOps 閉環 + Blind Spot Discovery + Config Diff、da-tools CLI 16→19 命令
+**文件版本：** v1.11.0 — 2026-03-08
+**最後更新：** v1.11.0 — Dynamic Runbook Injection + Recurring Maintenance + Config Drift CI、da-tools CLI 19→20 命令
 **維護者：** Platform Engineering Team

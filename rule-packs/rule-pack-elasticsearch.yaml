@@ -105,9 +105,13 @@ groups:
 
       - alert: ElasticsearchClusterYellow
         expr: |
-          tenant:es_cluster_health:status == 1
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:es_cluster_health:status == 1
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -115,15 +119,22 @@ groups:
           summary: "Elasticsearch cluster YELLOW on {{ $labels.tenant }}"
           description: "Some replica shards are unassigned"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: ElasticsearchHighHeapUsage
         expr: |
           (
-            tenant:es_heap_usage_percent:max
-            > on(tenant) group_left
-            tenant:alert_threshold:es_heap_usage_percent
+            (
+              tenant:es_heap_usage_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:es_heap_usage_percent
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -131,15 +142,22 @@ groups:
           summary: "Elasticsearch high heap usage on {{ $labels.tenant }}"
           description: "JVM heap: {{ $value | printf \"%.1f\" }}%"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: ElasticsearchHighDiskUsage
         expr: |
           (
-            tenant:es_disk_usage_percent:max
-            > on(tenant) group_left
-            tenant:alert_threshold:es_disk_usage_percent
+            (
+              tenant:es_disk_usage_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:es_disk_usage_percent
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -147,15 +165,22 @@ groups:
           summary: "Elasticsearch high disk usage on {{ $labels.tenant }}"
           description: "Disk usage: {{ $value | printf \"%.1f\" }}%"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: ElasticsearchHighSearchLatency
         expr: |
           (
-            tenant:es_search_latency_ms:avg
-            > on(tenant) group_left
-            tenant:alert_threshold:es_search_latency_ms
+            (
+              tenant:es_search_latency_ms:avg
+              > on(tenant) group_left
+              tenant:alert_threshold:es_search_latency_ms
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -163,11 +188,18 @@ groups:
           summary: "Elasticsearch high search latency on {{ $labels.tenant }}"
           description: "Average search latency: {{ $value | printf \"%.0f\" }}ms"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: ElasticsearchUnassignedShards
         expr: |
-          tenant:es_unassigned_shards:count > 0
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:es_unassigned_shards:count > 0
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 10m
         labels:
           severity: warning
@@ -175,18 +207,29 @@ groups:
           summary: "Elasticsearch has unassigned shards on {{ $labels.tenant }}"
           description: "{{ $value }} unassigned shards — check node capacity"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: ElasticsearchPendingTasks
         expr: |
           (
-            tenant:es_pending_tasks:max
-            > on(tenant) group_left
-            tenant:alert_threshold:es_pending_tasks
+            (
+              tenant:es_pending_tasks:max
+              > on(tenant) group_left
+              tenant:alert_threshold:es_pending_tasks
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Elasticsearch pending cluster tasks on {{ $labels.tenant }}"
           description: "{{ $value }} pending tasks — cluster may be overloaded"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

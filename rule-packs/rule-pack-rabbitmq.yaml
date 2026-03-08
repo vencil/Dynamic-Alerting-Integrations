@@ -94,12 +94,16 @@ groups:
       - alert: RabbitMQHighQueueDepth
         expr: |
           (
-            tenant:rabbitmq_queue_messages:max
-            > on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_queue_messages
+            (
+              tenant:rabbitmq_queue_messages:max
+              > on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_queue_messages
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -108,16 +112,23 @@ groups:
           summary: "High RabbitMQ queue depth on {{ $labels.tenant }}"
           description: "Messages ready: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Critical tier
       - alert: RabbitMQHighQueueDepthCritical
         expr: |
           (
-            tenant:rabbitmq_queue_messages:max
-            > on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_queue_messages_critical
+            (
+              tenant:rabbitmq_queue_messages:max
+              > on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_queue_messages_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: critical
@@ -126,15 +137,22 @@ groups:
           summary: "Critical RabbitMQ queue depth on {{ $labels.tenant }}"
           description: "Messages ready: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RabbitMQHighMemory
         expr: |
           (
-            tenant:rabbitmq_node_mem_percent:ratio
-            > on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_node_mem_percent
+            (
+              tenant:rabbitmq_node_mem_percent:ratio
+              > on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_node_mem_percent
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -143,16 +161,23 @@ groups:
           summary: "High RabbitMQ memory usage on {{ $labels.tenant }}"
           description: "Memory used: {{ $value | printf \"%.1f\" }}% of limit (warning threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Critical tier
       - alert: RabbitMQHighMemoryCritical
         expr: |
           (
-            tenant:rabbitmq_node_mem_percent:ratio
-            > on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+            (
+              tenant:rabbitmq_node_mem_percent:ratio
+              > on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: critical
@@ -161,15 +186,22 @@ groups:
           summary: "Critical RabbitMQ memory usage on {{ $labels.tenant }}"
           description: "Memory used: {{ $value | printf \"%.1f\" }}% of limit (critical threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RabbitMQHighConnections
         expr: |
           (
-            tenant:rabbitmq_connections:max
-            > on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_connections
+            (
+              tenant:rabbitmq_connections:max
+              > on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_connections
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -178,15 +210,22 @@ groups:
           summary: "High RabbitMQ connection count on {{ $labels.tenant }}"
           description: "Active connections: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RabbitMQLowConsumers
         expr: |
           (
-            tenant:rabbitmq_consumers:max
-            < on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_consumers
+            (
+              tenant:rabbitmq_consumers:max
+              < on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_consumers
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -195,15 +234,22 @@ groups:
           summary: "Low RabbitMQ consumer count on {{ $labels.tenant }}"
           description: "Active consumers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RabbitMQHighUnackedMessages
         expr: |
           (
-            tenant:rabbitmq_unacked_messages:max
-            > on(tenant) group_left
-            tenant:alert_threshold:rabbitmq_unacked_messages
+            (
+              tenant:rabbitmq_unacked_messages:max
+              > on(tenant) group_left
+              tenant:alert_threshold:rabbitmq_unacked_messages
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -211,3 +257,7 @@ groups:
         annotations:
           summary: "High unacknowledged messages on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.0f\" }} messages awaiting acknowledgment (consumer lag indicator)"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

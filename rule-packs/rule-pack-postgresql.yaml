@@ -107,12 +107,16 @@ groups:
       - alert: PostgreSQLHighConnections
         expr: |
           (
-            tenant:pg_connection_usage:ratio
-            > on(tenant) group_left
-            tenant:alert_threshold:pg_connections
+            (
+              tenant:pg_connection_usage:ratio
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_connections
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -121,16 +125,23 @@ groups:
           summary: "High connection usage on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }}% of max_connections used (warning threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Critical tier
       - alert: PostgreSQLHighConnectionsCritical
         expr: |
           (
-            tenant:pg_connection_usage:ratio
-            > on(tenant) group_left
-            tenant:alert_threshold:pg_connections_critical
+            (
+              tenant:pg_connection_usage:ratio
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_connections_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: critical
@@ -139,15 +150,22 @@ groups:
           summary: "Critical connection usage on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }}% of max_connections used (critical threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: PostgreSQLHighReplicationLag
         expr: |
           (
-            tenant:pg_replication_lag:max
-            > on(tenant) group_left
-            tenant:alert_threshold:pg_replication_lag
+            (
+              tenant:pg_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_replication_lag
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: warning
@@ -156,16 +174,23 @@ groups:
           summary: "High replication lag on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }}s replication lag (warning threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Critical tier
       - alert: PostgreSQLHighReplicationLagCritical
         expr: |
           (
-            tenant:pg_replication_lag:max
-            > on(tenant) group_left
-            tenant:alert_threshold:pg_replication_lag_critical
+            (
+              tenant:pg_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_replication_lag_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 30s
         labels:
           severity: critical
@@ -174,12 +199,19 @@ groups:
           summary: "Critical replication lag on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }}s replication lag (critical threshold exceeded)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # Deadlock detection (static threshold — typically 0 is expected)
       - alert: PostgreSQLHighDeadlocks
         expr: |
-          tenant:pg_deadlocks:rate5m > 0.1
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:pg_deadlocks:rate5m > 0.1
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -187,12 +219,19 @@ groups:
           summary: "Deadlocks detected on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.2f\" }} deadlocks/sec over 5m"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # High rollback ratio (> 5% of transactions are rollbacks)
       - alert: PostgreSQLHighRollbackRatio
         expr: |
-          tenant:pg_rollback_ratio:rate5m > 0.05
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:pg_rollback_ratio:rate5m > 0.05
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -200,6 +239,9 @@ groups:
           summary: "High rollback ratio on {{ $labels.tenant }}"
           description: "{{ $value | humanizePercentage }} of transactions are rollbacks"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: PostgreSQLRecentRestart
         expr: |
           (time() - pg_postmaster_start_time_seconds) < 300

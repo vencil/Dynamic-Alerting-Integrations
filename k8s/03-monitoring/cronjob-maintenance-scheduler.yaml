@@ -1,0 +1,67 @@
+# ============================================================
+# CronJob: maintenance-scheduler
+#
+# Runs every 5 minutes to evaluate recurring maintenance
+# schedules and create Alertmanager silences automatically.
+#
+# Prerequisites:
+#   - threshold-config ConfigMap with _state_maintenance.recurring
+#   - Alertmanager accessible at the configured URL
+#   - (Optional) Pushgateway for CronJob observability metrics
+#
+# The CronJob reads tenant configs from the mounted ConfigMap
+# and creates silences via the Alertmanager API when a
+# maintenance window is currently active.
+# ============================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: maintenance-scheduler
+  namespace: monitoring
+  labels:
+    app: dynamic-alerting
+    component: maintenance-scheduler
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: dynamic-alerting
+            component: maintenance-scheduler
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: scheduler
+              image: ghcr.io/vencil/da-tools:1.11.0
+              args:
+                - maintenance-scheduler
+                - --config-dir
+                - /etc/config/conf.d
+                - --alertmanager
+                - http://alertmanager.monitoring.svc.cluster.local:9093
+                - --json-output
+                # Uncomment when Pushgateway is deployed:
+                # - --pushgateway
+                # - http://pushgateway.monitoring.svc.cluster.local:9091
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              volumeMounts:
+                - name: threshold-config
+                  mountPath: /etc/config/conf.d
+                  readOnly: true
+          volumes:
+            - name: threshold-config
+              configMap:
+                name: threshold-config

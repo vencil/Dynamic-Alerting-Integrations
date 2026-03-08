@@ -1,6 +1,6 @@
 # Federation Integration Guide
 
-> **v1.10.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
+> **v1.11.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
 
 ## 1. 概覽
 
@@ -32,39 +32,29 @@
 
 ## 2. 架構圖
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Central Cluster                        │
-│                                                           │
-│  ┌──────────────────┐    ┌──────────────────────────┐    │
-│  │ threshold-exporter│    │   Central Prometheus      │    │
-│  │  (conf.d/*.yaml) │    │                            │    │
-│  │  ×2 HA replicas  │◄───┤  - scrape threshold-exp   │    │
-│  └──────────────────┘    │  - federation/remote-write │    │
-│                           │    from edge clusters      │    │
-│                           │  - Rule Packs (all parts)  │    │
-│                           │  - Alert evaluation        │    │
-│                           └─────────┬────────────────┘    │
-│                                     │                      │
-│                           ┌─────────▼────────────────┐    │
-│                           │     Alertmanager          │    │
-│                           │  (generated routes.yaml)  │    │
-│                           └───────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
-         ▲                    ▲                    ▲
-         │ federation /       │ federation /       │ federation /
-         │ remote-write       │ remote-write       │ remote-write
-         │                    │                    │
-┌────────┴───────┐  ┌────────┴───────┐  ┌────────┴───────┐
-│  Edge Cluster A │  │  Edge Cluster B │  │  Edge Cluster C │
-│                 │  │                 │  │                 │
-│  Prometheus     │  │  Prometheus     │  │  Prometheus     │
-│  + DB exporter  │  │  + DB exporter  │  │  + DB exporter  │
-│  + relabel:     │  │  + relabel:     │  │  + relabel:     │
-│    tenant=db-a  │  │    tenant=db-b  │  │    tenant=db-c  │
-│    cluster=edge │  │    cluster=edge │  │    cluster=edge │
-│                 │  │                 │  │                 │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+```mermaid
+graph TB
+    subgraph Central["Central Cluster"]
+        TE["threshold-exporter<br/>conf.d/*.yaml<br/>×2 HA replicas"]
+        CP["Central Prometheus<br/>• scrape threshold-exporter<br/>• federation / remote-write<br/>• Rule Packs (all parts)<br/>• Alert evaluation"]
+        AM["Alertmanager<br/>generated routes.yaml"]
+        CP -->|scrape :8080| TE
+        CP -->|alert rules| AM
+    end
+
+    subgraph EdgeA["Edge Cluster A"]
+        PA["Prometheus + DB exporter<br/>relabel: tenant=db-a, cluster=edge-a"]
+    end
+    subgraph EdgeB["Edge Cluster B"]
+        PB["Prometheus + DB exporter<br/>relabel: tenant=db-b, cluster=edge-b"]
+    end
+    subgraph EdgeC["Edge Cluster C"]
+        PC["Prometheus + DB exporter<br/>relabel: tenant=db-c, cluster=edge-c"]
+    end
+
+    PA -->|"federation / remote-write"| CP
+    PB -->|"federation / remote-write"| CP
+    PC -->|"federation / remote-write"| CP
 ```
 
 ## 3. 邊緣叢集配置

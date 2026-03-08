@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.10.0).
+This document provides Platform Engineers and Site Reliability Engineers (SREs) with an in-depth exploration of the technical architecture of the "Multi-Tenant Dynamic Alerting Platform" (v1.11.0).
 
 **This document covers:**
 - System architecture and core design principles (including Regex dimension thresholds, scheduled thresholds)
@@ -1218,15 +1218,20 @@ The complete migration path integrates the AST engine, Shadow Monitoring, and Tr
 
 The following items are listed by expected impact. For completed items, see [CHANGELOG.md](../CHANGELOG.md).
 
+```mermaid
+graph LR
+    subgraph P2["P2 Medium-term (customer-validated)"]
+        RP["Rule Pack Expansion"]
+        FB["Federation B"]
+        NM["1:N Mapping"]
+    end
+    subgraph P3["P3 Long-term (scale-driven)"]
+        CRD["CRD + Operator"]
+        LM["Log-to-Metric"]
+    end
 ```
-P2 Medium-term              P3 Long-term
-(customer-validated)        (scale-driven)
-┌────────────────┐     ┌───────────────┐
-│ Rule Pack Exp  │     │ CRD + Operator│
-│ Federation B   │     │ Log-to-Metric │
-│ 1:N Mapping    │     │               │
-└────────────────┘     └───────────────┘
-```
+
+> **Completed in v1.11.0:** Dynamic Runbook Injection (`tenant_metadata_info` info metric + Rule Pack `group_left` join), Recurring Maintenance Schedules (`maintenance_scheduler.py` + CronJob), Config Drift CI (GitHub Actions + GitLab CI templates). See [CHANGELOG.md](../CHANGELOG.md).
 
 ### P2 — Medium-term Evolution
 
@@ -1282,6 +1287,6 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v1.10.0 — 2026-03-08
-**Last updated:** v1.10.0 — Shadow Monitoring Automation + AM GitOps loop + Blind Spot Discovery + Config Diff, da-tools CLI 16→19 commands
+**Document version:** v1.11.0 — 2026-03-08
+**Last updated:** v1.11.0 — Dynamic Runbook Injection + Recurring Maintenance + Config Drift CI, da-tools CLI 19→20 commands
 **Maintainer:** Platform Engineering Team

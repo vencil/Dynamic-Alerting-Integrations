@@ -239,9 +239,22 @@ def build_parser():
 
 
 def main():
-    """Entry point."""
+    """Entry point.
+
+    Exit codes:
+      0 — no changes detected
+      1 — changes detected (useful for CI: non-zero = PR has config diff)
+      2 — error (bad args, missing dirs, etc.)
+    """
     parser = build_parser()
     args = parser.parse_args()
+
+    if not os.path.isdir(args.old_dir):
+        print(f"ERROR: old-dir not found: {args.old_dir}", file=sys.stderr)
+        sys.exit(2)
+    if not os.path.isdir(args.new_dir):
+        print(f"ERROR: new-dir not found: {args.new_dir}", file=sys.stderr)
+        sys.exit(2)
 
     old_configs = load_configs_from_dir(args.old_dir)
     new_configs = load_configs_from_dir(args.new_dir)
@@ -252,6 +265,9 @@ def main():
         print(json.dumps(diffs, indent=2, ensure_ascii=False, default=str))
     else:
         print(render_markdown(diffs, args.old_dir, args.new_dir))
+
+    # Exit 1 if changes detected (CI signal), 0 if clean
+    sys.exit(1 if diffs else 0)
 
 
 if __name__ == "__main__":

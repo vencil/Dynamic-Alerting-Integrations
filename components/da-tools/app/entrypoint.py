@@ -18,6 +18,7 @@ Commands (Prometheus API — portable):
     backtest          Backtest threshold changes against historical data
     cutover           One-command Shadow Monitoring cutover (§7.1 all steps)
     blind-spot        Scan cluster targets and find unmonitored instances
+    maintenance-scheduler  Evaluate recurring maintenance and create AM silences
 
 Commands (Config Generation — reads tenant YAML):
     generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
@@ -55,6 +56,7 @@ COMMAND_MAP = {
     "backtest": "backtest_threshold.py",
     "cutover": "cutover_tenant.py",
     "blind-spot": "blind_spot_discovery.py",
+    "maintenance-scheduler": "maintenance_scheduler.py",
     # Group B: Prometheus + file system (config generation)
     "generate-routes": "generate_alertmanager_routes.py",
     # Group C: File system only (offline)

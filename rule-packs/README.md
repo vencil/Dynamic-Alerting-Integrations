@@ -75,14 +75,27 @@ groups:
       - record: tenant:alert_threshold:<metric>
         expr: max by(tenant) (user_threshold{metric="<metric>", severity="warning"})
 
-  # 3. Alert Rules (使用 group_left + unless maintenance)
+  # 3. Alert Rules (使用 group_left + unless maintenance + runbook injection)
   - name: <db>-alerts
     rules:
       - alert: <AlertName>
         expr: |
-          ( tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric> )
+          (
+            tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
+          )
+          * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
           unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+        annotations:
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
 ```
+
+### Dynamic Runbook Injection (v1.11.0)
+
+Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
+
+若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 11 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
 
 ## Exporter 文件連結
 

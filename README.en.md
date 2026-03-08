@@ -2,7 +2,7 @@
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.10.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.11.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
 
 ---
 
@@ -68,7 +68,7 @@ Zero PromQL. Tenants write only YAML: `mysql_connections: "80"`. All tools are p
 
 ```bash
 # No clone needed — just pull and run
-docker run --rm -it ghcr.io/vencil/da-tools:1.10.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools:1.11.0 scaffold --tenant my-app --db mariadb,redis
 ```
 
 ---
@@ -86,7 +86,7 @@ On the deployment side: the Helm chart is published to an **OCI registry** — o
 ```bash
 # One-command deploy — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.8.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -99,7 +99,7 @@ helm install threshold-exporter \
 Maintenance window = alert storm (a single scheduled maintenance can trigger dozens of duplicate alerts). Non-critical Redis queue alert at 3 AM wakes up the on-call engineer. Warning and Critical fire simultaneously = two notifications for the same problem. Result: on-call starts muting channels, and real P0s get buried.
 
 **✅ Our Solution:**
-Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). Multi-layer severity (`_critical` suffix) with **Auto-Suppression** — when Critical fires, the corresponding Warning is automatically suppressed, eliminating duplicate alerts. Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable. **Scheduled thresholds**: time-window auto-switching (e.g., `22:00-06:00` relaxed nighttime thresholds), reducing off-hours false positives.
+Built-in maintenance mode (`_state_maintenance: enable` suppresses all alerts via `unless`). **Recurring maintenance windows** (`_state_maintenance.recurring[]` with cron + duration — a CronJob evaluates every 5 minutes and auto-creates Alertmanager silences with idempotency checks and auto-extend). Multi-layer severity (`_critical` suffix) with **Auto-Suppression** — when Critical fires, the corresponding Warning is automatically suppressed, eliminating duplicate alerts. Dimensional thresholds (`redis_queue_length{queue="email"}: 1000`). Three-state logic: each tenant's each metric supports custom / default / disable. **Scheduled thresholds**: time-window auto-switching (e.g., `22:00-06:00` relaxed nighttime thresholds), reducing off-hours false positives. **Config-Driven Routing**: tenants define notification destinations in YAML (webhook/email/slack/teams) with Go template message customization.
 
 ---
 
@@ -139,8 +139,8 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 |-------|---------------|-----------|---------------|
 | **Full Migration Automation** | Hundreds of legacy rules to migrate → weeks of manual analysis, fear of missing something, no rollback confidence | Onboard reverse-analyzes existing config → Scaffold auto-fills tenant YAML → Shadow Monitoring compares → Auto-Convergence detects stability → Batch Health Report → Gap Analysis finds uncovered metrics | `da-tools onboard --alertmanager-config am.yml` → `scaffold --from-onboard hints.json` → `validate --auto-detect-convergence` → `batch-diagnose` |
 | **Change Confidence** | Changing thresholds with unknown blast radius → PR reviews are pure guesswork → nobody dares change anything | `--diff` preview shows before/after + affected alerts. PR auto-triggers `backtest` replaying 7 days of historical data → HIGH/MEDIUM/LOW risk rating | `da-tools patch-config --diff db-a mysql_connections 50` |
-| **Zero Alert Fatigue** | Maintenance storms + duplicate notifications → on-call mutes channels → real P0s get buried | Auto-Suppression (Critical fires → Warning auto-silenced) + maintenance mode + scheduled thresholds (auto-relax at night) + three-state toggle | `make demo-full` end-to-end verification < 5 min |
-| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 19 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.10.0 scaffold` |
+| **Zero Alert Fatigue** | Maintenance storms + duplicate notifications → on-call mutes channels → real P0s get buried | Auto-Suppression (Critical fires → Warning auto-silenced) + maintenance mode + recurring maintenance windows (cron + duration → CronJob auto-silence) + scheduled thresholds (auto-relax at night) + three-state toggle | `make demo-full` end-to-end verification < 5 min |
+| **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 20 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.11.0 scaffold` |
 | **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate (with `--diff` preview) → `deprecate` / `offboard` retire. Three-tier governance + CI deny-list linting + PR backtest | `da-tools offboard <tenant> --dry-run` |
 | **Config-Driven Routing** | Notification targets hardcoded in Alertmanager config → changing one webhook requires editing central config | Tenant YAML `_routing` for self-service management of 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty) + Go template customization + CI validation | `da-tools generate-routes --validate` |
 | **12 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database/MQ type → reinventing the wheel | Covers 9 DB/MQ + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing. `analyze-gaps` auto-maps custom rules to official Rule Packs | `da-tools analyze-gaps --config-dir conf.d/` |
@@ -315,25 +315,28 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | `deprecate_rule.py` | Graceful rule/metric deprecation (3-step automation) |
 | `baseline_discovery.py` | Load observation + threshold suggestions (p95/p99 stats → recommendations) |
 | `lint_custom_rules.py` | CI deny-list linter — custom rule governance compliance |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment (route + receiver + inhibit) + `--apply` + `--validate` |
+| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment (route + receiver + inhibit) + `--apply` + `--validate` + `--output-configmap` (GitOps full ConfigMap) |
 | `validate_config.py` | All-in-one config validation (YAML + schema + routes + policy + versions) |
-| `lint_custom_rules.py` | CI deny-list linter — validates Custom Rule governance compliance |
+| `cutover_tenant.py` | Shadow Monitoring one-click cutover (§7.1 full automation) |
+| `blind_spot_discovery.py` | Cluster targets blind spot scan (Prometheus targets × tenant config cross-reference) |
+| `config_diff.py` | Directory-level config diff (GitOps PR review blast radius report) |
+| `maintenance_scheduler.py` | Recurring maintenance windows → automatic Alertmanager silence creation (CronJob) |
 
 **Usage Examples (da-tools container — no clone needed):**
 
 ```bash
 # View supported DB types
-docker run --rm ghcr.io/vencil/da-tools:1.10.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.11.0 scaffold --catalog
 
 # New tenant: Interactive config generator (supports 8 DB types)
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.10.0 scaffold
+docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.11.0 scaffold
 
 # Existing alert rules: Auto-convert with AST engine
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 migrate /data/legacy-rules.yml
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 migrate /data/legacy-rules.yml
 
 # Shadow Monitoring validation
 docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.10.0 validate --mapping /data/prefix-mapping.yaml
+  ghcr.io/vencil/da-tools:1.11.0 validate --mapping /data/prefix-mapping.yaml
 ```
 
 > **Cloned the repo?** You can also use local commands like `python3 scripts/tools/scaffold_tenant.py --catalog`.
@@ -408,7 +411,7 @@ make help               # Show help message
 ├── k8s/
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
-│       ├── configmap-rules-*.yaml  # 10 independent Rule Pack ConfigMaps (including platform)
+│       ├── configmap-rules-*.yaml  # 12 independent Rule Pack ConfigMaps (including platform)
 │       └── deployment-prometheus.yaml  # Projected Volume architecture
 ├── rule-packs/                 # Modular Prometheus rule packs (authoritative reference)
 │   └── README.md               # Rule Pack specifications and templates
@@ -484,6 +487,7 @@ The Platform Rule Pack (`configmap-rules-platform.yaml`) provides 4 self-monitor
 - **Config-Driven Full Chain**: From thresholds (YAML) → routing (`_routing`) → notifications (Alertmanager receiver) → behavior control (Silent/Maintenance) — everything is driven by tenant YAML. No need to touch PromQL or Alertmanager config.
 - **Dual-Side Consistency**: Go exporter and Python tools share identical constants (`RECEIVER_TYPES`, `GUARDRAILS`, `isDisabled` semantics), ensuring cross-language validation consistency.
 - **Security Guardrails Built-in**: Webhook Domain Allowlist (SSRF prevention), Tenant Key Schema Validation (typo silent-failure prevention), Cardinality Guard (metric explosion prevention) — all platform-level defaults, not optional add-ons.
+- **Info Metric Injection Pattern**: `tenant_metadata_info` (value=1) carries `runbook_url`, `owner`, `tier` as labels. Rule Pack alerts auto-inherit metadata via `group_left`. Tenants just write `_metadata` in YAML — no PromQL join knowledge needed.
 
 ---
 

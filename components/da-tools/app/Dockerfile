@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
 # ── Dependencies ──────────────────────────────────────────────────────
-RUN pip install --no-cache-dir PyYAML==6.0.2 promql-parser==0.7.0
+RUN pip install --no-cache-dir PyYAML==6.0.2 promql-parser==0.7.0 croniter==2.0.5
 
 # ── Copy tools ──────────────────────────────────────────────────────
 WORKDIR /opt/da-tools

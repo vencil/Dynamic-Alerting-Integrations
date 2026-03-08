@@ -87,7 +87,7 @@ def load_yaml_file(path, default=None):
 # ============================================================
 # Go equivalent: components/threshold-exporter/app/config.go
 #   validReservedKeys + validReservedPrefixes — keep in sync.
-VALID_RESERVED_KEYS = {"_silent_mode", "_severity_dedup", "_namespaces"}
+VALID_RESERVED_KEYS = {"_silent_mode", "_severity_dedup", "_namespaces", "_metadata"}
 VALID_RESERVED_PREFIXES = ("_state_", "_routing")
 
 

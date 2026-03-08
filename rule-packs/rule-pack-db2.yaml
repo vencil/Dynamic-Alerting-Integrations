@@ -99,12 +99,16 @@ groups:
       - alert: DB2HighConnections
         expr: |
           (
-            tenant:db2_connections_active:max
-            > on(tenant) group_left
-            tenant:alert_threshold:db2_connections_active
+            (
+              tenant:db2_connections_active:max
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_connections_active
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -112,15 +116,22 @@ groups:
           summary: "DB2 high active connections on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.0f\" }} active connections"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: DB2LowBufferpoolHitRatio
         expr: |
           (
-            tenant:db2_bufferpool_hit_ratio:min
-            < on(tenant) group_left
-            tenant:alert_threshold:db2_bufferpool_hit_ratio
+            (
+              tenant:db2_bufferpool_hit_ratio:min
+              < on(tenant) group_left
+              tenant:alert_threshold:db2_bufferpool_hit_ratio
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 10m
         labels:
           severity: warning
@@ -128,15 +139,22 @@ groups:
           summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
           description: "Hit ratio: {{ $value | printf \"%.4f\" }} — check bufferpool sizing"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: DB2HighLogUsage
         expr: |
           (
-            tenant:db2_log_usage_percent:max
-            > on(tenant) group_left
-            tenant:alert_threshold:db2_log_usage_percent
+            (
+              tenant:db2_log_usage_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_log_usage_percent
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -144,15 +162,22 @@ groups:
           summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
           description: "Log usage: {{ $value | printf \"%.1f\" }}%"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: DB2HighDeadlockRate
         expr: |
           (
-            tenant:db2_deadlocks:rate5m
-            > on(tenant) group_left
-            tenant:alert_threshold:db2_deadlock_rate
+            (
+              tenant:db2_deadlocks:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_deadlock_rate
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -160,15 +185,22 @@ groups:
           summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }} deadlocks/sec"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: DB2TablespaceAlmostFull
         expr: |
           (
-            tenant:db2_tablespace_used_percent:max
-            > on(tenant) group_left
-            tenant:alert_threshold:db2_tablespace_used_percent
+            (
+              tenant:db2_tablespace_used_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_tablespace_used_percent
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -176,14 +208,25 @@ groups:
           summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: DB2HighSortOverflow
         expr: |
-          tenant:db2_sort_overflow_ratio:avg > 0.05
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:db2_sort_overflow_ratio:avg > 0.05
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"
           description: "Sort overflow ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

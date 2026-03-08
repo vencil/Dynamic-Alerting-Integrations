@@ -90,7 +90,7 @@ def check_schema(config_dir):
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    _routing, _dedup, schema_warnings, _er = gen.load_tenant_configs(config_dir)
+    _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(config_dir)
 
     if schema_warnings:
         return _make_result("schema", WARN, schema_warnings)
@@ -107,7 +107,7 @@ def check_routes(config_dir, policy_file=None):
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    routing, dedup, _sw, enforced_routing = gen.load_tenant_configs(config_dir)
+    routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
 
     # Load allowed_domains from policy
     allowed_domains = None
@@ -162,7 +162,7 @@ def check_policy(config_dir, policy_file):
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
 
-    routing, _dedup, _sw, enforced_routing = gen.load_tenant_configs(config_dir)
+    routing, _dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
 
     import io
     old_stderr = sys.stderr

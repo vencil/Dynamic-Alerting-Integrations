@@ -1,7 +1,7 @@
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
-> **版本**: v1.10.0
+> **版本**: v1.11.0
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](../rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---
@@ -229,7 +229,7 @@ python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/c
 # 透過 da-tools 容器執行（不需 clone 專案）
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:1.10.0 \
+  ghcr.io/vencil/da-tools:1.11.0 \
   lint /data/rules --ci
 
 # 輸出範例
@@ -241,6 +241,8 @@ docker run --rm \
 Lint 工具同時會對缺少 `expiry` 或 `owner` label 的 Custom Rule 產出 WARN（不阻擋 CI，但提醒補齊）。
 
 > **一站式驗證**：`make validate-config` 或 `validate_config.py --rule-packs rule-packs/` 會自動將 deny-list linting 納入整體驗證報告，與 YAML syntax、schema、route 檢查一併執行。
+>
+> **變更影響分析**：閾值或配置變更時，可用 `da-tools config-diff --old-dir <base> --new-dir <pr>` 產出 blast radius 報告（每筆變更標記 tighter/looser/added/removed），適合作為 PR review 的輔助決策資訊。詳見 [GitOps 部署指南](gitops-deployment.md)。
 
 ### 4.3 為什麼限制「重量」而非「數量」
 

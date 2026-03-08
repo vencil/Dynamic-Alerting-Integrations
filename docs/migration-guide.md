@@ -70,19 +70,19 @@ flowchart TD
 
 ```bash
 # 分析既有 Alertmanager 設定
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   onboard --alertmanager-config /data/alertmanager.yml -o /data/migration-plan/
 
 # 分析既有 Prometheus rules
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   onboard --rule-files '/data/rules/*.yml' -o /data/migration-plan/
 
 # 分析 scrape config（用於 Tenant-NS mapping）
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   onboard --scrape-config /data/prometheus.yml -o /data/migration-plan/ --tenant-label cluster
 
 # 一次分析全部（三 phase 合併執行）
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   onboard --alertmanager-config /data/alertmanager.yml \
           --rule-files '/data/rules/*.yml' \
           --scrape-config /data/prometheus.yml \
@@ -107,22 +107,22 @@ docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
 
 ```bash
 # CLI 模式 — 一行搞定
-docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.11.0 \
   scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 
 # 含 N:1 namespace-tenant mapping（v1.8.0）
-docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.11.0 \
   scaffold --tenant redis-prod --db redis,mariadb --namespaces ns1,ns2,ns3 \
   --non-interactive -o /data
 
 # 含 routing 設定 — 產出即帶完整路由配置
-docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/output:/data ghcr.io/vencil/da-tools:1.11.0 \
   scaffold --tenant redis-prod --db redis,mariadb \
   --routing-receiver "https://hooks.slack.com/services/T.../B.../xxx" \
   --routing-receiver-type slack --non-interactive -o /data
 
 # 查看支援的 DB 類型與指標
-docker run --rm ghcr.io/vencil/da-tools:1.10.0 scaffold --catalog
+docker run --rm ghcr.io/vencil/da-tools:1.11.0 scaffold --catalog
 ```
 
 > **已 clone 專案？** 也可直接執行 Python 腳本：
@@ -153,7 +153,7 @@ scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-expor
 # 方式 A (推薦): Helm values 覆寫 — OCI registry
 #   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.8.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
   -n monitoring -f values-override.yaml
 
 # 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
@@ -174,19 +174,19 @@ ConfigMap 變更後，exporter 會在 1-3 分鐘內自動 hot-reload（K8s propa
 
 ```bash
 # 預覽模式 — 不產出檔案，只顯示分析結果
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   migrate /data/legacy-rules.yml --dry-run
 
 # 正式轉換 — 輸出至 output/
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   migrate /data/legacy-rules.yml -o /data/output
 
 # Triage + Dry Run（企業級遷移推薦）
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   migrate /data/legacy-rules.yml -o /data/output --dry-run --triage
 
 # 強制使用 regex 模式 (不使用 AST 引擎)
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   migrate /data/legacy-rules.yml --no-ast
 ```
 
@@ -289,7 +289,7 @@ kubectl create configmap prometheus-rules-custom \
 ```bash
 # 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.8.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -328,7 +328,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:1.10.0
+          image: ghcr.io/vencil/da-tools:1.11.0
           args:
             - scaffold
             - --tenant
@@ -653,18 +653,18 @@ Platform Team 可在 `_defaults.yaml` 設定 `_routing_enforced`，確保 NOC �
 
 ```bash
 # 0. 一站式配置驗證（建議部署前先跑，v1.7.0）
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
   validate-config --config-dir /data/conf.d
 
 # 1. 確認閾值正確輸出
 curl -s http://localhost:8080/metrics | grep 'user_threshold{.*connections'
 
 # 2. 確認 Alert 狀態
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.11.0 \
   check-alert MariaDBHighConnections db-a
 
 # 3. 租戶健康總檢（含 operational_mode、閾值解析、alert 狀態）
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:1.11.0 \
   diagnose db-a
 ```
 
@@ -885,7 +885,7 @@ Triage 分析          Shadow Monitoring          切換與收斂
 
 ```bash
 # 產出 CSV 分桶報告 — 在 Excel 中批次決策
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 ```
 
@@ -902,7 +902,7 @@ docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
 
 ```bash
 # 1. 正式轉換 (自動帶 custom_ 前綴)
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 \
   migrate /data/legacy-rules.yml -o /data/migration_output/
 
 # 2. 部署新規則 (帶 shadow label，不觸發通知)
@@ -917,7 +917,7 @@ kubectl apply -f migration_output/platform-alert-rules.yaml
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:1.10.0 \
+  ghcr.io/vencil/da-tools:1.11.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --tolerance 0.001 --watch --interval 60 --rounds 1440
 
@@ -925,7 +925,7 @@ docker run --rm --network=host \
 kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data \
-  ghcr.io/vencil/da-tools:1.10.0 \
+  ghcr.io/vencil/da-tools:1.11.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --tolerance 0.001 --watch --interval 60 --rounds 1440
 ```
@@ -951,7 +951,7 @@ spec:
     spec:
       containers:
         - name: validator
-          image: ghcr.io/vencil/da-tools:1.10.0
+          image: ghcr.io/vencil/da-tools:1.11.0
           command:
             - da-tools
             - validate
@@ -994,14 +994,14 @@ spec:
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.10.0 \
+  ghcr.io/vencil/da-tools:1.11.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a --dry-run
 
 # 執行切換（自動完成：停 Job → 移除舊規則 → 去 label → 移除 shadow route → 驗證）
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.10.0 \
+  ghcr.io/vencil/da-tools:1.11.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 ```
 
@@ -1019,13 +1019,13 @@ docker run --rm --network=host \
 ```bash
 # 批次健康檢查
 docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.10.0 batch-diagnose
+  ghcr.io/vencil/da-tools:1.11.0 batch-diagnose
 
 # 監控盲區掃描 — 確認所有叢集內的 DB instance 都有對應 tenant 配置
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/data/conf.d \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.10.0 \
+  ghcr.io/vencil/da-tools:1.11.0 \
   blind-spot --config-dir /data/conf.d
 ```
 
@@ -1099,11 +1099,11 @@ kubectl create configmap prometheus-rules-mariadb \
 
 ```bash
 # 預檢模式 — 確認無外部依賴
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
   offboard db-a
 
 # 確認後執行
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
   offboard db-a --execute
 ```
 
@@ -1119,15 +1119,15 @@ Pre-check 項目：設定檔存在性、跨檔案引用掃描、已設定指標�
 
 ```bash
 # 預覽模式
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
   deprecate mysql_slave_lag
 
 # 執行 (修改檔案)
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
   deprecate mysql_slave_lag --execute
 
 # 批次處理
-docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.10.0 \
+docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
   deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute
 ```
 

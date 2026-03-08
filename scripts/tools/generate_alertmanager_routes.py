@@ -137,6 +137,17 @@ def _substitute_tenant(obj, tenant_name):
     return obj
 
 
+def _contains_tenant_placeholder(obj):
+    """Check if any string value contains {{tenant}} placeholder."""
+    if isinstance(obj, str):
+        return "{{tenant}}" in obj
+    if isinstance(obj, dict):
+        return any(_contains_tenant_placeholder(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_contains_tenant_placeholder(item) for item in obj)
+    return False
+
+
 def merge_routing_with_defaults(defaults, tenant_routing, tenant_name):
     """Merge _routing_defaults with tenant _routing.
 
@@ -191,6 +202,7 @@ def load_tenant_configs(config_dir):
       - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
       - schema_warnings: list of validation warning strings
       - enforced_routing: dict or None — platform enforced routing config (v1.7.0)
+      - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0)
 
     Supports _routing_defaults in _defaults.yaml (v1.4.0):
       - Tenants without _routing inherit from _routing_defaults
@@ -205,6 +217,7 @@ def load_tenant_configs(config_dir):
     """
     routing_configs = {}
     dedup_configs = {}
+    metadata_configs = {}  # v1.11.0: {tenant: {runbook_url, owner, tier, ...}}
     routing_defaults = {}
     enforced_routing = None  # v1.7.0: platform enforced routing
     explicit_routing = {}  # track which tenants have explicit _routing
@@ -284,6 +297,11 @@ def load_tenant_configs(config_dir):
             else:
                 dedup_configs[tenant] = "enable"
 
+            # v1.11.0: Metadata extraction (runbook_url, owner, tier, etc.)
+            metadata = overrides.get("_metadata")
+            if metadata and isinstance(metadata, dict):
+                metadata_configs[tenant] = _substitute_tenant(metadata, tenant)
+
             # Routing: "disable" string → skip routing (dedup still tracked above)
             routing = overrides.get("_routing")
             if isinstance(routing, str) and _is_disabled(routing):
@@ -314,7 +332,7 @@ def load_tenant_configs(config_dir):
     for tenant, keys in sorted(tenant_keys.items()):
         schema_warnings.extend(validate_tenant_keys(tenant, keys, defaults_keys))
 
-    return routing_configs, dedup_configs, schema_warnings, enforced_routing
+    return routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs
 
 
 def build_receiver_config(receiver_obj, tenant):
@@ -494,11 +512,56 @@ def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None
     all_warnings = []
 
     # v1.7.0: Platform Enforced Routing — NOC always receives
+    # v1.10.0: {{tenant}} expansion — per-tenant enforced routes when placeholder present
     if enforced_routing and isinstance(enforced_routing, dict):
         enforced_receiver = enforced_routing.get("receiver")
         if not enforced_receiver:
             all_warnings.append("  WARN: _routing_enforced: missing 'receiver', skipping enforced route")
+        elif _contains_tenant_placeholder(enforced_routing):
+            # Per-tenant enforced routes: expand {{tenant}} for each tenant
+            for tenant in sorted(routing_configs.keys()):
+                substituted = _substitute_tenant(enforced_routing, tenant)
+                sub_receiver = substituted.get("receiver")
+                am_config, recv_warnings = build_receiver_config(
+                    sub_receiver, f"platform-enforced-{tenant}")
+                all_warnings.extend(recv_warnings)
+                if am_config is None:
+                    continue
+
+                if allowed_domains:
+                    domain_warnings = validate_receiver_domains(
+                        sub_receiver, f"platform-enforced-{tenant}", allowed_domains)
+                    all_warnings.extend(domain_warnings)
+                    if any("not in allowed_domains" in w for w in domain_warnings):
+                        continue
+
+                receiver_name = f"platform-enforced-{tenant}"
+                route = {
+                    "matchers": [f'tenant="{tenant}"'],
+                    "receiver": receiver_name,
+                    "continue": True,
+                }
+
+                # Optional extra matchers (also substituted)
+                match = substituted.get("match")
+                if match and isinstance(match, list):
+                    route["matchers"].extend(match)
+
+                group_by = substituted.get("group_by")
+                if group_by and isinstance(group_by, list):
+                    route["group_by"] = group_by
+
+                timing, timing_warnings = _apply_timing_params(
+                    substituted, f"platform-enforced-{tenant}")
+                all_warnings.extend(timing_warnings)
+                route.update(timing)
+
+                routes.append(route)
+                receiver = {"name": receiver_name}
+                receiver.update(am_config)
+                receivers.append(receiver)
         else:
+            # Single platform-level enforced route (no {{tenant}})
             am_config, recv_warnings = build_receiver_config(enforced_receiver, "platform-enforced")
             all_warnings.extend(recv_warnings)
             if am_config is not None:
@@ -865,8 +928,8 @@ def main():
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
 
-    # Load tenant configs (routing + dedup + schema warnings + enforced routing)
-    routing_configs, dedup_configs, schema_warnings, enforced_routing = \
+    # Load tenant configs (routing + dedup + schema warnings + enforced routing + metadata)
+    routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
         load_tenant_configs(args.config_dir)
 
     has_routing = bool(routing_configs)

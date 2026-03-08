@@ -99,12 +99,16 @@ groups:
       - alert: RedisHighMemory
         expr: |
           (
-            tenant:redis_memory_used_bytes:max
-            > on(tenant) group_left
-            tenant:alert_threshold:redis_memory_used_bytes
+            (
+              tenant:redis_memory_used_bytes:max
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_memory_used_bytes
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -112,15 +116,22 @@ groups:
           summary: "Redis high memory usage on {{ $labels.tenant }}"
           description: "Memory usage: {{ $value | humanize1024 }}B"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RedisHighConnections
         expr: |
           (
-            tenant:redis_connected_clients:max
-            > on(tenant) group_left
-            tenant:alert_threshold:redis_connected_clients
+            (
+              tenant:redis_connected_clients:max
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_connected_clients
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -128,15 +139,22 @@ groups:
           summary: "Redis high connection count on {{ $labels.tenant }}"
           description: "{{ $value }} connected clients"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RedisHighKeyEvictions
         expr: |
           (
-            tenant:redis_evicted_keys:rate5m
-            > on(tenant) group_left
-            tenant:alert_threshold:redis_evicted_keys_rate
+            (
+              tenant:redis_evicted_keys:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_evicted_keys_rate
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
@@ -144,15 +162,22 @@ groups:
           summary: "Redis high key eviction rate on {{ $labels.tenant }}"
           description: "{{ $value | printf \"%.1f\" }} evictions/sec — consider increasing maxmemory"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RedisReplicationLag
         expr: |
           (
-            tenant:redis_replication_lag:max
-            > on(tenant) group_left
-            tenant:alert_threshold:redis_replication_lag
+            (
+              tenant:redis_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_replication_lag
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 2m
         labels:
           severity: warning
@@ -160,14 +185,25 @@ groups:
           summary: "Redis replication lag on {{ $labels.tenant }}"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       - alert: RedisLowHitRatio
         expr: |
-          tenant:redis_keyspace_hit_ratio:avg < 0.9
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
+          (
+            tenant:redis_keyspace_hit_ratio:avg < 0.9
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Redis low hit ratio on {{ $labels.tenant }}"
           description: "Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

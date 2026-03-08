@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v1.10.0)
+## 專案概覽 (v1.11.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -23,7 +23,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | Sentinel Alert 模式 | exporter flag metric → sentinel alert → inhibit | §2.7 三態、§2.8 dedup |
 | Alert Routing | Tenant YAML → `generate_alertmanager_routes.py` → route + receiver + inhibit | §2.9 |
 | Per-rule Routing Overrides | `_routing.overrides[]` per-alertname/metric_group | §2.9 |
-| Platform Enforced Routing | `_routing_enforced` 雙軌通知（NOC + tenant） | §2.9 |
+| Platform Enforced Routing | `_routing_enforced` 雙軌通知（NOC + tenant）+ `{{tenant}}` per-tenant channel | §2.11 |
 | Routing Defaults 三態 | `_routing_defaults` 繼承/覆寫/disable + `{{tenant}}` 佔位符 | §2.9 |
 | Routing Guardrails | group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h | Go + Python 兩端一致 |
 | Webhook Domain Allowlist | `--policy` fnmatch 檢查，空清單=不限制 | `generate_alertmanager_routes.py` |
@@ -33,6 +33,9 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | N:1 Tenant Mapping | `scaffold_tenant.py --namespaces` + relabel_configs snippet | §2.3 |
 | Regex 維度閾值 | `=~` 運算子，`_re` label 後綴 | §2.4 |
 | 排程式閾值 | `ScheduledValue` + `ResolveAt(now)` 跨午夜 | §2.5 |
+| Dynamic Runbook Injection | `_metadata` → `tenant_metadata_info` info metric → Rule Pack `group_left` 自動繼承 | §2.12 |
+| Recurring Maintenance | `_state_maintenance.recurring[]` cron+duration → `maintenance_scheduler.py` CronJob → AM silence | §2.13 |
+| Config Drift CI | `config_diff.py` exit codes → GitHub Actions / GitLab CI 模板 | `docs/gitops-deployment.md` |
 | Benchmark | idle / scaling-curve / under-load / routing / alertmanager / reload | §4.1–§4.11 |
 | Federation | 場景 A 藍圖（中央 exporter + 邊緣 Prometheus） | `docs/federation-integration.md` |
 
@@ -90,6 +93,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `cutover_tenant.py` | Shadow Monitoring 一鍵切換（§7.1 全步驟自動化） |
 | `blind_spot_discovery.py` | Cluster targets 盲區掃描（Prometheus targets × tenant config 交叉比對） |
 | `config_diff.py` | 目錄級配置差異比對（GitOps PR review blast radius 報告） |
+| `maintenance_scheduler.py` | 排程式維護窗口 → Alertmanager silence 自動建立（CronJob） |
 
 共用函式庫：`scripts/tools/_lib_python.py`（Python 工具間共用）、`scripts/_lib.sh`（Shell scenario/benchmark 共用）。
 
@@ -129,5 +133,6 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## 長期展望
 
-Federation 場景 B Rule Pack 拆分、1:N Tenant Mapping、CRD/Operator、Log-to-Metric Bridge。
+P2: Rule Pack 擴展、Federation B、1:N Mapping。
+P3: CRD/Operator、Log-to-Metric Bridge。
 詳見 `docs/architecture-and-design.md` §11。

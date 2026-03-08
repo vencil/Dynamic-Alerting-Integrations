@@ -130,77 +130,112 @@ groups:
       - alert: ClickHouseHighQueryRate
         expr: |
           (
-            tenant:clickhouse_queries:rate5m
-            > on(tenant) group_left
-            tenant:alert_threshold:clickhouse_queries_rate
+            (
+              tenant:clickhouse_queries:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:clickhouse_queries_rate
+            )
+            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "ClickHouse query rate exceeds threshold"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # --- Active Connections ---
       - alert: ClickHouseHighConnections
         expr: |
           (
-            tenant:clickhouse_active_connections:max
-            > on(tenant) group_left
-            tenant:alert_threshold:clickhouse_active_connections
+            (
+              tenant:clickhouse_active_connections:max
+              > on(tenant) group_left
+              tenant:alert_threshold:clickhouse_active_connections
+            )
+            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "ClickHouse active connections exceed threshold"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # --- Max Part Count (partition merge pressure) ---
       - alert: ClickHouseHighPartCount
         expr: |
           (
-            tenant:clickhouse_max_part_count:max
-            > on(tenant) group_left
-            tenant:alert_threshold:clickhouse_max_part_count
+            (
+              tenant:clickhouse_max_part_count:max
+              > on(tenant) group_left
+              tenant:alert_threshold:clickhouse_max_part_count
+            )
+            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "ClickHouse max part count per partition exceeds threshold (merge pressure)"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # --- Replication Queue ---
       - alert: ClickHouseReplicationLag
         expr: |
           (
-            tenant:clickhouse_replication_queue:max
-            > on(tenant) group_left
-            tenant:alert_threshold:clickhouse_replication_queue
+            (
+              tenant:clickhouse_replication_queue:max
+              > on(tenant) group_left
+              tenant:alert_threshold:clickhouse_replication_queue
+            )
+            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "ClickHouse replication queue size exceeds threshold"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # --- Memory Tracking ---
       - alert: ClickHouseHighMemoryUsage
         expr: |
           (
-            tenant:clickhouse_memory_tracking:max
-            > on(tenant) group_left
-            tenant:alert_threshold:clickhouse_memory_tracking_bytes
+            (
+              tenant:clickhouse_memory_tracking:max
+              > on(tenant) group_left
+              tenant:alert_threshold:clickhouse_memory_tracking_bytes
+            )
+            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "ClickHouse memory tracking exceeds threshold"
 
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # --- Failed Queries (fixed threshold, no user override) ---
       - alert: ClickHouseHighFailedQueryRate
         expr: |

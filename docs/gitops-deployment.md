@@ -1,6 +1,6 @@
 # GitOps 部署指南
 
-> **版本**：v1.10.0
+> **版本**：v1.11.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -52,34 +52,28 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @team-db-b
 
 所有檢查通過 + CODEOWNERS 指定的 reviewer approve → 允許 merge。
 
-### PR Review 變更影響分析（v1.10.0）
+### PR Review 變更影響分析
 
-當 PR 修改 `conf.d/` 下的 tenant 配置時，CI 可自動執行 `config-diff` 產出 blast radius 報告，讓 reviewer 一眼看出變更影響範圍：
+當 PR 修改 `conf.d/` 下的 tenant 配置時，CI 自動執行 `config-diff` 產出 blast radius 報告，讓 reviewer 一眼看出變更影響範圍。
 
-```yaml
-# .github/workflows/config-review.yaml (摘要)
-- name: Config diff
-  run: |
-    # 從 base branch checkout 舊配置
-    git show origin/${{ github.base_ref }}:conf.d/ > /tmp/old-conf.d/ || true
+**現成 CI 範本**（可直接 include 使用）：
 
-    docker run --rm \
-      -v /tmp/old-conf.d:/data/old \
-      -v $(pwd)/conf.d:/data/new \
-      ghcr.io/vencil/da-tools:1.10.0 \
-      config-diff --old-dir /data/old --new-dir /data/new \
-    > /tmp/config-diff.md
+| 平台 | 範本位置 | 觸發條件 |
+|------|---------|---------|
+| GitHub Actions | `.github/workflows/config-diff.yaml` | PR 修改 `conf.d/**` |
+| GitLab CI | `.gitlab/ci/config-diff.gitlab-ci.yml` | MR 修改 `conf.d/**` |
 
-- name: Post PR comment
-  uses: actions/github-script@v7
-  with:
-    script: |
-      const diff = fs.readFileSync('/tmp/config-diff.md', 'utf8');
-      github.rest.issues.createComment({
-        issue_number: context.issue.number,
-        body: `## Config Diff Report\n${diff}`
-      });
-```
+GitHub Actions 範本會自動將 blast radius 報告貼為 PR comment（冪等更新，不重複建立）。
+
+**Exit codes**（供 CI pipeline 判斷）：
+
+| Exit Code | 含義 | CI 行為 |
+|-----------|------|---------|
+| 0 | 無配置變更 | 跳過 comment |
+| 1 | 偵測到變更 | 張貼 blast radius 報告 |
+| 2 | 錯誤（目錄不存在等） | pipeline 報錯 |
+
+**Data-Driven Threshold Review 雙引擎**：`config-diff`（blast radius 靜態分析）搭配 `backtest`（Prometheus 歷史回測），形成變更前預覽 + 歷史驗證的完整審查流程。
 
 報告內容包括：每個受影響 tenant 的變更清單、變更分類（tighter / looser / added / removed / toggled）、推斷受影響的 alert name。詳見 [da-tools README 場景八](../components/da-tools/README.md#場景八配置目錄級差異比對v1110)。
 
@@ -107,7 +101,7 @@ steps:
 
 ```bash
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.8.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
   -n monitoring \
   -f values-override.yaml
 ```

@@ -185,6 +185,25 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- m
 	}
+
+	// Tenant metadata info metric (v1.11.0): unconditionally emitted for ALL tenants.
+	// Carries runbook_url, owner, tier as labels. Unset fields default to empty string.
+	// Rule Pack Part 3 alert rules use group_left(runbook_url, owner, tier) to inherit
+	// these labels, enabling dynamic runbook injection in Alertmanager notifications.
+	metadataDesc := prometheus.NewDesc(
+		"tenant_metadata_info",
+		"Tenant metadata labels (info metric, always 1). Unconditional output for group_left joins. v1.11.0+",
+		[]string{"tenant", "runbook_url", "owner", "tier"},
+		nil,
+	)
+	for _, md := range cfg.ResolveMetadata() {
+		m, err := prometheus.NewConstMetric(metadataDesc, prometheus.GaugeValue, 1.0,
+			md.Tenant, md.RunbookURL, md.Owner, md.Tier)
+		if err != nil {
+			continue
+		}
+		ch <- m
+	}
 }
 
 // MetricsHandler returns an HTTP handler that serves /metrics
