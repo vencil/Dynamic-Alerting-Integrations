@@ -26,6 +26,6 @@ jobs:
           path: ~/.cache/pip
           key: mkdocs-${{ hashFiles('mkdocs.yml') }}
       - name: Install dependencies
-        run: pip install mkdocs-material mkdocs-mermaid2-plugin
+        run: pip install mkdocs-material mkdocs-mermaid2-plugin mkdocs-static-i18n
       - name: Deploy
         run: mkdocs gh-deploy --force

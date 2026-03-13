@@ -12,8 +12,6 @@ theme:
   name: material
   language: zh
   custom_dir: docs/overrides
-  favicon: docs/assets/favicon.ico
-  logo: docs/assets/logo.svg
   features:
     # Navigation & Discovery
     - navigation.instant
@@ -76,59 +74,55 @@ plugins:
       separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
       prebuild_index: true
   - tags:
-      tags_file: docs/tags.md
+      tags_file: tags.md
   - i18n:
-      default_language: zh
+      docs_structure: suffix
+      reconfigure_material: true
       languages:
-        zh:
+        - locale: zh
           name: 中文
+          default: true
           build: true
-        en:
+          nav_translations:
+            Home: 首頁
+            Getting Started: 快速入門
+            Core Architecture: 核心架構
+            Integration Guides: 整合指南
+            Migration: 遷移
+            Governance & Security: 治理與安全
+            Scenarios: 場景
+            Reference: 參考
+        - locale: en
           name: English
           build: true
-      nav_translations:
-        en:
-          首頁: Home
-          快速入門: Getting Started
-          核心架構: Core Architecture
-          整合指南: Integration Guides
-          遷移: Migration
-          治理與安全: Governance & Security
-          場景: Scenarios
-          參考: Reference
-          Platform Engineers: Platform Engineers
-          Domain Experts: Domain Experts
-          Tenants: Tenants
-          架構與設計: Architecture & Design
-          Context 圖: Context Diagram
-          性能基準: Performance Benchmarks
-          BYO Prometheus: BYO Prometheus
-          BYO Alertmanager: BYO Alertmanager
-          Federation: Federation
-          GitOps 部署: GitOps Deployment
-          遷移指南: Migration Guide
-          遷移引擎: Migration Engine
-          Shadow Monitoring SOP: Shadow Monitoring SOP
-          治理與安全: Governance & Security
-          Custom Rule 治理: Custom Rule Governance
-          Alert Routing Split: Alert Routing Split
-          進階場景: Advanced Scenarios
-          Shadow Monitoring 切換: Shadow Monitoring Cutover
-          多叢集 Federation: Multi-cluster Federation
-          Tenant 生命週期: Tenant Lifecycle
-          da-tools CLI: da-tools CLI
-          API 端點: API Endpoints
-          Grafana Dashboards: Grafana Dashboards
-          Rule Packs: Rule Packs
-          Alert 速查: Alert Reference
-          故障排查: Troubleshooting
-          術語表: Glossary
-          架構決策 (ADR): Architecture Decisions (ADR)
-          總覽: Overview
-          CLI 速查表: CLI Cheat Sheet
-          互動式工具: Interactive Tools
-          JSON Schema: JSON Schema
-          Changelog: Changelog
+          nav_translations:
+            首頁: Home
+            快速入門: Getting Started
+            核心架構: Core Architecture
+            整合指南: Integration Guides
+            遷移: Migration
+            治理與安全: Governance & Security
+            場景: Scenarios
+            參考: Reference
+            架構與設計: Architecture & Design
+            Context 圖: Context Diagram
+            性能基準: Performance Benchmarks
+            GitOps 部署: GitOps Deployment
+            遷移指南: Migration Guide
+            遷移引擎: Migration Engine
+            Custom Rule 治理: Custom Rule Governance
+            進階場景: Advanced Scenarios
+            Shadow Monitoring 切換: Shadow Monitoring Cutover
+            多叢集 Federation: Multi-cluster Federation
+            Tenant 生命週期: Tenant Lifecycle
+            API 端點: API Endpoints
+            Alert 速查: Alert Reference
+            故障排查: Troubleshooting
+            術語表: Glossary
+            架構決策 (ADR): Architecture Decisions (ADR)
+            總覽: Overview
+            CLI 速查表: CLI Cheat Sheet
+            互動式工具: Interactive Tools
 
 markdown_extensions:
   # Tables
@@ -150,7 +144,7 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets:
       auto_append:
-        - docs/includes/abbreviations.md
+        - includes/abbreviations.md
   # Lists & Tabs
   - pymdownx.tasklist:
       custom_checkbox: true
@@ -213,56 +207,56 @@ extra:
     provider: mike
 
 extra_css:
-  - docs/assets/extra.css
+  - assets/extra.css
 
 extra_javascript:
-  - docs/assets/extra.js
+  - assets/extra.js
   - https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js
 
 nav:
   - 首頁: index.md
   - 快速入門:
-    - Platform Engineers: docs/getting-started/for-platform-engineers.md
-    - Domain Experts: docs/getting-started/for-domain-experts.md
-    - Tenants: docs/getting-started/for-tenants.md
+    - Platform Engineers: getting-started/for-platform-engineers.md
+    - Domain Experts: getting-started/for-domain-experts.md
+    - Tenants: getting-started/for-tenants.md
   - 核心架構:
-    - 架構與設計: docs/architecture-and-design.md
-    - Context 圖: docs/context-diagram.md
-    - 性能基準: docs/benchmarks.md
+    - 架構與設計: architecture-and-design.md
+    - Context 圖: context-diagram.md
+    - 性能基準: benchmarks.md
     - 架構決策 (ADR):
-      - 總覽: docs/adr/README.md
-      - ADR-001 Severity Dedup via Inhibit: docs/adr/001-severity-dedup-via-inhibit.md
-      - ADR-002 OCI Registry: docs/adr/002-oci-registry-over-chartmuseum.md
-      - ADR-003 Sentinel Alert Pattern: docs/adr/003-sentinel-alert-pattern.md
-      - ADR-004 Federation Scenario A First: docs/adr/004-federation-scenario-a-first.md
-      - ADR-005 Projected Volume: docs/adr/005-projected-volume-for-rule-packs.md
+      - 總覽: adr/README.md
+      - ADR-001 Severity Dedup via Inhibit: adr/001-severity-dedup-via-inhibit.md
+      - ADR-002 OCI Registry: adr/002-oci-registry-over-chartmuseum.md
+      - ADR-003 Sentinel Alert Pattern: adr/003-sentinel-alert-pattern.md
+      - ADR-004 Federation Scenario A First: adr/004-federation-scenario-a-first.md
+      - ADR-005 Projected Volume: adr/005-projected-volume-for-rule-packs.md
   - 整合指南:
-    - BYO Prometheus: docs/byo-prometheus-integration.md
-    - BYO Alertmanager: docs/byo-alertmanager-integration.md
-    - Federation: docs/federation-integration.md
-    - GitOps 部署: docs/gitops-deployment.md
+    - BYO Prometheus: byo-prometheus-integration.md
+    - BYO Alertmanager: byo-alertmanager-integration.md
+    - Federation: federation-integration.md
+    - GitOps 部署: gitops-deployment.md
   - 遷移:
-    - 遷移指南: docs/migration-guide.md
-    - 遷移引擎: docs/migration-engine.md
-    - Shadow Monitoring SOP: docs/shadow-monitoring-sop.md
+    - 遷移指南: migration-guide.md
+    - 遷移引擎: migration-engine.md
+    - Shadow Monitoring SOP: shadow-monitoring-sop.md
   - 治理與安全:
-    - 治理與安全: docs/governance-security.md
-    - Custom Rule 治理: docs/custom-rule-governance.md
+    - 治理與安全: governance-security.md
+    - Custom Rule 治理: custom-rule-governance.md
   - 場景:
-    - Alert Routing Split: docs/scenarios/alert-routing-split.md
-    - 進階場景: docs/scenarios/advanced-scenarios.md
-    - Shadow Monitoring 切換: docs/scenarios/shadow-monitoring-cutover.md
-    - 多叢集 Federation: docs/scenarios/multi-cluster-federation.md
-    - Tenant 生命週期: docs/scenarios/tenant-lifecycle.md
+    - Alert Routing Split: scenarios/alert-routing-split.md
+    - 進階場景: scenarios/advanced-scenarios.md
+    - Shadow Monitoring 切換: scenarios/shadow-monitoring-cutover.md
+    - 多叢集 Federation: scenarios/multi-cluster-federation.md
+    - Tenant 生命週期: scenarios/tenant-lifecycle.md
   - 參考:
-    - da-tools CLI: docs/cli-reference.md
-    - CLI 速查表: docs/cheat-sheet.md
-    - 互動式工具: docs/interactive-tools.md
-    - API 端點: docs/api/README.md
-    - Grafana Dashboards: docs/grafana-dashboards.md
+    - da-tools CLI: cli-reference.md
+    - CLI 速查表: cheat-sheet.md
+    - 互動式工具: interactive-tools.md
+    - API 端點: api/README.md
+    - Grafana Dashboards: grafana-dashboards.md
     - Rule Packs: rule-packs/README.md
     - Alert 速查: rule-packs/ALERT-REFERENCE.md
-    - JSON Schema: docs/schemas/README.md
-    - 故障排查: docs/troubleshooting.md
-    - 術語表: docs/glossary.md
+    - JSON Schema: schemas/README.md
+    - 故障排查: troubleshooting.md
+    - 術語表: glossary.md
     - Changelog: CHANGELOG.md

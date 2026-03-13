@@ -34,3 +34,4 @@ kubeconfig
 # --- AI & Tools ---
 .claude/history/
 .claude/settings.json
+site/
