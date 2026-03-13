@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v2.0.0-preview)
+## 專案概覽 (v2.0.0-preview.2)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -53,13 +53,13 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## 文件導覽
 
-完整文件對照表（43 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（44 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
 快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (5 場景) | `docs/internal/` (Playbook + doc-map) | `docs/adr/` (5 ADRs)
 
 ## 工具 (scripts/tools/)
 
-完整工具表（42 個 Python 工具，分三類：運維 / DX Automation / 文件 CI）見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。
+完整工具表（50 個 Python 工具，分三類：運維 / DX Automation / 文件 CI）見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。
 
 常用工具速查：`da-tools <cmd> --help` | CLI 完整參考見 [`docs/cli-reference.md`](docs/cli-reference.md)
 
@@ -74,6 +74,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `make validate-config` | 一站式配置驗證 |
 | `make chart-package` / `chart-push` | Helm OCI 打包推送 |
 | `make version-check` / `bump-docs` | 版號治理 |
+| `make lint-docs` | 一站式文件 lint（versions + drift checks），支援 `ARGS="--parallel"` |
 | `make release-tag-exporter` | 從 Chart.yaml 推導 `exporter/v*` tag |
 
 完整目標見 `make help`。
@@ -127,10 +128,9 @@ Playbook 是 **living documents**，跟隨專案演進持續更新：
 
 ## 長期展望
 
-**已完成（v2.0.0-preview）：** DX Automation 四工具（`shadow_verify.py` / `byo_check.py` / `grafana_import.py` / `federation_check.py`）、cli-reference + cheat-sheet 新增 4 工具文件、文件正確性大修（6 對文件平均 -23% 精簡、移除捏造內容、手動 curl+jq 步驟改用 da-tools CLI）、CLAUDE.md 文件導覽提取至 doc-map.md。
-**已完成（v1.13.0）：** Dual-Perspective Annotation、文件大重構（6 專題 + 3 角色入門 + Context 圖）、全面雙語化（33 對 .en.md）、MkDocs Material 站點配置、文件 CI 工具鏈、互動式元件（Wizard + Playground + Rule Pack Selector + CLI Playground）、Conventional Commits、API 健康監控、Glossary + ADRs + JSON Schema + validate_all.py + Doc Includes。
-**已完成（v1.12.0）：** Rule Pack 擴展（JVM + Nginx）、Tenant Profiles Phase 1（四層繼承鏈）。
-P2: Federation B、1:N Mapping。
-P3: Sharded GitOps → Assembler Controller + Optional CRD（漸進式三層架構）、Log-to-Metric Bridge。
-P4: DX Automation — Grafana 自動截圖、Runbook 模板自動生成。
+已完成項目詳見 `CHANGELOG.md` 及 `docs/internal/dx-tooling-backlog.md`。
+
+近期：Federation B（Rule Pack 分層）、1:N Mapping、Alert Quality Scoring。
+中期：Policy-as-Code、Cross-Cluster Drift Detection、Incremental Reload。
+遠期：Tenant Self-Service Portal、Cardinality Forecasting、Log-to-Metric Bridge。
 詳見 `docs/architecture-and-design.md` §5。

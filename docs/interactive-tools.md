@@ -2,7 +2,7 @@
 title: "互動式工具"
 tags: [interactive, tools, react]
 audience: [all]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 
@@ -48,8 +48,16 @@ lang: zh
 
 這些 `.jsx` 檔案可在以下環境直接執行：
 
-1. **Claude Artifacts** — 將 `.jsx` 內容貼入對話，Claude 會即時渲染
-2. **React 開發環境** — `npx create-react-app` 後將元件引入使用
-3. **CodeSandbox / StackBlitz** — 線上即時預覽
+1. **GitHub Pages（推薦）** — 開啟 repo Settings → Pages → Source 選 `main` / `/docs`，即可透過 `docs/interactive/index.html` 入口頁直接在瀏覽器試用。元件透過 `docs/assets/jsx-loader.html` 在瀏覽器端以 Babel standalone 即時轉譯，無需 build step
+2. **Claude Artifacts** — 將 `.jsx` 內容貼入對話，Claude 會即時渲染
+3. **React 開發環境** — `npx create-react-app` 後將元件引入使用
+4. **CodeSandbox / StackBlitz** — 線上即時預覽
 
 每個元件均為獨立的 React functional component，無需額外 state management library。
+
+### GitHub Pages 本機預覽
+
+```bash
+cd docs && python3 -m http.server 8888
+# 開啟 http://localhost:8888/interactive/
+```

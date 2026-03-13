@@ -1,0 +1,116 @@
+# ThresholdConfig CRD — Optional entry point for declarative tenant config.
+#
+# Namespace-scoped.  The da-assembler-controller watches these resources and
+# renders each into a YAML file under config-dir/ that threshold-exporter reads.
+#
+# The spec.tenants structure mirrors the existing tenant YAML format exactly,
+# so migration from hand-written YAML to CRD is copy-paste.
+#
+# Install:
+#   kubectl apply -f k8s/crd/thresholdconfig-crd.yaml
+#
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: thresholdconfigs.dynamicalerting.io
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: assembler
+spec:
+  group: dynamicalerting.io
+  names:
+    kind: ThresholdConfig
+    listKind: ThresholdConfigList
+    plural: thresholdconfigs
+    singular: thresholdconfig
+    shortNames:
+      - tc
+      - tconfig
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: >-
+            ThresholdConfig declares tenant alerting thresholds in a K8s-native
+            way.  The assembler controller renders each resource into a tenant
+            YAML file that threshold-exporter hot-reloads via SHA-256 hashing.
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - tenants
+              properties:
+                tenants:
+                  description: >-
+                    Map of tenant name → threshold overrides.  Structure is
+                    identical to a hand-written conf.d/<tenant>.yaml file.
+                  type: object
+                  additionalProperties:
+                    description: >-
+                      Per-tenant threshold map.  Keys are metric names (or
+                      reserved keys like _silent_mode, _routing, _state_*).
+                      Values are strings (threshold), "disable", or objects
+                      (for _routing, _metadata, scheduled values).
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                defaults:
+                  description: >-
+                    Optional platform defaults block.  Usually only set in a
+                    single ThresholdConfig resource per namespace.  Merged with
+                    any existing _defaults.yaml.
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                stateFilters:
+                  description: >-
+                    Optional state_filters block.
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                profile:
+                  description: >-
+                    Optional _profile reference (v1.12.0 four-layer inheritance).
+                  type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  description: Current reconciliation phase.
+                  type: string
+                  enum:
+                    - Pending
+                    - Rendered
+                    - Error
+                lastRenderedHash:
+                  description: >-
+                    SHA-256 of the last successfully rendered YAML file.
+                  type: string
+                lastRenderedTime:
+                  description: Timestamp of last successful render.
+                  type: string
+                  format: date-time
+                message:
+                  description: Human-readable status message.
+                  type: string
+                tenantCount:
+                  description: Number of tenants declared in this resource.
+                  type: integer
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Tenants
+          type: integer
+          jsonPath: .status.tenantCount
+        - name: Last Rendered
+          type: date
+          jsonPath: .status.lastRenderedTime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

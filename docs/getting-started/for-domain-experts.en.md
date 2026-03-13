@@ -2,12 +2,12 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
 
-> **v1.13.0** | Audience: DBAs, Database Administrators, Domain Experts
+> **v2.0.0-preview** | Audience: DBAs, Database Administrators, Domain Experts
 >
 > Related docs: [Rule Packs](../../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 

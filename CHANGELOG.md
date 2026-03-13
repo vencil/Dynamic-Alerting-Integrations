@@ -2,12 +2,65 @@
 title: "Changelog"
 tags: [changelog, releases]
 audience: [all]
-version: v2.0.0-preview
+version: v2.0.0-preview.2
 lang: zh
 ---
 # Changelog
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
+
+## [v2.0.0-preview.2] — Scalable Config Governance + DX Tooling (2026-03-14)
+
+Roadmap §5.3 全面實作（Sharded GitOps + Assembler Controller + CRD）、9 輪 DX 工具迭代、GitHub Pages Interactive Tools、Roadmap 重寫。
+
+### 🏗️ Scalable Configuration Governance (§5.3)
+
+- **`assemble_config_dir.py`**: Sharded GitOps 組裝工具 — 多來源 conf.d/ 合併、SHA-256 衝突偵測、assembly manifest、YAML 驗證
+  * CLI: `da-tools sharded-assemble --sources <dirs> --output <dir> [--check] [--validate] [--manifest]`
+- **`da_assembler.py`**: ThresholdConfig CRD → YAML 輕量 controller（非 Operator）
+  * Watch 模式（即時 reconcile）、One-shot 模式（`--once`）、離線渲染（`--render-cr`）、Dry-run 預覽
+  * Status subresource 更新（phase / lastRenderedHash / tenantCount）
+  * CLI: `da-tools assembler --once` / `da-tools assembler --render-cr <file>`
+- **ThresholdConfig CRD** (`k8s/crd/thresholdconfig-crd.yaml`): `dynamicalerting.io/v1alpha1`，namespace-scoped
+  * `x-kubernetes-preserve-unknown-fields` 支援彈性 tenant 閾值結構
+  * Printer columns: Phase, Tenants, Last Rendered, Age
+  * Short names: `tc`, `tconfig`
+- **RBAC** (`k8s/crd/assembler-rbac.yaml`): ServiceAccount + ClusterRole + ClusterRoleBinding
+- **Makefile**: `make sharded-assemble` / `sharded-check` / `assembler-render` / `assembler-install-crd`
+
+### 🛠️ DX Tooling (Rounds 7–9, 11 improvements)
+
+- **`generate_doc_map.py`**: `--include-adr`（ADR 納入 doc-map，H1 title 萃取）
+- **`validate_docs_versions.py`**: doc-file-count 自動驗證 + auto-fix
+- **`bump_docs.py`**: `--what-if`（全 238 rules 審計）
+- **`generate_cheat_sheet.py`**: `--lang zh/en/all` 雙語速查表
+- **`check_doc_freshness.py`**: false-positive 修正（code-block-only + stopword）、`--fix`（`.doc-freshness-ignore` 自動產生）
+- **`check_translation.py`**: cross-dir + lang fix（full-path pairing + empty-lang guard）
+- **`validate_all.py`**: `--profile` + `--watch`（CSV timing trend）、`--smart`（git diff → affected-check 自動跳過）
+- **`generate_rule_pack_stats.py`**: `--lang zh/en/all` 雙語統計表
+- **`check_includes_sync.py`**: `--fix`（自動建立缺失 .en.md stub）
+
+### 🌐 GitHub Pages Interactive Tools
+
+- **`docs/interactive/index.html`**: Landing page（Dark mode、4 card navigation）
+- **`docs/assets/jsx-loader.html`**: 瀏覽器端 JSX 載入器改寫
+  * Front matter 剝離、ES import → global reference 轉換、lucide-react CDN + SVG fallback
+  * `export default function` → auto-render
+
+### 📄 Roadmap Rewrite (§5)
+
+- 移除已完成項目（搬至 `docs/internal/dx-tooling-backlog.md`）
+- 新增 4 個方向：Alert Quality Scoring、Policy-as-Code、Cross-Cluster Drift Detection、Incremental Reload
+- 重新分類：近期（設計基礎已有）/ 中期（需客戶驗證）/ 遠期（探索方向）
+
+### 📊 Numbers
+
+- Python 工具：50 個（+4）
+- 文件：44 個（+1）
+- 單元測試：31 個新增（14 assemble + 17 assembler）
+- 驗證 pipeline：11 checks pass
+
+---
 
 ## [v2.0.0-preview] — DX Automation + Documentation Overhaul (2026-03-13)
 

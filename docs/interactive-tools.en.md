@@ -2,7 +2,7 @@
 title: "Interactive Tools"
 tags: [interactive, tools, react]
 audience: [all]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 
@@ -48,8 +48,16 @@ Select a da-tools subcommand, fill in parameters, and automatically generate a c
 
 These `.jsx` files can run directly in the following environments:
 
-1. **Claude Artifacts** — Paste the `.jsx` content into a conversation and Claude renders it instantly
-2. **React dev environment** — Import the component into a `create-react-app` project
-3. **CodeSandbox / StackBlitz** — Online instant preview
+1. **GitHub Pages (recommended)** — Go to repo Settings → Pages → Source, select `main` / `/docs`. The landing page at `docs/interactive/index.html` lets visitors try all tools in the browser. Components are transpiled client-side via `docs/assets/jsx-loader.html` using Babel standalone — no build step required
+2. **Claude Artifacts** — Paste the `.jsx` content into a conversation and Claude renders it instantly
+3. **React dev environment** — Import the component into a `create-react-app` project
+4. **CodeSandbox / StackBlitz** — Online instant preview
 
 Each component is a standalone React functional component with no external state management dependencies.
+
+### Local preview with GitHub Pages layout
+
+```bash
+cd docs && python3 -m http.server 8888
+# Open http://localhost:8888/interactive/
+```

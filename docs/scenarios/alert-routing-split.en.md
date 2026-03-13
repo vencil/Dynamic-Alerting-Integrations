@@ -2,12 +2,12 @@
 title: "Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications
 
-> **v1.13.0** | Related docs: [`architecture-and-design.md` §2.9](../architecture-and-design.md), [`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
+> **v2.0.0-preview** | Related docs: [`architecture-and-design.md` §2.9](../architecture-and-design.md), [`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
 
 ## Problem
 

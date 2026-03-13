@@ -178,6 +178,27 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 		-n monitoring --dry-run=client -o yaml > .build/threshold-config.yaml
 	@echo "✓ .build/threshold-config.yaml ($(shell ls $(CONFDIR)/*.yaml | wc -l) files)"
 
+sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
+	@mkdir -p .build
+	@python3 ./scripts/tools/assemble_config_dir.py \
+		--sources $(SOURCES) --output .build/config-dir --validate \
+		--manifest .build/assembly-manifest.json
+	@echo "✓ manifest: .build/assembly-manifest.json"
+
+sharded-check: ## Sharded GitOps: 衝突偵測（dry-run）
+	@python3 ./scripts/tools/assemble_config_dir.py --sources $(SOURCES) --check
+
+assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
+	@mkdir -p .build/config-dir
+	@python3 ./scripts/tools/da_assembler.py \
+		--render-cr $(CR) --config-dir .build/config-dir
+	@echo "✓ rendered to .build/config-dir/"
+
+assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
+	@kubectl apply -f k8s/crd/thresholdconfig-crd.yaml
+	@kubectl apply -f k8s/crd/assembler-rbac.yaml
+	@echo "✓ CRD + RBAC installed"
+
 validate-routes: ## 驗證 Alertmanager route config (CI lint 用)
 	@python3 ./scripts/tools/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate
@@ -193,6 +214,11 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/bump_docs.py --check
+
+lint-docs: ## 一站式文件 lint（versions + drift checks，支援 ARGS="--parallel"）
+	@python3 ./scripts/tools/validate_all.py \
+		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes \
+		$(ARGS)
 
 version-show: ## 顯示目前三條版號線
 	@python3 ./scripts/tools/bump_docs.py --show-current

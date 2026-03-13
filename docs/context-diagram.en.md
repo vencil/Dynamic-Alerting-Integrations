@@ -2,14 +2,14 @@
 title: "Project Context Diagram: Roles, Tools, and Product Interactions"
 tags: [architecture, context-diagram]
 audience: [all]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Project Context Diagram: Roles, Tools, and Product Interactions
 
 > **Language / 語言：** **English (Current)** | [中文](context-diagram.md)
 
-> **v1.13.0** | Audience: All Participants (Platform Engineers, Domain Experts, Tenant Teams)
+> **v2.0.0-preview** | Audience: All Participants (Platform Engineers, Domain Experts, Tenant Teams)
 
 ## Introduction
 

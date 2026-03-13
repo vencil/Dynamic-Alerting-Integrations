@@ -2,7 +2,7 @@
 title: "術語表"
 tags: [reference, glossary]
 audience: [all]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # 術語表

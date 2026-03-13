@@ -2,7 +2,7 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # Migration Guide — 遷移指南
@@ -12,7 +12,7 @@ lang: zh
 
 > **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
 >
-> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:1.13.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
+> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v1.11.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
 
 ## 你在哪個階段？(Where Are You?)
 
@@ -48,7 +48,7 @@ flowchart TD
 
 ## Zero-Friction 導入
 
-本平台已預載 **13 個 Rule Pack ConfigMap** (MariaDB、PostgreSQL、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、Operational、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
+本平台已預載 **15 個 Rule Pack ConfigMap** (MariaDB、PostgreSQL、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Operational、Platform 自我監控)，透過 Kubernetes **Projected Volume** 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
 
 **未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)**。新增 exporter 後，只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
 
@@ -248,7 +248,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### 在 K8s 叢集內使用 da-tools
 
-da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:1.13.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
+da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v1.11.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
 
 > Job 產出可透過 `kubectl cp` 取回，再注入 `threshold-config` ConfigMap。長期運行的 Shadow Monitoring Job 範例參見 [§11 企業級遷移 Phase B](#11-企業級遷移--大型租戶-1000-條規則)。
 
@@ -683,7 +683,7 @@ da-tools blind-spot --config-dir /data/conf.d
 
 ## 12. Rule Pack 動態開關
 
-所有 13 個 Rule Pack ConfigMap 在 Projected Volume 中設定了 `optional: true`，允許選擇性卸載。
+所有 15 個 Rule Pack ConfigMap 在 Projected Volume 中設定了 `optional: true`，允許選擇性卸載。
 
 ### 卸載不需要的 Rule Pack
 

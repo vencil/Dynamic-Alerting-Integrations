@@ -2,40 +2,34 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v1.12.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** [English](README.en.md) | **中文（當前）**
 
-![Docs Coverage](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fvencil%2Fvibe-k8s-lab%2Fmain%2Fdocs%2Fassets%2Fdoc-coverage-badge.json&query=%24.message&label=docs%20coverage&color=brightgreen) ![Bilingual](https://img.shields.io/badge/bilingual-25%20pairs-blue) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-96-red)
+![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-44%20pairs-blue)
 
-> **企業級多租戶監控治理平台** v1.13.0 — 配置驅動閾值、租戶零 PromQL、15 個預載規則包、AST 遷移引擎、全鏈遷移自動化（Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report）、Config Diff Preview、PR 歷史回測 Bot、三態運營模式、安全護欄（SSRF + Schema + Cardinality）、HA 部署。
+多租戶動態警報平台 — 配置驅動閾值管理、15 個預載規則包、租戶零 PromQL、三態運營模式、HA 部署。
 
 ---
 
-## 痛點與解決方案
+## 核心問題與解法
 
-### 2.1 規則膨脹與效能瓶頸
+> **Before：** N tenants × M rules = N×M 條 PromQL，每個 tenant 手寫規則、獨立 PR、獨立路由設定。
+> **After：** 固定 238 條規則（不隨租戶數增長），租戶只寫 YAML，閾值 → 路由 → 通知 → 維護窗口全配置驅動。
 
-**❌ 傳統痛點：**
-100 個租戶 × 50 條規則 = 5,000 次獨立 PromQL 評估（每 15 秒）。Prometheus CPU 飆升，規則評估延遲影響 SLA。每新增一個租戶，規則數線性增長——50 租戶時堪用，200 租戶時已需水平擴展 Prometheus。
+### 規則膨脹
 
-**✅ 我們的方案：**
-透過 `group_left` 向量匹配。平台維護固定 M 條規則，Prometheus 一次評估即匹配所有租戶的 `user_threshold` 向量。複雜度：O(N×M) → O(M)。
-
-**程式碼對比：**
+傳統做法中，100 個租戶 × 50 條規則 = 5,000 次獨立 PromQL 評估。本平台透過 `group_left` 向量匹配，維護固定 M 條規則，Prometheus 一次評估即匹配所有租戶閾值。複雜度從 O(N×M) 降為 O(M)。
 
 ```yaml
-# ❌ Traditional: 每個 tenant 一條 rule (×100 tenants = 100 rules)
+# 傳統：每個 tenant 一條 rule
 - alert: MySQLHighConnections_db-a
   expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
-- alert: MySQLHighConnections_db-b
-  expr: mysql_global_status_threads_connected{namespace="db-b"} > 80
-# ... repeat for every tenant
 
-# ✅ Dynamic: 1 條 rule 涵蓋所有 tenants
+# 動態：1 條 rule 涵蓋所有 tenants
 - alert: MariaDBHighConnections
   expr: |
     tenant:mysql_threads_connected:max
@@ -43,10 +37,9 @@ lang: zh
     tenant:alert_threshold:connections
 ```
 
-**租戶配置（零 PromQL）：**
+租戶只寫 YAML，不需 PromQL：
 
 ```yaml
-# conf.d/db-a.yaml
 tenants:
   db-a:
     mysql_connections: "100"
@@ -54,186 +47,60 @@ tenants:
     mysql_connections: "80"
 ```
 
-**效能基準：**
+### 租戶導入成本
 
-| 指標 | 動態（現行） | 傳統 @ 100 租戶 |
-|------|-------------|-----------------|
-| 警報規則數 | 56（固定） | 5,600（56×100） |
-| 規則總數 | 155（15 Rule Packs） | 5,600+ |
-| **每週期評估時間** | **~20ms**（5 輪 mean ± 1.9ms） | **~800ms+**（線性增長） |
-| 未使用規則包成本 | 近乎零 | N/A |
-
-詳細效能分析：見 [架構與設計文件](docs/architecture-and-design.md)
-
----
-
-### 2.2 租戶導入阻力
-
-**❌ 傳統痛點：**
-租戶必須學習 PromQL（`rate`、`sum by`、`group_left`）。一個 label 寫錯 = 靜默失敗，alert 不觸發但無人發現。平台團隊花大量時間替租戶除錯 PromQL，而非改善平台本身。導入工具散落在 repo 各處，新租戶得先 clone 專案、安裝依賴——導入一個租戶常需 1-2 天協助。
-
-**✅ 我們的方案：**
-零 PromQL。租戶只寫 YAML：`mysql_connections: "80"`。所有工具封裝在 **`da-tools` 容器**中，`docker pull` 即可使用——不需 clone 專案、不需安裝 Python 依賴。`da-tools scaffold` 互動式產生配置，`da-tools migrate` 自動轉換舊規則並推斷聚合方式。
+所有工具封裝在 `da-tools` 容器中，`docker pull` 即用，不需 clone 專案或安裝依賴。`da-tools scaffold` 互動式產生配置，`da-tools migrate` 自動轉換舊規則（AST 引擎）。
 
 ```bash
-# 不需 clone — 直接使用
-docker run --rm -it ghcr.io/vencil/da-tools:1.11.0 scaffold --tenant my-app --db mariadb,redis
+docker run --rm -it ghcr.io/vencil/da-tools scaffold --tenant my-app --db mariadb,redis
 ```
 
----
+### 警報疲勞
 
-### 2.3 平台維護與部署災難
+內建維護模式（抑制所有警報）、Silent 模式（保留 TSDB 紀錄但攔截通知）、排程式維護窗口（cron + duration 自動 silence）、多層嚴重度搭配 Severity Dedup（Critical 觸發時抑制 Warning 通知）、排程式閾值（夜間自動放寬）。
 
-**❌ 傳統痛點：**
-所有規則塞在一個巨型 ConfigMap 中。每次閾值修改 = PR → review → CI/CD → Prometheus reload——一次緊急閾值調整平均 2-4 小時落地，事件期間根本來不及。多團隊編輯同一檔案 = merge conflicts。部署時得 clone 整個 repo、手動管理 chart 路徑與 image tag 對齊。
+### 部署與維護
 
-**✅ 我們的方案：**
-15 個獨立 Rule Pack ConfigMap，透過 Projected Volume 掛載。各團隊（DBA、SRE、K8s、Analytics）獨立維護自己的規則包。SHA-256 hash 熱重載 — 不需重啟 Prometheus。目錄模式（`conf.d/`）支援 per-tenant YAML 檔案。
-
-部署面：Helm chart 發佈至 **OCI registry**，一行指令完成安裝——chart 內已綁定對應版本的 image，無需手動管理 tag。基礎 chart 僅包含平台預設（`tenants: {}`），租戶配置透過 `values-override.yaml` 注入，完全分離。
+15 個獨立 Rule Pack ConfigMap 透過 Projected Volume 掛載，各團隊獨立維護。SHA-256 hash 熱重載，不需重啟 Prometheus。Helm chart 發佈至 OCI registry，一行指令完成安裝：
 
 ```bash
-# 一行部署 — 不需 clone repo
 helm install threshold-exporter \
   oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
-  -n monitoring --create-namespace \
-  -f values-override.yaml
+  -n monitoring --create-namespace -f values-override.yaml
 ```
 
----
+### 舊規則遷移
 
-### 2.4 警報疲勞
-
-**❌ 傳統痛點：**
-維護窗口 = 警報風暴（一次排程維護可觸發數十條重複告警）。非關鍵的 Redis queue alert 凌晨 3 點叫醒 on-call 工程師。Warning 和 Critical 同時觸發 = 同一問題收到兩則通知。結果：on-call 開始 mute 頻道，真正的 P0 被淹沒。
-
-**✅ 我們的方案：**
-內建維護模式（`_state_maintenance: enable` 透過 `unless` 抑制所有警報）。**排程式維護窗口**（`_state_maintenance.recurring[]` 搭配 cron + duration，CronJob 每 5 分鐘自動建立 Alertmanager silence，含冪等檢查與自動延展）。多層嚴重度（`_critical` 後綴）搭配 **Auto-Suppression**——Critical 觸發時自動抑制對應的 Warning，避免重複告警。維度閾值（`redis_queue_length{queue="email"}: 1000`）。三態邏輯：每個租戶的每個指標支援 custom / default / disable。**排程式閾值**：支援時間窗口自動切換（如 `22:00-06:00` 夜間放寬閾值），減少非工作時段的誤報。**Config-Driven Routing**：租戶在 YAML 中設定通知目的地（webhook/email/slack/teams），支援 Go template 客製化訊息內容。
-
----
-
-### 2.5 治理與稽核
-
-**❌ 傳統痛點：**
-誰改了什麼閾值？沒有稽核軌跡——事後追責只能翻 Slack 歷史。沒有權責分離——任何人都能改全域規則，一次手滑影響所有租戶。
-
-**✅ 我們的方案：**
-Per-tenant YAML 存放於 Git = 天然稽核軌跡。`_defaults.yaml` 由平台團隊管控（權責分離）。邊界規則防止租戶覆蓋平台設定。透過 Git 權限實現檔案級 RBAC。**三層治理模型**：Platform Team 管理全域預設 → Domain Experts 定義黃金標準 → Tenant Tech Leads 調整業務閾值，搭配 CI deny-list linting 確保合規。
-
----
-
-### 2.6 舊規則遷移風險
-
-**❌ 傳統痛點：**
-數百條手寫 PromQL 規則無法自動轉換。手動遷移耗時數週且易出錯。一次性 big-bang 切換風險極高——切換失敗 = 監控盲區，直到有人發現 alert 沒有在該觸發時觸發。
-
-**✅ 我們的方案：**
-`migrate_rule.py` v4 搭載 **AST 遷移引擎**（`promql-parser` Rust PyO3），精準辨識 metric name 與 label matcher。`custom_` prefix 隔離避免命名衝突。`--triage` 模式產出 CSV 清單分類每條規則的遷移策略。**Shadow Monitoring** 雙軌並行——`da-tools validate` 驗證遷移前後數值一致（容差 ≤ 5%），零風險漸進式切換。所有工具均可透過 `da-tools` 容器執行，不需建置本地環境。
-
----
-
-### 2.7 維度精細控制
-
-**❌ 傳統痛點：**
-同一指標只能設定單一閾值。Oracle DBA 需要對 `USERS` tablespace 設 85%、對 `SYSTEM` tablespace 設 95%——傳統方案必須寫兩條獨立 PromQL 規則。N 個維度 = N 條規則，回到規則膨脹的老路。
-
-**✅ 我們的方案：**
-**Regex 維度閾值**：支援 `=~` 運算子（如 `tablespace=~"SYS.*"`），在 YAML 中直接指定維度級別的閾值。Exporter 將 regex pattern 輸出為 `_re` 後綴 label，PromQL recording rules 在查詢時完成匹配。租戶仍然零 PromQL。
-
----
-
-### 企業級價值主張
-
-| 價值 | 解決什麼問題 | 機制 | 可驗證性 |
-|------|-------------|------|----------|
-| **全鏈遷移自動化** | 既有數百條規則要遷移 → 人工分析數週、切換怕漏、回滾無信心 | Onboard 反向分析 → Scaffold 自動填配置 → Shadow Monitoring 比對 → Auto-Convergence 偵測穩態 → Batch Health Report → Gap Analysis 找漏洞 | `da-tools onboard --alertmanager-config am.yml` → `scaffold --from-onboard hints.json` → `validate --auto-detect-convergence` → `batch-diagnose` |
-| **變更信心保證** | 改閾值不知道影響範圍、PR review 全靠人工 → 怕改就不改 | `--diff` preview 看 before/after + 受影響 alert。PR 自動觸發 `backtest` 用 7 天歷史數據回測 firing 變化量 → HIGH/MEDIUM/LOW 風險等級 | `da-tools patch-config --diff db-a mysql_connections 50` |
-| **告警疲勞歸零** | 維護窗口告警風暴 + 重複通知 → on-call mute 頻道 → 真正 P0 被淹沒 | Auto-Suppression（Critical 觸發自動靜默 Warning）+ 維護模式 + 排程式維護窗口（cron + duration → CronJob 自動 silence）+ 排程式閾值（夜間自動放寬）+ 三態開關 | `make demo-full` 端對端驗證 < 5 分鐘 |
-| **低導入成本** | 租戶學 PromQL 花數天、部署 clone repo 手動對齊版號 | OCI Helm chart 一行部署（`helm install oci://...`）。`da-tools` 容器封裝 20 個 CLI，`docker pull` 即用。`scaffold` 互動式產生配置 | `docker run --rm ghcr.io/vencil/da-tools:1.11.0 scaffold` |
-| **全生命週期治理** | 導入有工具、營運沒工具、下架更沒工具 → 殭屍規則累積 | `scaffold` 導入 → `patch_config` 營運（含 `--diff` preview） → `deprecate` / `offboard` 下架。三層治理模型 + CI deny-list linting + PR backtest | `da-tools offboard <tenant> --dry-run` |
-| **Config-Driven Routing** | 通知目的地寫死在 Alertmanager 設定 → 改一個 webhook 要改中央配置 | 租戶 YAML `_routing` 自主管理 6 種 receiver（webhook/email/slack/teams/rocketchat/pagerduty）+ Go template 客製化 + CI validation | `da-tools generate-routes --validate` |
-| **15 個 Rule Pack 即插即用** | 每種資料庫的監控規則從零開始寫 → 重複造輪子 | 涵蓋 9 種 DB/MQ + K8s + Platform 自監控 + Operational。Projected Volume `optional: true`——不用的規則包零成本。`analyze-gaps` 自動找 custom rule 對應的官方 Rule Pack | `da-tools analyze-gaps --config-dir conf.d/` |
+`migrate_rule.py` 搭載 AST 遷移引擎（`promql-parser` Rust PyO3），自動轉換既有 PromQL 規則。Shadow Monitoring 雙軌並行驗證遷移前後數值一致（容差 ≤ 5%），支援自動穩態偵測。
 
 ---
 
 ## 架構總覽
 
-### 概念對比：傳統 vs 動態
-
-```mermaid
-graph LR
-    subgraph "❌ Traditional"
-        T1_old[Tenant A<br>Writes PromQL] --> P_old[Prometheus<br>N×M Rules]
-        T2_old[Tenant B<br>Writes PromQL] --> P_old
-        TN_old[Tenant N<br>Writes PromQL] --> P_old
-    end
-
-    subgraph "✅ Dynamic Alerting"
-        T1_new[Tenant A<br>YAML only] --> TE[threshold-exporter<br>HA ×2]
-        T2_new[Tenant B<br>YAML only] --> TE
-        TN_new[Tenant N<br>YAML only] --> TE
-        TE --> P_new[Prometheus<br>M Rules only]
-        RP[15 Rule Packs<br>Projected Volume] --> P_new
-    end
-```
-
-### 遷移生命週期
-
-```mermaid
-graph LR
-    OB["da-tools onboard<br/>反向分析既有配置"] --> SC["da-tools scaffold<br/>--from-onboard<br/>自動產生 tenant YAML"]
-    SC --> MIG["da-tools migrate<br/>AST 轉換舊規則"]
-    MIG --> VAL["da-tools validate<br/>--auto-detect-convergence<br/>Shadow 比對至穩態"]
-    VAL --> CUT["Cutover<br/>切換流量"]
-    CUT --> BD["da-tools batch-diagnose<br/>多租戶健康報告"]
-    BD --> GAP["da-tools analyze-gaps<br/>Rule Pack 覆蓋分析"]
-
-    classDef auto fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    class OB,SC,MIG,VAL,BD,GAP auto
-    classDef manual fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    class CUT manual
-```
-
-### 資料流架構
-
 ```mermaid
 graph TD
-    subgraph TL["Tenant Layer - Zero PromQL"]
-        D["_defaults.yaml<br/>Platform globals"]
-        T1["db-a.yaml<br/>mysql_connections: 70"]
-        T2["db-b.yaml<br/>redis_memory: 80"]
+    subgraph TL["Tenant Layer — Zero PromQL"]
+        D["_defaults.yaml"]
+        T1["db-a.yaml"]
+        T2["db-b.yaml"]
     end
 
     subgraph PL["Platform Layer"]
-        TE["threshold-exporter x2 HA<br/>Directory Scanner / Hot-Reload<br/>Three-State / SHA-256 Hash"]
-        RP["Projected Volume<br/>15 Independent Rule Packs<br/>kubernetes | mariadb | postgresql | redis | mongodb<br/>elasticsearch | oracle | db2 | clickhouse<br/>kafka | rabbitmq | jvm | nginx | platform | operational"]
+        TE["threshold-exporter ×2 HA<br/>Directory Scanner / SHA-256 Hot-Reload"]
+        RP["Projected Volume<br/>15 Rule Packs"]
     end
 
-    subgraph PE["Prometheus Engine"]
-        PROM["Prometheus<br/>Vector Matching: group_left<br/>141 Rules / 27 Groups / ~20ms per cycle"]
-    end
-
-    subgraph CI["CI Safety Net"]
-        BT["PR Backtest Bot<br/>7-day historical replay<br/>Risk: HIGH/MEDIUM/LOW"]
+    subgraph PE["Prometheus + Alertmanager"]
+        PROM["Prometheus<br/>group_left Vector Matching"]
+        AM["Alertmanager<br/>Route by tenant"]
     end
 
     D --> TE
     T1 --> TE
     T2 --> TE
-    TE -->|"Expose user_threshold<br/>gauge metrics<br/>(max by tenant)"| PROM
-    RP -->|"Recording Rules +<br/>Alert Rules"| PROM
-    PROM --> AM["Alertmanager<br/>Route by tenant label"]
-    T1 -.->|"PR modifies conf.d/"| BT
-    BT -.->|"Prometheus range_query<br/>backtest firing delta"| PROM
-
-    classDef tenant fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef platform fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef engine fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    classDef ci fill:#fce4ec,stroke:#c62828,stroke-width:2px
-    class D,T1,T2 tenant
-    class TE,RP platform
-    class PROM,AM engine
-    class BT ci
+    TE -->|user_threshold metrics| PROM
+    RP -->|Recording + Alert Rules| PROM
+    PROM --> AM
 ```
 
 ---
@@ -241,262 +108,98 @@ graph TD
 ## 快速開始
 
 ```bash
-# 1. Open in VS Code → "Reopen in Container"
-
-# 2. 一鍵部署
+# 1. VS Code → "Reopen in Container"
+# 2. 部署
 make setup
-
-# 3. 驗證指標
+# 3. 驗證
 make verify
-
-# 4. 硬體故障測試 — Kill process 模擬服務中斷 (Hard Outage Test)
+# 4. 故障測試
 make test-alert
-
-# 5. 動態負載展演 — Live Load Demo (stress-ng + connections → alert 觸發 → 清除 → 自動恢復)
+# 5. 端對端展演
 make demo-full
-
-# 6. 存取 UI
+# 6. UI
 make port-forward
-# Prometheus: http://localhost:9090
-# Grafana:    http://localhost:3000 (admin/admin)
+# Prometheus: localhost:9090 | Grafana: localhost:3000 (admin/admin) | Alertmanager: localhost:9093
 ```
 
 ---
 
-## 文件導覽
+## 規則包
 
-按讀者旅程排序：理解架構 → 部署 → 整合 → 遷移 → 治理 → 維運。
+15 個 Rule Pack 透過 Projected Volume 預載，各自擁有獨立 ConfigMap（`optional: true`）。未使用的規則包評估成本近乎零。
 
-| 文件 | 說明 | 目標讀者 |
-|------|------|---------|
-| [架構與設計](docs/architecture-and-design.md) | O(M) 推導、HA 設計、Projected Volume 深度解析 | Platform Engineers、SREs |
-| [規則包目錄](rule-packs/README.md) | 15 個 Rule Pack 規格、結構範本、exporter 連結 | 全體 |
-| [Threshold Exporter](components/threshold-exporter/README.md) | 元件架構、API 端點、配置格式、開發指南 | 開發者 |
-| [BYOP Prometheus 整合指南](docs/byo-prometheus-integration.md) | 企業現有 Prometheus / Thanos 叢集的最小整合步驟 | Platform Engineers、SREs |
-| [BYOA Alertmanager 整合藍圖](docs/byo-alertmanager-integration.md) | Alertmanager 整合框架、動態 Reload 藍圖、Receiver 擴充方向 | Platform Engineers、SREs |
-| [Federation 整合藍圖](docs/federation-integration.md) | 多叢集場景：中央 Exporter + 邊緣 Prometheus 架構藍圖 | Platform Engineers |
-| [遷移指南](docs/migration-guide.md) | 零摩擦導入、scaffold 工具、5 個實戰場景 | 租戶、DevOps |
-| [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、RnR 權責定義、SLA 切割、CI Linting | Platform Leads、Domain Experts |
-| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP：啟動、巡檢、收斂判定、切換退出 | SREs、Platform Engineers |
-| [da-tools CLI](components/da-tools/README.md) | 可攜帶驗證工具容器 — 不需 clone 專案即可驗證整合 | 全體 |
-| [GitOps 部署指南](docs/gitops-deployment.md) | GitOps 工作流（ArgoCD/Flux）、CODEOWNERS RBAC、CI 自動驗證 | Platform Engineers、DevOps |
+| 規則包 | Exporter | Recording | Alert |
+|--------|----------|-----------|-------|
+| mariadb | mysqld_exporter (Percona) | 11 | 8 |
+| postgresql | postgres_exporter | 11 | 9 |
+| kubernetes | cAdvisor + kube-state-metrics | 7 | 4 |
+| redis | redis_exporter | 11 | 6 |
+| mongodb | mongodb_exporter | 10 | 6 |
+| elasticsearch | elasticsearch_exporter | 11 | 7 |
+| oracle | oracledb_exporter | 11 | 7 |
+| db2 | db2_exporter | 12 | 7 |
+| clickhouse | clickhouse_exporter | 12 | 7 |
+| kafka | kafka_exporter | 13 | 9 |
+| rabbitmq | rabbitmq_exporter | 12 | 8 |
+| jvm | jmx_exporter | 9 | 7 |
+| nginx | nginx-prometheus-exporter | 9 | 6 |
+| operational | threshold-exporter 運營模式 | 0 | 4 |
+| platform | threshold-exporter 自監控 | 0 | 4 |
+| **合計** | | **139** | **99** |
 
----
-
-## 規則包目錄
-
-15 個 Rule Pack 透過 Kubernetes **Projected Volume** 預載於 Prometheus 中，各自擁有獨立 ConfigMap（`optional: true`），由不同團隊獨立維護：
-
-| 規則包 | Exporter | 規則數 | 狀態 |
-|--------|----------|--------|------|
-| mariadb | mysqld_exporter (Percona) | 11R + 8A | 預載 |
-| postgresql | postgres_exporter | 12R + 6A | 預載 |
-| kubernetes | cAdvisor + kube-state-metrics | 7R + 4A | 預載 |
-| redis | oliver006/redis_exporter | 11R + 6A | 預載 |
-| mongodb | percona/mongodb_exporter | 10R + 6A | 預載 |
-| elasticsearch | elasticsearch_exporter | 11R + 7A | 預載 |
-| oracle | oracledb_exporter | 11R + 7A | 預載 |
-| db2 | db2_exporter | 12R + 7A | 預載 |
-| clickhouse | clickhouse_exporter | 12R + 7A | 預載 |
-| kafka | kafka_exporter | 10R + 5A | 預載 |
-| rabbitmq | rabbitmq_exporter | 11R + 6A | 預載 |
-| platform | threshold-exporter 自我監控 | 0R + 4A | 預載 |
-
-**備註：** R=Recording Rules（含 Normalization + Threshold Normalization）、A=Alert Rules。共 85R + 56A = 141 條規則。未使用的規則包評估成本近乎零。
+詳見 [規則包目錄](rule-packs/README.md) · [Alert 速查](rule-packs/ALERT-REFERENCE.md)
 
 ---
 
 ## 工具
 
-| 工具 | 用途 |
+所有工具可透過 `da-tools` 容器執行（`docker run --rm ghcr.io/vencil/da-tools`），或在已 clone 的環境中直接用 `python3 scripts/tools/<tool>.py`。
+
+**運維工具：**
+`scaffold_tenant` 新租戶配置產生 · `onboard_platform` 既有配置反向分析 · `migrate_rule` AST 遷移引擎 · `validate_migration` Shadow Monitoring 驗證 · `cutover_tenant` 一鍵切換 · `batch_diagnose` 多租戶健康報告 · `patch_config` 安全局部更新（含 `--diff` preview）· `diagnose` 單租戶檢查 · `check_alert` 警報狀態查詢 · `baseline_discovery` 負載觀測閾值建議 · `backtest_threshold` 歷史回測 · `analyze_rule_pack_gaps` 覆蓋分析 · `offboard_tenant` 安全下架 · `deprecate_rule` 規則下架 · `generate_alertmanager_routes` 路由產生 · `validate_config` 一站式驗證 · `config_diff` 配置差異比對 · `maintenance_scheduler` 排程維護 · `blind_spot_discovery` 盲區掃描
+
+**DX Automation：**
+`shadow_verify` Shadow Monitoring 自動驗證 · `byo_check` BYO 整合檢查 · `federation_check` Federation 驗證 · `grafana_import` Dashboard 匯入
+
+完整 CLI 參考：[da-tools CLI](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md)
+
+---
+
+## 文件導覽
+
+| 文件 | 說明 |
 |------|------|
-| `onboard_platform.py` | 既有配置反向分析 — Alertmanager / Rule file / scrape config 自動轉換。產出 `onboard-hints.json` 供 scaffold 銜接 |
-| `scaffold_tenant.py` | 新租戶配置產生器（互動 / CLI / `--from-onboard` 自動填充） |
-| `migrate_rule.py` | AST 遷移引擎（v4: AST 精準辨識 + Triage CSV + Prefix 隔離 + Dictionary + tenant label 注入） |
-| `validate_migration.py` | Shadow Monitoring 數值差異比對 + `--auto-detect-convergence` 自動穩態偵測 |
-| `batch_diagnose.py` | 多租戶並行健康報告（Post-cutover 全面檢查）— 自動發現 tenants + 並行診斷 |
-| `analyze_rule_pack_gaps.py` | Custom Rule → 官方 Rule Pack 覆蓋分析（Exact / Prefix / Fuzzy 三層匹配） |
-| `patch_config.py` | 安全局部更新 ConfigMap + `--diff` preview（terraform plan 類比） |
-| `backtest_threshold.py` | 閾值變更歷史回測 — 用 Prometheus 7 天數據模擬 old/new firing 差異 → 風險等級 |
-| `check_alert.py` | 查詢租戶警報狀態 |
-| `diagnose.py` | 單租戶健康檢查 |
-| `offboard_tenant.py` | 安全移除 Tenant 配置（Pre-check + 連帶檢查） |
-| `deprecate_rule.py` | 平滑下架過時的 Rule / Metric（三步自動化） |
-| `baseline_discovery.py` | 負載觀測 + 閾值建議（p95/p99 統計 → 建議值） |
-| `lint_custom_rules.py` | CI deny-list linter — 檢查 Custom Rule 治理合規性 |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment（route + receiver + inhibit）+ `--apply` + `--validate` + `--output-configmap`（GitOps 完整 ConfigMap） |
-| `validate_config.py` | 一站式配置驗證（YAML + schema + routes + policy + versions） |
-| `cutover_tenant.py` | Shadow Monitoring 一鍵切換（§7.1 全步驟自動化） |
-| `blind_spot_discovery.py` | Cluster targets 盲區掃描（Prometheus targets × tenant config 交叉比對） |
-| `config_diff.py` | 目錄級配置差異比對（GitOps PR review blast radius 報告） |
-| `maintenance_scheduler.py` | 排程式維護窗口 → Alertmanager silence 自動建立（CronJob） |
+| [架構與設計](docs/architecture-and-design.md) | 核心設計、HA、Rule Pack 架構 |
+| [快速入門（按角色）](docs/getting-started/) | Platform Engineers · Domain Experts · Tenants |
+| [遷移指南](docs/migration-guide.md) | 導入流程、AST 引擎、Shadow Monitoring |
+| [BYO Prometheus](docs/byo-prometheus-integration.md) | 整合既有 Prometheus/Thanos |
+| [BYO Alertmanager](docs/byo-alertmanager-integration.md) | Alertmanager 整合與動態 Routing |
+| [Federation](docs/federation-integration.md) | 多叢集架構藍圖 |
+| [GitOps 部署](docs/gitops-deployment.md) | ArgoCD/Flux 工作流 |
+| [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、CI Linting |
+| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP |
+| [場景指南](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
 
-**使用範例（da-tools 容器 — 不需 clone 專案）：**
-
-```bash
-# 查看支援的 DB 類型
-docker run --rm ghcr.io/vencil/da-tools:1.11.0 scaffold --catalog
-
-# 新租戶：互動式配置產生器（支援 8 種 DB）
-docker run --rm -it -v $(pwd)/output:/output ghcr.io/vencil/da-tools:1.11.0 scaffold
-
-# 舊規則自動轉換（AST 引擎）
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:1.11.0 migrate /data/legacy-rules.yml
-
-# Shadow Monitoring 驗證
-docker run --rm -e PROMETHEUS_URL=http://prometheus:9090 \
-  ghcr.io/vencil/da-tools:1.11.0 validate --mapping /data/prefix-mapping.yaml
-```
-
-> **已 clone 專案？** 也可直接用 `python3 scripts/tools/scaffold_tenant.py --catalog` 等本地指令。
+完整文件對照表：[doc-map.md](docs/internal/doc-map.md) · 工具表：[tool-map.md](docs/internal/tool-map.md)
 
 ---
 
 ## 前置需求
 
-**必要條件：**
-
 - [Docker Engine](https://docs.docker.com/engine/install/) 或 Docker Desktop
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-
-**建議（非必要）：**
-
-- [VS Code](https://code.visualstudio.com/) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) — 提供預先配好工具鏈的開發環境，但非使用本平台的必要條件
-
----
-
-## 開發（Makefile 目標）
-
-<details>
-<summary><strong>Click to expand all Makefile targets</strong></summary>
-
-```
-make setup              # 部署全部資源 (Kind cluster + DB + Monitoring)
-make reset              # 清除後重新部署
-make verify             # 驗證 Prometheus 指標抓取
-make test-alert         # 硬體故障/服務中斷測試 (使用: make test-alert TENANT=db-b)
-make test-scenario-a    # Scenario A: 動態閾值 (使用: make test-scenario-a TENANT=db-a)
-make test-scenario-b    # Scenario B: 弱環節檢測
-make test-scenario-c    # Scenario C: 狀態字串比對
-make test-scenario-d    # Scenario D: 維護模式 / 複合警報 / 多層嚴重度
-make test-scenario-e    # Scenario E: 多租戶隔離驗證 (--with-load 支援真實負載)
-make test-scenario-f    # Scenario F: HA 故障切換驗證 (Kill Pod → 連續性 → 無翻倍)
-make load-composite     # 複合負載注入 (connections + cpu) (TENANT=db-a)
-make baseline-discovery # 負載觀測 + 閾值建議 (TENANT=db-a)
-make demo               # 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check_alert)
-make demo-full          # 動態負載展演 — Live Load Demo (含 alert 觸發/消除完整循環)
-make component-build    # Build component image (COMP=threshold-exporter)
-make component-deploy   # Deploy component (COMP=threshold-exporter ENV=local)
-make component-logs     # View component logs
-make status             # 顯示所有 Pod 狀態
-make logs               # 查看 DB 日誌 (TENANT=db-b)
-make shell              # 進入 DB CLI (TENANT=db-a)
-make inspect-tenant     # AI Agent: 檢查 Tenant 健康 (TENANT=db-a)
-make port-forward       # 啟動 Port-Forward (9090, 3000, 9093, 8080)
-make clean              # 清除所有 K8s 資源（保留 cluster）
-make destroy            # 清除資源 + 刪除 Kind cluster
-make help               # 顯示說明
-```
-
-</details>
-
----
-
-## 專案結構
-
-<details>
-<summary><strong>Click to expand project directory tree</strong></summary>
-
-```
-.
-├── components/
-│   ├── threshold-exporter/     # 動態閾值 exporter (Helm chart + Go app)
-│   └── (kube-state-metrics 已整合至 k8s/03-monitoring/)
-├── environments/
-│   ├── local/                  # 本地開發 Helm values
-│   └── ci/                     # CI/CD Helm values
-├── helm/
-│   └── mariadb-instance/       # Helm chart: MariaDB + exporter sidecar
-├── k8s/
-│   ├── 00-namespaces/          # db-a, db-b, monitoring
-│   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
-│       ├── configmap-rules-*.yaml  # 15 獨立 Rule Pack ConfigMaps (含 platform)
-│       └── deployment-prometheus.yaml  # Projected Volume 架構
-├── rule-packs/                 # 模組化 Prometheus 規則包 (權威參考)
-│   └── README.md               # Rule Pack 規格與範本
-├── scripts/                    # 操作腳本 (_lib.sh, setup, verify, cleanup...)
-│   ├── setup.sh                # 一鍵部署
-│   ├── verify.sh               # 驗證指標抓取
-│   ├── test-alert.sh           # 觸發故障測試
-│   ├── demo.sh                 # 端對端示範
-│   └── tools/                  # 自動化工具
-│       ├── patch_config.py
-│       ├── check_alert.py
-│       ├── diagnose.py
-│       ├── migrate_rule.py
-│       ├── validate_migration.py  # Shadow Monitoring 驗證
-│       ├── scaffold_tenant.py
-│       ├── offboard_tenant.py     # Tenant 下架
-│       ├── deprecate_rule.py      # Rule/Metric 下架
-│       ├── baseline_discovery.py  # 負載觀測 + 閾值建議
-│       └── metric-dictionary.yaml # 啟發式指標對照字典
-├── tests/                      # 整合測試
-│   ├── scenario-a.sh           # 動態閾值測試
-│   ├── scenario-b.sh           # 弱環節檢測測試
-│   ├── scenario-c.sh           # 狀態字串比對測試
-│   ├── scenario-d.sh           # 維護模式/複合警報測試
-│   ├── scenario-e.sh           # 多租戶隔離測試
-│   ├── scenario-f.sh           # HA 故障切換測試
-│   └── test-migrate-*.sh       # 遷移工具測試
-├── docs/                       # 文件目錄
-│   ├── architecture-and-design.md  # 架構深度文件
-│   ├── migration-guide.md      # 完整遷移指南 (5 scenarios + 範例)
-│   ├── custom-rule-governance.md  # 客製化規則治理規範
-│   ├── byo-prometheus-integration.md # BYOP 整合指南
-│   ├── shadow-monitoring-sop.md   # Shadow Monitoring SRE SOP
-│   └── internal/               # 內部開發手冊 (非 user-facing)
-│       ├── testing-playbook.md    # 測試排錯手冊
-│       └── windows-mcp-playbook.md # Dev Container 操作手冊
-├── .devcontainer/              # Dev Container 配置
-├── CLAUDE.md                   # AI Agent 開發上下文指引
-├── CHANGELOG.md                # 版本變更日誌
-├── Makefile                    # 操作入口 (make help)
-└── README.md
-```
-
-</details>
-
----
-
-## 高可用與自我監控
-
-threshold-exporter 預設以 **2 Replicas** 部署，具備以下 HA 機制：
-
-- **Pod Anti-Affinity**（`preferredDuringSchedulingIgnoredDuringExecution`）：盡可能將兩個 replica 分散在不同 Node，相容 Kind 單節點叢集。
-- **PodDisruptionBudget**（`minAvailable: 1`）：Node 維護時保證至少 1 個 Pod 存活。
-- **RollingUpdate**（`maxUnavailable: 0`）：滾動更新期間零停機。
-- **`max by(tenant)` 聚合**：所有 threshold recording rules 使用 `max` 而非 `sum` 聚合 `user_threshold`，避免多 replica 造成閾值翻倍。
-
-Platform Rule Pack（`configmap-rules-platform.yaml`）提供 4 條自我監控警報：
-
-| 警報 | 條件 | 嚴重度 |
-|------|------|--------|
-| `ThresholdExporterDown` | 單一 Pod `up == 0` | warning |
-| `ThresholdExporterAbsent` | 所有 Pod 斷線 | critical |
-| `ThresholdExporterTooFewReplicas` | 健康 replica < 2 | warning |
-| `ThresholdExporterHighRestarts` | 1 小時內重啟 > 3 次 | warning |
+- （建議）VS Code + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
 
 ---
 
 ## 關鍵設計決策
 
-- **O(M) 規則複雜度**：所有 alert rule 使用 `group_left` 向量匹配，規則數只與 metric 種類（M）相關，與租戶數（N）無關。100 個租戶不會增加任何規則。
-- **TSDB 完整性優先**：Severity Dedup 在 Alertmanager inhibit 層實現（非 PromQL `unless`），TSDB 永遠保有完整的 warning + critical 紀錄，不犧牲可觀測性換取通知簡化。
-- **Projected Volume 隔離**：15 個 Rule Pack ConfigMap 各自獨立掛載（`optional: true`），各團隊獨立維護、零 PR 衝突。刪除任一 ConfigMap 不影響 Prometheus 運行。
-- **Config-Driven 全鏈路**：從閾值（YAML）→ 路由（`_routing`）→ 通知（Alertmanager receiver）→ 行為控制（Silent/Maintenance），全部由租戶 YAML 驅動，無需接觸 PromQL 或 Alertmanager 設定。
-- **雙端一致性**：Go exporter 與 Python 工具共用相同常數（`RECEIVER_TYPES`、`GUARDRAILS`、`isDisabled` 語義），確保驗證行為跨語言一致。
-- **安全護欄內建**：Webhook Domain Allowlist（防 SSRF）、Tenant Key Schema Validation（防 typo 靜默失敗）、Cardinality Guard（防 metric 爆炸），均為平台級預設而非可選外掛。
-- **Info Metric 注入模式**：`tenant_metadata_info`（value=1）搭載 `runbook_url`、`owner`、`tier` 等租戶 metadata 為 label，Rule Pack alert 透過 `group_left` 自動繼承。租戶只需在 YAML 寫 `_metadata`，不必理解 PromQL join。
+- **O(M) 規則複雜度**：`group_left` 向量匹配，規則數只與 metric 種類相關，與租戶數無關
+- **TSDB 完整性優先**：Severity Dedup 在 Alertmanager inhibit 層實現，TSDB 保有完整 warning + critical 紀錄
+- **Projected Volume 隔離**：15 個 Rule Pack ConfigMap 各自獨立（`optional: true`），零 PR 衝突
+- **Config-Driven 全鏈路**：閾值 → 路由 → 通知 → 行為控制，全部 YAML 驅動
+- **雙端一致性**：Go exporter 與 Python 工具共用相同常數與驗證邏輯
+- **安全護欄內建**：Webhook Domain Allowlist（防 SSRF）、Schema Validation（防 typo）、Cardinality Guard（防 metric 爆炸）
 
 ---
 

@@ -2,13 +2,13 @@
 title: "Grafana Dashboard Guide"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 
 # Grafana Dashboard Guide
 
-> **v1.13.0** | Audience: Platform Engineers, SREs, DevOps
+> **v2.0.0-preview** | Audience: Platform Engineers, SREs, DevOps
 >
 > Related docs: [Architecture](./architecture-and-design.en.md) · [Troubleshooting](./troubleshooting.en.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.en.md)
 

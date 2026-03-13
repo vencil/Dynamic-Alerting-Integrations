@@ -184,6 +184,74 @@ def format_changelog(
     return "\n".join(lines)
 
 
+# ── CHANGELOG Lint ───────────────────────────────────────────────────
+
+def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
+    """Lint the existing CHANGELOG.md for format issues.
+
+    Checks:
+    - Each version header has semver format [vX.Y.Z...]
+    - Date format is YYYY-MM-DD in parenthetical suffix
+    - Each version section has at least one ### subsection
+    - No duplicate version entries
+    Returns list of issue strings (empty = clean).
+    """
+    from pathlib import Path
+    path = Path(changelog_path)
+    if not path.exists():
+        return [f"{changelog_path} not found"]
+
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    issues: List[str] = []
+    seen_versions: Dict[str, int] = {}
+    current_version: Optional[str] = None
+    has_subsection = False
+
+    semver_re = re.compile(
+        r"^\#\# \[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9._-]+)?)\]"
+    )
+    date_re = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
+    subsection_re = re.compile(r"^### ")
+
+    for i, line in enumerate(lines, 1):
+        vm = semver_re.match(line)
+        if vm:
+            # Check previous version had subsections
+            if current_version and not has_subsection:
+                issues.append(
+                    f"L{seen_versions[current_version]}: [{current_version}] "
+                    f"has no ### subsections"
+                )
+
+            ver = vm.group(1)
+            if ver in seen_versions:
+                issues.append(
+                    f"L{i}: duplicate version [{ver}] "
+                    f"(first at L{seen_versions[ver]})"
+                )
+            seen_versions[ver] = i
+            current_version = ver
+            has_subsection = False
+
+            # Check date
+            dm = date_re.search(line)
+            if not dm:
+                issues.append(f"L{i}: [{ver}] missing date (YYYY-MM-DD)")
+
+        if subsection_re.match(line) and current_version:
+            has_subsection = True
+
+    # Last version
+    if current_version and not has_subsection:
+        issues.append(
+            f"L{seen_versions[current_version]}: [{current_version}] "
+            f"has no ### subsections"
+        )
+
+    return issues
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -208,7 +276,23 @@ def main() -> int:
         action="store_true",
         help="Check mode: verify all commits follow conventional format",
     )
+    parser.add_argument(
+        "--lint",
+        action="store_true",
+        help="Lint CHANGELOG.md format (semver headers, dates, subsections)",
+    )
     args = parser.parse_args()
+
+    # Lint mode — validate existing CHANGELOG format
+    if args.lint:
+        issues = lint_changelog("CHANGELOG.md")
+        if issues:
+            print(f"❌ {len(issues)} CHANGELOG format issue(s):")
+            for issue in issues:
+                print(f"  {issue}")
+            return 1
+        print("✅ CHANGELOG.md format is clean")
+        return 0
 
     # Determine starting point
     since_ref = args.since

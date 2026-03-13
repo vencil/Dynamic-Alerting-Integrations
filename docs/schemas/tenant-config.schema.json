@@ -3,7 +3,7 @@
   "$id": "https://github.com/vencil/vibe-k8s-lab/docs/schemas/tenant-config.schema.json",
   "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
   "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
-  "version": "v1.13.0",
+  "version": "v2.0.0-preview",
   "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/tenant-config.schema.json\": \"conf.d/*.yaml\" }",
   "type": "object",
   "required": ["tenants"],

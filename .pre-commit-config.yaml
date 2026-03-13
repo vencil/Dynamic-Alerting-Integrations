@@ -1,0 +1,78 @@
+# Pre-commit hooks for documentation & config drift prevention
+# Install: pip install pre-commit && pre-commit install
+# Manual:  pre-commit run --all-files
+#
+# These hooks run the lightweight CI checks locally before each commit,
+# catching drift issues early (tool-map, rule-pack stats, glossary, etc.).
+
+repos:
+  - repo: local
+    hooks:
+      # --- Fast drift checks (< 5s each) ---
+      - id: tool-map-check
+        name: Tool map coverage
+        entry: python3 scripts/tools/generate_tool_map.py --check
+        language: python
+        pass_filenames: false
+        files: ^scripts/tools/.*\.py$
+
+      - id: doc-map-check
+        name: Doc map coverage
+        entry: python3 scripts/tools/generate_doc_map.py --check
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.(md|jsx)$
+
+      - id: rule-pack-stats-check
+        name: Rule Pack stats drift
+        entry: python3 scripts/tools/generate_rule_pack_stats.py --check
+        language: python
+        pass_filenames: false
+        files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$
+        additional_dependencies: ['pyyaml']
+
+      - id: glossary-check
+        name: Glossary abbreviation sync
+        entry: python3 scripts/tools/sync_glossary_abbr.py --check
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.md$
+
+      - id: changelog-lint
+        name: Changelog format
+        entry: python3 scripts/tools/generate_changelog.py --check
+        language: python
+        pass_filenames: false
+        files: ^CHANGELOG.*\.md$
+
+      - id: version-consistency
+        name: Version/count consistency
+        entry: python3 scripts/tools/validate_docs_versions.py --ci
+        language: python
+        pass_filenames: false
+        files: \.(md|yaml|jsx)$
+        additional_dependencies: ['pyyaml']
+
+      - id: includes-sync
+        name: Include snippet zh/en sync
+        entry: python3 scripts/tools/check_includes_sync.py --check
+        language: python
+        pass_filenames: false
+        files: ^docs/includes/
+
+      # --- Optional heavier checks (enable with SKIP= override) ---
+      - id: schema-check
+        name: Go→JSON Schema drift
+        entry: python3 scripts/tools/sync_schema.py --check
+        language: python
+        pass_filenames: false
+        files: ^(components/|docs/)
+        stages: [manual]
+
+      - id: translation-check
+        name: Bilingual structure consistency
+        entry: python3 scripts/tools/check_translation.py
+        language: python
+        pass_filenames: false
+        files: \.en\.md$
+        stages: [manual]

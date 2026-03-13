@@ -2,12 +2,12 @@
 title: "場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知
 
-> **v1.13.0** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
+> **v2.0.0-preview** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
 
 ## 問題
 

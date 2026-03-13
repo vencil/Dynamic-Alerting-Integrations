@@ -90,9 +90,11 @@ def compare_front_matter(zh_fm: Dict, en_fm: Dict) -> List[str]:
         en_val = en_fm.get(key, '')
         if zh_val != en_val:
             issues.append(f'front_matter.{key}: ZH={zh_val} vs EN={en_val}')
-    # lang should differ
-    if zh_fm.get('lang', '') == en_fm.get('lang', ''):
-        issues.append(f'front_matter.lang: both are "{zh_fm.get("lang", "")}" (should differ)')
+    # lang should differ (skip if both have no front matter)
+    zh_lang = zh_fm.get('lang', '')
+    en_lang = en_fm.get('lang', '')
+    if zh_lang and en_lang and zh_lang == en_lang:
+        issues.append(f'front_matter.lang: both are "{zh_lang}" (should differ)')
     return issues
 
 
@@ -114,20 +116,16 @@ def analyze_file(path: Path) -> Dict:
 
 
 def find_bilingual_pairs(docs_dir: Path) -> List[Tuple[Path, Path]]:
-    """Find .md and .en.md file pairs."""
+    """Find .md and .en.md file pairs by matching full paths."""
     pairs = []
-    zh_files = {}
 
     for file_path in docs_dir.rglob('*.md'):
         if file_path.name.endswith('.en.md'):
             continue
-        base_name = file_path.name
-        zh_files[base_name] = file_path
-
-    for file_path in docs_dir.rglob('*.en.md'):
-        base_name = file_path.name.replace('.en.md', '.md')
-        if base_name in zh_files:
-            pairs.append((zh_files[base_name], file_path))
+        # Construct expected .en.md path in same directory
+        en_path = file_path.with_suffix('').with_suffix('.en.md')
+        if en_path.exists():
+            pairs.append((file_path, en_path))
 
     return sorted(pairs)
 

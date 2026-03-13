@@ -2,7 +2,7 @@
 title: "性能分析與基準測試 (Performance Analysis & Benchmarks)"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # 性能分析與基準測試 (Performance Analysis & Benchmarks)

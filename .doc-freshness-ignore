@@ -1,0 +1,20 @@
+# .doc-freshness-ignore
+# Paths listed here are excluded from check_doc_freshness.py
+# Format: one path prefix per line, or type:prefix for type-specific ignores
+
+# Example/template paths referenced in documentation
+conf.d/
+rule-packs/custom/
+rule-packs/my-db.yaml
+rule-packs/new-db-type.yaml
+rule-packs/platform-health.yml
+
+# K8s manifests referenced in docs but may not exist locally
+k8s/02-threshold-exporter/
+k8s/03-monitoring/dynamic-alerting-overview.json.old
+k8s/03-monitoring/prometheus-statefulset.yaml
+
+# Actual rule-pack YAMLs referenced from docs (exist only in k8s/ as ConfigMaps)
+rule-packs/mariadb.yaml
+rule-packs/*.yaml
+rule-packs/_metric_dictionary.yaml

@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -99,6 +99,10 @@ graph TB
                 RP7["configmap-rules-oracle.yaml"]
                 RP8["configmap-rules-db2.yaml"]
                 RP9["configmap-rules-clickhouse.yaml"]
+                RP10["configmap-rules-rabbitmq.yaml"]
+                RP11["configmap-rules-kafka.yaml"]
+                RP12["configmap-rules-jvm.yaml"]
+                RP13["configmap-rules-nginx.yaml"]
                 RP6["configmap-rules-platform.yaml"]
             end
 
@@ -254,26 +258,53 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
 ```
 
-#### Auto-Suppression
+#### Auto-Suppression (Severity Dedup via Alertmanager Inhibit)
 
-Platform Alert Rules use `unless` logic to auto-suppress warning when critical triggers:
+Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. This design preserves TSDB completeness while avoiding notification duplication.
+
+**Key principle:** Prometheus always records both warning and critical metrics. Alertmanager's `inhibit_rules` suppress only the **notification**, not the alert itself.
+
+**Prometheus alert rules:**
 
 ```yaml
 - alert: MariaDBHighConnections          # warning
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-    unless on(tenant)                    # ← Auto-Suppression: suppress warning when critical fires
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
+  for: 5m
+  labels:
+    severity: warning
+    metric_group: "connections"
+
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+  for: 5m
+  labels:
+    severity: critical
+    metric_group: "connections"
 ```
 
-**Result:** (dual `unless` logic)
-- Connection count ≥ 150 (critical): warning suppressed by second `unless`, only critical alert fires
-- Connection count 100–150 (warning only): second `unless` does not match, warning alert fires normally
+**Alertmanager inhibit rule (per-tenant, auto-generated):**
+
+```yaml
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+      - metric_group=~".+"
+      - tenant="db-a"
+    target_matchers:
+      - severity="warning"
+      - metric_group=~".+"
+      - tenant="db-a"
+    equal: ["metric_group"]
+```
+
+**Result:**
+- Connection count ≥ 150 (critical): Both warning and critical alerts fire in Prometheus (TSDB records both). Alertmanager's inhibit rule blocks only the **warning notification**, critical notification sends normally.
+- Connection count 100–150 (warning only): Warning alert fires, critical does not. Warning notification sends.
+- **TSDB completeness:** All alert firings remain in Prometheus TSDB regardless of notification suppression.
 
 ### 2.4 Regex Dimension Thresholds
 
@@ -578,7 +609,7 @@ _routing_enforced:
 
 ## 3. Projected Volume Architecture (Rule Packs)
 
-### 3.1 Twelve Independent Rule Packs
+### 3.1 Fifteen Independent Rule Packs
 
 | Rule Pack | Owning Team | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|------------|-----------------|----------------|-------------|
@@ -590,8 +621,12 @@ _routing_enforced:
 | Oracle | DBA / Oracle | `configmap-rules-oracle` | 6 | 7 |
 | DB2 | DBA / DB2 | `configmap-rules-db2` | 7 | 7 |
 | ClickHouse | Analytics | `configmap-rules-clickhouse` | 7 | 7 |
+| Kafka | Messaging | `configmap-rules-kafka` | 7 | 6 |
+| RabbitMQ | Messaging | `configmap-rules-rabbitmq` | 7 | 6 |
+| JVM | App Runtime | `configmap-rules-jvm` | 9 | 7 |
+| Nginx | WebServer | `configmap-rules-nginx` | 9 | 6 |
 | Platform | Platform | `configmap-rules-platform` | 0 | 4 |
-| **Total** | | | **53** | **56** |
+| **Total** | | | **139** | **99** |
 
 ### 3.2 Self-Contained Three-Part Structure
 
@@ -753,172 +788,118 @@ spec:
 
 ## 5. Future Roadmap
 
-The following items are listed by expected impact. For completed items, see [CHANGELOG.md](../CHANGELOG.md).
+The following items are listed by priority. Completed items — see [CHANGELOG.md](../CHANGELOG.md) and [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
 
 ```mermaid
 graph LR
-    subgraph P2["P2 Medium-term (customer-validated)"]
-        RP["Rule Pack Expansion"]
-        FB["Federation B"]
+    subgraph Near["Near-term (design foundations exist)"]
+        FB["Federation B<br/>Rule Pack Layering"]
         NM["1:N Mapping"]
+        QS["Alert Quality<br/>Scoring"]
     end
-    subgraph P3["P3 Long-term (scale-driven)"]
-        TP["Tenant Profiles"]
-        SG["Sharded GitOps"]
-        AC["Assembler Controller<br/>+ Optional CRD"]
-        LM["Log-to-Metric"]
-        TP --> SG --> AC
+    subgraph Mid["Mid-term (customer-validated)"]
+        PS["Policy-as-Code"]
+        CD["Cross-Cluster<br/>Drift Detection"]
+        IR["Incremental<br/>Reload"]
+    end
+    subgraph Far["Long-term (exploratory)"]
+        SP["Tenant Self-Service<br/>Portal"]
+        CF["Cardinality<br/>Forecasting"]
+        LM["Log-to-Metric<br/>Bridge"]
     end
 ```
 
-> **Completed in v1.11.0:** Dynamic Runbook Injection (`tenant_metadata_info` info metric + Rule Pack `group_left` join), Recurring Maintenance Schedules (`maintenance_scheduler.py` + CronJob), Config Drift CI (GitHub Actions + GitLab CI templates). See [CHANGELOG.md](../CHANGELOG.md).
+### 5.1 Federation Scenario B: Rule Pack Layering
 
-### P2 — Medium-term Evolution
+Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts).
 
-#### 5.1 Ecosystem Rule Pack Expansion
+**Technical entry point**: `generate_rule_pack_readme.py` already has Part classification data, which can be extended to produce `edge-rules.yaml` / `central-rules.yaml` split files. Requires pairing with `federation_check.py` to validate recording rule reference integrity after the split.
 
-v1.8.0 already covers 11 DB/MQ types (including Kafka, RabbitMQ). Next-wave candidates:
-
-| Domain | Recommended Exporter | Key Metrics for Threshold Management | Integration Pattern |
-|--------|---------------------|-------------------------------------|-------------------|
-| **JVM** | [prometheus/jmx_exporter](https://github.com/prometheus/jmx_exporter) | `jvm_gc_pause_seconds_sum`, `jvm_memory_used_bytes`, `jvm_threads_current` | Standard three-part — GC pause suits scheduled thresholds |
-| **Nginx** | [nginxinc/nginx-prometheus-exporter](https://github.com/nginxinc/nginx-prometheus-exporter) | `nginx_connections_active`, `nginx_http_requests_total` rate | Standard three-part — active connections use `max by(tenant)` |
-| **AWS RDS** | [percona/rds_exporter](https://github.com/percona/rds_exporter) / [YACE](https://github.com/nerdswords/yet-another-cloudwatch-exporter) | `rds_cpu_utilization`, `rds_free_storage_space`, `rds_database_connections` | CloudWatch → Prometheus → this platform |
-
-#### 5.2 Federation Scenario B: Rule Pack Layering
-
-Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts). To be pursued after Scenario A is deployed and clear customer demand exists.
-
-#### 5.3 1:N Tenant Mapping Advanced Support
+### 5.2 1:N Tenant Mapping Advanced Support
 
 Multiple logical tenants within a single namespace (differentiated by Service annotation / Pod label). Requires `scaffold_tenant.py --shared-namespace --tenant-source annotation` mode and `_tenant_mappings` config section. §2.3 already has relabel examples; tooling awaits requirement confirmation.
 
-### P3 — Long-term Blueprint
+### 5.3 Alert Quality Scoring
 
-#### 5.4 Scalable Configuration Governance: Progressive Three-Layer Architecture
+**Motivation**: As tenant and Rule Pack counts grow, low-quality alerts erode on-call engineers' attention budget. There is currently no systematic way to identify problematic alerts.
 
-**Problem redefined**: Scaling challenges fall into two distinct dimensions — **configuration management scaling** (YAML redundancy and GitOps review bottlenecks at 1000+ tenants) and **K8s governance scaling** (cross-cluster RBAC, drift reconciliation). These require different solutions and should not be coupled into a single approach.
+**Approach**: Analyze Alertmanager history to compute quality metrics for each alertname × tenant combination:
 
-**Current foundation**: The `-config-dir` directory scanner introduced in already solves the ConfigMap 1MB hard limit (one YAML per tenant, projected volume mount). GitOps-Driven RBAC (CODEOWNERS + CI + `make configmap-assemble`) handles permission control. However, when a single domain's tenant count exceeds 1000, Git PR review burden and YAML duplication become the new bottlenecks.
+- **Noise Score**: Excessive firing rate per time window (rapid fire/resolve oscillation)
+- **Stale Score**: Alerts that have not fired for an extended period (thresholds may have lost relevance)
+- **Resolution Latency**: Average time from firing to resolved (too short = flapping, too long = unattended)
+- **Suppression Ratio**: Proportion suppressed by inhibit or silence (too high = rule design needs adjustment)
 
-**Core design principle — Control Plane / Data Plane decoupling**: Regardless of which layer is adopted, `threshold-exporter` always reads from a config-dir directory and performs SHA-256 hot-reload. How upstream configuration is produced (hand-written YAML, Profile expansion, or CRD assembly) is entirely transparent to the exporter. This preserves the core engine's portability — it can run outside Kubernetes on Docker Compose or traditional VMs.
+**Output**: `da-tools alert-quality --period 30d --json` → per-tenant report, embeddable in Grafana dashboards or usable as a CI gate.
 
-```
-                                    ┌──────────────────────────┐
-  Phase 1: Profile                  │                          │
-  _defaults.yaml ──┐                │   threshold-exporter     │
-  _profiles.yaml ──┤  Resolve()     │   (agnostic to upstream) │
-  tenant-*.yaml ───┘  ──────────►   │   config-dir/ + SHA-256  │
-                                    │   hot-reload             │
-  Phase 2: Sharded GitOps           │                          │
-  repo-A/conf.d/ ──┐  CI Assembly   └──────────────────────────┘
-  repo-B/conf.d/ ──┤  ──────────►         ▲
-  repo-C/conf.d/ ──┘                      │
-                                          │ All produce the same
-  Phase 3: CRD + Assembler               │ config-dir directory
-  ThresholdConfig CR ──► Assembler ───────┘
-                         Controller
-```
+### 5.4 Policy-as-Code (Configuration Policy Engine)
 
-##### Phase 1: Tenant Profiles (Configuration Templates, Near-term)
+**Motivation**: The current `ValidateTenantKeys()` performs structural validation (schema) but cannot express organization-level policy constraints such as "all critical alerts must have a pagerduty receiver" or "repeat_interval must not be less than 5m". As Sharded GitOps enables more teams to self-manage configurations, policy guardrails become increasingly important.
 
-**Motivation**: 1000 tenants will not have 1000 completely different configurations. In practice, most tenants fall into a handful of patterns (e.g., `standard-mariadb-prod`, `standard-redis-staging`). The current `_defaults.yaml` provides a global baseline but lacks a "classification group" intermediate layer.
-
-**Four-layer inheritance chain**:
-
-1. **Global Defaults** (`_defaults.yaml`): Global fallback settings (e.g., default NOC routing, global silent mode)
-2. **Rule Pack Baseline**: System built-in standard thresholds (e.g., DB connections 80)
-3. **Profile Overlay** (`_profiles.yaml`): Domain-level group overrides; DBAs define "standard MariaDB" thresholds
-4. **Tenant Override** (`tenant-db-a.yaml`): Only per-instance exceptions
-
-```yaml
-# _profiles.yaml
-profiles:
-  standard-mariadb:
-    mariadb_connections: 85
-    mariadb_replication_lag: 30
-    mariadb_slow_queries: 50
-    _routing:
-      receiver: webhook
-      webhook_url: "https://noc.example.com/{{tenant}}"
-  standard-redis:
-    redis_memory_usage: 80
-    redis_connected_clients: 500
-
-# tenant-db-0742.yaml — only 2-3 lines needed
-_profile: standard-mariadb
-mariadb_connections: 95   # this instance is larger, override single threshold
-```
-
-**Implementation impact**: Go `Resolve()` function gains one additional profile merge layer (`_defaults` → `_profiles[name]` → tenant overrides), with no K8s architecture changes. `config_diff.py` can automatically compute the blast radius of profile changes (number of affected tenants). `scaffold_tenant.py` gains a `--profile` parameter.
-
-**Benefits**: Approximately 90% of 1000 tenant YAMLs reduce to 2-3 lines (profile reference + few overrides), making Git diff review feasible and significantly improving CI validation performance.
-
-##### Phase 2: Sharded GitOps (Organizational Scaling, Medium-term)
-
-**Motivation**: When multiple domain teams (Payment, User, Analytics) each manage hundreds of tenants, a single Git repo's PR review process becomes an organizational bottleneck (Conway's Law).
-
-**Approach**: Each domain team maintains an independent Git repo (or isolated directory within the same repo), each containing only that domain's `conf.d/` tenant configurations. The Platform team's central CI pipeline pulls from all repos at deploy time and assembles them into a single config-dir.
+**Approach**:
 
 ```
-payment-team/conf.d/          ─┐
-user-team/conf.d/              ├─► CI Assembly ─► config-dir/ ─► threshold-exporter
-analytics-team/conf.d/         ─┘
+tenant.yaml → Schema Validation (existing) → Policy Evaluation (new) → config-dir
 ```
 
-This approach requires no new K8s components — it is purely a CI/CD workflow adjustment. Each team has full PR permission management over their own repo; the Platform team only reviews cross-domain changes.
+Introduce a lightweight policy layer with declarative constraint rules. Two possible paths:
 
-##### Phase 3: Lightweight Assembler Controller + Optional CRD (Ultimate Form)
+- **Path A — Built-in DSL**: Add a `_policies` section to `_defaults.yaml` using concise key-operator-value syntax. Advantages: zero external dependencies, low learning curve.
+- **Path B — OPA/Rego integration**: Greater policy expressiveness, suitable for teams with existing OPA infrastructure. Disadvantage: introduces an external dependency.
 
-**Motivation**: When there is a clear requirement for tenant teams to declaratively manage configurations via the K8s API (e.g., cross-cluster drift reconciliation, integration with existing K8s CD pipelines), CRD is introduced as an optional entry point.
+Both paths plug into `validate_config.py` via a plugin mechanism, with no intrusion into the threshold-exporter core.
 
-**Architecture — Assembler Pattern (not a full Operator)**:
+### 5.5 Cross-Cluster Drift Detection
 
-```mermaid
-graph LR
-    subgraph ControlPlane["Control Plane (Optional)"]
-        CR["ThresholdConfig CR<br/>(namespace-scoped)"]
-        AC["da-assembler-controller<br/>(lightweight)"]
-    end
-    subgraph DataPlane["Data Plane (Unchanged)"]
-        CD["config-dir/"]
-        TE["threshold-exporter<br/>SHA-256 hot-reload"]
-    end
-    CR -->|"watch + reconcile"| AC
-    AC -->|"render YAML files"| CD
-    CD -->|"read + reload"| TE
-    YM["ConfigMap / GitOps<br/>(traditional path)"] -->|"mount"| CD
+**Motivation**: The Assembler Controller (implemented in §2.10) solves CRD → YAML translation for a single cluster. In multi-cluster deployments, actual config-dir contents across clusters may diverge due to deployment timing or manual operations.
+
+**Approach**:
+
+```
+Cluster-A config-dir ──┐
+Cluster-B config-dir ──┤── drift_detect.py ──► diff report + reconcile action
+Cluster-C config-dir ──┘
 ```
 
-`da-assembler-controller` is an extremely lightweight controller (single reconcile loop) that watches `ThresholdConfig` CRDs and renders them as YAML files under config-dir. **It is not a full Operator** — it does not auto-scale, does not manage the threshold-exporter lifecycle, and does not compete with GitOps. It does exactly one thing: CRD → YAML translation.
+- **Snapshot comparison**: Periodically capture config-dir SHA-256 manifests from each cluster (`assemble_config_dir.py --manifest` already supports this), compare cross-cluster.
+- **Drift classification**: Distinguish "expected differences" (per-cluster overrides) from "unexpected drift" (deployment failure residue).
+- **Auto-remediation**: Preview with dry-run, then optionally reconcile, leveraging `config_diff.py` for change details.
 
-**Key design decisions**:
+### 5.6 Incremental Hot-Reload
 
-- **CRD is an optional entry point**: Small domains continue using ConfigMap + GitOps with hand-written YAML; large domains optionally deploy the Assembler Controller. Both paths converge — threshold-exporter always sees the same config-dir format.
-- **Zero K8s dependency in core engine**: threshold-exporter does not import `client-go`, does not watch the K8s API, and remains a pure file reader. Full portability is preserved (Docker Compose, VM, bare metal all work).
-- **CRD is namespace-scoped**: Per-namespace permission control integrates naturally with K8s native RBAC. The `ThresholdConfig` spec structure matches the existing tenant YAML format, minimizing learning curve.
-- **GitOps audit trail uninterrupted**: The Assembler Controller's output YAML can be committed back to Git (dry-run mode), ensuring all configuration changes retain Git history.
+**Motivation**: The current threshold-exporter SHA-256 reload is a full reload — any single file change triggers reparsing of all tenants. At 1000+ tenant scale, reload latency grows linearly with tenant count.
 
-**Phase 3 entry criteria**: Scenarios that Phase 1 (Profiles) + Phase 2 (Sharded GitOps) cannot address clearly emerge — for example, 50+ domain teams needing to manage tenant configs through their own K8s CD pipelines, or drift reconciliation across 3+ clusters becoming an operational pain point.
+**Approach**: Maintain a per-file SHA-256 index and only reparse changed files during reload. Requires refactoring the Go `config.Load()` function to support incremental mode, maintaining a full tenant registry in memory for delta merging.
 
-#### 5.5 Log-to-Metric Bridge
+**Risk**: Delta merge consistency guarantees are more complex than full reload. Requires thorough benchmark comparison (`make benchmark` already has reload-bench as a foundation) to confirm the incremental mode does not regress at any scale.
 
-This platform's design boundary is the **Prometheus metrics layer** — it manages thresholds and alerts, and does not directly process logs. For scenarios requiring log-based alerting (e.g., Oracle ORA-600 fatal errors, MySQL slow query log analysis), the recommended ecosystem approach is:
+### 5.7 Tenant Self-Service Portal
+
+**Motivation**: Currently all tenant interaction relies on YAML files and CLI tools. For tenant teams without a DevOps background, a visual configuration experience can lower the onboarding barrier.
+
+**Scope** (lightweight — not a full UI platform):
+
+- **YAML Validation**: Paste tenant YAML and get instant feedback on schema errors and policy violations
+- **Alert Preview**: Input sample metric values and preview which alerts would fire (based on `validate_config.py` dry-evaluate capability)
+- **Routing Visualization**: Display the Alertmanager route structure as a tree diagram, highlighting the tenant's routing path
+
+**Technical foundation**: The React components under `docs/interactive/` (Tenant YAML Validator, Rule Pack Selector) have already validated browser-side execution feasibility. These can be further integrated into a standalone SPA.
+
+### 5.8 Cardinality Forecasting
+
+**Motivation**: The per-tenant 500 cardinality guard (§2.6) is a reactive safeguard. If cardinality growth can be predicted from historical trends, the Platform team can intervene proactively rather than truncating reactively.
+
+**Approach**: Based on time-series data from Prometheus `scrape_series_added` and `tenant_threshold_*` metric families, apply simple linear regression or exponential smoothing to project cardinality ceilings N days ahead. Generate a warning-level alert 7 days before the limit is reached.
+
+### 5.9 Log-to-Metric Bridge
+
+This platform's design boundary is the **Prometheus metrics layer** — it does not directly process logs. For scenarios requiring log-based alerting (e.g., Oracle ORA-600 fatal errors, MySQL slow query log analysis), the recommended ecosystem approach is:
 
 ```
 Application Log → grok_exporter / mtail → Prometheus metric → Platform threshold management
 ```
 
-This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture.
-
-#### 5.6 Documentation & Tooling Automation (DX Automation)
-
-As the platform's documentation and tooling continue to grow, the following directions can further reduce operational overhead:
-
-- **Grafana Dashboard Auto-Screenshot**: Use Grafana Rendering API or Puppeteer to automatically generate dashboard preview images in CI, embedding them in documentation so readers can preview panels without actual deployment.
-- **Runbook Automation Templates**: Based on ALERT-REFERENCE, auto-generate per-alert standardized Runbooks (triage steps, common queries, escalation paths) with PagerDuty / Opsgenie incident management integration.
-- **Operational Workflow Simplification**: Encapsulate multi-step operations documented in guides (e.g., Shadow Monitoring → Cutover → Health Report) into `da-tools` subcommands, reducing the need to consult documentation during operations.
-- **One-Click Validation**: Integrate `validate_config.py` + `config_diff.py` + `check_doc_links.py` into a single `da-tools validate --all` command covering configuration, routing, and documentation consistency.
+This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture. If demand materializes, a `log_bridge_check.py` tool can validate grok_exporter configuration alignment with Rule Packs.
 
 ---
 
@@ -932,8 +913,8 @@ As the platform's documentation and tooling continue to grow, the following dire
 
 ---
 
-**Document version:** — 2026-03-12
-**Last updated:** — Tenant Profiles + JVM/Nginx Rule Packs (13→15), Benchmark data update
+**Document version:** v2.0.0-preview.2 — 2026-03-14
+**Last updated:** — Auto-Suppression redesign (PromQL `unless` → Alertmanager inhibit), Roadmap consolidation (Tenant Profiles + Rule Pack Expansion completed), 15 Rule Packs, 238 total rules
 **Maintainer:** Platform Engineering Team
 
 ## Related Resources

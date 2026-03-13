@@ -2,12 +2,12 @@
 title: "GitOps 部署指南"
 tags: [gitops, deployment, ci-cd]
 audience: [platform-engineer, devops]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # GitOps 部署指南
 
-> **版本**：v1.13.0
+> **版本**：v2.0.0-preview.2
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 

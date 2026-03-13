@@ -1,0 +1,48 @@
+# RBAC for da-assembler-controller
+#
+# The controller needs:
+#   - watch/list/get on ThresholdConfig CRs (all namespaces)
+#   - patch on ThresholdConfig/status (to update reconciliation state)
+#
+# Apply:
+#   kubectl apply -f k8s/crd/assembler-rbac.yaml
+#
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: da-assembler
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: assembler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: da-assembler
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: assembler
+rules:
+  - apiGroups: ["dynamicalerting.io"]
+    resources: ["thresholdconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dynamicalerting.io"]
+    resources: ["thresholdconfigs/status"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: da-assembler
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: assembler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: da-assembler
+subjects:
+  - kind: ServiceAccount
+    name: da-assembler
+    namespace: monitoring

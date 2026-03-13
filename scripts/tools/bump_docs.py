@@ -20,6 +20,21 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
   # 只檢查不修改 (CI lint 用)
   python3 scripts/tools/bump_docs.py --check
 
+  # Dry-run：顯示 before→after diff 但不寫入
+  python3 scripts/tools/bump_docs.py --dry-run --platform 2.1.0
+
+  # 限定範圍：只處理 docs/ 下的檔案
+  python3 scripts/tools/bump_docs.py --dry-run --scope docs --platform 2.1.0
+
+  # 初始化英文 CHANGELOG
+  python3 scripts/tools/bump_docs.py --init-changelog 2.1.0 --changelog-lang en
+
+  # 同時初始化中英文 CHANGELOG
+  python3 scripts/tools/bump_docs.py --init-changelog 2.1.0 --changelog-lang all
+
+  # 完整規則審計（顯示所有規則的當前匹配狀態）
+  python3 scripts/tools/bump_docs.py --what-if
+
   # 組合使用
   python3 scripts/tools/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0
 """
@@ -49,38 +64,43 @@ DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
 # pattern_func(old_ver) -> regex pattern
 # replacement_func(new_ver) -> replacement string
 
+# Semver with optional pre-release suffix (-preview, -beta, etc.)
+_SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
+# Strict semver (no suffix) for image tags and chart versions
+_SEMVER_STRICT = r"[0-9]+\.[0-9]+\.[0-9]+"
+
 
 def _build_rules():
     """Build replacement rules. Called after REPO_ROOT is resolved."""
 
     # --- da-tools image tag rules ---
-    da_tools_image_files = [
-        "components/da-tools/README.md",
-        "components/threshold-exporter/README.md",
-        "docs/byo-alertmanager-integration.md",
-        "docs/byo-prometheus-integration.md",
-        "docs/migration-guide.md",
-        "docs/custom-rule-governance.md",
-        "docs/custom-rule-governance.en.md",
-        "README.md",
-        "README.en.md",
-        "docs/shadow-monitoring-sop.md",
-        "docs/byo-alertmanager-integration.en.md",
-        "docs/byo-prometheus-integration.en.md",
-        "docs/shadow-monitoring-sop.en.md",
-        "docs/migration-guide.en.md",
-        # Include snippets (single-source for embedded content)
-        "docs/includes/docker-usage-pattern.md",
-        "docs/includes/docker-usage-pattern.en.md",
-    ]
-
+    # Use glob to catch all files referencing the da-tools image tag
+    # instead of a hardcoded list (prevents missed files on expansion)
     tools_rules = []
-    for f in da_tools_image_files:
+    tools_rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "da-tools image tag in docs/**/*.md",
+        "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+    })
+    tools_rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.jsx",
+        "desc": "da-tools image tag in docs/**/*.jsx",
+        "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+    })
+    for f in ["README.md", "README.en.md",
+              "components/da-tools/README.md",
+              "components/threshold-exporter/README.md"]:
         tools_rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
-            "pattern": r"ghcr\.io/vencil/da-tools:[0-9]+\.[0-9]+\.[0-9]+",
-            "replacement": lambda v: f"ghcr.io/vencil/da-tools:{v}",
+            "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
         })
 
     # VERSION file (exact content)
@@ -194,13 +214,13 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/architecture-and-design.md",
         "desc": "architecture-and-design.md footer",
-        "pattern": r"\*\*文件版本：\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*文件版本：\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**文件版本：** v{v}",
     })
     platform_rules.append({
         "file": "docs/architecture-and-design.en.md",
         "desc": "architecture-and-design.en.md footer",
-        "pattern": r"\*\*Document version:\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*Document version:\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Document version:** v{v}",
     })
 
@@ -208,13 +228,13 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/architecture-and-design.md",
         "desc": "architecture-and-design.md header version",
-        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+ 的技術架構",
+        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)? 的技術架構",
         "replacement": lambda v: f"v{v} 的技術架構",
     })
     platform_rules.append({
         "file": "docs/architecture-and-design.en.md",
         "desc": "architecture-and-design.en.md header version",
-        "pattern": r"\(v[0-9]+\.[0-9]+\.[0-9]+\)\.",
+        "pattern": r"\(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)\.",
         "replacement": lambda v: f"(v{v}).",
     })
 
@@ -222,13 +242,13 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/byo-prometheus-integration.md",
         "desc": "BYOP guide version",
-        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
     })
     platform_rules.append({
         "file": "docs/byo-alertmanager-integration.md",
         "desc": "BYO Alertmanager guide version",
-        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
     })
 
@@ -236,13 +256,13 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/custom-rule-governance.md",
         "desc": "governance doc (zh) version header",
-        "pattern": r"\*\*版本\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*版本\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**: v{v}",
     })
     platform_rules.append({
         "file": "docs/custom-rule-governance.en.md",
         "desc": "governance doc (en) version header",
-        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
 
@@ -250,7 +270,7 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/gitops-deployment.md",
         "desc": "gitops-deployment.md version header",
-        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
     })
 
@@ -258,19 +278,19 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/byo-prometheus-integration.en.md",
         "desc": "BYOP guide (en) version",
-        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
     platform_rules.append({
         "file": "docs/byo-alertmanager-integration.en.md",
         "desc": "BYO Alertmanager guide (en) version",
-        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
     platform_rules.append({
         "file": "docs/gitops-deployment.en.md",
         "desc": "gitops-deployment.en.md version header",
-        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
 
@@ -278,13 +298,13 @@ def _build_rules():
     platform_rules.append({
         "file": "docs/federation-integration.md",
         "desc": "federation-integration.md version header",
-        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*",
+        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*",
         "replacement": lambda v: f"> **v{v}**",
     })
     platform_rules.append({
         "file": "docs/federation-integration.en.md",
         "desc": "federation-integration.en.md version header",
-        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*",
+        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*",
         "replacement": lambda v: f"> **v{v}**",
     })
 
@@ -292,7 +312,7 @@ def _build_rules():
     platform_rules.append({
         "file": "components/threshold-exporter/README.md",
         "desc": "threshold-exporter README title version",
-        "pattern": r"# Threshold Exporter \(v[0-9]+\.[0-9]+\.[0-9]+\)",
+        "pattern": r"# Threshold Exporter \(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)",
         "replacement": lambda v: f"# Threshold Exporter (v{v})",
     })
 
@@ -302,7 +322,7 @@ def _build_rules():
     platform_rules.append({
         "file": "CLAUDE.md",
         "desc": "CLAUDE.md project overview version",
-        "pattern": r"專案概覽 \(v[0-9]+\.[0-9]+\.[0-9]+\)",
+        "pattern": r"專案概覽 \(v[0-9]+\.[0-9]+[^)]*\)",
         "replacement": lambda v: f"專案概覽 (v{v})",
     })
 
@@ -310,41 +330,36 @@ def _build_rules():
     platform_rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools README platform version ref",
-        "pattern": r"平台版本（v[0-9]+\.[0-9]+\.[0-9]+\+）",
+        "pattern": r"平台版本（v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\+）",
         "replacement": lambda v: f"平台版本（v{v}+）",
     })
     platform_rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (platform row)",
-        "pattern": r"\| 平台文件 \| v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\| 平台文件 \| v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"| 平台文件 | v{v}",
     })
 
-    # Front matter `version: vX.Y.Z` in all docs/ .md files
+    # Front matter `version: vX.Y.Z` in all docs/ .md and .jsx files
     # Uses a glob scan instead of per-file rules
-    platform_rules.append({
-        "file": "__glob__",
-        "glob_dir": "docs",
-        "glob_pattern": "**/*.md",
-        "desc": "front matter version: in docs/*.md",
-        "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+\.[0-9]+(?=\n)",
-        "replacement": lambda v: f"version: v{v}",
-    })
-
-    # cli-reference da-tools container image version in header
-    for f in ("docs/cli-reference.md", "docs/cli-reference.en.md"):
+    for ext in ("**/*.md", "**/*.jsx"):
         platform_rules.append({
-            "file": f,
-            "desc": f"cli-reference container image version in {f}",
-            "pattern": r"ghcr\.io/vencil/da-tools:v[0-9]+\.[0-9]+\.[0-9]+",
-            "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+            "file": "__glob__",
+            "glob_dir": "docs",
+            "glob_pattern": ext,
+            "desc": f"front matter version: in docs/{ext}",
+            "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
+            "replacement": lambda v: f"version: v{v}",
         })
+
+    # NOTE: cli-reference da-tools image tags are handled by tools_rules glob
+    # (no longer duplicated here as platform rules)
 
     # mkdocs.yml extra.platform_version / tools_version
     platform_rules.append({
         "file": "mkdocs.yml",
         "desc": "mkdocs.yml extra.platform_version",
-        "pattern": r'platform_version:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+        "pattern": r'platform_version:\s*\"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"',
         "replacement": lambda v: f'platform_version: "{v}"',
     })
 
@@ -352,13 +367,13 @@ def _build_rules():
     platform_rules.append({
         "file": "README.md",
         "desc": "README.md intro version",
-        "pattern": r"治理平台\*\* v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"治理平台\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"治理平台** v{v}",
     })
     platform_rules.append({
         "file": "README.en.md",
         "desc": "README.en.md intro version",
-        "pattern": r"Governance Platform\*\* v[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"Governance Platform\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"Governance Platform** v{v}",
     })
 
@@ -379,7 +394,7 @@ def read_current_versions():
 
     # Exporter version from Chart.yaml (version = appVersion = exporter version)
     if CHART_YAML.exists():
-        content = CHART_YAML.read_text()
+        content = CHART_YAML.read_text(encoding="utf-8")
         m = re.search(r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE)
         if m:
             versions["exporter"] = m.group(1)
@@ -387,18 +402,40 @@ def read_current_versions():
     # Platform version from CLAUDE.md "專案概覽 (vX.Y.Z)"
     claude_md = REPO_ROOT / "CLAUDE.md"
     if claude_md.exists():
-        content = claude_md.read_text()
-        m = re.search(r"專案概覽 \(v([0-9]+\.[0-9]+\.[0-9]+)\)", content)
+        content = claude_md.read_text(encoding="utf-8")
+        m = re.search(r"專案概覽 \(v([0-9]+\.[0-9]+[^)]*)\)", content)
         if m:
             versions["platform"] = m.group(1)
 
     # da-tools version from VERSION file
     if DA_TOOLS_VERSION.exists():
-        ver = DA_TOOLS_VERSION.read_text().strip()
+        ver = DA_TOOLS_VERSION.read_text(encoding="utf-8").strip()
         if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", ver):
             versions["tools"] = ver
 
     return versions
+
+
+def _filter_by_scope(rules, scope):
+    """Filter rules to only include files under scope directory."""
+    if not scope:
+        return rules
+    # Normalize scope: strip trailing slash
+    scope = scope.rstrip("/").rstrip("\\")
+    filtered = []
+    for rule in rules:
+        f = rule.get("file", "")
+        if f == "__glob__":
+            # Check glob_dir
+            if rule.get("glob_dir", "").startswith(scope) or scope == ".":
+                filtered.append(rule)
+        elif f.startswith(scope + "/") or f.startswith(scope + "\\"):
+            filtered.append(rule)
+        elif "/" not in f and "\\" not in f:
+            # Root-level files: include if scope is "."
+            if scope == ".":
+                filtered.append(rule)
+    return filtered
 
 
 def _expand_glob_rules(rules):
@@ -411,7 +448,7 @@ def _expand_glob_rules(rules):
                 rel = fpath.relative_to(REPO_ROOT)
                 expanded.append({
                     "file": str(rel),
-                    "desc": f"front matter version in {rel}",
+                    "desc": f"{rule['desc'].split(' in ')[0]} in {rel}",
                     "pattern": rule["pattern"],
                     "replacement": rule["replacement"],
                 })
@@ -420,8 +457,15 @@ def _expand_glob_rules(rules):
     return expanded
 
 
-def apply_rules(rules, new_version, check_only=False):
-    """Apply a set of replacement rules. Returns (changes_count, details)."""
+def apply_rules(rules, new_version, check_only=False, dry_run=False):
+    """Apply a set of replacement rules. Returns list of (status, desc, detail) tuples.
+
+    Args:
+        rules: Replacement rules from _build_rules().
+        new_version: Target version string.
+        check_only: If True, don't modify files (for --check mode).
+        dry_run: If True, don't modify files but show before→after diffs.
+    """
     rules = _expand_glob_rules(rules)
     changes = []
     for rule in rules:
@@ -430,15 +474,15 @@ def apply_rules(rules, new_version, check_only=False):
             changes.append(("SKIP", rule["desc"], f"file not found: {rule['file']}"))
             continue
 
-        content = fpath.read_text()
+        content = fpath.read_text(encoding="utf-8")
 
         if rule.get("whole_file"):
             new_content = rule["replacement"](new_version)
             if content.strip() != new_content.strip():
-                changes.append(("UPDATE", rule["desc"],
-                                f"{content.strip()} → {new_content.strip()}"))
-                if not check_only:
-                    fpath.write_text(new_content)
+                diff_detail = f"{content.strip()} → {new_content.strip()}"
+                changes.append(("UPDATE", rule["desc"], diff_detail))
+                if not check_only and not dry_run:
+                    fpath.write_text(new_content, encoding="utf-8")
                     os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
             else:
                 changes.append(("OK", rule["desc"], "already up to date"))
@@ -455,15 +499,113 @@ def apply_rules(rules, new_version, check_only=False):
         needs_update = any(m != replacement for m in matches)
         if needs_update:
             new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
-            changes.append(("UPDATE", rule["desc"],
-                            f"replaced {len(matches)} occurrence(s)"))
-            if not check_only:
-                fpath.write_text(new_content)
+            # Build diff detail
+            unique_old = sorted(set(matches))
+            diff_detail = (f"replaced {len(matches)} occurrence(s): "
+                           f"{unique_old[0]} → {replacement}")
+            if dry_run:
+                diff_detail = f"[dry-run] {diff_detail}"
+            changes.append(("UPDATE", rule["desc"], diff_detail))
+            if not check_only and not dry_run:
+                fpath.write_text(new_content, encoding="utf-8")
                 os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
         else:
             changes.append(("OK", rule["desc"], "already up to date"))
 
     return changes
+
+
+def _init_changelog_entry(version: str, lang: str = "zh"):
+    """Insert a new version header stub at the top of CHANGELOG.
+
+    Args:
+        version: Semver string (without leading 'v').
+        lang: 'zh' for CHANGELOG.md, 'en' for CHANGELOG.en.md,
+              'all' for both.
+    """
+    from datetime import date
+
+    targets = []
+    if lang in ("zh", "all"):
+        targets.append("zh")
+    if lang in ("en", "all"):
+        targets.append("en")
+
+    today = date.today().isoformat()
+
+    for target_lang in targets:
+        if target_lang == "zh":
+            changelog = REPO_ROOT / "CHANGELOG.md"
+            stub = (
+                f"\n## [v{version}] — TITLE ({today})\n"
+                f"\n"
+                f"ONE-LINE SUMMARY\n"
+                f"\n"
+                f"### 版號\n"
+                f"\n"
+                f"- (填入版號變更)\n"
+                f"\n"
+                f"---\n"
+            )
+        else:
+            changelog = REPO_ROOT / "CHANGELOG.en.md"
+            stub = (
+                f"\n## [v{version}] — TITLE ({today})\n"
+                f"\n"
+                f"ONE-LINE SUMMARY\n"
+                f"\n"
+                f"### Versions\n"
+                f"\n"
+                f"- (fill in version changes)\n"
+                f"\n"
+                f"---\n"
+            )
+
+        if not changelog.exists():
+            # Create new file with minimal front matter
+            if target_lang == "en":
+                initial = (
+                    "---\n"
+                    "title: Changelog (English)\n"
+                    "---\n"
+                    "\n"
+                    "# Changelog\n"
+                )
+                changelog.write_text(initial + stub + "\n",
+                                     encoding="utf-8")
+                os.chmod(changelog,
+                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+                         | stat.S_IROTH)
+                print(f"✅ Created {changelog.name} with v{version} stub "
+                      f"({today})")
+                continue
+            else:
+                print(f"ERROR: {changelog} not found")
+                sys.exit(1)
+
+        content = changelog.read_text(encoding="utf-8")
+
+        # Insert after front matter (after second ---) and first blank line
+        fm_end = 0
+        if content.startswith("---"):
+            second_dash = content.find("---", 3)
+            if second_dash != -1:
+                fm_end = content.find("\n", second_dash) + 1
+
+        # Find first ## heading (existing first version entry)
+        first_heading = content.find("\n## ", fm_end)
+        if first_heading == -1:
+            insert_pos = fm_end
+        else:
+            insert_pos = first_heading
+
+        new_content = content[:insert_pos] + stub + content[insert_pos:]
+        changelog.write_text(new_content, encoding="utf-8")
+        os.chmod(changelog,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+                 | stat.S_IROTH)
+        print(f"✅ Inserted v{version} stub into {changelog.name} "
+              f"({today})")
 
 
 def main():
@@ -480,10 +622,29 @@ def main():
                         help="New da-tools version (e.g. 0.2.0)")
     parser.add_argument("--check", action="store_true",
                         help="Check only, don't modify files (exit 1 if outdated)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show before→after diffs without modifying files")
+    parser.add_argument("--scope", metavar="DIR",
+                        help="Limit to files under DIR (e.g. docs, components)")
+    parser.add_argument("--init-changelog", metavar="VER",
+                        help="Insert new CHANGELOG version header stub")
+    parser.add_argument("--changelog-lang", choices=["zh", "en", "all"],
+                        default="zh",
+                        help="Language for --init-changelog: zh (default), "
+                             "en, or all")
     parser.add_argument("--show-current", action="store_true",
                         help="Show current versions from source-of-truth files")
+    parser.add_argument("--what-if", action="store_true",
+                        help="Show all rules with current match status "
+                             "(comprehensive rule audit)")
 
     args = parser.parse_args()
+
+    # --init-changelog: insert a new version stub at the top of CHANGELOG.md
+    if args.init_changelog:
+        _init_changelog_entry(args.init_changelog.lstrip("v"),
+                              lang=args.changelog_lang)
+        return
 
     if args.show_current:
         versions = read_current_versions()
@@ -491,6 +652,83 @@ def main():
         for line, ver in sorted(versions.items()):
             print(f"  {line}: {ver}")
         return
+
+    # --what-if: comprehensive rule audit — show all rules and their status
+    if args.what_if:
+        versions = read_current_versions()
+        if not versions:
+            print("ERROR: Cannot read current versions from source files")
+            sys.exit(1)
+
+        all_rules = _build_rules()
+        total_rules = 0
+        matched = 0
+        unmatched = 0
+        missing = 0
+
+        for line in ("platform", "exporter", "tools"):
+            ver = versions.get(line)
+            if not ver:
+                print(f"\n⚠️  {line}: version not found in source-of-truth")
+                continue
+
+            rules = _expand_glob_rules(
+                _filter_by_scope(all_rules.get(line, []), args.scope))
+
+            print(f"\n{'='*60}")
+            print(f"  {line.upper()} (current: {ver}) — "
+                  f"{len(rules)} rule(s)")
+            print(f"{'='*60}")
+
+            for rule in rules:
+                total_rules += 1
+                fpath = REPO_ROOT / rule["file"]
+                desc = rule["desc"]
+
+                if not fpath.exists():
+                    missing += 1
+                    print(f"  ⚠️  {desc}")
+                    print(f"       file not found: {rule['file']}")
+                    continue
+
+                content = fpath.read_text(encoding="utf-8")
+                pattern = rule["pattern"]
+                replacement = rule["replacement"](ver)
+
+                if rule.get("whole_file"):
+                    if content.strip() == replacement.strip():
+                        matched += 1
+                        print(f"  ✅ {desc}")
+                        print(f"       matched: {content.strip()}")
+                    else:
+                        unmatched += 1
+                        print(f"  ❌ {desc}")
+                        print(f"       current: {content.strip()}")
+                        print(f"       expected: {replacement.strip()}")
+                    continue
+
+                matches = re.findall(pattern, content, re.MULTILINE)
+                if not matches:
+                    matched += 1
+                    print(f"  ✅ {desc}")
+                    print(f"       no match (pattern already resolved)")
+                elif all(m == replacement for m in matches):
+                    matched += 1
+                    print(f"  ✅ {desc}")
+                    print(f"       matched: {replacement} "
+                          f"({len(matches)} occurrence(s))")
+                else:
+                    unmatched += 1
+                    unique = sorted(set(matches))
+                    print(f"  ❌ {desc}")
+                    print(f"       found: {unique}")
+                    print(f"       expected: {replacement}")
+
+        print(f"\n{'='*60}")
+        print(f"  Summary: {total_rules} rules, "
+              f"{matched} ✅, {unmatched} ❌, {missing} ⚠️")
+        print(f"{'='*60}")
+        sys.exit(1 if unmatched > 0 else 0)
 
     # --check mode: read current versions and verify all references match
     if args.check and not (args.platform or args.exporter or args.tools):
@@ -503,7 +741,7 @@ def main():
         has_drift = False
 
         for line, ver in versions.items():
-            rules = all_rules.get(line, [])
+            rules = _filter_by_scope(all_rules.get(line, []), args.scope)
             changes = apply_rules(rules, ver, check_only=True)
             for status, desc, detail in changes:
                 if status == "UPDATE":
@@ -540,8 +778,9 @@ def main():
         print(f"  {line.upper()} → {new_ver}")
         print(f"{'='*60}")
 
-        rules = all_rules.get(line, [])
-        changes = apply_rules(rules, new_ver, check_only=args.check)
+        rules = _filter_by_scope(all_rules.get(line, []), args.scope)
+        changes = apply_rules(rules, new_ver,
+                              check_only=args.check, dry_run=args.dry_run)
 
         for status, desc, detail in changes:
             icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "⚠️ "}[status]
@@ -555,6 +794,11 @@ def main():
             sys.exit(1)
         else:
             print("\n✅ All version references are already up to date.")
+    elif args.dry_run:
+        if total_updates > 0:
+            print(f"\n🔍 Dry run: {total_updates} file(s) would be updated.")
+        else:
+            print("\n✅ Dry run: all version references are already up to date.")
     else:
         print(f"\n✅ Done. {total_updates} update(s) applied.")
 

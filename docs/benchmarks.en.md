@@ -2,7 +2,7 @@
 title: "Performance Analysis & Benchmarks"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Performance Analysis & Benchmarks
@@ -67,7 +67,7 @@ v1.11.0 (13 Rule Packs, 5-round mean ± stddev):
 
 ## Empty Vector Zero-Cost
 
-10 rule packs are pre-loaded. Packs without deployed exporters are evaluated against empty vectors.
+All rule packs are pre-loaded (9 at benchmark time, now expanded to 15 as of v1.8.0). Packs without deployed exporters are evaluated against empty vectors.
 
 **Kind cluster actual measurement:**
 
@@ -94,7 +94,7 @@ Single threshold-exporter pod (measured):
 - Scrape Duration: 4.1 ± 1.2ms
 
 × 2 HA Replicas: ~4.8MB total
-+ Prometheus RSS: 142.7 ± 1.4MB (10 Rule Packs, 141 rules)
++ Prometheus RSS: 142.7 ± 1.4MB (9 Rule Packs, 141 rules)
 = Cluster overhead: ~148MB
 
 vs. Traditional approach (100 tenants, 5,600 rules):

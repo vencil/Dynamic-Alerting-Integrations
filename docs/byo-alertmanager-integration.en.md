@@ -2,7 +2,7 @@
 title: "BYO Alertmanager Integration Guide"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # BYO Alertmanager Integration Guide

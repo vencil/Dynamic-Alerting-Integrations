@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -102,8 +102,10 @@ graph TB
                 RP9["prometheus-rules-clickhouse"]
                 RP10["prometheus-rules-kafka"]
                 RP11["prometheus-rules-rabbitmq"]
-                RP12["prometheus-rules-operational"]
-                RP13["prometheus-rules-platform"]
+                RP12["prometheus-rules-jvm"]
+                RP13["prometheus-rules-nginx"]
+                RP14["prometheus-rules-operational"]
+                RP15["prometheus-rules-platform"]
             end
 
             Prom["Prometheus<br/>(Scrape: TE, Rule Evaluation)"]
@@ -134,7 +136,7 @@ graph TB
 1. **Directory Scanner** 掃描 `conf.d/` 目錄，自動發現 `_defaults.yaml` 和租戶配置文件
 2. **threshold-exporter × 2 HA Replicas** 讀取 ConfigMap，輸出三態 Prometheus 指標
 3. **Projected Volume** 掛載 15 個獨立規則包，零 PR 衝突，各團隊獨立擁有
-4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度（相比傳統 O(M×N)：100 metric × 50 tenant = 5,000 條規則 vs 固定 100 條）
+4. **Prometheus** 使用 `group_left` 向量匹配與用戶閾值進行聯接，實現 O(M) 複雜度（相比傳統 O(M×N)：固定 M 條規則 vs N×M 線性增長）
 
 ---
 
@@ -302,26 +304,29 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
 ```
 
-#### 自動抑制 (Auto-Suppression)
+#### 自動抑制 (Auto-Suppression) — Severity Dedup
 
-平台 Alert Rule 使用 `unless` 邏輯，critical 觸發時自動抑制 warning：
+v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（詳見 §2.8）。Alert Rule 不再使用 `unless critical` 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由 Alertmanager per-tenant inhibit rule 控制。
 
 ```yaml
+# Warning 和 Critical 獨立觸發，TSDB 完整保留
 - alert: MariaDBHighConnections          # warning
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-    unless on(tenant)                    # ← Auto-Suppression：critical 觸發時抑制 warning
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
+  labels:
+    severity: warning
+    metric_group: connections
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+  labels:
+    severity: critical
+    metric_group: connections
 ```
 
-**結果：**（雙層 `unless` 邏輯）
-- 連線數 ≥ 150 (critical)：warning 被第二層 `unless` 抑制，只觸發 critical 警報
-- 連線數 100–150 (warning only)：第二層 `unless` 不成立，正常觸發 warning 警報
+**結果：** 連線數 ≥ 150 時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。
 
 ### 2.5 Regex 維度閾值 (Regex Dimension Thresholds)
 
@@ -626,12 +631,12 @@ _routing_enforced:
 
 ## 3. Projected Volume 架構 (Rule Packs)
 
-### 3.1 十三個獨立規則包
+### 3.1 十五個獨立規則包
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|---------|-----------------|----------------|-------------|
 | MariaDB | DBA | `prometheus-rules-mariadb` | 11 | 8 |
-| PostgreSQL | DBA | `prometheus-rules-postgresql` | 12 | 6 |
+| PostgreSQL | DBA | `prometheus-rules-postgresql` | 11 | 9 |
 | Kubernetes | Infra | `prometheus-rules-kubernetes` | 7 | 4 |
 | Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
 | MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 6 |
@@ -639,11 +644,13 @@ _routing_enforced:
 | Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
 | DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
 | ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
-| Kafka | Messaging | `prometheus-rules-kafka` | 10 | 5 |
-| RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 11 | 6 |
+| Kafka | Messaging | `prometheus-rules-kafka` | 13 | 9 |
+| RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 12 | 8 |
+| JVM | AppDev | `prometheus-rules-jvm` | 9 | 7 |
+| Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
 | Platform | Platform | `prometheus-rules-platform` | 0 | 4 |
-| **總計** | | | **118** | **77** |
+| **總計** | | | **139** | **99** |
 
 ### 3.2 自包含三部分結構
 
@@ -805,155 +812,110 @@ spec:
 
 ## 5. 未來擴展路線 (Future Roadmap)
 
-以下為按優先序排列的技術方向。已完成項目請查閱 [CHANGELOG.md](../CHANGELOG.md)。
+以下為按優先序排列的技術方向。已完成項目請查閱 [CHANGELOG.md](../CHANGELOG.md) 及 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
 ```mermaid
 graph LR
-    subgraph P2["P2 中期演進 (需客戶驗證)"]
-        RP["Rule Pack 擴展"]
-        FB["Federation B"]
+    subgraph Near["近期 (已有設計基礎)"]
+        FB["Federation B<br/>Rule Pack 分層"]
         NM["1:N Mapping"]
+        QS["Alert Quality<br/>Scoring"]
     end
-    subgraph P3["P3 長期藍圖 (規模化需求驅動)"]
-        TP["Tenant Profiles"]
-        SG["Sharded GitOps"]
-        AC["Assembler Controller<br/>+ Optional CRD"]
-        LM["Log-to-Metric"]
-        TP --> SG --> AC
+    subgraph Mid["中期 (需客戶驗證)"]
+        PS["Policy-as-Code"]
+        CD["Cross-Cluster<br/>Drift Detection"]
+        IR["Incremental<br/>Reload"]
+    end
+    subgraph Far["遠期 (探索方向)"]
+        SP["Tenant Self-Service<br/>Portal"]
+        CF["Cardinality<br/>Forecasting"]
+        LM["Log-to-Metric<br/>Bridge"]
     end
 ```
 
-> **v1.11.0 已完成：** Dynamic Runbook Injection（`tenant_metadata_info` info metric + Rule Pack `group_left` join）、Recurring Maintenance Schedules（`maintenance_scheduler.py` + CronJob）、Config Drift CI（GitHub Actions + GitLab CI 模板）。詳見 [CHANGELOG.md](../CHANGELOG.md)。
+### 5.1 Federation 場景 B：Rule Pack 分層
 
-### P2 — 中期演進
+場景 A（中央 threshold-exporter + 多邊緣 Prometheus）已有[架構文件](federation-integration.md)。場景 B 需要邊緣 Prometheus 透過 federation 或 remote-write 將 recording rule 結果送到中央。Rule Pack 需拆成兩層——邊緣用 Part 1（data normalization），中央用 Part 2 + Part 3（threshold normalization + alerts）。
 
-#### 5.1 生態系 Rule Pack 擴展
+**技術切入點**：`generate_rule_pack_readme.py` 已有 Part 分類資訊，可延伸產出 `edge-rules.yaml` / `central-rules.yaml` 分割檔。需搭配 `federation_check.py` 驗證分層後的 recording rule 引用完整性。
 
-v1.8.0 已涵蓋 11 種 DB/MQ（含 Kafka、RabbitMQ）。以下為下一波候選：
-
-| 領域 | 推薦 Exporter | 適合閾值管理的關鍵指標 | 整合模式 |
-|------|--------------|----------------------|---------|
-| **JVM** | [prometheus/jmx_exporter](https://github.com/prometheus/jmx_exporter) | `jvm_gc_pause_seconds_sum`, `jvm_memory_used_bytes`, `jvm_threads_current` | 標準三件式 — GC pause 適合排程式閾值 |
-| **Nginx** | [nginxinc/nginx-prometheus-exporter](https://github.com/nginxinc/nginx-prometheus-exporter) | `nginx_connections_active`, `nginx_http_requests_total` rate | 標準三件式 — active connections 用 `max by(tenant)` |
-| **AWS RDS** | [percona/rds_exporter](https://github.com/percona/rds_exporter) / [YACE](https://github.com/nerdswords/yet-another-cloudwatch-exporter) | `rds_cpu_utilization`, `rds_free_storage_space`, `rds_database_connections` | CloudWatch → Prometheus → 本平台 |
-
-#### 5.2 Federation 場景 B：Rule Pack 分層
-
-場景 A（中央 threshold-exporter + 多邊緣 Prometheus）已有[架構文件](federation-integration.md)。場景 B 需要邊緣 Prometheus 透過 federation 或 remote-write 將 recording rule 結果送到中央。Rule Pack 需拆成兩層——邊緣用 Part 1（data normalization），中央用 Part 2 + Part 3（threshold normalization + alerts）。待場景 A 落地且有明確客戶需求後再推進。
-
-#### 5.3 1:N Tenant Mapping 進階支援
+### 5.2 1:N Tenant Mapping 進階支援
 
 一個 Namespace 內多個邏輯 Tenant（透過 Service annotation/Pod label 區分）。需要 `scaffold_tenant.py --shared-namespace --tenant-source annotation` 模式及 `_tenant_mappings` 配置 section。目前 §2.3 已有 relabel 範例，工具化待需求確認。
 
-### P3 — 長期藍圖
+### 5.3 Alert Quality Scoring（警報品質評估）
 
-#### 5.4 規模化配置治理：漸進式三層架構
+**動機**：隨著租戶數與 Rule Pack 數量增長，低品質警報會侵蝕值班人員的注意力預算。目前缺乏系統化方式識別問題警報。
 
-**問題重新定義**：規模化帶來的挑戰分為兩個維度——**配置管理規模化**（1000+ tenant YAML 的冗餘與 GitOps 審查瓶頸）與 **K8s 治理規模化**（跨叢集 RBAC、drift reconciliation）。兩者的解法不同，不應綁定在同一個方案中。
+**做法**：分析 Alertmanager 歷史紀錄，對每個 alertname × tenant 組合計算品質指標：
 
-**現況基礎**：v1.5.0 引入的 `-config-dir` directory scanner 已解決 ConfigMap 1MB 硬限（每 tenant 一個 YAML，projected volume 掛載）。GitOps-Driven RBAC（CODEOWNERS + CI + `make configmap-assemble`）解決權限問題。但當單一 domain 的 tenant 數突破 1000 時，Git PR review 負擔與 YAML 重複率成為新瓶頸。
+- **Noise Score**：單位時間內 firing 次數過高（反覆 fire/resolve 震盪）
+- **Stale Score**：長期未 fire 的警報（閾值可能已失去意義）
+- **Resolution Latency**：從 firing 到 resolved 的平均時間（過短 = flapping，過長 = 無人處理）
+- **Suppression Ratio**：被 inhibit 或 silence 壓掉的比例（過高 = 規則設計需調整）
 
-**核心設計原則 — 控制面/資料面解耦**：無論採用哪一層方案，`threshold-exporter` 始終只讀取 config-dir 目錄並做 SHA-256 hot-reload。上游配置如何產生（手寫 YAML、Profile 展開、CRD 組裝）對 exporter 完全透明。這確保核心引擎的可攜性——它可以脫離 Kubernetes 運行於 Docker Compose 或傳統 VM。
+**產出**：`da-tools alert-quality --period 30d --json` → per-tenant 報告，可嵌入 Grafana dashboard 或作為 CI gate。
 
-```
-                                    ┌──────────────────────────┐
-  Phase 1: Profile                  │                          │
-  _defaults.yaml ──┐                │   threshold-exporter     │
-  _profiles.yaml ──┤  Resolve()     │   (不感知上游來源)       │
-  tenant-*.yaml ───┘  ──────────►   │   config-dir/ + SHA-256  │
-                                    │   hot-reload             │
-  Phase 2: Sharded GitOps           │                          │
-  repo-A/conf.d/ ──┐  CI Assembly   └──────────────────────────┘
-  repo-B/conf.d/ ──┤  ──────────►         ▲
-  repo-C/conf.d/ ──┘                      │
-                                          │ 產出相同的
-  Phase 3: CRD + Assembler               │ config-dir 目錄
-  ThresholdConfig CR ──► Assembler ───────┘
-                         Controller
-```
+### 5.4 Policy-as-Code（配置策略引擎）
 
-##### Phase 1：Tenant Profiles（配置模板，近期可行）
+**動機**：目前 `ValidateTenantKeys()` 做結構驗證（schema），但無法表達組織層級的策略約束，例如「所有 critical alert 必須配置 pagerduty receiver」或「repeat_interval 不得低於 5m」。隨著 Sharded GitOps 讓更多 team 自主管理配置，策略護欄變得更重要。
 
-**動機**：1000 個 tenant 不會有 1000 種完全不同的配置。實務上大多數 tenant 落在少數幾種 pattern（如 `standard-mariadb-prod`、`standard-redis-staging`）。現行 `_defaults.yaml` 提供全域打底，但缺乏「分類群組」的中間層。
-
-**四層繼承鏈**：
-
-1. **Global Defaults** (`_defaults.yaml`)：全域兜底設定（如預設 NOC 路由、全域靜音）
-2. **Rule Pack Baseline**：系統內建的標準閾值（如 DB 連線數 80）
-3. **Profile Overlay** (`_profiles.yaml`)：領域級別的群組覆寫，DBA 定義「標準版 MariaDB」的閾值
-4. **Tenant Override** (`tenant-db-a.yaml`)：僅寫單一機台的特例
-
-```yaml
-# _profiles.yaml
-profiles:
-  standard-mariadb:
-    mariadb_connections: 85
-    mariadb_replication_lag: 30
-    mariadb_slow_queries: 50
-    _routing:
-      receiver: webhook
-      webhook_url: "https://noc.example.com/{{tenant}}"
-  standard-redis:
-    redis_memory_usage: 80
-    redis_connected_clients: 500
-
-# tenant-db-0742.yaml — 只需 2-3 行
-_profile: standard-mariadb
-mariadb_connections: 95   # 這台規格較大，覆寫單一閾值
-```
-
-**實作影響**：Go `Resolve()` 函式新增一層 profile merge 邏輯（`_defaults` → `_profiles[name]` → tenant overrides），不改動 K8s 架構。`config_diff.py` 可自動計算 profile 變更的爆炸半徑（受影響 tenant 數）。`scaffold_tenant.py` 新增 `--profile` 參數。
-
-**效益**：1000 個 tenant YAML 中約 90% 只需 2-3 行（profile 引用 + 少數覆寫），Git diff review 變得可行，CI validation 效能也大幅提升。
-
-##### Phase 2：Sharded GitOps（組織擴展，中期方案）
-
-**動機**：當多個 domain team（Payment、User、Analytics）各自管理數百個 tenant 時，單一 Git repo 的 PR review 會成為組織瓶頸（Conway's Law）。
-
-**做法**：各 domain team 維護獨立的 Git repo（或同 repo 下的獨立目錄），每個 repo 只含該 domain 的 `conf.d/` tenant 配置。Platform team 的中央 CI pipeline 在 deploy 階段拉取各 repo，合併成一個完整的 config-dir。
+**做法**：
 
 ```
-payment-team/conf.d/          ─┐
-user-team/conf.d/              ├─► CI Assembly ─► config-dir/ ─► threshold-exporter
-analytics-team/conf.d/         ─┘
+tenant.yaml → Schema Validation (現有) → Policy Evaluation (新增) → config-dir
 ```
 
-此方案不需要任何 K8s 新元件，純粹是 CI/CD 流程的調整。各 team 對自己 repo 有完整的 PR 權限管理，Platform team 只審核跨 domain 變更。
+引入輕量策略層，以宣告式規則表達約束。兩種可能路徑：
 
-##### Phase 3：Lightweight Assembler Controller + Optional CRD（終極型態）
+- **Path A — 內建 DSL**：在 `_defaults.yaml` 新增 `_policies` section，用簡潔的 key-operator-value 語法。優點是零外部依賴，學習成本低。
+- **Path B — OPA/Rego 整合**：策略表達力強，適合已有 OPA 基礎設施的團隊。缺點是引入外部依賴。
 
-**動機**：當有明確需求讓 tenant team 透過 K8s API 宣告式管理配置（例如跨叢集 drift reconciliation、與現有 K8s CD pipeline 整合），引入 CRD 作為 optional 的進入點。
+兩條路徑都透過 `validate_config.py` 的 plugin 機制掛載，不侵入 threshold-exporter 核心。
 
-**架構 — Assembler Pattern（非完整 Operator）**：
+### 5.5 Cross-Cluster Drift Detection（跨叢集漂移偵測）
 
-```mermaid
-graph LR
-    subgraph ControlPlane["控制面 (Optional)"]
-        CR["ThresholdConfig CR<br/>(namespace-scoped)"]
-        AC["da-assembler-controller<br/>(lightweight)"]
-    end
-    subgraph DataPlane["資料面 (不變)"]
-        CD["config-dir/"]
-        TE["threshold-exporter<br/>SHA-256 hot-reload"]
-    end
-    CR -->|"watch + reconcile"| AC
-    AC -->|"render YAML files"| CD
-    CD -->|"read + reload"| TE
-    YM["ConfigMap / GitOps<br/>(傳統路徑)"] -->|"mount"| CD
+**動機**：Assembler Controller（§2.10 已實作）解決了單叢集的 CRD → YAML 翻譯。但在多叢集部署中，各叢集 config-dir 的實際內容可能因部署時序、人為操作而產生漂移。
+
+**做法**：
+
+```
+Cluster-A config-dir ──┐
+Cluster-B config-dir ──┤── drift_detect.py ──► diff report + reconcile action
+Cluster-C config-dir ──┘
 ```
 
-`da-assembler-controller` 是一個極輕量的 controller（單一 reconcile loop），watch `ThresholdConfig` CRD 並將其 render 成 config-dir 下的 YAML 檔案。**它不是完整的 Operator**——不做 auto-scaling、不管理 threshold-exporter 的生命週期、不與 GitOps 競爭。它只做一件事：CRD → YAML 翻譯。
+- **快照比對**：定期從各叢集擷取 config-dir 的 SHA-256 manifest（`assemble_config_dir.py --manifest` 已支援），跨叢集比對。
+- **漂移分類**：區分「預期差異」（per-cluster override）與「意外漂移」（部署失敗殘留）。
+- **自動修復**：dry-run 預覽後可選擇性 reconcile，搭配 `config_diff.py` 產出變更明細。
 
-**關鍵設計決策**：
+### 5.6 Incremental Hot-Reload（增量熱載入）
 
-- **CRD 是 optional 的進入點**：小 domain 繼續用 ConfigMap + GitOps 直接寫 YAML，大 domain 選擇性部署 Assembler Controller。兩條路徑殊途同歸，threshold-exporter 看到的永遠是相同格式的 config-dir。
-- **核心引擎零 K8s 依賴**：threshold-exporter 不 import `client-go`、不 watch K8s API，保持純粹的檔案讀取器身份。可攜性完整保留（Docker Compose、VM、bare metal 均可運行）。
-- **CRD namespace-scoped**：per-namespace 權限控制，與 K8s 原生 RBAC 自然整合。`ThresholdConfig` spec 結構與現行 tenant YAML 一致，降低學習成本。
-- **GitOps 審計不中斷**：Assembler Controller 產出的 YAML 可 commit 回 Git（dry-run 模式），確保所有配置變更仍有 Git 歷史。
+**動機**：目前 threshold-exporter 的 SHA-256 reload 是全量重載——任一檔案變更觸發所有 tenant 重新解析。在千級租戶規模下，reload latency 會隨 tenant 數線性增長。
 
-**Phase 3 進入條件**：Phase 1（Profiles）+ Phase 2（Sharded GitOps）已無法滿足的場景明確出現，例如 50+ 個 domain team 需要透過各自的 K8s CD pipeline 管理 tenant 配置，或跨 3+ 叢集的 drift reconciliation 成為運維痛點。
+**做法**：維護 per-file SHA-256 index，reload 時只重新解析有變更的檔案。需要在 Go 端改造 `config.Load()` 為 incremental 模式，保留完整的 tenant registry 在記憶體中做 delta merge。
 
-#### 5.5 Log-to-Metric Bridge（日誌轉指標橋接）
+**風險**：delta merge 的一致性保證比全量重載複雜。需要完善的 benchmark 對比（`make benchmark` 已有 reload-bench 基礎），確認增量模式在各規模下皆不退化。
+
+### 5.7 Tenant Self-Service Portal（租戶自助入口）
+
+**動機**：目前租戶互動完全依賴 YAML 檔案 + CLI 工具。對於非 DevOps 背景的 tenant team，提供視覺化的配置體驗可降低上手門檻。
+
+**功能範圍**（輕量，非完整 UI 平台）：
+
+- **YAML 驗證**：貼上 tenant YAML，即時回饋 schema error + policy violation
+- **Alert 預覽**：輸入樣本 metric 值，預覽哪些 alert 會 fire（基於 `validate_config.py` 的 dry-evaluate 能力）
+- **Routing 視覺化**：以樹狀圖呈現 Alertmanager route 結構，highlight 該 tenant 的 routing path
+
+**技術基礎**：`docs/interactive/` 下的 React 元件（Tenant YAML Validator、Rule Pack Selector）已驗證了瀏覽器端執行的可行性。可進一步整合為獨立的 SPA。
+
+### 5.8 Cardinality Forecasting（基數預測）
+
+**動機**：per-tenant 500 cardinality guard（§2.6）是事後防護。若能根據歷史趨勢預測基數增長，Platform team 可提前介入而非被動 truncate。
+
+**做法**：基於 Prometheus `scrape_series_added` 和 `tenant_threshold_*` metric family 的時序資料，用簡單的線性回歸 / 指數平滑預測未來 N 天的基數上限。產出 warning-level alert 在觸頂前 7 天通知。
+
+### 5.9 Log-to-Metric Bridge（日誌轉指標橋接）
 
 本平台的設計邊界是 **Prometheus metrics 層**，不直接處理日誌。對於需要基於日誌觸發警報的場景（如 Oracle ORA-600、MySQL slow query log），推薦的生態系解法：
 
@@ -961,46 +923,20 @@ graph LR
 Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理
 ```
 
-此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力，而不需要在核心架構中引入日誌處理邏輯。
-
-#### 5.6 文件與工具自動化（DX Automation）
-
-隨著平台文件與工具數量增長，以下方向可進一步降低操作門檻：
-
-- **Grafana Dashboard 自動截圖**：透過 Grafana Rendering API 或 Puppeteer，在 CI 中自動產生 Dashboard 預覽圖片嵌入文件，讓讀者無需實際部署即可預覽面板外觀。
-- **Runbook 自動化模板**：以 ALERT-REFERENCE 為基礎，自動產出 per-alert 的標準化 Runbook（triage 步驟、常用查詢、升級路徑），並整合 PagerDuty / Opsgenie incident management 連結。
-- **操作流程精簡工具**：將文件中描述的多步驟操作（如 Shadow Monitoring → Cutover → Health Report）進一步封裝為 `da-tools` 子命令，減少操作者需要查閱文件的次數。
-- **配置驗證一鍵化**：整合 `validate_config.py` + `config_diff.py` + `check_doc_links.py` 為單一 `da-tools validate --all` 指令，涵蓋配置、路由、文件一致性。
+此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力，而不需要在核心架構中引入日誌處理邏輯。未來若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
 
 ---
 
 ## 相關資源
 
-| 資源 | 相關性 |
-|------|--------|
-| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"](./architecture-and-design.en.md) | ⭐⭐⭐ |
-| [001-severity-dedup-via-inhibit](adr/001-severity-dedup-via-inhibit.md) | ⭐⭐ |
-| [002-oci-registry-over-chartmuseum](adr/002-oci-registry-over-chartmuseum.md) | ⭐⭐ |
-| [003-sentinel-alert-pattern](adr/003-sentinel-alert-pattern.md) | ⭐⭐ |
-| [004-federation-scenario-a-first](adr/004-federation-scenario-a-first.md) | ⭐⭐ |
-| [005-projected-volume-for-rule-packs](adr/005-projected-volume-for-rule-packs.md) | ⭐⭐ |
-| [README](adr/README.md) | ⭐⭐ |
-| ["專案 Context 圖：角色、工具與產品互動關係"](./context-diagram.md) | ⭐⭐ |
-
-
-- **README.md** — 快速開始與概述
-- **migration-guide.md** — 從傳統方案遷移
-- **custom-rule-governance.md** — 多租戶客製化規則治理規範
-- **rule-packs/README.md** — 規則包開發與擴展
-- **components/threshold-exporter/README.md** — 匯出器內部實現
-- **benchmarks.md** — 性能基準測試與效能數據
-- **governance-security.md** — 治理、稽核與安全合規
-- **troubleshooting.md** — 故障排查與邊界情況
-- **scenarios/advanced-scenarios.md** — 進階場景與測試覆蓋
-- **migration-engine.md** — AST 遷移引擎架構
+- [English Version](./architecture-and-design.en.md)
+- [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
+- [ADR 總覽](adr/README.md) — 5 個架構決策紀錄
+- [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
+- [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
+- [規則包目錄](../rule-packs/README.md) · [threshold-exporter](../components/threshold-exporter/README.md)
 
 ---
 
-**文件版本：** — 2026-03-12
-**最後更新：** — Tenant Profiles + JVM/Nginx Rule Packs（13→15）、Benchmark 數據更新、章節拆分重構
+**文件版本：** v2.0.0-preview.2 — 2026-03-14
 **維護者：** Platform Engineering Team

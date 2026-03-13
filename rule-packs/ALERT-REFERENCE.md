@@ -13,88 +13,17 @@ lang: zh
 
 ---
 
-## MariaDB Rule Pack
+## ClickHouse Rule Pack
 
 | 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|
-| MariaDBDown | critical | 實例連接故障 (mysql_up=0 持續 15 秒) | 立即檢查資料庫伺服器狀態、網路連線、防火牆規則；查看 mariadb 日誌 | mysql_up |
-| MariaDBExporterAbsent | critical | mysqld_exporter 缺失 (無 mysql_up 指標 30 秒) | 確認 exporter 容器已啟動、配置正確；檢查 exporter 日誌 | mysql_up |
-| MariaDBHighConnections | warning | 連線數超過警告閾值 (預設 80%) | 檢查連線池配置、應用連線是否有洩漏；考慮增加 max_connections | mysql_global_status_threads_connected |
-| MariaDBHighConnectionsCritical | critical | 連線數超過 critical 閾值 | 立即介入，檢查活躍連線、殺掉閒置連線；考慮應用端限流 | mysql_global_status_threads_connected |
-| MariaDBSystemBottleneck | critical | 連線數**且** CPU 同時超過警告閾值 | 多資源瓶頸，立即升級；同時檢查連線和 CPU 壓力源 | mysql_global_status_threads_connected, mysql_global_status_threads_running |
-| MariaDBRecentRestart | info | 實例最近重啟 (uptime < 5 分鐘) | 通知訊息，檢查是否有異常重啟；查看系統日誌和 mariadb 日誌 | mysql_global_status_uptime |
-| MariaDBHighSlowQueries | warning | 慢查詢速率高 (> 1 query/sec) | 檢查慢查詢日誌，找出優化候選；考慮調整 long_query_time 參數 | mysql_global_status_slow_queries |
-| MariaDBHighAbortedConnections | warning | 已中止連線率高 (> 5 conn/sec) | 檢查用戶端連線、驗證授權問題；查看應用端日誌 | mysql_global_status_aborted_connects |
-
----
-
-## PostgreSQL Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| PostgreSQLDown | critical | 實例連接故障 (pg_up=0 持續 15 秒) | 立即檢查 PostgreSQL 伺服器狀態、網路連線；查看 postgresql 日誌 | pg_up |
-| PostgreSQLExporterAbsent | critical | postgres_exporter 缺失 (無 pg_up 指標 30 秒) | 確認 exporter 容器已啟動、配置正確；檢查 exporter 日誌 | pg_up |
-| PostgreSQLHighConnections | warning | 連線數超過警告閾值 (預設 80% of max_connections) | 檢查活躍查詢、應用連線池設定；考慮增加 max_connections 或關閉閒置連線 | pg_stat_activity_count |
-| PostgreSQLHighConnectionsCritical | critical | 連線數超過 critical 閾值 (預設 90%) | 立即介入，檢查長時間運行查詢；使用 pg_terminate_backend 終止閒置連線 | pg_stat_activity_count |
-| PostgreSQLHighReplicationLag | warning | 複寫延遲超過警告閾值 (預設 30 秒) | 檢查複寫狀態、主副本網路連線；檢查 WAL 段堆積 | pg_replication_lag |
-| PostgreSQLHighReplicationLagCritical | critical | 複寫延遲超過 critical 閾值 (預設 60 秒) | 立即檢查副本健康狀態、WAL 磁碟空間；考慮手動追趕或重新同步 | pg_replication_lag |
-| PostgreSQLHighDeadlocks | warning | 死鎖發生頻率高 (> 1/sec over 5m) | 分析死鎖查詢日誌、調整應用邏輯減少衝突；考慮增加鎖定超時時間 | pg_stat_database_deadlocks |
-| PostgreSQLHighRollbackRatio | warning | 事務回滾比例高 (> 某閾值) | 檢查應用錯誤率、約束違反；調查交易失敗根本原因 | pg_stat_database_xact_rollback |
-| PostgreSQLRecentRestart | info | 實例最近重啟 (uptime < 5 分鐘) | 通知訊息，檢查是否有異常重啟；查看系統日誌 | pg_postmaster_start_time_seconds |
-
----
-
-## Redis Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| RedisDown | critical | 實例連接故障 (redis_up=0 持續 15 秒) | 立即檢查 Redis 伺服器狀態、網路連線；查看 redis 日誌 | redis_up |
-| RedisHighMemory | warning | 記憶體使用超過警告閾值 | 檢查鍵值對數量、淘汰策略；考慮增加記憶體或啟用數據壓縮 | redis_memory_used_bytes |
-| RedisHighConnections | warning | 連線數超過警告閾值 (預設 500) | 檢查應用連線池、是否有連線洩漏；增加 maxclients 設定 | redis_connected_clients |
-| RedisHighKeyEvictions | warning | 鍵值逐出速率高 (> 100 keys/sec) | 記憶體壓力，檢查淘汰策略 (LRU/LFU)；考慮增加記憶體或優化數據結構 | redis_evicted_keys_total |
-| RedisReplicationLag | warning | 複寫副本延遲高 | 檢查副本伺服器健康、網路延遲；查看複寫隊列大小 | redis_connected_slave_lag_seconds |
-| RedisLowHitRatio | warning | 鍵空間命中率低 (< 某閾值) | 應用查詢效率低下，檢查熱數據訪問模式；可能需要優化應用邏輯或增加記憶體 | redis_keyspace_hits_total, redis_keyspace_misses_total |
-
----
-
-## MongoDB Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| MongoDBDown | critical | 實例連接故障 (mongodb_up=0 持續 15 秒) | 立即檢查 MongoDB 伺服器狀態、複寫集狀態；查看 mongodb 日誌 | mongodb_up |
-| MongoDBHighConnections | warning | 活躍連線超過警告閾值 (預設 500) | 檢查應用連線池、連線是否有洩漏；考慮增加 maxPoolSize | mongodb_connections{state="current"} |
-| MongoDBReplicationLag | warning | 複寫延遲超過警告閾值 (預設 10 秒) | 檢查複寫成員健康、網路延遲；查看 oplog 大小和追趕進度 | mongodb_mongod_replset_member_replication_lag |
-| MongoDBHighOperations | warning | 操作速率高 (超過閾值) | 工作負載繁重，檢查是否需要拆分或優化查詢；考慮增加 CPU/記憶體 | mongodb_opcounters_total |
-| MongoDBHighPageFaults | warning | 頁面故障率高 (> 100/sec) | 記憶體不足，工作集大於可用記憶體；增加記憶體或優化查詢索引 | mongodb_extra_info_page_faults_total |
-| MongoDBConnectionSaturation | warning | 連線池飽和 (> 80% usage) | 接近連線限制，檢查應用行為；考慮增加連線池大小或實施限流 | mongodb_connections |
-
----
-
-## Elasticsearch Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| ElasticsearchClusterRed | critical | 叢集狀態為 RED (數據不可用) | 立即升級，可能有主分片遺失；檢查節點可用性、磁碟空間 | elasticsearch_cluster_health_status |
-| ElasticsearchClusterYellow | warning | 叢集狀態為 YELLOW (副本分片未分配) | 檢查叢集健康狀態、節點可用性；考慮重新分配副本或增加節點 | elasticsearch_cluster_health_status |
-| ElasticsearchHighHeapUsage | warning | JVM heap 使用超過警告閾值 (預設 85%) | 檢查大型查詢、聚合操作；調整 JVM 堆大小或優化查詢 | elasticsearch_jvm_memory_used_bytes{area="heap"} |
-| ElasticsearchHighDiskUsage | warning | 磁碟空間使用超過警告閾值 (預設 80%) | 清理舊索引、增加磁碟容量；檢查索引大小和分片分佈 | elasticsearch_filesystem_data_size_bytes |
-| ElasticsearchHighSearchLatency | warning | 搜尋延遲超過警告閾值 (預設 500ms) | 檢查查詢複雜度、索引大小；調整 refresh_interval 或優化映射 | elasticsearch_indices_search_query_time_seconds |
-| ElasticsearchUnassignedShards | warning | 未分配的分片 | 叢集無法恢復分片，檢查節點可用性；手動分配或重新啟動節點 | elasticsearch_cluster_health_unassigned_shards |
-| ElasticsearchPendingTasks | warning | 待處理叢集任務堆積 | 主節點負載高，檢查是否有故障節點；考慮優化或分割大型操作 | elasticsearch_cluster_health_number_of_pending_tasks |
-
----
-
-## Oracle Database Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| OracleDatabaseDown | critical | 實例連接故障 (oracledb_up=0) | 立即檢查 Oracle 實例狀態、監聽器、網路；查看 alert.log | oracledb_up |
-| OracleHighActiveSessions | warning | 活躍 session 超過警告閾值 (預設 200) | 檢查長時間運行查詢、鎖定情況；使用 v$session 分析會話 | oracledb_sessions_active |
-| OracleTablespaceAlmostFull | warning | 表空間使用接近上限 (預設 85%) | 增加表空間大小、清理垃圾數據；檢查自動擴展設定 | oracledb_tablespace_used_percent |
-| OracleHighWaitTime | warning | 等待時間率高 | 性能瓶頸，使用 v$session_wait 分析等待類型；調整參數或優化查詢 | oracledb_wait_time_seconds_total |
-| OracleHighProcessCount | warning | 進程數超過警告閾值 | 檢查進程使用情況；優化應用邏輯減少後台進程數 | oracledb_process_count |
-| OracleHighPGAUsage | warning | PGA 記憶體超過警告閾值 | 檢查大型排序、雜湊操作；調整 pga_aggregate_target 參數 | oracledb_pga_allocated_bytes |
-| OracleHighSessionUtilization | warning | Session 限制接近上限 (> 85%) | 檢查並行會話數、清理閒置會話；考慮增加 processes 參數 | oracledb_sessions_active |
+| ClickHouseDown | critical |  | 立即檢查伺服器狀態、網路連線；查看系統日誌 |  |
+| ClickHouseHighQueryRate | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse query rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 |  |
+| ClickHouseHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse connections exceeded  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 |  |
+| ClickHouseHighPartCount | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse partition merge pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 |  |
+| ClickHouseReplicationLag | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse replication queue high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 |  |
+| ClickHouseHighMemoryUsage | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse memory usage high  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 |  |
+| ClickHouseHighFailedQueryRate | warning |  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 |  |
 
 ---
 
@@ -102,69 +31,27 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|
-| DB2DatabaseDown | critical | 實例連接故障 (db2_up=0) | 立即檢查 DB2 實例狀態、網路連線；查看診斷日誌 | db2_up |
-| DB2HighConnections | warning | 活躍連線超過警告閾值 | 檢查應用連線池、連線洩漏；調整 maxagents 參數 | db2_connections_active |
-| DB2LowBufferpoolHitRatio | warning | 緩衝池命中率低於警告閾值 (預設 0.95) | 缺衝池記憶體不足，調整緩衝池大小；檢查索引使用情況 | db2_bufferpool_hit_ratio |
-| DB2HighLogUsage | warning | 交易日誌使用超過警告閾值 (預設 70%) | 大量活躍交易，檢查長時間運行的 DDL；調整日誌檔案大小 | db2_log_usage_percent |
-| DB2HighDeadlockRate | warning | 死鎖發生頻率高 | 分析死鎖查詢、調整應用邏輯；增加鎖定超時時間 | db2_deadlocks_total |
-| DB2TablespaceAlmostFull | warning | 表空間使用接近上限 | 增加表空間容量、清理數據；檢查自動擴展設定 | db2_tablespace_used_percent |
-| DB2HighSortOverflow | warning | 排序溢出比例高 (> 5%) | SORTHEAP 參數不足，調整 SORTHEAP；考慮增加可用記憶體 | db2_sort_overflows |
+| DB2DatabaseDown | critical |  | 立即檢查伺服器狀態、網路連線；查看系統日誌 |  |
+| DB2HighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: DB2 connection usage high  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| DB2LowBufferpoolHitRatio | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: DB2 bufferpool hit ratio low  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | ratio |
+| DB2HighLogUsage | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: DB2 transaction log usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | usage |
+| DB2HighDeadlockRate | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: DB2 deadlock rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| DB2TablespaceAlmostFull | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: DB2 tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | usage |
+| DB2HighSortOverflow | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: DB2 sort overflow ratio high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | overflow |
 
 ---
 
-## ClickHouse Rule Pack
+## Elasticsearch Rule Pack
 
 | 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|
-| ClickHouseDown | critical | 實例連接故障 (up=0 持續 2 分鐘) | 立即檢查 ClickHouse 伺服器狀態、網路連線；查看系統日誌 | up |
-| ClickHouseHighQueryRate | warning | 查詢速率超過警告閾值 (預設 500 query/sec) | 高工作負載，檢查查詢複雜度；考慮新增節點或優化查詢 | ClickHouseProfileEvents_Query |
-| ClickHouseHighConnections | warning | 活躍連線超過警告閾值 (預設 200) | 檢查應用連線池、連線是否洩漏；調整 max_concurrent_queries 參數 | ClickHouseMetrics_TCPConnection |
-| ClickHouseHighPartCount | warning | 分片部分計數高 (合併壓力) | 寫入速率高，導致部分堆積；檢查合併進度或調整寫入策略 | ClickHouseAsyncMetrics_MaxPartCountForPartition |
-| ClickHouseReplicationLag | warning | 複寫隊列大小超過警告閾值 | 複寫副本追趕不上主節點；檢查網路延遲或副本資源 | ClickHouseMetrics_ReplicatedSendQueueSize |
-| ClickHouseHighMemoryUsage | warning | 記憶體使用超過警告閾值 (預設 8 GB) | 檢查大型查詢、聚合操作；調整記憶體限制或優化查詢 | ClickHouseMetrics_MemoryTracking |
-| ClickHouseHighFailedQueryRate | warning | 查詢失敗速率高 (> 10/sec) | 檢查查詢日誌找出失敗原因；檢查磁碟空間、網路連線 | ClickHouseProfileEvents_FailedQuery |
-
----
-
-## Kafka Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| KafkaExporterAbsent | critical | kafka_exporter 缺失 (無 kafka_brokers 30 秒) | 確認 exporter 容器已啟動、配置正確；檢查 exporter 日誌 | kafka_brokers |
-| KafkaHighConsumerLag | warning | 消費者延遲超過警告閾值 (預設 1000) | 消費者追趕不上，檢查消費者應用狀態；增加消費者實例或優化消費邏輯 | kafka_consumergroup_lag_sum |
-| KafkaHighConsumerLagCritical | critical | 消費者延遲超過 critical 閾值 | 立即升級，消費者嚴重落後；檢查消費者應用故障、網路問題 | kafka_consumergroup_lag_sum |
-| KafkaUnderReplicatedPartitions | warning | 副本不足的分片 (未達到 in-sync 副本數) | 分片副本故障，檢查代理節點健康；檢查磁碟、網路問題 | kafka_topic_partition_under_replicated_partition |
-| KafkaUnderReplicatedPartitionsCritical | critical | 副本不足分片數超過 critical 閾值 | 立即檢查代理故障、修復副本；數據可用性受威脅 | kafka_topic_partition_under_replicated_partition |
-| KafkaNoActiveController | critical | 無活躍控制器 | 集群無主控制器，立即檢查代理狀態；重啟故障的主控制器 | kafka_controller_active_controller_count |
-| KafkaLowBrokerCount | warning | 代理數低於預期最小值 (預設 3) | 代理故障，檢查代理健康狀態；考慮重新啟動或替換故障代理 | kafka_brokers |
-| KafkaHighRequestRate | warning | 請求速率高 (超過警告閾值) | 高吞吐量工作負載，檢查是否需要擴展；監控代理 CPU 和磁碟使用 | kafka_server_brokertopicmetrics_messagesin_total |
-| KafkaHighRequestRateCritical | critical | 請求速率超過 critical 閾值 | 立即升級，代理接近飽和；考慮增加代理或分片 | kafka_server_brokertopicmetrics_messagesin_total |
-
----
-
-## RabbitMQ Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| RabbitMQExporterAbsent | critical | rabbitmq_exporter 缺失 (無 rabbitmq_identity_info 30 秒) | 確認 exporter 容器已啟動、配置正確；檢查 exporter 日誌 | rabbitmq_identity_info |
-| RabbitMQHighQueueDepth | warning | 佇列深度超過警告閾值 (預設 100000 msg) | 消費者追趕不上，檢查消費者應用狀態；增加消費者或優化消費邏輯 | rabbitmq_queue_messages_ready |
-| RabbitMQHighQueueDepthCritical | critical | 佇列深度超過 critical 閾值 | 立即升級，佇列堆積嚴重；立即增加消費者或檢查消費者故障 | rabbitmq_queue_messages_ready |
-| RabbitMQHighMemory | warning | 記憶體使用超過警告閾值 (預設 80%) | 檢查佇列大小、消費速率；調整記憶體限制或增加代理 | rabbitmq_node_mem_used |
-| RabbitMQHighMemoryCritical | critical | 記憶體使用超過 critical 閾值 (預設 95%) | 立即升級，代理接近故障；清除舊訊息或增加記憶體 | rabbitmq_node_mem_used |
-| RabbitMQHighConnections | warning | 連線數超過警告閾值 (預設 1000) | 檢查應用連線池、是否有連線洩漏；調整連線限制或優化應用 | rabbitmq_connections |
-| RabbitMQLowConsumers | warning | 消費者數低於預期最小值 | 消費者故障或不足，檢查消費者應用健康狀態；啟動更多消費者實例 | rabbitmq_queue_consumers |
-| RabbitMQHighUnackedMessages | warning | 未確認訊息數高 | 消費者處理過慢，檢查消費者應用邏輯；增加消費者或優化業務邏輯 | rabbitmq_queue_messages_unacked |
-
----
-
-## Kubernetes Rule Pack
-
-| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
-|---|---|---|---|---|
-| PodContainerHighCPU | warning | 容器 CPU 使用超過警告閾值 (預設 80%) | 檢查容器應用負載；增加 CPU 限制或優化應用效能 | container_cpu_usage_seconds_total |
-| PodContainerHighMemory | warning | 容器記憶體使用超過警告閾值 (預設 85%) | 檢查容器應用記憶體洩漏；增加記憶體限制或優化應用 | container_memory_working_set_bytes |
-| ContainerCrashLoop | critical | 容器反覆崩潰 (CrashLoopBackOff 狀態) | 檢查容器日誌找出崩潰原因；檢查應用配置、依賴項、磁碟空間 | kube_pod_container_status_waiting_reason |
-| ContainerImagePullFailure | warning | 容器鏡像拉取失敗 (ImagePullBackOff/InvalidImageName) | 檢查鏡像名稱、registry 可用性；驗證鏡像存在和認證配置 | kube_pod_container_status_waiting_reason |
+| ElasticsearchClusterRed | critical | Cluster health is RED  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | health |
+| ElasticsearchClusterYellow | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ES cluster YELLOW  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | replica |
+| ElasticsearchHighHeapUsage | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ES heap usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | heap |
+| ElasticsearchHighDiskUsage | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ES disk usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | usage |
+| ElasticsearchHighSearchLatency | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ES search latency elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | search |
+| ElasticsearchUnassignedShards | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ES unassigned shards  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| ElasticsearchPendingTasks | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: ES pending cluster tasks  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
 
 ---
 
@@ -172,13 +59,68 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|
-| JVMHighGCPause | warning | 垃圾回收暫停時間率高 (預設 0.5 sec/5m) | 檢查應用記憶體洩漏；調整 JVM 堆大小或 GC 參數 | jvm_gc_pause_seconds_sum |
-| JVMHighGCPauseCritical | critical | GC 暫停時間超過 critical 閾值 | 立即升級，應用性能嚴重下降；增加堆大小或使用低延遲 GC 演算法 | jvm_gc_pause_seconds_sum |
-| JVMMemoryPressure | warning | 堆記憶體使用超過警告閾值 (預設 80%) | 檢查應用記憶體洩漏；增加堆大小或優化應用邏輯 | jvm_memory_used_bytes{area="heap"} |
-| JVMMemoryPressureCritical | critical | 堆記憶體使用超過 critical 閾值 (預設 95%) | 立即升級，OOM 風險；立即增加堆大小或重啟應用 | jvm_memory_used_bytes{area="heap"} |
-| JVMThreadPoolExhaustion | warning | 活躍線程超過警告閾值 (預設 500) | 線程池飽和，檢查請求隊列；增加線程池大小或優化應用 | jvm_threads_current |
-| JVMThreadPoolExhaustionCritical | critical | 活躍線程超過 critical 閾值 | 立即升級，服務降級風險；立即增加線程池或實施限流 | jvm_threads_current |
-| JVMPerformanceDegraded | critical | GC 暫停**且**堆記憶體同時超過警告閾值 | 應用性能嚴重下降，同時有記憶體和 GC 壓力；立即增加資源或優化應用 | jvm_gc_pause_seconds_sum, jvm_memory_used_bytes{area="heap"} |
+| JVMHighGCPause | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: GC pause elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | pause |
+| JVMHighGCPauseCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical GC pause  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | pause |
+| JVMMemoryPressure | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: heap memory pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | usage |
+| JVMMemoryPressureCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical heap pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | usage |
+| JVMThreadPoolExhaustion | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: thread pool saturation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | threads |
+| JVMThreadPoolExhaustionCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical thread exhaustion  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | threads |
+| JVMPerformanceDegraded | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: multi-signal JVM degradation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | pause |
+
+---
+
+## Kafka Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| KafkaExporterAbsent | critical | No kafka_brokers metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | kafka_brokers |
+| KafkaHighConsumerLag | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: consumer lag elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | lag |
+| KafkaHighConsumerLagCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical consumer lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | lag |
+| KafkaUnderReplicatedPartitions | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: under-replicated partitions  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| KafkaUnderReplicatedPartitionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical under-replication  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| KafkaNoActiveController | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: no active Kafka controller  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | controllers |
+| KafkaLowBrokerCount | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: broker count below minimum  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | brokers |
+| KafkaHighRequestRate | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: message rate threshold exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rate |
+| KafkaHighRequestRateCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical message rate  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rate |
+
+---
+
+## Kubernetes Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| PodContainerHighCPU | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: container CPU pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | container |
+| PodContainerHighMemory | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: container memory pressure  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | container |
+| ContainerCrashLoop | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| ContainerImagePullFailure | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+
+---
+
+## MariaDB Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| MariaDBDown | critical | mysql_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | mysql_up |
+| MariaDBExporterAbsent | critical | No mysql_up metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | mysql_up |
+| MariaDBHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| MariaDBHighConnectionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| MariaDBSystemBottleneck | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: CPU + connections both exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | connections |
+| MariaDBRecentRestart | info | Uptime is only {{ $value }}s (< 5 min) | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | is |
+| MariaDBHighSlowQueries | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: slow query rate elevated  | 檢查慢查詢日誌，找出優化候選；考慮調整相關參數 | value |
+| MariaDBHighAbortedConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: aborted connection rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+
+---
+
+## MongoDB Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| MongoDBDown | critical |  | 立即檢查伺服器狀態、網路連線；查看系統日誌 |  |
+| MongoDBHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| MongoDBReplicationLag | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | lag |
+| MongoDBHighOperations | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| MongoDBHighPageFaults | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB page fault rate high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| MongoDBConnectionSaturation | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
 
 ---
 
@@ -186,48 +128,80 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|
-| NginxHighConnections | warning | 活躍連線超過警告閾值 (預設 1000) | 流量高，檢查上游應用；增加 worker 進程或上游容量 | nginx_connections_active |
-| NginxHighConnectionsCritical | critical | 活躍連線超過 critical 閾值 (預設 1500) | 立即升級，服務接近飽和；立即增加容量或實施限流 | nginx_connections_active |
-| NginxRequestRateSpike | warning | 請求速率超過警告閾值 (預設 5000 req/s) | 流量激增，檢查是否為正常業務流量；監控上游應用負載 | nginx_http_requests_total |
-| NginxRequestRateSpikeCritical | critical | 請求速率超過 critical 閾值 | 立即升級，可能 DDoS 攻擊或流量激增；檢查日誌、啟用限流或 DDoS 保護 | nginx_http_requests_total |
-| NginxConnectionBacklog | warning | 等待連線 (backlog) 超過警告閾值 (預設 200) | 上游應用響應慢，連線堆積；檢查上游應用狀態、優化回應時間 | nginx_connections_waiting |
-| NginxConnectionBacklogCritical | critical | 等待連線超過 critical 閾值 | 立即升級，服務降級；檢查上游應用故障、增加上游容量 | nginx_connections_waiting |
+| NginxHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Nginx connection threshold exceeded  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | connections |
+| NginxHighConnectionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical Nginx connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | connections |
+| NginxRequestRateSpike | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: request rate spike  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rate |
+| NginxRequestRateSpikeCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical request rate  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rate |
+| NginxConnectionBacklog | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: connection backlog building  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | connections |
+| NginxConnectionBacklogCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical connection backlog  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | connections |
 
 ---
 
-## 操作指南
+## Operational Rule Pack
 
-### 告警分類
-
-- **critical (紅色)**: 需要立即人工介入，可能影響服務可用性
-- **warning (黃色)**: 需要注意但不緊急，為未來問題的預兆
-- **info (藍色)**: 參考訊息，通常不需要動作
-
-### 快速決策樹
-
-1. **是否為計劃維護?** 使用 `_state_maintenance` 或 `_silent_mode` 暫時抑制告警
-2. **是否需要立即動作?** 檢查嚴重度
-   - critical → 立即升級給 on-call 工程師
-   - warning → 在下一個工作時段內調查
-3. **告警是否持續?** 確認不是瞬間尖峰
-4. **根本原因是什麼?** 使用相關指標深入診斷
-
-### 常見原因和快速修復
-
-| 根本原因 | 適用告警 | 快速修復 |
-|---|---|---|
-| 記憶體洩漏 | High Memory, GC Pause | 重啟應用或增加記憶體；檢查代碼記憶體洩漏 |
-| 連線池耗盡 | High Connections | 增加 max_connections；檢查連線洩漏 |
-| 消費者故障 | High Queue Depth, Consumer Lag | 重啟消費者；檢查消費者應用日誌 |
-| 磁碟滿 | High Disk Usage, Tablespace Full | 清理舊數據；增加磁碟容量 |
-| 網路延遲 | Replication Lag | 檢查網路連線；增加帶寬或優化傳輸 |
-| 應用故障 | High Error Rate, CrashLoop | 檢查應用日誌；回滾有問題的發布 |
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| TenantSilentWarning | none | Warning alerts for tenant {{ $labels.tenant }} will be recorded in TSDB but notifications suppressed | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | alerts |
+| TenantSilentCritical | none | Critical alerts for tenant {{ $labels.tenant }} will be recorded in TSDB but notifications suppresse | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | alerts |
+| TenantSeverityDedupEnabled | none | Warning notifications for {{ $labels.tenant }} will be suppressed when critical fires for the same m | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | notifications |
+| TenantConfigEvent | warning | Timed config for tenant {{ $labels.tenant }} has expired and auto-deactivated. Event: {{ $labels.eve | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | config |
 
 ---
 
-## 進一步資源
+## Oracle Database Rule Pack
 
-- **詳細配置**: 參考 `_defaults.yaml` 和租戶 YAML 配置
-- **Runbook**: 每個告警的 `runbook_url` 標籤提供詳細解決步驟
-- **指標查詢**: 使用 Prometheus UI 查詢相關指標進行深入診斷
-- **平台文件**: 參考 `docs/` 目錄下的詳細架構和運維指南
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| OracleDatabaseDown | critical |  | 立即檢查伺服器狀態、網路連線；查看系統日誌 |  |
+| OracleHighActiveSessions | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Oracle active sessions elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| OracleTablespaceAlmostFull | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | usage |
+| OracleHighWaitTime | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Oracle wait time elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | time |
+| OracleHighProcessCount | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Oracle process count high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| OracleHighPGAUsage | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Oracle PGA usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | allocated |
+| OracleHighSessionUtilization | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Oracle session limit approaching  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | utilization |
+
+---
+
+## PostgreSQL Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| PostgreSQLDown | critical | pg_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | pg_up |
+| PostgreSQLExporterAbsent | critical | No pg_up metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | pg_up |
+| PostgreSQLHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: connection usage high  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| PostgreSQLHighConnectionsCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| PostgreSQLHighReplicationLag | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: replication lag elevated  | 檢查複寫狀態、網路連線；檢查複寫隊列堆積情況 | value |
+| PostgreSQLHighReplicationLagCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical replication lag  | 檢查複寫狀態、網路連線；檢查複寫隊列堆積情況 | value |
+| PostgreSQLHighDeadlocks | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: deadlocks detected  | 分析死鎖查詢日誌、調整應用邏輯減少衝突；考慮增加鎖定超時時間 | value |
+| PostgreSQLHighRollbackRatio | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: high rollback ratio  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| PostgreSQLRecentRestart | info | PostgreSQL uptime is only {{ $value | printf "%.0f" }}s (< 5 min) | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | uptime |
+
+---
+
+## RabbitMQ Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| RabbitMQExporterAbsent | critical | No rabbitmq_identity_info metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | rabbitmq_identity_info |
+| RabbitMQHighQueueDepth | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: queue depth threshold exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | ready |
+| RabbitMQHighQueueDepthCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical queue depth  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | ready |
+| RabbitMQHighMemory | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ memory usage high  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | used |
+| RabbitMQHighMemoryCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: critical RabbitMQ memory  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | used |
+| RabbitMQHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ connection count high  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | connections |
+| RabbitMQLowConsumers | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ consumer count low  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | consumers |
+| RabbitMQHighUnackedMessages | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: unacked messages piling up  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+
+---
+
+## Redis Rule Pack
+
+| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |
+|---|---|---|---|---|
+| RedisDown | critical |  | 立即檢查伺服器狀態、網路連線；查看系統日誌 |  |
+| RedisHighMemory | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Redis memory threshold breached  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | usage |
+| RedisHighConnections | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Redis connection count high  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | value |
+| RedisHighKeyEvictions | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: key eviction rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | value |
+| RedisReplicationLag | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: Redis replication lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | lag |
+| RedisLowHitRatio | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: low cache hit ratio  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | ratio |
+
+---

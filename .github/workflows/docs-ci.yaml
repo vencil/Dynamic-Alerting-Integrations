@@ -18,10 +18,14 @@ on:
     branches: [main]
     paths:
       - "docs/**/*.md"
+      - "docs/**/*.jsx"
       - "rule-packs/**/*.md"
       - "README.md"
       - "README.en.md"
+      - "CLAUDE.md"
+      - "scripts/tools/*.py"
       - ".github/workflows/docs-ci.yaml"
+      - ".pre-commit-config.yaml"
 
 jobs:
   validate-mermaid:
@@ -237,6 +241,28 @@ jobs:
             echo "::notice::Doc line count decreased by ${DIFF#-} lines. Good job trimming!"
           fi
 
+  drift-checks:
+    name: Drift Detection (validate_all.py)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats)
+        run: |
+          python scripts/tools/validate_all.py \
+            --only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes \
+            --ci
+
   all-checks:
     name: All Documentation Checks
     runs-on: ubuntu-latest
@@ -247,6 +273,7 @@ jobs:
       - check-frontmatter
       - check-coverage
       - mkdocs-build
+      - drift-checks
     steps:
       - name: Check results
         run: |
@@ -255,11 +282,13 @@ jobs:
           echo "check-frontmatter: ${{ needs.check-frontmatter.result }}"
           echo "check-coverage: ${{ needs.check-coverage.result }}"
           echo "mkdocs-build: ${{ needs.mkdocs-build.result }}"
+          echo "drift-checks: ${{ needs.drift-checks.result }}"
           if [[ "${{ needs.validate-mermaid.result }}" == "failure" || \
                 "${{ needs.check-links.result }}" == "failure" || \
                 "${{ needs.check-frontmatter.result }}" == "failure" || \
                 "${{ needs.check-coverage.result }}" == "failure" || \
-                "${{ needs.mkdocs-build.result }}" == "failure" ]]; then
+                "${{ needs.mkdocs-build.result }}" == "failure" || \
+                "${{ needs.drift-checks.result }}" == "failure" ]]; then
             echo "::error::One or more documentation checks failed"
             exit 1
           fi

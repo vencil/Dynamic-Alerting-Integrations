@@ -24,23 +24,64 @@ class DocLinkChecker:
     def __init__(self, repo_root: str, verbose: bool = False):
         self.repo_root = Path(repo_root).resolve()
         self.verbose = verbose
-        
+
         # 掃描範圍
         self.scan_dirs = ["docs", "rule-packs"]
         self.root_md_files = ["README.md", "README.en.md", "CHANGELOG.md", "CLAUDE.md"]
+
+        # Load ignore patterns from .doclinkignore
+        self._ignore_patterns: Set[str] = self._load_ignore_file()
         
         # 統計
         self.total_links_checked = 0
         self.broken_links = []
+        self.broken_anchors = []
         self.section_refs_checked = 0
         self.broken_section_refs = []
         self.verbose_links = []
+
+        # Cache: filepath -> set of anchor ids
+        self._heading_cache: Dict[Path, Set[str]] = {}
         
+        self.ignored_count = 0
+
         # 已知的 section 參考格式：§X.Y (主章節.副章節)
         self.section_pattern = re.compile(r'§(\d+)\.(\d+)')
         
+        # Cache md file list (rglob is expensive on mounted fs)
+        self._md_files_cache: List[Path] = []
+
         # 已知的 section 集合 (從 CLAUDE.md 和其他文件中解析)
         self.known_sections = self._extract_sections()
+
+    def _load_ignore_file(self) -> Set[str]:
+        """Load .doclinkignore patterns.
+
+        Each non-empty, non-comment line is a pattern of the form:
+          file.md:link_url
+        or just:
+          link_url
+        Lines starting with # are comments.
+        """
+        ignore_file = self.repo_root / ".doclinkignore"
+        if not ignore_file.exists():
+            return set()
+        patterns: Set[str] = set()
+        for line in ignore_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            patterns.add(line)
+        return patterns
+
+    def _is_ignored(self, source_file: Path, link_url: str) -> bool:
+        """Check if a broken link should be ignored."""
+        if not self._ignore_patterns:
+            return False
+        rel = str(source_file.relative_to(self.repo_root))
+        # Match "file:link" or just "link"
+        return (f"{rel}:{link_url}" in self._ignore_patterns
+                or link_url in self._ignore_patterns)
 
     def _extract_sections(self) -> Set[str]:
         """從 Markdown 文件中提取已知的 section 編號。"""
@@ -63,30 +104,160 @@ class DocLinkChecker:
         return sections
 
     def _get_all_md_files(self) -> List[Path]:
-        """取得所有要掃描的 Markdown 文件。"""
+        """取得所有要掃描的 Markdown 文件（cached）。"""
+        if self._md_files_cache:
+            return self._md_files_cache
+
         md_files = []
-        
+
         # 掃描 docs/ 和 rule-packs/
         for scan_dir in self.scan_dirs:
             dir_path = self.repo_root / scan_dir
             if dir_path.exists():
                 md_files.extend(dir_path.rglob("*.md"))
-        
+
         # 掃描根目錄的 Markdown 文件
         for md_file in self.root_md_files:
             file_path = self.repo_root / md_file
             if file_path.exists():
                 md_files.append(file_path)
-        
-        return sorted(list(set(md_files)))
 
-    def _is_in_code_block(self, lines: List[str], line_num: int) -> bool:
-        """檢查指定行是否在程式碼區塊內。"""
-        fence_count = 0
-        for i in range(line_num):
-            if lines[i].strip().startswith("```"):
-                fence_count += 1
-        return fence_count % 2 == 1
+        self._md_files_cache = sorted(list(set(md_files)))
+        return self._md_files_cache
+
+    @staticmethod
+    def _heading_to_anchor(heading_text: str) -> str:
+        """Convert heading text to GFM-compatible anchor id.
+
+        GFM rules:
+        - Lowercase
+        - Remove non-alphanumeric/CJK chars except hyphens and spaces
+        - Replace spaces with hyphens
+        - Strip leading/trailing hyphens
+        """
+        text = heading_text.strip()
+        # Remove inline markdown: bold, italic, code, links, images
+        text = re.sub(r"[*_`]", "", text)
+        text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+        text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)
+        # Remove emoji shortcodes like :rocket:
+        text = re.sub(r":[a-zA-Z0-9_+-]+:", "", text)
+        # Lowercase
+        text = text.lower()
+        # Keep alphanumeric, CJK, spaces, hyphens
+        text = re.sub(
+            r"[^\w\s\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF-]",
+            "", text)
+        # Replace whitespace with hyphens
+        text = re.sub(r"\s+", "-", text)
+        # Strip leading/trailing hyphens
+        text = text.strip("-")
+        return text
+
+    def _get_headings(self, filepath: Path) -> Set[str]:
+        """Extract all heading anchors from a Markdown file (cached)."""
+        resolved = filepath.resolve()
+        if resolved in self._heading_cache:
+            return self._heading_cache[resolved]
+
+        anchors: Set[str] = set()
+        try:
+            with open(resolved, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            in_code = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("```"):
+                    in_code = not in_code
+                    continue
+                if in_code:
+                    continue
+                m = re.match(r"^(#{1,6})\s+(.+)", line)
+                if m:
+                    heading_text = m.group(2).strip()
+                    anchor = self._heading_to_anchor(heading_text)
+                    if anchor:
+                        anchors.add(anchor)
+        except Exception:
+            pass
+
+        self._heading_cache[resolved] = anchors
+        return anchors
+
+    @staticmethod
+    def _fuzzy_best(needle: str, haystack: Set[str],
+                    threshold: float = 0.5) -> str:
+        """Find the best fuzzy match for needle in haystack.
+
+        Uses a simple ratio based on longest common subsequence length.
+        Returns the best match or '' if below threshold.
+        """
+        def _lcs_len(a: str, b: str) -> int:
+            m, n = len(a), len(b)
+            if m == 0 or n == 0:
+                return 0
+            prev = [0] * (n + 1)
+            for i in range(1, m + 1):
+                curr = [0] * (n + 1)
+                for j in range(1, n + 1):
+                    if a[i - 1] == b[j - 1]:
+                        curr[j] = prev[j - 1] + 1
+                    else:
+                        curr[j] = max(prev[j], curr[j - 1])
+                prev = curr
+            return prev[n]
+
+        best_score = 0.0
+        best_match = ""
+        for candidate in haystack:
+            max_len = max(len(needle), len(candidate))
+            if max_len == 0:
+                continue
+            score = _lcs_len(needle, candidate) / max_len
+            if score > best_score:
+                best_score = score
+                best_match = candidate
+        return best_match if best_score >= threshold else ""
+
+    def _check_anchor(self, target_path: Path, anchor: str,
+                      source_file: Path, line_num: int,
+                      link_url: str) -> None:
+        """Validate that an anchor exists in the target file's headings."""
+        if not anchor:
+            return
+        headings = self._get_headings(target_path)
+        if not headings:
+            # No headings extracted — skip (might be non-standard format)
+            return
+        if anchor not in headings:
+            best = self._fuzzy_best(anchor, headings)
+            self.broken_anchors.append({
+                "file": source_file.relative_to(self.repo_root),
+                "line": line_num,
+                "link": link_url,
+                "anchor": anchor,
+                "best_match": best,
+                "available": sorted(headings)[:5],
+            })
+
+    @staticmethod
+    def _build_code_block_set(lines: List[str]) -> Set[int]:
+        """Pre-compute the set of line numbers inside code blocks.
+
+        Returns a set of 0-based line indices that are inside fenced
+        code blocks.  O(n) instead of O(n²).
+        """
+        in_code: Set[int] = set()
+        inside = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("```"):
+                inside = not inside
+                in_code.add(i)
+                continue
+            if inside:
+                in_code.add(i)
+        return in_code
 
     def _is_external_url(self, url: str) -> bool:
         """檢查是否為外部 URL。"""
@@ -159,10 +330,11 @@ class DocLinkChecker:
         
         # Markdown 連結模式：[text](path)
         link_pattern = re.compile(r'\[([^\]]+)\]\(([^\)]+)\)')
-        
+        code_lines = self._build_code_block_set(lines)
+
         for line_num, line in enumerate(lines, 1):
             # 跳過程式碼區塊
-            if self._is_in_code_block(lines, line_num - 1):
+            if (line_num - 1) in code_lines:
                 continue
             
             # 尋找所有連結
@@ -193,6 +365,9 @@ class DocLinkChecker:
                 
                 # 檢查目標是否存在
                 if not target_path.exists():
+                    if self._is_ignored(md_file, link_url):
+                        self.ignored_count += 1
+                        continue
                     suggestion = self._find_suggestions(link_url, md_file)
                     self.broken_links.append({
                         "file": md_file.relative_to(self.repo_root),
@@ -202,6 +377,14 @@ class DocLinkChecker:
                         "suggestion": suggestion,
                         "source_line": line.strip()
                     })
+                elif "#" in link_url:
+                    # File exists — validate anchor
+                    if self._is_ignored(md_file, link_url):
+                        self.ignored_count += 1
+                        continue
+                    anchor = link_url.split("#", 1)[1]
+                    self._check_anchor(
+                        target_path, anchor, md_file, line_num, link_url)
             
             # 掃描 §X.Y section 參考
             section_matches = self.section_pattern.findall(line)
@@ -242,6 +425,9 @@ class DocLinkChecker:
         print("=" * 70)
         print(f"Total links checked: {self.total_links_checked}")
         print(f"Broken links found: {len(self.broken_links)}")
+        print(f"Broken anchors found: {len(self.broken_anchors)}")
+        if self.ignored_count:
+            print(f"Ignored (via .doclinkignore): {self.ignored_count}")
         print(f"Section references checked: {self.section_refs_checked}")
         print(f"Broken section references: {len(self.broken_section_refs)}")
         print()
@@ -258,6 +444,21 @@ class DocLinkChecker:
                 print(f"  Suggestion: {broken['suggestion']}")
                 print(f"  Source: {broken['source_line'][:80]}")
         
+        # 列印破損的 anchor
+        if self.broken_anchors:
+            print("\n" + "=" * 70)
+            print("BROKEN ANCHORS:")
+            print("=" * 70)
+            for broken in self.broken_anchors:
+                print(f"\nFile: {broken['file']}:{broken['line']}")
+                print(f"  Link: {broken['link']}")
+                print(f"  Missing anchor: #{broken['anchor']}")
+                best = broken.get("best_match", "")
+                if best:
+                    print(f"  Best match: #{best}")
+                elif broken['available']:
+                    print(f"  Similar: {', '.join(broken['available'][:5])}")
+
         # 列印破損的 section 參考
         if self.broken_section_refs:
             print("\n" + "=" * 70)
@@ -274,11 +475,50 @@ class DocLinkChecker:
         print("\n" + "=" * 70)
         
         # 返回 exit code
-        if self.broken_links or self.broken_section_refs:
+        if self.broken_links or self.broken_anchors or self.broken_section_refs:
             return 1
         else:
             print("✓ All links and section references are valid!")
             return 0
+
+
+def _fix_broken_anchors(broken_anchors: list, repo_root: Path) -> int:
+    """Fix broken anchor links in source files.
+
+    For each broken anchor with a fuzzy best_match, replaces
+    `#old_anchor` with `#best_match` in the source file.
+
+    Returns number of fixes applied.
+    """
+    # Group fixes by file to batch I/O
+    fixes_by_file: Dict[Path, List[tuple]] = defaultdict(list)
+    for entry in broken_anchors:
+        best = entry.get("best_match", "")
+        if not best:
+            continue
+        src_file = repo_root / entry["file"]
+        old_anchor = entry["anchor"]
+        fixes_by_file[src_file].append((old_anchor, best, entry["link"]))
+
+    fixed_count = 0
+    for fpath, fixes in fixes_by_file.items():
+        content = fpath.read_text(encoding="utf-8")
+        new_content = content
+        for old_anchor, new_anchor, link_url in fixes:
+            # Replace the exact link reference
+            old_link = f"#{old_anchor}"
+            new_link = f"#{new_anchor}"
+            if old_link in new_content:
+                new_content = new_content.replace(old_link, new_link, 1)
+                print(f"  🔧 {fpath.relative_to(repo_root)}: "
+                      f"#{old_anchor} → #{new_anchor}")
+                fixed_count += 1
+
+        if new_content != content:
+            fpath.write_text(new_content, encoding="utf-8")
+            os.chmod(fpath, 0o644)
+
+    return fixed_count
 
 
 def main():
@@ -294,6 +534,11 @@ def main():
         "--verbose",
         action="store_true",
         help="Show detailed scan results for all links"
+    )
+    parser.add_argument(
+        "--fix-anchors",
+        action="store_true",
+        help="Auto-fix broken #anchor links using fuzzy heading match"
     )
     parser.add_argument(
         "--repo-root",
@@ -312,7 +557,13 @@ def main():
     
     checker = DocLinkChecker(str(repo_root), verbose=args.verbose)
     exit_code = checker.run()
-    
+
+    # --fix-anchors: auto-fix broken anchors with fuzzy match
+    if args.fix_anchors and checker.broken_anchors:
+        fixed = _fix_broken_anchors(checker.broken_anchors, repo_root)
+        if fixed > 0:
+            print(f"\n🔧 Fixed {fixed} broken anchor(s). Re-run to verify.")
+
     if args.ci:
         return exit_code
     else:

@@ -2,7 +2,7 @@
 title: "JSON Schema Reference"
 tags: [schema, validation, yaml, tooling]
 audience: [platform-engineers, tenants]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 
@@ -26,7 +26,7 @@ JSON Schema (draft-07) specifications for validating tenant YAML configurations.
 - Tenant profile references (v1.12.0+)
 - Platform-enforced dual routing (v1.13.0+)
 
-**Version**: v1.13.0
+**Version**: v2.0.0-preview
 
 **Schema Format**: JSON Schema Draft 7 ([specification](https://json-schema.org/specification.html))
 

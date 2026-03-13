@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dynamic Alerting — Interactive Tools</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --card-bg: #f8f9fb;
+    --card-border: #e2e6ea;
+    --card-hover: #eef1f5;
+    --accent: #3b82f6;
+    --muted: #6b7280;
+    --tag-bg: #e8ecf1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1117;
+      --fg: #e4e4e7;
+      --card-bg: #1a1d28;
+      --card-border: #2a2d3a;
+      --card-hover: #22253a;
+      --accent: #60a5fa;
+      --muted: #9ca3af;
+      --tag-bg: #2a2d3a;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+    padding: 0 16px;
+  }
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 0 64px;
+  }
+  header {
+    margin-bottom: 40px;
+  }
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  a.card {
+    display: block;
+    padding: 20px 24px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  a.card:hover {
+    background: var(--card-hover);
+    border-color: var(--accent);
+  }
+  .card-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .card-desc {
+    font-size: 0.88rem;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+  .tags {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--tag-bg);
+    color: var(--muted);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+  footer {
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 1px solid var(--card-border);
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  footer a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>Dynamic Alerting — Interactive Tools</h1>
+    <p class="subtitle">
+      Browser-based tools for the Multi-Tenant Dynamic Alerting platform.
+      No installation required — runs entirely in your browser.
+    </p>
+  </header>
+
+  <div class="cards">
+    <a class="card" href="../assets/jsx-loader.html?component=../playground.jsx">
+      <div class="card-title">Tenant YAML Validator</div>
+      <div class="card-desc">
+        Paste a tenant YAML configuration and get instant validation feedback.
+        Includes pre-built templates for MariaDB, PostgreSQL, Redis, and Kafka.
+      </div>
+      <div class="tags">
+        <span class="tag">validation</span>
+        <span class="tag">yaml</span>
+        <span class="tag">live preview</span>
+      </div>
+    </a>
+
+    <a class="card" href="../assets/jsx-loader.html?component=../cli-playground.jsx">
+      <div class="card-title">CLI Playground</div>
+      <div class="card-desc">
+        Build da-tools CLI commands interactively. Select a command, configure
+        flags and arguments, then copy the ready-to-run command.
+      </div>
+      <div class="tags">
+        <span class="tag">cli</span>
+        <span class="tag">da-tools</span>
+        <span class="tag">docker</span>
+      </div>
+    </a>
+
+    <a class="card" href="../assets/jsx-loader.html?component=../rule-pack-selector.jsx">
+      <div class="card-title">Rule Pack Selector</div>
+      <div class="card-desc">
+        Select the Prometheus rule packs you need, see rule counts, and generate
+        the YAML configuration snippet for your monitoring stack.
+      </div>
+      <div class="tags">
+        <span class="tag">prometheus</span>
+        <span class="tag">rule packs</span>
+        <span class="tag">config gen</span>
+      </div>
+    </a>
+
+    <a class="card" href="../assets/jsx-loader.html?component=../getting-started/wizard.jsx">
+      <div class="card-title">Getting Started Wizard</div>
+      <div class="card-desc">
+        Answer a few questions about your role and goals to get a personalized
+        reading path through the documentation.
+      </div>
+      <div class="tags">
+        <span class="tag">onboarding</span>
+        <span class="tag">docs</span>
+        <span class="tag">guided</span>
+      </div>
+    </a>
+  </div>
+
+  <footer>
+    <p>
+      Part of the
+      <a href="https://github.com/vencil/vibe-k8s-lab">Dynamic Alerting</a>
+      project (v2.0.0-preview).
+      Components load via client-side JSX — no server required.
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>

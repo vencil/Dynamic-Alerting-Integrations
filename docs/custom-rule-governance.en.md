@@ -2,7 +2,7 @@
 title: "Multi-Tenant Custom Rule Governance Model"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Multi-Tenant Custom Rule Governance Model
@@ -207,7 +207,7 @@ python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/c
 # Via da-tools container (no repo clone needed)
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:1.11.0 \
+  ghcr.io/vencil/da-tools:v1.11.0 \
   lint /data/rules --ci
 
 # Example output

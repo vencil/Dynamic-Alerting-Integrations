@@ -2,7 +2,7 @@
 title: "Troubleshooting and Edge Cases"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Troubleshooting and Edge Cases

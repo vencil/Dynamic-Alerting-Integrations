@@ -2,12 +2,12 @@
 title: "場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標
 
-> **v1.13.0** | 相關文件：[`federation-integration.md`](../federation-integration.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.0.0-preview** | 相關文件：[`federation-integration.md`](../federation-integration.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## 問題
 

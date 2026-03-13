@@ -2,15 +2,15 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 
 # da-tools CLI Reference
 
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
-> **容器映像**：`ghcr.io/vencil/da-tools:v1.13.0`
-> **版本**：v1.13.0（與平台版本同步）
+> **容器映像**：`ghcr.io/vencil/da-tools:v1.11.0`
+> **版本**：v2.0.0-preview（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
 
@@ -36,17 +36,17 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 
 ```bash
 # 從 OCI registry 拉取（需要 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:v1.13.0
+docker pull ghcr.io/vencil/da-tools:v1.11.0
 
 # 本地建構（開發用）
-cd components/da-tools/app && ./build.sh v1.13.0
+cd components/da-tools/app && ./build.sh v1.11.0
 ```
 
 ### 查看說明
 
 ```bash
-docker run --rm ghcr.io/vencil/da-tools:v1.13.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v1.13.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v1.11.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v1.11.0 --version
 da-tools <command> --help
 ```
 
@@ -1159,7 +1159,7 @@ da-tools deprecate <metric_keys...> [options]
 # 標記多個指標為 disabled
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v1.13.0 \
+  ghcr.io/vencil/da-tools:v1.11.0 \
   deprecate old_metric_1 old_metric_2 \
     --reason "Replaced by new_metric; migration complete"
 ```
@@ -1394,7 +1394,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v1.13.0
+          image: ghcr.io/vencil/da-tools:v1.11.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

@@ -9,11 +9,13 @@ Usage:
     check_includes_sync.py              # interactive report
     check_includes_sync.py --check      # CI mode (exit 1 on mismatch)
     check_includes_sync.py --verbose     # show per-file details
+    check_includes_sync.py --fix         # create missing .en.md stubs
 """
 
 import argparse
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -94,6 +96,33 @@ def compare_pair(zh_path: Path, en_path: Path) -> list:
     return issues
 
 
+# ── Fix: generate missing English stubs ──────────────────────────────
+
+# Common zh→en header translations for auto-generated includes
+_ZH_EN_HEADERS = {
+    "規則包": "Rule Pack",
+    "合計": "Total",
+    "運營模式": "operational mode",
+    "自監控": "self-monitoring",
+}
+
+
+def _create_en_stub(zh_path: Path, en_path: Path) -> None:
+    """Create an English stub from a Chinese include snippet.
+
+    Copies the zh file and replaces known Chinese headers/keywords
+    with English equivalents.
+    """
+    content = zh_path.read_text(encoding="utf-8")
+
+    for zh_str, en_str in _ZH_EN_HEADERS.items():
+        content = content.replace(zh_str, en_str)
+
+    en_path.write_text(content, encoding="utf-8")
+    os.chmod(en_path,
+             stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -107,6 +136,10 @@ def main() -> int:
     parser.add_argument(
         "--verbose", action="store_true",
         help="Show details for each file pair",
+    )
+    parser.add_argument(
+        "--fix", action="store_true",
+        help="Create missing .en.md stubs from Chinese versions",
     )
     args = parser.parse_args()
 
@@ -127,6 +160,7 @@ def main() -> int:
     total_pairs = 0
     total_issues = 0
     missing_en = 0
+    fixed = 0
 
     for zh_path in zh_files:
         en_name = zh_path.stem + ".en.md"
@@ -137,6 +171,11 @@ def main() -> int:
 
         if not en_path.exists():
             missing_en += 1
+            if args.fix:
+                _create_en_stub(zh_path, en_path)
+                print(f"  🔧 Created {en_name} from {zh_path.name}")
+                fixed += 1
+                continue
 
         if issues:
             total_issues += len(issues)
@@ -151,6 +190,12 @@ def main() -> int:
     print(f"Pairs checked: {total_pairs}")
     print(f"Missing English: {missing_en}")
     print(f"Structural issues: {total_issues}")
+    if fixed:
+        print(f"Fixed (stubs created): {fixed}")
+
+    if args.fix and fixed:
+        print(f"\n🔧 Created {fixed} English stub(s). Review and refine.")
+        return 0
 
     if total_issues > 0 or missing_en > 0:
         print(f"\n❌ {total_issues} issue(s) found across {total_pairs} pairs")

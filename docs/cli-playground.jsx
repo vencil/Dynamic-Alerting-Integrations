@@ -2,7 +2,7 @@
 title: "da-tools CLI Playground"
 tags: [cli, interactive, tools, docker]
 audience: [all]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 
@@ -200,7 +200,7 @@ export default function CLIPlayground() {
       cmd = 'docker run --rm ';
       if (network.network) cmd += network.network + ' ';
       cmd += `-e PROMETHEUS_URL=${network.prometheus} `;
-      cmd += 'ghcr.io/vencil/da-tools:v1.13.0 ';
+      cmd += 'ghcr.io/vencil/da-tools:v1.11.0 ';
     } else {
       cmd = 'da-tools ';
     }
@@ -443,7 +443,7 @@ export default function CLIPlayground() {
                   {isDocker && (
                     <>
                       <div>
-                        <span className="font-medium text-slate-900">Image:</span> ghcr.io/vencil/da-tools:v1.13.0
+                        <span className="font-medium text-slate-900">Image:</span> ghcr.io/vencil/da-tools:v1.11.0
                       </div>
                       <div>
                         <span className="font-medium text-slate-900">Network:</span> {network.label}

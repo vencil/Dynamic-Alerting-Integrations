@@ -1,64 +1,72 @@
 # 工具導覽 (Tool Map)
 
-> 本表由 CLAUDE.md 提取，列出 `scripts/tools/` 下所有 Python 工具。
+> 本表由 `generate_tool_map.py --generate` 自動產生。
 > da-tools CLI 對應的子命令見 [cli-reference.md](../cli-reference.md)。
 
 ## 運維工具（da-tools CLI 封裝）
 
 | 工具 | 用途 |
 |------|------|
-| `patch_config.py` | ConfigMap 局部更新 + `--diff` preview |
-| `check_alert.py` | Alert 狀態查詢 |
-| `diagnose.py` | 單租戶健康檢查 |
-| `batch_diagnose.py` | 多租戶並行健康報告（Post-cutover） |
-| `onboard_platform.py` | 既有配置反向分析 + `onboard-hints.json` 產出 |
-| `migrate_rule.py` | 傳統規則遷移（AST + Triage + Prefix + Dictionary） |
-| `scaffold_tenant.py` | Tenant 配置產生器（互動 / CLI / `--from-onboard`） |
-| `validate_migration.py` | Shadow Monitoring 數值 diff + Auto-Convergence 偵測 |
-| `analyze_rule_pack_gaps.py` | Custom Rule → Rule Pack 覆蓋分析 |
-| `backtest_threshold.py` | 閾值變更歷史回測（Prometheus 7d replay） |
-| `offboard_tenant.py` | Tenant 下架 |
-| `deprecate_rule.py` | Rule/Metric 下架 |
-| `baseline_discovery.py` | 負載觀測 + 閾值建議 |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment（含 `--apply` / `--validate` / `--output-configmap`） |
-| `validate_config.py` | 一站式配置驗證（YAML + schema + routes + policy + versions） |
-| `cutover_tenant.py` | Shadow Monitoring 一鍵切換（§7.1 全步驟自動化） |
-| `blind_spot_discovery.py` | Cluster targets 盲區掃描（Prometheus targets × tenant config 交叉比對） |
-| `config_diff.py` | 目錄級配置差異比對（GitOps PR review blast radius 報告） |
-| `maintenance_scheduler.py` | 排程式維護窗口 → Alertmanager silence 自動建立（CronJob） |
+| `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
+| `backtest_threshold.py` | Backtest threshold changes against historical Prometheus data. |
+| `baseline_discovery.py` | Baseline Discovery 工具。 |
+| `batch_diagnose.py` | Post-cutover multi-tenant health report. |
+| `blind_spot_discovery.py` | Scan Prometheus targets and cross-reference tenant configs |
+| `check_alert.py` | Check Prometheus alert state for a specific tenant. |
+| `config_diff.py` | Directory-level Config Diff for GitOps PR review. |
+| `cutover_tenant.py` | Shadow Monitoring 一鍵切換工具。 |
+| `deprecate_rule.py` | 規則/指標下架工具。 |
+| `diagnose.py` | Quick health check for a tenant's MariaDB and monitoring stack. |
+| `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
+| `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
+| `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
+| `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
+| `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
+| `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
+| `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
+| `validate_config.py` | One-stop configuration validation. |
+| `validate_migration.py` | Shadow Monitoring 驗證工具。 |
 
 ## DX Automation 工具
 
 | 工具 | 用途 |
 |------|------|
-| `shadow_verify.py` | Shadow Monitoring 就緒度與收斂性驗證（preflight / runtime / convergence 三階段） |
-| `byo_check.py` | BYO Prometheus & Alertmanager 整合驗證（自動化手動 curl + jq 步驟） |
-| `grafana_import.py` | Grafana Dashboard ConfigMap 匯入（sidecar 自動掛載 + `--verify` / `--dry-run`） |
-| `federation_check.py` | 多叢集 Federation 整合驗證（edge / central / e2e 三模式） |
+| `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
+| `federation_check.py` | Multi-cluster federation integration verification. |
+| `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
+| `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 
 ## 文件 CI 工具
 
 | 工具 | 用途 |
 |------|------|
-| `bump_docs.py` | 版號一致性管理 |
-| `lint_custom_rules.py` | Custom Rule 治理 linter |
-| `check_doc_links.py` | 文件間交叉引用一致性檢查（`--ci` exit code） |
-| `check_doc_freshness.py` | 文件中的過時參考掃描（檔案路徑、指令、Docker 版本、Helm 版本）（`--ci` exit code） |
-| `validate_mermaid.py` | Mermaid 圖語法驗證（`--render` 可選 mmdc 渲染） |
-| `add_frontmatter.py` | 文件 YAML front matter 批次新增（MkDocs/Docusaurus 整合） |
-| `doc_coverage.py` | 文件覆蓋率 Dashboard（雙語/front matter/連結健康度 + `--badge` shield.io） |
-| `generate_alert_reference.py` | Rule Pack YAML → ALERT-REFERENCE.md 自動生成（`--check` CI drift） |
-| `check_translation.py` | 中英文文件結構一致性檢查（標題/程式碼/表格/圖表數量比對） |
-| `doc_impact.py` | 文件變更影響分析（CI PR review：front matter 讀取 + 關聯文件 + 雙語同步提醒） |
-| `sync_glossary_abbr.py` | Glossary → abbreviations.md 自動同步（`--check` CI 模式） |
-| `sync_schema.py` | Go 原始碼 → JSON Schema 同步（`--check` CI drift 偵測） |
-| `generate_cheat_sheet.py` | cli-reference.md → cheat-sheet.md 自動精簡產出（`--check` CI drift） |
-| `inject_related_docs.py` | 自動計算並注入「相關資源」表格（front matter tags/audience 匹配） |
-| `generate_rule_pack_readme.py` | rule-packs/*.yaml → README.md 自動生成（`--check` CI drift） |
-| `validate_all.py` | 統一驗證入口（一次執行 11 項檢查：links + mermaid + translation + glossary + schema + alerts + rule_packs + cheatsheet + freshness + includes + changelog） |
-| `generate_nav.py` | docs/ front matter → MkDocs nav 自動生成（`--check` CI 偵測遺漏） |
-| `generate_changelog.py` | Conventional Commits → CHANGELOG 草稿生成（`--check` 格式驗證） |
-| `check_includes_sync.py` | Include 片段中英文結構一致性檢查（code blocks/table rows/versions 比對） |
+| `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
+| `assemble_config_dir.py` | Sharded GitOps Assembly Tool — merge multiple conf.d/ sources into one config-dir. |
+| `bump_docs.py` | 版號一致性管理工具 |
+| `check_doc_freshness.py` | check_doc_freshness.py |
+| `check_doc_links.py` | 文件間交叉引用一致性檢查 |
+| `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
+| `check_translation.py` | 自動化翻譯品質檢查 |
+| `da_assembler.py` | da-assembler-controller — Lightweight ThresholdConfig CRD → YAML renderer. |
+| `doc_coverage.py` | 文件覆蓋率 Dashboard |
+| `doc_impact.py` | 文件變更影響分析 |
+| `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
+| `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
+| `generate_cheat_sheet.py` | Auto-generate da-tools cheat sheet from CLI reference. |
+| `generate_doc_map.py` | 文件導覽自動生成 |
+| `generate_nav.py` | 從 docs/ 目錄自動生成 MkDocs nav 結構 |
+| `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
+| `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_tool_map.py` | 工具導覽自動生成 |
+| `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
+| `lint_custom_rules.py` | Custom Rule deny-list linter。 |
+| `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
+| `sync_schema.py` | Sync JSON Schema with Go source definitions. |
+| `test_assemble_config_dir.py` | Tests for assemble_config_dir.py — Sharded GitOps assembly tool. |
+| `test_da_assembler.py` | Tests for da_assembler.py — CRD → YAML assembler. |
+| `validate_all.py` | Unified validation entry point for all documentation and config validation tools. |
+| `validate_docs_versions.py` | 文件版號與計數一致性檢查 |
+| `validate_mermaid.py` | Mermaid 圖渲染驗證 |
 
 ## 共用函式庫
 

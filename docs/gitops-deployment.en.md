@@ -2,7 +2,7 @@
 title: "GitOps Deployment Guide"
 tags: [gitops, deployment, ci-cd]
 audience: [platform-engineer, devops]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # GitOps Deployment Guide

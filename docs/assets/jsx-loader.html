@@ -7,39 +7,166 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.min.js"
+        onerror="console.warn('lucide-react CDN unavailable, using fallback icons')"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 16px; background: #fff; color: #333; }
-  @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #ddd; } }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    padding: 16px;
+    background: #fff;
+    color: #333;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1e1e1e; color: #ddd; }
+  }
+  #loading {
+    display: flex; align-items: center; justify-content: center;
+    height: 60vh; font-size: 1.1rem; color: #888;
+  }
+  #error {
+    display: none; padding: 24px; margin: 20vh auto;
+    max-width: 500px; text-align: center;
+    border: 1px solid #e55; border-radius: 8px; color: #c33;
+  }
 </style>
 </head>
 <body>
+<div id="loading">Loading component...</div>
+<div id="error"></div>
 <div id="root"></div>
 <script>
-  // Load component from query parameter: ?component=playground.jsx
-  const params = new URLSearchParams(window.location.search);
-  const component = params.get('component');
-  if (component) {
-    fetch(component)
-      .then(r => r.text())
-      .then(jsx => {
-        const script = document.createElement('script');
-        script.type = 'text/babel';
-        script.setAttribute('data-type', 'module');
-        // Wrap: render the default export
-        script.textContent = jsx + `\n;(() => {
-          const App = typeof default_export !== 'undefined' ? default_export : null;
-          const root = document.getElementById('root');
-          if (App) ReactDOM.createRoot(root).render(React.createElement(App));
-        })();`;
-        document.body.appendChild(script);
-        // Re-trigger Babel transform
-        window.Babel.transformScriptTags();
-      })
-      .catch(err => {
-        document.getElementById('root').textContent = 'Failed to load component: ' + err.message;
-      });
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var componentPath = params.get('component');
+
+  if (!componentPath) {
+    showError('No component specified. Use ?component=playground.jsx');
+    return;
   }
+
+  // Update page title from component name
+  var name = componentPath.split('/').pop().replace('.jsx', '');
+  document.title = name.replace(/-/g, ' ').replace(/\b\w/g, function(c) {
+    return c.toUpperCase();
+  }) + ' — Dynamic Alerting';
+
+  fetch(componentPath)
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
+      return r.text();
+    })
+    .then(function(jsx) {
+      document.getElementById('loading').style.display = 'none';
+      renderJSX(jsx);
+    })
+    .catch(function(err) {
+      showError('Failed to load component: ' + err.message);
+    });
+
+  function showError(msg) {
+    document.getElementById('loading').style.display = 'none';
+    var el = document.getElementById('error');
+    el.style.display = 'block';
+    el.textContent = msg;
+  }
+
+  /**
+   * Transform raw JSX source (with front matter + ES imports + export default)
+   * into something Babel standalone can execute in a <script type="text/babel">.
+   */
+  function renderJSX(source) {
+    // 1) Strip YAML front matter (--- ... ---)
+    source = source.replace(/^---[\s\S]*?---\s*\n?/, '');
+
+    // 2) Replace ES imports with global references
+    //    React is already global via UMD script tags
+    source = source.replace(
+      /^import\s+React\s*,?\s*\{([^}]*)\}\s*from\s*['"]react['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        return 'const { ' + items.join(', ') + ' } = React;';
+      }
+    );
+    source = source.replace(
+      /^import\s+\{([^}]*)\}\s*from\s*['"]react['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        return 'const { ' + items.join(', ') + ' } = React;';
+      }
+    );
+    source = source.replace(
+      /^import\s+React\s+from\s*['"]react['"];?\s*$/gm, ''
+    );
+
+    // lucide-react: use global lucideReact or provide SVG fallbacks
+    source = source.replace(
+      /^import\s+\{([^}]*)\}\s*from\s*['"]lucide-react['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        var lines = items.map(function(icon) {
+          return 'const ' + icon + ' = (window.lucideReact && window.lucideReact.' + icon +
+                 ') || window.__iconFallback("' + icon + '");';
+        });
+        return lines.join('\n');
+      }
+    );
+
+    // 3) Replace `export default function Name(` with `function Name(`
+    //    and capture the name for rendering
+    var componentName = null;
+    source = source.replace(
+      /^export\s+default\s+function\s+(\w+)/m,
+      function(_, name) { componentName = name; return 'function ' + name; }
+    );
+    // Also handle: export default Name;
+    if (!componentName) {
+      source = source.replace(
+        /^export\s+default\s+(\w+)\s*;?\s*$/m,
+        function(_, name) { componentName = name; return ''; }
+      );
+    }
+
+    if (!componentName) {
+      document.getElementById('root').textContent =
+        'Error: component has no export default function';
+      return;
+    }
+
+    // 4) Append render call
+    source += '\n;ReactDOM.createRoot(document.getElementById("root")).render(' +
+              'React.createElement(' + componentName + '));';
+
+    // 5) Create script tag for Babel to process
+    var script = document.createElement('script');
+    script.type = 'text/babel';
+    script.textContent = source;
+    document.body.appendChild(script);
+    window.Babel.transformScriptTags();
+  }
+})();
+
+// Fallback SVG icons when lucide-react CDN is unavailable
+window.__iconFallback = function(name) {
+  var paths = {
+    Copy: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M8 2h8v4H8z',
+    RefreshCw: 'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0 1 14.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0 0 20.49 15',
+    ChevronDown: 'M6 9l6 6 6-6',
+    ChevronUp: 'M18 15l-6-6-6 6',
+    Check: 'M20 6L9 17l-5-5',
+    AlertTriangle: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z M12 9v4 M12 17h.01',
+  };
+  return function(props) {
+    var size = (props && props.size) || 16;
+    return React.createElement('svg', {
+      width: size, height: size, viewBox: '0 0 24 24',
+      fill: 'none', stroke: 'currentColor', strokeWidth: 2,
+      strokeLinecap: 'round', strokeLinejoin: 'round',
+      className: props && props.className,
+      style: props && props.style,
+    }, React.createElement('path', { d: paths[name] || 'M12 12h.01' }));
+  };
+};
 </script>
 </body>
 </html>

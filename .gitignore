@@ -35,3 +35,8 @@ kubeconfig
 .claude/history/
 .claude/settings.json
 site/
+
+# --- Validation ---
+.validation-baseline.json
+.validation-profile.csv
+.claude/

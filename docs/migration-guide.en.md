@@ -2,7 +2,7 @@
 title: "Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform
@@ -14,7 +14,7 @@ lang: en
 
 > **⚠️ Migration Safety Guarantee:** The migration process on this platform is designed to be **progressive and reversible**. Your legacy rules don't need to be switched all at once—new rules via the `custom_` prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's `optional: true` mechanism ensures that deleting any rule pack will not affect Prometheus operation.
 >
-> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:1.13.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
+> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v1.11.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
 
 ## Where Are You? (你在哪個階段？)
 
@@ -50,7 +50,7 @@ flowchart TD
 
 ## Zero-Friction Onboarding
 
-This platform comes pre-loaded with **13 Rule Pack ConfigMaps** (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, Operational, and Platform self-monitoring), distributed across independent ConfigMaps via Kubernetes **Projected Volume** architecture. Each Rule Pack contains a complete three-piece set: Normalization Recording Rules + Threshold Normalization + Alert Rules.
+This platform comes pre-loaded with **15 Rule Pack ConfigMaps** (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Operational, and Platform self-monitoring), distributed across independent ConfigMaps via Kubernetes **Projected Volume** architecture. Each Rule Pack contains a complete three-piece set: Normalization Recording Rules + Threshold Normalization + Alert Rules.
 
 **Rule Packs without deployed exporters won't generate metrics, and alerts won't fire incorrectly (near-zero cost)**. After adding a new exporter, you only need to configure `_defaults.yaml` + tenant YAML without modifying Prometheus configuration.
 
@@ -252,7 +252,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### Use da-tools in K8s Cluster
 
-da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:1.13.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
+da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:v1.11.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
 
 > Job output can be retrieved via `kubectl cp`, then injected into `threshold-config` ConfigMap. For long-running Shadow Monitoring Job examples, see [§11 Enterprise-Grade Migration Phase B](#phase-b-conversion--shadow-monitoring).
 
@@ -687,7 +687,7 @@ The following tools reduce manual intervention in large migrations:
 
 ## 12. Rule Pack Dynamic Toggle
 
-All 13 Rule Pack ConfigMaps have `optional: true` in Projected Volume, allowing selective unloading.
+All 15 Rule Pack ConfigMaps have `optional: true` in Projected Volume, allowing selective unloading.
 
 ### Unload Unnecessary Rule Packs
 

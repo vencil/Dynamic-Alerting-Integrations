@@ -2,7 +2,7 @@
 title: "進階場景與測試覆蓋"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: zh
 ---
 # 進階場景與測試覆蓋

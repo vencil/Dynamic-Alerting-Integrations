@@ -2,7 +2,7 @@
 title: "Governance, Audit & Security Compliance"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v1.13.0
+version: v2.0.0-preview.2
 lang: en
 ---
 # Governance, Audit & Security Compliance
