@@ -1,8 +1,15 @@
+---
+title: "Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"
+tags: [integration, prometheus, byop]
+audience: [platform-engineer, sre]
+version: v1.13.0
+lang: zh
+---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v1.11.0
+> **版本**：v1.13.0
 
 ---
 
@@ -18,7 +25,7 @@
 | 2 | 抓取 `threshold-exporter` | ~2 分鐘 |
 | 3 | 掛載黃金規則包 (Rule Packs) | ~5 分鐘 |
 
-整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 13 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
+整合後，你的 Prometheus 會新增：1 個 relabel 設定、1 個 scrape job、以及 15 個 Rule Pack ConfigMap（可選擇性掛載）。**現有的 scrape job、recording rule、alerting rule 完全不受影響。**
 
 ```mermaid
 graph LR
@@ -33,7 +40,7 @@ graph LR
 
     subgraph DA["Dynamic Alerting (新增)"]
         TE["threshold-exporter<br/>×2 HA :8080"]
-        RP["12 Rule Pack<br/>ConfigMaps"]
+        RP["15 Rule Pack<br/>ConfigMaps"]
     end
 
     NS -->|"① relabel_configs<br/>namespace → tenant"| P
@@ -112,23 +119,13 @@ relabel_configs:
 
 ### 驗證
 
-注入 `tenant` 標籤後，等待一個 scrape interval（預設 10–15 秒），然後驗證：
-
 ```bash
-# 1. 確認指標帶有 tenant 標籤
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=mysql_global_status_threads_connected' \
-  | jq '.data.result[].metric.tenant'
-
-# 預期輸出（每個 tenant 一筆）：
-# "db-a"
-# "db-b"
-
-# 2. 如果沒有輸出或值為 null，檢查 target 是否被正確發現
-curl -s 'http://<your-prometheus>:9090/api/v1/targets' \
-  | jq '.data.activeTargets[] | select(.labels.job=="tenant-db-exporters") | {instance: .labels.instance, tenant: .labels.tenant, health: .health}'
+# 確認指標帶有 tenant 標籤
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{tenant!=""}' \
+  | jq '.data.result[] | {tenant: .metric.tenant, instance: .metric.instance}'
 ```
 
-**✅ 通過條件**：每個 tenant 的指標都帶有正確的 `tenant` 標籤值。
+**✅ 通過條件**：每個 tenant 的指標都帶有正確的 `tenant` 標籤值。若無結果，檢查 target 發現與 relabel_configs。
 
 ### 進階：彈性 Tenant-Namespace 映射
 
@@ -190,32 +187,12 @@ scrape_configs:
 ### 驗證
 
 ```bash
-# 1. 確認 target 狀態為 UP
-curl -s 'http://<your-prometheus>:9090/api/v1/targets' \
-  | jq '.data.activeTargets[] | select(.labels.job=="dynamic-thresholds") | {instance: .scrapeUrl, health: .health}'
+# 確認 target 狀態為 UP 且閾值指標可查詢
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresholds"}' \
+  | jq '.data.result[] | {instance: .metric.instance, up: .value[1]}'
 
-# 預期：health: "up"
-
-# 2. 確認閾值指標可查詢（metric name 是 user_threshold，透過 metric label 區分指標類型）
 curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{metric="connections"}' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
-
-# 預期：每個 tenant 一筆，value 為其自訂閾值
-# {"tenant": "db-a", "value": "100"}
-# {"tenant": "db-b", "value": "80"}
-
-# 3. 確認 metadata info metric（v1.11.0 — 租戶配置了 _metadata 時才有）
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=tenant_metadata_info' \
-  | jq '.data.result[] | {tenant: .metric.tenant, runbook_url: .metric.runbook_url, owner: .metric.owner}'
-
-# 預期：每個已配置 _metadata 的 tenant 一筆，值為 1
-# 此 metric 供 Rule Pack alert 透過 group_left 注入 runbook_url / owner / tier
-
-# 4. 確認三態指標（state filter）
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_state_filter' \
-  | jq '.data.result[] | {tenant: .metric.tenant, filter: .metric.filter, value: .value[1]}'
-
-# value=1 表示啟用（例如 maintenance mode on），absent 表示停用
 ```
 
 **✅ 通過條件**：`dynamic-thresholds` job 狀態為 `up`，且 `user_threshold` 指標可正常查詢。
@@ -313,30 +290,10 @@ kill -HUP $(pidof prometheus)
 ### 驗證
 
 ```bash
-# 1. 確認規則已載入
+# 確認規則已載入且無評估錯誤
 curl -s 'http://<your-prometheus>:9090/api/v1/rules' \
-  | jq '.data.groups[].name' | sort -u
-
-# 預期：應看到類似以下的規則群組名稱（每個 pack 有 normalization + threshold-normalization + alerts 三組）
-# "mariadb-normalization"
-# "mariadb-threshold-normalization"
-# "mariadb-alerts"
-# "redis-normalization"
-# ...
-
-# 2. 確認規則數量與預期一致
-curl -s 'http://<your-prometheus>:9090/api/v1/rules' \
-  | jq '[.data.groups[].rules[]] | length'
-
-# 3. 確認沒有評估錯誤
-curl -s 'http://<your-prometheus>:9090/api/v1/rules' \
-  | jq '.data.groups[].rules[] | select(.lastError != "") | {name: .name, error: .lastError}'
-
-# 預期：空輸出（沒有錯誤）
-
-# 4. 確認 recording rule 有產生歸一化指標
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=tenant:mysql_threads_connected:max' \
-  | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
+  | jq '[.data.groups[].rules[] | select(.lastError != "")] | length'
+# 預期：0（無錯誤）
 ```
 
 **✅ 通過條件**：規則群組全部載入、無評估錯誤、recording rule 正常產出歸一化指標。
@@ -345,73 +302,48 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=tenant:mysql_threads_c
 
 ## 端到端驗證 Checklist
 
-完成上述三個步驟後，執行以下最終驗證：
+完成上述三個步驟後，使用自動化驗證工具一鍵執行端到端檢查：
 
 ```bash
-# ① tenant 標籤存在於資料庫指標上
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="tenant-db-exporters"}' \
-  | jq '.data.result[] | .metric.tenant' | sort -u
+# 自動化驗證（推薦）
+da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 
-# ② threshold-exporter 被正常抓取
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresholds"}' \
-  | jq '(.data.result[0].value[1] == "1")'
-# 預期：true
-
-# ③ 向量匹配可正常運作（核心驗證）
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=tenant%3Amysql_threads_connected%3Amax%20-%20on(tenant)%20tenant%3Aalert_threshold%3Aconnections' \
-  | jq '.data.result[] | {tenant: .metric.tenant, diff: .value[1]}'
-# 預期：每個 tenant 一筆結果。diff 為負表示在閾值內，為正表示超過閾值。
-# 如果結果為空，代表 tenant 標籤匹配失敗 — 回頭檢查步驟 1。
-
-# ④ Alert Rule 可正常評估
-curl -s 'http://<your-prometheus>:9090/api/v1/rules?type=alert' \
-  | jq '.data.groups[].rules[] | select(.name | startswith("MariaDB") or startswith("Redis")) | {name: .name, state: .state, activeCount: (.alerts | length)}'
+# JSON 輸出（適合 CI）
+da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 ```
 
-> **排障**：如果步驟 ③ 返回空結果，最常見的原因是 `tenant` 標籤值不一致。用以下命令比對兩邊的值：
+工具自動檢查：tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配。所有項目均通過後顯示 `PASS`。
+
+> **手動驗證**：若需逐步手動確認，核心驗證為向量匹配測試：
 > ```bash
-> # 資料庫指標的 tenant 值
-> curl -s '...query=group(mysql_global_status_threads_connected) by (tenant)' | jq '.data.result[].metric.tenant'
-> # 閾值指標的 tenant 值
-> curl -s '...query=group(user_threshold{metric="connections"}) by (tenant)' | jq '.data.result[].metric.tenant'
-> # 兩邊的值必須完全一致（包含大小寫）
+> curl -s 'http://<prometheus>:9090/api/v1/query?query=tenant%3Amysql_threads_connected%3Amax%20-%20on(tenant)%20tenant%3Aalert_threshold%3Aconnections' \
+>   | jq '.data.result[] | {tenant: .metric.tenant, diff: .value[1]}'
+> # 結果為空 → tenant 標籤不匹配，回頭檢查步驟 1
 > ```
 
 ---
 
 ## 使用 da-tools CLI 快速驗證
 
-如果你不想手動執行上述 curl 命令，可以使用我們打包好的 [da-tools CLI 容器](../components/da-tools/README.md)，一行指令完成驗證：
+除了上述 `byo-check` 自動化驗證外，`da-tools` 提供更多診斷工具：
 
 ```bash
-# 設定 Prometheus 位址
 export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 
-# ① 確認特定 alert 的狀態
-docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.11.0 check-alert MariaDBHighConnections db-a
+# 確認特定 alert 的狀態
+da-tools check-alert MariaDBHighConnections db-a
 
-# ② 觀測現有指標，取得閾值建議
-docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.11.0 baseline --tenant db-a --duration 300
+# 觀測現有指標，取得閾值建議
+da-tools baseline --tenant db-a --duration 300
 
-# ③ 租戶健康檢查（exporter 狀態 + 運營模式）
-docker run --rm --network=host -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.11.0 diagnose db-a
+# 租戶健康檢查（exporter 狀態 + 運營模式）
+da-tools diagnose db-a
 
-# ④ 一站式配置驗證（YAML + schema + routes + custom rules）
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.11.0 validate-config --config-dir /data/conf.d
-
-# ⑤ 啟動 Shadow Monitoring 雙軌比對
-docker run --rm --network=host \
-  -v $(pwd)/mapping.csv:/data/mapping.csv \
-  -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:1.11.0 validate --mapping /data/mapping.csv --watch --rounds 5
+# 一站式配置驗證（YAML + schema + routes + custom rules）
+da-tools validate-config --config-dir /data/conf.d
 ```
 
-> **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull` 即可使用。詳見 [da-tools README](../components/da-tools/README.md)。
+> **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull ghcr.io/vencil/da-tools:1.13.0` 即可使用。
 
 ---
 
@@ -535,3 +467,16 @@ A: 是的。`threshold-exporter` 需要存取 tenant ConfigMap，因此必須部
 
 **Q: 如果我用的是 Thanos 多叢集架構怎麼辦？**
 A: `threshold-exporter` 部署在資料叢集內（靠近 tenant ConfigMap）。Thanos Sidecar 會自動將閾值指標上傳到 Object Store。規則包載入到 Thanos Ruler，它會透過 Thanos Querier 進行跨叢集的向量匹配。
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ⭐⭐⭐ |
+| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐⭐ |
+| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |

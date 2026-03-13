@@ -144,6 +144,7 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse query rate exceeds threshold"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse query rate elevated — workload review"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -166,6 +167,7 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse active connections exceed threshold"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse connections exceeded — client pool review"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -188,6 +190,7 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse max part count per partition exceeds threshold (merge pressure)"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse partition merge pressure — part count review"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -210,6 +213,7 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse replication queue size exceeds threshold"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse replication queue high — replica health check"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -232,6 +236,7 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse memory tracking exceeds threshold"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse memory usage high — resource sizing review"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

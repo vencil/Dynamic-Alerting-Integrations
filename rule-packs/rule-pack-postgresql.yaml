@@ -123,6 +123,7 @@ groups:
           metric_group: "pg_connections"
         annotations:
           summary: "High connection usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection usage high — review max_connections and pool sizing"
           description: "{{ $value | printf \"%.1f\" }}% of max_connections used (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -148,6 +149,7 @@ groups:
           metric_group: "pg_connections"
         annotations:
           summary: "Critical connection usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation — immediate action needed"
           description: "{{ $value | printf \"%.1f\" }}% of max_connections used (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -172,6 +174,7 @@ groups:
           metric_group: "pg_replication_lag"
         annotations:
           summary: "High replication lag on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: replication lag elevated — check replica health"
           description: "{{ $value | printf \"%.1f\" }}s replication lag (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -197,6 +200,7 @@ groups:
           metric_group: "pg_replication_lag"
         annotations:
           summary: "Critical replication lag on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical replication lag — failover risk, escalate"
           description: "{{ $value | printf \"%.1f\" }}s replication lag (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -217,6 +221,7 @@ groups:
           severity: warning
         annotations:
           summary: "Deadlocks detected on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: deadlocks detected — application-level lock contention"
           description: "{{ $value | printf \"%.2f\" }} deadlocks/sec over 5m"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -237,6 +242,7 @@ groups:
           severity: warning
         annotations:
           summary: "High rollback ratio on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: high rollback ratio — application error pattern"
           description: "{{ $value | humanizePercentage }} of transactions are rollbacks"
 
           runbook_url: "{{ $labels.runbook_url }}"

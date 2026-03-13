@@ -1,3 +1,10 @@
+---
+title: "測試注意事項 — 排錯手冊 (Testing Playbook)"
+tags: [documentation]
+audience: [all]
+version: v1.13.0
+lang: zh
+---
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
 
 > K8s 環境排錯、負載注入陷阱、Benchmark 方法論、程式碼品質規範。
@@ -22,10 +29,10 @@
 
 ## Projected Volume 架構
 
-13 個獨立 ConfigMap 透過 `projected` volume 投射至 `/etc/prometheus/rules/`：
+15 個獨立 ConfigMap 透過 `projected` volume 投射至 `/etc/prometheus/rules/`：
 
 ```
-configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,clickhouse,postgresql,kafka,rabbitmq,custom,platform}.yaml
+configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,clickhouse,postgresql,kafka,rabbitmq,jvm,nginx,custom,platform}.yaml
 ```
 
 每個 DB Rule Pack 含 `*-recording.yml` + `*-alert.yml`；Platform 含 `platform-alert.yml`。全部設定 `optional: true`（Zero-Crash Opt-Out）。
@@ -138,7 +145,7 @@ make benchmark ARGS="--under-load --scaling-curve --routing-bench --alertmanager
 | Benchmark 類型 | 建議輪數 | 報告格式 | 耗時 |
 |----------------|---------|---------|------|
 | idle-state | 5 輪，間隔 45s | mean ± stddev | ~4min |
-| scaling-curve (12→6→3 packs) | 3 輪 | median (range) | ~12min |
+| scaling-curve (15→6→3 packs) | 3 輪 | median (range) | ~12min |
 | Go micro-bench (`-count=N`) | 5 次 | median, stddev | ~1min |
 | under-load | 1 輪（功能性） | 單次值 | ~3min |
 | routing-bench (N=2/10/50/100/200) | 5 輪 | median | ~1min |
@@ -146,6 +153,51 @@ make benchmark ARGS="--under-load --scaling-curve --routing-bench --alertmanager
 | reload-bench | 5 輪 | median | ~2min |
 
 **scaling-curve 注意：** 每輪需刪 Rule Pack → 重啟 Prometheus → 等穩定 → 取樣。port-forward 在 Pod 重建後斷開，需重連。Median 比 mean 更能代表穩態。
+
+### Benchmark 在 Dev Container 內執行
+
+benchmark.sh 需要 K8s + Go 環境，**必須在 Dev Container 內跑**。由於 PowerShell 引號嵌套問題，直接 `docker exec bash -c "..."` 複雜指令常失敗。
+
+**標準做法：寫輔助腳本 → docker exec 執行 → 讀結果：**
+
+```bash
+# Step 1: Write tool 寫輔助腳本
+cat > /workspaces/vibe-k8s-lab/_run_bench.sh << 'SCRIPT'
+#!/bin/bash
+cd /workspaces/vibe-k8s-lab
+exec > /workspaces/vibe-k8s-lab/_bench_result.txt 2>&1
+./scripts/benchmark.sh --routing-bench --json
+echo "EXIT_CODE=$?"
+SCRIPT
+
+# Step 2: 背景執行
+docker exec -d vibe-dev-container bash /workspaces/vibe-k8s-lab/_run_bench.sh
+
+# Step 3: 等待 + Read tool 讀 _bench_result.txt
+# Step 4: 清理
+docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/_run_bench.sh /workspaces/vibe-k8s-lab/_bench_result.txt
+```
+
+**Go micro-bench 同理：**
+```bash
+cd /workspaces/vibe-k8s-lab/components/threshold-exporter/app
+go test -bench=. -benchmem -count=5 ./...
+```
+
+### benchmark.sh 已知問題
+
+- **`local` 關鍵字限制**：`local` 只能在 function 內使用。若 for loop 在 top-level scope 使用 `local`，bash 不報錯但部分 shell 會。移除即可。
+- **`grep -E '--- [0-9]+'` pattern**：`---` 被 grep 解讀為選項旗標。用 `grep -E -- '--- [0-9]+'` 或 `grep -E '\-\-\- [0-9]+'` 避免。此問題不阻塞執行（routes 有 fallback 解析）。
+
+### Dev Container 重啟
+
+系統重開機後 Dev Container 會停止（`Exited (255)`）：
+
+```bash
+docker start vibe-dev-container
+# 驗證
+docker exec vibe-dev-container kubectl get nodes
+```
 
 ### Routing Bench 注意事項
 
@@ -265,7 +317,7 @@ mysql_connections: "70"
 
 **偵測方法：** 載入 YAML 後檢查 `"tenants" in data and isinstance(data["tenants"], dict)`，若存在則 drill into nested structure。
 
-**測試要求：** 每個讀取 conf.d/ 的工具至少需要兩組測試：`test_*_flat()` 和 `test_*_wrapped()`。已知踩坑工具：`config_diff.py`、`blind_spot_discovery.py`（v1.10.0 修正）。
+**測試要求：** 每個讀取 conf.d/ 的工具至少需要兩組測試：`test_*_flat()` 和 `test_*_wrapped()`。已知踩坑工具：`config_diff.py`、`blind_spot_discovery.py`。
 
 ### 字串匹配：segment vs substring
 
@@ -305,3 +357,11 @@ for keyword, db_type in JOB_DB_MAP.items():
 所有面向使用者的文件（byo-*、migration-guide、shadow-monitoring-sop）中的工具用法，以 `docker run ghcr.io/vencil/da-tools:<ver>` 為主要範例。raw `python3 scripts/tools/...` 寫法僅在「本地開發」或「CI pipeline」上下文使用。
 
 **檢查方式：** `grep -rn "python3 scripts/tools/" docs/` — 面向使用者的文件中不應出現（`docs/internal/` 例外）。
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["GitHub Release — 操作手冊 (Playbook)"](internal/github-release-playbook.md) | ⭐⭐ |
+| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](internal/testing-playbook.md) | ⭐⭐ |
+| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](internal/windows-mcp-playbook.md) | ⭐⭐ |

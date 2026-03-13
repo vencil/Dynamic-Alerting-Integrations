@@ -1,0 +1,31 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'rule-packs/*.md'
+  workflow_dispatch:  # manual trigger
+
+permissions:
+  contents: write  # for gh-deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: mkdocs-${{ hashFiles('mkdocs.yml') }}
+      - name: Install dependencies
+        run: pip install mkdocs-material mkdocs-mermaid2-plugin
+      - name: Deploy
+        run: mkdocs gh-deploy --force

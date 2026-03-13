@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Component</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 16px; background: #fff; color: #333; }
+  @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #ddd; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  // Load component from query parameter: ?component=playground.jsx
+  const params = new URLSearchParams(window.location.search);
+  const component = params.get('component');
+  if (component) {
+    fetch(component)
+      .then(r => r.text())
+      .then(jsx => {
+        const script = document.createElement('script');
+        script.type = 'text/babel';
+        script.setAttribute('data-type', 'module');
+        // Wrap: render the default export
+        script.textContent = jsx + `\n;(() => {
+          const App = typeof default_export !== 'undefined' ? default_export : null;
+          const root = document.getElementById('root');
+          if (App) ReactDOM.createRoot(root).render(React.createElement(App));
+        })();`;
+        document.body.appendChild(script);
+        // Re-trigger Babel transform
+        window.Babel.transformScriptTags();
+      })
+      .catch(err => {
+        document.getElementById('root').textContent = 'Failed to load component: ' + err.message;
+      });
+  }
+</script>
+</body>
+</html>

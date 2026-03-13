@@ -1,6 +1,13 @@
+---
+title: "BYO Alertmanager 整合指南"
+tags: [integration, alertmanager]
+audience: [platform-engineer, sre]
+version: v1.13.0
+lang: zh
+---
 # BYO Alertmanager 整合指南
 
-> **版本**：v1.11.0
+> **版本**：v1.13.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -89,7 +96,7 @@ alerting:
 
 ### Step 3: 設定 Tenant Routing Config
 
-在 tenant YAML 中定義 `_routing` section（v1.3.0 結構化 receiver）：
+在 tenant YAML 中定義 `_routing` section：
 
 ```yaml
 # conf.d/db-a.yaml
@@ -109,23 +116,13 @@ tenants:
 
 ```bash
 # 產出 fragment
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  generate-routes --config-dir /data/conf.d -o /data/alertmanager-routes.yaml
+da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
 
 # 驗證產出
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  generate-routes --config-dir /data/conf.d --validate
+da-tools generate-routes --config-dir conf.d/ --validate
 
-# 驗證 + webhook domain allowlist 檢查（v1.5.0）
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  -v $(pwd)/.github:/data/.github \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  generate-routes --config-dir /data/conf.d --validate --policy /data/.github/custom-rule-policy.yaml
+# 驗證 + webhook domain allowlist 檢查
+da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom-rule-policy.yaml
 ```
 
 產出內容包含：
@@ -141,16 +138,7 @@ docker run --rm \
 
 ```bash
 # 一站式自動合併 + apply + reload
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  --network=host \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  generate-routes --config-dir /data/conf.d --apply --yes
-
-# 或手動合併後 apply
-kubectl create configmap alertmanager-config \
-  --from-file=alertmanager.yml=alertmanager-merged.yml \
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
 適合：初次部署測試、P0 緊急修復、不走 GitOps 的環境。
@@ -159,21 +147,11 @@ kubectl create configmap alertmanager-config \
 
 ```bash
 # 產出完整 ConfigMap YAML（含 global + default route/receiver + tenant routes）
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  -v $(pwd)/deploy:/data/deploy \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  generate-routes --config-dir /data/conf.d --output-configmap \
-  -o /data/deploy/alertmanager-configmap.yaml
+da-tools generate-routes --config-dir conf.d/ --output-configmap -o deploy/alertmanager-configmap.yaml
 
-# 搭配自訂基礎配置（覆蓋 global.resolve_timeout、SMTP 設定等）
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  -v $(pwd)/deploy:/data/deploy \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  generate-routes --config-dir /data/conf.d --output-configmap \
-  --base-config /data/conf.d/base-alertmanager.yaml \
-  -o /data/deploy/alertmanager-configmap.yaml
+# 搭配自訂基礎配置
+da-tools generate-routes --config-dir conf.d/ --output-configmap \
+  --base-config conf.d/base-alertmanager.yaml -o deploy/alertmanager-configmap.yaml
 
 # 檔案進 Git → PR review → merge → ArgoCD/Flux 自動 sync
 git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
@@ -220,7 +198,7 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 | `--validate` | 驗證配置合法性（exit 0/1，適合 CI） |
 | `--policy FILE` | 載入 `allowed_domains` 做 webhook URL 合規檢查 |
 | `--apply [--yes]` | 自動合併至 Alertmanager ConfigMap + reload（`--yes` 跳過確認） |
-| `--output-configmap` | 產出完整 ConfigMap YAML（與 `--apply` 互斥），適合 GitOps PR flow（v1.10.0） |
+| `--output-configmap` | 產出完整 ConfigMap YAML（與 `--apply` 互斥），適合 GitOps PR flow |
 | `--base-config FILE` | 搭配 `--output-configmap`，載入基礎 Alertmanager 配置（global / default receiver 等） |
 
 ### Timing Guardrails
@@ -250,97 +228,41 @@ curl -X POST http://alertmanager:9093/-/reload
 
 | 方案 | 說明 | 適用場景 |
 |------|------|----------|
-| **HTTP reload** | `curl -X POST /-/reload`（v1.3.0 預設） | 最小侵入，適合自管 Alertmanager |
+| **HTTP reload** | `curl -X POST /-/reload` | 最小侵入，適合自管 Alertmanager |
 | **ConfigMap Watcher Sidecar** | 類似 `prometheus-config-reloader` | 全自動，適合生產環境 |
 | **CI Pipeline 整合** | GitOps: `generate-routes --validate` + apply + reload | 適合 GitOps 工作流 |
 | **GitOps ConfigMap 產出** | `generate-routes --output-configmap` 產出完整 ConfigMap YAML 進 Git PR flow | v1.10.0+，取代 `--apply` 直操作 |
 | **Alertmanager Operator** | `kube-prometheus-stack` 的 AlertmanagerConfig CRD | 適合已使用 Operator 的環境 |
 
-### _lib.sh Helper
-
-```bash
-source scripts/_lib.sh
-reload_alertmanager  # 預設 http://localhost:9093
-reload_alertmanager "http://alertmanager.monitoring.svc.cluster.local:9093"
-```
-
 ---
 
 ## 5. Receiver 類型
 
-v1.4.0 支援六種 receiver 類型：
-
-### Webhook
+v1.4.0 支援六種 receiver 類型。以 Webhook 為例：
 
 ```yaml
 _routing:
   receiver:
     type: "webhook"
     url: "https://webhook.example.com/alerts"
+    send_resolved: true  # optional: send resolved alerts
 ```
 
-### Email
+其他五種 receiver 類型快速參考：
 
-```yaml
-_routing:
-  receiver:
-    type: "email"
-    to: ["team@example.com", "oncall@example.com"]
-    smarthost: "smtp.example.com:587"
-    from: "alertmanager@example.com"
-    require_tls: true
-```
+| 類型 | 必填欄位 | 範例 |
+|------|---------|------|
+| **Email** | `to`, `smarthost`, `from` | `to: ["team@example.com"]`, `smarthost: "smtp.example.com:587"`, `from: "alertmanager@example.com"` |
+| **Slack** | `api_url`, `channel` | `api_url: "https://hooks.slack.com/..."`, `channel: "#alerts"` |
+| **Microsoft Teams** | `webhook_url` | `webhook_url: "https://outlook.office.com/webhook/..."` |
+| **Rocket.Chat** | `url`, `channel`, `username` | `url: "https://chat.example.com/hooks/xxx/yyy"` |
+| **PagerDuty** | `service_key`, `severity`, `client` | `service_key: "key-123"`, `severity: "critical"` |
 
-### Slack
-
-```yaml
-_routing:
-  receiver:
-    type: "slack"
-    api_url: "https://hooks.slack.com/services/T.../B.../xxx"
-    channel: "#alerts"
-```
-
-### Microsoft Teams
-
-```yaml
-_routing:
-  receiver:
-    type: "teams"
-    webhook_url: "https://outlook.office.com/webhook/..."
-```
-
-### Rocket.Chat
-
-```yaml
-_routing:
-  receiver:
-    type: "rocketchat"
-    url: "https://chat.example.com/hooks/xxx/yyy"
-    channel: "#alerts"        # metadata（不傳入 AM config）
-    username: "PrometheusBot" # metadata（不傳入 AM config）
-```
-
-### PagerDuty
-
-```yaml
-_routing:
-  receiver:
-    type: "pagerduty"
-    service_key: "your-integration-key"
-    severity: "critical"
-    client: "Dynamic Alerting Platform"
-```
-
-### 共通選填欄位
-
-所有 receiver 類型都支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
+所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
 
 ### 訊息模板（Go Template）
 
-Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager 原生的 Go template 語法，可引用 alert 的 labels、annotations、status：
-
-**Slack 客製化範例：**
+Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager Go template 語法。以 Slack 為例：
 
 ```yaml
 _routing:
@@ -357,38 +279,11 @@ _routing:
       {{ end }}
 ```
 
-**Email HTML 模板範例：**
+Email 和 Teams 使用相同的 Go template 語法，僅欄位名稱不同：
+- Email：`html` 欄位（HTML 格式）
+- Teams：`text` 欄位（Markdown 格式）
 
-```yaml
-_routing:
-  receiver:
-    type: "email"
-    to: ["team@example.com"]
-    smarthost: "smtp.example.com:587"
-    html: |
-      <h2>{{ .CommonLabels.alertname }}</h2>
-      <p>Tenant: {{ .CommonLabels.tenant }} | Severity: {{ .CommonLabels.severity }}</p>
-      <ul>
-      {{ range .Alerts }}
-        <li>{{ .Annotations.description }}</li>
-      {{ end }}
-      </ul>
-```
-
-**可用的 Go template 變數：**
-
-| 變數 | 說明 |
-|------|------|
-| `.CommonLabels.alertname` | Alert 名稱 |
-| `.CommonLabels.tenant` | Tenant 名稱 |
-| `.CommonLabels.severity` | 嚴重度（warning / critical） |
-| `.CommonAnnotations.summary` | Alert 摘要 |
-| `.CommonAnnotations.description` | Alert 描述 |
-| `.Status` | 狀態（firing / resolved） |
-| `.Alerts` | Alert 列表（可 `{{ range }}` 迴圈） |
-| `{{ .Alerts \| len }}` | Alert 數量 |
-
-> 完整語法參考：[Alertmanager Notification Template Reference](https://prometheus.io/docs/alerting/latest/notifications/)
+**可用變數：** `.CommonLabels.alertname`, `.CommonLabels.tenant`, `.CommonLabels.severity`, `.CommonAnnotations.summary`, `.CommonAnnotations.description`, `.Status`, `.Alerts`（支援 `{{ range }}` 迴圈）。詳見 [Alertmanager 官方範本](https://prometheus.io/docs/alerting/latest/notifications/)
 
 ---
 
@@ -410,14 +305,16 @@ curl -sf http://localhost:9093/-/ready
 curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
 ```
 
+> **自動化驗證**：`da-tools byo-check alertmanager` 可一鍵執行上述所有 Alertmanager 驗證項目。
+
 ### 功能驗證
 
-- [ ] `validate-config --config-dir conf.d/` 通過（一站式檢查）
+--8<-- "docs/includes/verify-checklist.md"
+
+**Alertmanager 整合專項：**
+
 - [ ] `generate-routes --validate` exit code 0
 - [ ] Alertmanager 載入合併後的配置無錯誤
-- [ ] `curl -X POST /-/reload` 回傳 200
-- [ ] Silent Mode tenant 的 alert 不發送通知
-- [ ] Maintenance Mode tenant 的 alert 不觸發
 - [ ] Silent/Maintenance 的 `expires` 到期後自動恢復
 - [ ] Severity Dedup enabled tenant 的 warning 在 critical 觸發時被抑制
 - [ ] Custom routing tenant 的 alert 送達指定 receiver
@@ -425,7 +322,7 @@ curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
 
 ---
 
-## 7. Per-Rule Routing Overrides（v1.8.0）
+## 7. Per-Rule Routing Overrides
 
 在進階場景中，某些特定警報可能需要不同的路由策略。Tenant YAML 的 `_routing.overrides[]` 支援 per-alertname 或 per-metric_group 指定自訂 receiver：
 
@@ -465,7 +362,7 @@ tenants:
 
 ---
 
-## 8. Platform Enforced Routing（v1.7.0）
+## 8. Platform Enforced Routing
 
 Platform Team 可在 `_defaults.yaml` 設定強制路由，確保 NOC 必收所有 tenant 的告警（與 tenant 自訂路由並行，雙軌通知）：
 
@@ -482,7 +379,7 @@ _routing_enforced:
     severity: "critical"
 ```
 
-**模式 B：Per-tenant 獨立通道（v1.10.0）**
+**模式 B：Per-tenant 獨立通道**
 
 當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫：
 
@@ -505,16 +402,11 @@ _routing_enforced:
 v1.7.0 新增 `validate_config.py`，一次檢查 YAML syntax、schema、routes、policy、custom rules、版號一致性：
 
 ```bash
-# da-tools 容器方式
-docker run --rm -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.11.0 validate-config --config-dir /data/conf.d
+# 一站式驗證
+da-tools validate-config --config-dir conf.d/
 
-# CI pipeline 使用 JSON 輸出
-docker run --rm \
-  -v $(pwd)/conf.d:/data/conf.d \
-  -v $(pwd)/.github:/data/.github \
-  ghcr.io/vencil/da-tools:1.11.0 \
-  validate-config --config-dir /data/conf.d --policy /data/.github/custom-rule-policy.yaml --json
+# CI pipeline 使用 JSON 輸出 + policy 檢查
+da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-policy.yaml --json
 ```
 
 建議在 `generate-routes --apply` 前先執行 `validate-config`，確保配置完整正確。
@@ -529,10 +421,8 @@ docker run --rm \
 - Alertmanager 已啟用 API v2（預設開啟，無需額外設定）
 
 ```bash
-# da-tools 容器方式（每 5 分鐘由 CronJob 呼叫）
-docker run --rm -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:1.11.0 maintenance-scheduler \
-  --config-dir /data/conf.d --alertmanager http://alertmanager:9093
+# 由 CronJob 定期呼叫
+da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
 ```
 
 工具內建冪等檢查（不重複建立相同 silence）與自動延展（既有 silence 到期早於視窗結束時自動 extend）。詳見 [Shadow Monitoring SOP §8](shadow-monitoring-sop.md) 中的維護窗口操作說明。
@@ -562,3 +452,16 @@ spec:
 ```
 
 此路徑與 `generate_alertmanager_routes.py` 的 ConfigMap 方式互斥。選擇 Operator 路徑的用戶不需要使用 `generate-routes` 工具。
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ⭐⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐⭐ |
+| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |

@@ -1,3 +1,10 @@
+---
+title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
+tags: [documentation]
+audience: [all]
+version: v1.13.0
+lang: zh
+---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
 
 > AI Agent 透過 Windows-MCP Shell / Desktop Commander / Cowork VM 操作 Dev Container 的最佳實踐與已知陷阱。
@@ -202,6 +209,9 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 16 | PAT push `.github/workflows/` 被 reject | PAT 需含 Workflows scope（詳見 [GitHub Release Playbook](github-release-playbook.md)） |
 | 17 | Windows MCP Shell 長 REST body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 完成後 `Remove-Item` |
 | 18 | GitHub Release `already_exists` 422 | tag 推送後 GitHub 可能自動建 release；改用 PATCH 更新（GET tag → 取 id → PATCH body） |
+| 19 | Dev Container `Exited (255)` 未啟動 | `docker start vibe-dev-container`；每次 session 開始先 `docker ps` 確認 |
+| 20 | Benchmark / Go test 複雜指令在 PowerShell 下失敗 | 寫 `.sh` 輔助腳本 → `docker exec [-d] bash script.sh`（見 [Testing Playbook → Benchmark 在 Dev Container 內執行](testing-playbook.md#benchmark-在-dev-container-內執行)）|
+| 21 | Go test 從 repo root 執行失敗 | `go.mod` 在 `components/threshold-exporter/app/`，必須 `-w` 指定或 `cd` 進去 |
 
 ## 指令快速參考
 
@@ -222,3 +232,11 @@ docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/_*.txt /workspaces
 # 版號一致性
 docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash -c "python3 ./scripts/tools/bump_docs.py --check > /workspaces/vibe-k8s-lab/_ver.txt 2>&1"
 ```
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["GitHub Release — 操作手冊 (Playbook)"](internal/github-release-playbook.md) | ⭐⭐ |
+| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](internal/testing-playbook.md) | ⭐⭐ |
+| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](internal/windows-mcp-playbook.md) | ⭐⭐ |

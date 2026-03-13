@@ -1,0 +1,35 @@
+name: Commitlint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          npm install --save-dev @commitlint/cli @commitlint/config-conventional
+
+      - name: Validate PR title (for squash-merge)
+        if: github.event_name == 'pull_request'
+        run: |
+          npx commitlint --config .commitlintrc.yaml <<< "${{ github.event.pull_request.title }}"
+
+      - name: Validate commits on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          npx commitlint --config .commitlintrc.yaml \
+            --from ${{ github.event.pull_request.base.sha }} \
+            --to ${{ github.event.pull_request.head.sha }}

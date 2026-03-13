@@ -1,0 +1,266 @@
+# docs-ci.yaml — Documentation CI/CD Pipeline
+#
+# Validates and renders documentation on every PR that touches docs/**/*.md
+# or rule-packs/**/*.md.
+#
+# Jobs:
+#   1. validate-mermaid: Syntax check + optional mmdc render of Mermaid diagrams
+#   2. check-links: Cross-reference validation (internal links, anchors, files)
+#   3. check-frontmatter: YAML front matter consistency check
+#   4. check-coverage: Documentation coverage thresholds (80% minimum)
+#
+# Uses caching (npm + pip) for speed.
+
+name: Documentation CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**/*.md"
+      - "rule-packs/**/*.md"
+      - "README.md"
+      - "README.en.md"
+      - ".github/workflows/docs-ci.yaml"
+
+jobs:
+  validate-mermaid:
+    name: Validate Mermaid Diagrams
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install mermaid-cli
+        run: |
+          npm install -g @mermaid-js/mermaid-cli puppeteer
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Validate and render Mermaid diagrams
+        run: |
+          python scripts/tools/validate_mermaid.py \
+            docs/ rule-packs/ \
+            --ci --render
+
+  check-links:
+    name: Check Documentation Links
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Check document links and cross-references
+        run: |
+          python scripts/tools/check_doc_links.py \
+            docs/ rule-packs/ \
+            --ci
+
+  check-frontmatter:
+    name: Check Documentation Front Matter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Validate documentation YAML front matter
+        run: |
+          python scripts/tools/add_frontmatter.py \
+            docs/ rule-packs/ \
+            --check
+
+  check-coverage:
+    name: Check Documentation Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Check documentation coverage (80% minimum)
+        run: |
+          python scripts/tools/doc_coverage.py \
+            docs/ rule-packs/ \
+            --ci
+
+      - name: Update coverage badge JSON
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python scripts/tools/doc_coverage.py \
+            docs/ rule-packs/ \
+            --badge --json > docs/assets/doc-coverage-badge.json || true
+
+      - name: Sync glossary abbreviations
+        run: |
+          python scripts/tools/sync_glossary_abbr.py --check
+
+      - name: Commit badge update
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/assets/doc-coverage-badge.json
+          git diff --staged --quiet || git commit -m "docs: update coverage badge [skip ci]"
+          git push || true
+
+  mkdocs-build:
+    name: MkDocs Build Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-mkdocs-${{ hashFiles('mkdocs.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-mkdocs-
+
+      - name: Install MkDocs and plugins
+        run: |
+          pip install mkdocs-material mkdocs-i18n pymdown-extensions
+
+      - name: Build site (strict mode)
+        run: |
+          mkdocs build --strict 2>&1 | tee mkdocs-build.log
+          # Fail on warnings (strict mode already does this)
+
+  doc-line-count:
+    name: Documentation Line Count Monitor
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Compare doc line counts
+        run: |
+          PR_LINES=$(find docs rule-packs -name '*.md' -exec cat {} + | wc -l)
+          BASE_LINES=$(find base/docs base/rule-packs -name '*.md' -exec cat {} + 2>/dev/null | wc -l)
+          DIFF=$((PR_LINES - BASE_LINES))
+          echo "Base: $BASE_LINES lines | PR: $PR_LINES lines | Delta: $DIFF lines"
+          if [ "$DIFF" -gt 200 ]; then
+            echo "::warning::Doc line count increased by $DIFF lines (threshold: 200). Consider trimming redundant content."
+          elif [ "$DIFF" -lt -50 ]; then
+            echo "::notice::Doc line count decreased by ${DIFF#-} lines. Good job trimming!"
+          fi
+
+  all-checks:
+    name: All Documentation Checks
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - validate-mermaid
+      - check-links
+      - check-frontmatter
+      - check-coverage
+      - mkdocs-build
+    steps:
+      - name: Check results
+        run: |
+          echo "validate-mermaid: ${{ needs.validate-mermaid.result }}"
+          echo "check-links: ${{ needs.check-links.result }}"
+          echo "check-frontmatter: ${{ needs.check-frontmatter.result }}"
+          echo "check-coverage: ${{ needs.check-coverage.result }}"
+          echo "mkdocs-build: ${{ needs.mkdocs-build.result }}"
+          if [[ "${{ needs.validate-mermaid.result }}" == "failure" || \
+                "${{ needs.check-links.result }}" == "failure" || \
+                "${{ needs.check-frontmatter.result }}" == "failure" || \
+                "${{ needs.check-coverage.result }}" == "failure" || \
+                "${{ needs.mkdocs-build.result }}" == "failure" ]]; then
+            echo "::error::One or more documentation checks failed"
+            exit 1
+          fi
+          echo "All documentation checks passed"

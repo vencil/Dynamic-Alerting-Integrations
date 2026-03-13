@@ -533,7 +533,6 @@ print(f'Generated ${N_TENANTS} tenant configs → ${RB_TENANT_DIR}/')
         if [[ "${round}" -eq 1 ]]; then
           RB_LINES=$(echo "${RB_OUTPUT}" | wc -l)
           # Parse counts from summary line: "--- N route(s), M receiver(s), K inhibit rule(s) ---"
-          local summary_line
           summary_line=$(echo "${RB_OUTPUT}" | grep -E '--- [0-9]+ route' || echo "")
           if [[ -n "${summary_line}" ]]; then
             RB_ROUTES=$(echo "${summary_line}" | grep -oP '(\d+) route' | grep -oP '\d+')

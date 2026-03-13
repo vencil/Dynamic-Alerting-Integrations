@@ -1,8 +1,17 @@
+---
+title: "Dynamic Alerting Integrations"
+tags: [overview, introduction]
+audience: [all]
+version: v1.12.0
+lang: en
+---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.11.0 — Configuration-driven thresholds, zero PromQL for tenants, 12 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
+![Docs Coverage](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fvencil%2Fvibe-k8s-lab%2Fmain%2Fdocs%2Fassets%2Fdoc-coverage-badge.json&query=%24.message&label=docs%20coverage&color=brightgreen) ![Bilingual](https://img.shields.io/badge/bilingual-25%20pairs-blue) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-96-red)
+
+> **Enterprise-Grade Multi-Tenant Monitoring Governance Platform** v1.13.0 — Configuration-driven thresholds, zero PromQL for tenants, 15 pre-loaded rule packs, AST migration engine, full migration automation (Onboard → Scaffold → Shadow → Auto-Convergence → Cutover → Health Report), Config Diff Preview, PR Historical Backtest Bot, three operational modes, security guardrails (SSRF + Schema + Cardinality), HA deployment.
 
 ---
 
@@ -50,7 +59,7 @@ tenants:
 | Metric | Dynamic (Current) | Traditional @ 100 Tenants |
 |--------|-------------------|---------------------------|
 | Alert Rules | 56 (fixed) | 5,600 (56×100) |
-| Total Rules | 141 (12 Rule Packs) | 5,600+ |
+| Total Rules | 155 (15 Rule Packs) | 5,600+ |
 | **Evaluation Time per Cycle** | **~20ms** (5-round mean ± 1.9ms) | **~800ms+** (linear growth) |
 | Cost of Unused Rule Packs | Near zero | N/A |
 
@@ -79,7 +88,7 @@ docker run --rm -it ghcr.io/vencil/da-tools:1.11.0 scaffold --tenant my-app --db
 All rules packed in a single giant ConfigMap. Every threshold change = PR → review → CI/CD → Prometheus reload — an urgent threshold adjustment averages 2-4 hours to land, far too slow during an incident. Multi-team editing the same file = merge conflicts. Deployment requires cloning the repo, manually managing chart paths and image tag alignment.
 
 **✅ Our Solution:**
-12 independent Rule Pack ConfigMaps mounted via Projected Volume. Each team (DBA, SRE, K8s, Analytics) maintains their own rule pack independently. SHA-256 hash hot-reload — no Prometheus restart needed. Directory mode (`conf.d/`) supports per-tenant YAML files.
+15 independent Rule Pack ConfigMaps mounted via Projected Volume. Each team (DBA, SRE, K8s, Analytics) maintains their own rule pack independently. SHA-256 hash hot-reload — no Prometheus restart needed. Directory mode (`conf.d/`) supports per-tenant YAML files.
 
 On the deployment side: the Helm chart is published to an **OCI registry** — one command to install with the correct image version pre-bound. The base chart ships with empty tenant config (`tenants: {}`); tenant-specific settings are injected via `values-override.yaml`, cleanly separated.
 
@@ -143,7 +152,7 @@ Only one threshold per metric. Oracle DBAs need 85% for `USERS` tablespace and 9
 | **Low Onboarding Cost** | Tenants spend days learning PromQL; deployment requires cloning repo and version alignment | OCI Helm chart one-command deploy (`helm install oci://...`). `da-tools` container packages 20 CLIs — `docker pull` and go. `scaffold` generates config interactively | `docker run --rm ghcr.io/vencil/da-tools:1.11.0 scaffold` |
 | **Full Lifecycle Governance** | Tools for onboarding exist, but not for operations or offboarding → zombie rules accumulate | `scaffold` onboard → `patch_config` operate (with `--diff` preview) → `deprecate` / `offboard` retire. Three-tier governance + CI deny-list linting + PR backtest | `da-tools offboard <tenant> --dry-run` |
 | **Config-Driven Routing** | Notification targets hardcoded in Alertmanager config → changing one webhook requires editing central config | Tenant YAML `_routing` for self-service management of 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty) + Go template customization + CI validation | `da-tools generate-routes --validate` |
-| **12 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database/MQ type → reinventing the wheel | Covers 9 DB/MQ + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing. `analyze-gaps` auto-maps custom rules to official Rule Packs | `da-tools analyze-gaps --config-dir conf.d/` |
+| **15 Rule Packs Out-of-the-Box** | Writing monitoring rules from scratch for each database/MQ type → reinventing the wheel | Covers 9 DB/MQ + K8s + Platform self-monitoring + Operational. Projected Volume `optional: true` — unused packs cost nothing. `analyze-gaps` auto-maps custom rules to official Rule Packs | `da-tools analyze-gaps --config-dir conf.d/` |
 
 ---
 
@@ -164,7 +173,7 @@ graph LR
         T2_new[Tenant B<br>YAML only] --> TE
         TN_new[Tenant N<br>YAML only] --> TE
         TE --> P_new[Prometheus<br>M Rules only]
-        RP[12 Rule Packs<br>Projected Volume] --> P_new
+        RP[15 Rule Packs<br>Projected Volume] --> P_new
     end
 ```
 
@@ -197,7 +206,7 @@ graph TD
 
     subgraph PL["Platform Layer"]
         TE["threshold-exporter x2 HA<br/>Directory Scanner / Hot-Reload<br/>Three-State / SHA-256 Hash"]
-        RP["Projected Volume<br/>12 Independent Rule Packs<br/>mariadb | postgresql | redis | mongodb<br/>elasticsearch | oracle | db2 | clickhouse<br/>kafka | rabbitmq | platform | operational"]
+        RP["Projected Volume<br/>15 Independent Rule Packs<br/>kubernetes | mariadb | postgresql | redis | mongodb<br/>elasticsearch | oracle | db2 | clickhouse<br/>kafka | rabbitmq | jvm | nginx | platform | operational"]
     end
 
     subgraph PE["Prometheus Engine"]
@@ -261,7 +270,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 | Document | Description | Target Audience |
 |----------|-------------|-----------------|
 | [Architecture and Design](docs/architecture-and-design.en.md) | O(M) derivation, HA design, Projected Volume deep-dive | Platform Engineers, SREs |
-| [Rule Packs Directory](rule-packs/README.md) | 12 Rule Pack specifications, structure templates, exporter links | Everyone |
+| [Rule Packs Directory](rule-packs/README.md) | 15 Rule Pack specifications, structure templates, exporter links | Everyone |
 | [Threshold Exporter](components/threshold-exporter/README.md) | Component architecture, API endpoints, configuration format, development guide | Developers |
 | [BYOP Prometheus Integration Guide](docs/byo-prometheus-integration.md) | Minimum integration steps for existing Prometheus / Thanos clusters | Platform Engineers, SREs |
 | [BYOA Alertmanager Integration Blueprint](docs/byo-alertmanager-integration.md) | Alertmanager integration framework, dynamic reload roadmap, receiver expansion | Platform Engineers, SREs |
@@ -276,7 +285,7 @@ Ordered by reader journey: Understand → Deploy → Integrate → Migrate → G
 
 ## Rule Packs Directory
 
-12 Rule Packs are pre-loaded in Prometheus via Kubernetes **Projected Volume**, each with its own independent ConfigMap (`optional: true`), maintained separately by different teams:
+15 Rule Packs are pre-loaded in Prometheus via Kubernetes **Projected Volume**, each with its own independent ConfigMap (`optional: true`), maintained separately by different teams:
 
 | Rule Pack | Exporter | Rules | Status |
 |-----------|----------|-------|--------|
@@ -411,7 +420,7 @@ make help               # Show help message
 ├── k8s/
 │   ├── 00-namespaces/          # db-a, db-b, monitoring
 │   └── 03-monitoring/          # Prometheus, Grafana, Alertmanager
-│       ├── configmap-rules-*.yaml  # 12 independent Rule Pack ConfigMaps (including platform)
+│       ├── configmap-rules-*.yaml  # 15 independent Rule Pack ConfigMaps (including platform)
 │       └── deployment-prometheus.yaml  # Projected Volume architecture
 ├── rule-packs/                 # Modular Prometheus rule packs (authoritative reference)
 │   └── README.md               # Rule Pack specifications and templates
@@ -483,7 +492,7 @@ The Platform Rule Pack (`configmap-rules-platform.yaml`) provides 4 self-monitor
 
 - **O(M) Rule Complexity**: All alert rules use `group_left` vector matching — rule count depends only on metric types (M), not tenant count (N). 100 tenants add zero rules.
 - **TSDB Completeness First**: Severity Dedup is implemented at the Alertmanager inhibit layer (not PromQL `unless`), so TSDB always retains complete warning + critical records. Observability is never sacrificed for notification simplification.
-- **Projected Volume Isolation**: 12 Rule Pack ConfigMaps mounted independently (`optional: true`), each team maintains their own pack with zero PR conflicts. Deleting any ConfigMap does not affect Prometheus operation.
+- **Projected Volume Isolation**: 15 Rule Pack ConfigMaps mounted independently (`optional: true`), each team maintains their own pack with zero PR conflicts. Deleting any ConfigMap does not affect Prometheus operation.
 - **Config-Driven Full Chain**: From thresholds (YAML) → routing (`_routing`) → notifications (Alertmanager receiver) → behavior control (Silent/Maintenance) — everything is driven by tenant YAML. No need to touch PromQL or Alertmanager config.
 - **Dual-Side Consistency**: Go exporter and Python tools share identical constants (`RECEIVER_TYPES`, `GUARDRAILS`, `isDisabled` semantics), ensuring cross-language validation consistency.
 - **Security Guardrails Built-in**: Webhook Domain Allowlist (SSRF prevention), Tenant Key Schema Validation (typo silent-failure prevention), Cardinality Guard (metric explosion prevention) — all platform-level defaults, not optional add-ons.

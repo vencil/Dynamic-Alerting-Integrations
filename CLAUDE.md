@@ -1,12 +1,12 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v1.11.0)
+## 專案概覽 (v2.0.0-preview)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
-- **Prometheus**: Projected Volume 掛載 12 個 Rule Pack (`optional: true`)
+- **Prometheus**: Projected Volume 掛載 15 個 Rule Pack (`optional: true`)
 - **Alertmanager**: 動態 route/receiver/inhibit 產生 + `configmap-reload` sidecar 自動 reload
 - **三態運營模式**: Normal / Silent (`_silent_mode`) / Maintenance (`_state_maintenance`)，均支援 `expires` 自動失效
 - **Distribution**: OCI registry + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`)
@@ -33,10 +33,11 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | N:1 Tenant Mapping | `scaffold_tenant.py --namespaces` + relabel_configs snippet | §2.3 |
 | Regex 維度閾值 | `=~` 運算子，`_re` label 後綴 | §2.4 |
 | 排程式閾值 | `ScheduledValue` + `ResolveAt(now)` 跨午夜 | §2.5 |
-| Dynamic Runbook Injection | `_metadata` → `tenant_metadata_info` info metric → Rule Pack `group_left` 自動繼承 | §2.12 |
-| Recurring Maintenance | `_state_maintenance.recurring[]` cron+duration → `maintenance_scheduler.py` CronJob → AM silence | §2.13 |
+| Dynamic Runbook Injection | `_metadata` → `tenant_metadata_info` info metric → Rule Pack `group_left` 自動繼承 | `docs/getting-started/for-tenants.md` |
+| Recurring Maintenance | `_state_maintenance.recurring[]` cron+duration → `maintenance_scheduler.py` CronJob → AM silence | `docs/architecture-and-design.md` §2.7 |
 | Config Drift CI | `config_diff.py` exit codes → GitHub Actions / GitLab CI 模板 | `docs/gitops-deployment.md` |
-| Benchmark | idle / scaling-curve / under-load / routing / alertmanager / reload | §4.1–§4.11 |
+| Dual-Perspective Annotation | `platform_summary` + `summary` 雙視角 annotation → `_routing_enforced` NOC 通知 | `docs/scenarios/alert-routing-split.md` |
+| Benchmark | idle / scaling-curve / under-load / routing / alertmanager / reload | `docs/benchmarks.md` |
 | Federation | 場景 A 藍圖（中央 exporter + 邊緣 Prometheus） | `docs/federation-integration.md` |
 
 ## 開發規範
@@ -52,50 +53,15 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## 文件導覽
 
-| 文件 | 受眾 | 內容 |
-|------|------|------|
-| `README.md` / `README.en.md` | 技術主管、初訪者 | 痛點對比 + 企業價值 |
-| `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 完整架構 + Benchmark 數據 |
-| `docs/migration-guide.md` | Tenants, DevOps | 遷移步驟 + routing 說明 |
-| `docs/byo-prometheus-integration.md` | Platform Engineers | BYOP 最小整合 |
-| `docs/byo-alertmanager-integration.md` | Platform Engineers | Alertmanager 整合指引 |
-| `docs/custom-rule-governance.md` | Platform Leads | 三層治理模型 + CI Linting |
-| `docs/shadow-monitoring-sop.md` | SRE | Shadow Monitoring SOP |
-| `docs/gitops-deployment.md` | DevOps | ArgoCD/Flux + CODEOWNERS RBAC |
-| `docs/federation-integration.md` | Platform Engineers | Federation 場景 A 藍圖 |
-| `docs/internal/testing-playbook.md` | AI Agent | K8s 排錯 + Benchmark 方法論 |
-| `docs/internal/windows-mcp-playbook.md` | AI Agent | Dev Container + MCP 操作 |
-| `docs/internal/github-release-playbook.md` | AI Agent | Git push + GitHub Release 流程 |
-| `rule-packs/README.md` | All | 12 Rule Packs + optional 卸載 |
-| `k8s/03-monitoring/dynamic-alerting-overview.json` | SRE | Grafana Dashboard |
+完整文件對照表（43 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+
+快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (5 場景) | `docs/internal/` (Playbook + doc-map) | `docs/adr/` (5 ADRs)
 
 ## 工具 (scripts/tools/)
 
-| 工具 | 用途 |
-|------|------|
-| `patch_config.py` | ConfigMap 局部更新 + `--diff` preview |
-| `check_alert.py` | Alert 狀態查詢 |
-| `diagnose.py` | 單租戶健康檢查 |
-| `batch_diagnose.py` | 多租戶並行健康報告（Post-cutover） |
-| `onboard_platform.py` | 既有配置反向分析 + `onboard-hints.json` 產出 |
-| `migrate_rule.py` | 傳統規則遷移（AST + Triage + Prefix + Dictionary） |
-| `scaffold_tenant.py` | Tenant 配置產生器（互動 / CLI / `--from-onboard`） |
-| `validate_migration.py` | Shadow Monitoring 數值 diff + Auto-Convergence 偵測 |
-| `analyze_rule_pack_gaps.py` | Custom Rule → Rule Pack 覆蓋分析 |
-| `backtest_threshold.py` | 閾值變更歷史回測（Prometheus 7d replay） |
-| `offboard_tenant.py` | Tenant 下架 |
-| `deprecate_rule.py` | Rule/Metric 下架 |
-| `baseline_discovery.py` | 負載觀測 + 閾值建議 |
-| `bump_docs.py` | 版號一致性管理 |
-| `lint_custom_rules.py` | Custom Rule 治理 linter |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager fragment（含 `--apply` / `--validate` / `--output-configmap`） |
-| `validate_config.py` | 一站式配置驗證（YAML + schema + routes + policy + versions） |
-| `cutover_tenant.py` | Shadow Monitoring 一鍵切換（§7.1 全步驟自動化） |
-| `blind_spot_discovery.py` | Cluster targets 盲區掃描（Prometheus targets × tenant config 交叉比對） |
-| `config_diff.py` | 目錄級配置差異比對（GitOps PR review blast radius 報告） |
-| `maintenance_scheduler.py` | 排程式維護窗口 → Alertmanager silence 自動建立（CronJob） |
+完整工具表（42 個 Python 工具，分三類：運維 / DX Automation / 文件 CI）見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。
 
-共用函式庫：`scripts/tools/_lib_python.py`（Python 工具間共用）、`scripts/_lib.sh`（Shell scenario/benchmark 共用）。
+常用工具速查：`da-tools <cmd> --help` | CLI 完整參考見 [`docs/cli-reference.md`](docs/cli-reference.md)
 
 ## Makefile 速查
 
@@ -129,10 +95,42 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - **Prometheus/Alertmanager**: `port-forward` + `localhost:9090/9093`
 - **Python tests**: Cowork VM 可直接跑；Go tests 需在 Dev Container 內
 - **檔案清理**: `docker exec ... rm -f`（Cowork VM 無法直接 rm 掛載路徑）
-- **Playbooks**: `docs/internal/testing-playbook.md` | `docs/internal/windows-mcp-playbook.md` | `docs/internal/github-release-playbook.md`
+- **Dev Container 重啟**: 系統重開機後 `docker start vibe-dev-container`
+
+### Playbook 體系（必讀）
+
+每個操作領域都有對應的 Playbook，記錄累積的經驗、已知陷阱和標準做法。**開始任何非純程式碼的操作前，先讀對應 Playbook。**
+
+| Playbook | 涵蓋領域 | 何時讀 |
+|----------|---------|--------|
+| `docs/internal/testing-playbook.md` | K8s 排錯、負載注入、Benchmark 方法論、程式碼品質、SAST | 跑測試、benchmark、場景驗證、新增工具 |
+| `docs/internal/windows-mcp-playbook.md` | Docker exec 模式、Shell 陷阱、Port-forward、Helm 防衝突 | 任何 docker exec / K8s / Windows MCP 操作 |
+| `docs/internal/github-release-playbook.md` | Git push、Tag、GitHub Release、CI 觸發 | Release 流程 |
+
+### Playbook 維護原則
+
+Playbook 是 **living documents**，跟隨專案演進持續更新：
+
+1. **Lesson Learned 回寫**：每次遇到新陷阱或發現更好做法，立即更新對應 Playbook（不是下次再說）
+2. **新領域擴展**：專案新增技術領域（如新的 Rule Pack 類型、新的部署目標、新的 CI 工具）時，評估是否需要新 Playbook 或在既有 Playbook 新增章節
+3. **交叉引用**：Playbook 之間用相對連結互相引用，避免重複內容。每個 Playbook 頂部有 `相關文件` 導航
+4. **全局 vs 領域**：CLAUDE.md 只放指引級摘要（指向哪個 Playbook），詳細步驟和陷阱清單放 Playbook 內
+5. **驗證更新**：Playbook 內的數字（Rule Pack 數量、工具數量等）在版本升級時一併更新
+
+### 開發 Session 標準工作流
+
+1. **起手式**：`docker ps` 確認 Dev Container 運行 → 讀相關 Playbook
+2. **開發**：程式碼修改 → Go test / Python test → 場景驗證
+3. **Benchmark**：完整 benchmark（idle + routing + Go micro-bench）→ 記錄到 CHANGELOG + architecture docs
+4. **文件同步**：`bump_docs.py --check` → 更新 CLAUDE.md / README / CHANGELOG 的計數
+5. **Lesson Learned**：回寫 Playbook + CLAUDE.md
 
 ## 長期展望
 
-P2: Rule Pack 擴展、Federation B、1:N Mapping。
-P3: CRD/Operator、Log-to-Metric Bridge。
-詳見 `docs/architecture-and-design.md` §11。
+**已完成（v2.0.0-preview）：** DX Automation 四工具（`shadow_verify.py` / `byo_check.py` / `grafana_import.py` / `federation_check.py`）、cli-reference + cheat-sheet 新增 4 工具文件、文件正確性大修（6 對文件平均 -23% 精簡、移除捏造內容、手動 curl+jq 步驟改用 da-tools CLI）、CLAUDE.md 文件導覽提取至 doc-map.md。
+**已完成（v1.13.0）：** Dual-Perspective Annotation、文件大重構（6 專題 + 3 角色入門 + Context 圖）、全面雙語化（33 對 .en.md）、MkDocs Material 站點配置、文件 CI 工具鏈、互動式元件（Wizard + Playground + Rule Pack Selector + CLI Playground）、Conventional Commits、API 健康監控、Glossary + ADRs + JSON Schema + validate_all.py + Doc Includes。
+**已完成（v1.12.0）：** Rule Pack 擴展（JVM + Nginx）、Tenant Profiles Phase 1（四層繼承鏈）。
+P2: Federation B、1:N Mapping。
+P3: Sharded GitOps → Assembler Controller + Optional CRD（漸進式三層架構）、Log-to-Metric Bridge。
+P4: DX Automation — Grafana 自動截圖、Runbook 模板自動生成。
+詳見 `docs/architecture-and-design.md` §5。

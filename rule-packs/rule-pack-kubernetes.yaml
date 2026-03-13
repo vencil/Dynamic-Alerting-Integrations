@@ -112,6 +112,7 @@ groups:
           severity: warning
         annotations:
           summary: "High container CPU in {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU pressure — evaluate resource limits"
           description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -135,6 +136,7 @@ groups:
           severity: warning
         annotations:
           summary: "High container memory in {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container memory pressure — evaluate resource limits"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -165,6 +167,7 @@ groups:
           severity: critical
         annotations:
           summary: "Container crash loop detected in {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected — check deployment and image health"
           description: "{{ $value }} container(s) in CrashLoopBackOff state"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -190,6 +193,7 @@ groups:
           severity: warning
         annotations:
           summary: "Image pull failure detected in {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing — verify registry and image availability"
           description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"
 
           runbook_url: "{{ $labels.runbook_url }}"

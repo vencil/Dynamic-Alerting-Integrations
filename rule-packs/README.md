@@ -1,28 +1,37 @@
+---
+title: "Rule Packs — 模組化 Prometheus 規則"
+tags: [overview, introduction]
+audience: [all]
+version: v1.12.0
+lang: zh
+---
 # Rule Packs — 模組化 Prometheus 規則
 
 > 每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。
-> **所有 12 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
+> **所有 15 個 Rule Pack 已透過 Projected Volume 架構預載入 Prometheus 中** (分散於 `configmap-rules-*.yaml`)。
 > 未部署 exporter 的 pack 不會產生 metrics，因此 alert 不會誤觸發 (near-zero cost)。
 >
 > **其他文件：** [README](../README.md) (概覽) · [Migration Guide](../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../docs/architecture-and-design.md) (技術深度)
 
 ## 支援的整合 (Supported Integrations)
 
-| Rule Pack | Exporter | 狀態 | Recording Rules | Alert Rules |
-|-----------|----------|------|----------------|------------|
-| **kubernetes** | cAdvisor + kube-state-metrics | 🟢 預載 | 5 | 4 |
-| **mariadb** | mysqld_exporter (Percona) | 🟢 預載 | 7 | 8 |
-| **postgresql** | postgres_exporter (prometheus-community) | 🟢 預載 | 5 | 5 |
-| **redis** | oliver006/redis_exporter | 🟢 預載 | 7 | 6 |
-| **mongodb** | percona/mongodb_exporter | 🟢 預載 | 7 | 6 |
-| **elasticsearch** | elasticsearch_exporter | 🟢 預載 | 7 | 7 |
-| **oracle** | oracledb_exporter (iamseth) | 🟢 預載 | 6 | 7 |
-| **db2** | ibm_db2_exporter (community) | 🟢 預載 | 7 | 7 |
-| **clickhouse** | ClickHouse built-in /metrics | 🟢 預載 | 7 | 7 |
-| **kafka** | kafka_exporter (danielqsj) | 🟢 預載 | 7 | 7 |
-| **rabbitmq** | prometheus-rabbitmq-exporter | 🟢 預載 | 7 | 7 |
-| **operational** | threshold-exporter (user_silent_mode) | 🟢 預載 | 0 | 2 |
-| **platform** | threshold-exporter self-monitoring | 🟢 預載 | 0 | 4 |
+| Rule Pack | File | Recording Rules | Alert Rules | Total |
+|-----------|------|-----------------|-------------|-------|
+| Clickhouse | rule-pack-clickhouse.yaml | 12 | 7 | 19 |
+| DB2 | rule-pack-db2.yaml | 12 | 7 | 19 |
+| Elasticsearch | rule-pack-elasticsearch.yaml | 11 | 7 | 18 |
+| JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
+| Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
+| Kubernetes | rule-pack-kubernetes.yaml | 7 | 4 | 11 |
+| Mariadb | rule-pack-mariadb.yaml | 11 | 8 | 19 |
+| Mongodb | rule-pack-mongodb.yaml | 10 | 6 | 16 |
+| Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
+| Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
+| Oracle | rule-pack-oracle.yaml | 11 | 7 | 18 |
+| Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
+| Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
+| Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
+| **TOTAL** | | **139** | **95** | **234** |
 
 ## 架構說明
 
@@ -40,7 +49,7 @@
 
 ### 動態卸載 (optional: true)
 
-所有 12 個 Rule Pack 在 Projected Volume 中均設定 `optional: true`，這代表：
+所有 Rule Pack 在 Projected Volume 中均設定 `optional: true`，這代表：
 
 - **卸載不崩潰**: 刪除任何 Rule Pack 的 ConfigMap（`kubectl delete cm prometheus-rules-<type> -n monitoring`）後，Prometheus **不會 Crash**，只是對應的規則消失。
 - **適用場景**: 大型客戶可能有自己的規則體系，需要關閉平台的黃金標準 Rule Pack，改用 `custom_` 前綴的遷移規則或完全自訂的規則。

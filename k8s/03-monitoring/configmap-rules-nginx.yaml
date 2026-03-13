@@ -1,0 +1,197 @@
+# ============================================================
+# Nginx Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-nginx.yaml
+# Maintained by: Platform Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-nginx
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: nginx
+data:
+  nginx-recording.yml: |
+    groups:
+      - name: nginx-normalization
+        interval: 15s
+        rules:
+          - record: tenant:nginx_connections_active:max
+            expr: |
+              max by(tenant) (
+                nginx_connections_active
+              )
+          - record: tenant:nginx_requests:rate5m
+            expr: |
+              sum by(tenant) (
+                rate(nginx_http_requests_total[5m])
+              )
+          - record: tenant:nginx_connections_waiting:max
+            expr: |
+              max by(tenant) (
+                nginx_connections_waiting
+              )
+      - name: nginx-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:nginx_connections
+            expr: max by(tenant) (user_threshold{metric="nginx_connections", severity="warning"})
+          - record: tenant:alert_threshold:nginx_connections_critical
+            expr: max by(tenant) (user_threshold{metric="nginx_connections", severity="critical"})
+          - record: tenant:alert_threshold:nginx_request_rate
+            expr: max by(tenant) (user_threshold{metric="nginx_request_rate", severity="warning"})
+          - record: tenant:alert_threshold:nginx_request_rate_critical
+            expr: max by(tenant) (user_threshold{metric="nginx_request_rate", severity="critical"})
+          - record: tenant:alert_threshold:nginx_waiting
+            expr: max by(tenant) (user_threshold{metric="nginx_waiting", severity="warning"})
+          - record: tenant:alert_threshold:nginx_waiting_critical
+            expr: max by(tenant) (user_threshold{metric="nginx_waiting", severity="critical"})
+
+  nginx-alert.yml: |
+    groups:
+      - name: nginx-alerts
+        rules:
+          - alert: NginxHighConnections
+            expr: |
+              (
+                (
+                  tenant:nginx_connections_active:max
+                  > on(tenant) group_left
+                  tenant:alert_threshold:nginx_connections
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "nginx_connections"
+            annotations:
+              summary: "NginxHighConnections on {{ $labels.tenant }}"
+              description: "Active connections {{ $value }} exceeds threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: NginxHighConnectionsCritical
+            expr: |
+              (
+                (
+                  tenant:nginx_connections_active:max
+                  > on(tenant) group_left
+                  tenant:alert_threshold:nginx_connections_critical
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 3m
+            labels:
+              severity: critical
+              metric_group: "nginx_connections"
+            annotations:
+              summary: "NginxHighConnectionsCritical on {{ $labels.tenant }}"
+              description: "Active connections {{ $value }} exceeds critical threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: NginxRequestRateSpike
+            expr: |
+              (
+                (
+                  tenant:nginx_requests:rate5m
+                  > on(tenant) group_left
+                  tenant:alert_threshold:nginx_request_rate
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "nginx_request_rate"
+            annotations:
+              summary: "NginxRequestRateSpike on {{ $labels.tenant }}"
+              description: "Request rate {{ $value }} req/s exceeds threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: NginxRequestRateSpikeCritical
+            expr: |
+              (
+                (
+                  tenant:nginx_requests:rate5m
+                  > on(tenant) group_left
+                  tenant:alert_threshold:nginx_request_rate_critical
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 3m
+            labels:
+              severity: critical
+              metric_group: "nginx_request_rate"
+            annotations:
+              summary: "NginxRequestRateSpikeCritical on {{ $labels.tenant }}"
+              description: "Request rate {{ $value }} req/s exceeds critical threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: NginxConnectionBacklog
+            expr: |
+              (
+                (
+                  tenant:nginx_connections_waiting:max
+                  > on(tenant) group_left
+                  tenant:alert_threshold:nginx_waiting
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "nginx_waiting"
+            annotations:
+              summary: "NginxConnectionBacklog on {{ $labels.tenant }}"
+              description: "Waiting connections {{ $value }} exceeds threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: NginxConnectionBacklogCritical
+            expr: |
+              (
+                (
+                  tenant:nginx_connections_waiting:max
+                  > on(tenant) group_left
+                  tenant:alert_threshold:nginx_waiting_critical
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 3m
+            labels:
+              severity: critical
+              metric_group: "nginx_waiting"
+            annotations:
+              summary: "NginxConnectionBacklogCritical on {{ $labels.tenant }}"
+              description: "Waiting connections {{ $value }} exceeds critical threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"

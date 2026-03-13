@@ -236,6 +236,40 @@ RULE_PACKS = {
             "rabbitmq_queue_messages{queue=\"bulk-processing\"}": "500000",
         },
     },
+    # v1.12.0: JVM Rule Pack
+    "jvm": {
+        "display": "JVM (jmx_exporter / Micrometer)",
+        "exporter": "prometheus/jmx_exporter or Spring Boot Actuator",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-jvm.yaml",
+        "defaults": {
+            "jvm_gc_pause": {"value": 0.5, "unit": "seconds/5m", "desc": "GC pause duration rate warning"},
+            "jvm_memory": {"value": 80, "unit": "%", "desc": "Heap memory usage warning"},
+            "jvm_threads": {"value": 500, "unit": "count", "desc": "Active thread count warning"},
+        },
+        "optional_overrides": {
+            "jvm_gc_pause_critical": {"value": 1.0, "unit": "seconds/5m", "desc": "GC pause critical"},
+            "jvm_memory_critical": {"value": 95, "unit": "%", "desc": "Heap memory critical"},
+            "jvm_threads_critical": {"value": 800, "unit": "count", "desc": "Thread count critical"},
+        },
+    },
+    # v1.12.0: Nginx Rule Pack
+    "nginx": {
+        "display": "Nginx (nginx-prometheus-exporter)",
+        "exporter": "nginxinc/nginx-prometheus-exporter",
+        "default_on": False,
+        "rule_pack_file": "rule-packs/rule-pack-nginx.yaml",
+        "defaults": {
+            "nginx_connections": {"value": 1000, "unit": "count", "desc": "Active connections warning"},
+            "nginx_request_rate": {"value": 5000, "unit": "req/s", "desc": "Request rate warning"},
+            "nginx_waiting": {"value": 200, "unit": "count", "desc": "Waiting connections (backlog) warning"},
+        },
+        "optional_overrides": {
+            "nginx_connections_critical": {"value": 2000, "unit": "count", "desc": "Active connections critical"},
+            "nginx_request_rate_critical": {"value": 10000, "unit": "req/s", "desc": "Request rate critical"},
+            "nginx_waiting_critical": {"value": 500, "unit": "count", "desc": "Waiting connections critical"},
+        },
+    },
 }
 
 
@@ -286,6 +320,40 @@ def prompt_value(metric, info, current=None):
     if raw.lower() in ("skip", "disable"):
         return raw if raw.lower() == "disable" else None
     return raw
+
+
+def generate_profile(profile_name, selected_dbs, tier="prod"):
+    """Generate a _profiles.yaml skeleton with metric defaults for selected DBs.
+
+    Args:
+        profile_name: Profile name (e.g., "standard-mariadb-prod")
+        selected_dbs: List of DB type keys (e.g., ["kubernetes", "mariadb"])
+        tier: Environment tier hint for threshold adjustment
+              ("prod" = conservative, "staging" = relaxed)
+
+    Returns:
+        dict: {"profiles": {profile_name: {metric_key: value, ...}}}
+    """
+    profile = {}
+    tier_factor = 1.0 if tier == "prod" else 1.2  # staging: 20% more relaxed
+
+    for db in selected_dbs:
+        pack = RULE_PACKS.get(db)
+        if not pack:
+            continue
+        for key, info in pack.get("defaults", {}).items():
+            value = info["value"]
+            if isinstance(value, (int, float)) and tier_factor != 1.0:
+                value = type(info["value"])(value * tier_factor)
+            profile[key] = value
+
+        # Include optional overrides (critical tiers) as commented hints
+        # By placing them with actual values, the profile becomes a
+        # complete "standard" baseline that tenants only override selectively
+        for key, info in pack.get("optional_overrides", {}).items():
+            profile[key] = info["value"]
+
+    return {"profiles": {profile_name: profile}}
 
 
 def generate_defaults(selected_dbs):
@@ -650,10 +718,20 @@ def run_interactive(output_dir):
     if ns_input:
         namespaces = ns_input
 
+    # Step 5: Profile assignment (optional, v1.12.0)
+    profile_name = None
+    profile_input = input("\n🏷️  使用 Tenant Profile? (輸入 profile 名稱，空白跳過): ").strip()
+    if profile_input:
+        profile_name = profile_input
+
     # Generate
     print("\n⚙️  正在生成...")
     defaults_data = generate_defaults(selected_dbs)
     tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=interactive_thresholds)
+
+    # Add _profile if specified (v1.12.0)
+    if profile_name:
+        tenant_data["tenants"][tenant_name]["_profile"] = profile_name
 
     # Add _namespaces metadata if provided
     if namespaces:
@@ -691,6 +769,11 @@ def run_non_interactive(args):
     print(f"⚙️  生成 {tenant_name} config (DBs: {', '.join(selected_dbs)})...")
     defaults_data = generate_defaults(selected_dbs)
     tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=False)
+
+    # Apply --profile if specified (v1.12.0)
+    profile_name = getattr(args, "profile", None)
+    if profile_name:
+        tenant_data["tenants"][tenant_name]["_profile"] = profile_name
 
     # Apply --silent-mode if specified
     silent_mode = getattr(args, "silent_mode", None)
@@ -843,13 +926,50 @@ def main():
                         help="Group interval duration (e.g., 5m, range: 5s-5m)")
     parser.add_argument("--routing-repeat-interval",
                         help="Repeat interval duration (e.g., 4h, range: 1m-72h)")
+    parser.add_argument("--profile",
+                        help="Tenant profile name (e.g., standard-mariadb-prod). "
+                             "When set, tenant YAML will reference the named profile "
+                             "and only contain explicit overrides.")
     parser.add_argument("--from-onboard",
                         help="Path to onboard-hints.json (auto-scaffold from onboard results)")
+    parser.add_argument("--generate-profile",
+                        help="Generate a _profiles.yaml skeleton. Value is profile name "
+                             "(e.g., standard-mariadb-prod). Requires --db.")
+    parser.add_argument("--tier", choices=["prod", "staging"], default="prod",
+                        help="Environment tier for profile thresholds "
+                             "(prod=conservative, staging=relaxed 20%%). Default: prod")
 
     args = parser.parse_args()
 
     if args.catalog:
         print_catalog()
+        sys.exit(0)
+
+    if args.generate_profile:
+        if not args.db:
+            print("錯誤: --generate-profile 需要 --db 參數", file=sys.stderr)
+            sys.exit(1)
+        selected_dbs = ["kubernetes"] + [db.strip() for db in args.db.split(",")]
+        for db in selected_dbs:
+            if db not in RULE_PACKS:
+                print(f"錯誤: 不支援的 DB 類型 '{db}'", file=sys.stderr)
+                sys.exit(1)
+        profile_data = generate_profile(args.generate_profile, selected_dbs,
+                                        tier=args.tier)
+        output_dir = args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        profiles_path = os.path.join(output_dir, "_profiles.yaml")
+        with open(profiles_path, "w", encoding="utf-8") as f:
+            f.write("# _profiles.yaml — Tenant Profile definitions\n")
+            f.write("# Generated by scaffold_tenant.py --generate-profile\n")
+            f.write("# Four-layer inheritance: Defaults → Rule Pack → Profile → Tenant\n")
+            yaml.safe_dump(profile_data, f, default_flow_style=False,
+                           allow_unicode=True, sort_keys=False)
+        os.chmod(profiles_path, 0o600)
+        print(f"✅ Profile skeleton generated: {profiles_path}")
+        print(f"   Profile: {args.generate_profile} (tier={args.tier})")
+        print(f"   DBs: {', '.join(selected_dbs)}")
+        print(f"   Metrics: {len(profile_data['profiles'][args.generate_profile])} keys")
         sys.exit(0)
 
     if args.from_onboard:

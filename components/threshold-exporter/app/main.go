@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -58,8 +59,9 @@ func main() {
 	// Create metrics collector
 	collector := NewThresholdCollector(manager)
 
-	// Start config reload goroutine
-	go manager.WatchLoop(reloadInterval)
+	// Start config reload goroutine with stop channel
+	stopCh := make(chan struct{})
+	go manager.WatchLoop(reloadInterval, stopCh)
 
 	// HTTP handlers
 	mux := http.NewServeMux()
@@ -74,11 +76,13 @@ func main() {
 		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 3 * time.Second,
 		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    8192,
 	}
 
 	// Graceful shutdown
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		log.Printf("Listening on %s", listenAddr)
@@ -87,9 +91,19 @@ func main() {
 		}
 	}()
 
-	<-stop
+	<-sigCh
 	log.Println("Shutting down...")
-	server.Close()
+
+	// Stop WatchLoop goroutine
+	close(stopCh)
+
+	// Graceful HTTP shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+	log.Println("Server stopped")
 }
 
 // resolveConfigPath determines the config path based on flags and auto-detection.

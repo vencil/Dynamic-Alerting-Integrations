@@ -16,9 +16,21 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: prometheus
           image: prom/prometheus:v2.53.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus"
@@ -160,6 +172,22 @@ spec:
                       path: rabbitmq-recording.yml
                     - key: rabbitmq-alert.yml
                       path: rabbitmq-alert.yml
+              - configMap:
+                  name: prometheus-rules-jvm
+                  optional: true
+                  items:
+                    - key: jvm-recording.yml
+                      path: jvm-recording.yml
+                    - key: jvm-alert.yml
+                      path: jvm-alert.yml
+              - configMap:
+                  name: prometheus-rules-nginx
+                  optional: true
+                  items:
+                    - key: nginx-recording.yml
+                      path: nginx-recording.yml
+                    - key: nginx-alert.yml
+                      path: nginx-alert.yml
               - configMap:
                   name: prometheus-rules-platform
                   optional: true

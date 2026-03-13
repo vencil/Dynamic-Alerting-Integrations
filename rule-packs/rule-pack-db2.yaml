@@ -114,6 +114,7 @@ groups:
           severity: warning
         annotations:
           summary: "DB2 high active connections on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 connection usage high — pool sizing review"
           description: "{{ $value | printf \"%.0f\" }} active connections"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -137,6 +138,7 @@ groups:
           severity: warning
         annotations:
           summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 bufferpool hit ratio low — memory tuning review"
           description: "Hit ratio: {{ $value | printf \"%.4f\" }} — check bufferpool sizing"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -160,6 +162,7 @@ groups:
           severity: warning
         annotations:
           summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 transaction log usage high — log space review"
           description: "Log usage: {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -183,6 +186,7 @@ groups:
           severity: warning
         annotations:
           summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 deadlock rate elevated — application contention review"
           description: "{{ $value | printf \"%.1f\" }} deadlocks/sec"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -206,6 +210,7 @@ groups:
           severity: warning
         annotations:
           summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 tablespace nearing capacity — storage review"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -225,6 +230,7 @@ groups:
           severity: warning
         annotations:
           summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 sort overflow ratio high — SORTHEAP tuning review"
           description: "Sort overflow ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP"
 
           runbook_url: "{{ $labels.runbook_url }}"

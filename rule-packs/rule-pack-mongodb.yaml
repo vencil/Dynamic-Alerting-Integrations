@@ -105,6 +105,7 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB high connection count on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached — pool sizing review"
           description: "{{ $value }} current connections"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -128,6 +129,7 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB replication lag on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag — check replica health"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s behind primary"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -151,6 +153,7 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB high operation rate on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated — workload review"
           description: "{{ $value | printf \"%.0f\" }} ops/sec"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -170,6 +173,7 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB high page faults on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB page fault rate high — memory sizing review"
           description: "{{ $value | printf \"%.1f\" }} page faults/sec — check memory"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -189,6 +193,7 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation — capacity action needed"
           description: "{{ $value | printf \"%.0f\" }}% of connections used"
 
           runbook_url: "{{ $labels.runbook_url }}"

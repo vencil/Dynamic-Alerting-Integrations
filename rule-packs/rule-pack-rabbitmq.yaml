@@ -110,6 +110,7 @@ groups:
           metric_group: "rabbitmq_queue_messages"
         annotations:
           summary: "High RabbitMQ queue depth on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: queue depth threshold exceeded — consumer capacity review"
           description: "Messages ready: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -135,6 +136,7 @@ groups:
           metric_group: "rabbitmq_queue_messages"
         annotations:
           summary: "Critical RabbitMQ queue depth on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical queue depth — immediate consumer scaling needed"
           description: "Messages ready: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -159,6 +161,7 @@ groups:
           metric_group: "rabbitmq_node_mem_percent"
         annotations:
           summary: "High RabbitMQ memory usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ memory usage high — broker sizing review"
           description: "Memory used: {{ $value | printf \"%.1f\" }}% of limit (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -184,6 +187,7 @@ groups:
           metric_group: "rabbitmq_node_mem_percent"
         annotations:
           summary: "Critical RabbitMQ memory usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical RabbitMQ memory — broker at risk, escalate"
           description: "Memory used: {{ $value | printf \"%.1f\" }}% of limit (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -208,6 +212,7 @@ groups:
           metric_group: "rabbitmq_connections"
         annotations:
           summary: "High RabbitMQ connection count on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ connection count high — client pool review"
           description: "Active connections: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -232,6 +237,7 @@ groups:
           metric_group: "rabbitmq_consumers"
         annotations:
           summary: "Low RabbitMQ consumer count on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ consumer count low — consumer health check"
           description: "Active consumers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -256,6 +262,7 @@ groups:
           metric_group: "rabbitmq_unacked_messages"
         annotations:
           summary: "High unacknowledged messages on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: unacked messages piling up — consumer health check"
           description: "{{ $value | printf \"%.0f\" }} messages awaiting acknowledgment (consumer lag indicator)"
 
           runbook_url: "{{ $labels.runbook_url }}"

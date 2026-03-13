@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"sort"
 
@@ -82,6 +83,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		)
 		m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, t.Value, labelValues...)
 		if err != nil {
+			log.Printf("WARN: failed to create user_threshold metric for tenant=%s metric=%s: %v", t.Tenant, t.Metric, err)
 			continue
 		}
 		ch <- m
@@ -97,6 +99,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, sf := range cfg.ResolveStateFilters() {
 		m, err := prometheus.NewConstMetric(stateDesc, prometheus.GaugeValue, 1.0, sf.Tenant, sf.FilterName, sf.Severity)
 		if err != nil {
+			log.Printf("WARN: failed to create user_state_filter metric for tenant=%s filter=%s: %v", sf.Tenant, sf.FilterName, err)
 			continue
 		}
 		ch <- m
@@ -136,6 +139,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 			m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
 				sm.Tenant, "silence_expired", reason)
 			if err != nil {
+				log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", sm.Tenant, err)
 				continue
 			}
 			ch <- m
@@ -143,6 +147,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
 		if err != nil {
+			log.Printf("WARN: failed to create user_silent_mode metric for tenant=%s: %v", sm.Tenant, err)
 			continue
 		}
 		ch <- m
@@ -163,6 +168,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
 			me.Tenant, "maintenance_expired", reason)
 		if err != nil {
+			log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", me.Tenant, err)
 			continue
 		}
 		ch <- m
@@ -181,6 +187,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, sd := range cfg.ResolveSeverityDedup() {
 		m, err := prometheus.NewConstMetric(dedupDesc, prometheus.GaugeValue, 1.0, sd.Tenant, sd.Mode)
 		if err != nil {
+			log.Printf("WARN: failed to create user_severity_dedup metric for tenant=%s: %v", sd.Tenant, err)
 			continue
 		}
 		ch <- m
@@ -200,6 +207,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		m, err := prometheus.NewConstMetric(metadataDesc, prometheus.GaugeValue, 1.0,
 			md.Tenant, md.RunbookURL, md.Owner, md.Tier)
 		if err != nil {
+			log.Printf("WARN: failed to create tenant_metadata_info metric for tenant=%s: %v", md.Tenant, err)
 			continue
 		}
 		ch <- m

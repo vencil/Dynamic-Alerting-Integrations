@@ -1,4 +1,4 @@
-FROM python:3.12-alpine AS base
+FROM python:3.13-alpine AS base
 
 # ── Metadata ────────────────────────────────────────────────────────
 LABEL org.opencontainers.image.title="da-tools" \
@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
 # ── Dependencies ──────────────────────────────────────────────────────
-RUN pip install --no-cache-dir PyYAML==6.0.2 promql-parser==0.7.0 croniter==2.0.5
+RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.7.0 croniter==6.0.0
 
 # ── Copy tools ──────────────────────────────────────────────────────
 WORKDIR /opt/da-tools
@@ -25,6 +25,10 @@ RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \
     chmod +x /opt/da-tools/entrypoint.py
 
 ENV PROMETHEUS_URL=""
+
+RUN addgroup -g 65534 -S nonroot && \
+    adduser -S -D -H -u 65534 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
+USER nonroot:nonroot
 
 ENTRYPOINT ["python3", "/opt/da-tools/entrypoint.py"]
 CMD ["--help"]

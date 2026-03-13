@@ -1,7 +1,14 @@
+---
+title: "Multi-Tenant Custom Rule Governance Model"
+tags: [governance, custom-rules]
+audience: [platform-engineer]
+version: v1.13.0
+lang: en
+---
 # Multi-Tenant Custom Rule Governance Model
 
 > **Audience**: Platform Engineering, Domain Experts (DBA/Infra), Tenant Tech Leads
-> **Version**: v1.11.0
+> **Version**: 
 > **Related**: [Architecture and Design](architecture-and-design.en.md), [Rule Packs Directory](../rule-packs/README.md), [Migration Guide](migration-guide.md)
 
 ---
@@ -266,3 +273,10 @@ If a specific tenant's Tier 3 count keeps rising, this signals that Tier 2 scena
 | **Rule complexity** | O(M) | O(scenario count) | O(Custom count) |
 | **CI checks** | Automatic (three-state validation) | Rule Pack CI | Deny-list linting |
 | **Lifecycle** | Permanent | Permanent | Expiry date required |
+
+## Related Resources
+
+| Resource | Relevance |
+|----------|-----------|
+| ["多租戶客製化規則治理規範 (Custom Rule Governance Model)"](./custom-rule-governance.md) | ★★★ |
+| ["Governance, Audit & Security Compliance"](./governance-security.en.md) | ★★ |

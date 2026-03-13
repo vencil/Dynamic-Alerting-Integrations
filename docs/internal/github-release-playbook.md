@@ -1,3 +1,10 @@
+---
+title: "GitHub Release — 操作手冊 (Playbook)"
+tags: [documentation]
+audience: [all]
+version: v1.13.0
+lang: zh
+---
 # GitHub Release — 操作手冊 (Playbook)
 
 > AI Agent 透過 Cowork VM + Windows MCP 執行 git push、建立 GitHub Release 的流程與限制。
@@ -188,5 +195,13 @@ git push origin "tools/v<VERSION>"
 3. **語義校正**（sed 無法自動處理）：
    - da-tools README 版號策略表：Platform Git Tag、da-tools 說明（累加新命令）
    - architecture-and-design 底部版本戳：日期、功能摘要、CLI 命令數區間
-   - CHANGELOG 測試表：基線版對齊前一版（如 v1.9.0 → v1.10.0，非 v1.10.0 → v1.10.0）
+   - CHANGELOG 測試表：基線版對齊前一版（如 → v1.10.0，非 → v1.10.0）
 4. **驗證**: `grep -rn "OLD_VERSION"` → 0 命中；`bump_docs.py --check` → ✅
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["GitHub Release — 操作手冊 (Playbook)"](internal/github-release-playbook.md) | ⭐⭐ |
+| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](internal/testing-playbook.md) | ⭐⭐ |
+| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](internal/windows-mcp-playbook.md) | ⭐⭐ |

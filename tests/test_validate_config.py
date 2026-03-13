@@ -262,5 +262,79 @@ class TestIntegration(unittest.TestCase):
                                 f"{r['check']} failed: {r['details']}")
 
 
+class TestProfilesCheck(unittest.TestCase):
+    """Check 6: Profile validation (v1.12.0 deep validation)."""
+
+    def test_valid_profile_passes(self):
+        """Well-formed profile with metric keys should pass."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+                yaml.dump({"profiles": {"standard": {
+                    "mysql_connections": 80,
+                    "redis_memory_used_bytes": 4294967296,
+                }}}, f)
+            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+                yaml.dump({"tenants": {"tenant-a": {
+                    "_profile": "standard"
+                }}}, f)
+            result = vc.check_profiles(d)
+            self.assertEqual(result["status"], vc.PASS)
+
+    def test_reserved_key_in_profile_warns(self):
+        """Profile containing reserved keys should warn."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+                yaml.dump({"profiles": {"bad-profile": {
+                    "mysql_connections": 80,
+                    "_routing": {"receiver": {"type": "webhook"}},
+                }}}, f)
+            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+                yaml.dump({"defaults": {}}, f)
+            result = vc.check_profiles(d)
+            self.assertEqual(result["status"], vc.WARN)
+            self.assertTrue(any("reserved key" in detail
+                                for detail in result["details"]))
+
+    def test_empty_profile_warns(self):
+        """Empty profile should warn."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+                yaml.dump({"profiles": {"empty-profile": {}}}, f)
+            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+                yaml.dump({"defaults": {}}, f)
+            result = vc.check_profiles(d)
+            self.assertEqual(result["status"], vc.WARN)
+            self.assertTrue(any("empty" in detail.lower()
+                                for detail in result["details"]))
+
+    def test_unknown_profile_ref_warns(self):
+        """Tenant referencing non-existent profile should warn."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_profiles.yaml"), "w") as f:
+                yaml.dump({"profiles": {"standard": {"mysql_connections": 80}}}, f)
+            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+                yaml.dump({"defaults": {}}, f)
+            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+                yaml.dump({"tenants": {"tenant-a": {
+                    "_profile": "nonexistent"
+                }}}, f)
+            result = vc.check_profiles(d)
+            self.assertEqual(result["status"], vc.WARN)
+            self.assertTrue(any("unknown profile" in detail
+                                for detail in result["details"]))
+
+    def test_no_profiles_file_passes(self):
+        """Missing _profiles.yaml should still pass (no profiles defined)."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_defaults.yaml"), "w") as f:
+                yaml.dump({"defaults": {}}, f)
+            with open(os.path.join(d, "tenant-a.yaml"), "w") as f:
+                yaml.dump({"tenants": {"tenant-a": {"mysql_connections": "80"}}}, f)
+            result = vc.check_profiles(d)
+            self.assertEqual(result["status"], vc.PASS)
+
+
 if __name__ == "__main__":
     unittest.main()

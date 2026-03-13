@@ -18,6 +18,10 @@ spec:
         app: mariadb
         instance: {{ .Values.instance }}
     spec:
+      securityContext:
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         # --- MariaDB ---
         - name: mariadb
@@ -38,12 +42,15 @@ spec:
             - name: initdb
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
+            - name: mysql-auth
+              mountPath: /etc/mysql/credentials
+              readOnly: true
           livenessProbe:
             exec:
               command:
                 - bash
                 - -c
-                - mariadb -u root -p"${MARIADB_ROOT_PASSWORD}" -e "SELECT 1"
+                - mariadb --defaults-file=/etc/mysql/credentials/.my.cnf -e "SELECT 1"
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -53,7 +60,7 @@ spec:
               command:
                 - bash
                 - -c
-                - mariadb -u root -p"${MARIADB_ROOT_PASSWORD}" -e "SELECT 1"
+                - mariadb --defaults-file=/etc/mysql/credentials/.my.cnf -e "SELECT 1"
             initialDelaySeconds: 15
             periodSeconds: 5
             timeoutSeconds: 3
@@ -68,6 +75,11 @@ spec:
         # --- mysqld_exporter sidecar ---
         - name: mysqld-exporter
           image: {{ .Values.exporter.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - --mysqld.address=127.0.0.1:3306
             - --mysqld.username={{ .Values.mariadb.exporterUser }}
@@ -113,3 +125,10 @@ spec:
         - name: initdb
           configMap:
             name: mariadb-init
+        - name: mysql-auth
+          secret:
+            secretName: mariadb-credentials
+            items:
+              - key: MY_CNF
+                path: .my.cnf
+            defaultMode: 0400

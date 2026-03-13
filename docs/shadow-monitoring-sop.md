@@ -1,3 +1,10 @@
+---
+title: "Shadow Monitoring SRE SOP"
+tags: [migration, shadow-monitoring, sop]
+audience: [sre, platform-engineer]
+version: v1.13.0
+lang: zh
+---
 # Shadow Monitoring SRE SOP
 
 > **受眾**: SRE / Platform Engineer / DevOps
@@ -31,15 +38,13 @@ python3 scripts/tools/validate_config.py --config-dir components/threshold-expor
 ### 2.2 確認新規則已載入
 
 ```bash
-# 確認 Prometheus 已載入新規則
-curl -s http://localhost:9090/api/v1/rules | \
-  python3 -c "import sys,json; rules=json.load(sys.stdin)['data']['groups']; \
-  print(f'Rule groups: {len(rules)}'); \
-  [print(f'  {g[\"name\"]}: {len(g[\"rules\"])} rules') for g in rules]"
-
-# 確認 prefix-mapping.yaml 存在（migrate 產出）
-ls -la migration_output/prefix-mapping.yaml
+# 自動化前置檢查（規則載入 + mapping + AM 攔截）
+da-tools shadow-verify preflight \
+  --mapping migration_output/prefix-mapping.yaml \
+  --prometheus http://localhost:9090
 ```
+
+> 手動替代：`curl -s http://localhost:9090/api/v1/rules | python3 -c "..."` + `ls -la migration_output/prefix-mapping.yaml`
 
 ### 2.3 Alertmanager 攔截設定
 
@@ -150,21 +155,16 @@ spec:
 ### 4.1 巡檢操作
 
 ```bash
-# 1. 查看最新 CSV 報告
-tail -20 validation_output/validation-report.csv
+# 一鍵巡檢（mismatch 統計 + tenant 覆蓋率 + 運營模式）
+da-tools shadow-verify runtime \
+  --report-csv validation_output/validation-report.csv \
+  --prometheus http://localhost:9090
 
-# 2. 快速統計 mismatch
-grep "mismatch" validation_output/validation-report.csv | wc -l
-
-# 3. 若使用 K8s Job，查看 Job 日誌
+# 若使用 K8s Job，查看 Job 日誌
 kubectl logs job/shadow-monitor -n monitoring --tail=50
-
-# 4. 租戶健康檢查（確認 exporter 正常 + 運營模式）
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.11.0 \
-  diagnose db-a
 ```
 
-`diagnose` 輸出包含 `operational_mode` 欄位。若 tenant 處於 `silent` 或 `maintenance` 模式，shadow 比對數值仍有效，但切換後 alert 不會觸發，直到恢復為 `normal`。
+> `shadow-verify runtime` 會自動檢查 CSV 中的 mismatch 比例、tenant 覆蓋率，以及 Prometheus 中的 silent/maintenance 模式狀態。若 tenant 處於 `silent` 或 `maintenance` 模式，shadow 比對數值仍有效，但切換後 alert 不會觸發，直到恢復為 `normal`。
 
 ### 4.2 健康指標
 
@@ -244,17 +244,17 @@ kubectl apply -f shadow-monitor-job.yaml
 ### 6.2 收斂確認
 
 ```bash
-# 統計過去 7 天的 mismatch
-awk -F',' '$8 == "mismatch" {count++} END {print "Mismatches:", count+0}' \
-  validation_output/validation-report.csv
+# 一鍵收斂驗證（7 天 zero-mismatch + readiness JSON + 運營模式）
+da-tools shadow-verify convergence \
+  --report-csv validation_output/validation-report.csv \
+  --readiness-json validation_output/cutover-readiness.json \
+  --prometheus http://localhost:9090
 
-# 確認所有 tenant 都有比對
-awk -F',' 'NR>1 {tenants[$2]++} END {for(t in tenants) print t, tenants[t]}' \
-  validation_output/validation-report.csv
-
-# 確認 tenant 運營模式
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.11.0 diagnose db-a
-docker run --rm --network=host ghcr.io/vencil/da-tools:1.11.0 diagnose db-b
+# 或全階段一次執行
+da-tools shadow-verify all \
+  --mapping migration_output/prefix-mapping.yaml \
+  --report-csv validation_output/validation-report.csv \
+  --prometheus http://localhost:9090
 ```
 
 ## 7. 退出 Shadow Monitoring
@@ -371,6 +371,7 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
 | **Threshold backtest** ✅ | `backtest --git-diff --prometheus <url>` | PR 修改 threshold 時回測 7 天歷史數據，CI 自動產出風險評估 |
 | **Shadow Dashboard** ✅ | Grafana 掛載 `shadow-monitoring-dashboard.json`（見下方 §8.1） | 即時顯示 shadow rule 數量、per-tenant 狀態、old/new metric 對比趨勢、delta 收斂圖 |
 | **One-command cutover** ✅ | `da-tools cutover --readiness-json <path> --tenant <t>`（見 §7.1） | 單一指令完成切換全流程。支援 `--dry-run` 預覽、`--force` 跳過 readiness 檢查 |
+| **Shadow verify** ✅ | `da-tools shadow-verify <preflight\|runtime\|convergence\|all>` | 三階段自動驗證：前置檢查 + 巡檢 + 收斂判定，替代手動 curl + awk 操作 |
 
 ### 8.1 Shadow Dashboard 部署與使用
 
@@ -379,17 +380,13 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:1.11.0 \
 **匯入方式：**
 
 ```bash
-# 方式 A：Grafana UI 手動匯入
-# 1. 開啟 Grafana → 左側選單 → Dashboards → Import
-# 2. 上傳 shadow-monitoring-dashboard.json
-# 3. 選擇 Prometheus data source → Import
+# 方式 A：一鍵匯入（自動建立 ConfigMap + 標記 sidecar label）
+da-tools grafana-import \
+  --dashboard k8s/03-monitoring/shadow-monitoring-dashboard.json \
+  --namespace monitoring
 
-# 方式 B：ConfigMap 自動掛載（搭配 Grafana sidecar）
-kubectl create configmap shadow-dashboard \
-  --from-file=shadow-monitoring-dashboard.json=k8s/03-monitoring/shadow-monitoring-dashboard.json \
-  -n monitoring
-kubectl label configmap shadow-dashboard grafana_dashboard=1 -n monitoring
-# Grafana sidecar 會自動偵測並載入（需部署時已啟用 sidecar）
+# 方式 B：Grafana UI 手動匯入
+# 開啟 Grafana → Dashboards → Import → 上傳 JSON → 選擇 Prometheus data source
 ```
 
 **5 個 Panel 解讀：**
@@ -425,3 +422,16 @@ kubectl label configmap shadow-dashboard grafana_dashboard=1 -n monitoring
 │  清理：da-tools deprecate (支援批次) / rm 產物                │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ⭐⭐⭐ |
+| ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |
+| ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
+| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |

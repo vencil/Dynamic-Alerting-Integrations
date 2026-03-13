@@ -65,6 +65,13 @@ def _build_rules():
         "README.md",
         "README.en.md",
         "docs/shadow-monitoring-sop.md",
+        "docs/byo-alertmanager-integration.en.md",
+        "docs/byo-prometheus-integration.en.md",
+        "docs/shadow-monitoring-sop.en.md",
+        "docs/migration-guide.en.md",
+        # Include snippets (single-source for embedded content)
+        "docs/includes/docker-usage-pattern.md",
+        "docs/includes/docker-usage-pattern.en.md",
     ]
 
     tools_rules = []
@@ -161,6 +168,12 @@ def _build_rules():
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
+            "file": "docs/gitops-deployment.en.md",
+            "desc": "OCI chart --version in gitops deployment guide (en)",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
             "file": "components/da-tools/README.md",
             "desc": "exporter version in da-tools strategy table",
             "pattern": r"\| threshold-exporter \| v[0-9]+\.[0-9]+\.[0-9]+",
@@ -241,10 +254,36 @@ def _build_rules():
         "replacement": lambda v: f"**版本**：v{v}",
     })
 
+    # English doc version headers (BYO guides and gitops)
+    platform_rules.append({
+        "file": "docs/byo-prometheus-integration.en.md",
+        "desc": "BYOP guide (en) version",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**Version**: v{v}",
+    })
+    platform_rules.append({
+        "file": "docs/byo-alertmanager-integration.en.md",
+        "desc": "BYO Alertmanager guide (en) version",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**Version**: v{v}",
+    })
+    platform_rules.append({
+        "file": "docs/gitops-deployment.en.md",
+        "desc": "gitops-deployment.en.md version header",
+        "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**Version**: v{v}",
+    })
+
     # Federation integration guide version header
     platform_rules.append({
         "file": "docs/federation-integration.md",
         "desc": "federation-integration.md version header",
+        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*",
+        "replacement": lambda v: f"> **v{v}**",
+    })
+    platform_rules.append({
+        "file": "docs/federation-integration.en.md",
+        "desc": "federation-integration.en.md version header",
         "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*",
         "replacement": lambda v: f"> **v{v}**",
     })
@@ -279,6 +318,34 @@ def _build_rules():
         "desc": "da-tools version strategy table (platform row)",
         "pattern": r"\| 平台文件 \| v[0-9]+\.[0-9]+\.[0-9]+",
         "replacement": lambda v: f"| 平台文件 | v{v}",
+    })
+
+    # Front matter `version: vX.Y.Z` in all docs/ .md files
+    # Uses a glob scan instead of per-file rules
+    platform_rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "front matter version: in docs/*.md",
+        "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+\.[0-9]+(?=\n)",
+        "replacement": lambda v: f"version: v{v}",
+    })
+
+    # cli-reference da-tools container image version in header
+    for f in ("docs/cli-reference.md", "docs/cli-reference.en.md"):
+        platform_rules.append({
+            "file": f,
+            "desc": f"cli-reference container image version in {f}",
+            "pattern": r"ghcr\.io/vencil/da-tools:v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+        })
+
+    # mkdocs.yml extra.platform_version / tools_version
+    platform_rules.append({
+        "file": "mkdocs.yml",
+        "desc": "mkdocs.yml extra.platform_version",
+        "pattern": r'platform_version:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+        "replacement": lambda v: f'platform_version: "{v}"',
     })
 
     # README.md / README.en.md intro version
@@ -334,8 +401,28 @@ def read_current_versions():
     return versions
 
 
+def _expand_glob_rules(rules):
+    """Expand __glob__ rules into per-file rules."""
+    expanded = []
+    for rule in rules:
+        if rule.get("file") == "__glob__":
+            glob_dir = REPO_ROOT / rule["glob_dir"]
+            for fpath in sorted(glob_dir.glob(rule["glob_pattern"])):
+                rel = fpath.relative_to(REPO_ROOT)
+                expanded.append({
+                    "file": str(rel),
+                    "desc": f"front matter version in {rel}",
+                    "pattern": rule["pattern"],
+                    "replacement": rule["replacement"],
+                })
+        else:
+            expanded.append(rule)
+    return expanded
+
+
 def apply_rules(rules, new_version, check_only=False):
     """Apply a set of replacement rules. Returns (changes_count, details)."""
+    rules = _expand_glob_rules(rules)
     changes = []
     for rule in rules:
         fpath = REPO_ROOT / rule["file"]

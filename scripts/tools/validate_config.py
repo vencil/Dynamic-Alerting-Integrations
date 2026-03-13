@@ -38,7 +38,7 @@ import sys
 
 import yaml
 
-from _lib_python import load_yaml_file  # noqa: E402
+from _lib_python import load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES  # noqa: E402
 
 # ============================================================
 # Check results
@@ -221,7 +221,104 @@ def check_custom_rules(rule_packs_dir, policy_file=None):
 
 
 # ============================================================
-# Check 6: Version consistency
+# Check 6: Profile references (v1.12.0)
+# ============================================================
+def _is_reserved_key(key):
+    """Check if a key is a reserved tenant config key (starts with _)."""
+    if key in VALID_RESERVED_KEYS:
+        return True
+    for prefix in VALID_RESERVED_PREFIXES:
+        if key.startswith(prefix):
+            return True
+    return False
+
+
+def check_profiles(config_dir):
+    """Validate tenant _profile references and profile structure.
+
+    Checks:
+      - Tenant _profile references point to defined profiles
+      - Profile keys don't use reserved prefixes (_, _routing, _state_)
+      - Profile values are valid types (numeric, string, dict for scheduled)
+      - Profiles have at least one metric key
+    """
+    profiles_path = os.path.join(config_dir, "_profiles.yaml")
+    profiles_raw = load_yaml_file(profiles_path, default={})
+    profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
+
+    # Load defaults for cross-referencing
+    defaults_path = os.path.join(config_dir, "_defaults.yaml")
+    defaults_raw = load_yaml_file(defaults_path, default={})
+    known_defaults = set()
+    if isinstance(defaults_raw, dict):
+        known_defaults = set(defaults_raw.get("defaults", {}).keys())
+
+    warnings = []
+    tenant_count = 0
+    profile_ref_count = 0
+
+    # ── Profile structure validation ──
+    for p_name, p_data in profiles.items():
+        if not isinstance(p_data, dict):
+            warnings.append(f"profile={p_name}: value is not a mapping (got {type(p_data).__name__})")
+            continue
+
+        if not p_data:
+            warnings.append(f"profile={p_name}: empty profile (no metric keys)")
+            continue
+
+        for key in p_data:
+            # Reserved keys should not be in profiles (they belong in tenant config)
+            if key.startswith("_"):
+                if _is_reserved_key(key):
+                    warnings.append(
+                        f"profile={p_name}: contains reserved key \"{key}\" "
+                        f"(reserved keys belong in tenant config, not profiles)")
+                else:
+                    warnings.append(
+                        f"profile={p_name}: contains unknown reserved key \"{key}\"")
+
+    # ── Tenant _profile reference validation ──
+    for fname in sorted(os.listdir(config_dir)):
+        if not fname.endswith((".yaml", ".yml")):
+            continue
+        if fname.startswith("_") or fname.startswith("."):
+            continue
+        fpath = os.path.join(config_dir, fname)
+        raw = load_yaml_file(fpath, default={})
+        if not isinstance(raw, dict):
+            continue
+
+        tenants = {}
+        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
+            tenants = raw["tenants"]
+        else:
+            tenant = fname.rsplit(".", 1)[0]
+            tenants = {tenant: raw}
+
+        for t_name, t_data in tenants.items():
+            if not isinstance(t_data, dict):
+                continue
+            tenant_count += 1
+            profile = t_data.get("_profile")
+            if not profile or not isinstance(profile, str):
+                continue
+            profile_ref_count += 1
+            profile = profile.strip()
+            if profile and profile not in profiles:
+                warnings.append(
+                    f"tenant={t_name}: _profile references unknown profile "
+                    f"\"{profile}\"")
+
+    if warnings:
+        return _make_result("profiles", WARN, warnings)
+    details = [f"{tenant_count} tenants scanned, {profile_ref_count} profile refs, "
+               f"{len(profiles)} profiles defined"]
+    return _make_result("profiles", PASS, details)
+
+
+# ============================================================
+# Check 7: Version consistency
 # ============================================================
 def check_versions():
     """Run bump_docs.py --check for version consistency."""
@@ -332,7 +429,10 @@ def main():
     if args.rule_packs:
         results.append(check_custom_rules(args.rule_packs, args.policy))
 
-    # 6. Version consistency (if requested)
+    # 6. Profile references (v1.12.0)
+    results.append(check_profiles(args.config_dir))
+
+    # 7. Version consistency (if requested)
     if args.version_check:
         results.append(check_versions())
 

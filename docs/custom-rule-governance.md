@@ -1,7 +1,14 @@
+---
+title: "多租戶客製化規則治理規範 (Custom Rule Governance Model)"
+tags: [governance, custom-rules]
+audience: [platform-engineer]
+version: v1.13.0
+lang: zh
+---
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
-> **版本**: v1.11.0
+> **版本**: 
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](../rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---
@@ -77,7 +84,7 @@ tenants:
         api_url: "https://hooks.slack.com/services/..."
       group_wait: "30s"                # 5s–5m，平台 guardrails 自動 clamp
       repeat_interval: "4h"            # 1m–72h
-      # Per-rule override（v1.8.0）— 特定 alert 走不同 receiver
+      # Per-rule override— 特定 alert 走不同 receiver
       overrides:
         - alertname: "MariaDBReplicationLag"
           receiver:
@@ -289,3 +296,10 @@ flowchart TD
 | **CI 檢查** | Schema 驗證 + Route 驗證 | Rule Pack CI | Deny-list linting |
 | **生命週期** | 永久 | 永久 | 帶 expiry date |
 | **工具** | `scaffold` / `patch_config` | Rule Pack YAML | `lint` / `validate-config` |
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["Multi-Tenant Custom Rule Governance Model"](./custom-rule-governance.en.md) | ⭐⭐⭐ |
+| ["治理、稽核與安全合規"](./governance-security.md) | ⭐⭐ |

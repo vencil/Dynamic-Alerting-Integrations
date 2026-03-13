@@ -1,0 +1,223 @@
+# ============================================================
+# JVM Rule Pack — Recording Rules & Alert Rules
+# Canonical source: rule-packs/rule-pack-jvm.yaml
+# Maintained by: Platform Team
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-jvm
+  namespace: monitoring
+  labels:
+    app: prometheus
+    rule-pack: jvm
+data:
+  jvm-recording.yml: |
+    groups:
+      - name: jvm-normalization
+        interval: 15s
+        rules:
+          - record: tenant:jvm_gc_pause:rate5m
+            expr: |
+              sum by(tenant) (
+                rate(jvm_gc_pause_seconds_sum[5m])
+              )
+          - record: tenant:jvm_memory_used:percent
+            expr: |
+              max by(tenant) (
+                jvm_memory_used_bytes{area="heap"}
+                / jvm_memory_max_bytes{area="heap"}
+                * 100
+              )
+          - record: tenant:jvm_threads:current
+            expr: |
+              max by(tenant) (
+                jvm_threads_current
+              )
+      - name: jvm-threshold-normalization
+        interval: 15s
+        rules:
+          - record: tenant:alert_threshold:jvm_gc_pause
+            expr: max by(tenant) (user_threshold{metric="jvm_gc_pause", severity="warning"})
+          - record: tenant:alert_threshold:jvm_gc_pause_critical
+            expr: max by(tenant) (user_threshold{metric="jvm_gc_pause", severity="critical"})
+          - record: tenant:alert_threshold:jvm_memory
+            expr: max by(tenant) (user_threshold{metric="jvm_memory", severity="warning"})
+          - record: tenant:alert_threshold:jvm_memory_critical
+            expr: max by(tenant) (user_threshold{metric="jvm_memory", severity="critical"})
+          - record: tenant:alert_threshold:jvm_threads
+            expr: max by(tenant) (user_threshold{metric="jvm_threads", severity="warning"})
+          - record: tenant:alert_threshold:jvm_threads_critical
+            expr: max by(tenant) (user_threshold{metric="jvm_threads", severity="critical"})
+
+  jvm-alert.yml: |
+    groups:
+      - name: jvm-alerts
+        rules:
+          - alert: JVMHighGCPause
+            expr: |
+              (
+                (
+                  tenant:jvm_gc_pause:rate5m
+                  > on(tenant) group_left
+                  tenant:alert_threshold:jvm_gc_pause
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "jvm_gc_pause"
+            annotations:
+              summary: "JVMHighGCPause on {{ $labels.tenant }}"
+              description: "GC pause rate {{ $value }}s/5m exceeds threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: JVMHighGCPauseCritical
+            expr: |
+              (
+                (
+                  tenant:jvm_gc_pause:rate5m
+                  > on(tenant) group_left
+                  tenant:alert_threshold:jvm_gc_pause_critical
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 3m
+            labels:
+              severity: critical
+              metric_group: "jvm_gc_pause"
+            annotations:
+              summary: "JVMHighGCPauseCritical on {{ $labels.tenant }}"
+              description: "GC pause rate {{ $value }}s/5m exceeds critical threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: JVMMemoryPressure
+            expr: |
+              (
+                (
+                  tenant:jvm_memory_used:percent
+                  > on(tenant) group_left
+                  tenant:alert_threshold:jvm_memory
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "jvm_memory"
+            annotations:
+              summary: "JVMMemoryPressure on {{ $labels.tenant }}"
+              description: "Heap usage {{ $value }}% exceeds threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: JVMMemoryPressureCritical
+            expr: |
+              (
+                (
+                  tenant:jvm_memory_used:percent
+                  > on(tenant) group_left
+                  tenant:alert_threshold:jvm_memory_critical
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 3m
+            labels:
+              severity: critical
+              metric_group: "jvm_memory"
+            annotations:
+              summary: "JVMMemoryPressureCritical on {{ $labels.tenant }}"
+              description: "Heap usage {{ $value }}% exceeds critical threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: JVMThreadPoolExhaustion
+            expr: |
+              (
+                (
+                  tenant:jvm_threads:current
+                  > on(tenant) group_left
+                  tenant:alert_threshold:jvm_threads
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: warning
+              metric_group: "jvm_threads"
+            annotations:
+              summary: "JVMThreadPoolExhaustion on {{ $labels.tenant }}"
+              description: "Active threads {{ $value }} exceeds threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: JVMThreadPoolExhaustionCritical
+            expr: |
+              (
+                (
+                  tenant:jvm_threads:current
+                  > on(tenant) group_left
+                  tenant:alert_threshold:jvm_threads_critical
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 3m
+            labels:
+              severity: critical
+              metric_group: "jvm_threads"
+            annotations:
+              summary: "JVMThreadPoolExhaustionCritical on {{ $labels.tenant }}"
+              description: "Active threads {{ $value }} exceeds critical threshold"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"
+
+          - alert: JVMPerformanceDegraded
+            expr: |
+              (
+                (
+                  tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
+                  and on(tenant)
+                  tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
+                )
+                unless on(tenant)
+                (user_state_filter{filter="maintenance"} == 1)
+              )
+              * on(tenant) group_left(runbook_url, owner, tier)
+                tenant_metadata_info
+            for: 5m
+            labels:
+              severity: critical
+              metric_group: "jvm_performance"
+            annotations:
+              summary: "JVMPerformanceDegraded on {{ $labels.tenant }}"
+              description: "Both GC pause and memory exceed thresholds — JVM performance degraded"
+              runbook_url: "{{ $labels.runbook_url }}"
+              owner: "{{ $labels.owner }}"
+              tier: "{{ $labels.tier }}"

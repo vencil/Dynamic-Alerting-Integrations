@@ -111,6 +111,7 @@ groups:
           metric_group: "kafka_consumer_lag"
         annotations:
           summary: "High Kafka consumer lag on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: consumer lag elevated — consumer capacity review"
           description: "Consumer lag: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -136,6 +137,7 @@ groups:
           metric_group: "kafka_consumer_lag"
         annotations:
           summary: "Critical Kafka consumer lag on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical consumer lag — immediate consumer scaling needed"
           description: "Consumer lag: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -160,6 +162,7 @@ groups:
           metric_group: "kafka_under_replicated_partitions"
         annotations:
           summary: "Under-replicated partitions detected on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: under-replicated partitions — broker health check"
           description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -185,6 +188,7 @@ groups:
           metric_group: "kafka_under_replicated_partitions"
         annotations:
           summary: "Critical under-replicated partitions on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical under-replication — data durability at risk, escalate"
           description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -209,6 +213,7 @@ groups:
           metric_group: "kafka_active_controllers"
         annotations:
           summary: "No active Kafka controller on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: no active Kafka controller — cluster leadership lost, escalate"
           description: "Active controllers: {{ $value | printf \"%.0f\" }} (expected at least 1)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -233,6 +238,7 @@ groups:
           metric_group: "kafka_broker_count"
         annotations:
           summary: "Low Kafka broker count on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: broker count below minimum — cluster availability at risk"
           description: "Active brokers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -257,6 +263,7 @@ groups:
           metric_group: "kafka_request_rate"
         annotations:
           summary: "High Kafka request rate on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: message rate threshold exceeded — throughput review"
           description: "Message rate: {{ $value | printf \"%.1f\" }} msg/s (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -282,6 +289,7 @@ groups:
           metric_group: "kafka_request_rate"
         annotations:
           summary: "Critical Kafka request rate on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical message rate — broker saturation risk, escalate"
           description: "Message rate: {{ $value | printf \"%.1f\" }} msg/s (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"

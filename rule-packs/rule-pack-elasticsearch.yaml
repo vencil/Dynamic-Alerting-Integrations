@@ -117,6 +117,7 @@ groups:
           severity: warning
         annotations:
           summary: "Elasticsearch cluster YELLOW on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES cluster YELLOW — replica shards unassigned"
           description: "Some replica shards are unassigned"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -140,6 +141,7 @@ groups:
           severity: warning
         annotations:
           summary: "Elasticsearch high heap usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES heap usage high — JVM sizing review"
           description: "JVM heap: {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -163,6 +165,7 @@ groups:
           severity: warning
         annotations:
           summary: "Elasticsearch high disk usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES disk usage high — storage capacity review"
           description: "Disk usage: {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -186,6 +189,7 @@ groups:
           severity: warning
         annotations:
           summary: "Elasticsearch high search latency on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES search latency elevated — query/index optimization review"
           description: "Average search latency: {{ $value | printf \"%.0f\" }}ms"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -205,6 +209,7 @@ groups:
           severity: warning
         annotations:
           summary: "Elasticsearch has unassigned shards on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES unassigned shards — check node capacity"
           description: "{{ $value }} unassigned shards — check node capacity"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -228,6 +233,7 @@ groups:
           severity: warning
         annotations:
           summary: "Elasticsearch pending cluster tasks on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES pending cluster tasks — cluster overload review"
           description: "{{ $value }} pending tasks — cluster may be overloaded"
 
           runbook_url: "{{ $labels.runbook_url }}"

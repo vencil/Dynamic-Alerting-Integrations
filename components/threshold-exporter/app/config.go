@@ -280,10 +280,11 @@ func parseHHMM(s string) (int, int, error) {
 const DefaultMaxMetricsPerTenant = 500
 
 type ThresholdConfig struct {
-	Defaults            map[string]float64                  `yaml:"defaults"`
-	StateFilters        map[string]StateFilter              `yaml:"state_filters"`
+	Defaults            map[string]float64                   `yaml:"defaults"`
+	StateFilters        map[string]StateFilter               `yaml:"state_filters"`
 	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
-	MaxMetricsPerTenant int                                 `yaml:"max_metrics_per_tenant"`
+	Profiles            map[string]map[string]ScheduledValue `yaml:"profiles"`
+	MaxMetricsPerTenant int                                  `yaml:"max_metrics_per_tenant"`
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
@@ -837,8 +838,9 @@ func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 var validReservedKeys = map[string]bool{
 	"_silent_mode":    true,
 	"_severity_dedup": true,
-	"_namespaces":     true, // v1.8.0: metadata for N:1 tenant mapping tooling
-	"_metadata":       true, // v1.11.0: tenant metadata (runbook_url, owner, tier) → tenant_metadata_info metric
+	"_namespaces":     true,  // v1.8.0: metadata for N:1 tenant mapping tooling
+	"_metadata":       true,  // v1.11.0: tenant metadata (runbook_url, owner, tier) → tenant_metadata_info metric
+	"_profile":        true,  // v1.12.0: tenant profile reference for four-layer inheritance
 }
 
 // validReservedPrefixes lists prefixes for tenant config keys with special meaning.
@@ -854,6 +856,19 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 	var warnings []string
 
 	for tenant, overrides := range c.Tenants {
+		// Validate _profile reference (v1.12.0)
+		// Note: applyProfiles() also warns on unknown profiles during merging.
+		// This check ensures validation is complete even if applyProfiles is skipped.
+		if sv, exists := overrides["_profile"]; exists {
+			profileName := strings.TrimSpace(sv.Default)
+			if profileName != "" {
+				if _, found := c.Profiles[profileName]; !found {
+					warnings = append(warnings, fmt.Sprintf(
+						"WARN: tenant=%s: _profile references unknown profile %q", tenant, profileName))
+				}
+			}
+		}
+
 		for key := range overrides {
 			// Known reserved key
 			if validReservedKeys[key] {
@@ -914,6 +929,49 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 	}
 
 	return warnings
+}
+
+// applyProfiles expands profile values into tenant overrides (fill-in, not overwrite).
+// For each tenant with _profile: "<name>", profile keys that are NOT already set
+// by the tenant are copied into the tenant's overrides map.
+//
+// Four-layer inheritance chain (v1.12.0):
+//  1. Global Defaults (_defaults.yaml) — handled by Resolve fallback
+//  2. Rule Pack Baseline — embedded in defaults
+//  3. Profile Overlay (_profiles.yaml) — expanded HERE into tenant overrides
+//  4. Tenant Override (tenant-*.yaml) — already in overrides, never overwritten
+//
+// This approach ensures all existing Resolve* functions work unchanged —
+// they see a single merged overrides map without knowing about profiles.
+func (c *ThresholdConfig) applyProfiles() {
+	if len(c.Profiles) == 0 {
+		return
+	}
+
+	for tenant, overrides := range c.Tenants {
+		sv, exists := overrides["_profile"]
+		if !exists {
+			continue
+		}
+
+		profileName := strings.TrimSpace(sv.Default)
+		if profileName == "" {
+			continue
+		}
+
+		profile, found := c.Profiles[profileName]
+		if !found {
+			log.Printf("WARN: tenant=%s references unknown profile %q, ignoring", tenant, profileName)
+			continue
+		}
+
+		// Fill-in: copy profile keys that the tenant has NOT overridden
+		for key, profileValue := range profile {
+			if _, tenantHas := overrides[key]; !tenantHas {
+				overrides[key] = profileValue
+			}
+		}
+	}
 }
 
 // RoutingConfig represents a tenant's alert routing preferences.
@@ -1272,6 +1330,12 @@ func (m *ConfigManager) Load() error {
 	if cfg.StateFilters == nil {
 		cfg.StateFilters = make(map[string]StateFilter)
 	}
+	if cfg.Profiles == nil {
+		cfg.Profiles = make(map[string]map[string]ScheduledValue)
+	}
+
+	// Expand profile values into tenant overrides (v1.12.0)
+	cfg.applyProfiles()
 
 	m.mu.Lock()
 	m.config = &cfg
@@ -1283,8 +1347,8 @@ func (m *ConfigManager) Load() error {
 	resolved := cfg.Resolve()
 	resolvedState := cfg.ResolveStateFilters()
 	resolvedSilent := cfg.ResolveSilentModes()
-	log.Printf("Config loaded (%s): %d defaults, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters, %d silent modes",
-		m.Mode(), len(cfg.Defaults), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState), len(resolvedSilent))
+	log.Printf("Config loaded (%s): %d defaults, %d profiles, %d state_filters, %d tenants, %d resolved thresholds, %d resolved state filters, %d silent modes",
+		m.Mode(), len(cfg.Defaults), len(cfg.Profiles), len(cfg.StateFilters), len(cfg.Tenants), len(resolved), len(resolvedState), len(resolvedSilent))
 
 	// Schema validation: warn on unknown tenant config keys (v1.5.0)
 	if warnings := cfg.ValidateTenantKeys(); len(warnings) > 0 {
@@ -1333,6 +1397,7 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 		Defaults:     make(map[string]float64),
 		StateFilters: make(map[string]StateFilter),
 		Tenants:      make(map[string]map[string]ScheduledValue),
+		Profiles:     make(map[string]map[string]ScheduledValue),
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -1376,8 +1441,9 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 		}
 
 		isDefaultsFile := strings.HasPrefix(name, "_")
+		isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
 
-		// Boundary enforcement: warn if tenant file contains state_filters or defaults
+		// Boundary enforcement: warn if tenant file contains state_filters, defaults, or profiles
 		if !isDefaultsFile {
 			if len(partial.StateFilters) > 0 {
 				log.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
@@ -1386,6 +1452,12 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 			if len(partial.Defaults) > 0 {
 				log.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
 				partial.Defaults = nil
+			}
+		}
+		if !isProfilesFile && !isDefaultsFile {
+			if len(partial.Profiles) > 0 {
+				log.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
+				partial.Profiles = nil
 			}
 		}
 
@@ -1397,6 +1469,16 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 		// Merge state_filters
 		for k, v := range partial.StateFilters {
 			merged.StateFilters[k] = v
+		}
+
+		// Merge profiles (v1.12.0)
+		for profileName, profileValues := range partial.Profiles {
+			if merged.Profiles[profileName] == nil {
+				merged.Profiles[profileName] = make(map[string]ScheduledValue)
+			}
+			for k, v := range profileValues {
+				merged.Profiles[profileName][k] = v
+			}
 		}
 
 		// Merge tenants (deep merge per tenant)
@@ -1418,11 +1500,19 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 // Uses content hash comparison for reliable change detection.
 // K8s ConfigMap volumes update via symlink rotation (..data), so hash-based
 // detection is more reliable than ModTime for both modes.
-func (m *ConfigManager) WatchLoop(interval time.Duration) {
+// The stopCh parameter allows graceful shutdown — close it to stop the loop.
+func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-stopCh:
+			log.Println("WatchLoop stopped")
+			return
+		case <-ticker.C:
+		}
+
 		var hash string
 		var err error
 

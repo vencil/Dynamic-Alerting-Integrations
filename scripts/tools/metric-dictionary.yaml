@@ -413,3 +413,45 @@ rabbitmq_queue_messages_delivered_total:
   golden_rule: null
   rule_pack: rabbitmq
   note: "Deliver rate — rate() 參考指標"
+
+# ────────────────────────────────────────
+# JVM (v1.12.0)
+# ────────────────────────────────────────
+jvm_gc_pause_seconds_sum:
+  maps_to: jvm_gc_pause
+  golden_rule: JVMHighGCPause
+  rule_pack: jvm
+  note: "GC pause duration — rate(jvm_gc_pause_seconds_sum[5m])"
+
+jvm_memory_used_bytes:
+  maps_to: jvm_memory
+  golden_rule: JVMMemoryPressure
+  rule_pack: jvm
+  note: "Heap memory usage — jvm_memory_used_bytes{area='heap'} / max * 100"
+
+jvm_threads_current:
+  maps_to: jvm_threads
+  golden_rule: JVMThreadPoolExhaustion
+  rule_pack: jvm
+  note: "Active thread count"
+
+# ────────────────────────────────────────
+# Nginx (v1.12.0)
+# ────────────────────────────────────────
+nginx_connections_active:
+  maps_to: nginx_connections
+  golden_rule: NginxHighConnections
+  rule_pack: nginx
+  note: "Active connections count"
+
+nginx_http_requests_total:
+  maps_to: nginx_request_rate
+  golden_rule: NginxRequestRateSpike
+  rule_pack: nginx
+  note: "Request rate — rate(nginx_http_requests_total[5m])"
+
+nginx_connections_waiting:
+  maps_to: nginx_waiting
+  golden_rule: NginxConnectionBacklog
+  rule_pack: nginx
+  note: "Waiting connections (backlog)"

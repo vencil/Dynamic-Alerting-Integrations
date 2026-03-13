@@ -1083,5 +1083,71 @@ class TestRelabelSnippetEdgeCases(unittest.TestCase):
         self.assertIn("team", result)
 
 
+# ── generate_profile() Tests (v1.12.0 Improvement) ───────────────
+
+class TestGenerateProfile(unittest.TestCase):
+    """Tests for scaffold_tenant.generate_profile()."""
+
+    def test_basic_profile_generation(self):
+        """Profile for mariadb should contain mariadb defaults + optional overrides."""
+        result = scaffold_tenant.generate_profile(
+            "standard-mariadb-prod", ["kubernetes", "mariadb"])
+        self.assertIn("profiles", result)
+        self.assertIn("standard-mariadb-prod", result["profiles"])
+        profile = result["profiles"]["standard-mariadb-prod"]
+        # Should have kubernetes + mariadb defaults + mariadb optional
+        self.assertIn("container_cpu", profile)
+        self.assertIn("mysql_connections", profile)
+        self.assertIn("mysql_connections_critical", profile)  # optional override
+
+    def test_staging_tier_relaxed(self):
+        """Staging tier should produce 20% more relaxed thresholds."""
+        prod = scaffold_tenant.generate_profile(
+            "p", ["kubernetes", "mariadb"], tier="prod")
+        staging = scaffold_tenant.generate_profile(
+            "s", ["kubernetes", "mariadb"], tier="staging")
+        prod_cpu = prod["profiles"]["p"]["container_cpu"]
+        staging_cpu = staging["profiles"]["s"]["container_cpu"]
+        self.assertGreater(staging_cpu, prod_cpu)
+
+    def test_multi_db_profile(self):
+        """Profile with multiple DBs should include all metric keys."""
+        result = scaffold_tenant.generate_profile(
+            "multi", ["kubernetes", "mariadb", "redis"])
+        profile = result["profiles"]["multi"]
+        self.assertIn("mysql_connections", profile)
+        self.assertIn("redis_memory_used_bytes", profile)
+
+    def test_empty_db_list(self):
+        """Empty DB list still returns valid profile structure."""
+        result = scaffold_tenant.generate_profile("empty", [])
+        self.assertIn("profiles", result)
+        self.assertEqual(result["profiles"]["empty"], {})
+
+    def test_generate_profile_cli(self):
+        """--generate-profile via CLI writes _profiles.yaml."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_argv = sys.argv
+            sys.argv = [
+                "scaffold_tenant.py",
+                "--generate-profile", "test-profile",
+                "--db", "mariadb",
+                "-o", tmpdir,
+            ]
+            try:
+                with self.assertRaises(SystemExit) as cm:
+                    scaffold_tenant.main()
+                self.assertEqual(cm.exception.code, 0)
+            finally:
+                sys.argv = old_argv
+
+            path = os.path.join(tmpdir, "_profiles.yaml")
+            self.assertTrue(os.path.isfile(path))
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            self.assertIn("profiles", data)
+            self.assertIn("test-profile", data["profiles"])
+
+
 if __name__ == "__main__":
     unittest.main()

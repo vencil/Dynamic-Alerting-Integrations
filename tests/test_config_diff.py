@@ -301,5 +301,103 @@ class TestExitCode(unittest.TestCase):
             self.assertEqual(1 if diffs else 0, 1)
 
 
+# ── 9. Profile Key Diff (v1.12.0 fine-grained) ───────────────────
+
+class TestProfileKeyDiff(unittest.TestCase):
+    """Fine-grained profile content diff."""
+
+    def test_added_profile(self):
+        """New profile should show all keys as added."""
+        diffs = cd.compute_profile_key_diff(None, {"mysql_connections": 80, "redis_memory": 1024})
+        self.assertEqual(len(diffs), 2)
+        self.assertTrue(all(d["change"] == "added" for d in diffs))
+
+    def test_removed_profile(self):
+        """Removed profile should show all keys as removed."""
+        diffs = cd.compute_profile_key_diff({"mysql_connections": 80}, None)
+        self.assertEqual(len(diffs), 1)
+        self.assertEqual(diffs[0]["change"], "removed")
+
+    def test_modified_key(self):
+        """Changed key should show tighter/looser."""
+        diffs = cd.compute_profile_key_diff(
+            {"mysql_connections": 80},
+            {"mysql_connections": 50}
+        )
+        self.assertEqual(len(diffs), 1)
+        self.assertEqual(diffs[0]["change"], "tighter")
+
+    def test_no_changes(self):
+        """Identical profiles should produce no diffs."""
+        diffs = cd.compute_profile_key_diff(
+            {"mysql_connections": 80}, {"mysql_connections": 80})
+        self.assertEqual(diffs, [])
+
+
+class TestProfileDiffEndToEnd(unittest.TestCase):
+    """End-to-end profile diff with directories."""
+
+    def test_profile_modified_with_key_diffs(self):
+        """Modified profile should include key_diffs in result."""
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            # Old profile
+            with open(os.path.join(old_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"profiles": {"standard": {
+                    "mysql_connections": 80, "redis_memory": 1024
+                }}}, f)
+            # New profile — tighter mysql
+            with open(os.path.join(new_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"profiles": {"standard": {
+                    "mysql_connections": 50, "redis_memory": 1024
+                }}}, f)
+            # Tenant referencing profile
+            for d in (old_dir, new_dir):
+                with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
+                    yaml.dump({"tenants": {"db-a": {"_profile": "standard"}}}, f)
+
+            results = cd.compute_profile_diff(old_dir, new_dir)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["profile"], "standard")
+            self.assertEqual(results[0]["change"], "modified")
+            self.assertEqual(len(results[0]["key_diffs"]), 1)
+            self.assertEqual(results[0]["key_diffs"][0]["key"], "mysql_connections")
+            self.assertEqual(results[0]["key_diffs"][0]["change"], "tighter")
+
+    def test_profile_added_with_key_diffs(self):
+        """Added profile should list all keys as added."""
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            # No profile in old
+            with open(os.path.join(old_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"profiles": {}}, f)
+            # New profile
+            with open(os.path.join(new_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"profiles": {"new-profile": {
+                    "mysql_connections": 80
+                }}}, f)
+
+            results = cd.compute_profile_diff(old_dir, new_dir)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["change"], "added")
+            self.assertEqual(len(results[0]["key_diffs"]), 1)
+            self.assertEqual(results[0]["key_diffs"][0]["change"], "added")
+
+    def test_json_output_includes_key_diffs(self):
+        """JSON output should include key_diffs in profile_diffs."""
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            with open(os.path.join(old_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"profiles": {"s": {"x": 80}}}, f)
+            with open(os.path.join(new_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"profiles": {"s": {"x": 50}}}, f)
+
+            profile_diffs = cd.compute_profile_diff(old_dir, new_dir)
+            output = {"metric_diffs": {}, "profile_diffs": profile_diffs}
+            j = json.dumps(output, default=str)
+            parsed = json.loads(j)
+            self.assertIn("key_diffs", parsed["profile_diffs"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

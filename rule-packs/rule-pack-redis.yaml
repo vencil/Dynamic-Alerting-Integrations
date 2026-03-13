@@ -114,6 +114,7 @@ groups:
           severity: warning
         annotations:
           summary: "Redis high memory usage on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis memory threshold breached — evaluate maxmemory policy"
           description: "Memory usage: {{ $value | humanize1024 }}B"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -137,6 +138,7 @@ groups:
           severity: warning
         annotations:
           summary: "Redis high connection count on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis connection count high — client pool review"
           description: "{{ $value }} connected clients"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -160,6 +162,7 @@ groups:
           severity: warning
         annotations:
           summary: "Redis high key eviction rate on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: key eviction rate elevated — capacity review needed"
           description: "{{ $value | printf \"%.1f\" }} evictions/sec — consider increasing maxmemory"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -183,6 +186,7 @@ groups:
           severity: warning
         annotations:
           summary: "Redis replication lag on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis replication lag — check replica health"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -202,6 +206,7 @@ groups:
           severity: warning
         annotations:
           summary: "Redis low hit ratio on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: low cache hit ratio — cache strategy review"
           description: "Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy"
 
           runbook_url: "{{ $labels.runbook_url }}"

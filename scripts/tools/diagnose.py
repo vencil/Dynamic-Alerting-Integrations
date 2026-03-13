@@ -22,12 +22,15 @@ Returns JSON: {"status": "healthy"|"error", "tenant", ...}
     * 叢集外: port-forward 或 Ingress
     * 多叢集: Thanos Query / VictoriaMetrics 等統一查詢端點亦可
 """
+import os
 import subprocess
 import sys
 import json
 import argparse
 import urllib.request
 import urllib.parse
+
+import yaml
 
 
 def run_cmd(cmd):
@@ -58,7 +61,173 @@ def query_prometheus(prom_url, promql):
         return None
 
 
-def check(tenant, prom_url):
+def lookup_tenant_profile(tenant, config_dir):
+    """Look up the _profile assignment for a tenant from config-dir YAML files.
+
+    Returns profile name string or None.
+    """
+    if not config_dir or not os.path.isdir(config_dir):
+        return None
+    for fname in sorted(os.listdir(config_dir)):
+        if not fname.endswith((".yaml", ".yml")):
+            continue
+        if fname.startswith("."):
+            continue
+        fpath = os.path.join(config_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                raw = yaml.safe_load(f)
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        tenants = {}
+        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
+            tenants = raw["tenants"]
+        elif not fname.startswith("_"):
+            t_name = fname.rsplit(".", 1)[0]
+            tenants = {t_name: raw}
+        if tenant in tenants and isinstance(tenants[tenant], dict):
+            profile = tenants[tenant].get("_profile")
+            if profile and isinstance(profile, str):
+                return profile.strip()
+    return None
+
+
+def resolve_inheritance_chain(tenant, config_dir):
+    """Resolve the four-layer inheritance chain for a tenant.
+
+    Returns a dict with:
+      - chain: list of layers with source and keys
+      - resolved: final merged key→value after all layers
+      - profile_name: profile name or None
+
+    Four-layer inheritance (v1.12.0):
+      1. Global Defaults (_defaults.yaml)
+      2. Profile Overlay (_profiles.yaml → profile keys fill-in)
+      3. Tenant Override (tenant-specific keys)
+    """
+    if not config_dir or not os.path.isdir(config_dir):
+        return None
+
+    # Layer 1: Global defaults
+    defaults_path = os.path.join(config_dir, "_defaults.yaml")
+    defaults_raw = {}
+    try:
+        with open(defaults_path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        defaults_raw = raw.get("defaults", {}) if isinstance(raw, dict) else {}
+    except Exception:
+        pass
+
+    # Find tenant config
+    tenant_overrides = {}
+    for fname in sorted(os.listdir(config_dir)):
+        if not fname.endswith((".yaml", ".yml")):
+            continue
+        if fname.startswith("."):
+            continue
+        fpath = os.path.join(config_dir, fname)
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        tenants = {}
+        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
+            tenants = raw["tenants"]
+        elif not fname.startswith("_"):
+            t_name = fname.rsplit(".", 1)[0]
+            tenants = {t_name: raw}
+        if tenant in tenants and isinstance(tenants[tenant], dict):
+            tenant_overrides = tenants[tenant]
+            break
+
+    # Layer 2: Profile overlay
+    profile_name = None
+    profile_keys = {}
+    p_ref = tenant_overrides.get("_profile")
+    if p_ref and isinstance(p_ref, str):
+        profile_name = p_ref.strip()
+        profiles_path = os.path.join(config_dir, "_profiles.yaml")
+        try:
+            with open(profiles_path, encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            all_profiles = raw.get("profiles", {}) if isinstance(raw, dict) else {}
+            profile_keys = all_profiles.get(profile_name, {})
+        except Exception:
+            pass
+
+    # Layer 3: Tenant-specific (non-reserved metric keys only)
+    tenant_metric_keys = {
+        k: v for k, v in tenant_overrides.items()
+        if not k.startswith("_")
+    }
+
+    # Build chain
+    chain = []
+
+    # Layer 1: defaults
+    default_only = {k: v for k, v in defaults_raw.items() if not k.startswith("_")}
+    if default_only:
+        chain.append({"layer": "defaults", "source": "_defaults.yaml",
+                       "keys": default_only})
+
+    # Layer 2: profile (fill-in — keys NOT in tenant override)
+    if profile_name and profile_keys:
+        effective_profile = {
+            k: v for k, v in profile_keys.items()
+            if not k.startswith("_") and k not in tenant_metric_keys
+        }
+        chain.append({"layer": "profile", "source": f"_profiles.yaml → {profile_name}",
+                       "keys": effective_profile})
+
+    # Layer 3: tenant override
+    if tenant_metric_keys:
+        chain.append({"layer": "tenant", "source": f"{tenant}.yaml",
+                       "keys": tenant_metric_keys})
+
+    # Resolved: merge all layers (later layers win)
+    resolved = {}
+    resolved.update(default_only)
+    if profile_keys:
+        # Profile fills in only where tenant hasn't overridden
+        for k, v in profile_keys.items():
+            if not k.startswith("_") and k not in tenant_metric_keys:
+                resolved[k] = v
+    resolved.update(tenant_metric_keys)
+
+    return {
+        "chain": chain,
+        "resolved": resolved,
+        "profile_name": profile_name,
+    }
+
+
+def _format_chain_summary(inheritance):
+    """Format inheritance chain for JSON output (token-efficient).
+
+    Returns a compact summary: {layers: [...], resolved_count: N}
+    """
+    layers = []
+    for c in inheritance.get("chain", []):
+        layers.append({
+            "layer": c["layer"],
+            "source": c["source"],
+            "key_count": len(c["keys"]),
+        })
+    return {
+        "layers": layers,
+        "resolved_count": len(inheritance.get("resolved", {})),
+        "profile": inheritance.get("profile_name"),
+    }
+
+
+def check(tenant, prom_url, config_dir=None):
     errors = []
 
     # 1. 檢查 Pod 狀態
@@ -102,16 +271,24 @@ def check(tenant, prom_url):
     except Exception:
         pass  # Non-fatal: mode query failure doesn't affect health status
 
-    # 4. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
+    # 4. Profile lookup + inheritance chain (v1.12.0, optional — requires --config-dir)
+    profile_name = lookup_tenant_profile(tenant, config_dir)
+    inheritance = resolve_inheritance_chain(tenant, config_dir) if config_dir else None
+
+    # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
     if not errors:
         result = {"status": "healthy", "tenant": tenant}
         if operational_mode != "normal":
             result["operational_mode"] = operational_mode
+        if profile_name:
+            result["profile"] = profile_name
+        if inheritance:
+            result["inheritance_chain"] = _format_chain_summary(inheritance)
         print(json.dumps(result))
     else:
         # 只有異常時，嘗試抓取最近的 error log
         logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb", "--tail=20"])
-        error_logs = [line for line in logs.split('\n') if 'ERROR' in line] if logs else []
+        error_logs = [line for line in (logs or "").split('\n') if 'ERROR' in line]
 
         result = {
             "status": "error",
@@ -121,6 +298,10 @@ def check(tenant, prom_url):
         }
         if operational_mode != "normal":
             result["operational_mode"] = operational_mode
+        if profile_name:
+            result["profile"] = profile_name
+        if inheritance:
+            result["inheritance_chain"] = _format_chain_summary(inheritance)
         print(json.dumps(result, ensure_ascii=False))
 
 
@@ -133,5 +314,25 @@ if __name__ == "__main__":
                         help="Prometheus Query API URL "
                              "(預設: http://localhost:9090; "
                              "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    parser.add_argument("--config-dir",
+                        help="Path to tenant config directory (conf.d/) for profile lookup")
+    parser.add_argument("--show-inheritance", action="store_true",
+                        help="Show detailed four-layer inheritance chain resolution "
+                             "(requires --config-dir)")
     args = parser.parse_args()
-    check(args.tenant, args.prometheus)
+
+    if args.show_inheritance:
+        if not args.config_dir:
+            print("ERROR: --show-inheritance requires --config-dir",
+                  file=sys.stderr)
+            sys.exit(1)
+        inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
+        if inheritance:
+            print(json.dumps(inheritance, indent=2, ensure_ascii=False,
+                             default=str))
+        else:
+            print(json.dumps({"error": "Could not resolve inheritance chain"},
+                             indent=2))
+        sys.exit(0)
+
+    check(args.tenant, args.prometheus, config_dir=args.config_dir)

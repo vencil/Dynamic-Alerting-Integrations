@@ -24,6 +24,7 @@ import yaml
 from _lib_python import (  # noqa: E402
     is_disabled as _is_disabled,
     load_yaml_file,
+    VALID_RESERVED_KEYS,
 )
 
 
@@ -62,6 +63,116 @@ def load_configs_from_dir(dir_path):
             configs[tenant] = flatten_tenant_config(raw)
 
     return configs
+
+
+def load_profiles_from_dir(dir_path):
+    """Load profiles from _profiles.yaml in a conf.d/ directory.
+
+    Returns {profile_name: {key: value, ...}} or empty dict.
+    """
+    if not os.path.isdir(dir_path):
+        return {}
+    profiles_path = os.path.join(dir_path, "_profiles.yaml")
+    raw = load_yaml_file(profiles_path, default={})
+    return raw.get("profiles", {}) if isinstance(raw, dict) else {}
+
+
+def load_tenant_profile_refs(dir_path):
+    """Scan all tenant files to build a mapping of profile_name → [tenant_names].
+
+    Returns {profile_name: [tenant1, tenant2, ...]}.
+    """
+    refs = {}
+    if not os.path.isdir(dir_path):
+        return refs
+    for fname in sorted(os.listdir(dir_path)):
+        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
+            continue
+        if fname.startswith("_") or fname.startswith("."):
+            continue
+        path = os.path.join(dir_path, fname)
+        raw = load_yaml_file(path, default={})
+        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
+            for t_name, t_data in raw["tenants"].items():
+                if isinstance(t_data, dict):
+                    profile = t_data.get("_profile")
+                    if profile and isinstance(profile, str):
+                        refs.setdefault(profile, []).append(t_name)
+        else:
+            tenant = fname.rsplit(".", 1)[0]
+            if isinstance(raw, dict):
+                profile = raw.get("_profile")
+                if profile and isinstance(profile, str):
+                    refs.setdefault(profile, []).append(tenant)
+    return refs
+
+
+def compute_profile_key_diff(old_data, new_data):
+    """Compute fine-grained key-level diff between two profile data dicts.
+
+    Returns list of {"key", "old", "new", "change"} entries.
+    """
+    if old_data is None:
+        old_data = {}
+    if new_data is None:
+        new_data = {}
+
+    all_keys = set(old_data.keys()) | set(new_data.keys())
+    changes = []
+    for key in sorted(all_keys):
+        old_val = old_data.get(key)
+        new_val = new_data.get(key)
+        if old_val == new_val:
+            continue
+        change_type = classify_change(old_val, new_val)
+        if change_type == "unchanged":
+            continue
+        changes.append({
+            "key": key,
+            "old": old_val,
+            "new": new_val,
+            "change": change_type,
+        })
+    return changes
+
+
+def compute_profile_diff(old_dir, new_dir):
+    """Compute profile-level diff and blast radius with fine-grained key diffs.
+
+    Returns list of {profile, change, affected_tenants, key_diffs} entries.
+    """
+    old_profiles = load_profiles_from_dir(old_dir)
+    new_profiles = load_profiles_from_dir(new_dir)
+    new_refs = load_tenant_profile_refs(new_dir)
+
+    all_names = set(old_profiles.keys()) | set(new_profiles.keys())
+    results = []
+
+    for name in sorted(all_names):
+        old_p = old_profiles.get(name)
+        new_p = new_profiles.get(name)
+        if old_p == new_p:
+            continue
+
+        affected = new_refs.get(name, [])
+        if old_p is None:
+            change = "added"
+        elif new_p is None:
+            change = "removed"
+        else:
+            change = "modified"
+
+        key_diffs = compute_profile_key_diff(old_p, new_p)
+
+        results.append({
+            "profile": name,
+            "change": change,
+            "affected_tenants": affected,
+            "affected_count": len(affected),
+            "key_diffs": key_diffs,
+        })
+
+    return results
 
 
 def flatten_tenant_config(raw):
@@ -174,7 +285,7 @@ def _format_value(val):
     return str(val)
 
 
-def render_markdown(diffs, old_dir, new_dir):
+def render_markdown(diffs, old_dir, new_dir, profile_diffs=None):
     """Render a Markdown blast radius report."""
     lines = []
     lines.append("# Config Diff Report")
@@ -182,7 +293,39 @@ def render_markdown(diffs, old_dir, new_dir):
     lines.append(f"Comparing: `{old_dir}` → `{new_dir}`")
     lines.append("")
 
-    if not diffs:
+    # Profile changes section (v1.12.0)
+    if profile_diffs:
+        lines.append("## Profile Changes")
+        lines.append("")
+        for pd in profile_diffs:
+            affected = pd["affected_count"]
+            tenants_str = ", ".join(pd["affected_tenants"][:10])
+            if affected > 10:
+                tenants_str += f" ... (+{affected - 10} more)"
+            key_diffs = pd.get("key_diffs", [])
+            lines.append(
+                f"### Profile: {pd['profile']} ({pd['change']}) — "
+                f"{affected} tenant(s) affected"
+            )
+            if pd["affected_tenants"]:
+                lines.append(f"  Tenants: {tenants_str}")
+            lines.append("")
+            if key_diffs:
+                lines.append("| Key | Before | After | Change |")
+                lines.append("|-----|--------|-------|--------|")
+                for kd in key_diffs:
+                    lines.append(
+                        f"| {kd['key']} | {_format_value(kd['old'])} "
+                        f"| {_format_value(kd['new'])} | {kd['change']} |"
+                    )
+                lines.append("")
+            elif pd["change"] == "added":
+                lines.append(f"  New profile with {len(pd.get('key_diffs', []))} keys")
+                lines.append("")
+            else:
+                lines.append("")
+
+    if not diffs and not profile_diffs:
         lines.append("No changes detected.")
         return "\n".join(lines)
 
@@ -205,7 +348,11 @@ def render_markdown(diffs, old_dir, new_dir):
 
     lines.append("---")
     changed = len(diffs)
-    lines.append(f"Summary: {changed} tenant(s) changed, {total_changes} metric change(s)")
+    profile_affected = sum(pd["affected_count"] for pd in (profile_diffs or []))
+    summary = f"Summary: {changed} tenant(s) changed, {total_changes} metric change(s)"
+    if profile_affected:
+        summary += f", {profile_affected} tenant(s) affected by profile changes"
+    lines.append(summary)
 
     return "\n".join(lines)
 
@@ -260,14 +407,17 @@ def main():
     new_configs = load_configs_from_dir(args.new_dir)
 
     diffs = compute_diff(old_configs, new_configs)
+    profile_diffs = compute_profile_diff(args.old_dir, args.new_dir)
 
     if args.json_output:
-        print(json.dumps(diffs, indent=2, ensure_ascii=False, default=str))
+        output = {"metric_diffs": diffs, "profile_diffs": profile_diffs}
+        print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
     else:
-        print(render_markdown(diffs, args.old_dir, args.new_dir))
+        print(render_markdown(diffs, args.old_dir, args.new_dir, profile_diffs=profile_diffs))
 
     # Exit 1 if changes detected (CI signal), 0 if clean
-    sys.exit(1 if diffs else 0)
+    has_changes = bool(diffs) or bool(profile_diffs)
+    sys.exit(1 if has_changes else 0)
 
 
 if __name__ == "__main__":

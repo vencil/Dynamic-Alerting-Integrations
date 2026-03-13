@@ -111,6 +111,7 @@ groups:
           metric_group: "connections"
         annotations:
           summary: "High connections on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
           description: "{{ $value }} threads connected (warning threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -136,6 +137,7 @@ groups:
           metric_group: "connections"
         annotations:
           summary: "Critical connections on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation — immediate capacity action needed"
           description: "{{ $value }} threads connected (critical threshold exceeded)"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -168,6 +170,7 @@ groups:
           severity: critical
         annotations:
           summary: "System bottleneck on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CPU + connections both exceeded — multi-resource bottleneck, escalate"
           description: "Both connections AND CPU thresholds exceeded simultaneously"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -197,6 +200,7 @@ groups:
           severity: warning
         annotations:
           summary: "High slow query rate on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: slow query rate elevated — query optimization review"
           description: "{{ $value | printf \"%.2f\" }} slow queries/sec"
 
           runbook_url: "{{ $labels.runbook_url }}"
@@ -217,6 +221,7 @@ groups:
           severity: warning
         annotations:
           summary: "High aborted connections on {{ $labels.tenant }}"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: aborted connection rate elevated — check client connectivity"
           description: "{{ $value | printf \"%.2f\" }} aborted connections/sec"
 
           runbook_url: "{{ $labels.runbook_url }}"

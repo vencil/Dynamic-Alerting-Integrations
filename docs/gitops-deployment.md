@@ -1,6 +1,13 @@
+---
+title: "GitOps 部署指南"
+tags: [gitops, deployment, ci-cd]
+audience: [platform-engineer, devops]
+version: v1.13.0
+lang: zh
+---
 # GitOps 部署指南
 
-> **版本**：v1.11.0
+> **版本**：v1.13.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -47,8 +54,8 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @team-db-b
 | Webhook URL 合規 | `--policy .github/custom-rule-policy.yaml` | URL 不在 allowed_domains |
 | Custom rule deny-list | `lint_custom_rules.py --ci` | 禁用函式 / 破壞 tenant 隔離 |
 | 版號一致性 | `bump_docs.py --check` | 跨文件版號不一致 |
-| **配置變更 blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment 顯示受影響 tenant/metric（v1.10.0） |
-| **閾值歷史回測** | `backtest --git-diff --prometheus <url>` | 風險等級報告貼 PR comment（v1.9.0） |
+| **配置變更 blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment 顯示受影響 tenant/metric |
+| **閾值歷史回測** | `backtest --git-diff --prometheus <url>` | 風險等級報告貼 PR comment |
 
 所有檢查通過 + CODEOWNERS 指定的 reviewer approve → 允許 merge。
 
@@ -240,3 +247,12 @@ Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routin
 2. 將產出放入 `conf.d/<tenant>.yaml`
 3. 更新 `.github/CODEOWNERS` 加入 `@team-<tenant>`
 4. 發 PR → CI 驗證（`validate-config` 一站式檢查） → merge → 自動部署
+
+## 相關資源
+
+| 資源 | 相關性 |
+|------|--------|
+| ["GitOps Deployment Guide"](./gitops-deployment.en.md) | ⭐⭐⭐ |
+| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
+| ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |

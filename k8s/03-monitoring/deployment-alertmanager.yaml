@@ -15,9 +15,21 @@ spec:
       labels:
         app: alertmanager
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: alertmanager
           image: prom/alertmanager:v0.27.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - "--config.file=/etc/alertmanager/alertmanager.yml"
             - "--storage.path=/alertmanager"
@@ -28,6 +40,8 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/alertmanager
+            - name: data
+              mountPath: /alertmanager
           resources:
             requests:
               cpu: 50m
@@ -49,6 +63,11 @@ spec:
             periodSeconds: 10
         - name: config-reloader
           image: ghcr.io/jimmidyson/configmap-reload:v0.14.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - "--volume-dir=/etc/alertmanager"
             - "--webhook-url=http://localhost:9093/-/reload"
