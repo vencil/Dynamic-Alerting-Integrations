@@ -4,27 +4,53 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dynamic Alerting — Interactive Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
   :root {
-    --bg: #ffffff;
+    --bg: #fafbfc;
     --fg: #1a1a2e;
-    --card-bg: #f8f9fb;
+    --hero-bg: #0f172a;
+    --hero-fg: #e2e8f0;
+    --hero-muted: #94a3b8;
+    --hero-accent: #38bdf8;
+    --card-bg: #ffffff;
     --card-border: #e2e6ea;
-    --card-hover: #eef1f5;
+    --card-hover-border: #3b82f6;
+    --card-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    --card-hover-shadow: 0 4px 12px rgba(59,130,246,0.15);
     --accent: #3b82f6;
-    --muted: #6b7280;
-    --tag-bg: #e8ecf1;
+    --accent-soft: #eff6ff;
+    --muted: #64748b;
+    --tag-bg: #f1f5f9;
+    --tag-fg: #475569;
+    --section-border: #e2e8f0;
+    --icon-validation: #10b981;
+    --icon-cli: #f59e0b;
+    --icon-rules: #8b5cf6;
+    --icon-wizard: #ec4899;
+    --stat-bg: rgba(255,255,255,0.08);
+    --stat-border: rgba(255,255,255,0.12);
+    --mermaid-bg: rgba(255,255,255,0.05);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0f1117;
-      --fg: #e4e4e7;
-      --card-bg: #1a1d28;
-      --card-border: #2a2d3a;
-      --card-hover: #22253a;
+      --bg: #0b0f1a;
+      --fg: #e2e8f0;
+      --hero-bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --card-hover-border: #60a5fa;
+      --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      --card-hover-shadow: 0 4px 12px rgba(96,165,250,0.2);
       --accent: #60a5fa;
-      --muted: #9ca3af;
-      --tag-bg: #2a2d3a;
+      --accent-soft: #1e3a5f;
+      --muted: #94a3b8;
+      --tag-bg: #1e293b;
+      --tag-fg: #94a3b8;
+      --section-border: #1e293b;
+      --stat-bg: rgba(255,255,255,0.05);
+      --stat-border: rgba(255,255,255,0.08);
+      --mermaid-bg: rgba(255,255,255,0.03);
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,56 +59,171 @@
     background: var(--bg);
     color: var(--fg);
     min-height: 100vh;
-    padding: 0 16px;
+    -webkit-font-smoothing: antialiased;
   }
-  .container {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 48px 0 64px;
+
+  /* ── Hero ── */
+  .hero {
+    background: var(--hero-bg);
+    color: var(--hero-fg);
+    padding: 56px 24px 48px;
+    text-align: center;
   }
-  header {
-    margin-bottom: 40px;
+  .hero-inner { max-width: 780px; margin: 0 auto; }
+  .hero-badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--hero-accent);
+    border: 1px solid var(--hero-accent);
+    border-radius: 20px;
+    padding: 3px 12px;
+    margin-bottom: 16px;
   }
-  h1 {
-    font-size: 1.6rem;
+  .hero h1 {
+    font-size: 2rem;
     font-weight: 700;
-    margin-bottom: 8px;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+    line-height: 1.2;
   }
-  .subtitle {
-    color: var(--muted);
-    font-size: 0.95rem;
-    line-height: 1.5;
+  .hero-desc {
+    color: var(--hero-muted);
+    font-size: 1.05rem;
+    line-height: 1.6;
+    max-width: 560px;
+    margin: 0 auto 32px;
   }
-  .cards {
+
+  /* ── Stats bar ── */
+  .stats {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 36px;
+  }
+  .stat {
+    background: var(--stat-bg);
+    border: 1px solid var(--stat-border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    text-align: center;
+    min-width: 120px;
+  }
+  .stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--hero-accent);
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 0.75rem;
+    color: var(--hero-muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* ── Mermaid diagram in hero ── */
+  .diagram-section {
+    background: var(--mermaid-bg);
+    border-radius: 12px;
+    padding: 24px 16px;
+    margin-top: 8px;
+    overflow-x: auto;
+  }
+  .diagram-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--hero-muted);
+    margin-bottom: 16px;
+  }
+  .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+  .mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* ── Main content ── */
+  .main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 48px 24px 64px;
+  }
+  .section-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--section-border);
+  }
+
+  /* ── Tool cards grid ── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 48px;
   }
   a.card {
-    display: block;
-    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    padding: 24px;
     background: var(--card-bg);
     border: 1px solid var(--card-border);
-    border-radius: 10px;
+    border-radius: 12px;
     text-decoration: none;
     color: inherit;
-    transition: background 0.15s, border-color 0.15s;
+    box-shadow: var(--card-shadow);
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
   }
   a.card:hover {
-    background: var(--card-hover);
-    border-color: var(--accent);
+    border-color: var(--card-hover-border);
+    box-shadow: var(--card-hover-shadow);
+    transform: translateY(-2px);
+  }
+  .card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+    font-size: 1.2rem;
+  }
+  .card-icon.validation { background: #ecfdf5; color: var(--icon-validation); }
+  .card-icon.cli { background: #fffbeb; color: var(--icon-cli); }
+  .card-icon.rules { background: #f5f3ff; color: var(--icon-rules); }
+  .card-icon.wizard { background: #fdf2f8; color: var(--icon-wizard); }
+  @media (prefers-color-scheme: dark) {
+    .card-icon.validation { background: #064e3b; }
+    .card-icon.cli { background: #451a03; }
+    .card-icon.rules { background: #2e1065; }
+    .card-icon.wizard { background: #500724; }
   }
   .card-title {
-    font-size: 1.05rem;
+    font-size: 1rem;
     font-weight: 600;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+    line-height: 1.3;
   }
   .card-desc {
     font-size: 0.88rem;
     color: var(--muted);
-    line-height: 1.5;
-    margin-bottom: 10px;
+    line-height: 1.55;
+    flex: 1;
+    margin-bottom: 14px;
   }
   .tags {
     display: flex;
@@ -90,19 +231,52 @@
     flex-wrap: wrap;
   }
   .tag {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 4px;
     background: var(--tag-bg);
-    color: var(--muted);
+    color: var(--tag-fg);
     font-weight: 500;
     letter-spacing: 0.02em;
   }
+
+  /* ── Quick links section ── */
+  .links {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 48px;
+  }
+  a.link-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    text-decoration: none;
+    color: inherit;
+    font-size: 0.88rem;
+    font-weight: 500;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  a.link-item:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .link-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    width: 20px;
+    text-align: center;
+  }
+
+  /* ── Footer ── */
   footer {
-    margin-top: 48px;
-    padding-top: 20px;
-    border-top: 1px solid var(--card-border);
-    font-size: 0.82rem;
+    padding: 20px 24px;
+    border-top: 1px solid var(--section-border);
+    text-align: center;
+    font-size: 0.8rem;
     color: var(--muted);
     line-height: 1.6;
   }
@@ -114,22 +288,75 @@
 </style>
 </head>
 <body>
-<div class="container">
 
-  <header>
-    <h1>Dynamic Alerting — Interactive Tools</h1>
-    <p class="subtitle">
-      Browser-based tools for the Multi-Tenant Dynamic Alerting platform.
-      No installation required — runs entirely in your browser.
+<!-- ── Hero Section ── -->
+<section class="hero">
+  <div class="hero-inner">
+    <span class="hero-badge">Open Source</span>
+    <h1>Dynamic Alerting Interactive Tools</h1>
+    <p class="hero-desc">
+      Browser-based utilities for the Multi-Tenant Dynamic Alerting platform.
+      Validate configs, build CLI commands, and explore rule packs — no installation required.
     </p>
-  </header>
 
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value">15</div>
+        <div class="stat-label">Rule Packs</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">238</div>
+        <div class="stat-label">Total Rules</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">50</div>
+        <div class="stat-label">CLI Tools</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">44</div>
+        <div class="stat-label">Doc Pages</div>
+      </div>
+    </div>
+
+    <div class="diagram-section">
+      <div class="diagram-label">Platform Architecture</div>
+      <pre class="mermaid">
+graph LR
+    subgraph Config["Configuration Layer"]
+        Y["Tenant YAML<br/>conf.d/"]
+        P["Profiles<br/>_defaults + _profiles"]
+        CR["ThresholdConfig CRD<br/>(optional)"]
+    end
+    subgraph Core["Core Engine"]
+        TE["threshold-exporter<br/>SHA-256 hot-reload"]
+    end
+    subgraph Observability["Monitoring Stack"]
+        PR["Prometheus<br/>15 Rule Packs"]
+        AM["Alertmanager<br/>Dynamic Routing"]
+    end
+    Y --> TE
+    P --> TE
+    CR -->|"Assembler"| TE
+    TE -->|"metrics"| PR
+    PR -->|"alerts"| AM
+      </pre>
+    </div>
+  </div>
+</section>
+
+<!-- ── Main Content ── -->
+<div class="main">
+
+  <div class="section-title">Interactive Tools</div>
   <div class="cards">
     <a class="card" href="../assets/jsx-loader.html?component=../playground.jsx">
+      <div class="card-icon validation">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+      </div>
       <div class="card-title">Tenant YAML Validator</div>
       <div class="card-desc">
         Paste a tenant YAML configuration and get instant validation feedback.
-        Includes pre-built templates for MariaDB, PostgreSQL, Redis, and Kafka.
+        Pre-built templates for MariaDB, PostgreSQL, Redis, and Kafka.
       </div>
       <div class="tags">
         <span class="tag">validation</span>
@@ -139,6 +366,9 @@
     </a>
 
     <a class="card" href="../assets/jsx-loader.html?component=../cli-playground.jsx">
+      <div class="card-icon cli">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      </div>
       <div class="card-title">CLI Playground</div>
       <div class="card-desc">
         Build da-tools CLI commands interactively. Select a command, configure
@@ -152,10 +382,13 @@
     </a>
 
     <a class="card" href="../assets/jsx-loader.html?component=../rule-pack-selector.jsx">
+      <div class="card-icon rules">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </div>
       <div class="card-title">Rule Pack Selector</div>
       <div class="card-desc">
-        Select the Prometheus rule packs you need, see rule counts, and generate
-        the YAML configuration snippet for your monitoring stack.
+        Browse all 15 rule packs, see recording/alert rule counts, and generate
+        the Prometheus YAML configuration snippet for your stack.
       </div>
       <div class="tags">
         <span class="tag">prometheus</span>
@@ -165,6 +398,9 @@
     </a>
 
     <a class="card" href="../assets/jsx-loader.html?component=../getting-started/wizard.jsx">
+      <div class="card-icon wizard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      </div>
       <div class="card-title">Getting Started Wizard</div>
       <div class="card-desc">
         Answer a few questions about your role and goals to get a personalized
@@ -178,15 +414,78 @@
     </a>
   </div>
 
-  <footer>
-    <p>
-      Part of the
-      <a href="https://github.com/vencil/vibe-k8s-lab">Dynamic Alerting</a>
-      project (v2.0.0-preview).
-      Components load via client-side JSX — no server required.
-    </p>
-  </footer>
+  <div class="section-title">Documentation</div>
+  <div class="links">
+    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations">
+      <span class="link-icon">📦</span> GitHub Repository
+    </a>
+    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/architecture-and-design.en.md">
+      <span class="link-icon">📐</span> Architecture & Design
+    </a>
+    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.en.md">
+      <span class="link-icon">⌨️</span> CLI Reference
+    </a>
+    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/getting-started/for-tenants.en.md">
+      <span class="link-icon">🚀</span> Getting Started
+    </a>
+    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/benchmarks.en.md">
+      <span class="link-icon">📊</span> Benchmarks
+    </a>
+    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md">
+      <span class="link-icon">📝</span> Changelog
+    </a>
+  </div>
 
 </div>
+
+<footer>
+  <p>
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations">Dynamic Alerting Integrations</a>
+    v2.0.0-preview.2 — Multi-Tenant Dynamic Alerting Platform
+  </p>
+</footer>
+
+<script>
+  // Initialize mermaid with theme based on color scheme
+  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: isDark ? 'dark' : 'default',
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis'
+    },
+    themeVariables: isDark ? {
+      primaryColor: '#1e3a5f',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#38bdf8',
+      lineColor: '#475569',
+      secondaryColor: '#1e293b',
+      tertiaryColor: '#0f172a',
+      background: '#0f172a',
+      mainBkg: '#1e293b',
+      nodeBorder: '#475569',
+      clusterBkg: '#0f172a33',
+      clusterBorder: '#334155',
+      titleColor: '#e2e8f0',
+      edgeLabelBackground: '#1e293b'
+    } : {
+      primaryColor: '#eff6ff',
+      primaryTextColor: '#1e293b',
+      primaryBorderColor: '#3b82f6',
+      lineColor: '#94a3b8',
+      secondaryColor: '#f1f5f9',
+      tertiaryColor: '#fafbfc',
+      background: '#ffffff',
+      mainBkg: '#eff6ff',
+      nodeBorder: '#93c5fd',
+      clusterBkg: '#f8fafc',
+      clusterBorder: '#cbd5e1',
+      titleColor: '#1e293b',
+      edgeLabelBackground: '#ffffff'
+    }
+  });
+</script>
 </body>
 </html>
