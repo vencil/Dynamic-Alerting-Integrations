@@ -215,9 +215,9 @@ flowchart TD
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 測試告警規則的 PromQL 運算式
-> - [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 查看現有 Rule Pack 的覆蓋範圍
-> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 驗證進階場景配置
+> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../promql-tester.jsx) — 測試告警規則的 PromQL 運算式
+> - [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-matrix.jsx) — 查看現有 Rule Pack 的覆蓋範圍
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-lint.jsx) — 驗證進階場景配置
 
 ## 相關資源
 

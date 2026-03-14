@@ -48,3 +48,32 @@
 | `rule-packs/README.md` | All | 15 Rule Packs + optional 卸載 |
 | `rule-packs/ALERT-REFERENCE.md (.en.md)` | Tenants, SREs | 96 個 Alert 含義 + 建議動作速查 |
 | `k8s/03-monitoring/dynamic-alerting-overview.json` | SRE | Grafana Dashboard |
+| `docs/assets/tool-registry.yaml` | AI Agent | 互動工具單一真相源（23 tools metadata） |
+
+---
+
+## Change Impact Matrix
+
+> 變更任何項目前，先查此表確認連動更新範圍。
+
+| 變更類型 | 必須更新的文件 | 驗證指令 |
+|---------|--------------|---------|
+| **新增互動工具** | ① JSX 檔案（含 frontmatter）→ ② `tool-registry.yaml` → ③ Hub `index.html`（卡片 + data-audience）→ ④ jsx-loader `TOOL_META` → ⑤ 相關 .md callout → ⑥ CHANGELOG | `make lint-docs` |
+| **修改工具 audience** | ① `tool-registry.yaml` → ② Hub `data-audience` → ③ JSX frontmatter | `make lint-docs` |
+| **修改工具 related** | ① JSX frontmatter `related:` → ② `tool-registry.yaml` related | `make lint-docs` |
+| **新增 Rule Pack** | ① exporter 程式碼 → ② rule-pack-selector/detail/matrix JSX 內建資料 → ③ dependency-graph edges → ④ capacity-planner 計算 → ⑤ architecture docs → ⑥ Hub stats | `make lint-docs` |
+| **修改 routing 機制** | ① Go code → ② Python gen → ③ architecture-and-design.md → ④ scenarios/ → ⑤ alert-simulator JSX 邏輯 | Go + Python tests |
+| **修改三態邏輯** | ① Go code → ② schema-explorer JSX → ③ playground validation → ④ config-lint rules | Go + Python tests |
+| **新增 Scenario 文件** | ① .md 檔案 → ② doc-map.md 表格 → ③ 加互動工具 callout → ④ Hub Documentation links | `make lint-docs` |
+| **版號升級** | `make bump-docs` → CLAUDE.md / README / CHANGELOG / JSX frontmatter version | `make version-check` |
+
+### 新增互動工具 Checklist（詳細版）
+
+1. 建立 `docs/<tool-name>.jsx`（含 YAML frontmatter: title, tags, audience, version, lang, related）
+2. 更新 `docs/assets/tool-registry.yaml` — 新增 entry
+3. 更新 `docs/interactive/index.html` — 新增卡片（含 `data-audience`）
+4. 更新 `docs/assets/jsx-loader.html` — TOOL_META 新增條目
+5. 更新相關 Getting-Started / Scenario / Architecture .md — 加 callout
+6. 更新 `tool-registry.yaml` 的 `appears_in` 反映上一步
+7. 執行 `make lint-docs` 驗證一致性
+8. 更新 CHANGELOG.md

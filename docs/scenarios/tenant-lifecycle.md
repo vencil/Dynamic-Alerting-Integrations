@@ -490,9 +490,9 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 編輯和驗證租戶配置
-> - [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 探索租戶配置的完整架構
-> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 驗證租戶配置的正確性
+> - [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../playground.jsx) — 編輯和驗證租戶配置
+> - [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../schema-explorer.jsx) — 探索租戶配置的完整架構
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-lint.jsx) — 驗證租戶配置的正確性
 
 ## 相關資源
 

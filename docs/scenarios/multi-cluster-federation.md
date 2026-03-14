@@ -458,9 +458,9 @@ da-tools federation-check e2e \
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 選擇適用於聯邦架構的 Rule Pack
-> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 視覺化 Rule Pack 的依賴關係
-> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 估算多叢集部署的資源需求
+> - [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-selector.jsx) — 選擇適用於聯邦架構的 Rule Pack
+> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../dependency-graph.jsx) — 視覺化 Rule Pack 的依賴關係
+> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../capacity-planner.jsx) — 估算多叢集部署的資源需求
 
 ## 相關資源
 

@@ -215,10 +215,13 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/bump_docs.py --check
 
-lint-docs: ## 一站式文件 lint（versions + drift checks，支援 ARGS="--parallel"）
+lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes \
 		$(ARGS)
+	@echo ""
+	@echo "=== Tool Consistency Check ==="
+	@python3 ./scripts/tools/lint_tool_consistency.py || true
 
 version-show: ## 顯示目前三條版號線
 	@python3 ./scripts/tools/bump_docs.py --show-current

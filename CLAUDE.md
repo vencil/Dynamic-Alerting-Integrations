@@ -45,11 +45,20 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 1. **ConfigMap**: 禁止 `cat <<EOF`。用 `kubectl patch` / `helm upgrade` / `patch_config.py`
 2. **Tenant-agnostic**: Go/PromQL 禁止 Hardcode Tenant ID
 3. **三態**: Custom / Default (省略) / Disable (`"disable"`)
-4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`
+4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`。變更連動規則見 `docs/internal/doc-map.md` § Change Impact Matrix
 5. **SAST**: Go `ReadHeaderTimeout`; Python `os.chmod(path, 0o600)` + `encoding="utf-8"`; `subprocess` 禁止 `shell=True`
 6. **推銷語言不進 repo**: README 保持客觀工程語言
 7. **版號治理**: `make version-check` → `make bump-docs` → 三線 tag（`v*` platform / `exporter/v*` / `tools/v*`）
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
+
+## 互動工具生態（23 JSX tools）
+
+- **單一真相源**: `docs/assets/tool-registry.yaml` — 所有工具 metadata（key, audience, related, appears_in）
+- **Hub 頁面**: `docs/interactive/index.html` — 角色篩選（Platform / Domain / Tenant）+ 22 張卡片
+- **jsx-loader**: `docs/assets/jsx-loader.html` — 瀏覽器端 JSX transpiler + `TOOL_META`（related footer）
+- **離線支援**: `make vendor-download` → `docs/assets/vendor/`，jsx-loader 自動偵測
+
+變更互動工具時：先更新 `tool-registry.yaml` → 依 `doc-map.md` § Change Impact Matrix 連動 → `make lint-docs` 驗證。
 
 ## 文件導覽
 
@@ -74,7 +83,9 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `make validate-config` | 一站式配置驗證 |
 | `make chart-package` / `chart-push` | Helm OCI 打包推送 |
 | `make version-check` / `bump-docs` | 版號治理 |
-| `make lint-docs` | 一站式文件 lint（versions + drift checks），支援 `ARGS="--parallel"` |
+| `make lint-docs` | 一站式文件 lint（versions + drift + tool consistency），支援 `ARGS="--parallel"` |
+| `make serve-docs` | 啟動本地文件伺服器（含互動工具 `localhost:8080`） |
+| `make vendor-download` / `vendor-check` | 下載 / 檢查離線 CDN 資源 |
 | `make release-tag-exporter` | 從 Chart.yaml 推導 `exporter/v*` tag |
 
 完整目標見 `make help`。
