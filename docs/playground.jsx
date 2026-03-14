@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 
 const YAML_TEMPLATES = {
+  minimal: `# This is ALL a tenant needs to write — just 3 lines!
+tenants:
+  my-app:
+    mysql_connections: "100"`,
   mariadb: `tenants:
   db-a:
     mysql_connections: "70"
@@ -469,6 +473,7 @@ export default function TenantYAMLPlayground() {
               onChange={handleTemplateChange}
               className="px-3 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
+              <option value="minimal">Minimal (3 lines!)</option>
               <option value="mariadb">MariaDB Example</option>
               <option value="postgresql">PostgreSQL Example</option>
               <option value="redis">Redis Example</option>

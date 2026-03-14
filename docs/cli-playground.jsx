@@ -169,9 +169,18 @@ function initCommandState(cmdKey) {
   return { args: a, flags: f };
 }
 
+function readHashCmd() {
+  try {
+    const p = new URLSearchParams(window.location.hash.slice(1));
+    const cmd = p.get('cmd');
+    return (cmd && COMMANDS[cmd]) ? cmd : 'check-alert';
+  } catch(e) { return 'check-alert'; }
+}
+
 export default function CLIPlayground() {
-  const initial = initCommandState('check-alert');
-  const [selectedCommand, setSelectedCommand] = useState('check-alert');
+  const initialCmd = readHashCmd();
+  const initial = initCommandState(initialCmd);
+  const [selectedCommand, setSelectedCommand] = useState(initialCmd);
   const [isDocker, setIsDocker] = useState(true);
   const [networkMode, setNetworkMode] = useState('linux');
   const [args, setArgs] = useState(initial.args);
@@ -189,6 +198,7 @@ export default function CLIPlayground() {
     const state = initCommandState(cmdKey);
     setArgs(state.args);
     setFlags(state.flags);
+    window.history.replaceState(null, '', '#cmd=' + cmdKey);
   };
 
   const updateArg = (name, value) => {

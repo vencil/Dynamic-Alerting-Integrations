@@ -349,24 +349,26 @@
     <div class="diagram-section">
       <div class="diagram-label">Platform Architecture</div>
       <pre class="mermaid">
-graph LR
-    subgraph Config["Configuration Layer"]
-        Y["Tenant YAML<br/>conf.d/"]
-        P["Profiles<br/>_defaults + _profiles"]
-        CR["ThresholdConfig CRD<br/>(optional)"]
+graph TD
+    subgraph TL["Tenant Layer — Zero PromQL"]
+        D["_defaults.yaml"]
+        T1["db-a.yaml"]
+        T2["db-b.yaml"]
     end
-    subgraph Core["Core Engine"]
-        TE["threshold-exporter<br/>SHA-256 hot-reload"]
+    subgraph PL["Platform Layer"]
+        TE["threshold-exporter ×2 HA\nSHA-256 Hot-Reload · Directory Scanner"]
+        RP["Projected Volume\n15 Rule Packs"]
     end
-    subgraph Observability["Monitoring Stack"]
-        PR["Prometheus<br/>15 Rule Packs"]
-        AM["Alertmanager<br/>Dynamic Routing"]
+    subgraph PE["Prometheus + Alertmanager"]
+        PROM["Prometheus\ngroup_left Vector Matching"]
+        AM["Alertmanager\nDynamic Routing · Severity Dedup"]
     end
-    Y --> TE
-    P --> TE
-    CR -->|"Assembler"| TE
-    TE -->|"metrics"| PR
-    PR -->|"alerts"| AM
+    D --> TE
+    T1 --> TE
+    T2 --> TE
+    TE -->|"user_threshold metrics"| PROM
+    RP -->|"Recording + Alert Rules"| PROM
+    PROM -->|"alerts"| AM
       </pre>
     </div>
   </div>

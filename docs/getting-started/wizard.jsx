@@ -109,215 +109,139 @@ const RECOMMENDATIONS = {
   "platform-setup": {
     title: "Platform Initial Setup",
     docs: [
-      {
-        name: "Platform Engineer Quick Start",
-        path: "for-platform-engineers.md",
-        priority: "start-here",
-      },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "BYO Prometheus Integration", path: "../byo-prometheus-integration.md" },
-      {
-        name: "BYO Alertmanager Integration",
-        path: "../byo-alertmanager-integration.md",
-      },
-      { name: "GitOps Deployment Guide", path: "../gitops-deployment.md" },
-      { name: "Custom Rule Governance", path: "../custom-rule-governance.md" },
+      { name: "Platform Engineer Quick Start", path: "for-platform-engineers.md", priority: "start-here", summary: "Deploy the platform end-to-end: Helm install, config, and verify." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "BYO Prometheus Integration", path: "../byo-prometheus-integration.md", summary: "Integrate with your existing Prometheus or Thanos setup." },
+      { name: "BYO Alertmanager Integration", path: "../byo-alertmanager-integration.md", summary: "Connect to an existing Alertmanager with dynamic routing." },
+      { name: "GitOps Deployment Guide", path: "../gitops-deployment.md", summary: "ArgoCD / Flux workflows, CI drift detection." },
+      { name: "Custom Rule Governance", path: "../custom-rule-governance.md", summary: "Three-tier governance model, CI linting, naming conventions." },
     ],
   },
   "platform-migration": {
     title: "Migration from Legacy Systems",
     docs: [
-      {
-        name: "Platform Engineer Quick Start",
-        path: "for-platform-engineers.md",
-        priority: "start-here",
-      },
-      {
-        name: "Migration Engine Guide",
-        path: "../migration-engine.md",
-      },
-      {
-        name: "Migration User Guide",
-        path: "../migration-guide.md",
-      },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md" },
-      { name: "Shadow Monitoring SOP", path: "../shadow-monitoring-sop.md" },
-      {
-        name: "Shadow Monitoring Cutover",
-        path: "../scenarios/shadow-monitoring-cutover.md",
-      },
+      { name: "Platform Engineer Quick Start", path: "for-platform-engineers.md", priority: "start-here", summary: "Deploy the platform end-to-end: Helm install, config, and verify." },
+      { name: "Migration Engine Guide", path: "../migration-engine.md", summary: "AST-based PromQL-to-YAML converter internals." },
+      { name: "Migration User Guide", path: "../migration-guide.md", summary: "Step-by-step onboarding flow with scaffold and migrate tools." },
+      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Shadow Monitoring SOP", path: "../shadow-monitoring-sop.md", summary: "Dual-track old/new rules, auto-convergence detection." },
+      { name: "Shadow Monitoring Cutover", path: "../scenarios/shadow-monitoring-cutover.md", summary: "Zero-risk cutover: readiness check, one-click switch, rollback." },
     ],
   },
   "platform-federation": {
     title: "Multi-Cluster Federation",
     docs: [
-      {
-        name: "Platform Engineer Quick Start",
-        path: "for-platform-engineers.md",
-        priority: "start-here",
-      },
-      {
-        name: "Federation Integration Guide",
-        path: "../federation-integration.md",
-      },
-      {
-        name: "Multi-Cluster Federation Scenarios",
-        path: "../scenarios/multi-cluster-federation.md",
-      },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Governance & Security", path: "../governance-security.md" },
+      { name: "Platform Engineer Quick Start", path: "for-platform-engineers.md", priority: "start-here", summary: "Deploy the platform end-to-end: Helm install, config, and verify." },
+      { name: "Federation Integration Guide", path: "../federation-integration.md", summary: "Scenario A blueprint: central exporter + edge Prometheus." },
+      { name: "Multi-Cluster Federation Scenarios", path: "../scenarios/multi-cluster-federation.md", summary: "Edge-to-central metric flow, cross-cluster alert routing." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Governance & Security", path: "../governance-security.md", summary: "RBAC, webhook allowlists, cardinality guards." },
     ],
   },
   "platform-monitoring": {
     title: "Platform Monitoring & Scaling",
     docs: [
-      {
-        name: "Platform Engineer Quick Start",
-        path: "for-platform-engineers.md",
-        priority: "start-here",
-      },
-      { name: "Benchmarks & Performance", path: "../benchmarks.md" },
-      {
-        name: "Troubleshooting Guide",
-        path: "../troubleshooting.md",
-      },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Governance & Security", path: "../governance-security.md" },
+      { name: "Platform Engineer Quick Start", path: "for-platform-engineers.md", priority: "start-here", summary: "Deploy the platform end-to-end: Helm install, config, and verify." },
+      { name: "Benchmarks & Performance", path: "../benchmarks.md", summary: "Idle, scaling-curve, under-load, routing, and reload benchmarks." },
+      { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Governance & Security", path: "../governance-security.md", summary: "RBAC, webhook allowlists, cardinality guards." },
     ],
   },
   "domain-mariadb": {
     title: "MariaDB Threshold Configuration",
     docs: [
-      {
-        name: "Domain Expert Quick Start",
-        path: "for-domain-experts.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Quick Start", path: "for-tenants.md" },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Rule Packs Overview", path: "../rule-packs/README.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md" },
+      { name: "Domain Expert Quick Start", path: "for-domain-experts.md", priority: "start-here", summary: "Learn the three-layer Rule Pack architecture and set thresholds." },
+      { name: "Tenant Quick Start", path: "for-tenants.md", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md", summary: "Observe real metrics and compute p50/p90/p99 threshold suggestions." },
     ],
   },
   "domain-postgresql": {
     title: "PostgreSQL Threshold Configuration",
     docs: [
-      {
-        name: "Domain Expert Quick Start",
-        path: "for-domain-experts.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Quick Start", path: "for-tenants.md" },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Rule Packs Overview", path: "../rule-packs/README.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md" },
+      { name: "Domain Expert Quick Start", path: "for-domain-experts.md", priority: "start-here", summary: "Learn the three-layer Rule Pack architecture and set thresholds." },
+      { name: "Tenant Quick Start", path: "for-tenants.md", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md", summary: "Observe real metrics and compute p50/p90/p99 threshold suggestions." },
     ],
   },
   "domain-redis": {
     title: "Redis Threshold Configuration",
     docs: [
-      {
-        name: "Domain Expert Quick Start",
-        path: "for-domain-experts.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Quick Start", path: "for-tenants.md" },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Rule Packs Overview", path: "../rule-packs/README.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md" },
+      { name: "Domain Expert Quick Start", path: "for-domain-experts.md", priority: "start-here", summary: "Learn the three-layer Rule Pack architecture and set thresholds." },
+      { name: "Tenant Quick Start", path: "for-tenants.md", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md", summary: "Observe real metrics and compute p50/p90/p99 threshold suggestions." },
     ],
   },
   "domain-mongodb": {
     title: "MongoDB Threshold Configuration",
     docs: [
-      {
-        name: "Domain Expert Quick Start",
-        path: "for-domain-experts.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Quick Start", path: "for-tenants.md" },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Rule Packs Overview", path: "../rule-packs/README.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md" },
+      { name: "Domain Expert Quick Start", path: "for-domain-experts.md", priority: "start-here", summary: "Learn the three-layer Rule Pack architecture and set thresholds." },
+      { name: "Tenant Quick Start", path: "for-tenants.md", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Baseline Discovery Tool", path: "../internal/testing-playbook.md", summary: "Observe real metrics and compute p50/p90/p99 threshold suggestions." },
     ],
   },
   "domain-other": {
     title: "Custom Threshold Configuration",
     docs: [
-      {
-        name: "Domain Expert Quick Start",
-        path: "for-domain-experts.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Quick Start", path: "for-tenants.md" },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Custom Rule Governance", path: "../custom-rule-governance.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md" },
+      { name: "Domain Expert Quick Start", path: "for-domain-experts.md", priority: "start-here", summary: "Learn the three-layer Rule Pack architecture and set thresholds." },
+      { name: "Tenant Quick Start", path: "for-tenants.md", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Custom Rule Governance", path: "../custom-rule-governance.md", summary: "Three-tier governance model, CI linting, naming conventions." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
     ],
   },
   "tenant-onboard": {
     title: "Getting Your Team Onboarded",
     docs: [
-      {
-        name: "Tenant Quick Start",
-        path: "for-tenants.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md" },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Rule Packs Overview", path: "../rule-packs/README.md" },
-      { name: "Migration Guide", path: "../migration-guide.md" },
+      { name: "Tenant Quick Start", path: "for-tenants.md", priority: "start-here", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md", summary: "Scaffold → validate → deploy → offboard full lifecycle." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
+      { name: "Migration Guide", path: "../migration-guide.md", summary: "Step-by-step onboarding flow with scaffold and migrate tools." },
     ],
   },
   "tenant-alerts": {
     title: "Configure Alerts for Your Services",
     docs: [
-      {
-        name: "Tenant Quick Start",
-        path: "for-tenants.md",
-        priority: "start-here",
-      },
-      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md" },
-      { name: "Rule Packs Overview", path: "../rule-packs/README.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md" },
-      { name: "Troubleshooting Guide", path: "../troubleshooting.md" },
+      { name: "Tenant Quick Start", path: "for-tenants.md", priority: "start-here", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
+      { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
     ],
   },
   "tenant-routing": {
     title: "Set Up Alert Routing & Notifications",
     docs: [
-      {
-        name: "Tenant Quick Start",
-        path: "for-tenants.md",
-        priority: "start-here",
-      },
-      {
-        name: "Alert Routing Split (NOC vs Tenant)",
-        path: "../scenarios/alert-routing-split.md",
-      },
-      { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md" },
-      { name: "Troubleshooting Guide", path: "../troubleshooting.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
+      { name: "Tenant Quick Start", path: "for-tenants.md", priority: "start-here", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Alert Routing Split (NOC vs Tenant)", path: "../scenarios/alert-routing-split.md", summary: "Dual-perspective notifications: NOC gets platform_summary, tenant gets summary." },
+      { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md", summary: "Scaffold → validate → deploy → offboard full lifecycle." },
+      { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
     ],
   },
   "tenant-maintenance": {
     title: "Manage Maintenance Windows & Silences",
     docs: [
-      {
-        name: "Tenant Quick Start",
-        path: "for-tenants.md",
-        priority: "start-here",
-      },
-      { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md" },
-      { name: "Architecture & Design", path: "../architecture-and-design.md" },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md" },
-      { name: "Troubleshooting Guide", path: "../troubleshooting.md" },
+      { name: "Tenant Quick Start", path: "for-tenants.md", priority: "start-here", summary: "The 3 things every tenant needs to know in 30 seconds." },
+      { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md", summary: "Scaffold → validate → deploy → offboard full lifecycle." },
+      { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
+      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
     ],
   },
 };
@@ -416,9 +340,9 @@ const DocumentLink = ({ doc }) => {
               </span>
             )}
           </h4>
-          <p className="text-xs text-gray-500 mt-1 font-mono break-all">
-            {doc.path}
-          </p>
+          {doc.summary && (
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{doc.summary}</p>
+          )}
         </div>
         <div className="ml-3 text-lg">→</div>
       </div>
@@ -447,11 +371,30 @@ const RecommendationsSummary = ({ recommendations }) => {
   );
 };
 
+// Read initial state from URL hash (e.g., #role=tenant&option=routing)
+function readHash() {
+  try {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    return { role: params.get('role'), option: params.get('option') };
+  } catch (e) { return { role: null, option: null }; }
+}
+
+function writeHash(role, option) {
+  const parts = [];
+  if (role) parts.push('role=' + role);
+  if (option) parts.push('option=' + option);
+  window.history.replaceState(null, '', parts.length ? '#' + parts.join('&') : window.location.pathname + window.location.search);
+}
+
 export default function GettingStartedWizard() {
-  const [step, setStep] = useState(0);
-  const [selectedRole, setSelectedRole] = useState(null);
-  const [selectedOption, setSelectedOption] = useState(null);
-  const [recommendationKey, setRecommendationKey] = useState(null);
+  const initial = readHash();
+  const hasInitialOption = initial.role && initial.option && RECOMMENDATIONS[initial.role + '-' + initial.option];
+  const [step, setStep] = useState(hasInitialOption ? 2 : initial.role ? 1 : 0);
+  const [selectedRole, setSelectedRole] = useState(initial.role);
+  const [selectedOption, setSelectedOption] = useState(initial.option);
+  const [recommendationKey, setRecommendationKey] = useState(
+    hasInitialOption ? initial.role + '-' + initial.option : null
+  );
 
   const getOptionsList = () => {
     if (selectedRole === "platform") return GOALS.platform;
@@ -472,6 +415,7 @@ export default function GettingStartedWizard() {
     setSelectedOption(null);
     setRecommendationKey(null);
     setStep(1);
+    writeHash(roleId, null);
   };
 
   const handleOptionSelect = (optionId) => {
@@ -479,6 +423,7 @@ export default function GettingStartedWizard() {
     const key = selectedRole === "platform" ? `platform-${optionId}` : selectedRole === "domain" ? `domain-${optionId}` : `tenant-${optionId}`;
     setRecommendationKey(key);
     setStep(2);
+    writeHash(selectedRole, optionId);
   };
 
   const handleStartOver = () => {
@@ -486,6 +431,7 @@ export default function GettingStartedWizard() {
     setSelectedRole(null);
     setSelectedOption(null);
     setRecommendationKey(null);
+    writeHash(null, null);
   };
 
   const selectedRoleObj = ROLES.find((r) => r.id === selectedRole);

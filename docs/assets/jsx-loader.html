@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Interactive Component</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Configure Tailwind to use class-based dark mode
+  tailwind.config = { darkMode: 'class' };
+  // Apply dark mode on load if system prefers dark
+  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.classList.add('dark');
+  }
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -58,10 +66,31 @@
     transition: color 0.15s, border-color 0.15s;
   }
   .back-home:hover { color: #3b82f6; border-color: #3b82f6; }
+  /* Dark mode toggle */
+  .theme-toggle {
+    position: fixed; top: 12px; right: 12px; z-index: 50;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem;
+    background: rgba(255,255,255,0.9); border: 1px solid #e2e8f0;
+    border-radius: 8px; cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .theme-toggle:hover { border-color: #3b82f6; }
+  /* Dark mode overrides when .dark is on html */
+  html.dark body { background: #0f172a; color: #e2e8f0; }
+  html.dark .back-home { color: #94a3b8; background: rgba(15,23,42,0.9); border-color: #334155; }
+  html.dark .back-home:hover { color: #60a5fa; border-color: #60a5fa; }
+  html.dark .theme-toggle { background: rgba(15,23,42,0.9); border-color: #334155; }
+  html.dark .theme-toggle:hover { border-color: #60a5fa; }
+  html.dark #loading .label { color: #94a3b8; }
+  html.dark #loading .spinner { border-color: #334155; border-top-color: #60a5fa; }
 </style>
 </head>
 <body>
 <a class="back-home" href="../interactive/index.html">← Tools</a>
+<button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
 <div id="loading"><div class="spinner"></div><div class="label">Loading component…</div></div>
 <div id="error"></div>
 <div id="root"></div>
@@ -177,6 +206,19 @@
     document.body.appendChild(script);
     window.Babel.transformScriptTags();
   }
+})();
+
+// Dark mode toggle
+(function() {
+  var btn = document.getElementById('theme-toggle');
+  function updateIcon() {
+    btn.textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+  }
+  updateIcon();
+  btn.addEventListener('click', function() {
+    document.documentElement.classList.toggle('dark');
+    updateIcon();
+  });
 })();
 
 // Fallback SVG icons when lucide-react CDN is unavailable
