@@ -1,5 +1,25 @@
 import { useState } from "react";
 
+// Base URL for doc links — GitHub renders .md files natively
+const REPO_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main";
+
+// Convert relative doc path to full GitHub URL
+function docUrl(relativePath) {
+  // relativePath is relative to docs/getting-started/
+  // e.g., "for-tenants.md" → docs/getting-started/for-tenants.md
+  // e.g., "../architecture-and-design.md" → docs/architecture-and-design.md
+  // e.g., "../rule-packs/README.md" → rule-packs/README.md
+  let resolved;
+  if (relativePath.startsWith("../rule-packs/")) {
+    resolved = relativePath.replace("../", "");
+  } else if (relativePath.startsWith("../")) {
+    resolved = "docs/" + relativePath.replace("../", "");
+  } else {
+    resolved = "docs/getting-started/" + relativePath;
+  }
+  return `${REPO_BASE}/${resolved}`;
+}
+
 const ROLES = [
   {
     id: "platform",
@@ -337,9 +357,12 @@ const OptionCard = ({ option, isSelected, onClick, icon = null }) => {
 
 const DocumentLink = ({ doc }) => {
   const isPriority = doc.priority === "start-here";
+  const href = docUrl(doc.path);
   return (
     <a
-      href={doc.path}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
       className={`block p-4 rounded-lg border transition-all hover:shadow-md ${
         isPriority
           ? "border-amber-300 bg-amber-50 hover:bg-amber-100"
@@ -539,11 +562,11 @@ export default function GettingStartedWizard() {
         <div className="mt-12 pt-8 border-t border-gray-200">
           <p className="text-center text-sm text-gray-600">
             Questions? Check the{" "}
-            <a href="../troubleshooting.md" className="text-blue-600 hover:underline">
+            <a href={docUrl("../troubleshooting.md")} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
               Troubleshooting Guide
             </a>
             {" "}or{" "}
-            <a href="../context-diagram.md" className="text-blue-600 hover:underline">
+            <a href={docUrl("../context-diagram.md")} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
               Context Diagram
             </a>
           </p>
