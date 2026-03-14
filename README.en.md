@@ -180,7 +180,7 @@ Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](do
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.en.md) | Dual-track SOP |
 | [Scenarios](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
 
-Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md)
+Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
 ---
 
