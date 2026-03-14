@@ -4,6 +4,7 @@ tags: [migration, interactive, tools]
 audience: [platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [playground, promql-tester, config-diff]
 ---
 
 import React, { useState, useMemo } from 'react';

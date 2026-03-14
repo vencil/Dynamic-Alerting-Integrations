@@ -4,6 +4,7 @@ tags: [alert, timeline, simulation, interactive]
 audience: [tenant, platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [alert-simulator, runbook-viewer, glossary]
 ---
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';

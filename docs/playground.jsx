@@ -1,3 +1,12 @@
+---
+title: "YAML Playground"
+tags: [playground, interactive, tools]
+audience: [tenant, platform-engineer, domain-expert]
+version: v2.0.0-preview.2
+lang: en
+related: [config-lint, schema-explorer, template-gallery]
+---
+
 import React, { useState, useEffect, useMemo } from 'react';
 
 const YAML_TEMPLATES = {

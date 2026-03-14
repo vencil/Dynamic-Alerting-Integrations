@@ -4,6 +4,7 @@ tags: [diff, interactive, tools]
 audience: [platform-engineer, tenant]
 version: v2.0.0-preview.2
 lang: en
+related: [config-lint, playground, migration-simulator]
 ---
 
 import React, { useState, useMemo } from 'react';

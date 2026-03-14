@@ -4,6 +4,7 @@ tags: [rule-packs, interactive, comparison]
 audience: [platform-engineer, sre]
 version: v2.0.0-preview.2
 lang: en
+related: [rule-pack-detail, dependency-graph, rule-pack-selector]
 ---
 
 import React, { useState, useMemo } from 'react';

@@ -4,6 +4,7 @@ tags: [cli, interactive, tools, docker]
 audience: [all]
 version: v2.0.0-preview.2
 lang: en
+related: [wizard, onboarding-checklist, glossary]
 ---
 
 import React, { useState, useCallback } from 'react';

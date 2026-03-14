@@ -4,6 +4,7 @@ tags: [capacity, planning, estimation, interactive]
 audience: [platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [architecture-quiz, rule-pack-matrix, dependency-graph]
 ---
 
 import React, { useState, useMemo } from 'react';

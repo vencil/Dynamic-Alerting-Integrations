@@ -4,6 +4,7 @@ tags: [promql, testing, simulation, interactive]
 audience: [platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en
+related: [rule-pack-detail, schema-explorer, migration-simulator]
 ---
 
 import React, { useState, useMemo } from 'react';

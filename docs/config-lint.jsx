@@ -4,6 +4,7 @@ tags: [lint, validation, yaml, best-practices]
 audience: [tenant, platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en
+related: [config-diff, playground, schema-explorer]
 ---
 
 import React, { useState, useMemo } from 'react';

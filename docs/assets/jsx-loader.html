@@ -4,7 +4,43 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Interactive Component</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<!--
+  Vendor loading strategy:
+  1. Try local vendor/ files first (for offline/air-gapped environments)
+  2. Fall back to CDN if local files are not available
+  Run `make vendor-download` to populate docs/assets/vendor/ for offline use.
+-->
+<script>
+  // Detect if local vendor files are available
+  (function() {
+    var vendorBase = 'vendor/';
+    var cdn = {
+      tailwind:  'https://cdn.tailwindcss.com',
+      react:     'https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js',
+      reactDom:  'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js',
+      babel:     'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js',
+      lucide:    'https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.min.js'
+    };
+    var local = {
+      tailwind:  vendorBase + 'tailwindcss.js',
+      react:     vendorBase + 'react.production.min.js',
+      reactDom:  vendorBase + 'react-dom.production.min.js',
+      babel:     vendorBase + 'babel.min.js',
+      lucide:    vendorBase + 'lucide-react.min.js'
+    };
+    // Probe local vendor via sync XHR (fast, same-origin only)
+    var useLocal = false;
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('HEAD', local.react, false);
+      xhr.send();
+      useLocal = (xhr.status === 200);
+    } catch(e) { useLocal = false; }
+    window.__DA_VENDOR = useLocal ? local : cdn;
+    if (useLocal) console.log('[DA] Using local vendor files (offline mode)');
+  })();
+</script>
+<script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.tailwind+'"><\/scr'+'ipt>')</script>
 <script>
   // Configure Tailwind to use class-based dark mode
   tailwind.config = { darkMode: 'class' };
@@ -13,11 +49,10 @@
     document.documentElement.classList.add('dark');
   }
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<script src="https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.min.js"
-        onerror="console.warn('lucide-react CDN unavailable, using fallback icons')"></script>
+<script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.react+'"><\/scr'+'ipt>')</script>
+<script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.reactDom+'"><\/scr'+'ipt>')</script>
+<script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.babel+'"><\/scr'+'ipt>')</script>
+<script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.lucide+'" onerror="console.warn(\'lucide-react unavailable, using fallback icons\')"><\/scr'+'ipt>')</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -147,6 +182,19 @@
    * into something Babel standalone can execute in a <script type="text/babel">.
    */
   function renderJSX(source) {
+    // 0) Extract front matter for related tools before stripping
+    var frontMatter = '';
+    var fmMatch = source.match(/^---\n([\s\S]*?)\n---/);
+    if (fmMatch) frontMatter = fmMatch[1];
+    var relatedTools = [];
+    var relMatch = frontMatter.match(/related:\s*\[([^\]]*)\]/);
+    if (relMatch) {
+      relMatch[1].split(',').forEach(function(item) {
+        var trimmed = item.trim().replace(/['"]/g, '');
+        if (trimmed) relatedTools.push(trimmed);
+      });
+    }
+
     // 1) Strip YAML front matter (--- ... ---)
     source = source.replace(/^---[\s\S]*?---\s*\n?/, '');
 
@@ -214,6 +262,53 @@
     script.textContent = source;
     document.body.appendChild(script);
     window.Babel.transformScriptTags();
+
+    // Render related tools footer if front matter has related field
+    if (relatedTools.length > 0) {
+      var TOOL_META = {
+        'playground': { title: 'YAML Playground', desc: 'Validate & preview YAML', path: '../playground.jsx' },
+        'rule-pack-selector': { title: 'Rule Pack Selector', desc: 'Pick your Rule Packs', path: '../rule-pack-selector.jsx' },
+        'threshold-calculator': { title: 'Threshold Calculator', desc: 'Compute thresholds from percentiles', path: '../threshold-calculator.jsx' },
+        'alert-simulator': { title: 'Alert Simulator', desc: 'Simulate what-if scenarios', path: '../alert-simulator.jsx' },
+        'config-lint': { title: 'Config Lint', desc: 'Best-practice validation', path: '../config-lint.jsx' },
+        'config-diff': { title: 'Config Diff', desc: 'Compare YAML configs', path: '../config-diff.jsx' },
+        'glossary': { title: 'Glossary', desc: 'Platform terminology', path: '../glossary.jsx' },
+        'schema-explorer': { title: 'Schema Explorer', desc: 'Browse all YAML keys', path: '../schema-explorer.jsx' },
+        'rule-pack-detail': { title: 'Rule Pack Details', desc: 'Recording & alert rules', path: '../rule-pack-detail.jsx' },
+        'rule-pack-matrix': { title: 'Rule Pack Matrix', desc: 'Compare all 15 packs', path: '../rule-pack-matrix.jsx' },
+        'capacity-planner': { title: 'Capacity Planner', desc: 'Estimate resources', path: '../capacity-planner.jsx' },
+        'migration-simulator': { title: 'Migration Simulator', desc: 'PromQL to YAML preview', path: '../migration-simulator.jsx' },
+        'alert-timeline': { title: 'Alert Timeline', desc: 'Animated alert replay', path: '../alert-timeline.jsx' },
+        'runbook-viewer': { title: 'Runbook Viewer', desc: 'Diagnose → Fix → Verify', path: '../runbook-viewer.jsx' },
+        'dependency-graph': { title: 'Dependency Graph', desc: 'Rule Pack dependencies', path: '../dependency-graph.jsx' },
+        'architecture-quiz': { title: 'Architecture Quiz', desc: 'Find your deployment pattern', path: '../architecture-quiz.jsx' },
+        'promql-tester': { title: 'PromQL Tester', desc: 'Test queries & find rules', path: '../promql-tester.jsx' },
+        'onboarding-checklist': { title: 'Onboarding Checklist', desc: 'Step-by-step from zero', path: '../onboarding-checklist.jsx' },
+        'health-dashboard': { title: 'Health Dashboard', desc: 'Simulated tenant health', path: '../health-dashboard.jsx' },
+        'template-gallery': { title: 'Template Gallery', desc: 'Ready-made YAML configs', path: '../template-gallery.jsx' },
+        'cli-playground': { title: 'CLI Playground', desc: 'Build da-tools commands', path: '../getting-started/cli-playground.jsx' },
+        'wizard': { title: 'Getting Started Wizard', desc: 'Find your learning path', path: '../getting-started/wizard.jsx' },
+        'platform-demo': { title: 'Platform Demo', desc: 'Interactive make demo walkthrough', path: '../platform-demo.jsx' }
+      };
+      var footer = document.createElement('div');
+      footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';
+      footer.innerHTML = '<div style="border-top:1px solid #e2e8f0;padding-top:1.5rem">' +
+        '<h3 style="font-size:0.875rem;font-weight:600;color:#64748b;margin-bottom:0.75rem">' +
+        (window.__DA_LANG === 'zh' ? '推薦下一步' : 'You might also like') + '</h3>' +
+        '<div style="display:flex;gap:0.75rem;flex-wrap:wrap">' +
+        relatedTools.map(function(key) {
+          var m = TOOL_META[key];
+          if (!m) return '';
+          return '<a href="?component=' + m.path + '" style="display:block;padding:0.75rem 1rem;' +
+            'background:#f8fafc;border:1px solid #e2e8f0;border-radius:0.75rem;text-decoration:none;' +
+            'min-width:180px;transition:border-color 0.2s" ' +
+            'onmouseover="this.style.borderColor=\'#3b82f6\'" onmouseout="this.style.borderColor=\'#e2e8f0\'">' +
+            '<div style="font-size:0.8125rem;font-weight:600;color:#1e293b">' + m.title + '</div>' +
+            '<div style="font-size:0.6875rem;color:#64748b;margin-top:0.25rem">' + m.desc + '</div></a>';
+        }).join('') +
+        '</div></div>';
+      document.body.appendChild(footer);
+    }
   }
 })();
 

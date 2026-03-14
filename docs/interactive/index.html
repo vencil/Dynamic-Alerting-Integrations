@@ -268,6 +268,16 @@
     border-top-color: #be185d;
   }
 
+  /* ── Role filter ── */
+  .role-filter {
+    padding: 6px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 500;
+    border: 1px solid var(--card-border); background: var(--card-bg); color: var(--muted);
+    cursor: pointer; transition: all 0.2s;
+  }
+  .role-filter:hover { border-color: var(--accent); color: var(--accent); }
+  .role-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .card[data-hidden="true"] { display: none; }
+
   /* ── Quick links section ── */
   .links {
     display: grid;
@@ -437,9 +447,18 @@
 <!-- ── Main Content ── -->
 <div class="main">
 
+  <!-- Role filter -->
+  <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+    <span style="font-size:0.8125rem;color:var(--muted);font-weight:500">Filter by role:</span>
+    <button class="role-filter active" data-role="all">All</button>
+    <button class="role-filter" data-role="platform">⚙️ Platform Engineer</button>
+    <button class="role-filter" data-role="domain">🗄️ Domain Expert</button>
+    <button class="role-filter" data-role="tenant">👥 Tenant Team</button>
+  </div>
+
   <div class="section-title">Interactive Tools</div>
   <div class="cards">
-    <a class="card card-ribbon" href="../assets/jsx-loader.html?component=../getting-started/wizard.jsx">
+    <a class="card card-ribbon" data-audience="platform,domain,tenant" href="../assets/jsx-loader.html?component=../getting-started/wizard.jsx">
       <div class="card-icon wizard">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
       </div>
@@ -455,7 +474,7 @@
       </div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../playground.jsx">
+    <a class="card" data-audience="platform,tenant" href="../assets/jsx-loader.html?component=../playground.jsx">
       <div class="card-icon validation">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
       </div>
@@ -471,7 +490,7 @@
       </div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../rule-pack-selector.jsx">
+    <a class="card" data-audience="platform,domain" href="../assets/jsx-loader.html?component=../rule-pack-selector.jsx">
       <div class="card-icon rules">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       </div>
@@ -487,7 +506,7 @@
       </div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../cli-playground.jsx">
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../cli-playground.jsx">
       <div class="card-icon cli">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
       </div>
@@ -506,7 +525,7 @@
 
   <div class="section-title">Advanced Tools</div>
   <div class="cards">
-    <a class="card" href="../assets/jsx-loader.html?component=../rule-pack-detail.jsx">
+    <a class="card" data-audience="platform,domain" href="../assets/jsx-loader.html?component=../rule-pack-detail.jsx">
       <div class="card-icon rules">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       </div>
@@ -515,7 +534,7 @@
       <div class="tags"><span class="tag">rules</span><span class="tag">PromQL</span><span class="tag">reference</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../threshold-calculator.jsx">
+    <a class="card" data-audience="domain,tenant" href="../assets/jsx-loader.html?component=../threshold-calculator.jsx">
       <div class="card-icon validation">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       </div>
@@ -524,7 +543,7 @@
       <div class="tags"><span class="tag">calculator</span><span class="tag">thresholds</span><span class="tag">yaml</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../template-gallery.jsx">
+    <a class="card" data-audience="tenant,platform" href="../assets/jsx-loader.html?component=../template-gallery.jsx">
       <div class="card-icon wizard">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
       </div>
@@ -533,7 +552,7 @@
       <div class="tags"><span class="tag">templates</span><span class="tag">examples</span><span class="tag">stacks</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../migration-simulator.jsx">
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../migration-simulator.jsx">
       <div class="card-icon cli">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       </div>
@@ -542,7 +561,7 @@
       <div class="tags"><span class="tag">migration</span><span class="tag">PromQL</span><span class="tag">dry-run</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../alert-simulator.jsx">
+    <a class="card" data-audience="domain,tenant" href="../assets/jsx-loader.html?component=../alert-simulator.jsx">
       <div class="card-icon cli">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       </div>
@@ -551,7 +570,7 @@
       <div class="tags"><span class="tag">simulation</span><span class="tag">alerts</span><span class="tag">dedup</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../config-diff.jsx">
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../config-diff.jsx">
       <div class="card-icon validation">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       </div>
@@ -560,7 +579,7 @@
       <div class="tags"><span class="tag">diff</span><span class="tag">compare</span><span class="tag">yaml</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../glossary.jsx">
+    <a class="card" data-audience="platform,domain,tenant" href="../assets/jsx-loader.html?component=../glossary.jsx">
       <div class="card-icon wizard">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
       </div>
@@ -569,7 +588,7 @@
       <div class="tags"><span class="tag">glossary</span><span class="tag">reference</span><span class="tag">terms</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../health-dashboard.jsx">
+    <a class="card" data-audience="platform,tenant" href="../assets/jsx-loader.html?component=../health-dashboard.jsx">
       <div class="card-icon validation">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
       </div>
@@ -578,7 +597,7 @@
       <div class="tags"><span class="tag">dashboard</span><span class="tag">health</span><span class="tag">demo</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../rule-pack-matrix.jsx">
+    <a class="card" data-audience="platform,domain" href="../assets/jsx-loader.html?component=../rule-pack-matrix.jsx">
       <div class="card-icon rules">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
       </div>
@@ -587,7 +606,7 @@
       <div class="tags"><span class="tag">matrix</span><span class="tag">comparison</span><span class="tag">rule packs</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../onboarding-checklist.jsx">
+    <a class="card" data-audience="platform,domain,tenant" href="../assets/jsx-loader.html?component=../onboarding-checklist.jsx">
       <div class="card-icon wizard">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
       </div>
@@ -596,7 +615,7 @@
       <div class="tags"><span class="tag">onboarding</span><span class="tag">checklist</span><span class="tag">progress</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../alert-timeline.jsx">
+    <a class="card" data-audience="domain,tenant" href="../assets/jsx-loader.html?component=../alert-timeline.jsx">
       <div class="card-icon cli">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </div>
@@ -605,7 +624,7 @@
       <div class="tags"><span class="tag">animation</span><span class="tag">timeline</span><span class="tag">dedup</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../schema-explorer.jsx">
+    <a class="card" data-audience="platform,domain" href="../assets/jsx-loader.html?component=../schema-explorer.jsx">
       <div class="card-icon validation">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M9 3v18"/><path d="M3 9h18"/></svg>
       </div>
@@ -614,7 +633,7 @@
       <div class="tags"><span class="tag">schema</span><span class="tag">reference</span><span class="tag">yaml</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../capacity-planner.jsx">
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../capacity-planner.jsx">
       <div class="card-icon wizard">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       </div>
@@ -623,7 +642,7 @@
       <div class="tags"><span class="tag">capacity</span><span class="tag">planning</span><span class="tag">estimation</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../runbook-viewer.jsx">
+    <a class="card" data-audience="platform,domain" href="../assets/jsx-loader.html?component=../runbook-viewer.jsx">
       <div class="card-icon rules">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       </div>
@@ -632,7 +651,7 @@
       <div class="tags"><span class="tag">runbook</span><span class="tag">operations</span><span class="tag">alerts</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../dependency-graph.jsx">
+    <a class="card" data-audience="platform,domain" href="../assets/jsx-loader.html?component=../dependency-graph.jsx">
       <div class="card-icon cli">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
       </div>
@@ -641,7 +660,7 @@
       <div class="tags"><span class="tag">graph</span><span class="tag">dependencies</span><span class="tag">visual</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../config-lint.jsx">
+    <a class="card" data-audience="platform,tenant" href="../assets/jsx-loader.html?component=../config-lint.jsx">
       <div class="card-icon validation">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
       </div>
@@ -650,7 +669,7 @@
       <div class="tags"><span class="tag">lint</span><span class="tag">validation</span><span class="tag">best practices</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../architecture-quiz.jsx">
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../architecture-quiz.jsx">
       <div class="card-icon wizard">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       </div>
@@ -659,13 +678,22 @@
       <div class="tags"><span class="tag">architecture</span><span class="tag">quiz</span><span class="tag">decision</span></div>
     </a>
 
-    <a class="card" href="../assets/jsx-loader.html?component=../promql-tester.jsx">
+    <a class="card" data-audience="domain,platform" href="../assets/jsx-loader.html?component=../promql-tester.jsx">
       <div class="card-icon cli">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
       </div>
       <div class="card-title">PromQL Tester</div>
       <div class="card-desc">Enter a PromQL expression, see simulated results, and discover which Rule Pack recording rules already cover your query.</div>
       <div class="tags"><span class="tag">PromQL</span><span class="tag">testing</span><span class="tag">recording rules</span></div>
+    </a>
+
+    <a class="card" data-audience="platform,domain,tenant" href="../assets/jsx-loader.html?component=../platform-demo.jsx">
+      <div class="card-icon wizard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      </div>
+      <div class="card-title">Platform Demo</div>
+      <div class="card-desc">Experience the full `make demo` workflow in your browser — scaffold, migrate, validate, generate routes, and discover baselines, no cluster required.</div>
+      <div class="tags"><span class="tag">demo</span><span class="tag">walkthrough</span><span class="tag">interactive</span></div>
     </a>
   </div>
 
@@ -859,6 +887,30 @@
       }
     })
     .catch(function() { /* badge-data.json not available, keep defaults */ });
+})();
+</script>
+
+<!-- Role-based filter -->
+<script>
+(function() {
+  var buttons = document.querySelectorAll('.role-filter');
+  var cards = document.querySelectorAll('a.card[data-audience]');
+
+  buttons.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      buttons.forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      var role = btn.getAttribute('data-role');
+      cards.forEach(function(card) {
+        if (role === 'all') {
+          card.setAttribute('data-hidden', 'false');
+        } else {
+          var audiences = (card.getAttribute('data-audience') || '').split(',');
+          card.setAttribute('data-hidden', audiences.indexOf(role) === -1 ? 'true' : 'false');
+        }
+      });
+    });
+  });
 })();
 </script>
 </body>

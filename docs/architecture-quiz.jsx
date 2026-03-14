@@ -4,6 +4,7 @@ tags: [architecture, quiz, decision, interactive]
 audience: [platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [capacity-planner, dependency-graph, onboarding-checklist]
 ---
 
 import React, { useState, useMemo } from 'react';

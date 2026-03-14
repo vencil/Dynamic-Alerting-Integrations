@@ -4,6 +4,7 @@ tags: [rule-packs, interactive, tools]
 audience: [platform-engineer, sre]
 version: v2.0.0-preview.2
 lang: en
+related: [rule-pack-detail, dependency-graph, threshold-calculator]
 ---
 
 import React, { useState, useCallback } from 'react';

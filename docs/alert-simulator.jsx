@@ -4,6 +4,7 @@ tags: [alerts, interactive, simulation]
 audience: [tenant, platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [alert-timeline, runbook-viewer, config-lint]
 ---
 
 import React, { useState, useMemo } from 'react';

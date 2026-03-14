@@ -387,6 +387,14 @@ python3 scripts/tools/cutover_tenant.py \
 - [ ] 舊規則已完全移除
 - [ ] 備份已歸檔
 
+## 互動工具
+
+> 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
+>
+> - [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 預覽遷移過程和驗收結果
+> - [Health Dashboard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 監控遷移期間的系統健康狀況
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 比對遷移前後的告警規則配置
+
 ## 相關資源
 
 | 資源 | 相關性 |

@@ -1,3 +1,12 @@
+---
+title: "Getting Started Wizard"
+tags: [wizard, onboarding, interactive, tools]
+audience: [tenant, platform-engineer, domain-expert]
+version: v2.0.0-preview.2
+lang: en
+related: [onboarding-checklist, architecture-quiz, rule-pack-selector]
+---
+
 import { useState } from "react";
 
 // i18n helper — picks zh or en based on jsx-loader's detected language

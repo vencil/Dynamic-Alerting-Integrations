@@ -4,6 +4,7 @@ tags: [runbook, alerts, operations, interactive]
 audience: [tenant, platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en
+related: [alert-simulator, alert-timeline, health-dashboard]
 ---
 
 import React, { useState, useMemo } from 'react';

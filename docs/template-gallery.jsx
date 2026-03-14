@@ -4,6 +4,7 @@ tags: [templates, interactive, tools]
 audience: [tenant, domain-expert]
 version: v2.0.0-preview.2
 lang: en
+related: [playground, rule-pack-selector, threshold-calculator]
 ---
 
 import React, { useState } from 'react';

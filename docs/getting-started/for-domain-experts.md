@@ -55,6 +55,8 @@ thresholds:
     dimensions_re: ["role=~^primary|replica$"]  # 正規表達式維度
 ```
 
+> 💡 **互動工具** — 想瀏覽所有 Rule Pack 的 recording/alert rule？用 [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-detail.jsx)。比較 15 個 Rule Pack 的指標覆蓋？用 [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-matrix.jsx)。從 p50/p90/p99 推算建議閾值？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../threshold-calculator.jsx)。
+
 ### 第三層：告警規則
 
 ```yaml
@@ -283,6 +285,8 @@ A: 使用 shadow monitoring 環境。配置平行的 Prometheus + threshold-expo
 
 **Q: 如何在多個資料庫間共享閾值邏輯？**
 A: 把通用邏輯提取到共用 Rule Pack，或在 `_profiles.yaml` 中定義通用 profile，讓多個 tenant 繼承。例如所有 MySQL 都用 `mysql-standard` profile。
+
+> 💡 **互動工具** — 查看所有合法 YAML key 和型別？用 [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../schema-explorer.jsx)。測試 PromQL 表達式對應的 Recording Rule？用 [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../promql-tester.jsx)。遷移既有規則？用 [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../migration-simulator.jsx)。查看平台術語？用 [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../glossary.jsx)。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。
 
 ## 相關資源
 

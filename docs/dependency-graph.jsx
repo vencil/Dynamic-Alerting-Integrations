@@ -4,6 +4,7 @@ tags: [dependency, graph, visualization, rule-packs]
 audience: [platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en
+related: [rule-pack-matrix, rule-pack-selector, capacity-planner]
 ---
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';

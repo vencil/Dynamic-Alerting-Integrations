@@ -4,6 +4,7 @@ tags: [glossary, interactive, reference]
 audience: [all]
 version: v2.0.0-preview.2
 lang: en
+related: [schema-explorer, wizard, onboarding-checklist]
 ---
 
 import React, { useState } from 'react';

@@ -4,6 +4,7 @@ tags: [dashboard, interactive, visualization]
 audience: [tenant, platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [alert-simulator, runbook-viewer, alert-timeline]
 ---
 
 import React, { useState, useEffect } from 'react';

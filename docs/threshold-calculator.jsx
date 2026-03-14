@@ -4,6 +4,7 @@ tags: [thresholds, interactive, tools]
 audience: [domain-expert, tenant]
 version: v2.0.0-preview.2
 lang: en
+related: [playground, alert-simulator, schema-explorer]
 ---
 
 import React, { useState, useMemo } from 'react';

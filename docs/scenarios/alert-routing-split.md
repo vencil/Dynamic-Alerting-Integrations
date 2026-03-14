@@ -187,6 +187,14 @@ tenants:
 3. **Infrastructure alert 不含 platform_summary**：`XxxDown`、`ExporterAbsent` 等基礎設施 alert 本身已是平台觀點。
 4. **Fallback**：若 receiver 模板引用 `platform_summary` 但某個 alert 沒有此 annotation，Alertmanager 會輸出空字串。建議使用 `{{ or .Annotations.platform_summary .Annotations.summary }}` 做 fallback。
 
+## 互動工具
+
+> 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
+>
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 比對路由配置變更
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 模擬告警流向和通知路由
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 驗證路由配置的正確性
+
 ## 相關資源
 
 | 資源 | 相關性 |

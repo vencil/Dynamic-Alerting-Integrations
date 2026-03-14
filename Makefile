@@ -259,6 +259,25 @@ release-tag-exporter: version-check ## 從 Chart.yaml 推導 exporter tag（觸�
 	@echo "✅ Tag exporter/v$(CHART_VER) created locally."
 	@echo "Run: git push origin exporter/v$(CHART_VER)"
 
+# ----------------------------------------------------------
+# 文件本地伺服
+# ----------------------------------------------------------
+.PHONY: serve-docs
+serve-docs: ## 啟動本地文件伺服器（含互動工具）
+	@echo "Starting local docs server at http://localhost:8080"
+	@echo "Interactive Tools Hub: http://localhost:8080/docs/interactive/"
+	@echo "Press Ctrl+C to stop."
+	@cd docs && python3 -m http.server 8080 --bind 127.0.0.1 2>/dev/null || \
+		(cd .. && python3 -m http.server 8080 --bind 127.0.0.1 --directory docs)
+
+.PHONY: vendor-download
+vendor-download: ## 下載 CDN 資源到 vendor/（離線環境用）
+	@bash scripts/tools/vendor_download.sh
+
+.PHONY: vendor-check
+vendor-check: ## 檢查 vendor/ 資源是否完整
+	@bash scripts/tools/vendor_download.sh --check
+
 .PHONY: help
 help: ## 顯示說明
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'

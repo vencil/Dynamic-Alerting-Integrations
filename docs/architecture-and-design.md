@@ -629,6 +629,18 @@ _routing_enforced:
 
 ---
 
+> 💡 **互動工具**
+>
+> **Routing 與 Receiver 配置**助手：
+>
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-diff.jsx) — 比較租戶路由與接收器配置的變更
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../alert-simulator.jsx) — 模擬警報流經路由、分組與重複間隔的行為
+> - [Architecture Quiz](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../architecture-quiz.jsx) — 通過互動測驗找出最適合你的架構模式
+>
+> 更多工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)
+
+---
+
 ## 3. Projected Volume 架構 (Rule Packs)
 
 ### 3.1 十五個獨立規則包
@@ -725,6 +737,18 @@ groups:
 | §7 故障排查與邊界情況 | [troubleshooting.md](troubleshooting.md) | Platform Engineers, SREs, Tenant 管理者 |
 | §8–§9 進階場景與測試覆蓋 | [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) | Platform Engineers, SREs |
 | §10 AST 遷移引擎架構 | [migration-engine.md](migration-engine.md) | Platform Engineers, DevOps |
+
+---
+
+> 💡 **互動工具**
+>
+> **容量規劃、依賴分析與驗證**：
+>
+> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../capacity-planner.jsx) — 估算叢集資源需求（基數、副本、記憶體）
+> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../dependency-graph.jsx) — 視覺化 Rule Pack 與記錄規則的依賴關係
+> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../promql-tester.jsx) — 測試與驗證 PromQL 查詢
+>
+> 更多工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
 ---
 

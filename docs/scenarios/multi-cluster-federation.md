@@ -454,6 +454,14 @@ da-tools federation-check e2e \
 - [ ] Grafana 儀表板顯示全域視圖
 - [ ] 無 cardinality 超限警告
 
+## 互動工具
+
+> 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
+>
+> - [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 選擇適用於聯邦架構的 Rule Pack
+> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 視覺化 Rule Pack 的依賴關係
+> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../tool-file.jsx) — 估算多叢集部署的資源需求
+
 ## 相關資源
 
 | 資源 | 相關性 |

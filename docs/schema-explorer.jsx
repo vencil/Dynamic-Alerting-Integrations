@@ -4,6 +4,7 @@ tags: [schema, yaml, interactive, reference]
 audience: [tenant, domain-expert, platform-engineer]
 version: v2.0.0-preview.2
 lang: en
+related: [playground, glossary, config-lint]
 ---
 
 import React, { useState, useMemo } from 'react';
