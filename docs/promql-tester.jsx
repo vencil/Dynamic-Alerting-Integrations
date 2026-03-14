@@ -136,7 +136,7 @@ function analyzeQuery(query) {
     analysis.suggestions.push(t('此查詢的 metric 已有對應的 Recording Rule，建議直接使用 recording rule 名稱以提升效能', 'This metric has a matching Recording Rule — consider using the recording rule name for better performance'));
   }
 
-  if (normalized.includes('rate') && !analysis.duration) {
+  if (/\brate\s*\(/.test(normalized) && !analysis.duration) {
     analysis.warnings.push(t('rate() 需要 range vector，請確認有加 [duration]', 'rate() requires a range vector — ensure you include [duration]'));
   }
 

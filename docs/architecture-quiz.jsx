@@ -328,9 +328,7 @@ export default function ArchitectureQuiz() {
                     </div>
 
                     {/* ASCII diagram */}
-                    <pre className="text-xs bg-slate-900 text-green-400 px-4 py-3 rounded-lg font-mono overflow-x-auto mb-4 whitespace-pre">
-                      {arch.diagram}
-                    </pre>
+                    <pre className="text-xs bg-slate-900 text-green-400 px-4 py-3 rounded-lg font-mono overflow-x-auto mb-4 whitespace-pre">{arch.diagram}</pre>
 
                     {/* Docs */}
                     <div className="mb-3">
