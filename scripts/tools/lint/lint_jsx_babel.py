@@ -2,9 +2,14 @@
 """lint_jsx_babel.py — Validate JSX files parse correctly via Babel standalone.
 
 Replicates the jsx-loader.html transform pipeline (front-matter strip,
-ES import → global reference, export default → function) then invokes
-Node.js + @babel/standalone to parse.  Catches errors that only surface
-in the browser at runtime.
+ES import → global reference, export default → function) then runs TWO
+validation passes:
+
+  1. **Static pattern check** — catches ``style={{ }}`` and other patterns
+     that Babel's programmatic API accepts but the browser script-tag mode
+     (``Babel.transformScriptTags()``) silently breaks on.
+  2. **Babel parse** — runs ``Babel.transform()`` via Node.js to catch
+     syntax errors.
 
 Requirements:
     - Node.js (>=16)
@@ -24,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,10 +64,49 @@ for (const f of files) {
 process.stdout.write(JSON.stringify(results));
 """
 
+# ---------------------------------------------------------------------------
+# Static pattern checks — catch patterns that Babel.transform() accepts
+# but Babel.transformScriptTags() (browser mode) silently breaks on.
+# ---------------------------------------------------------------------------
+
+# Matches style={{ ... }} — the double-curly pattern is mishandled by
+# browser-mode Babel (the value is stripped entirely).
+_RE_STYLE_DOUBLE_CURLY = re.compile(r'style\s*=\s*\{\{')
+
+# Matches self-closing HTML elements (div, span, p, etc.) that are not
+# valid self-closing in some Babel parsers.  <div ... /> is fine in React
+# but can confuse older Babel standalone + script-tag mode.
+_RE_SELF_CLOSING_HTML = re.compile(
+    r'<(div|span|p|a|section|main|header|footer|article|aside|nav|ul|ol|li|label|button|h[1-6])\b[^>]*/\s*>'
+)
+
+_STATIC_CHECKS = [
+    (
+        _RE_STYLE_DOUBLE_CURLY,
+        "style={{ }} double-curly pattern breaks browser Babel — "
+        "extract style object to a variable: const s = { ... }; style={s}",
+    ),
+]
+
+
+def _run_static_checks(filepath: str, source: str) -> list[dict]:
+    """Return list of {path, line, error} for each static pattern match."""
+    issues = []
+    lines = source.split("\n")
+    for lineno, line in enumerate(lines, 1):
+        for pattern, msg in _STATIC_CHECKS:
+            if pattern.search(line):
+                issues.append({
+                    "path": filepath,
+                    "line": lineno,
+                    "error": f"(static) {msg}",
+                    "snippet": line.strip()[:120],
+                })
+    return issues
+
 
 def _transform_jsx(source: str) -> str:
     """Replicate jsx-loader.html renderJSX() transform pipeline."""
-    import re
 
     # 1) Strip YAML front matter
     source = re.sub(r"^---[\s\S]*?---\s*\n?", "", source)
@@ -160,19 +205,23 @@ def main() -> int:
 
     # Collect JSX files
     files = []
+    static_failures = []
     for d in JSX_DIRS:
         if not d.exists():
             continue
         for jsx in sorted(d.glob("*.jsx")):
             source = jsx.read_text(encoding="utf-8")
+            rel_path = str(jsx.relative_to(PROJECT_ROOT))
+            # Pass 1: static pattern checks (on original source, before transform)
+            static_failures.extend(_run_static_checks(rel_path, source))
             transformed = _transform_jsx(source)
-            files.append({"path": str(jsx.relative_to(PROJECT_ROOT)), "source": transformed})
+            files.append({"path": rel_path, "source": transformed})
 
     if not files:
         print("✓ No JSX files found")
         return 0
 
-    # Run Babel via Node.js
+    # Pass 2: Babel parse via Node.js
     env = os.environ.copy()
     env["NODE_PATH"] = str(node_modules)
     result = subprocess.run(
@@ -184,26 +233,45 @@ def main() -> int:
         env=env,
     )
 
+    babel_failures = []
     if result.returncode != 0:
         print(f"⚠ Node.js error: {result.stderr[:200]}")
+    else:
+        try:
+            results = json.loads(result.stdout)
+            babel_failures = [r for r in results if not r["ok"]]
+        except json.JSONDecodeError:
+            print("⚠ Could not parse Node.js output")
+
+    # Combine results
+    all_failures = static_failures + babel_failures
+    total_files = len(files)
+    unique_failing = set()
+    for f in all_failures:
+        unique_failing.add(f["path"])
+
+    if not all_failures:
+        print(f"✓ All {total_files} JSX files pass (Babel parse + static checks)")
         return 0
 
-    try:
-        results = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        print(f"⚠ Could not parse Node.js output")
-        return 0
+    # Report static pattern issues
+    if static_failures:
+        print(f"✗ {len(static_failures)} browser-incompatible pattern(s) found:\n")
+        for f in static_failures:
+            print(f"  {f['path']}:{f['line']}: {f['error']}")
+            print(f"    → {f['snippet']}")
+        print()
 
-    failures = [r for r in results if not r["ok"]]
-    passes = [r for r in results if r["ok"]]
+    # Report Babel parse failures
+    if babel_failures:
+        print(f"✗ {len(babel_failures)} JSX file(s) failed Babel parse:\n")
+        for f in babel_failures:
+            print(f"  {f['path']}: {f['error']}")
+        print()
 
-    if not failures:
-        print(f"✓ All {len(passes)} JSX files parse OK")
-        return 0
-
-    print(f"✗ {len(failures)} JSX file(s) failed Babel parse:\n")
-    for f in failures:
-        print(f"  {f['path']}: {f['error']}")
+    passed = total_files - len(unique_failing)
+    print(f"Summary: {passed}/{total_files} files OK, "
+          f"{len(unique_failing)} file(s) have issues")
 
     return 1 if args.ci else 0
 

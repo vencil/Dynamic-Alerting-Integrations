@@ -237,6 +237,8 @@ export default function OnboardingChecklist() {
   };
 
   const progressPct = totalSteps > 0 ? Math.round((checkedCount / totalSteps) * 100) : 0;
+  const progressBarStyle = { width: progressPct + '%' };
+  const progressBarClass = 'h-full rounded-full transition-all duration-500 ' + (progressPct === 100 ? 'bg-green-500' : 'bg-blue-500');
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
@@ -289,9 +291,9 @@ export default function OnboardingChecklist() {
               <div className="flex items-center gap-4">
                 <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all duration-500 ${progressPct === 100 ? 'bg-green-500' : 'bg-blue-500'}`}
-                    style={{ width: progressPct + '%' }}
-                  />
+                    className={progressBarClass}
+                    style={progressBarStyle}
+                  ></div>
                 </div>
                 <span className={`text-sm font-bold ${progressPct === 100 ? 'text-green-600' : 'text-slate-600'}`}>
                   {checkedCount}/{totalSteps} ({progressPct}%)

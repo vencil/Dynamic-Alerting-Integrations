@@ -108,6 +108,8 @@ export default function DependencyGraph() {
   const relatedIds = new Set(relatedEdges.flatMap(e => [e.from, e.to]));
 
   const svgW = 800, svgH = 600;
+  const svgStyle = { minHeight: '400px' };
+  const pointerStyle = { cursor: 'pointer' };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
@@ -138,7 +140,7 @@ export default function DependencyGraph() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* SVG Graph */}
           <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-4 overflow-hidden">
-            <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full" style={{ minHeight: '400px' }}>
+            <svg viewBox={'0 0 ' + svgW + ' ' + svgH} className="w-full" style={svgStyle}>
               <defs>
                 <marker id="arrow-req" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
                   <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
@@ -170,7 +172,7 @@ export default function DependencyGraph() {
                   <g key={i}
                     onMouseEnter={() => setHoveredEdge(i)}
                     onMouseLeave={() => setHoveredEdge(null)}
-                    style={{ cursor: 'pointer' }} className="cursor-pointer">
+                    style={pointerStyle} className="cursor-pointer">
                     <line x1={fx} y1={fy} x2={tx} y2={ty}
                       stroke={edge.type === 'requires' ? '#ef4444' : '#3b82f6'}
                       strokeWidth={isHighlighted || isHovered ? 3 : 1.5}
@@ -199,7 +201,7 @@ export default function DependencyGraph() {
                 return (
                   <g key={pack.id}
                     onClick={() => setSelected(isSelected ? null : pack.id)}
-                    style={{ cursor: 'pointer' }} className="cursor-pointer"
+                    style={pointerStyle} className="cursor-pointer"
                     opacity={isDimmed ? 0.25 : 1}>
                     <circle cx={pos.x} cy={pos.y} r={isSelected ? 30 : 24}
                       fill={isSelected ? color.bg : color.light}
@@ -226,7 +228,7 @@ export default function DependencyGraph() {
               <div className="space-y-2 text-xs">
                 {Object.entries(CATEGORY_COLORS).map(([cat, c]) => (
                   <div key={cat} className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full" style={{ backgroundColor: c.bg }} />
+                    <span className="w-3 h-3 rounded-full" style={({ backgroundColor: c.bg })}></span>
                     <span className="capitalize text-slate-700">{cat}</span>
                   </div>
                 ))}

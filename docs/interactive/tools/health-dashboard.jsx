@@ -72,6 +72,7 @@ function GaugeBar({ label, current, threshold, unit, inverted }) {
   const warn = inverted ? current < threshold * 1.1 : current > threshold * 0.75;
   const color = danger ? 'bg-red-500' : warn ? 'bg-amber-400' : 'bg-green-500';
 
+  const barStyle = { width: Math.min(pct, 100) + '%' };
   return (
     <div className="mb-3">
       <div className="flex justify-between text-xs mb-1">
@@ -79,7 +80,7 @@ function GaugeBar({ label, current, threshold, unit, inverted }) {
         <span className="font-mono text-slate-500">{current}{unit} / {threshold}{unit}</span>
       </div>
       <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className={'h-full ' + color + ' rounded-full transition-all'} style={{ width: Math.min(pct, 100) + '%' }}></div>
+        <div className={'h-full ' + color + ' rounded-full transition-all'} style={barStyle}></div>
       </div>
     </div>
   );

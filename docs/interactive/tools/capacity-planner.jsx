@@ -59,6 +59,7 @@ const RULE_PACKS = (() => {
 function GaugeBar({ value, max, label, unit, color }) {
   const pct = Math.min((value / max) * 100, 100);
   const barColor = pct > 80 ? 'bg-red-500' : pct > 60 ? 'bg-amber-500' : color || 'bg-blue-500';
+  const barStyle = { width: pct + '%' };
   return (
     <div>
       <div className="flex justify-between text-xs text-slate-600 mb-1">
@@ -66,7 +67,7 @@ function GaugeBar({ value, max, label, unit, color }) {
         <span className="font-mono">{typeof value === 'number' ? value.toLocaleString() : value}{unit}</span>
       </div>
       <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-        <div className={'h-full rounded-full transition-all duration-500 ' + barColor} style={{ width: pct + '%' }}></div>
+        <div className={'h-full rounded-full transition-all duration-500 ' + barColor} style={barStyle}></div>
       </div>
     </div>
   );

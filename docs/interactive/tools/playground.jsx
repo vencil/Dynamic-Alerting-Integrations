@@ -626,7 +626,6 @@ export default function TenantYAMLPlayground() {
               onChange={(e) => setYaml(e.target.value)}
               className="flex-1 p-4 font-mono text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 resize-none"
               spellCheck="false"
-              style={{ fontFamily: "Courier New, monospace" }}
             />
           </div>
         </div>

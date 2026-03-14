@@ -285,12 +285,14 @@ export default function PromQLTester() {
                       const max = Math.max(...simulated.map(x => typeof x === 'string' ? parseFloat(x) : x));
                       const pct = max > 0 ? (numV / max) * 100 : 0;
                       const barHeight = Math.max(pct, 2) + '%';
+                      const barStyle = { height: barHeight };
+                      const label = typeof v === 'number' ? (v > 1000 ? (v / 1000).toFixed(0) + 'K' : v > 100 ? Math.round(v) : v.toFixed ? v.toFixed(1) : v) : v;
                       return (
                         <div key={i} className="flex-1 flex flex-col items-center gap-1">
                           <span className="text-xs text-slate-400 font-mono text-[8px]">
-                            {typeof v === 'number' ? (v > 1000 ? `${(v / 1000).toFixed(0)}K` : v > 100 ? Math.round(v) : v.toFixed ? v.toFixed(1) : v) : v}
+                            {label}
                           </span>
-                          <div className="w-full bg-blue-500 rounded-t" style={{ height: barHeight }} />
+                          <div className="w-full bg-blue-500 rounded-t" style={barStyle}></div>
                         </div>
                       );
                     })}

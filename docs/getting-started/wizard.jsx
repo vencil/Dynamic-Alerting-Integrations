@@ -434,6 +434,7 @@ const PathCompare = ({ currentKey, onClose }) => {
 const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => {
   const total = recommendations.docs.length;
   const done = recommendations.docs.filter(d => readDocs.has(d.path)).length;
+  const progressStyle = { width: (total > 0 ? (done / total) * 100 : 0) + '%' };
   return (
     <div className="space-y-6">
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
@@ -445,7 +446,7 @@ const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => 
         </p>
         <div className="mt-3 flex items-center gap-3">
           <div className="flex-1 h-2 bg-blue-100 rounded-full overflow-hidden">
-            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: (total > 0 ? (done / total) * 100 : 0) + '%' }} />
+            <div className="h-full bg-green-500 rounded-full transition-all" style={progressStyle}></div>
           </div>
           <span className="text-sm font-medium text-gray-600">{done}/{total}</span>
         </div>
