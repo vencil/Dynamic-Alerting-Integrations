@@ -2,7 +2,7 @@
 title: "da-tools CLI Playground"
 tags: [cli, da-tools, docker]
 audience: ["platform-engineer"]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [wizard, onboarding-checklist, glossary]
 ---
@@ -163,7 +163,7 @@ Running validation suite...
 [✓] Threshold format     18 thresholds, all numeric strings
 [✓] Routing validation   2 receivers configured
 [✓] Duration guardrails  group_wait, repeat_interval in range
-[✓] Version consistency  v2.0.0-preview.2
+[✓] Version consistency  v2.0.0-preview.3
 
 All checks passed (6/6). Exit code: 0`,
     args: [],

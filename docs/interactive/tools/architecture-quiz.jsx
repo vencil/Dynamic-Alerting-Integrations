@@ -2,7 +2,7 @@
 title: "Architecture Decision Quiz"
 tags: [architecture, quiz, decision]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [capacity-planner, dependency-graph, onboarding-checklist]
 ---

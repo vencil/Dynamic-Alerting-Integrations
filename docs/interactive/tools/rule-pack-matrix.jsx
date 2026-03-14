@@ -2,7 +2,7 @@
 title: "Rule Pack Comparison Matrix"
 tags: [matrix, comparison, rule packs]
 audience: ["platform-engineer", "domain-expert"]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [rule-pack-detail, dependency-graph, rule-pack-selector]
 ---

@@ -2,7 +2,7 @@
 title: "YAML Schema Explorer"
 tags: [schema, reference, yaml]
 audience: ["platform-engineer", "domain-expert"]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [playground, glossary, config-lint]
 ---

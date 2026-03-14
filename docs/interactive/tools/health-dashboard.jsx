@@ -2,7 +2,7 @@
 title: "Tenant Health Dashboard"
 tags: [dashboard, health, demo]
 audience: [tenant, platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [alert-simulator, runbook-viewer, alert-timeline]
 ---
@@ -79,7 +79,7 @@ function GaugeBar({ label, current, threshold, unit, inverted }) {
         <span className="font-mono text-slate-500">{current}{unit} / {threshold}{unit}</span>
       </div>
       <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: Math.min(pct, 100) + '%' }} />
+        <div className={'h-full ' + color + ' rounded-full transition-all'} style={{ width: Math.min(pct, 100) + '%' }}></div>
       </div>
     </div>
   );

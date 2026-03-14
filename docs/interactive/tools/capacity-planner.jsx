@@ -2,7 +2,7 @@
 title: "Capacity Planner"
 tags: [capacity, planning, estimation]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [architecture-quiz, rule-pack-matrix, dependency-graph]
 ---
@@ -66,7 +66,7 @@ function GaugeBar({ value, max, label, unit, color }) {
         <span className="font-mono">{typeof value === 'number' ? value.toLocaleString() : value}{unit}</span>
       </div>
       <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: pct + '%' }} />
+        <div className={'h-full rounded-full transition-all duration-500 ' + barColor} style={{ width: pct + '%' }}></div>
       </div>
     </div>
   );

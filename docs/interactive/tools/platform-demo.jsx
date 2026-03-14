@@ -2,7 +2,7 @@
 title: "Platform Demo"
 tags: [demo, walkthrough, interactive]
 audience: [platform-engineer, domain-expert, tenant]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 related: [wizard, cli-playground, onboarding-checklist]
 ---
@@ -109,8 +109,8 @@ spec:
       '    - incident.demo.local: allowed',
       '',
       '  ✓ Version check',
-      '    - Platform: v2.0.0-preview.2',
-      '    - Exporter: v2.0.0-preview.2',
+      '    - Platform: v2.0.0-preview.3',
+      '    - Exporter: v2.0.0-preview.3',
       '',
       'Status: ALL CHECKS PASSED',
     ],
@@ -309,7 +309,23 @@ function SampleSection({ sample, language = 'yaml' }) {
   );
 }
 
-function PhaseContent({ phase, isActive, isRunning, onRun }) {
+function PhaseContent({ phase, isActive, isRunning, onRun, typingSpeed }) {
+  const [typingIdx, setTypingIdx] = useState(-1);
+
+  // Drive typing animation: increment typingIdx while isRunning
+  useEffect(() => {
+    if (!isRunning) { setTypingIdx(-1); return; }
+    setTypingIdx(0);
+    const totalChars = phase.terminal.reduce((s, l) => s + l.length + 1, 0);
+    const id = setInterval(() => {
+      setTypingIdx(prev => {
+        if (prev >= totalChars) { clearInterval(id); return prev; }
+        return prev + 2; // 2 chars per tick for smooth progress
+      });
+    }, typingSpeed || 20);
+    return () => clearInterval(id);
+  }, [isRunning, phase.terminal, typingSpeed]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -326,7 +342,7 @@ function PhaseContent({ phase, isActive, isRunning, onRun }) {
       <Terminal
         lines={phase.terminal}
         isTyping={isActive && isRunning}
-        typingIndex={isRunning ? phase.terminal.length * 50 : -1}
+        typingIndex={typingIdx}
       />
 
       {phase.sample && <SampleSection sample={phase.sample} />}
@@ -470,6 +486,7 @@ export default function PlatformDemo() {
               isActive={true}
               isRunning={isRunning}
               onRun={handleRun}
+              typingSpeed={typingSpeed}
             />
 
             {/* Navigation */}
