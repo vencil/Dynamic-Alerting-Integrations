@@ -285,7 +285,7 @@ function validateTenantConfig(yamlText) {
   if (!parsed.success) {
     return {
       valid: false,
-      errors: [{ rule: t('YAML 语法', 'YAML Syntax'), message: t(`解析错误: ${parsed.error}`, `Parse error: ${parsed.error}`) }],
+      errors: [{ rule: t('YAML 語法', 'YAML Syntax'), message: t(`解析錯誤: ${parsed.error}`, `Parse error: ${parsed.error}`) }],
       warnings: [],
       metrics: [],
       summary: { thresholds: 0, specialKeys: 0, routing: 'error' }
@@ -296,7 +296,7 @@ function validateTenantConfig(yamlText) {
   if (!config.tenants) {
     return {
       valid: false,
-      errors: [{ rule: t('结构', 'Structure'), message: t('未找到 "tenants" 根键', 'No "tenants" root key found') }],
+      errors: [{ rule: t('結構', 'Structure'), message: t('未找到 "tenants" 根鍵', 'No "tenants" root key found') }],
       warnings: [],
       metrics: [],
       summary: { thresholds: 0, specialKeys: 0, routing: 'error' }
@@ -306,7 +306,7 @@ function validateTenantConfig(yamlText) {
   // Step 2: Validate each tenant
   Object.entries(config.tenants).forEach(([tenantId, tenantConfig]) => {
     if (typeof tenantConfig !== 'object' || tenantConfig === null) {
-      errors.push({ rule: t('租户结构', 'Tenant Structure'), message: t(`租户 "${tenantId}" 不是一个对象`, `Tenant "${tenantId}" is not an object`) });
+      errors.push({ rule: t('租戶結構', 'Tenant Structure'), message: t(`租戶 "${tenantId}" 不是一個對象`, `Tenant "${tenantId}" is not an object`) });
       return;
     }
 
@@ -317,8 +317,8 @@ function validateTenantConfig(yamlText) {
         const strVal = String(value);
         if (!/^\d+$/.test(strVal)) {
           errors.push({
-            rule: t('阈值格式', 'Threshold Format'),
-            message: t(`${tenantId}.${key}: 必须是数字字符串, 得到 "${strVal}"`, `${tenantId}.${key}: must be a number string, got "${strVal}"`)
+            rule: t('閾值格式', 'Threshold Format'),
+            message: t(`${tenantId}.${key}: 必須是數字字串, 得到 "${strVal}"`, `${tenantId}.${key}: must be a number string, got "${strVal}"`)
           });
         } else {
           metrics.push({
@@ -339,13 +339,13 @@ function validateTenantConfig(yamlText) {
             if (value.expires && !isValidISO8601(value.expires)) {
               errors.push({
                 rule: '_silent_mode',
-                message: t(`${tenantId}._silent_mode.expires: 无效的 ISO 8601 时间戳`, `${tenantId}._silent_mode.expires: invalid ISO 8601 timestamp`)
+                message: t(`${tenantId}._silent_mode.expires: 無效的 ISO 8601 時間戳`, `${tenantId}._silent_mode.expires: invalid ISO 8601 timestamp`)
               });
             }
           } else {
             errors.push({
               rule: '_silent_mode',
-              message: t(`${tenantId}._silent_mode: 必须是 "disable" 或具有 expires 的对象`, `${tenantId}._silent_mode: must be "disable" or object with expires`)
+              message: t(`${tenantId}._silent_mode: 必須是 "disable" 或具有 expires 的對象`, `${tenantId}._silent_mode: must be "disable" or object with expires`)
             });
           }
         } else if (key === '_state_maintenance') {
@@ -353,13 +353,13 @@ function validateTenantConfig(yamlText) {
             if (value.expires && !isValidISO8601(value.expires)) {
               errors.push({
                 rule: '_state_maintenance',
-                message: t(`${tenantId}._state_maintenance.expires: 无效的 ISO 8601 时间戳`, `${tenantId}._state_maintenance.expires: invalid ISO 8601 timestamp`)
+                message: t(`${tenantId}._state_maintenance.expires: 無效的 ISO 8601 時間戳`, `${tenantId}._state_maintenance.expires: invalid ISO 8601 timestamp`)
               });
             }
           } else {
             errors.push({
               rule: '_state_maintenance',
-              message: t(`${tenantId}._state_maintenance: 必须是对象`, `${tenantId}._state_maintenance: must be object`)
+              message: t(`${tenantId}._state_maintenance: 必須是對象`, `${tenantId}._state_maintenance: must be object`)
             });
           }
         } else if (key === '_severity_dedup') {
@@ -367,7 +367,7 @@ function validateTenantConfig(yamlText) {
             if (typeof value.enabled !== 'boolean') {
               errors.push({
                 rule: '_severity_dedup',
-                message: t(`${tenantId}._severity_dedup.enabled: 必须是布尔值 (true/false)`, `${tenantId}._severity_dedup.enabled: must be boolean (true/false)`)
+                message: t(`${tenantId}._severity_dedup.enabled: 必須是布林值 (true/false)`, `${tenantId}._severity_dedup.enabled: must be boolean (true/false)`)
               });
             }
           }
@@ -381,18 +381,18 @@ function validateTenantConfig(yamlText) {
             if (!receiver) {
               errors.push({
                 rule: '_routing',
-                message: t(`${tenantId}._routing: 必须有 "receiver" 字段`, `${tenantId}._routing: must have "receiver" field`)
+                message: t(`${tenantId}._routing: 必須有 "receiver" 欄位`, `${tenantId}._routing: must have "receiver" field`)
               });
             } else if (typeof receiver === 'object') {
               if (!receiver.type) {
                 errors.push({
                   rule: '_routing.receiver',
-                  message: t(`${tenantId}._routing.receiver: 必须有 "type" 字段`, `${tenantId}._routing.receiver: must have "type" field`)
+                  message: t(`${tenantId}._routing.receiver: 必須有 "type" 欄位`, `${tenantId}._routing.receiver: must have "type" field`)
                 });
               } else if (!RECEIVER_TYPES.has(receiver.type)) {
                 errors.push({
                   rule: '_routing.receiver.type',
-                  message: t(`${tenantId}._routing.receiver.type: 未知的类型 "${receiver.type}"`, `${tenantId}._routing.receiver.type: unknown type "${receiver.type}"`)
+                  message: t(`${tenantId}._routing.receiver.type: 未知的類型 "${receiver.type}"`, `${tenantId}._routing.receiver.type: unknown type "${receiver.type}"`)
                 });
               }
             }
@@ -428,15 +428,15 @@ function validateTenantConfig(yamlText) {
           }
         } else {
           warnings.push({
-            rule: t('未知特殊键', 'Unknown Special Key'),
-            message: t(`${tenantId}.${key}: 未知的特殊键 (以 _ 开头)`, `${tenantId}.${key}: unknown special key (starts with _)`)
+            rule: t('未知特殊鍵', 'Unknown Special Key'),
+            message: t(`${tenantId}.${key}: 未知的特殊鍵 (以 _ 開頭)`, `${tenantId}.${key}: unknown special key (starts with _)`)
           });
         }
       } else {
         // Unknown regular key
         warnings.push({
-          rule: t('未知键', 'Unknown Key'),
-          message: t(`${tenantId}.${key}: 不在已知指标列表中 (可能是拼写错误?)`, `${tenantId}.${key}: not in known metrics list (possible typo?)`)
+          rule: t('未知鍵', 'Unknown Key'),
+          message: t(`${tenantId}.${key}: 不在已知指標列表中 (可能是拼寫錯誤?)`, `${tenantId}.${key}: not in known metrics list (possible typo?)`)
         });
       }
     });
@@ -538,8 +538,8 @@ export default function TenantYAMLPlayground() {
       <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 p-4 shadow-sm z-10">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{t('租户 YAML 验证器', 'Tenant YAML Validator')}</h1>
-            <p className="text-sm text-gray-500 mt-1">{t('用于租户配置验证的交互式游乐场', 'Interactive playground for tenant configuration validation')}</p>
+            <h1 className="text-2xl font-bold text-gray-900">{t('租戶 YAML 驗證器', 'Tenant YAML Validator')}</h1>
+            <p className="text-sm text-gray-500 mt-1">{t('用於租戶配置驗證的互動式遊樂場', 'Interactive playground for tenant configuration validation')}</p>
           </div>
           <div className="flex gap-3">
             <select
@@ -565,7 +565,7 @@ export default function TenantYAMLPlayground() {
                 showDiff ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
               }`}
             >
-              {showDiff ? t('隐藏差异', 'Hide Diff') : t('差异对比', 'Diff')}
+              {showDiff ? t('隱藏差異', 'Hide Diff') : t('差異對比', 'Diff')}
               {hasChanges && !showDiff && <span className="ml-1 text-xs">●</span>}
             </button>
             <button
@@ -573,7 +573,7 @@ export default function TenantYAMLPlayground() {
               disabled={!validation.valid}
               className="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
             >
-              {t('导出 .yaml', 'Export .yaml')}
+              {t('匯出 .yaml', 'Export .yaml')}
             </button>
             <button
               onClick={handleShareLink}
@@ -581,7 +581,7 @@ export default function TenantYAMLPlayground() {
                 shareCopied ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
               }`}
             >
-              {shareCopied ? t('✓ 已复制', '✓ Link Copied') : t('分享链接', 'Share Link')}
+              {shareCopied ? t('✓ 已複製', '✓ Link Copied') : t('分享連結', 'Share Link')}
             </button>
           </div>
         </div>
@@ -592,12 +592,12 @@ export default function TenantYAMLPlayground() {
         {/* Left Pane: YAML Editor */}
         <div className="w-1/2 border-r border-gray-200 flex flex-col bg-white">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">{t('租户 YAML', 'Tenant YAML')}</h2>
-            <p className="text-xs text-gray-500 mt-1">{t('在下方编辑 YAML。验证实时更新。', 'Edit YAML below. Validation updates in real-time.')}</p>
+            <h2 className="text-lg font-semibold text-gray-900">{t('租戶 YAML', 'Tenant YAML')}</h2>
+            <p className="text-xs text-gray-500 mt-1">{t('在下方編輯 YAML。驗證實時更新。', 'Edit YAML below. Validation updates in real-time.')}</p>
           </div>
           {showDiff && (
             <div className="border-b border-gray-200 bg-gray-50 px-6 py-3 max-h-48 overflow-y-auto">
-              <div className="text-xs font-semibold text-gray-600 mb-2">{t('相对于模板的变化:', 'Changes vs. template:')}</div>
+              <div className="text-xs font-semibold text-gray-600 mb-2">{t('相對於範本的變化:', 'Changes vs. template:')}</div>
               <pre className="font-mono text-xs leading-relaxed">
                 {diff.map((d, i) => {
                   if (d.type === 'same') return null;
@@ -609,7 +609,7 @@ export default function TenantYAMLPlayground() {
                     </div>
                   );
                 })}
-                {!hasChanges && <div className="text-gray-400">{t('相对模板没有更改。', 'No changes from template.')}</div>}
+                {!hasChanges && <div className="text-gray-400">{t('相對於範本沒有更改。', 'No changes from template.')}</div>}
               </pre>
             </div>
           )}
@@ -636,11 +636,11 @@ export default function TenantYAMLPlayground() {
           <div className="px-6 py-4 border-b border-gray-200 bg-white">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">{t('验证结果', 'Validation Results')}</h2>
+                <h2 className="text-lg font-semibold text-gray-900">{t('驗證結果', 'Validation Results')}</h2>
                 <p className="text-xs text-gray-500 mt-1">
                   {validation.errors.length === 0
-                    ? t('所有检查都通过了!', 'All checks passed!')
-                    : t(`找到 ${validation.errors.length} 个错误`, `${validation.errors.length} error(s) found`)}
+                    ? t('所有檢查都通過了!', 'All checks passed!')
+                    : t(`找到 ${validation.errors.length} 個錯誤`, `${validation.errors.length} error(s) found`)}
                 </p>
               </div>
               <div className="text-right">
@@ -661,11 +661,11 @@ export default function TenantYAMLPlayground() {
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="text-2xl font-bold text-blue-600">{validation.summary.thresholds}</div>
-                <div className="text-xs text-gray-600 mt-1">{t('已配置的阈值', 'Thresholds Configured')}</div>
+                <div className="text-xs text-gray-600 mt-1">{t('已配置的閾值', 'Thresholds Configured')}</div>
               </div>
               <div className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="text-2xl font-bold text-purple-600">{validation.summary.specialKeys}</div>
-                <div className="text-xs text-gray-600 mt-1">{t('特殊键', 'Special Keys')}</div>
+                <div className="text-xs text-gray-600 mt-1">{t('特殊鍵', 'Special Keys')}</div>
               </div>
               <div className="bg-white rounded-lg p-4 border border-gray-200">
                 <div
@@ -679,9 +679,9 @@ export default function TenantYAMLPlayground() {
                 >
                   {validation.summary.routing === 'configured' ? '✓' : '○'}
                 </div>
-                <div className="text-xs text-gray-600 mt-1">{t('路由状态', 'Routing Status')}</div>
+                <div className="text-xs text-gray-600 mt-1">{t('路由狀態', 'Routing Status')}</div>
                 <div className="text-xs text-gray-500 mt-2">
-                  {validation.summary.routing === 'configured' ? t('已配置', 'configured') : validation.summary.routing === 'error' ? t('错误', 'error') : t('未配置', 'not configured')}
+                  {validation.summary.routing === 'configured' ? t('已配置', 'configured') : validation.summary.routing === 'error' ? t('錯誤', 'error') : t('未配置', 'not configured')}
                 </div>
               </div>
             </div>
@@ -690,7 +690,7 @@ export default function TenantYAMLPlayground() {
             {validation.errors.length > 0 && (
               <div>
                 <h3 className="font-semibold text-red-700 mb-3 flex items-center gap-2">
-                  <span className="text-lg">✗</span> {t('错误', 'Errors')} ({validation.errors.length})
+                  <span className="text-lg">✗</span> {t('錯誤', 'Errors')} ({validation.errors.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.errors.map((err, i) => (
@@ -730,7 +730,7 @@ export default function TenantYAMLPlayground() {
             {validation.metrics.length > 0 && (
               <div>
                 <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                  <span className="text-lg">📊</span> {t('导出的指标', 'Exported Metrics')} ({validation.metrics.length})
+                  <span className="text-lg">📊</span> {t('匯出的指標', 'Exported Metrics')} ({validation.metrics.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.metrics.map((metric, i) => (
@@ -754,7 +754,7 @@ export default function TenantYAMLPlayground() {
                 <div className="text-2xl mb-2">✓</div>
                 <div className="text-green-800 font-semibold">{t('配置有效!', 'Configuration is valid!')}</div>
                 <div className="text-xs text-green-700 mt-2">
-                  {validation.summary.thresholds} {t('阈值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊键', 'special keys')} •
+                  {validation.summary.thresholds} {t('閾值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊鍵', 'special keys')} •
                   {validation.summary.routing === 'configured' ? t(' 已配置路由', ' routing configured') : t(' 未配置路由', ' no routing')}
                 </div>
               </div>
