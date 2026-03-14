@@ -66,6 +66,7 @@ TOOLS = [
     ("tool_consistency", "lint/lint_tool_consistency.py", [], "Tool registry ↔ Hub ↔ JSX ↔ MD links"),
     ("repo_name", "lint/check_repo_name.py", ["--ci"], "Repo name guard (no vibe-k8s-lab in URLs)"),
     ("structure", "lint/check_structure.py", ["--ci"], "Project structure enforcement"),
+    ("jsx_babel", "lint/lint_jsx_babel.py", ["--ci"], "JSX Babel standalone parse validation"),
 ]
 
 

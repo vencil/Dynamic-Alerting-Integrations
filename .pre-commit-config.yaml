@@ -115,6 +115,14 @@ repos:
         stages: [manual]
         additional_dependencies: ['pyyaml']
 
+      - id: jsx-babel-check
+        name: JSX Babel standalone parse validation
+        entry: python3 scripts/tools/lint/lint_jsx_babel.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
+        stages: [manual]
+
       - id: i18n-coverage-check
         name: i18n coverage report
         entry: python3 scripts/tools/lint/check_i18n_coverage.py

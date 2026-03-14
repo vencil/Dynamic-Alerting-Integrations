@@ -94,7 +94,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | `tool-consistency-check` | Registry ↔ Hub ↔ TOOL_META ↔ JSX ↔ MD 連結 | `docs/assets/`, `docs/**/*.{jsx,md}` |
 | `structure-check` | 專案結構正規化（工具/JSX/測試位置） | `*.{py,jsx,yaml}` |
 
-手動全跑：`pre-commit run --all-files`。Manual-stage 額外檢查：`pre-commit run --hook-stage manual --all-files`（schema + translation + flow E2E + i18n coverage）。
+手動全跑：`pre-commit run --all-files`。Manual-stage 額外檢查：`pre-commit run --hook-stage manual --all-files`（schema + translation + flow E2E + jsx-babel + i18n coverage）。
 
 ## 文件導覽
 
@@ -104,13 +104,13 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## 工具 (scripts/tools/)
 
-58 個 Python 工具，依職責分三子目錄：
+59 個 Python 工具，依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
 | `ops/` | 運維工具（scaffold, diagnose, migrate, validate...） | 27 |
 | `dx/` | DX 自動化（generate_*, bump_docs, sync_*...） | 18 |
-| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*...） | 12 |
+| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*...） | 13 |
 | root | 共用（`_lib_python.py`, `validate_all.py`, `metric-dictionary.yaml`） | 4 |
 
 完整工具表見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。常用工具速查：`da-tools <cmd> --help` | CLI 完整參考見 [`docs/cli-reference.md`](docs/cli-reference.md)
