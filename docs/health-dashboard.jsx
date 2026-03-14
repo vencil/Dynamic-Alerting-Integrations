@@ -1,6 +1,6 @@
 ---
 title: "Tenant Health Dashboard"
-tags: [dashboard, interactive, visualization]
+tags: [dashboard, health, demo]
 audience: [tenant, platform-engineer]
 version: v2.0.0-preview.2
 lang: en

@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""sync_tool_registry.py — 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
+"""sync_tool_registry.py — 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META + JSX frontmatter
 
 從 tool-registry.yaml (單一真相源) 自動更新：
   1. docs/assets/jsx-loader.html 的 TOOL_META 物件
   2. docs/interactive/index.html 的卡片 data-audience + 新卡片插入
+  3. JSX frontmatter 的 audience/tags（--sync-frontmatter）
 
 Usage:
-    python3 scripts/tools/sync_tool_registry.py [--dry-run] [--verbose]
+    python3 scripts/tools/sync_tool_registry.py [--dry-run] [--verbose] [--sync-frontmatter]
 
 Flags:
-    --dry-run   只顯示差異，不寫入檔案
-    --verbose   顯示詳細過程
+    --dry-run            只顯示差異，不寫入檔案
+    --verbose            顯示詳細過程
+    --sync-frontmatter   同步 registry audience/tags → JSX frontmatter
 
 Exit codes:
     0 = 同步完成（或 dry-run 無差異）
@@ -303,14 +305,134 @@ def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# JSX frontmatter sync
+# ---------------------------------------------------------------------------
+# Audience name mapping: registry uses short names, JSX uses long names
+_AUDIENCE_MAP = {
+    "platform": "platform-engineer",
+    "domain": "domain-expert",
+    "tenant": "tenant",
+}
+_AUDIENCE_REVERSE = {v: k for k, v in _AUDIENCE_MAP.items()}
+
+
+def sync_frontmatter(tools: list, dry_run: bool, verbose: bool) -> bool:
+    """Sync registry audience/tags → JSX frontmatter. Returns True if changed."""
+    any_changed = False
+
+    for tool in tools:
+        key = tool["key"]
+        jsx_path = PROJECT_ROOT / "docs" / tool.get("file", f"{key}.jsx")
+        if not jsx_path.exists():
+            if verbose:
+                print(f"  [frontmatter] {key}: file not found, skipping")
+            continue
+
+        content = jsx_path.read_text(encoding="utf-8")
+        fm_match = re.match(r"^(---\n)([\s\S]*?)\n(---)", content)
+        if not fm_match:
+            if verbose:
+                print(f"  [frontmatter] {key}: no frontmatter, skipping")
+            continue
+
+        fm_block = fm_match.group(2)
+        new_fm = fm_block
+        changes = []
+
+        # Sync audience
+        reg_audience = tool.get("audience", [])
+        jsx_audience = [_AUDIENCE_MAP.get(a, a) for a in reg_audience]
+        audience_line_re = re.compile(r"^(audience:\s*)\[([^\]]*)\]", re.MULTILINE)
+        am = audience_line_re.search(new_fm)
+        if am:
+            current = [a.strip().strip('"').strip("'") for a in am.group(2).split(",")]
+            current = [a for a in current if a]
+            if sorted(current) != sorted(jsx_audience):
+                quoted = ", ".join(f'"{a}"' if "-" in a else a for a in jsx_audience)
+                new_line = f"{am.group(1)}[{quoted}]"
+                new_fm = new_fm[: am.start()] + new_line + new_fm[am.end() :]
+                changes.append(f"audience: {current} → {jsx_audience}")
+
+        # Sync tags
+        reg_tags = tool.get("tags", [])
+        tags_line_re = re.compile(r"^(tags:\s*)\[([^\]]*)\]", re.MULTILINE)
+        tm = tags_line_re.search(new_fm)
+        if tm and reg_tags:
+            current_tags = [t.strip().strip('"').strip("'") for t in tm.group(2).split(",")]
+            current_tags = [t for t in current_tags if t]
+            if sorted(current_tags) != sorted(reg_tags):
+                tag_list = ", ".join(reg_tags)
+                new_line = f"{tm.group(1)}[{tag_list}]"
+                new_fm = new_fm[: tm.start()] + new_line + new_fm[tm.end() :]
+                changes.append(f"tags: {current_tags} → {reg_tags}")
+
+        if new_fm != fm_block:
+            if dry_run:
+                for c in changes:
+                    print(f"  [frontmatter] {key}: would update {c}")
+                any_changed = True
+            else:
+                new_content = content.replace(
+                    fm_match.group(0),
+                    f"{fm_match.group(1)}{new_fm}\n{fm_match.group(3)}",
+                )
+                jsx_path.write_text(new_content, encoding="utf-8")
+                for c in changes:
+                    print(f"  [frontmatter] {key}: updated {c}")
+                any_changed = True
+        elif verbose:
+            print(f"  [frontmatter] {key}: in sync")
+
+    return any_changed
+
+
+# ---------------------------------------------------------------------------
+# appears_in auto-scan
+# ---------------------------------------------------------------------------
+def scan_appears_in(tools: list, verbose: bool) -> dict:
+    """Scan all markdown files for tool references and return actual appears_in map."""
+    docs_dir = PROJECT_ROOT / "docs"
+    md_files = list(docs_dir.rglob("*.md"))
+    # Exclude internal docs that don't count as "appears_in"
+    md_files = [f for f in md_files if "internal/" not in str(f)]
+
+    actual = {}
+    for tool in tools:
+        key = tool["key"]
+        file_path = tool.get("file", f"{key}.jsx")
+        refs = []
+        for md in md_files:
+            md_content = md.read_text(encoding="utf-8")
+            # Check for jsx-loader link or direct file reference
+            if file_path in md_content or f"component=../{file_path}" in md_content:
+                rel = str(md.relative_to(PROJECT_ROOT))
+                refs.append(rel)
+        actual[key] = sorted(refs)
+        if verbose and refs:
+            print(f"  [scan] {key}: found in {refs}")
+
+    return actual
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Sync tool-registry.yaml → Hub + TOOL_META"
+        description="Sync tool-registry.yaml → Hub + TOOL_META + JSX frontmatter"
     )
     parser.add_argument("--dry-run", action="store_true", help="Show changes only")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--sync-frontmatter",
+        action="store_true",
+        help="Sync registry audience/tags → JSX frontmatter",
+    )
+    parser.add_argument(
+        "--scan-appears-in",
+        action="store_true",
+        help="Scan markdown files and show actual appears_in (compare with registry)",
+    )
     args = parser.parse_args()
 
     if not REGISTRY_PATH.exists():
@@ -324,7 +446,36 @@ def main():
     changed_meta = sync_tool_meta(tools, args.dry_run, args.verbose)
     changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose)
 
-    if changed_meta or changed_hub:
+    changed_fm = False
+    if args.sync_frontmatter:
+        print()
+        print("=== Frontmatter Sync ===")
+        changed_fm = sync_frontmatter(tools, args.dry_run, args.verbose)
+
+    if args.scan_appears_in:
+        print()
+        print("=== appears_in Scan ===")
+        actual = scan_appears_in(tools, args.verbose)
+        diffs = 0
+        for tool in tools:
+            key = tool["key"]
+            registered = sorted(tool.get("appears_in", []))
+            scanned = actual.get(key, [])
+            if registered != scanned:
+                diffs += 1
+                missing = set(scanned) - set(registered)
+                extra = set(registered) - set(scanned)
+                if missing:
+                    print(f"  {key}: missing from registry → {missing}")
+                if extra:
+                    print(f"  {key}: in registry but not in file → {extra}")
+        if diffs == 0:
+            print("  ✅ All appears_in entries match actual references")
+        else:
+            print(f"\n  {diffs} tool(s) have appears_in mismatches")
+
+    any_changed = changed_meta or changed_hub or changed_fm
+    if any_changed:
         print()
         if args.dry_run:
             print("Dry run: no files modified. Run without --dry-run to apply.")

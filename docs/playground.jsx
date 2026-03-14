@@ -1,7 +1,7 @@
 ---
 title: "YAML Playground"
-tags: [playground, interactive, tools]
-audience: [tenant, platform-engineer, domain-expert]
+tags: [validation, yaml, live preview]
+audience: ["platform-engineer", tenant]
 version: v2.0.0-preview.2
 lang: en
 related: [config-lint, schema-explorer, template-gallery]
@@ -485,6 +485,7 @@ function readPlaygroundHash() {
 }
 
 export default function TenantYAMLPlayground() {
+  const t = window.__t || ((zh, en) => en);
   const initial = readPlaygroundHash();
   const [yaml, setYaml] = useState(initial.yaml || YAML_TEMPLATES[initial.tpl] || YAML_TEMPLATES.mariadb);
   const [selectedTemplate, setSelectedTemplate] = useState(initial.tpl || 'mariadb');
@@ -533,8 +534,8 @@ export default function TenantYAMLPlayground() {
       <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 p-4 shadow-sm z-10">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Tenant YAML Validator</h1>
-            <p className="text-sm text-gray-500 mt-1">Interactive playground for tenant configuration validation</p>
+            <h1 className="text-2xl font-bold text-gray-900">{t('租户 YAML 验证器', 'Tenant YAML Validator')}</h1>
+            <p className="text-sm text-gray-500 mt-1">{t('用于租户配置验证的交互式游乐场', 'Interactive playground for tenant configuration validation')}</p>
           </div>
           <div className="flex gap-3">
             <select
@@ -542,17 +543,17 @@ export default function TenantYAMLPlayground() {
               onChange={handleTemplateChange}
               className="px-3 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="minimal">Minimal (3 lines!)</option>
-              <option value="mariadb">MariaDB Example</option>
-              <option value="postgresql">PostgreSQL Example</option>
-              <option value="redis">Redis Example</option>
-              <option value="kafka">Kafka Example</option>
+              <option value="minimal">{t('最小化 (3行!)', 'Minimal (3 lines!)')}</option>
+              <option value="mariadb">{t('MariaDB 示例', 'MariaDB Example')}</option>
+              <option value="postgresql">{t('PostgreSQL 示例', 'PostgreSQL Example')}</option>
+              <option value="redis">{t('Redis 示例', 'Redis Example')}</option>
+              <option value="kafka">{t('Kafka 示例', 'Kafka Example')}</option>
             </select>
             <button
               onClick={handleResetExample}
               className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm font-medium hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
             >
-              Reset
+              {t('重置', 'Reset')}
             </button>
             <button
               onClick={() => setShowDiff(!showDiff)}
@@ -560,7 +561,7 @@ export default function TenantYAMLPlayground() {
                 showDiff ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
               }`}
             >
-              {showDiff ? 'Hide Diff' : 'Diff'}
+              {showDiff ? t('隐藏差异', 'Hide Diff') : t('差异对比', 'Diff')}
               {hasChanges && !showDiff && <span className="ml-1 text-xs">●</span>}
             </button>
             <button
@@ -568,7 +569,7 @@ export default function TenantYAMLPlayground() {
               disabled={!validation.valid}
               className="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
             >
-              Export .yaml
+              {t('导出 .yaml', 'Export .yaml')}
             </button>
             <button
               onClick={handleShareLink}
@@ -576,7 +577,7 @@ export default function TenantYAMLPlayground() {
                 shareCopied ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
               }`}
             >
-              {shareCopied ? '✓ Link Copied' : 'Share Link'}
+              {shareCopied ? t('✓ 已复制', '✓ Link Copied') : t('分享链接', 'Share Link')}
             </button>
           </div>
         </div>
@@ -587,12 +588,12 @@ export default function TenantYAMLPlayground() {
         {/* Left Pane: YAML Editor */}
         <div className="w-1/2 border-r border-gray-200 flex flex-col bg-white">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Tenant YAML</h2>
-            <p className="text-xs text-gray-500 mt-1">Edit YAML below. Validation updates in real-time.</p>
+            <h2 className="text-lg font-semibold text-gray-900">{t('租户 YAML', 'Tenant YAML')}</h2>
+            <p className="text-xs text-gray-500 mt-1">{t('在下方编辑 YAML。验证实时更新。', 'Edit YAML below. Validation updates in real-time.')}</p>
           </div>
           {showDiff && (
             <div className="border-b border-gray-200 bg-gray-50 px-6 py-3 max-h-48 overflow-y-auto">
-              <div className="text-xs font-semibold text-gray-600 mb-2">Changes vs. template:</div>
+              <div className="text-xs font-semibold text-gray-600 mb-2">{t('相对于模板的变化:', 'Changes vs. template:')}</div>
               <pre className="font-mono text-xs leading-relaxed">
                 {diff.map((d, i) => {
                   if (d.type === 'same') return null;
@@ -604,7 +605,7 @@ export default function TenantYAMLPlayground() {
                     </div>
                   );
                 })}
-                {!hasChanges && <div className="text-gray-400">No changes from template.</div>}
+                {!hasChanges && <div className="text-gray-400">{t('相对模板没有更改。', 'No changes from template.')}</div>}
               </pre>
             </div>
           )}
@@ -632,11 +633,11 @@ export default function TenantYAMLPlayground() {
           <div className="px-6 py-4 border-b border-gray-200 bg-white">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">Validation Results</h2>
+                <h2 className="text-lg font-semibold text-gray-900">{t('验证结果', 'Validation Results')}</h2>
                 <p className="text-xs text-gray-500 mt-1">
                   {validation.errors.length === 0
-                    ? 'All checks passed!'
-                    : `${validation.errors.length} error(s) found`}
+                    ? t('所有检查都通过了!', 'All checks passed!')
+                    : t(`找到 ${validation.errors.length} 个错误`, `${validation.errors.length} error(s) found`)}
                 </p>
               </div>
               <div className="text-right">
@@ -657,11 +658,11 @@ export default function TenantYAMLPlayground() {
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="text-2xl font-bold text-blue-600">{validation.summary.thresholds}</div>
-                <div className="text-xs text-gray-600 mt-1">Thresholds Configured</div>
+                <div className="text-xs text-gray-600 mt-1">{t('已配置的阈值', 'Thresholds Configured')}</div>
               </div>
               <div className="bg-white rounded-lg p-4 border border-gray-200">
                 <div className="text-2xl font-bold text-purple-600">{validation.summary.specialKeys}</div>
-                <div className="text-xs text-gray-600 mt-1">Special Keys</div>
+                <div className="text-xs text-gray-600 mt-1">{t('特殊键', 'Special Keys')}</div>
               </div>
               <div className="bg-white rounded-lg p-4 border border-gray-200">
                 <div
@@ -675,7 +676,7 @@ export default function TenantYAMLPlayground() {
                 >
                   {validation.summary.routing === 'configured' ? '✓' : '○'}
                 </div>
-                <div className="text-xs text-gray-600 mt-1">Routing Status</div>
+                <div className="text-xs text-gray-600 mt-1">{t('路由状态', 'Routing Status')}</div>
               </div>
             </div>
 
@@ -683,7 +684,7 @@ export default function TenantYAMLPlayground() {
             {validation.errors.length > 0 && (
               <div>
                 <h3 className="font-semibold text-red-700 mb-3 flex items-center gap-2">
-                  <span className="text-lg">✗</span> Errors ({validation.errors.length})
+                  <span className="text-lg">✗</span> {t('错误', 'Errors')} ({validation.errors.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.errors.map((err, i) => (
@@ -703,7 +704,7 @@ export default function TenantYAMLPlayground() {
             {validation.warnings.length > 0 && (
               <div>
                 <h3 className="font-semibold text-amber-700 mb-3 flex items-center gap-2">
-                  <span className="text-lg">⚠</span> Warnings ({validation.warnings.length})
+                  <span className="text-lg">⚠</span> {t('警告', 'Warnings')} ({validation.warnings.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.warnings.map((warn, i) => (
@@ -723,7 +724,7 @@ export default function TenantYAMLPlayground() {
             {validation.metrics.length > 0 && (
               <div>
                 <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                  <span className="text-lg">📊</span> Exported Metrics ({validation.metrics.length})
+                  <span className="text-lg">📊</span> {t('导出的指标', 'Exported Metrics')} ({validation.metrics.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.metrics.map((metric, i) => (
@@ -745,10 +746,10 @@ export default function TenantYAMLPlayground() {
             {validation.valid && validation.errors.length === 0 && (
               <div className="bg-green-50 border border-green-200 rounded-md p-4 text-center">
                 <div className="text-2xl mb-2">✓</div>
-                <div className="text-green-800 font-semibold">Configuration is valid!</div>
+                <div className="text-green-800 font-semibold">{t('配置有效!', 'Configuration is valid!')}</div>
                 <div className="text-xs text-green-700 mt-2">
-                  {validation.summary.thresholds} thresholds • {validation.summary.specialKeys} special keys •
-                  {validation.summary.routing === 'configured' ? ' routing configured' : ' no routing'}
+                  {validation.summary.thresholds} {t('阈值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊键', 'special keys')} •
+                  {validation.summary.routing === 'configured' ? t(' 已配置路由', ' routing configured') : t(' 未配置路由', ' no routing')}
                 </div>
               </div>
             )}

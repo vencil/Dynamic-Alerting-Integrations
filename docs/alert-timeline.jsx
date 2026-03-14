@@ -1,7 +1,7 @@
 ---
 title: "Alert Timeline Replay"
-tags: [alert, timeline, simulation, interactive]
-audience: [tenant, platform-engineer]
+tags: [animation, timeline, dedup]
+audience: ["domain-expert", tenant]
 version: v2.0.0-preview.2
 lang: en
 related: [alert-simulator, runbook-viewer, glossary]

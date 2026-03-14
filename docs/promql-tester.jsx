@@ -1,6 +1,6 @@
 ---
 title: "Prometheus Query Tester"
-tags: [promql, testing, simulation, interactive]
+tags: [PromQL, testing, recording rules]
 audience: [platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en

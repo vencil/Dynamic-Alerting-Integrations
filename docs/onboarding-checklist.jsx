@@ -1,6 +1,6 @@
 ---
 title: "Onboarding Checklist Generator"
-tags: [onboarding, interactive, tools]
+tags: [onboarding, checklist, progress]
 audience: [tenant, platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en

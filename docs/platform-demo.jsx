@@ -1,6 +1,6 @@
 ---
 title: "Platform Demo"
-tags: [demo, walkthrough, getting-started]
+tags: [demo, walkthrough, interactive]
 audience: [platform-engineer, domain-expert, tenant]
 version: v2.0.0-preview.2
 lang: en

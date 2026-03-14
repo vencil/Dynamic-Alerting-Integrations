@@ -1,7 +1,7 @@
 ---
 title: "da-tools CLI Playground"
-tags: [cli, interactive, tools, docker]
-audience: [all]
+tags: [cli, da-tools, docker]
+audience: ["platform-engineer"]
 version: v2.0.0-preview.2
 lang: en
 related: [wizard, onboarding-checklist, glossary]

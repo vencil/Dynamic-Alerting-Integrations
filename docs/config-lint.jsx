@@ -1,7 +1,7 @@
 ---
 title: "Config Lint Report"
-tags: [lint, validation, yaml, best-practices]
-audience: [tenant, platform-engineer, domain-expert]
+tags: [lint, validation, best practices]
+audience: ["platform-engineer", tenant]
 version: v2.0.0-preview.2
 lang: en
 related: [config-diff, playground, schema-explorer]

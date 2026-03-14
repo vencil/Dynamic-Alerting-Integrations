@@ -1,6 +1,6 @@
 ---
 title: "Rule Pack Detail Viewer"
-tags: [rule-packs, interactive, reference]
+tags: [rules, PromQL, reference]
 audience: [platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en

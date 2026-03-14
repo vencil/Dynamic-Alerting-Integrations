@@ -1,6 +1,6 @@
 ---
 title: "Threshold Calculator"
-tags: [thresholds, interactive, tools]
+tags: [calculator, thresholds, yaml]
 audience: [domain-expert, tenant]
 version: v2.0.0-preview.2
 lang: en

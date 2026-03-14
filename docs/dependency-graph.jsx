@@ -1,6 +1,6 @@
 ---
 title: "Dependency Graph"
-tags: [dependency, graph, visualization, rule-packs]
+tags: [graph, dependencies, visual]
 audience: [platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en

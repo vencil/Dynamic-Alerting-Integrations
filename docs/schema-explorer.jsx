@@ -1,7 +1,7 @@
 ---
 title: "YAML Schema Explorer"
-tags: [schema, yaml, interactive, reference]
-audience: [tenant, domain-expert, platform-engineer]
+tags: [schema, reference, yaml]
+audience: ["platform-engineer", "domain-expert"]
 version: v2.0.0-preview.2
 lang: en
 related: [playground, glossary, config-lint]

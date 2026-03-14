@@ -47,8 +47,8 @@ tools:
     related: [rule-pack-detail, dependency-graph, threshold-calculator]
     hub_section: interactive
     appears_in:
-      - docs/getting-started/for-tenants.md
       - docs/getting-started/for-platform-engineers.md
+      - docs/getting-started/for-tenants.md
       - docs/scenarios/multi-cluster-federation.md
 
   - key: cli-playground
@@ -84,8 +84,8 @@ tools:
     related: [playground, alert-simulator, schema-explorer]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-tenants.md
       - docs/getting-started/for-domain-experts.md
+      - docs/getting-started/for-tenants.md
 
   - key: template-gallery
     title: { en: "Config Template Gallery", zh: "配置模板庫" }
@@ -121,8 +121,8 @@ tools:
     related: [alert-timeline, runbook-viewer, config-lint]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-tenants.md
       - docs/architecture-and-design.md
+      - docs/getting-started/for-tenants.md
       - docs/scenarios/alert-routing-split.md
 
   - key: config-diff
@@ -135,8 +135,8 @@ tools:
     related: [config-lint, playground, migration-simulator]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-platform-engineers.md
       - docs/architecture-and-design.md
+      - docs/getting-started/for-platform-engineers.md
       - docs/scenarios/alert-routing-split.md
       - docs/scenarios/shadow-monitoring-cutover.md
 
@@ -224,8 +224,8 @@ tools:
     related: [architecture-quiz, rule-pack-matrix, dependency-graph]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-platform-engineers.md
       - docs/architecture-and-design.md
+      - docs/getting-started/for-platform-engineers.md
       - docs/scenarios/multi-cluster-federation.md
 
   - key: runbook-viewer
@@ -249,8 +249,8 @@ tools:
     related: [rule-pack-matrix, rule-pack-selector, capacity-planner]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-platform-engineers.md
       - docs/architecture-and-design.md
+      - docs/getting-started/for-platform-engineers.md
       - docs/scenarios/multi-cluster-federation.md
 
   - key: config-lint
@@ -264,8 +264,8 @@ tools:
     hub_section: advanced
     appears_in:
       - docs/getting-started/for-platform-engineers.md
-      - docs/scenarios/alert-routing-split.md
       - docs/scenarios/advanced-scenarios.md
+      - docs/scenarios/alert-routing-split.md
       - docs/scenarios/tenant-lifecycle.md
 
   - key: architecture-quiz
@@ -278,8 +278,8 @@ tools:
     related: [capacity-planner, dependency-graph, onboarding-checklist]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-platform-engineers.md
       - docs/architecture-and-design.md
+      - docs/getting-started/for-platform-engineers.md
 
   - key: promql-tester
     title: { en: "PromQL Tester", zh: "PromQL 測試器" }
@@ -291,8 +291,8 @@ tools:
     related: [rule-pack-detail, schema-explorer, migration-simulator]
     hub_section: advanced
     appears_in:
-      - docs/getting-started/for-domain-experts.md
       - docs/architecture-and-design.md
+      - docs/getting-started/for-domain-experts.md
       - docs/scenarios/advanced-scenarios.md
 
   - key: platform-demo
@@ -304,4 +304,7 @@ tools:
     desc: { en: "Interactive make demo walkthrough", zh: "互動式 make demo 導覽" }
     related: [wizard, cli-playground, onboarding-checklist]
     hub_section: advanced
-    appears_in: []
+    appears_in:
+      - docs/getting-started/for-domain-experts.md
+      - docs/getting-started/for-platform-engineers.md
+      - docs/getting-started/for-tenants.md

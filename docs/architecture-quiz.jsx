@@ -1,6 +1,6 @@
 ---
 title: "Architecture Decision Quiz"
-tags: [architecture, quiz, decision, interactive]
+tags: [architecture, quiz, decision]
 audience: [platform-engineer]
 version: v2.0.0-preview.2
 lang: en

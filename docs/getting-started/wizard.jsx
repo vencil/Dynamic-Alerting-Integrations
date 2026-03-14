@@ -1,6 +1,6 @@
 ---
 title: "Getting Started Wizard"
-tags: [wizard, onboarding, interactive, tools]
+tags: [onboarding, guided, 3 min]
 audience: [tenant, platform-engineer, domain-expert]
 version: v2.0.0-preview.2
 lang: en

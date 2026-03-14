@@ -1,6 +1,6 @@
 ---
 title: "Capacity Planner"
-tags: [capacity, planning, estimation, interactive]
+tags: [capacity, planning, estimation]
 audience: [platform-engineer]
 version: v2.0.0-preview.2
 lang: en

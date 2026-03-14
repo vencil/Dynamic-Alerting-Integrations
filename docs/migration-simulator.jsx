@@ -1,6 +1,6 @@
 ---
 title: "Migration Dry-Run Simulator"
-tags: [migration, interactive, tools]
+tags: [migration, PromQL, dry-run]
 audience: [platform-engineer]
 version: v2.0.0-preview.2
 lang: en
