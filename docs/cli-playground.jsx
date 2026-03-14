@@ -155,12 +155,23 @@ const NETWORK_MODES = {
   }
 };
 
+// Build initial state for a command's args/flags
+function initCommandState(cmdKey) {
+  const cmd = COMMANDS[cmdKey];
+  const a = {};
+  const f = {};
+  cmd.args.forEach(arg => { a[arg.name] = ''; });
+  cmd.flags.forEach(flag => { f[flag.name] = flag.type === 'checkbox' ? false : ''; });
+  return { args: a, flags: f };
+}
+
 export default function CLIPlayground() {
+  const initial = initCommandState('check-alert');
   const [selectedCommand, setSelectedCommand] = useState('check-alert');
   const [isDocker, setIsDocker] = useState(true);
   const [networkMode, setNetworkMode] = useState('linux');
-  const [args, setArgs] = useState({});
-  const [flags, setFlags] = useState({});
+  const [args, setArgs] = useState(initial.args);
+  const [flags, setFlags] = useState(initial.flags);
   const [copied, setCopied] = useState(false);
 
   const command = COMMANDS[selectedCommand];
@@ -169,19 +180,9 @@ export default function CLIPlayground() {
   // Initialize args/flags when command changes
   const handleCommandChange = (cmdKey) => {
     setSelectedCommand(cmdKey);
-    const cmd = COMMANDS[cmdKey];
-    const newArgs = {};
-    const newFlags = {};
-
-    cmd.args.forEach(arg => {
-      newArgs[arg.name] = '';
-    });
-    cmd.flags.forEach(flag => {
-      newFlags[flag.name] = flag.type === 'checkbox' ? false : '';
-    });
-
-    setArgs(newArgs);
-    setFlags(newFlags);
+    const state = initCommandState(cmdKey);
+    setArgs(state.args);
+    setFlags(state.flags);
   };
 
   const updateArg = (name, value) => {

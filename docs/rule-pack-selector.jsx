@@ -169,11 +169,6 @@ export default function RulePackSelector() {
       .concat(['prometheus-rules-operational', 'prometheus-rules-platform'])
       .sort();
 
-    const volumeItems = configMapNames.map((cm, index) => {
-      const itemKey = index === 0 ? `${cm}.yaml` : `\n            - key: rules\n              path: ${cm}.yaml`;
-      return itemKey;
-    });
-
     return `  - name: prometheus-rule-volumes
     projected:
       sources:
@@ -266,7 +261,10 @@ ${generatePrometheusRuleFiles()}`;
                               >
                                 <ChevronDown
                                   size={16}
-                                  className={`transition-transform ${expandedPacks.has(pack.key) ? 'rotate-180' : ''}`}
+                                  style={{
+                                    transition: 'transform 0.2s',
+                                    transform: expandedPacks.has(pack.key) ? 'rotate(180deg)' : 'none'
+                                  }}
                                 />
                               </button>
                             </div>

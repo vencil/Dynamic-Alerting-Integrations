@@ -99,14 +99,46 @@ const KNOWN_METRIC_KEYS = new Set([
 
 const RECEIVER_TYPES = new Set(['webhook', 'email', 'slack', 'teams', 'rocketchat', 'pagerduty']);
 
-// Simple YAML parser (handles basic structure)
+// Strip surrounding quotes from a YAML value
+function stripQuotes(s) {
+  if (!s) return s;
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
+// Coerce YAML scalars: booleans and numbers stay as-is (string), but quotes are stripped
+function coerceValue(raw) {
+  const s = stripQuotes(raw);
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  return s;
+}
+
+// Parse inline YAML array: ["a", "b"] → ['a', 'b']
+function parseInlineArray(s) {
+  if (!s.startsWith('[') || !s.endsWith(']')) return null;
+  return s.slice(1, -1).split(',').map(item => stripQuotes(item.trim())).filter(Boolean);
+}
+
+// Split "key: value" on the FIRST colon only (preserves URLs like https://...)
+function splitKeyValue(line) {
+  const idx = line.indexOf(':');
+  if (idx === -1) return null;
+  const key = line.slice(0, idx).trim();
+  const value = line.slice(idx + 1).trim();
+  return { key, value };
+}
+
+// Simple YAML parser (handles tenant config structure up to 4 indent levels)
 function parseYAML(text) {
   try {
     const lines = text.split('\n');
     const result = {};
     let currentTenant = null;
-    let currentKey = null;
-    let indentLevel = 0;
+    let level4Key = null;     // key at indent 4 (e.g., _routing)
+    let level6Key = null;     // key at indent 6 (e.g., receiver)
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -115,36 +147,70 @@ function parseYAML(text) {
       const indent = line.search(/\S/);
       const trimmed = line.trim();
 
-      if (trimmed.endsWith(':')) {
+      // Reset deeper context when indent decreases
+      if (indent <= 4) level6Key = null;
+      if (indent <= 2) level4Key = null;
+
+      // Pure key line (ends with ":" and nothing after)
+      if (trimmed.endsWith(':') && !trimmed.includes(': ')) {
         const key = trimmed.slice(0, -1);
         if (indent === 0) {
-          if (key === 'tenants') {
-            result.tenants = {};
-          }
+          if (key === 'tenants') result.tenants = {};
         } else if (indent === 2 && result.tenants) {
           currentTenant = key;
           result.tenants[currentTenant] = {};
+          level4Key = null;
+          level6Key = null;
         } else if (indent === 4 && currentTenant) {
-          currentKey = key;
-          if (key === '_routing' || key === '_silent_mode' || key === '_state_maintenance' || key === '_severity_dedup') {
-            result.tenants[currentTenant][key] = {};
+          level4Key = key;
+          level6Key = null;
+          result.tenants[currentTenant][key] = {};
+        } else if (indent === 6 && currentTenant && level4Key) {
+          level6Key = key;
+          if (!result.tenants[currentTenant][level4Key]) {
+            result.tenants[currentTenant][level4Key] = {};
           }
+          result.tenants[currentTenant][level4Key][key] = {};
         }
-      } else if (trimmed.includes(':') && !trimmed.endsWith(':')) {
-        const [key, value] = trimmed.split(':').map(s => s.trim());
-        if (currentTenant && indent === 4) {
+        continue;
+      }
+
+      // Key-value line
+      const kv = splitKeyValue(trimmed);
+      if (kv && kv.value !== '') {
+        const key = kv.key;
+        // Check for inline array
+        const arr = parseInlineArray(kv.value);
+        const value = arr !== null ? arr : coerceValue(kv.value);
+
+        if (indent === 4 && currentTenant) {
           result.tenants[currentTenant][key] = value;
-        } else if (currentTenant && currentKey && indent === 6) {
-          if (!result.tenants[currentTenant][currentKey]) {
-            result.tenants[currentTenant][currentKey] = {};
+          // If this is a special key with a simple value (e.g., _silent_mode: "disable")
+          if (key.startsWith('_') && typeof value === 'string') {
+            level4Key = null; // not a nested object
           }
-          result.tenants[currentTenant][currentKey][key] = value;
+        } else if (indent === 6 && currentTenant && level4Key) {
+          if (!result.tenants[currentTenant][level4Key]) {
+            result.tenants[currentTenant][level4Key] = {};
+          }
+          result.tenants[currentTenant][level4Key][key] = value;
+        } else if (indent === 8 && currentTenant && level4Key && level6Key) {
+          if (!result.tenants[currentTenant][level4Key][level6Key]) {
+            result.tenants[currentTenant][level4Key][level6Key] = {};
+          }
+          result.tenants[currentTenant][level4Key][level6Key][key] = value;
         }
-      } else if (trimmed.startsWith('- ') && currentTenant && currentKey && indent === 6) {
-        if (!Array.isArray(result.tenants[currentTenant][currentKey])) {
-          result.tenants[currentTenant][currentKey] = [];
+        continue;
+      }
+
+      // List item (- value)
+      if (trimmed.startsWith('- ')) {
+        const itemValue = stripQuotes(trimmed.slice(2).trim());
+        if (indent === 6 && currentTenant && level4Key) {
+          const target = result.tenants[currentTenant][level4Key];
+          // Convert to array if needed (for group_by etc.)
+          // This handles rare cases of block-style arrays at indent 6
         }
-        result.tenants[currentTenant][currentKey].push(trimmed.slice(2).trim());
       }
     }
 
@@ -231,10 +297,11 @@ function validateTenantConfig(yamlText) {
       // Threshold validation
       if (KNOWN_METRIC_KEYS.has(key)) {
         thresholdCount++;
-        if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        const strVal = String(value);
+        if (!/^\d+$/.test(strVal)) {
           errors.push({
             rule: 'Threshold Format',
-            message: `${tenantId}.${key}: must be quoted number string, got "${value}"`
+            message: `${tenantId}.${key}: must be a number string, got "${strVal}"`
           });
         } else {
           metrics.push({
@@ -280,10 +347,10 @@ function validateTenantConfig(yamlText) {
           }
         } else if (key === '_severity_dedup') {
           if (typeof value === 'object' && value !== null && 'enabled' in value) {
-            if (typeof value.enabled !== 'boolean' && value.enabled !== 'true' && value.enabled !== 'false') {
+            if (typeof value.enabled !== 'boolean') {
               errors.push({
                 rule: '_severity_dedup',
-                message: `${tenantId}._severity_dedup.enabled: must be boolean`
+                message: `${tenantId}._severity_dedup.enabled: must be boolean (true/false)`
               });
             }
           }
@@ -291,28 +358,31 @@ function validateTenantConfig(yamlText) {
           routingStatus = 'configured';
           if (typeof value === 'object' && value !== null) {
             const routing = value;
-            if (!routing.receiver) {
+            // receiver can be a nested object { type: "webhook", url: "..." }
+            // or missing entirely
+            const receiver = routing.receiver;
+            if (!receiver) {
               errors.push({
                 rule: '_routing',
                 message: `${tenantId}._routing: must have "receiver" field`
               });
-            } else {
-              if (!routing.receiver.type) {
+            } else if (typeof receiver === 'object') {
+              if (!receiver.type) {
                 errors.push({
                   rule: '_routing.receiver',
                   message: `${tenantId}._routing.receiver: must have "type" field`
                 });
-              } else if (!RECEIVER_TYPES.has(routing.receiver.type)) {
+              } else if (!RECEIVER_TYPES.has(receiver.type)) {
                 errors.push({
                   rule: '_routing.receiver.type',
-                  message: `${tenantId}._routing.receiver.type: unknown type "${routing.receiver.type}"`
+                  message: `${tenantId}._routing.receiver.type: unknown type "${receiver.type}"`
                 });
               }
             }
 
-            // Timing guardrails
+            // Timing guardrails (values are already unquoted strings)
             if (routing.group_wait) {
-              const gwCheck = validateDurationRange(routing.group_wait, 5000, 5 * 60 * 1000);
+              const gwCheck = validateDurationRange(String(routing.group_wait), 5000, 5 * 60 * 1000);
               if (!gwCheck.valid) {
                 errors.push({
                   rule: '_routing.group_wait',
@@ -321,7 +391,7 @@ function validateTenantConfig(yamlText) {
               }
             }
             if (routing.group_interval) {
-              const giCheck = validateDurationRange(routing.group_interval, 5000, 5 * 60 * 1000);
+              const giCheck = validateDurationRange(String(routing.group_interval), 5000, 5 * 60 * 1000);
               if (!giCheck.valid) {
                 errors.push({
                   rule: '_routing.group_interval',
@@ -330,7 +400,7 @@ function validateTenantConfig(yamlText) {
               }
             }
             if (routing.repeat_interval) {
-              const riCheck = validateDurationRange(routing.repeat_interval, 60000, 72 * 60 * 60 * 1000);
+              const riCheck = validateDurationRange(String(routing.repeat_interval), 60000, 72 * 60 * 60 * 1000);
               if (!riCheck.valid) {
                 errors.push({
                   rule: '_routing.repeat_interval',

@@ -267,32 +267,34 @@ const RECOMMENDATIONS = {
 };
 
 const ProgressIndicator = ({ step, totalSteps }) => {
-  return (
-    <div className="flex items-center justify-between mb-8">
-      {Array.from({ length: totalSteps }).map((_, i) => (
-        <div key={i} className="flex items-center">
-          <div
-            className={`flex items-center justify-center w-10 h-10 rounded-full font-bold transition-all ${
-              i < step
-                ? "bg-blue-600 text-white"
-                : i === step
-                  ? "bg-blue-500 text-white ring-4 ring-blue-200"
-                  : "bg-gray-200 text-gray-500"
-            }`}
-          >
-            {i + 1}
-          </div>
-          {i < totalSteps - 1 && (
-            <div
-              className={`flex-1 h-1 mx-2 transition-all ${
-                i < step ? "bg-blue-600" : "bg-gray-200"
-              }`}
-            />
-          )}
-        </div>
-      ))}
-    </div>
-  );
+  const items = [];
+  for (let i = 0; i < totalSteps; i++) {
+    items.push(
+      <div
+        key={`circle-${i}`}
+        className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full font-bold transition-all ${
+          i < step
+            ? "bg-blue-600 text-white"
+            : i === step
+              ? "bg-blue-500 text-white ring-4 ring-blue-200"
+              : "bg-gray-200 text-gray-500"
+        }`}
+      >
+        {i < step ? "✓" : i + 1}
+      </div>
+    );
+    if (i < totalSteps - 1) {
+      items.push(
+        <div
+          key={`bar-${i}`}
+          className={`flex-1 h-1 mx-2 rounded transition-all ${
+            i < step ? "bg-blue-600" : "bg-gray-200"
+          }`}
+        />
+      );
+    }
+  }
+  return <div className="flex items-center mb-8">{items}</div>;
 };
 
 const RoleCard = ({ role, isSelected, onClick }) => {
@@ -447,7 +449,7 @@ export default function GettingStartedWizard() {
         </div>
 
         {/* Progress Indicator */}
-        {step > 0 && <ProgressIndicator step={step} totalSteps={2} />}
+        <ProgressIndicator step={step} totalSteps={3} />
 
         {/* Step 1: Role Selection */}
         {step === 0 && (
