@@ -411,11 +411,11 @@ spec:
 
 ## 版號策略
 
-`da-tools` 採用**獨立版號**，與平台版本（v2.0.0-preview.2+）和 threshold-exporter 版號脫鉤：
+`da-tools` 採用**獨立版號**，與平台版本（v2.0.0-preview.3+）和 threshold-exporter 版號脫鉤：
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v2.0.0-preview.2 | `v1.11.0` | Runbook Injection + Recurring Maintenance + Config Drift CI |
+| 平台文件 | v2.0.0-preview.3 | `v1.11.0` | Runbook Injection + Recurring Maintenance + Config Drift CI |
 | threshold-exporter | v1.9.0 | `exporter/v1.9.0` | Go binary |
 | **da-tools** | **v1.11.0** | **`tools/v1.11.0`** | **Python CLI 工具集（20 命令，新增 cutover / blind-spot / config-diff / maintenance-scheduler）** |
 

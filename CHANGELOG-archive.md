@@ -553,7 +553,7 @@ threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值
 
 ### 🛡️ CI Deny-list Linting
 
-* **`scripts/tools/lint_custom_rules.py`**: Custom Rule 治理合規 linter
+* **`scripts/tools/ops/lint_custom_rules.py`**: Custom Rule 治理合規 linter
   * 禁止高成本函式 (`holt_winters`, `predict_linear`)
   * 禁止危險 regex (`=~".*"`) 和 tenant 隔離破壞 (`without(tenant)`) — whitespace-tolerant 比對
   * 強制 `tenant` label、限制 range vector duration
@@ -624,7 +624,7 @@ threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值
 
 ### 🔧 版號治理工具
 
-* **`scripts/tools/bump_docs.py`**: 三條版號線批次更新工具 (`--platform` / `--exporter` / `--tools`)，含 `--check` 模式供 CI lint。
+* **`scripts/tools/dx/bump_docs.py`**: 三條版號線批次更新工具 (`--platform` / `--exporter` / `--tools`)，含 `--check` 模式供 CI lint。
 * **Makefile**: 新增 `make version-check`、`make version-show`、`make bump-docs` targets。
 
 ### 📖 文件更新
@@ -665,7 +665,7 @@ threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值
 
 ### 📋 SRE Runbook & Discovery Tooling
 * **`docs/shadow-monitoring-sop.md`**: Shadow Monitoring SRE SOP — 啟動/巡檢/異常處理/收斂判定/退出完整 runbook。
-* **`scripts/tools/baseline_discovery.py`**: Baseline Discovery — 觀測 p50~p99 統計，建議 warning (p95×1.2) / critical (p99×1.5) 閾值。
+* **`scripts/tools/ops/baseline_discovery.py`**: Baseline Discovery — 觀測 p50~p99 統計，建議 warning (p95×1.2) / critical (p99×1.5) 閾值。
 
 ### 🎭 Demo 強化
 * **`make demo`**: Step 5d 新增 `baseline_discovery.py` 快速觀測（15s 取樣 + 閾值建議），展示完整工具鏈。
@@ -716,7 +716,7 @@ threshold-exporter Go 核心重構：支援 regex 維度閾值與排程式閾值
 
 ### 📋 SRE Runbook & Discovery Tooling
 * **`docs/shadow-monitoring-sop.md`**: Shadow Monitoring SRE SOP — 完整 runbook 涵蓋：啟動（本地 / K8s Job）、日常巡檢流程與頻率、異常處理 Playbook（mismatch / missing / 工具故障）、收斂判定標準（7 天 0 mismatch + 覆蓋業務高低峰）、退出與回退步驟。
-* **`scripts/tools/baseline_discovery.py`**: Baseline Discovery 工具 — 在負載注入環境下持續觀測指標（connections / cpu / slow_queries / memory / disk_io），計算 p50/p90/p95/p99/max 統計摘要，自動建議 warning (p95×1.2) / critical (p99×1.5) 閾值。產出時間序列 CSV + 統計摘要 CSV + patch_config.py 建議指令。
+* **`scripts/tools/ops/baseline_discovery.py`**: Baseline Discovery 工具 — 在負載注入環境下持續觀測指標（connections / cpu / slow_queries / memory / disk_io），計算 p50/p90/p95/p99/max 統計摘要，自動建議 warning (p95×1.2) / critical (p99×1.5) 閾值。產出時間序列 CSV + 統計摘要 CSV + patch_config.py 建議指令。
 * **`make baseline-discovery TENANT=db-a`**: Makefile target 快捷入口。
 
 ### 🧪 Testing Coverage Expansion (Phase 7)

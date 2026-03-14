@@ -2,7 +2,7 @@
 title: "Grafana Dashboard 導覽"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 

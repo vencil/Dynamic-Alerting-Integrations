@@ -3,13 +3,13 @@ title: "Dynamic Alerting Platform — Home"
 description: "Enterprise-grade Multi-Tenant Dynamic Alerting for Kubernetes"
 tags: [home, overview]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
 # Dynamic Alerting Platform
 
-> **Language / 語言：** [English](README.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 ## Overview
 
@@ -286,8 +286,8 @@ graph TB
 | [BYO Prometheus](byo-prometheus-integration.md) | Platform Engineers | Minimal integration for existing Prometheus |
 | [BYO Alertmanager](byo-alertmanager-integration.md) | Platform Engineers | Alertmanager integration guide |
 | [GitOps Deployment](gitops-deployment.md) | DevOps | ArgoCD/Flux + RBAC patterns |
-| [Rule Packs Reference](../rule-packs/README.md) | All | 15 rule packs + optional carve-out |
-| [Alert Reference](../rule-packs/ALERT-REFERENCE.md) | Tenants, SREs | 96 alerts + remediation guide |
+| [Rule Packs Reference](rule-packs/README.md) | All | 15 rule packs + optional carve-out |
+| [Alert Reference](rule-packs/ALERT-REFERENCE.md) | Tenants, SREs | 96 alerts + remediation guide |
 | [Troubleshooting](troubleshooting.md) | All | Common issues & solutions |
 
 ---
@@ -310,8 +310,8 @@ graph TB
 
 ## Getting Help
 
-- **Issues & Questions**: [GitHub Issues](https://github.com/vencil/vibe-k8s-lab/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vencil/vibe-k8s-lab/discussions)
+- **Issues & Questions**: [GitHub Issues](https://github.com/vencil/Dynamic-Alerting-Integrations/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/vencil/Dynamic-Alerting-Integrations/discussions)
 - **Documentation**: [Full Site Map](#documentation-map) above
 - **Playbooks**: See `docs/internal/` for operational procedures
 
@@ -325,4 +325,4 @@ Apache License 2.0 — See [LICENSE](../LICENSE) in the repository.
 
 | 資源 | 相關性 |
 |------|--------|
-| ["文件導覽"](./README.md) | ⭐⭐ |
+| ["文件導覽"](index.md) | ⭐⭐ |

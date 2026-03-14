@@ -2,14 +2,14 @@
 title: "多租戶客製化規則治理規範 (Custom Rule Governance Model)"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
 > **版本**: 
-> **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](../rule-packs/README.md)、[遷移指南](migration-guide.md)
+> **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---
 
@@ -228,10 +228,10 @@ max_evaluation_interval: 60s  # Custom Rule group interval 上限
 
 ```bash
 # CI 中執行
-python3 scripts/tools/lint_custom_rules.py rule-packs/custom/
+python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/
 
 # 使用自訂 policy
-python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
+python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
 
 # 透過 da-tools 容器執行（不需 clone 專案）
 docker run --rm \
@@ -301,5 +301,5 @@ flowchart TD
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Multi-Tenant Custom Rule Governance Model"](./custom-rule-governance.en.md) | ⭐⭐⭐ |
+| ["Multi-Tenant Custom Rule Governance Model"] | ⭐⭐⭐ |
 | ["治理、稽核與安全合規"](./governance-security.md) | ⭐⭐ |

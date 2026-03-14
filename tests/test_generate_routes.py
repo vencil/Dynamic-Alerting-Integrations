@@ -20,15 +20,12 @@ import argparse
 import inspect
 import os
 import re
-import sys
 import tempfile
 import unittest
 
 import yaml
 
 # Add scripts/tools to path
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import generate_alertmanager_routes as gen  # noqa: E402
 from conftest import write_yaml  # noqa: E402

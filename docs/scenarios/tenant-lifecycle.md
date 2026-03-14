@@ -2,7 +2,7 @@
 title: "場景：租戶完整生命週期管理"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 場景：租戶完整生命週期管理
@@ -74,10 +74,10 @@ graph TD
 
 ```bash
 # 使用 scaffold_tenant.py 的互動模式
-python3 scripts/tools/scaffold_tenant.py
+python3 scripts/tools/ops/scaffold_tenant.py
 
 # 或指定參數（非互動）
-python3 scripts/tools/scaffold_tenant.py \
+python3 scripts/tools/ops/scaffold_tenant.py \
   --tenant db-product-01 \
   --db postgresql \
   --namespaces ns-prod,ns-staging \
@@ -91,7 +91,7 @@ python3 scripts/tools/scaffold_tenant.py \
 
 #### 1.1.3 規劃 Rule Pack 和 Exporter
 
-`scaffold-report.txt` 會包含推薦的 Rule Pack 清單。根據 DB 類型選擇必要的 Rule Pack（詳見 [Rule Packs README](../../rule-packs/README.md)），確認對應 Exporter 已部署或納入部署計畫。
+`scaffold-report.txt` 會包含推薦的 Rule Pack 清單。根據 DB 類型選擇必要的 Rule Pack（詳見 [Rule Packs README](../rule-packs/README.md)），確認對應 Exporter 已部署或納入部署計畫。
 
 #### 1.1.4 與 DBA 協商初始閾值
 
@@ -125,7 +125,7 @@ da-tools diagnose db-product-01
 
 ```bash
 # 使用 diagnose 工具進行全面健康檢查
-python3 scripts/tools/diagnose.py db-product-01 \
+python3 scripts/tools/ops/diagnose.py db-product-01 \
   --prometheus http://localhost:9090
 
 # 預期輸出：
@@ -143,7 +143,7 @@ python3 scripts/tools/diagnose.py db-product-01 \
 # 持續 3 天監控，確保無誤報和漏報
 
 # 每日檢查
-python3 scripts/tools/diagnose.py db-product-01
+python3 scripts/tools/ops/diagnose.py db-product-01
 
 # 查看實時告警
 curl -s http://prometheus:9090/api/v1/alerts | \
@@ -175,8 +175,8 @@ curl -s http://prometheus:9090/api/v1/alerts | \
 
 ```bash
 # 每日早上執行
-python3 scripts/tools/diagnose.py db-product-01
-python3 scripts/tools/check_alert.py MariaDBHighConnections db-product-01
+python3 scripts/tools/ops/diagnose.py db-product-01
+python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-product-01
 
 # 檢查清單
 □ operational_mode: normal / silent / maintenance
@@ -189,7 +189,7 @@ python3 scripts/tools/check_alert.py MariaDBHighConnections db-product-01
 
 ```bash
 # 每週生成多租戶健康報告
-python3 scripts/tools/batch_diagnose.py \
+python3 scripts/tools/ops/batch_diagnose.py \
   --output weekly-report.json
 
 # 報告包含：
@@ -264,7 +264,7 @@ tenants:
 **驗證**：
 
 ```bash
-python3 scripts/tools/diagnose.py db-product-01
+python3 scripts/tools/ops/diagnose.py db-product-01
 # 輸出：operational_mode: silent
 # 規則仍評估，但告警不觸發通知
 ```
@@ -308,7 +308,7 @@ groups:
 EOF
 
 # 2. 驗證自訂規則
-python3 scripts/tools/lint_custom_rules.py custom-rules.yaml
+python3 scripts/tools/ops/lint_custom_rules.py custom-rules.yaml
 
 # 3. 部署
 kubectl apply -f custom-rules.yaml
@@ -490,16 +490,16 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../playground.jsx) — 編輯和驗證租戶配置
-> - [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../schema-explorer.jsx) — 探索租戶配置的完整架構
-> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-lint.jsx) — 驗證租戶配置的正確性
+> - [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx) — 編輯和驗證租戶配置
+> - [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx) — 探索租戶配置的完整架構
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-lint.jsx) — 驗證租戶配置的正確性
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["場景：租戶完整生命週期管理"](scenarios/tenant-lifecycle.md) | ⭐⭐⭐ |
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
-| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](scenarios/alert-routing-split.md) | ⭐⭐ |
-| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](scenarios/multi-cluster-federation.md) | ⭐⭐ |
-| ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
+| ["場景：租戶完整生命週期管理"](tenant-lifecycle.md) | ⭐⭐⭐ |
+| ["進階場景與測試覆蓋"](advanced-scenarios.md) | ⭐⭐ |
+| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](alert-routing-split.md) | ⭐⭐ |
+| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](multi-cluster-federation.md) | ⭐⭐ |
+| ["場景：Shadow Monitoring 全自動切換工作流"](shadow-monitoring-cutover.md) | ⭐⭐ |

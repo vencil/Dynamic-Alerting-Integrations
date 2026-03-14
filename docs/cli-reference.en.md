@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -1718,10 +1718,10 @@ They're complementary; run both after migration.
 
 | Document | Content |
 |----------|---------|
-| [getting-started/for-platform-engineers.en.md](../docs/getting-started/for-platform-engineers.en.md) | Platform Engineer Quick Start |
-| [migration-guide.en.md](../docs/migration-guide.en.md) | Migration Steps Explained |
-| [troubleshooting.en.md](../docs/troubleshooting.en.md) | Troubleshooting |
-| [architecture-and-design.en.md](../docs/architecture-and-design.en.md) | Architecture & Design Principles |
+| [getting-started/for-platform-engineers.en.md](getting-started/for-platform-engineers.en.md) | Platform Engineer Quick Start |
+| [migration-guide.en.md](migration-guide.en.md) | Migration Steps Explained |
+| [troubleshooting.en.md](troubleshooting.en.md) | Troubleshooting |
+| [architecture-and-design.en.md](architecture-and-design.en.md) | Architecture & Design Principles |
 
 ## Related Resources
 
@@ -1729,9 +1729,9 @@ They're complementary; run both after migration.
 |----------|-----------|
 | ["da-tools CLI Reference"](./cli-reference.md) | ★★★ |
 | ["Threshold Exporter API Reference"](api/README.en.md) | ★★★ |
-| ["da-tools Quick Reference"](./cheat-sheet.en.md) | ★★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
-| ["Troubleshooting and Edge Cases"](./troubleshooting.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"](./benchmarks.en.md) | ★★ |
-| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ★★ |
+| ["da-tools Quick Reference"] | ★★★ |
+| ["Grafana Dashboard Guide"] | ★★ |
+| ["Troubleshooting and Edge Cases"] | ★★ |
+| ["Performance Analysis & Benchmarks"] | ★★ |
+| ["BYO Alertmanager Integration Guide"] | ★★ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★ |

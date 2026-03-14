@@ -2,7 +2,7 @@
 title: "場景：Shadow Monitoring 全自動切換工作流"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 場景：Shadow Monitoring 全自動切換工作流
@@ -71,7 +71,7 @@ graph LR
 
 ```bash
 # validate_migration.py 自動偵測收斂並產出 cutover-readiness.json
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
@@ -95,7 +95,7 @@ python3 scripts/tools/validate_migration.py \
 在 `validate_migration.py` 中傳入 `--tolerance` 參數：
 
 ```bash
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch \
@@ -123,13 +123,13 @@ cp -r conf.d conf.d.bak
 cp -r alertmanager.yml alertmanager.yml.bak
 
 # 1.2 掃描並分析現有配置
-python3 scripts/tools/onboard_platform.py \
+python3 scripts/tools/ops/onboard_platform.py \
   --legacy-config /path/to/old_rules/ \
   --output migration_input/
 # 產出：onboard-hints.json（含規則映射提示、需手工調整的項目、預計遷移工作量）
 
 # 1.3 驗證環境就緒
-python3 scripts/tools/validate_config.py \
+python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/ \
   --policy .github/custom-rule-policy.yaml
 ```
@@ -138,7 +138,7 @@ python3 scripts/tools/validate_config.py \
 
 ```bash
 # 2.1 執行規則轉換
-python3 scripts/tools/migrate_rule.py \
+python3 scripts/tools/ops/migrate_rule.py \
   --input migration_input/onboard-hints.json \
   --tenant db-a,db-b \
   --output migration_output/
@@ -162,7 +162,7 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ```bash
 # 3.1 啟動並行驗證
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
@@ -186,7 +186,7 @@ da-tools shadow-verify convergence \
   --prometheus http://localhost:9090
 
 # 4.2 乾運行模式（--dry-run）
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --readiness-json validation_output/cutover-readiness.json \
   --tenant db-a \
   --prometheus http://localhost:9090 \
@@ -207,7 +207,7 @@ python3 scripts/tools/cutover_tenant.py \
 
 ```bash
 # 5.1 執行單個 tenant 切換
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --readiness-json validation_output/cutover-readiness.json \
   --tenant db-a \
   --prometheus http://localhost:9090
@@ -223,7 +223,7 @@ python3 scripts/tools/cutover_tenant.py \
 # 5.2 批次切換多個 tenant（逐一執行）
 for tenant in db-a db-b db-c; do
   echo "[INFO] Cutting over $tenant..."
-  python3 scripts/tools/cutover_tenant.py \
+  python3 scripts/tools/ops/cutover_tenant.py \
     --readiness-json validation_output/cutover-readiness.json \
     --tenant "$tenant" \
     --prometheus http://localhost:9090
@@ -232,7 +232,7 @@ for tenant in db-a db-b db-c; do
 done
 
 # 5.3 驗證全部切換成功
-python3 scripts/tools/batch_diagnose.py \
+python3 scripts/tools/ops/batch_diagnose.py \
   --prometheus http://localhost:9090 \
   --check-shadow-removal
 ```
@@ -241,7 +241,7 @@ python3 scripts/tools/batch_diagnose.py \
 
 ```bash
 # 6.1 確認舊規則已完全移除（batch-diagnose 含 shadow-removal 檢查）
-python3 scripts/tools/batch_diagnose.py \
+python3 scripts/tools/ops/batch_diagnose.py \
   --prometheus http://localhost:9090 --check-shadow-removal
 
 # 6.2 清理遷移產物與備份
@@ -282,7 +282,7 @@ kubectl patch configmap alertmanager-config -n monitoring \
   --patch-file alertmanager-block-custom.patch  # 臨時攔截 custom_* alerts
 
 # 3.2 執行完整回退
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --tenant db-a \
   --rollback --prometheus http://localhost:9090
 # 自動：恢復舊規則、恢復舊 AM 設定、重啟驗證
@@ -332,7 +332,7 @@ python3 scripts/tools/cutover_tenant.py \
 
 ```bash
 # 容忍度提寬至 5%，連續 3 輪無 mismatch 即宣告收斂
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 288 \
@@ -351,7 +351,7 @@ python3 scripts/tools/validate_migration.py \
 
 ```bash
 # 跳過 cutover-readiness.json 驗證，直接切換
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --tenant db-a \
   --prometheus http://localhost:9090 \
   --force  # 不需要 --readiness-json
@@ -391,19 +391,19 @@ python3 scripts/tools/cutover_tenant.py \
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../migration-simulator.jsx) — 預覽遷移過程和驗收結果
-> - [Health Dashboard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../health-dashboard.jsx) — 監控遷移期間的系統健康狀況
-> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-diff.jsx) — 比對遷移前後的告警規則配置
+> - [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx) — 預覽遷移過程和驗收結果
+> - [Health Dashboard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/health-dashboard.jsx) — 監控遷移期間的系統健康狀況
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx) — 比對遷移前後的告警規則配置
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐⭐ |
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |
-| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
-| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
-| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](scenarios/alert-routing-split.md) | ⭐⭐ |
-| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](scenarios/multi-cluster-federation.md) | ⭐⭐ |
-| ["場景：租戶完整生命週期管理"](scenarios/tenant-lifecycle.md) | ⭐⭐ |
+| ["場景：Shadow Monitoring 全自動切換工作流"](shadow-monitoring-cutover.md) | ⭐⭐⭐ |
+| ["進階場景與測試覆蓋"](advanced-scenarios.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
+| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](alert-routing-split.md) | ⭐⭐ |
+| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](multi-cluster-federation.md) | ⭐⭐ |
+| ["場景：租戶完整生命週期管理"](tenant-lifecycle.md) | ⭐⭐ |

@@ -1,3 +1,5 @@
+# ⚠️  DEPRECATED — community reference only. Primary CI: .github/workflows/
+#
 # docs-ci.gitlab-ci.yml — Documentation CI/CD Pipeline
 #
 # Include in your .gitlab-ci.yml:
@@ -32,7 +34,7 @@ validate-mermaid:
     - npm install -g @mermaid-js/mermaid-cli puppeteer
   script:
     - |
-      python3 scripts/tools/validate_mermaid.py \
+      python3 scripts/tools/lint/validate_mermaid.py \
         docs/ rule-packs/ \
         --ci --render
   allow_failure: false
@@ -51,7 +53,7 @@ check-links:
     - pip install pyyaml
   script:
     - |
-      python3 scripts/tools/check_doc_links.py \
+      python3 scripts/tools/lint/check_doc_links.py \
         docs/ rule-packs/ \
         --ci
   allow_failure: false
@@ -70,7 +72,7 @@ check-frontmatter:
     - pip install pyyaml
   script:
     - |
-      python3 scripts/tools/add_frontmatter.py \
+      python3 scripts/tools/dx/add_frontmatter.py \
         docs/ rule-packs/ \
         --check
   allow_failure: false
@@ -89,7 +91,7 @@ check-coverage:
     - pip install pyyaml
   script:
     - |
-      python3 scripts/tools/doc_coverage.py \
+      python3 scripts/tools/dx/doc_coverage.py \
         docs/ rule-packs/ \
         --ci
   allow_failure: false

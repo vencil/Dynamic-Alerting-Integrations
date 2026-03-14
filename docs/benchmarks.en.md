@@ -2,7 +2,7 @@
 title: "Performance Analysis & Benchmarks"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Performance Analysis & Benchmarks
@@ -340,9 +340,9 @@ Tenant YAML change
 |----------|-----------|
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ★★★ |
 | ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
+| ["BYO Alertmanager Integration Guide"] | ★★ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★ |
+| ["da-tools CLI Reference"] | ★★ |
+| ["Grafana Dashboard Guide"] | ★★ |
 | ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ★★ |
+| ["Shadow Monitoring SRE SOP"] | ★★ |

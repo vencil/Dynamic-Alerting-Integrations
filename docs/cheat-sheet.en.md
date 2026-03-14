@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -101,6 +101,6 @@ Full reference at [cli-reference.en.md](cli-reference.en.md).
 | Resource | Relevance |
 |----------|-----------|
 | ["da-tools Quick Reference"](./cheat-sheet.md) | ★★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★★ |
-| ["Glossary"](./glossary.en.md) | ★★ |
+| ["da-tools CLI Reference"] | ★★★ |
+| ["Glossary"] | ★★ |
 | ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |

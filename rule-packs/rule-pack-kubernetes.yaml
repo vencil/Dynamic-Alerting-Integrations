@@ -112,8 +112,11 @@ groups:
           severity: warning
         annotations:
           summary: "High container CPU in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器 CPU 使用率過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU pressure — evaluate resource limits"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 壓力過高 — 請評估資源限制"
           description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+          description_zh: "最大容器 CPU 使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -136,8 +139,11 @@ groups:
           severity: warning
         annotations:
           summary: "High container memory in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器記憶體使用率過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container memory pressure — evaluate resource limits"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體壓力過高 — 請評估資源限制"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+          description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -167,8 +173,11 @@ groups:
           severity: critical
         annotations:
           summary: "Container crash loop detected in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 偵測到容器崩潰迴圈"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected — check deployment and image health"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
           description: "{{ $value }} container(s) in CrashLoopBackOff state"
+          description_zh: "{{ $value }} 個容器處於 CrashLoopBackOff 狀態"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -193,8 +202,11 @@ groups:
           severity: warning
         annotations:
           summary: "Image pull failure detected in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 偵測到映像檔案拉取失敗"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing — verify registry and image availability"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 映像檔案拉取失敗 — 請檢查 registry 和映像檔案可用性"
           description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"
+          description_zh: "{{ $value }} 個容器處於 ImagePullBackOff/InvalidImageName 狀態"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

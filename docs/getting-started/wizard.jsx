@@ -445,7 +445,7 @@ const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => 
         </p>
         <div className="mt-3 flex items-center gap-3">
           <div className="flex-1 h-2 bg-blue-100 rounded-full overflow-hidden">
-            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }} />
+            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: (total > 0 ? (done / total) * 100 : 0) + '%' }} />
           </div>
           <span className="text-sm font-medium text-gray-600">{done}/{total}</span>
         </div>
@@ -522,6 +522,8 @@ export default function GettingStartedWizard() {
     setRecommendationKey(null);
     setStep(1);
     writeHash(roleId, null, readDocs);
+    // Persist role to flow state for cross-step data passing
+    if (window.__flowSave) window.__flowSave({ role: roleId });
   };
 
   const handleOptionSelect = (optionId) => {

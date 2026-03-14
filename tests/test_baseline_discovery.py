@@ -10,15 +10,9 @@ Covers:
 """
 
 import math
-import os
-import sys
 import unittest
 
 # Make baseline_discovery importable
-TOOLS_DIR = os.path.join(
-    os.path.dirname(__file__), os.pardir, "scripts", "tools",
-)
-sys.path.insert(0, os.path.abspath(TOOLS_DIR))
 
 import baseline_discovery  # noqa: E402
 

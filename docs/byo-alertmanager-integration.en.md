@@ -2,7 +2,7 @@
 title: "BYO Alertmanager Integration Guide"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # BYO Alertmanager Integration Guide
@@ -338,7 +338,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/.../default"
+        api_url: "https://hooks.slack.com/services/../default"
         channel: "#db-alerts"
 
       # Routing overrides for specific alerts
@@ -460,10 +460,10 @@ This path is mutually exclusive with the `generate_alertmanager_routes.py` Confi
 | Resource | Relevance |
 |----------|-----------|
 | ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ★★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ★★★ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★★ |
 | ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"](./benchmarks.en.md) | ★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
+| ["Performance Analysis & Benchmarks"] | ★★ |
+| ["da-tools CLI Reference"] | ★★ |
+| ["Grafana Dashboard Guide"] | ★★ |
 | ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ★★ |
+| ["Shadow Monitoring SRE SOP"] | ★★ |

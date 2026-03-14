@@ -10,12 +10,9 @@
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import analyze_rule_pack_gaps as ag  # noqa: E402
 

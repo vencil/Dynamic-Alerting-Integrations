@@ -95,6 +95,7 @@ groups:
           severity: critical
         annotations:
           summary: "Redis instance {{ $labels.instance }} is DOWN"
+          summary_zh: "Redis 實例 {{ $labels.instance }} 已停機"
 
       - alert: RedisHighMemory
         expr: |
@@ -114,8 +115,11 @@ groups:
           severity: warning
         annotations:
           summary: "Redis high memory usage on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 記憶體使用率過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis memory threshold breached — evaluate maxmemory policy"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 記憶體閾值超過 — 請評估 maxmemory 政策"
           description: "Memory usage: {{ $value | humanize1024 }}B"
+          description_zh: "記憶體使用量: {{ $value | humanize1024 }}B"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -138,8 +142,11 @@ groups:
           severity: warning
         annotations:
           summary: "Redis high connection count on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 連線數過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis connection count high — client pool review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 連線數過高 — 請檢查客戶端連線池"
           description: "{{ $value }} connected clients"
+          description_zh: "{{ $value }} 個已連線的客戶端"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -162,8 +169,11 @@ groups:
           severity: warning
         annotations:
           summary: "Redis high key eviction rate on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis Key 驅逐率過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: key eviction rate elevated — capacity review needed"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Key 驅逐率提升 — 需要檢查容量"
           description: "{{ $value | printf \"%.1f\" }} evictions/sec — consider increasing maxmemory"
+          description_zh: "{{ $value | printf \"%.1f\" }} 驅逐次數/秒 — 請考慮增加 maxmemory"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -186,8 +196,11 @@ groups:
           severity: warning
         annotations:
           summary: "Redis replication lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 複製延遲"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis replication lag — check replica health"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 複製延遲 — 請檢查副本狀態"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
+          description_zh: "複製延遲: {{ $value | printf \"%.1f\" }}s"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -206,8 +219,11 @@ groups:
           severity: warning
         annotations:
           summary: "Redis low hit ratio on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 快取命中率過低"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: low cache hit ratio — cache strategy review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 快取命中率過低 — 請檢查快取策略"
           description: "Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy"
+          description_zh: "命中率: {{ $value | printf \"%.2f\" }} — 請檢查快取策略"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

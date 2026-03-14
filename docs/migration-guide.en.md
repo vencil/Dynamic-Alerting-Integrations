@@ -2,7 +2,7 @@
 title: "Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform
@@ -10,7 +10,7 @@ lang: en
 > **Language / 語言：** **English (Current)** | [中文](migration-guide.md)
 
 > Migrate from traditional Prometheus alerting to the dynamic multi-tenant threshold architecture.
-> **Other Documents:** [README](../README.md) (Overview) · [Architecture & Design](architecture-and-design.md) (Technical Depth) · [Rule Packs](../rule-packs/README.md) (Rule Pack Directory)
+> **Other Documents:** [README](index.md) (Overview) · [Architecture & Design](architecture-and-design.md) (Technical Depth) · [Rule Packs](rule-packs/README.md) (Rule Pack Directory)
 
 > **⚠️ Migration Safety Guarantee:** The migration process on this platform is designed to be **progressive and reversible**. Your legacy rules don't need to be switched all at once—new rules via the `custom_` prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's `optional: true` mechanism ensures that deleting any rule pack will not affect Prometheus operation.
 >
@@ -103,7 +103,7 @@ da-tools scaffold --tenant redis-prod --db redis,mariadb --namespaces ns1,ns2,ns
 
 # With routing configuration — output includes complete routing config
 da-tools scaffold --tenant redis-prod --db redis,mariadb \
-                  --routing-receiver "https://hooks.slack.com/services/T.../B.../xxx" \
+                  --routing-receiver "https://hooks.slack.com/services/T../B../xxx" \
                   --routing-receiver-type slack --non-interactive -o /data
 
 # View supported DB types and metrics
@@ -140,7 +140,7 @@ kubectl create configmap threshold-config \
 
 After ConfigMap changes, exporter will auto hot-reload within 1-3 minutes (K8s propagation + SHA-256 watcher) without needing to restart Pods.
 
-> For detailed three injection methods (Helm / kubectl / GitOps), see [threshold-exporter README — K8s Deployment and Configuration Management](../components/threshold-exporter/README.md#k8s-deployment-and-configuration-management).
+> For detailed three injection methods (Helm / kubectl / GitOps), see [threshold-exporter README — K8s Deployment and Configuration Management](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-deployment-and-configuration-management).
 
 ---
 
@@ -205,7 +205,7 @@ kubectl create configmap prometheus-rules-custom \
 #    If already have custom rule pack slot, ConfigMap auto-mounts after creation
 ```
 
-> **Helm users**: You can also integrate recording/alert rules into Helm chart values for centralized management. See [threshold-exporter README](../components/threshold-exporter/README.md#k8s-deployment-and-configuration-management).
+> **Helm users**: You can also integrate recording/alert rules into Helm chart values for centralized management. See [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-deployment-and-configuration-management).
 
 ### Aggregation Mode Intelligent Guessing
 
@@ -307,7 +307,7 @@ The three-piece set structure demonstrated in 4.1 above applies to all scenarios
 | **4.4 Rate Metric** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum for "cluster total" (slow queries overall) |
 | **4.5 Percentage Calculation** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | Percentage calculation completes in Recording Rule |
 
-> **Summary:** Sections 4.2-4.5 simply apply the 4.1 three-piece template by changing the metric name and tenant config key. Platform-side alert rule structure remains consistent. See [Rule Packs ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.md) for actual rules.
+> **Summary:** Sections 4.2-4.5 simply apply the 4.1 three-piece template by changing the metric name and tenant config key. Platform-side alert rule structure remains consistent. See [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) for actual rules.
 
 ---
 
@@ -531,7 +531,7 @@ Ask yourself: "If one node exceeds threshold and others are normal, is there a p
 6. Add default threshold to `_defaults.yaml`
 7. Use `da-tools scaffold` to generate tenant config
 
-Complete Rule Pack structure see [rule-packs/README.md](../rule-packs/README.md).
+Complete Rule Pack structure see [rule-packs/README.md](rule-packs/README.md).
 
 ---
 
@@ -763,8 +763,8 @@ Three-step automation:
 |----------|-----------|
 | ["Migration Guide — 遷移指南"](./migration-guide.md) | ★★★ |
 | ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ★★ |
-| ["AST Migration Engine Architecture"](./migration-engine.en.md) | ★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
+| ["AST Migration Engine Architecture"] | ★★ |
+| ["da-tools CLI Reference"] | ★★ |
 | ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ★★ |
 | ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ★★ |
+| ["Shadow Monitoring SRE SOP"] | ★★ |

@@ -8,6 +8,14 @@ data:
     global:
       resolve_timeout: 5m
 
+    # v2.0.0 Bilingual Templates (i18n)
+    # Alertmanager notification templates with fallback logic:
+    # - Prefer *_zh annotations when available (Chinese)
+    # - Fall back to English if *_zh is not set
+    # Pattern: {{ or .CommonAnnotations.annotation_zh .CommonAnnotations.annotation }}
+    # Receiver-specific templates override the defaults below
+    templates: []  # Built-in templates only, no custom template files in this MVP
+
     route:
       group_by: ["alertname", "tenant"]
       group_wait: 10s
@@ -61,3 +69,243 @@ data:
         target_matchers:
           - severity="critical"
         equal: ["tenant"]
+
+  # v2.0.0 Bilingual Notification Templates (i18n)
+  # Templates with fallback logic: prefer Chinese (*_zh) → fall back to English
+  # Pattern: {{ $var := or .CommonAnnotations.annotation_zh .CommonAnnotations.annotation }}
+  #
+  # These templates are used by receivers (email, webhook, slack, teams, pagerduty).
+  # Alertmanager evaluates templates at notification time, using the {{or}} function
+  # to prefer Chinese annotations when available.
+  #
+  # Receiver-specific usage:
+  #   - Email: use in 'headers' and 'text'/'html' fields
+  #   - Webhook: use in custom request body (tenant-defined JSON)
+  #   - Slack: use in 'title' and 'text' fields
+  #   - Teams: use in 'title' and 'text' fields
+  #   - PagerDuty: use in 'description' field
+  #
+  # Example email_template.html:
+  #   {{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+  #   {{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+  #   {{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+  #   <h2>{{ $summary }}</h2>
+  #   <p>{{ $description }}</p>
+  #   <p><strong>Platform Perspective:</strong> {{ $platformSummary }}</p>
+  #
+  # Rules for Rule Pack authors:
+  #   - Always provide 'summary' and 'description' (English)
+  #   - Optionally add 'summary_zh' and 'description_zh' (Chinese)
+  #   - For platform-level alerts, add 'platform_summary' and optionally 'platform_summary_zh'
+  #
+  # Backward compatibility: Without *_zh annotations, templates fall back to English automatically.
+  alertmanager-templates.md: |
+    # Bilingual Alertmanager Templates
+
+    ## Annotation Fallback Pattern
+
+    For each annotation, use the Go template `or` function to prefer Chinese:
+
+    ```
+    {{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+    {{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    {{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    ```
+
+    ## Receiver-Specific Examples
+
+    ### Email (text)
+    ```
+    Summary: {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+    Description: {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    Platform View: {{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    Severity: {{ .GroupLabels.severity }}
+    Tenant: {{ .GroupLabels.tenant }}
+    ```
+
+    ### Slack
+    ```
+    title: "{{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}"
+    text: |
+      *Severity:* {{ .GroupLabels.severity | toUpper }}
+      *Tenant:* {{ .GroupLabels.tenant }}
+      *Description:* {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+      *Platform Summary:* {{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    ```
+
+    ### Webhook (JSON)
+    ```json
+    {
+      "alert": "{{ .GroupLabels.alertname }}",
+      "summary": "{{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}",
+      "description": "{{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}",
+      "platform_summary": "{{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}",
+      "severity": "{{ .GroupLabels.severity }}",
+      "tenant": "{{ .GroupLabels.tenant }}"
+    }
+    ```
+
+    ## Rule Pack Annotation Guidelines
+
+    All new rules must include English annotations. Chinese translations are optional but recommended for tenant-facing alerts:
+
+    ```yaml
+    - alert: MyAlert
+      expr: ...
+      annotations:
+        summary: "English summary here"
+        description: "Detailed English description"
+        summary_zh: "中文摘要"
+        description_zh: "詳細的中文描述"
+        platform_summary: "Platform/NOC view (English)"
+        platform_summary_zh: "平台/NOC 檢視（中文）"
+    ```
+
+    ## Testing the Fallback
+
+    1. Alert with only English annotations → uses English text
+    2. Alert with both → uses Chinese text
+    3. Alert with *_zh but missing English → falls back to English (may be empty)
+
+    For safety, always provide English as the baseline.
+
+  alertmanager-receiver-examples.yaml: |
+    # v2.0.0 Example Receivers with Bilingual Template Support
+    #
+    # These examples show how to configure different receiver types
+    # to use the bilingual annotation fallback pattern.
+    #
+    # Pattern: {{ or .CommonAnnotations.annotation_zh .CommonAnnotations.annotation }}
+    #
+    # Copy these examples to your tenant YAML _routing configuration.
+
+    # ========================================================
+    # Webhook Example (JSON)
+    # ========================================================
+    # Use case: Send alerts to a custom webhook endpoint
+    # The webhook receives JSON with bilingual annotations
+    #
+    # Usage in tenant YAML:
+    #   _routing:
+    #     receiver:
+    #       type: webhook
+    #       url: https://webhook.example.com/alerts
+    #       send_resolved: true
+    #
+    # Generated payload example:
+    # {
+    #   "status": "firing",
+    #   "alerts": [
+    #     {
+    #       "status": "firing",
+    #       "labels": { "alertname": "HighConnections", "severity": "warning", "tenant": "db-a" },
+    #       "annotations": {
+    #         "summary": "MariaDB connections exceeded",
+    #         "summary_zh": "MariaDB 連線數超出",
+    #         "description": "...",
+    #         "description_zh": "..."
+    #       }
+    #     }
+    #   ]
+    # }
+
+    # Webhook sends all annotations as-is. Receiver-side filtering:
+    # - If client supports zh_CN locale → use summary_zh
+    # - Otherwise → use summary (automatic via Go template or client logic)
+
+    # ========================================================
+    # Email Example with Text Template
+    # ========================================================
+    # Use case: Send alerts via email with bilingual subject/body
+    #
+    # Usage in tenant YAML:
+    #   _routing:
+    #     receiver:
+    #       type: email
+    #       to: ops@example.com
+    #       smarthost: smtp.example.com:587
+    #       from: alerts@example.com
+    #       auth_username: user
+    #       auth_password: pass
+    #       text: |
+    #         Summary: {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+    #         Severity: {{ .GroupLabels.severity }}
+    #         Tenant: {{ .GroupLabels.tenant }}
+    #         Description: {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    #
+    # The {{ or }} function is evaluated by Alertmanager:
+    # - If summary_zh exists and is non-empty → use it
+    # - Otherwise → use summary (English)
+
+    # ========================================================
+    # Slack Example
+    # ========================================================
+    # Use case: Send alerts to Slack with bilingual text
+    #
+    # Usage in tenant YAML:
+    #   _routing:
+    #     receiver:
+    #       type: slack
+    #       api_url: https://hooks.slack.com/services/T/B/xxxxx
+    #       channel: "#alerts"
+    #       title: |
+    #         [{{ .GroupLabels.severity | toUpper }}] {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+    #       text: |
+    #         *Tenant:* {{ .GroupLabels.tenant }}
+    #         *Severity:* {{ .GroupLabels.severity }}
+    #         *Description:* {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    #         *Platform View:* {{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    #
+    # Slack renders Markdown. Use ** for bold, _ for italics, ` for monospace.
+
+    # ========================================================
+    # Teams Example
+    # ========================================================
+    # Use case: Send alerts to Microsoft Teams
+    #
+    # Usage in tenant YAML:
+    #   _routing:
+    #     receiver:
+    #       type: teams
+    #       webhook_url: https://outlook.webhook.office.com/webhookb2/...
+    #       title: |
+    #         {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+    #       text: |
+    #         **Tenant:** {{ .GroupLabels.tenant }}
+    #         **Severity:** {{ .GroupLabels.severity }}
+    #         **Description:** {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    #
+    # Teams supports Markdown formatting.
+
+    # ========================================================
+    # PagerDuty Example
+    # ========================================================
+    # Use case: Send critical alerts to PagerDuty
+    #
+    # Usage in tenant YAML:
+    #   _routing:
+    #     receiver:
+    #       type: pagerduty
+    #       service_key: <pagerduty_integration_key>
+    #       description: |
+    #         {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }} ({{ .GroupLabels.tenant }})
+    #       severity: "{{ .GroupLabels.severity }}"
+    #       client: "Dynamic Alerting Platform"
+    #
+    # PagerDuty automatically creates incidents based on description.
+
+    # ========================================================
+    # Locale Detection (Client-Side)
+    # ========================================================
+    #
+    # For webhook and custom integrations, you can detect locale server-side:
+    #
+    #   def get_alert_text(alert):
+    #       locale = detect_client_locale()  # From HTTP header Accept-Language
+    #       if locale.startswith('zh'):
+    #           return alert['annotations'].get('summary_zh', alert['annotations'].get('summary'))
+    #       else:
+    #           return alert['annotations'].get('summary')
+    #
+    # Alertmanager handles fallback automatically via {{ or }}. Client code
+    # should mirror this logic for consistency.

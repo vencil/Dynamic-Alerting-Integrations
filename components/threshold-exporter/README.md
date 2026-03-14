@@ -1,4 +1,4 @@
-# Threshold Exporter (v2.0.0-preview.2)
+# Threshold Exporter (v2.0.0-preview.3)
 
 > **核心 Component** — config-driven 的 Prometheus metric exporter，將 YAML 閾值設定轉換為 Prometheus metrics。相比硬寫 PromQL 規則（修改需重啟 Prometheus、規則數隨 tenant × metric 線性增長），threshold-exporter 以 YAML 驅動實現零停機更新、租戶級隔離、固定 O(M) 規則複雜度。
 >

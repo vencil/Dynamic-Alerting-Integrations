@@ -23,7 +23,7 @@ on:
       - "README.md"
       - "README.en.md"
       - "CLAUDE.md"
-      - "scripts/tools/*.py"
+      - "scripts/tools/**/*.py"
       - ".github/workflows/docs-ci.yaml"
       - ".pre-commit-config.yaml"
 
@@ -72,7 +72,7 @@ jobs:
 
       - name: Validate and render Mermaid diagrams
         run: |
-          python scripts/tools/validate_mermaid.py \
+          python scripts/tools/lint/validate_mermaid.py \
             docs/ rule-packs/ \
             --ci --render
 
@@ -102,7 +102,7 @@ jobs:
 
       - name: Check document links and cross-references
         run: |
-          python scripts/tools/check_doc_links.py \
+          python scripts/tools/lint/check_doc_links.py \
             docs/ rule-packs/ \
             --ci
 
@@ -132,7 +132,7 @@ jobs:
 
       - name: Validate documentation YAML front matter
         run: |
-          python scripts/tools/add_frontmatter.py \
+          python scripts/tools/dx/add_frontmatter.py \
             docs/ rule-packs/ \
             --check
 
@@ -162,20 +162,20 @@ jobs:
 
       - name: Check documentation coverage (80% minimum)
         run: |
-          python scripts/tools/doc_coverage.py \
+          python scripts/tools/dx/doc_coverage.py \
             docs/ rule-packs/ \
             --ci
 
       - name: Update coverage badge JSON
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          python scripts/tools/doc_coverage.py \
+          python scripts/tools/dx/doc_coverage.py \
             docs/ rule-packs/ \
             --badge --json > docs/assets/doc-coverage-badge.json || true
 
       - name: Sync glossary abbreviations
         run: |
-          python scripts/tools/sync_glossary_abbr.py --check
+          python scripts/tools/dx/sync_glossary_abbr.py --check
 
       - name: Commit badge update
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -208,12 +208,27 @@ jobs:
 
       - name: Install MkDocs and plugins
         run: |
-          pip install mkdocs-material mkdocs-i18n pymdown-extensions
+          pip install mkdocs-material mkdocs-static-i18n pymdown-extensions
 
       - name: Build site (strict mode)
         run: |
-          mkdocs build --strict 2>&1 | tee mkdocs-build.log
-          # Fail on warnings (strict mode already does this)
+          # Build with strict mode, filtering known acceptable warnings:
+          #   - mkdocs_static_i18n navigation.instant compat (known limitation)
+          #   - README.md excluded by index.md conflict (expected)
+          mkdocs build 2>&1 | tee mkdocs-build.log
+          # Filter known warnings and fail on any remaining
+          REAL_WARNS=$(grep "^WARNING" mkdocs-build.log \
+            | grep -v "mkdocs_static_i18n.*navigation.instant" \
+            | grep -v "Excluding.*README.md.*conflicts with.*index.md" \
+            | wc -l)
+          echo "::notice::Actionable MkDocs warnings: $REAL_WARNS"
+          if [ "$REAL_WARNS" -gt 0 ]; then
+            grep "^WARNING" mkdocs-build.log \
+              | grep -v "mkdocs_static_i18n.*navigation.instant" \
+              | grep -v "Excluding.*README.md.*conflicts with.*index.md"
+            echo "::error::MkDocs build has $REAL_WARNS actionable warnings. Fix broken links."
+            exit 1
+          fi
 
   doc-line-count:
     name: Documentation Line Count Monitor
@@ -260,7 +275,7 @@ jobs:
       - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats)
         run: |
           python scripts/tools/validate_all.py \
-            --only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes \
+            --only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,repo_name \
             --ci
 
   all-checks:

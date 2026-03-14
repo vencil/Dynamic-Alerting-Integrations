@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/vencil/vibe-k8s-lab/docs/schemas/tenant-config.schema.json",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/tenant-config.schema.json",
   "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
   "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
   "version": "v2.0.0-preview",

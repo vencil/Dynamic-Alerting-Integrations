@@ -2,7 +2,7 @@
 title: "Shadow Monitoring SRE SOP"
 tags: [migration, shadow-monitoring, sop]
 audience: [sre, platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # Shadow Monitoring SRE SOP
@@ -32,7 +32,7 @@ Shadow Monitoring 是遷移流程的**並行驗證階段**：新規則（`custom
 da-tools validate-config --config-dir /data/conf.d
 
 # 或本地 Python 執行
-python3 scripts/tools/validate_config.py --config-dir components/threshold-exporter/config/conf.d
+python3 scripts/tools/ops/validate_config.py --config-dir components/threshold-exporter/config/conf.d
 ```
 
 ### 2.2 確認新規則已載入
@@ -67,7 +67,7 @@ receivers:
 對關鍵 tenant 執行負載觀測，建立遷移前的 baseline 數據作為比對參考：
 
 ```bash
-python3 scripts/tools/baseline_discovery.py --tenant db-a --duration 1800 --interval 30
+python3 scripts/tools/ops/baseline_discovery.py --tenant db-a --duration 1800 --interval 30
 ```
 
 產出包含 p50/p90/p95/p99 統計與閾值建議 CSV，可在 shadow 期間比對趨勢是否偏移。
@@ -90,7 +90,7 @@ docker run --rm --network=host \
 
 > **已 clone 專案？** 也可直接執行 Python 腳本：
 > ```bash
-> python3 scripts/tools/validate_migration.py \
+> python3 scripts/tools/ops/validate_migration.py \
 >   --mapping migration_output/prefix-mapping.yaml \
 >   --prometheus http://localhost:9090 \
 >   --watch --interval 300 --rounds 4032
@@ -427,7 +427,7 @@ da-tools grafana-import \
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ⭐⭐⭐ |
+| ["Shadow Monitoring SRE SOP"] | ⭐⭐⭐ |
 | ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |
 | ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |

@@ -90,7 +90,9 @@ groups:
           severity: critical
         annotations:
           summary: "Kafka exporter target missing"
+          summary_zh: "Kafka exporter 目標缺失"
           description: "No kafka_brokers metric found for 30s"
+          description_zh: "30 秒內未找到 kafka_brokers metric"
 
       - alert: KafkaHighConsumerLag
         expr: |
@@ -111,8 +113,11 @@ groups:
           metric_group: "kafka_consumer_lag"
         annotations:
           summary: "High Kafka consumer lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Kafka 消費者延遲過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: consumer lag elevated — consumer capacity review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 消費者延遲提升 — 請檢查消費者容量"
           description: "Consumer lag: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
+          description_zh: "消費者延遲: {{ $value | printf \"%.0f\" }} (超過警告閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -137,8 +142,11 @@ groups:
           metric_group: "kafka_consumer_lag"
         annotations:
           summary: "Critical Kafka consumer lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Kafka 消費者延遲嚴重"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical consumer lag — immediate consumer scaling needed"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 消費者延遲嚴重 — 需要立即擴展消費者"
           description: "Consumer lag: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
+          description_zh: "消費者延遲: {{ $value | printf \"%.0f\" }} (超過嚴重閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -162,8 +170,11 @@ groups:
           metric_group: "kafka_under_replicated_partitions"
         annotations:
           summary: "Under-replicated partitions detected on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 偵測到複製不足的分割區"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: under-replicated partitions — broker health check"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 複製不足分割區 — 請檢查 broker 健康狀態"
           description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (warning threshold exceeded)"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個分割區缺少同步副本 (超過警告閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -188,8 +199,11 @@ groups:
           metric_group: "kafka_under_replicated_partitions"
         annotations:
           summary: "Critical under-replicated partitions on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的複製不足分割區情況嚴重"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical under-replication — data durability at risk, escalate"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 複製不足情況嚴重 — 資料耐久性有風險，請上報"
           description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (critical threshold exceeded)"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個分割區缺少同步副本 (超過嚴重閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -213,8 +227,11 @@ groups:
           metric_group: "kafka_active_controllers"
         annotations:
           summary: "No active Kafka controller on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上沒有活躍的 Kafka controller"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: no active Kafka controller — cluster leadership lost, escalate"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 沒有活躍的 Kafka controller — 叢集領導已遺失，請上報"
           description: "Active controllers: {{ $value | printf \"%.0f\" }} (expected at least 1)"
+          description_zh: "活躍的 controller: {{ $value | printf \"%.0f\" }} (預期至少 1 個)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -238,8 +255,11 @@ groups:
           metric_group: "kafka_broker_count"
         annotations:
           summary: "Low Kafka broker count on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Kafka broker 數量過少"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: broker count below minimum — cluster availability at risk"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: broker 數量低於最小值 — 叢集可用性有風險"
           description: "Active brokers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
+          description_zh: "活躍的 broker: {{ $value | printf \"%.0f\" }} (低於最小閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -263,8 +283,11 @@ groups:
           metric_group: "kafka_request_rate"
         annotations:
           summary: "High Kafka request rate on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Kafka 請求率過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: message rate threshold exceeded — throughput review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 訊息率超過閾值 — 請檢查吞吐量"
           description: "Message rate: {{ $value | printf \"%.1f\" }} msg/s (warning threshold exceeded)"
+          description_zh: "訊息速率: {{ $value | printf \"%.1f\" }} 訊息/秒 (超過警告閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -289,8 +312,11 @@ groups:
           metric_group: "kafka_request_rate"
         annotations:
           summary: "Critical Kafka request rate on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Kafka 請求率嚴重過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical message rate — broker saturation risk, escalate"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 訊息率嚴重過高 — broker 飽和風險，請上報"
           description: "Message rate: {{ $value | printf \"%.1f\" }} msg/s (critical threshold exceeded)"
+          description_zh: "訊息速率: {{ $value | printf \"%.1f\" }} 訊息/秒 (超過嚴重閾值)"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

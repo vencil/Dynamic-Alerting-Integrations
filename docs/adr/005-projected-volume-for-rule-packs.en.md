@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -123,24 +123,24 @@ volumes:
 
 ## Related Decisions
 
-- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.en.md) — inhibit rules can be part of Rule Pack
-- [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.en.md) — sentinel rules distributed as Rule Pack
+- [ADR-001: Severity Dedup via Inhibit Rules] — inhibit rules can be part of Rule Pack
+- [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.md) — sentinel rules distributed as Rule Pack
 
 ## References
 
-- [`rule-packs/README.md`](../../rule-packs/README.md) — Rule Pack directory structure and list
-- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.en.md) §Rule Pack Configuration — Custom Rule Pack guide
+- [`rule-packs/README.md`](../rule-packs/README.md) — Rule Pack directory structure and list
+- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.md) §Rule Pack Configuration — Custom Rule Pack guide
 - [Kubernetes Projected Volume Official Documentation](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
 
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ★★★ |
-| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ★★★ |
-| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ★★★ |
-| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★★ |
-| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★★ |
-| [README.en](adr/README.en.md) | ★★★ |
-| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"](./architecture-and-design.en.md) | ★★ |
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"](./context-diagram.en.md) | ★★ |
+| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ★★★ |
+| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ★★★ |
+| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ★★★ |
+| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ★★★ |
+| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ★★★ |
+| [README.en](README.en.md) | ★★★ |
+| ["Architecture and Design"](../architecture-and-design.md) | ★★ |
+| ["Project Context Diagram"](../context-diagram.md) | ★★ |

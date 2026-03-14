@@ -2,12 +2,12 @@
 title: "BYO Alertmanager 整合指南"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # BYO Alertmanager 整合指南
 
-> **版本**：v2.0.0-preview.2
+> **版本**：v2.0.0-preview.3
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -336,7 +336,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/.../default"
+        api_url: "https://hooks.slack.com/services/../default"
         channel: "#db-alerts"
 
       # 特定警報的路由覆寫
@@ -457,7 +457,7 @@ spec:
 
 | 資源 | 相關性 |
 |------|--------|
-| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ⭐⭐⭐ |
+| ["BYO Alertmanager Integration Guide"] | ⭐⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |

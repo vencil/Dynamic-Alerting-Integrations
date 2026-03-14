@@ -1,6 +1,54 @@
 #!/usr/bin/env python3
-"""
-da-tools — Dynamic Alerting CLI Toolkit
+import os
+
+def _build_help_text(lang):
+    """Build help text in the specified language.
+
+    Args:
+        lang: 'zh' (Chinese) or 'en' (English)
+
+    Returns:
+        Help text string
+    """
+    if lang == 'zh':
+        return """da-tools — 動態告警 CLI 工具包
+
+統一的可攜式驗證和遷移工具入口。
+為平台工程師和 SRE 設計，無需克隆完整倉庫即可驗證整合。
+
+用法:
+    da-tools <command> [options]
+
+命令 (Prometheus API — 可攜式):
+    check-alert       查詢租戶的告警觸發狀態
+    diagnose          租戶健康檢查 (配置 + 指標 + 告警狀態)
+    batch-diagnose    多租戶並行健康報告 (轉換後)
+    baseline          觀察指標並建議閾值
+    validate          比較舊規則 vs 新規則 (影子監控)
+    backtest          根據歷史資料回測閾值變更
+    cutover           一鍵影子監控轉換 (§7.1 所有步驟)
+    blind-spot        掃描叢集目標並查找未監控實例
+    maintenance-scheduler  評估週期性維護並建立 AM 靜默規則
+
+命令 (配置生成 — 讀取租戶 YAML):
+    generate-routes   租戶 YAML → Alertmanager route/receiver/inhibit 片段
+    patch-config      修補 threshold-config ConfigMap (含 --diff 預覽)
+    analyze-gaps      Rule Pack 間隙分析 (用於自訂規則)
+
+命令 (文件系統 — 離線):
+    migrate           轉換遺留 Prometheus 規則為動態格式
+    scaffold          互動式生成租戶配置
+    offboard          租戶配置預檢和移除
+    deprecate         跨配置標記指標為已禁用
+    lint              針對治理禁止列表驗證自訂規則
+    onboard           分析現有 Alertmanager/Prometheus 配置以供遷移
+    config-diff       GitOps PR 審查的目錄級配置差異
+
+全域環境變數:
+    PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
+    DA_LANG           設定 CLI 語言 (zh/en，優先於 LC_ALL/LANG)"""
+    else:
+        return """da-tools — Dynamic Alerting CLI Toolkit
 
 Unified entrypoint for portable verification and migration tools.
 Designed for Platform Engineers and SREs to validate integrations
@@ -36,14 +84,29 @@ Commands (File System — offline):
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
-"""
+    DA_LANG           Set CLI language (zh/en, takes precedence over LC_ALL/LANG)"""
 
 import os
 import sys
 import importlib.util
 
 
+def detect_cli_lang():
+    """Detect CLI language from LANG/LC_ALL/DA_LANG environment variable.
+
+    Returns 'zh' or 'en'. Default: 'en'.
+    """
+    for var in ('DA_LANG', 'LC_ALL', 'LANG'):
+        val = os.environ.get(var, '')
+        if val.startswith('zh'):
+            return 'zh'
+        if val.startswith('en'):
+            return 'en'
+    return 'en'
+
+
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+_LANG = detect_cli_lang()
 
 # Map subcommand names to script filenames
 COMMAND_MAP = {
@@ -78,21 +141,37 @@ PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
 
 
 def print_usage():
-    """Print help message."""
-    print(__doc__.strip())
+    """Print help message in detected language."""
+    print(_build_help_text(_LANG))
     print()
-    print("Examples:")
-    print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
-    print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
-    print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
-    print("  da-tools migrate legacy-rules.yml --dry-run --triage")
-    print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
-    print("  da-tools lint /path/to/custom-rules/ --ci")
-    print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
-    print("  da-tools validate-config --config-dir conf.d/")
-    print()
-    print("Environment:")
-    print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")
+    if _LANG == 'zh':
+        print("範例:")
+        print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
+        print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
+        print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
+        print("  da-tools migrate legacy-rules.yml --dry-run --triage")
+        print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
+        print("  da-tools lint /path/to/custom-rules/ --ci")
+        print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
+        print("  da-tools validate-config --config-dir conf.d/")
+        print()
+        print("環境變數:")
+        print("  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)")
+        print("  DA_LANG          設定 CLI 語言 (zh/en)")
+    else:
+        print("Examples:")
+        print("  da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090")
+        print("  da-tools baseline --tenant db-a --prometheus http://prometheus:9090")
+        print("  da-tools validate --mapping mapping.csv --prometheus http://prometheus:9090")
+        print("  da-tools migrate legacy-rules.yml --dry-run --triage")
+        print("  da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive")
+        print("  da-tools lint /path/to/custom-rules/ --ci")
+        print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
+        print("  da-tools validate-config --config-dir conf.d/")
+        print()
+        print("Environment:")
+        print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")
+        print("  DA_LANG          Set CLI language (zh/en)")
     sys.exit(0)
 
 
@@ -138,10 +217,19 @@ def main():
             print("da-tools (dev)")
         sys.exit(0)
 
+    # Handle --help for the main entrypoint
+    if command in ("-h", "--help", "help"):
+        print_usage()
+
     if command not in COMMAND_MAP:
-        print(f"Error: Unknown command '{command}'", file=sys.stderr)
-        print(f"Available commands: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
-        print("Run 'da-tools --help' for usage.", file=sys.stderr)
+        if _LANG == 'zh':
+            print(f"錯誤: 未知命令 '{command}'", file=sys.stderr)
+            print(f"可用命令: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
+            print("執行 'da-tools --help' 以查看用法。", file=sys.stderr)
+        else:
+            print(f"Error: Unknown command '{command}'", file=sys.stderr)
+            print(f"Available commands: {', '.join(sorted(COMMAND_MAP.keys()))}", file=sys.stderr)
+            print("Run 'da-tools --help' for usage.", file=sys.stderr)
         sys.exit(1)
 
     # Inject PROMETHEUS_URL for applicable commands

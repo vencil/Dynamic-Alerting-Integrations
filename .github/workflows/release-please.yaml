@@ -67,7 +67,7 @@ jobs:
 
       - name: Run bump_docs.py
         run: |
-          python scripts/tools/bump_docs.py \
+          python scripts/tools/dx/bump_docs.py \
             --platform "${{ steps.version.outputs.PLATFORM_VERSION }}" \
             --check
         continue-on-error: true

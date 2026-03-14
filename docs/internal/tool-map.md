@@ -55,15 +55,20 @@
 | `generate_cheat_sheet.py` | Auto-generate da-tools cheat sheet from CLI reference. |
 | `generate_doc_map.py` | 文件導覽自動生成 |
 | `generate_nav.py` | 從 docs/ 目錄自動生成 MkDocs nav 結構 |
-| `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
+| `generate_rule_pack_readme.py` | Generate ../rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_platform_data.py` | Rule Pack 共用資料源產生器（→ `platform-data.json`，供 JSX 工具 fetch） |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
 | `sync_schema.py` | Sync JSON Schema with Go source definitions. |
-| `test_assemble_config_dir.py` | Tests for assemble_config_dir.py — Sharded GitOps assembly tool. |
-| `test_da_assembler.py` | Tests for da_assembler.py — CRD → YAML assembler. |
+| `check_bilingual_annotations.py` | Rule Pack 雙語 annotation 覆蓋率檢查（`--check` / `--coverage` / `--ci`）。 |
+| `check_i18n_coverage.py` | i18n 覆蓋率報告（JSX / Rule Pack / Python CLI）。 |
+| `check_repo_name.py` | GitHub URL repo name 防護 — 掃描 vibe-k8s-lab 誤用（`--ci` / `--fix`）。 |
+| `check_structure.py` | 專案結構正規化檢查（工具/JSX/測試位置）。 |
+| `fix_doc_links.py` | 文件連結自動修復（`check_doc_links.py` 的 `--fix` 對應工具）。 |
+| `sync_tool_registry.py` | Tool registry ↔ Hub ↔ TOOL_META 同步。 |
 | `validate_all.py` | Unified validation entry point for all documentation and config validation tools. |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |
 | `validate_mermaid.py` | Mermaid 圖渲染驗證 |

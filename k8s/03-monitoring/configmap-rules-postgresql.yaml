@@ -77,7 +77,9 @@ data:
               severity: critical
             annotations:
               summary: "PostgreSQL instance {{ $labels.instance }} is DOWN"
+              summary_zh: "PostgreSQL 實例 {{ $labels.instance }} 已關閉"
               description: "pg_up=0 for 15s on {{ $labels.instance }}"
+              description_zh: "pg_up=0，持續 15 秒，實例：{{ $labels.instance }}"
 
           - alert: PostgreSQLExporterAbsent
             expr: absent(pg_up{job="tenant-exporters"})
@@ -86,7 +88,9 @@ data:
               severity: critical
             annotations:
               summary: "postgres_exporter target missing"
+              summary_zh: "postgres_exporter 目標缺失"
               description: "No pg_up metric found for 30s"
+              description_zh: "找不到 pg_up 指標，持續 30 秒"
 
           - alert: PostgreSQLHighConnections
             expr: |
@@ -103,7 +107,9 @@ data:
               metric_group: "pg_connections"
             annotations:
               summary: "High connection usage on {{ $labels.tenant }}"
+              summary_zh: "{{ $labels.tenant }} 連線使用率過高"
               description: "{{ $value | printf \"%.1f\" }}% of max_connections used (warning threshold exceeded)"
+              description_zh: "已使用 {{ $value | printf \"%.1f\" }}% 的 max_connections（超過警告閾值）"
 
           - alert: PostgreSQLHighConnectionsCritical
             expr: |
@@ -120,7 +126,9 @@ data:
               metric_group: "pg_connections"
             annotations:
               summary: "Critical connection usage on {{ $labels.tenant }}"
+              summary_zh: "{{ $labels.tenant }} 連線使用率嚴重過高"
               description: "{{ $value | printf \"%.1f\" }}% of max_connections used (critical threshold exceeded)"
+              description_zh: "已使用 {{ $value | printf \"%.1f\" }}% 的 max_connections（超過嚴重閾值）"
 
           - alert: PostgreSQLHighReplicationLag
             expr: |
@@ -137,7 +145,9 @@ data:
               metric_group: "pg_replication_lag"
             annotations:
               summary: "High replication lag on {{ $labels.tenant }}"
+              summary_zh: "{{ $labels.tenant }} 複寫延遲過高"
               description: "{{ $value | printf \"%.1f\" }}s replication lag (warning threshold exceeded)"
+              description_zh: "複寫延遲 {{ $value | printf \"%.1f\" }}s（超過警告閾值）"
 
           - alert: PostgreSQLHighReplicationLagCritical
             expr: |
@@ -154,7 +164,9 @@ data:
               metric_group: "pg_replication_lag"
             annotations:
               summary: "Critical replication lag on {{ $labels.tenant }}"
+              summary_zh: "{{ $labels.tenant }} 複寫延遲嚴重"
               description: "{{ $value | printf \"%.1f\" }}s replication lag (critical threshold exceeded)"
+              description_zh: "複寫延遲 {{ $value | printf \"%.1f\" }}s（超過嚴重閾值）"
 
           - alert: PostgreSQLHighDeadlocks
             expr: |
@@ -166,7 +178,9 @@ data:
               severity: warning
             annotations:
               summary: "Deadlocks detected on {{ $labels.tenant }}"
+              summary_zh: "{{ $labels.tenant }} 偵測到死鎖"
               description: "{{ $value | printf \"%.2f\" }} deadlocks/sec over 5m"
+              description_zh: "{{ $value | printf \"%.2f\" }} 次死鎖／秒（5 分鐘內）"
 
           - alert: PostgreSQLHighRollbackRatio
             expr: |
@@ -178,7 +192,9 @@ data:
               severity: warning
             annotations:
               summary: "High rollback ratio on {{ $labels.tenant }}"
+              summary_zh: "{{ $labels.tenant }} 回滾比率過高"
               description: "{{ $value | humanizePercentage }} of transactions are rollbacks"
+              description_zh: "{{ $value | humanizePercentage }} 的交易已回滾"
 
           - alert: PostgreSQLRecentRestart
             expr: |
@@ -188,4 +204,6 @@ data:
               severity: info
             annotations:
               summary: "{{ $labels.instance }} restarted recently"
+              summary_zh: "{{ $labels.instance }} 最近已重新啟動"
               description: "PostgreSQL uptime is only {{ $value | printf \"%.0f\" }}s (< 5 min)"
+              description_zh: "PostgreSQL 運行時間僅 {{ $value | printf \"%.0f\" }}s（少於 5 分鐘）"

@@ -62,7 +62,7 @@ jobs:
       # Schema validation + routing validation + webhook domain allowlist
       - name: Validate alertmanager routes
         run: |
-          python scripts/tools/generate_alertmanager_routes.py \
+          python scripts/tools/ops/generate_alertmanager_routes.py \
             --config-dir components/threshold-exporter/config/conf.d/ \
             --validate \
             --policy .github/custom-rule-policy.yaml
@@ -70,7 +70,7 @@ jobs:
       # Custom rule deny-list linting
       - name: Lint custom rules
         run: |
-          python scripts/tools/lint_custom_rules.py \
+          python scripts/tools/ops/lint_custom_rules.py \
             rule-packs/ \
             --policy .github/custom-rule-policy.yaml \
             --ci
@@ -84,4 +84,4 @@ jobs:
         with:
           python-version: "3.10"
       - run: pip install pyyaml
-      - run: python scripts/tools/bump_docs.py --check
+      - run: python scripts/tools/dx/bump_docs.py --check

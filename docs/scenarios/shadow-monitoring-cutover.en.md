@@ -2,7 +2,7 @@
 title: "Scenario: Automated Shadow Monitoring Cutover Workflow"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Scenario: Automated Shadow Monitoring Cutover Workflow
@@ -71,7 +71,7 @@ New and old rules are deemed "behaviorally equivalent" when:
 
 ```bash
 # validate_migration.py auto-detects and generates cutover-readiness.json
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
@@ -95,7 +95,7 @@ Different metric types warrant different tolerances:
 Pass `--tolerance` to `validate_migration.py`:
 
 ```bash
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch \
@@ -123,13 +123,13 @@ cp -r conf.d conf.d.bak
 cp -r alertmanager.yml alertmanager.yml.bak
 
 # 1.2 Scan and analyze current config
-python3 scripts/tools/onboard_platform.py \
+python3 scripts/tools/ops/onboard_platform.py \
   --legacy-config /path/to/old_rules/ \
   --output migration_input/
 # Output: onboard-hints.json (rule mapping hints, manual adjustments needed, estimated effort)
 
 # 1.3 Verify environment readiness
-python3 scripts/tools/validate_config.py \
+python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/ \
   --policy .github/custom-rule-policy.yaml
 ```
@@ -138,7 +138,7 @@ python3 scripts/tools/validate_config.py \
 
 ```bash
 # 2.1 Execute rule transformation
-python3 scripts/tools/migrate_rule.py \
+python3 scripts/tools/ops/migrate_rule.py \
   --input migration_input/onboard-hints.json \
   --tenant db-a,db-b \
   --output migration_output/
@@ -162,7 +162,7 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ```bash
 # 3.1 Start parallel validation
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
@@ -186,7 +186,7 @@ da-tools shadow-verify convergence \
   --prometheus http://localhost:9090
 
 # 4.2 Dry-run mode (--dry-run)
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --readiness-json validation_output/cutover-readiness.json \
   --tenant db-a \
   --prometheus http://localhost:9090 \
@@ -207,7 +207,7 @@ python3 scripts/tools/cutover_tenant.py \
 
 ```bash
 # 5.1 Execute single-tenant cutover
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --readiness-json validation_output/cutover-readiness.json \
   --tenant db-a \
   --prometheus http://localhost:9090
@@ -223,7 +223,7 @@ python3 scripts/tools/cutover_tenant.py \
 # 5.2 Batch cutover multiple tenants (sequential execution)
 for tenant in db-a db-b db-c; do
   echo "[INFO] Cutting over $tenant..."
-  python3 scripts/tools/cutover_tenant.py \
+  python3 scripts/tools/ops/cutover_tenant.py \
     --readiness-json validation_output/cutover-readiness.json \
     --tenant "$tenant" \
     --prometheus http://localhost:9090
@@ -232,7 +232,7 @@ for tenant in db-a db-b db-c; do
 done
 
 # 5.3 Verify all cutovers succeeded
-python3 scripts/tools/batch_diagnose.py \
+python3 scripts/tools/ops/batch_diagnose.py \
   --prometheus http://localhost:9090 \
   --check-shadow-removal
 ```
@@ -241,7 +241,7 @@ python3 scripts/tools/batch_diagnose.py \
 
 ```bash
 # 6.1 Verify old rules completely removed (batch-diagnose includes shadow-removal check)
-python3 scripts/tools/batch_diagnose.py \
+python3 scripts/tools/ops/batch_diagnose.py \
   --prometheus http://localhost:9090 --check-shadow-removal
 
 # 6.2 Clean up migration artifacts and backups
@@ -297,7 +297,7 @@ curl -s http://localhost:9090/api/v1/rules | \
 kubectl logs -n monitoring deployment/alertmanager | grep "custom_" | tail -10
 
 # Check tenant operational mode
-python3 scripts/tools/diagnose.py db-a
+python3 scripts/tools/ops/diagnose.py db-a
 ```
 
 **Common causes**:
@@ -319,7 +319,7 @@ kubectl patch configmap alertmanager-config -n monitoring \
   --patch-file alertmanager-block-custom.patch  # Temporarily intercept custom_* alerts
 
 # 3.2 Execute full rollback
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --tenant db-a \
   --rollback --prometheus http://localhost:9090
 # Auto: restores old rules, old AM config, re-starts validation
@@ -369,7 +369,7 @@ To accept higher risk and speed up validation:
 
 ```bash
 # Relax tolerance to 5%, declare convergence at 3 consecutive zero-mismatch rounds
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 288 \
@@ -388,7 +388,7 @@ When manual validation is thorough, skip auto-readiness checks:
 
 ```bash
 # Skip cutover-readiness.json validation, proceed directly
-python3 scripts/tools/cutover_tenant.py \
+python3 scripts/tools/ops/cutover_tenant.py \
   --tenant db-a \
   --prometheus http://localhost:9090 \
   --force  # Does not require --readiness-json
@@ -428,11 +428,11 @@ After cutover:
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](scenarios/shadow-monitoring-cutover.en.md) | ★★★ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](scenarios/alert-routing-split.en.md) | ★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](scenarios/multi-cluster-federation.en.md) | ★★ |
-| ["Scenario: Complete Tenant Lifecycle Management"](scenarios/tenant-lifecycle.en.md) | ★★ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★★ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★ |
+| ["Shadow Monitoring SRE SOP"] | ★★ |
+| ["da-tools CLI Reference"] | ★★ |
+| ["Grafana Dashboard Guide"] | ★★ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★ |
+| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ★★ |

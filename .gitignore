@@ -16,7 +16,9 @@ Thumbs.db
 components/*/app/threshold-exporter
 
 # --- Python ---
-__pycache__
+__pycache__/
+*.pyc
+.pytest_cache/
 
 # --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔
@@ -26,17 +28,20 @@ __pycache__
 tmp/
 kubeconfig
 
+# --- Test Artifacts ---
+# 測試腳本產生的可重複產物，不需追蹤
+tests/_test_output/
+tests/_test_multidb_output/
+
 # --- Helm ---
 # 忽略 helm package 產生的壓縮檔與建置目錄
 *.tgz
 .build/
 
 # --- AI & Tools ---
-.claude/history/
-.claude/settings.json
+.claude/
 site/
 
 # --- Validation ---
 .validation-baseline.json
 .validation-profile.csv
-.claude/

@@ -2,14 +2,12 @@
 """Tests for onboard_platform.py — Reverse analysis engine for Dynamic Alerting onboarding."""
 import csv
 import os
-import sys
 import tempfile
 import unittest
 
 import yaml
 
 # Ensure scripts/tools is on path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "tools"))
 
 from conftest import write_yaml  # noqa: E402
 from onboard_platform import (  # noqa: E402

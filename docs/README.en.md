@@ -2,7 +2,7 @@
 title: "Documentation Guide"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Documentation Guide
@@ -37,7 +37,7 @@ Responsible for alert rule configuration, Rule Pack management, custom rule revi
 | Document | Purpose |
 |----------|---------|
 | [Quick Start](getting-started/for-domain-experts.en.md) | 30-minute onboarding for Domain Experts: Rule Pack concepts, custom rule governance |
-| [Rule Packs](../rule-packs/README.md) | 15 Rule Packs directory + optional uninstall instructions |
+| [Rule Packs](rule-packs/README.md) | 15 Rule Packs directory + optional uninstall instructions |
 | [Custom Rule Governance](custom-rule-governance.en.md) | Three-tier governance model, linting, schema validation, best practices |
 | [Migration Engine](migration-engine.en.md) | AST migration engine architecture, cross-dialect rule transformation, triage logic |
 
@@ -58,7 +58,7 @@ Want to quickly understand roles, tools, and product interactions?
 | Document | Purpose |
 |----------|---------|
 | [Context Diagram](context-diagram.en.md) | Three roles × tools × product interaction visualization |
-| [Project Overview](../README.en.md) | Pain points, business value, quick start (root directory) |
+| [Project Overview](index.md) | Pain points, business value, quick start (root directory) |
 
 ---
 

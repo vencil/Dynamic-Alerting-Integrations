@@ -38,6 +38,20 @@
     } catch(e) { useLocal = false; }
     window.__DA_VENDOR = useLocal ? local : cdn;
     if (useLocal) console.log('[DA] Using local vendor files (offline mode)');
+
+    // Pre-fetch platform-data.json (shared Rule Pack data source)
+    try {
+      var pdXhr = new XMLHttpRequest();
+      pdXhr.open('GET', 'platform-data.json', false);
+      pdXhr.send();
+      if (pdXhr.status === 200) {
+        window.__PLATFORM_DATA = JSON.parse(pdXhr.responseText);
+        console.log('[DA] Loaded platform-data.json (' + Object.keys(window.__PLATFORM_DATA.rulePacks || {}).length + ' packs)');
+      }
+    } catch(e) {
+      console.warn('[DA] platform-data.json not available, JSX tools will use fallback data');
+      window.__PLATFORM_DATA = null;
+    }
   })();
 </script>
 <script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.tailwind+'"><\/scr'+'ipt>')</script>
@@ -121,6 +135,114 @@
   html.dark .theme-toggle:hover { border-color: #60a5fa; }
   html.dark #loading .label { color: #94a3b8; }
   html.dark #loading .spinner { border-color: #334155; border-top-color: #60a5fa; }
+
+  /* ── Flow mode ── */
+  .flow-stepper {
+    background: #0f172a; color: #e2e8f0;
+    padding: 48px 24px 14px;
+    border-bottom: 1px solid #1e293b;
+  }
+  .flow-stepper-inner {
+    max-width: 72rem; margin: 0 auto;
+  }
+  .flow-stepper-title {
+    font-size: 0.72rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: #38bdf8; margin-bottom: 14px; text-align: center;
+  }
+  .flow-steps {
+    display: flex; align-items: center; justify-content: center;
+    gap: 0; overflow-x: auto; padding: 0 8px;
+  }
+  .flow-step {
+    display: flex; flex-direction: column; align-items: center;
+    text-decoration: none; color: #64748b;
+    min-width: 64px; padding: 0 4px;
+    transition: color 0.15s;
+  }
+  .flow-step:hover { color: #94a3b8; }
+  .flow-step.done { color: #22c55e; }
+  .flow-step.active { color: #38bdf8; }
+  .flow-step-dot {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 700;
+    border: 2px solid currentColor;
+    margin-bottom: 6px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .flow-step.active .flow-step-dot {
+    background: #38bdf8; color: #0f172a; border-color: #38bdf8;
+  }
+  .flow-step.done .flow-step-dot {
+    background: #22c55e; color: #fff; border-color: #22c55e;
+  }
+  .flow-step-label {
+    font-size: 0.68rem; font-weight: 500;
+    white-space: nowrap; text-align: center;
+  }
+  .flow-step-line {
+    flex: 0 0 32px; height: 2px;
+    background: #334155; margin: 0 2px;
+    align-self: flex-start; margin-top: 13px;
+    transition: background 0.15s;
+  }
+  .flow-step-line.done { background: #22c55e; }
+  @media (max-width: 600px) {
+    .flow-step-label { display: none; }
+    .flow-step { min-width: 36px; }
+    .flow-step-line { flex: 0 0 16px; }
+  }
+
+  .flow-hint {
+    max-width: 72rem; margin: 0 auto;
+    padding: 12px 24px;
+    background: #eff6ff; border-bottom: 1px solid #bfdbfe;
+    font-size: 0.85rem; color: #1e40af;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .flow-hint-icon { font-size: 1rem; flex-shrink: 0; }
+  html.dark .flow-hint {
+    background: #1e293b; border-color: #334155; color: #93c5fd;
+  }
+
+  .flow-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 40;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 24px;
+    background: rgba(255,255,255,0.95);
+    border-top: 1px solid #e2e8f0;
+    backdrop-filter: blur(8px);
+  }
+  html.dark .flow-nav {
+    background: rgba(15,23,42,0.95); border-color: #334155;
+  }
+  .flow-nav-label {
+    font-size: 0.75rem; color: #64748b; font-weight: 500;
+  }
+  .flow-nav-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 8px 18px; border-radius: 8px;
+    font-size: 0.82rem; font-weight: 600;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .flow-nav-prev {
+    color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0;
+  }
+  .flow-nav-prev:hover { background: #e2e8f0; color: #1e293b; }
+  html.dark .flow-nav-prev { background: #1e293b; border-color: #334155; color: #94a3b8; }
+  html.dark .flow-nav-prev:hover { background: #334155; color: #e2e8f0; }
+  .flow-nav-next {
+    color: #fff; background: #3b82f6; border: 1px solid #3b82f6;
+  }
+  .flow-nav-next:hover { background: #2563eb; }
+  .flow-nav-done {
+    color: #fff; background: #22c55e; border: 1px solid #22c55e;
+  }
+  .flow-nav-done:hover { background: #16a34a; }
+  body.has-flow-nav { padding-bottom: 60px; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 </style>
 </head>
 <body>
@@ -135,37 +257,273 @@
 (function() {
   var params = new URLSearchParams(window.location.search);
   var componentPath = params.get('component');
+  var flowName = params.get('flow');
+  var flowStep = parseInt(params.get('step') || '0', 10);
 
-  // Detect language: ?lang=zh, or navigator.language, default 'en'
+  // Detect language (in priority order):
+  // 1. URL param ?lang=zh (highest priority, for flow links)
+  // 2. localStorage.__da_lang_pref (user preference)
+  // 3. Browser navigator.language
+  // 4. Default: 'en'
   var langParam = params.get('lang');
-  var detectedLang = langParam || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en');
+  var storedLang = null;
+  try { storedLang = localStorage.getItem('__da_lang_pref'); } catch(e) {}
+  var detectedLang = langParam || storedLang || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en');
   window.__DA_LANG = detectedLang;
   // Expose a helper components can import: window.__t(zhText, enText)
-  window.__t = function(zh, en) { return window.__DA_LANG === 'zh' ? zh : en; };
-
-  if (!componentPath) {
-    showError('No component specified. Use ?component=playground.jsx');
-    return;
+  window.__t = function(zh, en) { return window.__DA_LANG === 'zh' ? zh : en };
+  // Store preference when explicitly set via URL param
+  if (langParam) {
+    try { localStorage.setItem('__da_lang_pref', langParam); } catch(e) {}
   }
 
-  // Update page title from component name
-  var name = componentPath.split('/').pop().replace('.jsx', '');
-  document.title = name.replace(/-/g, ' ').replace(/\b\w/g, function(c) {
-    return c.toUpperCase();
-  }) + ' — Dynamic Alerting';
+  // Flow state: shared data between steps (persists via sessionStorage)
+  window.__FLOW_STATE = {};
+  window.__FLOW_NAME = flowName || null;
+  window.__FLOW_STEP = flowStep;
+  if (flowName) {
+    try {
+      var saved = sessionStorage.getItem('__da_flow_' + flowName);
+      if (saved) window.__FLOW_STATE = JSON.parse(saved);
+    } catch(e) {}
+    // Components can call this to persist data for subsequent steps
+    window.__flowSave = function(data) {
+      Object.assign(window.__FLOW_STATE, data);
+      try { sessionStorage.setItem('__da_flow_' + flowName, JSON.stringify(window.__FLOW_STATE)); } catch(e) {}
+    };
+    // Save progress: highest step reached (for resume button in Hub)
+    try {
+      var progressKey = '__da_flow_progress_' + flowName;
+      var prev = parseInt(sessionStorage.getItem(progressKey) || '0', 10);
+      if (flowStep >= prev) sessionStorage.setItem(progressKey, String(flowStep));
+    } catch(e) {}
+  }
 
-  fetch(componentPath)
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
-      return r.text();
-    })
-    .then(function(jsx) {
-      document.getElementById('loading').style.display = 'none';
-      renderJSX(jsx);
-    })
-    .catch(function(err) {
-      showError('Failed to load component: ' + err.message);
+  // ── Flow mode ──
+  if (flowName) {
+    // Custom flow: ?flow=custom&tools=wizard,playground,config-lint
+    var customTools = params.get('tools');
+    var flowPromise;
+    if (flowName === 'custom' && customTools) {
+      flowPromise = Promise.resolve({ flows: { custom: buildCustomFlow(customTools) } });
+    } else {
+      flowPromise = fetch('flows.json').then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    }
+    // Filter steps by condition against __FLOW_STATE
+    function filterSteps(steps) {
+      return steps.filter(function(s) {
+        if (!s.condition) return true;
+        // s.condition is an object like { "role": ["platform", "domain"] }
+        // All condition keys must match: the state value must be in the allowed array
+        var keys = Object.keys(s.condition);
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          var allowed = s.condition[k];
+          var stateVal = window.__FLOW_STATE[k];
+          if (!stateVal) return true; // No state yet → show step (don't hide before user picks)
+          if (Array.isArray(allowed) && allowed.indexOf(stateVal) === -1) return false;
+        }
+        return true;
+      });
+    }
+
+    // Validate step checkpoint: returns warning message or null
+    function checkValidation(step) {
+      if (!step.validation) return null;
+      var v = step.validation;
+      if (v.required_state) {
+        for (var i = 0; i < v.required_state.length; i++) {
+          var key = v.required_state[i];
+          var val = window.__FLOW_STATE[key];
+          if (val === undefined || val === null || val === '') {
+            var lang = window.__DA_LANG || 'en';
+            return (v.warn && (v.warn[lang] || v.warn.en)) || 'Please complete the previous step first.';
+          }
+          // Also check empty arrays
+          if (Array.isArray(val) && val.length === 0) {
+            var lang2 = window.__DA_LANG || 'en';
+            return (v.warn && (v.warn[lang2] || v.warn.en)) || 'Please complete the previous step first.';
+          }
+        }
+      }
+      return null;
+    }
+
+    flowPromise
+      .then(function(data) {
+        var flow = data.flows[flowName];
+        if (!flow) { showError('Unknown flow: ' + flowName + '. Available: ' + Object.keys(data.flows).join(', ')); return; }
+
+        // Apply conditional step filtering
+        flow.steps = filterSteps(flow.steps);
+
+        if (flowStep < 0) flowStep = 0;
+        if (flowStep >= flow.steps.length) flowStep = flow.steps.length - 1;
+        var step = flow.steps[flowStep];
+
+        renderFlowUI(flow, flowStep, flowName);
+
+        // Update page title
+        var t = window.__t;
+        var stepTitle = step.title[window.__DA_LANG] || step.title.en || step.title;
+        var flowTitle = flow.title[window.__DA_LANG] || flow.title.en || flow.title;
+        document.title = stepTitle + ' — ' + flowTitle;
+
+        return fetch(step.component)
+          .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + step.component);
+            return r.text();
+          })
+          .then(function(jsx) {
+            document.getElementById('loading').style.display = 'none';
+            renderJSX(jsx);
+          });
+      })
+      .catch(function(err) {
+        showError('Failed to load flow: ' + err.message);
+      });
+    // Skip single-component mode
+  }
+  // ── Single component mode (existing) ──
+  else if (componentPath) {
+    // Update page title from component name
+    var name = componentPath.split('/').pop().replace('.jsx', '');
+    document.title = name.replace(/-/g, ' ').replace(/\b\w/g, function(c) {
+      return c.toUpperCase();
+    }) + ' — Dynamic Alerting';
+
+    fetch(componentPath)
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
+        return r.text();
+      })
+      .then(function(jsx) {
+        document.getElementById('loading').style.display = 'none';
+        renderJSX(jsx);
+      })
+      .catch(function(err) {
+        showError('Failed to load component: ' + err.message);
+      });
+  } else {
+    showError('No component or flow specified. Use ?component=playground.jsx or ?flow=onboarding');
+  }
+
+  // Tool key → component path mapping for custom flows
+  var CUSTOM_FLOW_MAP = {
+    'wizard': '../getting-started/wizard.jsx',
+    'playground': '../interactive/tools/playground.jsx',
+    'rule-pack-selector': '../interactive/tools/rule-pack-selector.jsx',
+    'cli-playground': '../interactive/tools/cli-playground.jsx',
+    'rule-pack-detail': '../interactive/tools/rule-pack-detail.jsx',
+    'threshold-calculator': '../interactive/tools/threshold-calculator.jsx',
+    'template-gallery': '../interactive/tools/template-gallery.jsx',
+    'migration-simulator': '../interactive/tools/migration-simulator.jsx',
+    'alert-simulator': '../interactive/tools/alert-simulator.jsx',
+    'config-diff': '../interactive/tools/config-diff.jsx',
+    'glossary': '../interactive/tools/glossary.jsx',
+    'health-dashboard': '../interactive/tools/health-dashboard.jsx',
+    'rule-pack-matrix': '../interactive/tools/rule-pack-matrix.jsx',
+    'onboarding-checklist': '../interactive/tools/onboarding-checklist.jsx',
+    'alert-timeline': '../interactive/tools/alert-timeline.jsx',
+    'schema-explorer': '../interactive/tools/schema-explorer.jsx',
+    'capacity-planner': '../interactive/tools/capacity-planner.jsx',
+    'runbook-viewer': '../interactive/tools/runbook-viewer.jsx',
+    'dependency-graph': '../interactive/tools/dependency-graph.jsx',
+    'config-lint': '../interactive/tools/config-lint.jsx',
+    'architecture-quiz': '../interactive/tools/architecture-quiz.jsx',
+    'promql-tester': '../interactive/tools/promql-tester.jsx',
+    'platform-demo': '../interactive/tools/platform-demo.jsx'
+  };
+
+  function buildCustomFlow(toolsParam) {
+    var t = window.__t;
+    var keys = toolsParam.split(',').filter(function(k) { return k.trim() in CUSTOM_FLOW_MAP; });
+    return {
+      title: { en: 'Custom Flow', zh: '自定義流程' },
+      desc: { en: keys.length + ' tools selected', zh: '已選 ' + keys.length + ' 個工具' },
+      steps: keys.map(function(k) {
+        var key = k.trim();
+        var label = key.replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+        return {
+          tool: key,
+          component: CUSTOM_FLOW_MAP[key],
+          title: { en: label, zh: label },
+          hint: { en: '', zh: '' }
+        };
+      })
+    };
+  }
+
+  function renderFlowUI(flow, stepIdx, fName) {
+    var t = window.__t;
+    var step = flow.steps[stepIdx];
+    var flowTitle = flow.title[window.__DA_LANG] || flow.title.en;
+    var stepHint = step.hint ? (step.hint[window.__DA_LANG] || step.hint.en) : '';
+    var lang = window.__DA_LANG;
+
+    // Update back link
+    var backLink = document.querySelector('.back-home');
+    backLink.href = '../interactive/index.html';
+    backLink.textContent = '← ' + t('結束導覽', 'Exit Flow');
+
+    // Build stepper bar
+    var stepper = document.createElement('div');
+    stepper.className = 'flow-stepper';
+    var inner = '<div class="flow-stepper-inner">';
+    inner += '<div class="flow-stepper-title">' + flowTitle + '</div>';
+    inner += '<div class="flow-steps">';
+    flow.steps.forEach(function(s, i) {
+      var sTitle = s.title[lang] || s.title.en;
+      var cls = i === stepIdx ? 'flow-step active' : (i < stepIdx ? 'flow-step done' : 'flow-step');
+      var href = '?flow=' + fName + '&step=' + i + '&lang=' + lang;
+      inner += '<a class="' + cls + '" href="' + href + '">';
+      inner += '<span class="flow-step-dot">' + (i < stepIdx ? '✓' : (i + 1)) + '</span>';
+      inner += '<span class="flow-step-label">' + sTitle + '</span>';
+      inner += '</a>';
+      if (i < flow.steps.length - 1) {
+        inner += '<span class="flow-step-line' + (i < stepIdx ? ' done' : '') + '"></span>';
+      }
     });
+    inner += '</div></div>';
+    stepper.innerHTML = inner;
+    document.body.insertBefore(stepper, document.getElementById('loading'));
+
+    // Hint banner
+    if (stepHint) {
+      var hint = document.createElement('div');
+      hint.className = 'flow-hint';
+      hint.innerHTML = '<span class="flow-hint-icon">💡</span> ' + stepHint;
+      document.body.insertBefore(hint, document.getElementById('loading'));
+    }
+
+    // Bottom navigation bar
+    document.body.classList.add('has-flow-nav');
+    var nav = document.createElement('div');
+    nav.className = 'flow-nav';
+    var prevHtml = stepIdx > 0
+      ? '<a class="flow-nav-btn flow-nav-prev" href="?flow=' + fName + '&step=' + (stepIdx - 1) + '&lang=' + lang + '">← ' + t('上一步', 'Previous') + '</a>'
+      : '<span></span>';
+    var nextHtml;
+    if (stepIdx < flow.steps.length - 1) {
+      // Store next step validation data for the gate check
+      var nextStep = flow.steps[stepIdx + 1];
+      var nextHref = '?flow=' + fName + '&step=' + (stepIdx + 1) + '&lang=' + lang;
+      if (nextStep && nextStep.validation) {
+        // Validation gate: onclick checks __FLOW_STATE before navigating
+        nextHtml = '<a class="flow-nav-btn flow-nav-next" href="' + nextHref + '" data-validation=\'' + JSON.stringify(nextStep.validation).replace(/'/g, '&#39;') + '\' onclick="return window.__checkFlowGate(this)">' + t('下一步', 'Next') + ' →</a>';
+      } else {
+        nextHtml = '<a class="flow-nav-btn flow-nav-next" href="' + nextHref + '">' + t('下一步', 'Next') + ' →</a>';
+      }
+    } else {
+      nextHtml = '<a class="flow-nav-btn flow-nav-done" href="../interactive/index.html" onclick="try{sessionStorage.setItem(\'__da_flow_completed_' + fName + '\',Date.now())}catch(e){}">✓ ' + t('完成', 'Done') + '</a>';
+    }
+    var stepLabel = t('步驟', 'Step') + ' ' + (stepIdx + 1) + ' / ' + flow.steps.length;
+    nav.innerHTML = prevHtml + '<span class="flow-nav-label">' + stepLabel + '</span>' + nextHtml;
+    document.body.appendChild(nav);
+  }
 
   function showError(msg) {
     document.getElementById('loading').style.display = 'none';
@@ -182,6 +540,9 @@
    * into something Babel standalone can execute in a <script type="text/babel">.
    */
   function renderJSX(source) {
+    // Store original JSX for re-render on language change
+    window.__currentComponent = source;
+
     // 0) Extract front matter for related tools before stripping
     var frontMatter = '';
     var fmMatch = source.match(/^---\n([\s\S]*?)\n---/);
@@ -252,43 +613,51 @@
       return;
     }
 
+    // Store component name for re-render on language change
+    window.__currentComponentName = componentName;
+
     // 4) Append render call
     source += '\n;ReactDOM.createRoot(document.getElementById("root")).render(' +
               'React.createElement(' + componentName + '));';
 
     // 5) Create script tag for Babel to process
+    // Clear previous Babel scripts when re-rendering for language change
+    var existingBabelScripts = document.querySelectorAll('script[data-babel-component]');
+    existingBabelScripts.forEach(function(s) { s.remove(); });
+
     var script = document.createElement('script');
     script.type = 'text/babel';
+    script.setAttribute('data-babel-component', '1');
     script.textContent = source;
     document.body.appendChild(script);
     window.Babel.transformScriptTags();
 
-    // Render related tools footer if front matter has related field
-    if (relatedTools.length > 0) {
+    // Render related tools footer (skip in flow mode — stepper handles navigation)
+    if (relatedTools.length > 0 && !window.__FLOW_NAME) {
       var TOOL_META = {
         'wizard': { title: 'Getting Started Wizard', desc: 'Find your learning path', path: '../getting-started/wizard.jsx' },
-        'playground': { title: 'Tenant YAML Validator', desc: 'Validate & preview YAML', path: '../playground.jsx' },
-        'rule-pack-selector': { title: 'Rule Pack Selector', desc: 'Pick your Rule Packs', path: '../rule-pack-selector.jsx' },
-        'cli-playground': { title: 'CLI Playground', desc: 'Build da-tools commands', path: '../cli-playground.jsx' },
-        'rule-pack-detail': { title: 'Rule Pack Details', desc: 'Recording & alert rules', path: '../rule-pack-detail.jsx' },
-        'threshold-calculator': { title: 'Threshold Calculator', desc: 'Compute thresholds from percentiles', path: '../threshold-calculator.jsx' },
-        'template-gallery': { title: 'Config Template Gallery', desc: 'Ready-made YAML configs', path: '../template-gallery.jsx' },
-        'migration-simulator': { title: 'Migration Simulator', desc: 'PromQL to YAML preview', path: '../migration-simulator.jsx' },
-        'alert-simulator': { title: 'Alert Simulator', desc: 'Simulate what-if scenarios', path: '../alert-simulator.jsx' },
-        'config-diff': { title: 'Config Diff Viewer', desc: 'Compare YAML configs', path: '../config-diff.jsx' },
-        'glossary': { title: 'Platform Glossary', desc: 'Platform terminology', path: '../glossary.jsx' },
-        'health-dashboard': { title: 'Health Dashboard', desc: 'Simulated tenant health', path: '../health-dashboard.jsx' },
-        'rule-pack-matrix': { title: 'Rule Pack Matrix', desc: 'Compare all 15 packs', path: '../rule-pack-matrix.jsx' },
-        'onboarding-checklist': { title: 'Onboarding Checklist', desc: 'Step-by-step from zero', path: '../onboarding-checklist.jsx' },
-        'alert-timeline': { title: 'Alert Timeline Replay', desc: 'Animated alert replay', path: '../alert-timeline.jsx' },
-        'schema-explorer': { title: 'YAML Schema Explorer', desc: 'Browse all YAML keys', path: '../schema-explorer.jsx' },
-        'capacity-planner': { title: 'Capacity Planner', desc: 'Estimate resources', path: '../capacity-planner.jsx' },
-        'runbook-viewer': { title: 'Runbook Viewer', desc: 'Diagnose → Fix → Verify', path: '../runbook-viewer.jsx' },
-        'dependency-graph': { title: 'Dependency Graph', desc: 'Rule Pack dependencies', path: '../dependency-graph.jsx' },
-        'config-lint': { title: 'Config Lint Report', desc: 'Best-practice validation', path: '../config-lint.jsx' },
-        'architecture-quiz': { title: 'Architecture Quiz', desc: 'Find your deployment pattern', path: '../architecture-quiz.jsx' },
-        'promql-tester': { title: 'PromQL Tester', desc: 'Test queries & find rules', path: '../promql-tester.jsx' },
-        'platform-demo': { title: 'Platform Demo', desc: 'Interactive make demo walkthrough', path: '../platform-demo.jsx' }
+        'playground': { title: 'Tenant YAML Validator', desc: 'Validate & preview YAML', path: '../interactive/tools/playground.jsx' },
+        'rule-pack-selector': { title: 'Rule Pack Selector', desc: 'Pick your Rule Packs', path: '../interactive/tools/rule-pack-selector.jsx' },
+        'cli-playground': { title: 'CLI Playground', desc: 'Build da-tools commands', path: '../interactive/tools/cli-playground.jsx' },
+        'rule-pack-detail': { title: 'Rule Pack Details', desc: 'Recording & alert rules', path: '../interactive/tools/rule-pack-detail.jsx' },
+        'threshold-calculator': { title: 'Threshold Calculator', desc: 'Compute thresholds from percentiles', path: '../interactive/tools/threshold-calculator.jsx' },
+        'template-gallery': { title: 'Config Template Gallery', desc: 'Ready-made YAML configs', path: '../interactive/tools/template-gallery.jsx' },
+        'migration-simulator': { title: 'Migration Simulator', desc: 'PromQL to YAML preview', path: '../interactive/tools/migration-simulator.jsx' },
+        'alert-simulator': { title: 'Alert Simulator', desc: 'Simulate what-if scenarios', path: '../interactive/tools/alert-simulator.jsx' },
+        'config-diff': { title: 'Config Diff Viewer', desc: 'Compare YAML configs', path: '../interactive/tools/config-diff.jsx' },
+        'glossary': { title: 'Platform Glossary', desc: 'Platform terminology', path: '../interactive/tools/glossary.jsx' },
+        'health-dashboard': { title: 'Health Dashboard', desc: 'Simulated tenant health', path: '../interactive/tools/health-dashboard.jsx' },
+        'rule-pack-matrix': { title: 'Rule Pack Matrix', desc: 'Compare all 15 packs', path: '../interactive/tools/rule-pack-matrix.jsx' },
+        'onboarding-checklist': { title: 'Onboarding Checklist', desc: 'Step-by-step from zero', path: '../interactive/tools/onboarding-checklist.jsx' },
+        'alert-timeline': { title: 'Alert Timeline Replay', desc: 'Animated alert replay', path: '../interactive/tools/alert-timeline.jsx' },
+        'schema-explorer': { title: 'YAML Schema Explorer', desc: 'Browse all YAML keys', path: '../interactive/tools/schema-explorer.jsx' },
+        'capacity-planner': { title: 'Capacity Planner', desc: 'Estimate resources', path: '../interactive/tools/capacity-planner.jsx' },
+        'runbook-viewer': { title: 'Runbook Viewer', desc: 'Diagnose → Fix → Verify', path: '../interactive/tools/runbook-viewer.jsx' },
+        'dependency-graph': { title: 'Dependency Graph', desc: 'Rule Pack dependencies', path: '../interactive/tools/dependency-graph.jsx' },
+        'config-lint': { title: 'Config Lint Report', desc: 'Best-practice validation', path: '../interactive/tools/config-lint.jsx' },
+        'architecture-quiz': { title: 'Architecture Quiz', desc: 'Find your deployment pattern', path: '../interactive/tools/architecture-quiz.jsx' },
+        'promql-tester': { title: 'PromQL Tester', desc: 'Test queries & find rules', path: '../interactive/tools/promql-tester.jsx' },
+        'platform-demo': { title: 'Platform Demo', desc: 'Interactive make demo walkthrough', path: '../interactive/tools/platform-demo.jsx' }
       };
       var footer = document.createElement('div');
       footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';
@@ -312,19 +681,75 @@
   }
 })();
 
-// Language toggle
+// Flow validation gate: called by Next button onclick when next step has validation
+window.__checkFlowGate = function(el) {
+  try {
+    var v = JSON.parse(el.getAttribute('data-validation'));
+    if (v && v.required_state) {
+      for (var i = 0; i < v.required_state.length; i++) {
+        var key = v.required_state[i];
+        var val = window.__FLOW_STATE[key];
+        var missing = (val === undefined || val === null || val === '');
+        if (!missing && Array.isArray(val) && val.length === 0) missing = true;
+        if (missing) {
+          var lang = window.__DA_LANG || 'en';
+          var msg = (v.warn && (v.warn[lang] || v.warn.en)) || 'Please complete this step first.';
+          // Show inline warning toast
+          var existing = document.getElementById('flow-gate-toast');
+          if (existing) existing.remove();
+          var toast = document.createElement('div');
+          toast.id = 'flow-gate-toast';
+          toast.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:999;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;padding:10px 20px;border-radius:10px;font-size:0.85rem;font-weight:500;box-shadow:0 4px 12px rgba(0,0,0,0.15);animation:fadeIn 0.2s';
+          toast.textContent = msg;
+          document.body.appendChild(toast);
+          setTimeout(function() { toast.remove(); }, 3500);
+          return false; // Prevent navigation
+        }
+      }
+    }
+  } catch(e) {}
+  return true; // Allow navigation
+};
+
+// Language toggle with persistence and re-render
 (function() {
   var btn = document.getElementById('lang-toggle');
-  function updateLbl() { btn.textContent = window.__DA_LANG === 'zh' ? '中' : 'EN'; }
+  var componentName = null;
+  var currentJsx = null;
+
+  function updateLbl() {
+    btn.textContent = window.__DA_LANG === 'zh' ? '中文 / EN' : '中文 / EN';
+    btn.title = window.__DA_LANG === 'zh' ? 'Switch to English' : '切換中文';
+  }
+
+  function setLanguage(newLang) {
+    window.__DA_LANG = newLang;
+    // Update __t function for new language
+    window.__t = function(zh, en) { return window.__DA_LANG === 'zh' ? zh : en };
+    // Persist preference
+    try { localStorage.setItem('__da_lang_pref', newLang); } catch(e) {}
+    updateLbl();
+
+    // If a component is loaded, re-render it with new language
+    // Store componentName during renderJSX for later re-render
+    if (window.__currentComponent && window.__currentComponentName) {
+      renderJSX(window.__currentComponent);
+    } else {
+      // Fallback: reload page with new lang param
+      var url = new URL(window.location.href);
+      url.searchParams.set('lang', window.__DA_LANG);
+      window.location.href = url.toString();
+    }
+  }
+
   updateLbl();
   btn.addEventListener('click', function() {
-    window.__DA_LANG = window.__DA_LANG === 'zh' ? 'en' : 'zh';
-    updateLbl();
-    // Reload component with new lang
-    var url = new URL(window.location.href);
-    url.searchParams.set('lang', window.__DA_LANG);
-    window.location.href = url.toString();
+    var newLang = window.__DA_LANG === 'zh' ? 'en' : 'zh';
+    setLanguage(newLang);
   });
+
+  // Expose for keyboard shortcut
+  window.__setLanguage = setLanguage;
 })();
 
 // Dark mode toggle
@@ -353,6 +778,8 @@
     '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">d</kbd><span>Toggle dark mode</span>' +
     '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">l</kbd><span>Toggle language</span>' +
     '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">h</kbd><span>Go to Hub</span>' +
+    (window.__FLOW_NAME ? '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">n</kbd><span>Next step (flow)</span>' +
+    '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">p</kbd><span>Previous step (flow)</span>' : '') +
     '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">Esc</kbd><span>Close overlay</span>' +
     '</div>' +
     '<p style="margin-top:16px;font-size:0.75rem;color:#64748b">Press <kbd style="background:#334155;padding:1px 6px;border-radius:3px;font-family:monospace">?</kbd> or <kbd style="background:#334155;padding:1px 6px;border-radius:3px;font-family:monospace">Esc</kbd> to close</p>' +
@@ -379,6 +806,12 @@
       document.getElementById('lang-toggle').click();
     } else if (e.key === 'h' && !e.ctrlKey && !e.metaKey) {
       window.location.href = '../interactive/index.html';
+    } else if (window.__FLOW_NAME && e.key === 'n' && !e.ctrlKey && !e.metaKey) {
+      var nextBtn = document.querySelector('.flow-nav-next');
+      if (nextBtn) nextBtn.click();
+    } else if (window.__FLOW_NAME && e.key === 'p' && !e.ctrlKey && !e.metaKey) {
+      var prevBtn = document.querySelector('.flow-nav-prev');
+      if (prevBtn) prevBtn.click();
     }
   });
 

@@ -2,7 +2,7 @@
 title: "Threshold Exporter API Reference"
 tags: [api, reference, threshold-exporter]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -593,11 +593,11 @@ kubectl logs <pod-name> -n monitoring | tail -50
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Threshold Exporter API Reference"](api/README.en.md) | ★★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★★ |
-| ["Performance Analysis & Benchmarks"](./benchmarks.en.md) | ★★ |
-| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ★★ |
-| ["da-tools Quick Reference"](./cheat-sheet.en.md) | ★★ |
-| ["Glossary"](./glossary.en.md) | ★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
+| ["Threshold Exporter API Reference"](README.en.md) | ★★★ |
+| ["da-tools CLI Reference"] | ★★★ |
+| ["Performance Analysis & Benchmarks"] | ★★ |
+| ["BYO Alertmanager Integration Guide"] | ★★ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★ |
+| ["da-tools Quick Reference"] | ★★ |
+| ["Glossary"] | ★★ |
+| ["Grafana Dashboard Guide"] | ★★ |

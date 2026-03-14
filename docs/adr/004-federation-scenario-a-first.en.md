@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -69,7 +69,7 @@ Scenario A covers the majority of use cases, enabling faster go-to-market.
 
 Core development work for Scenario A is already complete (v1.12.0):
 - `remote_read` integration testing complete
-- Documentation recorded ([`docs/federation-integration.en.md`](../federation-integration.en.md))
+- Documentation recorded ([`docs/federation-integration.en.md`](../federation-integration.md))
 - Typical deployment time: 2-3 hours
 
 Scenario B requires additional development:
@@ -122,19 +122,19 @@ No direct architectural dependencies. This decision is purely a prioritization c
 
 ## References
 
-- [`docs/federation-integration.en.md`](../federation-integration.en.md) — Scenario A detailed integration guide
-- [`docs/scenarios/multi-cluster-federation.en.md`](../scenarios/multi-cluster-federation.en.md) — Multi-cluster scenario examples
-- [`CHANGELOG.md`](../../CHANGELOG.md) — v1.12.0 Federation initial implementation notes
+- [`docs/federation-integration.en.md`](../federation-integration.md) — Scenario A detailed integration guide
+- [`docs/scenarios/multi-cluster-federation.en.md`](../scenarios/multi-cluster-federation.md) — Multi-cluster scenario examples
+- `CHANGELOG.md` — v1.12.0 Federation initial implementation notes
 
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ★★★ |
-| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ★★★ |
-| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ★★★ |
-| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★★ |
-| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★★ |
-| [README.en](adr/README.en.md) | ★★★ |
-| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"](./architecture-and-design.en.md) | ★★ |
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"](./context-diagram.en.md) | ★★ |
+| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ★★★ |
+| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ★★★ |
+| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ★★★ |
+| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ★★★ |
+| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ★★★ |
+| [README.en](README.en.md) | ★★★ |
+| ["Architecture and Design"](../architecture-and-design.md) | ★★ |
+| ["Project Context Diagram"](../context-diagram.md) | ★★ |

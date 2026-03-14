@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -25,7 +25,7 @@ This directory contains Architecture Decision Records (ADRs) for the Multi-Tenan
 
 ## 001: Severity Dedup via Inhibit Rules
 
-**Document**: [`001-severity-dedup-via-inhibit.en.md`](./001-severity-dedup-via-inhibit.en.md)
+**Document**: [`001-severity-dedup-via-inhibit.en.md`]
 
 Use Alertmanager inhibit_rules instead of PromQL `absent()`/`unless()` for severity deduplication. Key consideration: preserve TSDB integrity where all severity levels of the same metric are recorded, with intelligent suppression performed at the Alertmanager layer.
 
@@ -33,7 +33,7 @@ Use Alertmanager inhibit_rules instead of PromQL `absent()`/`unless()` for sever
 
 ## 002: OCI Registry over ChartMuseum
 
-**Document**: [`002-oci-registry-over-chartmuseum.en.md`](./002-oci-registry-over-chartmuseum.en.md)
+**Document**: [`002-oci-registry-over-chartmuseum.en.md`]
 
 Consolidate Helm charts and Docker images distribution via ghcr.io OCI registry, eliminating dependency on a standalone ChartMuseum. Requires Helm 3.8+, but significantly simplifies operational overhead.
 
@@ -41,7 +41,7 @@ Consolidate Helm charts and Docker images distribution via ghcr.io OCI registry,
 
 ## 003: Sentinel Alert Pattern
 
-**Document**: [`003-sentinel-alert-pattern.en.md`](./003-sentinel-alert-pattern.en.md)
+**Document**: [`003-sentinel-alert-pattern.en.md`]
 
 Implement tri-state mode (Normal/Silent/Maintenance) via exporter flag metric → recording rule → sentinel alert → inhibit flow. Compared to direct PromQL suppression, this pattern provides strong composability and easier debugging.
 
@@ -49,7 +49,7 @@ Implement tri-state mode (Normal/Silent/Maintenance) via exporter flag metric �
 
 ## 004: Federation Scenario A First
 
-**Document**: [`004-federation-scenario-a-first.en.md`](./004-federation-scenario-a-first.en.md)
+**Document**: [`004-federation-scenario-a-first.en.md`]
 
 Prioritize Federation Scenario A implementation: central exporter + edge Prometheus. This approach is simple (single exporter deployment), covering 80% of federation use cases; Scenario B (edge exporter) deferred to P2.
 
@@ -57,7 +57,7 @@ Prioritize Federation Scenario A implementation: central exporter + edge Prometh
 
 ## 005: Projected Volume for Rule Packs
 
-**Document**: [`005-projected-volume-for-rule-packs.en.md`](./005-projected-volume-for-rule-packs.en.md)
+**Document**: [`005-projected-volume-for-rule-packs.en.md`]
 
 Use Projected Volume with `optional: true` to implement selective Rule Pack unloading for 15 Rule Packs. Tenants can delete individual ConfigMaps to disable specific Rule Packs; Prometheus does not fail when packs are missing.
 
@@ -65,7 +65,7 @@ Use Projected Volume with `optional: true` to implement selective Rule Pack unlo
 
 ## Related Documents
 
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.en.md) — Complete architecture design
-- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.en.md) — Platform engineer quick start guide
-- [`CLAUDE.md`](../../CLAUDE.md) — AI development context guide
+- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) — Complete architecture design
+- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.md) — Platform engineer quick start guide
+- [`CLAUDE.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) — AI development context guide
 

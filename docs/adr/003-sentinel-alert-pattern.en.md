@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -100,24 +100,24 @@ exporter (tenant_silent_mode)
 
 ## Related Decisions
 
-- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.en.md) — Foundation design for inhibit_rules
-- [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — Sentinel rules distributed as part of rule pack
+- [ADR-001: Severity Dedup via Inhibit Rules] — Foundation design for inhibit_rules
+- [ADR-005: Projected Volume for Rule Packs] — Sentinel rules distributed as part of rule pack
 
 ## References
 
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.en.md) §2.7 — Tri-state operational mode detailed design
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.en.md) §2.8 — Dedup and Sentinel interaction mechanism
-- [`rule-packs/README.md`](../../rule-packs/README.md) — Rule Packs overview (includes Sentinel Recording Rules)
+- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.7 — Tri-state operational mode detailed design
+- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.8 — Dedup and Sentinel interaction mechanism
+- [`rule-packs/README.md`](../rule-packs/README.md) — Rule Packs overview (includes Sentinel Recording Rules)
 
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ★★★ |
-| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ★★★ |
-| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ★★★ |
-| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★★ |
-| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★★ |
-| [README.en](adr/README.en.md) | ★★★ |
-| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"](./architecture-and-design.en.md) | ★★ |
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"](./context-diagram.en.md) | ★★ |
+| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ★★★ |
+| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ★★★ |
+| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ★★★ |
+| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ★★★ |
+| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ★★★ |
+| [README.en](README.en.md) | ★★★ |
+| ["Architecture and Design"](../architecture-and-design.md) | ★★ |
+| ["Project Context Diagram"](../context-diagram.md) | ★★ |

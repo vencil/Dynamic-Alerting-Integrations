@@ -11,21 +11,21 @@ repos:
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage
-        entry: python3 scripts/tools/generate_tool_map.py --check
+        entry: python3 scripts/tools/dx/generate_tool_map.py --check
         language: python
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
 
       - id: doc-map-check
         name: Doc map coverage
-        entry: python3 scripts/tools/generate_doc_map.py --check
+        entry: python3 scripts/tools/dx/generate_doc_map.py --check
         language: python
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
 
       - id: rule-pack-stats-check
         name: Rule Pack stats drift
-        entry: python3 scripts/tools/generate_rule_pack_stats.py --check
+        entry: python3 scripts/tools/dx/generate_rule_pack_stats.py --check
         language: python
         pass_filenames: false
         files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$
@@ -33,21 +33,21 @@ repos:
 
       - id: glossary-check
         name: Glossary abbreviation sync
-        entry: python3 scripts/tools/sync_glossary_abbr.py --check
+        entry: python3 scripts/tools/dx/sync_glossary_abbr.py --check
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
 
       - id: changelog-lint
         name: Changelog format
-        entry: python3 scripts/tools/generate_changelog.py --check
+        entry: python3 scripts/tools/dx/generate_changelog.py --check
         language: python
         pass_filenames: false
         files: ^CHANGELOG.*\.md$
 
       - id: version-consistency
         name: Version/count consistency
-        entry: python3 scripts/tools/validate_docs_versions.py --ci
+        entry: python3 scripts/tools/lint/validate_docs_versions.py --ci
         language: python
         pass_filenames: false
         files: \.(md|yaml|jsx)$
@@ -55,15 +55,44 @@ repos:
 
       - id: includes-sync
         name: Include snippet zh/en sync
-        entry: python3 scripts/tools/check_includes_sync.py --check
+        entry: python3 scripts/tools/lint/check_includes_sync.py --check
         language: python
         pass_filenames: false
         files: ^docs/includes/
 
+      - id: platform-data-check
+        name: Platform data drift (platform-data.json vs YAML source)
+        entry: python3 scripts/tools/dx/generate_platform_data.py --check
+        language: python
+        pass_filenames: false
+        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py)
+        additional_dependencies: ['pyyaml']
+
+      - id: repo-name-check
+        name: Repo name guard (no vibe-k8s-lab in GitHub URLs)
+        entry: python3 scripts/tools/lint/check_repo_name.py --ci
+        language: python
+        pass_filenames: false
+        files: \.(md|yaml|yml|py|jsx|html|json)$
+
+      - id: tool-consistency-check
+        name: Tool registry ↔ Hub ↔ TOOL_META ↔ JSX ↔ Markdown links
+        entry: python3 scripts/tools/lint/lint_tool_consistency.py
+        language: python
+        pass_filenames: false
+        files: ^docs/(assets/(tool-registry\.yaml|jsx-loader\.html)|interactive/(index\.html|tools/.*\.jsx)|getting-started/wizard\.jsx|.*\.md)$
+
+      - id: structure-check
+        name: Project structure enforcement
+        entry: python3 scripts/tools/lint/check_structure.py --ci
+        language: python
+        pass_filenames: false
+        files: \.(py|jsx|yaml)$
+
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
         name: Go→JSON Schema drift
-        entry: python3 scripts/tools/sync_schema.py --check
+        entry: python3 scripts/tools/dx/sync_schema.py --check
         language: python
         pass_filenames: false
         files: ^(components/|docs/)
@@ -71,8 +100,26 @@ repos:
 
       - id: translation-check
         name: Bilingual structure consistency
-        entry: python3 scripts/tools/check_translation.py
+        entry: python3 scripts/tools/lint/check_translation.py
         language: python
         pass_filenames: false
         files: \.en\.md$
         stages: [manual]
+
+      - id: flow-e2e-check
+        name: Guided Flow E2E smoke test
+        entry: python3 tests/test_flows_e2e.py
+        language: python
+        pass_filenames: false
+        files: ^docs/(assets/(flows\.json|jsx-loader\.html)|interactive/index\.html)
+        stages: [manual]
+        additional_dependencies: ['pyyaml']
+
+      - id: i18n-coverage-check
+        name: i18n coverage report
+        entry: python3 scripts/tools/lint/check_i18n_coverage.py
+        language: python
+        pass_filenames: false
+        files: ^(docs/(interactive/tools|getting-started)/.*\.jsx|rule-packs/.*\.yaml|scripts/tools/.*\.py|components/da-tools/app/entrypoint\.py)$
+        stages: [manual]
+        additional_dependencies: ['pyyaml']

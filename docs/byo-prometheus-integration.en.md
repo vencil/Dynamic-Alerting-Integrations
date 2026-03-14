@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide
@@ -475,10 +475,10 @@ A: `threshold-exporter` is deployed in the data cluster (near tenant ConfigMaps)
 | Resource | Relevance |
 |----------|-----------|
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ★★★ |
-| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ★★★ |
+| ["BYO Alertmanager Integration Guide"] | ★★★ |
 | ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"](./benchmarks.en.md) | ★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
+| ["Performance Analysis & Benchmarks"] | ★★ |
+| ["da-tools CLI Reference"] | ★★ |
+| ["Grafana Dashboard Guide"] | ★★ |
 | ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.en.md) | ★★ |
+| ["Shadow Monitoring SRE SOP"] | ★★ |

@@ -5,14 +5,11 @@ Tests for diagnose.py resolve_inheritance_chain() and _format_chain_summary().
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
 import yaml
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import diagnose  # noqa: E402
 

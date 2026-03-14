@@ -14,14 +14,13 @@ import re
 import sys
 import unittest
 
-# Make entrypoint importable
+
+import entrypoint  # noqa: E402  (path set by conftest.py)
+
 DA_TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), os.pardir,
     "components", "da-tools", "app",
 )
-sys.path.insert(0, os.path.abspath(DA_TOOLS_DIR))
-
-import entrypoint  # noqa: E402
 
 
 # ── Command Map Consistency ────────────────────────────────────────
@@ -204,17 +203,12 @@ class TestBumpDocsToolsRuleCoverage(unittest.TestCase):
 
     def test_readme_header_rule_exists(self):
         """bump_docs tools_rules must include da-tools README version header."""
-        tools_dir = os.path.join(os.path.dirname(__file__), os.pardir, "scripts", "tools")
-        sys.path.insert(0, os.path.abspath(tools_dir))
-        try:
-            import bump_docs
-            rules = bump_docs._build_rules()
-            tools_descs = [r["desc"] for r in rules["tools"]]
-            header_rules = [d for d in tools_descs if "version header" in d.lower()]
-            self.assertGreaterEqual(len(header_rules), 1,
-                                   "No bump_docs rule covers da-tools README version header")
-        finally:
-            sys.path.pop(0)
+        import bump_docs  # noqa: E402  (path set by conftest.py)
+        rules = bump_docs._build_rules()
+        tools_descs = [r["desc"] for r in rules["tools"]]
+        header_rules = [d for d in tools_descs if "version header" in d.lower()]
+        self.assertGreaterEqual(len(header_rules), 1,
+                               "No bump_docs rule covers da-tools README version header")
 
 
 # ── main() routing ─────────────────────────────────────────────────

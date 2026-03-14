@@ -26,7 +26,7 @@ tools:
 
   - key: playground
     title: { en: "Tenant YAML Validator", zh: "YAML 驗證器" }
-    file: playground.jsx
+    file: interactive/tools/playground.jsx
     audience: [platform, tenant]
     icon: validation
     tags: [validation, yaml, live preview]
@@ -39,7 +39,7 @@ tools:
 
   - key: rule-pack-selector
     title: { en: "Rule Pack Selector", zh: "Rule Pack 選擇器" }
-    file: rule-pack-selector.jsx
+    file: interactive/tools/rule-pack-selector.jsx
     audience: [platform, domain]
     icon: rules
     tags: [prometheus, rule packs, config gen]
@@ -53,7 +53,7 @@ tools:
 
   - key: cli-playground
     title: { en: "CLI Playground", zh: "CLI 互動場" }
-    file: cli-playground.jsx
+    file: interactive/tools/cli-playground.jsx
     audience: [platform]
     icon: cli
     tags: [cli, da-tools, docker]
@@ -64,7 +64,7 @@ tools:
 
   - key: rule-pack-detail
     title: { en: "Rule Pack Details", zh: "Rule Pack 細節" }
-    file: rule-pack-detail.jsx
+    file: interactive/tools/rule-pack-detail.jsx
     audience: [platform, domain]
     icon: rules
     tags: [rules, PromQL, reference]
@@ -76,7 +76,7 @@ tools:
 
   - key: threshold-calculator
     title: { en: "Threshold Calculator", zh: "閾值計算器" }
-    file: threshold-calculator.jsx
+    file: interactive/tools/threshold-calculator.jsx
     audience: [domain, tenant]
     icon: validation
     tags: [calculator, thresholds, yaml]
@@ -89,7 +89,7 @@ tools:
 
   - key: template-gallery
     title: { en: "Config Template Gallery", zh: "配置模板庫" }
-    file: template-gallery.jsx
+    file: interactive/tools/template-gallery.jsx
     audience: [tenant, platform]
     icon: wizard
     tags: [templates, examples, stacks]
@@ -100,7 +100,7 @@ tools:
 
   - key: migration-simulator
     title: { en: "Migration Simulator", zh: "遷移模擬器" }
-    file: migration-simulator.jsx
+    file: interactive/tools/migration-simulator.jsx
     audience: [platform]
     icon: cli
     tags: [migration, PromQL, dry-run]
@@ -113,7 +113,7 @@ tools:
 
   - key: alert-simulator
     title: { en: "Alert Simulator", zh: "告警模擬器" }
-    file: alert-simulator.jsx
+    file: interactive/tools/alert-simulator.jsx
     audience: [domain, tenant]
     icon: cli
     tags: [simulation, alerts, dedup]
@@ -127,7 +127,7 @@ tools:
 
   - key: config-diff
     title: { en: "Config Diff Viewer", zh: "配置差異檢視器" }
-    file: config-diff.jsx
+    file: interactive/tools/config-diff.jsx
     audience: [platform]
     icon: validation
     tags: [diff, compare, yaml]
@@ -142,7 +142,7 @@ tools:
 
   - key: glossary
     title: { en: "Platform Glossary", zh: "平台術語表" }
-    file: glossary.jsx
+    file: interactive/tools/glossary.jsx
     audience: [platform, domain, tenant]
     icon: wizard
     tags: [glossary, reference, terms]
@@ -154,7 +154,7 @@ tools:
 
   - key: health-dashboard
     title: { en: "Health Dashboard", zh: "健康儀表板" }
-    file: health-dashboard.jsx
+    file: interactive/tools/health-dashboard.jsx
     audience: [platform, tenant]
     icon: validation
     tags: [dashboard, health, demo]
@@ -166,7 +166,7 @@ tools:
 
   - key: rule-pack-matrix
     title: { en: "Rule Pack Matrix", zh: "Rule Pack 矩陣" }
-    file: rule-pack-matrix.jsx
+    file: interactive/tools/rule-pack-matrix.jsx
     audience: [platform, domain]
     icon: rules
     tags: [matrix, comparison, rule packs]
@@ -179,7 +179,7 @@ tools:
 
   - key: onboarding-checklist
     title: { en: "Onboarding Checklist", zh: "入職清單" }
-    file: onboarding-checklist.jsx
+    file: interactive/tools/onboarding-checklist.jsx
     audience: [platform, domain, tenant]
     icon: wizard
     tags: [onboarding, checklist, progress]
@@ -192,7 +192,7 @@ tools:
 
   - key: alert-timeline
     title: { en: "Alert Timeline Replay", zh: "告警時間線重播" }
-    file: alert-timeline.jsx
+    file: interactive/tools/alert-timeline.jsx
     audience: [domain, tenant]
     icon: cli
     tags: [animation, timeline, dedup]
@@ -203,7 +203,7 @@ tools:
 
   - key: schema-explorer
     title: { en: "YAML Schema Explorer", zh: "YAML 結構探索器" }
-    file: schema-explorer.jsx
+    file: interactive/tools/schema-explorer.jsx
     audience: [platform, domain]
     icon: validation
     tags: [schema, reference, yaml]
@@ -216,7 +216,7 @@ tools:
 
   - key: capacity-planner
     title: { en: "Capacity Planner", zh: "容量規劃器" }
-    file: capacity-planner.jsx
+    file: interactive/tools/capacity-planner.jsx
     audience: [platform]
     icon: wizard
     tags: [capacity, planning, estimation]
@@ -230,7 +230,7 @@ tools:
 
   - key: runbook-viewer
     title: { en: "Runbook Viewer", zh: "Runbook 檢視器" }
-    file: runbook-viewer.jsx
+    file: interactive/tools/runbook-viewer.jsx
     audience: [platform, domain]
     icon: rules
     tags: [runbook, operations, alerts]
@@ -241,7 +241,7 @@ tools:
 
   - key: dependency-graph
     title: { en: "Dependency Graph", zh: "依賴圖" }
-    file: dependency-graph.jsx
+    file: interactive/tools/dependency-graph.jsx
     audience: [platform, domain]
     icon: cli
     tags: [graph, dependencies, visual]
@@ -255,7 +255,7 @@ tools:
 
   - key: config-lint
     title: { en: "Config Lint Report", zh: "配置 Lint 報告" }
-    file: config-lint.jsx
+    file: interactive/tools/config-lint.jsx
     audience: [platform, tenant]
     icon: validation
     tags: [lint, validation, best practices]
@@ -270,7 +270,7 @@ tools:
 
   - key: architecture-quiz
     title: { en: "Architecture Quiz", zh: "架構問答" }
-    file: architecture-quiz.jsx
+    file: interactive/tools/architecture-quiz.jsx
     audience: [platform]
     icon: wizard
     tags: [architecture, quiz, decision]
@@ -283,7 +283,7 @@ tools:
 
   - key: promql-tester
     title: { en: "PromQL Tester", zh: "PromQL 測試器" }
-    file: promql-tester.jsx
+    file: interactive/tools/promql-tester.jsx
     audience: [domain, platform]
     icon: cli
     tags: [PromQL, testing, recording rules]
@@ -297,7 +297,7 @@ tools:
 
   - key: platform-demo
     title: { en: "Platform Demo", zh: "平台 Demo" }
-    file: platform-demo.jsx
+    file: interactive/tools/platform-demo.jsx
     audience: [platform, domain, tenant]
     icon: wizard
     tags: [demo, walkthrough, interactive]

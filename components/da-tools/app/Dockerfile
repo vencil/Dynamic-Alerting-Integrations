@@ -3,7 +3,7 @@ FROM python:3.13-alpine AS base
 # ── Metadata ────────────────────────────────────────────────────────
 LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.description="Dynamic Alerting CLI Toolkit — portable verification and migration tools" \
-      org.opencontainers.image.source="https://github.com/vencil/vibe-k8s-lab" \
+      org.opencontainers.image.source="https://github.com/vencil/Dynamic-Alerting-Integrations" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
 # ── Dependencies ──────────────────────────────────────────────────────

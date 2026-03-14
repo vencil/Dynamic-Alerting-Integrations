@@ -25,6 +25,25 @@ _DURATION_RE = re.compile(r"^(\d+\.?\d*)([smhd])$")
 _DURATION_MULTIPLIERS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
+def detect_cli_lang():
+    """Detect CLI language from LANG/LC_ALL/DA_LANG environment variable.
+
+    Checks environment variables in order: DA_LANG, LC_ALL, LANG.
+    If any starts with 'zh', returns 'zh'. If any starts with 'en', returns 'en'.
+    Default: 'en'.
+
+    Returns:
+        'zh' (Chinese) or 'en' (English)
+    """
+    for var in ('DA_LANG', 'LC_ALL', 'LANG'):
+        val = os.environ.get(var, '')
+        if val.startswith('zh'):
+            return 'zh'
+        if val.startswith('en'):
+            return 'en'
+    return 'en'
+
+
 def parse_duration_seconds(value):
     """Parse a Prometheus-style duration string to seconds.
 

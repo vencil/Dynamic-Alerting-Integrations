@@ -2,7 +2,7 @@
 title: "Threshold Exporter API Reference"
 tags: [api, reference, threshold-exporter]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -593,11 +593,11 @@ kubectl logs <pod-name> -n monitoring | tail -50
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐⭐ |
-| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
-| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐ |
-| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐ |
-| ["da-tools Quick Reference"](./cheat-sheet.md) | ⭐⭐ |
-| ["術語表"](./glossary.md) | ⭐⭐ |
-| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](README.md) | ⭐⭐⭐ |
+| ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](../benchmarks.md) | ⭐⭐ |
+| ["BYO Alertmanager 整合指南"](../byo-alertmanager-integration.md) | ⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](../byo-prometheus-integration.md) | ⭐⭐ |
+| ["da-tools Quick Reference"](../cheat-sheet.md) | ⭐⭐ |
+| ["術語表"](../glossary.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |

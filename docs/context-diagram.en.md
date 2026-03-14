@@ -2,7 +2,7 @@
 title: "Project Context Diagram: Roles, Tools, and Product Interactions"
 tags: [architecture, context-diagram]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Project Context Diagram: Roles, Tools, and Product Interactions
@@ -542,4 +542,4 @@ graph LR
 | [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★ |
 | [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★ |
 | [README.en](adr/README.en.md) | ★★ |
-| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"](./architecture-and-design.en.md) | ★★ |
+| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"] | ★★ |

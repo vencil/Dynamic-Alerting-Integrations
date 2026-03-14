@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -28,10 +28,10 @@ This document provides Platform Engineers and Site Reliability Engineers (SREs) 
 - **Migration Engine** → [migration-engine.en.md](migration-engine.en.md)
 
 **Related documentation:**
-- **Quick Start** → [README.en.md](../README.en.md)
+- **Quick Start** → [README.en.md](index.md)
 - **Migration Guide** → [migration-guide.md](migration-guide.md)
-- **Rule Packs Documentation** → [rule-packs/README.md](../rule-packs/README.md)
-- **threshold-exporter Component** → [components/threshold-exporter/README.md](../components/threshold-exporter/README.md)
+- **Rule Packs Documentation** → [rule-packs/README.md](rule-packs/README.md)
+- **threshold-exporter Component** → [components/threshold-exporter/README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 
 ---
 
@@ -486,7 +486,7 @@ tenants:
 **Generated Alertmanager Configuration**
 
 ```bash
-python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
 # Output includes per-tenant inhibit_rules section, merged into Alertmanager config
 ```
 
@@ -530,16 +530,16 @@ Silent Mode naturally bypasses routing: Alertmanager's `inhibit_rules` intercept
 
 ```bash
 # Preview mode
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --dry-run
 
 # Generate fragment + CI validation
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ -o alertmanager-routes.yaml --validate \
   --policy .github/custom-rule-policy.yaml
 
 # All-in-one merge into Alertmanager ConfigMap + reload
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --apply --yes
 ```
 
@@ -788,7 +788,7 @@ spec:
 
 ## 5. Future Roadmap
 
-The following items are listed by priority. Completed items — see [CHANGELOG.md](../CHANGELOG.md) and [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
+The following items are listed by priority. Completed items — see [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md) and [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
 
 ```mermaid
 graph LR
@@ -913,7 +913,7 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v2.0.0-preview.2 — 2026-03-14
+**Document version:** v2.0.0-preview.3 — 2026-03-14
 **Last updated:** — Auto-Suppression redesign (PromQL `unless` → Alertmanager inhibit), Roadmap consolidation (Tenant Profiles + Rule Pack Expansion completed), 15 Rule Packs, 238 total rules
 **Maintainer:** Platform Engineering Team
 
@@ -928,4 +928,4 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 | [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★ |
 | [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★ |
 | [README.en](adr/README.en.md) | ★★ |
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"](./context-diagram.en.md) | ★★ |
+| ["Project Context Diagram: Roles, Tools, and Product Interactions"] | ★★ |

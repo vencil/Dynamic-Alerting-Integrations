@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -1448,16 +1448,16 @@ spec:
 
 | 文件 | 內容 |
 |------|------|
-| [getting-started/for-platform-engineers.md](../docs/getting-started/for-platform-engineers.md) | Platform Engineer 快速入門 |
-| [migration-guide.md](../docs/migration-guide.md) | 遷移步驟詳解 |
-| [troubleshooting.md](../docs/troubleshooting.md) | 故障排查 |
-| [architecture-and-design.md](../docs/architecture-and-design.md) | 架構與設計原理 |
+| [getting-started/for-platform-engineers.md](getting-started/for-platform-engineers.md) | Platform Engineer 快速入門 |
+| [migration-guide.md](migration-guide.md) | 遷移步驟詳解 |
+| [troubleshooting.md](troubleshooting.md) | 故障排查 |
+| [architecture-and-design.md](architecture-and-design.md) | 架構與設計原理 |
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ⭐⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐⭐ |
 | ["da-tools Quick Reference"](./cheat-sheet.md) | ⭐⭐⭐ |
 | ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |

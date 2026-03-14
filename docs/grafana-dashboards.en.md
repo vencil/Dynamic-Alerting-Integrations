@@ -2,7 +2,7 @@
 title: "Grafana Dashboard Guide"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -10,7 +10,7 @@ lang: en
 
 > **v2.0.0-preview** | Audience: Platform Engineers, SREs, DevOps
 >
-> Related docs: [Architecture](./architecture-and-design.en.md) · [Troubleshooting](./troubleshooting.en.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.en.md)
+> Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 
 This document introduces the two Grafana Dashboards provided by the Dynamic Alerting platform, with guidance on deployment, usage, and troubleshooting.
 
@@ -121,9 +121,9 @@ This dashboard tracks old vs. new recording rule convergence during shadow monit
 
 **Normal state:** Pre-migration non-zero (old rules), shadow non-zero (coexisting), post-cutover 0.
 
-**Anomaly:** Still > 0 after cutover → Check old rules not deleted; expected shadow rules but 0 → Verify `migration_status: shadow` label. See [SOP](./shadow-monitoring-sop.en.md).
+**Anomaly:** Still > 0 after cutover → Check old rules not deleted; expected shadow rules but 0 → Verify `migration_status: shadow` label. See [SOP].
 
-**Related docs:** See [Shadow Monitoring SOP](./shadow-monitoring-sop.en.md)
+**Related docs:** See [Shadow Monitoring SOP]
 
 ---
 
@@ -151,7 +151,7 @@ This dashboard tracks old vs. new recording rule convergence during shadow monit
 
 **Anomaly:** 0 during shadow → Check inhibit rule config; Pending > Firing → alert awaiting evaluation cycles, typically OK.
 
-**Related config:** See [Shadow Monitoring Cutover](./scenarios/shadow-monitoring-cutover.en.md)
+**Related config:** See [Shadow Monitoring Cutover]
 
 ---
 
@@ -192,9 +192,9 @@ This dashboard tracks old vs. new recording rule convergence during shadow monit
 
 **Normal state:** Smooth decline trending to 0 (green line).
 
-**Anomaly:** Persistently red (delta > 0.1) → New rule PromQL wrong; sudden spike → Exporter data quality degraded. Green ≥ 24h safe to cutover; red persistent needs fix. See [Cutover Decision](./scenarios/shadow-monitoring-cutover.en.md).
+**Anomaly:** Persistently red (delta > 0.1) → New rule PromQL wrong; sudden spike → Exporter data quality degraded. Green ≥ 24h safe to cutover; red persistent needs fix. See [Cutover Decision].
 
-**Related docs:** See [Shadow Monitoring Cutover Decision Criteria](./scenarios/shadow-monitoring-cutover.en.md)
+**Related docs:** See [Shadow Monitoring Cutover Decision Criteria]
 
 ---
 
@@ -372,11 +372,11 @@ Add a new row (Row: API Health) to the Platform Overview Dashboard with the foll
 
 | Resource | Purpose |
 |----------|---------|
-| [Architecture & Design](./architecture-and-design.en.md) | Platform design and core concepts |
-| [Troubleshooting](./troubleshooting.en.md) | Common issues and troubleshooting |
-| [Shadow Monitoring SOP](./shadow-monitoring-sop.en.md) | Complete shadow monitoring guide |
-| [Shadow Monitoring Cutover](./scenarios/shadow-monitoring-cutover.en.md) | Cutover criteria and automation |
-| [API Endpoints](./api/README.en.md) | threshold-exporter API endpoint reference |
+| [Architecture & Design] | Platform design and core concepts |
+| [Troubleshooting] | Common issues and troubleshooting |
+| [Shadow Monitoring SOP] | Complete shadow monitoring guide |
+| [Shadow Monitoring Cutover] | Cutover criteria and automation |
+| [API Endpoints] | threshold-exporter API endpoint reference |
 | [Prometheus Targets](http://localhost:9090/targets) | Real-time scrape status |
 | [Prometheus Rules](http://localhost:9090/rules) | Recording and alert rule listing |
 

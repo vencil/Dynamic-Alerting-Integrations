@@ -17,11 +17,6 @@ import unittest
 
 import yaml
 
-# Make scaffold_tenant importable
-TOOLS_DIR = os.path.join(
-    os.path.dirname(__file__), os.pardir, "scripts", "tools",
-)
-sys.path.insert(0, os.path.abspath(TOOLS_DIR))
 
 import scaffold_tenant  # noqa: E402
 

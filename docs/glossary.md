@@ -2,12 +2,12 @@
 title: "術語表"
 tags: [reference, glossary]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 術語表
 
-> **Language / 語言：** [English](glossary.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 本頁列出 Dynamic Alerting 平台文件中常見的專有名詞與縮寫，依字母排序。
 
@@ -153,4 +153,4 @@ lang: zh
 | [Architecture & Design](./architecture-and-design.md) | 核心架構與設計詳解 |
 | [CLI Reference](./cli-reference.md) | da-tools 完整指令參考 |
 | [API Reference](./api/README.md) | threshold-exporter API 端點 |
-| [Alert Reference](../rule-packs/ALERT-REFERENCE.md) | 96 個告警含義速查 |
+| [Alert Reference](rule-packs/ALERT-REFERENCE.md) | 96 個告警含義速查 |

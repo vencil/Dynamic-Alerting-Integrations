@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -105,17 +105,17 @@ exporter (tenant_silent_mode)
 
 - [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.7 — 三態運營模式詳細設計
 - [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.8 — Dedup 與 Sentinel 交互機制
-- [`rule-packs/README.md`](../../rule-packs/README.md) — Rule Packs 總覽（含 Sentinel Recording Rules）
+- [`../rule-packs/README.md`](../rule-packs/README.md) — Rule Packs 總覽（含 Sentinel Recording Rules）
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| [001-severity-dedup-via-inhibit](adr/001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum](adr/002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern](adr/003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
-| [004-federation-scenario-a-first](adr/004-federation-scenario-a-first.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs](adr/005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
-| [README](adr/README.md) | ⭐⭐⭐ |
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](./architecture-and-design.md) | ⭐⭐ |
-| ["專案 Context 圖：角色、工具與產品互動關係"](./context-diagram.md) | ⭐⭐ |
+| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
+| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
+| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
+| [004-federation-scenario-a-first](004-federation-scenario-a-first.md) | ⭐⭐⭐ |
+| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
+| [README](README.md) | ⭐⭐⭐ |
+| ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐ |
+| ["專案 Context 圖：角色、工具與產品互動關係"](../context-diagram.md) | ⭐⭐ |

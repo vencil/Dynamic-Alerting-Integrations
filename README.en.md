@@ -2,7 +2,7 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Dynamic Alerting Integrations
@@ -15,7 +15,7 @@ Multi-tenant dynamic alerting platform — config-driven threshold management, 1
 
 > **Not sure where to start?** Try the [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — answer a few questions and get a personalized reading path.
 >
-> Or jump in by role: [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert / DBA](docs/getting-started/for-domain-experts.en.md) · [Tenant Team](docs/getting-started/for-tenants.en.md)
+> Or jump in by role: [Platform Engineer](getting-started/for-platform-engineers.en.md) · [Domain Expert / DBA](getting-started/for-domain-experts.en.md) · [Tenant Team](getting-started/for-tenants.en.md)
 
 ---
 
@@ -165,7 +165,7 @@ All tools available via `da-tools` container (`docker run --rm ghcr.io/vencil/da
 **DX Automation:**
 `shadow_verify` Shadow Monitoring auto-verify · `byo_check` BYO integration check · `federation_check` Federation verify · `grafana_import` dashboard import
 
-Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md)
+Full CLI reference: [da-tools CLI](cli-reference.en.md) · [Cheat Sheet](cheat-sheet.en.md)
 
 ---
 
@@ -173,18 +173,18 @@ Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](do
 
 | Document | Description |
 |----------|-------------|
-| [Architecture & Design](docs/architecture-and-design.en.md) | Core design, HA, Rule Pack architecture |
-| Getting Started (by role) | [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert](docs/getting-started/for-domain-experts.en.md) · [Tenant](docs/getting-started/for-tenants.en.md) |
-| [Migration Guide](docs/migration-guide.en.md) | Onboarding flow, AST engine, Shadow Monitoring |
-| [BYO Prometheus](docs/byo-prometheus-integration.en.md) | Integrate with existing Prometheus/Thanos |
-| [BYO Alertmanager](docs/byo-alertmanager-integration.en.md) | Alertmanager integration & dynamic routing |
-| [Federation](docs/federation-integration.en.md) | Multi-cluster architecture blueprint |
-| [GitOps Deployment](docs/gitops-deployment.en.md) | ArgoCD/Flux workflow |
-| [Custom Rule Governance](docs/custom-rule-governance.en.md) | Three-tier governance, CI linting |
-| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.en.md) | Dual-track SOP |
-| [Scenarios](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
+| [Architecture & Design](architecture-and-design.en.md) | Core design, HA, Rule Pack architecture |
+| Getting Started (by role) | [Platform Engineer](getting-started/for-platform-engineers.en.md) · [Domain Expert](getting-started/for-domain-experts.en.md) · [Tenant](getting-started/for-tenants.en.md) |
+| [Migration Guide](migration-guide.en.md) | Onboarding flow, AST engine, Shadow Monitoring |
+| [BYO Prometheus](byo-prometheus-integration.en.md) | Integrate with existing Prometheus/Thanos |
+| [BYO Alertmanager](byo-alertmanager-integration.en.md) | Alertmanager integration & dynamic routing |
+| [Federation](federation-integration.en.md) | Multi-cluster architecture blueprint |
+| [GitOps Deployment](gitops-deployment.en.md) | ArgoCD/Flux workflow |
+| [Custom Rule Governance](custom-rule-governance.en.md) | Three-tier governance, CI linting |
+| [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) | Dual-track SOP |
+| [Scenarios](scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
 
-Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
+Full doc map: [doc-map.md](internal/doc-map.md) · Tool map: [tool-map.md](internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
 ---
 

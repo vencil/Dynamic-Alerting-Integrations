@@ -2,7 +2,7 @@
 title: "GitHub Release — 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # GitHub Release — 操作手冊 (Playbook)
@@ -202,6 +202,6 @@ git push origin "tools/v<VERSION>"
 
 | 資源 | 相關性 |
 |------|--------|
-| ["GitHub Release — 操作手冊 (Playbook)"](internal/github-release-playbook.md) | ⭐⭐ |
-| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](internal/testing-playbook.md) | ⭐⭐ |
-| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](internal/windows-mcp-playbook.md) | ⭐⭐ |
+| ["GitHub Release — 操作手冊 (Playbook)"](github-release-playbook.md) | ⭐⭐ |
+| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](testing-playbook.md) | ⭐⭐ |
+| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](windows-mcp-playbook.md) | ⭐⭐ |

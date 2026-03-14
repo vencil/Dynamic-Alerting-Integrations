@@ -1,0 +1,30 @@
+# Example ThresholdConfig CR — equivalent to a hand-written conf.d/db-a.yaml
+#
+# Apply:
+#   kubectl apply -f k8s/crd/examples/example-thresholdconfig.yaml
+#
+# The da-assembler-controller watches this and renders it to:
+#   config-dir/db-a.yaml
+#
+apiVersion: dynamicalerting.io/v1alpha1
+kind: ThresholdConfig
+metadata:
+  name: db-a
+  namespace: db-a
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    domain: payment
+spec:
+  tenants:
+    db-a:
+      mysql_connections: "70"
+      mysql_cpu: "80"
+      container_memory: "85"
+      _silent_mode: "disable"
+      _routing:
+        receiver:
+          type: "webhook"
+          url: "https://webhook.db-a.example.com/alerts"
+        group_by: ["alertname", "severity"]
+        group_wait: "30s"
+        repeat_interval: "4h"

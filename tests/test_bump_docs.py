@@ -13,14 +13,11 @@
 
 import os
 import stat
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 # Add scripts/tools to path
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import bump_docs  # noqa: E402
 

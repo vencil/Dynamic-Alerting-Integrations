@@ -2,12 +2,12 @@
 title: "性能分析與基準測試 (Performance Analysis & Benchmarks)"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 性能分析與基準測試 (Performance Analysis & Benchmarks)
 
-> **Language / 語言：** [English](benchmarks.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 > 相關文件：[Architecture](architecture-and-design.md) · [Testing Playbook](internal/testing-playbook.md)
 
@@ -339,7 +339,7 @@ Tenant YAML 變更
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Performance Analysis & Benchmarks"](./benchmarks.en.md) | ⭐⭐⭐ |
+| ["Performance Analysis & Benchmarks"] | ⭐⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
 | ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐ |

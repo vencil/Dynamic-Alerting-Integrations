@@ -2,7 +2,7 @@
 title: "GitOps Deployment Guide"
 tags: [gitops, deployment, ci-cd]
 audience: [platform-engineer, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # GitOps Deployment Guide
@@ -84,7 +84,7 @@ The GitHub Actions template automatically posts the blast radius report as a PR 
 
 **Data-Driven Threshold Review Dual Engine**: `config-diff` (static blast radius analysis) paired with `backtest` (Prometheus historical backtest) form a complete review workflow with pre-change preview + historical validation.
 
-Report content includes: change list per affected tenant, change classification (tighter / looser / added / removed / toggled), inferred affected alert names. See [da-tools README Scenario 8](../components/da-tools/README.md#scenario-8-directory-level-config-diff-v1110).
+Report content includes: change list per affected tenant, change classification (tighter / looser / added / removed / toggled), inferred affected alert names. See [da-tools README Scenario 8](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-tools/README.md#scenario-8-directory-level-config-diff-v1110).
 
 ## 3. ConfigMap Assembly
 
@@ -121,7 +121,7 @@ If Alertmanager routing configuration also uses GitOps, use `generate-routes --o
 
 ```bash
 # Auto-generate Alertmanager ConfigMap in CI
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir config/conf.d/ --output-configmap \
   --base-config deploy/base-alertmanager.yaml \
   -o deploy/alertmanager-configmap.yaml
@@ -221,7 +221,7 @@ spec:
 **② Break-Glass** — During P0 incidents, SRE can bypass Git and patch runtime directly:
 
 ```bash
-python3 scripts/tools/patch_config.py <tenant> <key> <value>
+python3 scripts/tools/ops/patch_config.py <tenant> <key> <value>
 ```
 
 ConfigMap updates immediately, threshold-exporter auto-applies the change in the next reload cycle (30-60s).
@@ -256,6 +256,6 @@ Platform Team-controlled settings (in `_defaults.yaml`) include global defaults,
 | Resource | Relevance |
 |----------|-----------|
 | ["GitOps 部署指南"](./gitops-deployment.md) | ★★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
-| ["Grafana Dashboard Guide"](./grafana-dashboards.en.md) | ★★ |
-| ["AST Migration Engine Architecture"](./migration-engine.en.md) | ★★ |
+| ["da-tools CLI Reference"] | ★★ |
+| ["Grafana Dashboard Guide"] | ★★ |
+| ["AST Migration Engine Architecture"] | ★★ |

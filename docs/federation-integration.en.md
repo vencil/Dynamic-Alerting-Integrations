@@ -2,14 +2,14 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Federation Integration Guide
 
 > **Language / 語言：** **English (Current)** | [中文](federation-integration.md)
 
-> **v2.0.0-preview.2** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
+> **v2.0.0-preview.3** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
 
 ## 1. Overview
 
@@ -136,7 +136,7 @@ When multiple namespaces within an edge cluster correspond to the same tenant, u
 
 ```bash
 # Auto-generate Prometheus relabel_configs snippet
-python3 scripts/tools/scaffold_tenant.py \
+python3 scripts/tools/ops/scaffold_tenant.py \
   --tenant db-a --db postgresql --namespaces ns-prod,ns-staging
 ```
 
@@ -337,7 +337,7 @@ curl -s central-prometheus:9090/api/v1/query?query=user_threshold | jq '.data.re
 curl -s central-prometheus:9090/api/v1/rules | jq '.data.groups[].name'
 
 # Use validate-config for one-stop validation
-python3 scripts/tools/validate_config.py \
+python3 scripts/tools/ops/validate_config.py \
   --config-dir components/threshold-exporter/config/conf.d/ \
   --policy .github/custom-rule-policy.yaml \
   --rule-packs rule-packs/ \
@@ -348,11 +348,11 @@ python3 scripts/tools/validate_config.py \
 
 ```bash
 # Use check_alert.py to confirm cross-cluster tenant alert status
-python3 scripts/tools/check_alert.py MariaDBHighConnections db-a \
+python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-a \
   --prometheus http://central-prometheus:9090
 
 # Use diagnose.py to confirm tenant health
-python3 scripts/tools/diagnose.py db-b \
+python3 scripts/tools/ops/diagnose.py db-b \
   --prometheus http://central-prometheus:9090
 ```
 

@@ -2,7 +2,7 @@
 title: "場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標
@@ -142,7 +142,7 @@ relabel_configs:
 使用工具自動產出：
 
 ```bash
-python3 scripts/tools/scaffold_tenant.py \
+python3 scripts/tools/ops/scaffold_tenant.py \
   --tenant db-a \
   --db postgresql \
   --namespaces prod-ns,staging-ns,canary-ns \
@@ -458,17 +458,17 @@ da-tools federation-check e2e \
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-selector.jsx) — 選擇適用於聯邦架構的 Rule Pack
-> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../dependency-graph.jsx) — 視覺化 Rule Pack 的依賴關係
-> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../capacity-planner.jsx) — 估算多叢集部署的資源需求
+> - [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-selector.jsx) — 選擇適用於聯邦架構的 Rule Pack
+> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/dependency-graph.jsx) — 視覺化 Rule Pack 的依賴關係
+> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/capacity-planner.jsx) — 估算多叢集部署的資源需求
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](scenarios/multi-cluster-federation.md) | ⭐⭐⭐ |
-| ["Federation Integration Guide"](./federation-integration.md) | ⭐⭐⭐ |
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
-| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](scenarios/alert-routing-split.md) | ⭐⭐ |
-| ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
-| ["場景：租戶完整生命週期管理"](scenarios/tenant-lifecycle.md) | ⭐⭐ |
+| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](multi-cluster-federation.md) | ⭐⭐⭐ |
+| ["Federation Integration Guide"](../federation-integration.md) | ⭐⭐⭐ |
+| ["進階場景與測試覆蓋"](advanced-scenarios.md) | ⭐⭐ |
+| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](alert-routing-split.md) | ⭐⭐ |
+| ["場景：Shadow Monitoring 全自動切換工作流"](shadow-monitoring-cutover.md) | ⭐⭐ |
+| ["場景：租戶完整生命週期管理"](tenant-lifecycle.md) | ⭐⭐ |

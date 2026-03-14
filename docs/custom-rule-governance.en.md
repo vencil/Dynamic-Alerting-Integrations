@@ -2,14 +2,14 @@
 title: "Multi-Tenant Custom Rule Governance Model"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Multi-Tenant Custom Rule Governance Model
 
 > **Audience**: Platform Engineering, Domain Experts (DBA/Infra), Tenant Tech Leads
 > **Version**: 
-> **Related**: [Architecture and Design](architecture-and-design.en.md), [Rule Packs Directory](../rule-packs/README.md), [Migration Guide](migration-guide.md)
+> **Related**: [Architecture and Design](architecture-and-design.en.md), [Rule Packs Directory](rule-packs/README.md), [Migration Guide](migration-guide.md)
 
 ---
 
@@ -199,10 +199,10 @@ max_evaluation_interval: 60s  # Custom Rule Group interval cap
 
 ```bash
 # Run in CI
-python3 scripts/tools/lint_custom_rules.py rule-packs/custom/
+python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/
 
 # With custom policy file
-python3 scripts/tools/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
+python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
 
 # Via da-tools container (no repo clone needed)
 docker run --rm \
@@ -279,4 +279,4 @@ If a specific tenant's Tier 3 count keeps rising, this signals that Tier 2 scena
 | Resource | Relevance |
 |----------|-----------|
 | ["多租戶客製化規則治理規範 (Custom Rule Governance Model)"](./custom-rule-governance.md) | ★★★ |
-| ["Governance, Audit & Security Compliance"](./governance-security.en.md) | ★★ |
+| ["Governance, Audit & Security Compliance"] | ★★ |

@@ -2,12 +2,12 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
 
-> **Language / 語言：** [English](architecture-and-design.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 ## 簡介
 
@@ -23,10 +23,10 @@ lang: zh
 **獨立專題文件：** 性能基準測試 → [benchmarks.md](benchmarks.md) · 治理與安全 → [governance-security.md](governance-security.md) · 故障排查 → [troubleshooting.md](troubleshooting.md) · 進階場景 → [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) · 遷移引擎 → [migration-engine.md](migration-engine.md)
 
 **其他相關文件：**
-- **快速入門** → [README.md](../README.md)
+- **快速入門** → [README.md](index.md)
 - **遷移指南** → [migration-guide.md](migration-guide.md)
-- **規則包文件** → [rule-packs/README.md](../rule-packs/README.md)
-- **threshold-exporter 元件** → [components/threshold-exporter/README.md](../components/threshold-exporter/README.md)
+- **規則包文件** → [rule-packs/README.md](rule-packs/README.md)
+- **threshold-exporter 元件** → [components/threshold-exporter/README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 - **性能基準測試** → [benchmarks.md](benchmarks.md)
 - **治理與安全合規** → [governance-security.md](governance-security.md)
 - **故障排查與邊界情況** → [troubleshooting.md](troubleshooting.md)
@@ -508,7 +508,7 @@ tenants:
 **產出 Alertmanager 設定**
 
 ```bash
-python3 scripts/tools/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
 # 輸出包含 per-tenant inhibit_rules section，合併至 Alertmanager config
 ```
 
@@ -552,16 +552,16 @@ Silent Mode 天然 bypass routing：Alertmanager 的 inhibit_rules 在 route eva
 
 ```bash
 # 預覽模式
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --dry-run
 
 # 產出 fragment + CI 驗證
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ -o alertmanager-routes.yaml --validate \
   --policy .github/custom-rule-policy.yaml
 
 # 一站式合併至 Alertmanager ConfigMap + reload
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --apply --yes
 ```
 
@@ -633,9 +633,9 @@ _routing_enforced:
 >
 > **Routing 與 Receiver 配置**助手：
 >
-> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-diff.jsx) — 比較租戶路由與接收器配置的變更
-> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../alert-simulator.jsx) — 模擬警報流經路由、分組與重複間隔的行為
-> - [Architecture Quiz](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../architecture-quiz.jsx) — 通過互動測驗找出最適合你的架構模式
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx) — 比較租戶路由與接收器配置的變更
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx) — 模擬警報流經路由、分組與重複間隔的行為
+> - [Architecture Quiz](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/architecture-quiz.jsx) — 通過互動測驗找出最適合你的架構模式
 >
 > 更多工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
@@ -715,7 +715,49 @@ groups:
           severity: warning
         annotations:
           summary: "MariaDB connections {{ $value }} exceeds threshold ({{ $labels.tenant }})"
+          summary_zh: "MariaDB 連線數 {{ $value }} 超過閾值（{{ $labels.tenant }}）"
+          description: "Connection count has exceeded the threshold"
+          description_zh: "連線數已超過設定的閾值"
+          platform_summary: "[Tier: {{ $labels.tier }}] {{ $labels.tenant }}: Connection pool exhaustion — escalate to DBA"
+          platform_summary_zh: "[Tier: {{ $labels.tier }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
 ```
+
+#### v2.0.0 Bilingual Annotations (i18n) for Alerts
+
+Starting with v2.0.0, Rule Packs support **bilingual annotations** to enable multi-language notifications:
+
+- **`summary`** (English): Brief alert summary
+- **`summary_zh`** (Chinese): Brief alert summary in Chinese (optional)
+- **`description`** (English): Detailed explanation
+- **`description_zh`** (Chinese): Detailed explanation in Chinese (optional)
+- **`platform_summary`** (English): NOC/Platform perspective annotation (used in enforced routing §2.11)
+- **`platform_summary_zh`** (Chinese): NOC/Platform perspective annotation in Chinese (optional)
+
+**Alertmanager Fallback Logic:**
+
+Alertmanager templates use Go's `or` function to prefer Chinese annotations when available, with automatic fallback to English:
+
+```go
+{{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+{{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+{{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+```
+
+This pattern is applied in all receiver types (email, webhook, Slack, Teams, PagerDuty) via Alertmanager's global templates (see `k8s/03-monitoring/configmap-alertmanager.yaml`).
+
+**Backward Compatibility:**
+
+- Rule Packs without `*_zh` annotations continue to work — notifications automatically fall back to English
+- Existing Prometheus rules need no changes
+- New rules should include both English and Chinese for better UX in multi-region deployments
+
+**Three Pilot Rule Packs (v2.0.0):**
+
+- `rule-pack-mariadb.yaml` — 8 alerts with bilingual annotations
+- `rule-pack-postgresql.yaml` — 9 alerts with bilingual annotations
+- `rule-pack-kubernetes.yaml` — 4 alerts with bilingual annotations (Operational alerts)
+
+For full examples, see `rule-packs/` directory.
 
 ### 3.3 優點
 
@@ -744,9 +786,9 @@ groups:
 >
 > **容量規劃、依賴分析與驗證**：
 >
-> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../capacity-planner.jsx) — 估算叢集資源需求（基數、副本、記憶體）
-> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../dependency-graph.jsx) — 視覺化 Rule Pack 與記錄規則的依賴關係
-> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../promql-tester.jsx) — 測試與驗證 PromQL 查詢
+> - [Capacity Planner](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/capacity-planner.jsx) — 估算叢集資源需求（基數、副本、記憶體）
+> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/dependency-graph.jsx) — 視覺化 Rule Pack 與記錄規則的依賴關係
+> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx) — 測試與驗證 PromQL 查詢
 >
 > 更多工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
@@ -836,7 +878,7 @@ spec:
 
 ## 5. 未來擴展路線 (Future Roadmap)
 
-以下為按優先序排列的技術方向。已完成項目請查閱 [CHANGELOG.md](../CHANGELOG.md) 及 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
+以下為按優先序排列的技術方向。已完成項目請查閱 [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md) 及 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
 ```mermaid
 graph LR
@@ -953,14 +995,13 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 ## 相關資源
 
-- [English Version](./architecture-and-design.en.md)
-- [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
+- - [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
 - [ADR 總覽](adr/README.md) — 5 個架構決策紀錄
 - [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
 - [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
-- [規則包目錄](../rule-packs/README.md) · [threshold-exporter](../components/threshold-exporter/README.md)
+- [規則包目錄](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 
 ---
 
-**文件版本：** v2.0.0-preview.2 — 2026-03-14
+**文件版本：** v2.0.0-preview.3 — 2026-03-14
 **維護者：** Platform Engineering Team

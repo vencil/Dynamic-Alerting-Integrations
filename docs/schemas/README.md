@@ -2,7 +2,7 @@
 title: "JSON Schema Reference"
 tags: [schema, validation, yaml, tooling]
 audience: [platform-engineers, tenants]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -231,7 +231,7 @@ tenants:
 The schema is referenced by `validate_config.py` for comprehensive validation:
 
 ```bash
-python3 scripts/tools/validate_config.py --config-dir conf.d/
+python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
 ### IDE Linting

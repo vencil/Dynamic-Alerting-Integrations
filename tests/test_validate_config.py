@@ -8,8 +8,6 @@ import unittest
 import yaml
 
 # Ensure scripts/tools is on the path
-TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts", "tools")
-sys.path.insert(0, os.path.abspath(TOOLS_DIR))
 
 import validate_config as vc  # noqa: E402
 

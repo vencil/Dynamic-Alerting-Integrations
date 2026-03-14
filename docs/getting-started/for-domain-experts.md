@@ -2,14 +2,14 @@
 title: "Domain Expert (DBA) 快速入門指南"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # Domain Expert (DBA) 快速入門指南
 
 > **v2.0.0-preview** | 適用對象：DBA、資料庫管理員、領域專家
 >
-> 相關文件：[Rule Packs](../../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
+> 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 
 ## 你需要知道的三件事
 
@@ -55,7 +55,7 @@ thresholds:
     dimensions_re: ["role=~^primary|replica$"]  # 正規表達式維度
 ```
 
-> 💡 **互動工具** — 想瀏覽所有 Rule Pack 的 recording/alert rule？用 [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-detail.jsx)。比較 15 個 Rule Pack 的指標覆蓋？用 [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-matrix.jsx)。從 p50/p90/p99 推算建議閾值？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../threshold-calculator.jsx)。
+> 💡 **互動工具** — 想瀏覽所有 Rule Pack 的 recording/alert rule？用 [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx)。比較 15 個 Rule Pack 的指標覆蓋？用 [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx)。從 p50/p90/p99 推算建議閾值？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx)。
 
 ### 第三層：告警規則
 
@@ -104,7 +104,7 @@ alert_rules:
 驗證新規則：
 
 ```bash
-python3 scripts/tools/lint_custom_rules.py \
+python3 scripts/tools/ops/lint_custom_rules.py \
   --rule-pack rule-packs/mariadb.yaml \
   --check
 ```
@@ -194,18 +194,18 @@ annotations:
 
 ```bash
 # 1. 反向分析現有配置
-python3 scripts/tools/onboard_platform.py \
+python3 scripts/tools/ops/onboard_platform.py \
   --existing-prometheus-rules /path/to/rules.yaml \
   --output-hints onboard-hints.json
 
 # 2. 遷移規則（AST + Triage + Prefix + Dictionary）
-python3 scripts/tools/migrate_rule.py \
+python3 scripts/tools/ops/migrate_rule.py \
   --input-rule alert.yml \
   --output-rule-pack rule-packs/my-db.yaml \
   --tenant-prefix "my-tenant"
 
 # 3. 驗證遷移（Shadow Monitoring 數值 diff）
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --old-prometheus-url "http://old-prometheus:9090" \
   --new-prometheus-url "http://new-prometheus:9090" \
   --compare-range "7d"
@@ -216,7 +216,7 @@ python3 scripts/tools/validate_migration.py \
 在 CI 環境中回測：
 
 ```bash
-python3 scripts/tools/backtest_threshold.py \
+python3 scripts/tools/ops/backtest_threshold.py \
   --rule-pack rule-packs/mariadb.yaml \
   --tenant my-tenant \
   --look-back "7d" \
@@ -230,7 +230,7 @@ python3 scripts/tools/backtest_threshold.py \
 ### Lint Custom Rules
 
 ```bash
-python3 scripts/tools/lint_custom_rules.py \
+python3 scripts/tools/ops/lint_custom_rules.py \
   --config-dir conf.d/ \
   --deny-list "disable=.*production.*" \
   --naming-convention "^[A-Z][a-zA-Z0-9_]+$"
@@ -286,13 +286,13 @@ A: 使用 shadow monitoring 環境。配置平行的 Prometheus + threshold-expo
 **Q: 如何在多個資料庫間共享閾值邏輯？**
 A: 把通用邏輯提取到共用 Rule Pack，或在 `_profiles.yaml` 中定義通用 profile，讓多個 tenant 繼承。例如所有 MySQL 都用 `mysql-standard` profile。
 
-> 💡 **互動工具** — 查看所有合法 YAML key 和型別？用 [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../schema-explorer.jsx)。測試 PromQL 表達式對應的 Recording Rule？用 [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../promql-tester.jsx)。遷移既有規則？用 [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../migration-simulator.jsx)。查看平台術語？用 [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../glossary.jsx)。在瀏覽器中觀看平台如何處理多租戶配置？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../platform-demo.jsx) 展示完整流程。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。
+> 💡 **互動工具** — 查看所有合法 YAML key 和型別？用 [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx)。測試 PromQL 表達式對應的 Recording Rule？用 [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx)。遷移既有規則？用 [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx)。查看平台術語？用 [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/glossary.jsx)。在瀏覽器中觀看平台如何處理多租戶配置？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示完整流程。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Domain Expert (DBA) 快速入門指南"](getting-started/for-domain-experts.md) | ⭐⭐⭐ |
-| ["Platform Engineer 快速入門指南"](getting-started/for-platform-engineers.md) | ⭐⭐ |
-| ["Tenant 快速入門指南"](getting-started/for-tenants.md) | ⭐⭐ |
-| ["Migration Guide — 遷移指南"](./migration-guide.md) | ⭐⭐ |
+| ["Domain Expert (DBA) 快速入門指南"](for-domain-experts.md) | ⭐⭐⭐ |
+| ["Platform Engineer 快速入門指南"](for-platform-engineers.md) | ⭐⭐ |
+| ["Tenant 快速入門指南"](for-tenants.md) | ⭐⭐ |
+| ["Migration Guide — 遷移指南"](../migration-guide.md) | ⭐⭐ |

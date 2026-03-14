@@ -2,14 +2,14 @@
 title: "Platform Engineer Quick Start Guide"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Platform Engineer Quick Start Guide
 
 > **v2.0.0-preview** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
-> Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../../rule-packs/README.md)
+> Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md)
 
 ## Three Things You Need to Know
 
@@ -70,7 +70,7 @@ defaults:
 Validate defaults syntax:
 
 ```bash
-python3 scripts/tools/validate_config.py --config-dir conf.d/ --schema
+python3 scripts/tools/ops/validate_config.py --config-dir conf.d/ --schema
 ```
 
 ### Managing Rule Packs
@@ -154,7 +154,7 @@ tenants:
 Restrict webhook receiver target domains:
 
 ```bash
-python3 scripts/tools/generate_alertmanager_routes.py \
+python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ \
   --policy "*.example.com" \
   --policy "hooks.slack.com" \
@@ -168,7 +168,7 @@ Empty list means no restriction; fnmatch patterns support wildcards.
 ### One-Stop Configuration Validation
 
 ```bash
-python3 scripts/tools/validate_config.py \
+python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/ \
   --schema
 ```
@@ -183,7 +183,7 @@ Checked items:
 ### Configuration Difference Analysis
 
 ```bash
-python3 scripts/tools/config_diff.py \
+python3 scripts/tools/ops/config_diff.py \
   --old-dir conf.d.baseline \
   --new-dir conf.d/ \
   --format json
@@ -195,7 +195,7 @@ Output: added tenants, removed tenants, changed defaults, changed profiles. Use 
 
 ```bash
 make version-check
-python3 scripts/tools/bump_docs.py --check
+python3 scripts/tools/dx/bump_docs.py --check
 ```
 
 Ensure versions in CLAUDE.md, README, and CHANGELOG are synchronized.
@@ -249,7 +249,7 @@ A: Don't modify Rule Packs directly. Use `_routing.overrides[]` in tenant YAML t
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ★★★ |
-| ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ★★ |
-| ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](./migration-guide.en.md) | ★★ |
+| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ★★★ |
+| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ★★ |
+| ["Tenant Quick Start Guide"](for-tenants.en.md) | ★★ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |

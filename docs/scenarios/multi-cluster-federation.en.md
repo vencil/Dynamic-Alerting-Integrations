@@ -2,7 +2,7 @@
 title: "Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics
@@ -146,7 +146,7 @@ relabel_configs:
 Auto-generate with tooling:
 
 ```bash
-python3 scripts/tools/scaffold_tenant.py \
+python3 scripts/tools/ops/scaffold_tenant.py \
   --tenant db-a \
   --db postgresql \
   --namespaces prod-ns,staging-ns,canary-ns \
@@ -462,9 +462,9 @@ da-tools federation-check e2e \
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](scenarios/multi-cluster-federation.en.md) | ★★★ |
-| ["Federation Integration Guide"](./federation-integration.en.md) | ★★★ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](scenarios/alert-routing-split.en.md) | ★★ |
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](scenarios/shadow-monitoring-cutover.en.md) | ★★ |
-| ["Scenario: Complete Tenant Lifecycle Management"](scenarios/tenant-lifecycle.en.md) | ★★ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★★ |
+| ["Federation Integration Guide"] | ★★★ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★ |
+| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ★★ |

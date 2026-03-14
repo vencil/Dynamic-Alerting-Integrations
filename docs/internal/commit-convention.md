@@ -205,4 +205,4 @@ build(deps): bump kind cluster version to 1.29.1
 
 - [Conventional Commits Specification](https://www.conventionalcommits.org/)
 - [commitlint Documentation](https://commitlint.js.org/)
-- [CHANGELOG.md](../../CHANGELOG.md) - Auto-generated from these commits
+- CHANGELOG.md - Auto-generated from these commits

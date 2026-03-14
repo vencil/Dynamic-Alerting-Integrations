@@ -2,7 +2,7 @@
 title: "Scenario: Complete Tenant Lifecycle Management"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
@@ -73,10 +73,10 @@ For tenants being set up from scratch (no legacy rule conversion needed).
 
 ```bash
 # Use interactive mode
-python3 scripts/tools/scaffold_tenant.py
+python3 scripts/tools/ops/scaffold_tenant.py
 
 # Or non-interactive with parameters
-python3 scripts/tools/scaffold_tenant.py \
+python3 scripts/tools/ops/scaffold_tenant.py \
   --tenant db-product-01 \
   --db postgresql \
   --namespaces ns-prod,ns-staging \
@@ -90,7 +90,7 @@ python3 scripts/tools/scaffold_tenant.py \
 
 #### 1.1.3 Plan Rule Packs and Exporters
 
-`scaffold-report.txt` includes recommended Rule Pack list. Select required Rule Packs based on DB type (see [Rule Packs README](../../rule-packs/README.md)), and confirm corresponding Exporters are deployed or in deployment plan.
+`scaffold-report.txt` includes recommended Rule Pack list. Select required Rule Packs based on DB type (see [Rule Packs README](../rule-packs/README.md)), and confirm corresponding Exporters are deployed or in deployment plan.
 
 #### 1.1.4 Negotiate Initial Thresholds with DBA
 
@@ -124,7 +124,7 @@ Verification includes: threshold-exporter loaded, Prometheus metrics present, Ru
 
 ```bash
 # Comprehensive health check
-python3 scripts/tools/diagnose.py db-product-01 \
+python3 scripts/tools/ops/diagnose.py db-product-01 \
   --prometheus http://localhost:9090
 
 # Expected output:
@@ -142,7 +142,7 @@ python3 scripts/tools/diagnose.py db-product-01 \
 # Monitor for 3 days to ensure no false positives or missed alerts
 
 # Daily check
-python3 scripts/tools/diagnose.py db-product-01
+python3 scripts/tools/ops/diagnose.py db-product-01
 
 # View live alerts
 curl -s http://prometheus:9090/api/v1/alerts | \
@@ -174,8 +174,8 @@ For tenants already running on other platforms needing migration to Dynamic Aler
 
 ```bash
 # Run every morning
-python3 scripts/tools/diagnose.py db-product-01
-python3 scripts/tools/check_alert.py MariaDBHighConnections db-product-01
+python3 scripts/tools/ops/diagnose.py db-product-01
+python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-product-01
 
 # Checklist
 □ operational_mode: normal / silent / maintenance
@@ -188,7 +188,7 @@ python3 scripts/tools/check_alert.py MariaDBHighConnections db-product-01
 
 ```bash
 # Generate multi-tenant health report weekly
-python3 scripts/tools/batch_diagnose.py \
+python3 scripts/tools/ops/batch_diagnose.py \
   --output weekly-report.json
 
 # Report includes:
@@ -263,7 +263,7 @@ tenants:
 **Verification**:
 
 ```bash
-python3 scripts/tools/diagnose.py db-product-01
+python3 scripts/tools/ops/diagnose.py db-product-01
 # Output: operational_mode: silent
 # Rules still evaluate, but alerts don't send notifications
 ```
@@ -307,7 +307,7 @@ groups:
 EOF
 
 # 2. Validate custom rules
-python3 scripts/tools/lint_custom_rules.py custom-rules.yaml
+python3 scripts/tools/ops/lint_custom_rules.py custom-rules.yaml
 
 # 3. Deploy
 kubectl apply -f custom-rules.yaml
@@ -489,8 +489,8 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Scenario: Complete Tenant Lifecycle Management"](scenarios/tenant-lifecycle.en.md) | ★★★ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](scenarios/alert-routing-split.en.md) | ★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](scenarios/multi-cluster-federation.en.md) | ★★ |
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](scenarios/shadow-monitoring-cutover.en.md) | ★★ |
+| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ★★★ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★ |

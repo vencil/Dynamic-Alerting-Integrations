@@ -7,7 +7,6 @@ introduced in v0.6.0.
 
 import os
 import stat
-import sys
 import tempfile
 import unittest
 
@@ -16,8 +15,6 @@ import yaml
 # ---------------------------------------------------------------------------
 # Import tools
 # ---------------------------------------------------------------------------
-TOOLS_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "scripts", "tools")
-sys.path.insert(0, os.path.abspath(TOOLS_DIR))
 
 import offboard_tenant  # noqa: E402
 import deprecate_rule  # noqa: E402

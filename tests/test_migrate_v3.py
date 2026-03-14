@@ -13,10 +13,9 @@ import unittest
 import yaml
 
 # ---------------------------------------------------------------------------
-# Import migrate_rule module
+# Import migrate_rule module (sys.path set by conftest.py)
 # ---------------------------------------------------------------------------
 TOOLS_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "scripts", "tools")
-sys.path.insert(0, os.path.abspath(TOOLS_DIR))
 
 import migrate_rule  # noqa: E402
 

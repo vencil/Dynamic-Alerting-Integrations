@@ -16,14 +16,13 @@
 """
 
 import os
-import sys
 import unittest
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import yaml
 
 # Add scripts/tools to path
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import migrate_rule  # noqa: E402
 

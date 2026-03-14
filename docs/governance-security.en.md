@@ -2,7 +2,7 @@
 title: "Governance, Audit & Security Compliance"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Governance, Audit & Security Compliance
@@ -134,4 +134,4 @@ response = requests.get('http://localhost:8080/health')
 | Resource | Relevance |
 |----------|-----------|
 | ["治理、稽核與安全合規"](./governance-security.md) | ★★★ |
-| ["Multi-Tenant Custom Rule Governance Model"](./custom-rule-governance.en.md) | ★★ |
+| ["Multi-Tenant Custom Rule Governance Model"] | ★★ |

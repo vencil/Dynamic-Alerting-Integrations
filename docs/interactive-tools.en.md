@@ -2,7 +2,7 @@
 title: "Interactive Tools"
 tags: [interactive, tools, react]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 
@@ -20,7 +20,7 @@ Guides users to the appropriate getting-started documentation based on their rol
 
 ## Tenant YAML Playground
 
-**File:** `docs/playground.jsx`
+**File:** `docs/interactive/tools/playground.jsx`
 
 Interactive Tenant YAML editor with real-time syntax validation (key names, three-state values, schedule format) and live preview of generated Prometheus metrics.
 
@@ -28,7 +28,7 @@ Interactive Tenant YAML editor with real-time syntax validation (key names, thre
 
 ## Rule Pack Selector
 
-**File:** `docs/rule-pack-selector.jsx`
+**File:** `docs/interactive/tools/rule-pack-selector.jsx`
 
 Recommends applicable Rule Packs based on technology stack (MySQL / PostgreSQL / Redis / JVM / Nginx, etc.), showing alert count and covered metrics for each pack.
 
@@ -36,7 +36,7 @@ Recommends applicable Rule Packs based on technology stack (MySQL / PostgreSQL /
 
 ## CLI Command Builder
 
-**File:** `docs/cli-playground.jsx`
+**File:** `docs/interactive/tools/cli-playground.jsx`
 
 Select a da-tools subcommand, fill in parameters, and automatically generate a complete `docker run` command ready to copy.
 

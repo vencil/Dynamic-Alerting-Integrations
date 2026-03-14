@@ -2,7 +2,7 @@
 title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
@@ -16,7 +16,7 @@ lang: zh
 |------|------|------|
 | kubectl / kind / go / helm | Dev Container (`vibe-dev-container`) 內 | Cowork VM 無法直接使用 |
 | Python tests | Cowork VM 可直接跑 | `python3 -m pytest tests/ -v` |
-| Go build/test | Dev Container 內 | `-w .../components/threshold-exporter/app` |
+| Go build/test | Dev Container 內 | `-w ../components/threshold-exporter/app` |
 | 純 Python 工具 (routing-bench 等) | 兩者皆可 | 不依賴 K8s 的優先用 Cowork VM |
 | Mounted workspace | `/workspaces/vibe-k8s-lab` (container 內) | 雙向可見 |
 
@@ -94,7 +94,7 @@ docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/scripts/_task.sh /
 | K8s 查詢 | 先試 K8s MCP → fallback docker exec | K8s MCP 常 TLS timeout |
 | 多步 K8s 操作 | 寫腳本 → `docker exec bash script.sh` | 避免 timeout + 引號問題 |
 | Prometheus / Alertmanager API | docker exec + port-forward | ClusterIP 在 container 外不可達 |
-| Go build/test | `docker exec -w .../app vibe-dev-container go ...` | Go 僅在 container 內 |
+| Go build/test | `docker exec -w ../app vibe-dev-container go ...` | Go 僅在 container 內 |
 | 檔案清理 (mounted workspace) | `docker exec ... rm -f` | Cowork VM 無法直接 rm 掛載路徑 |
 
 **K8s MCP 已知限制：** 常 TLS timeout、`name` 必填、不支援 pipe/重定向。timeout 直接 fallback docker exec，不重試。
@@ -195,7 +195,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 2 | `bash -c "..."` 引號被拆解 | 寫成獨立 `.sh` / `.py` 腳本 |
 | 3 | PowerShell 編碼亂碼 | MCP Shell 指定 `shell: "cmd"` |
 | 4 | `docker exec -d bash -c "..."` 失敗 | `-d` 只接腳本路徑，腳本內 `exec > file 2>&1` |
-| 5 | Go test `./...` 找不到 module | `-w .../components/threshold-exporter/app` |
+| 5 | Go test `./...` 找不到 module | `-w ../components/threshold-exporter/app` |
 | 6 | `start_process` 硬上限 60s | 寫腳本 → `docker exec -d` → sleep → 讀結果 |
 | 7 | kubeconfig 過期 | `kind export kubeconfig --name dynamic-alerting-cluster` |
 | 8 | port-forward 殘留 / Pod 重啟後斷開 | `pkill -f port-forward`；重建需等 Pod Ready |
@@ -230,13 +230,13 @@ docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh
 # 暫存檔清理
 docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/_*.txt /workspaces/vibe-k8s-lab/_*.json
 # 版號一致性
-docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash -c "python3 ./scripts/tools/bump_docs.py --check > /workspaces/vibe-k8s-lab/_ver.txt 2>&1"
+docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash -c "python3 ./scripts/tools/dx/bump_docs.py --check > /workspaces/vibe-k8s-lab/_ver.txt 2>&1"
 ```
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["GitHub Release — 操作手冊 (Playbook)"](internal/github-release-playbook.md) | ⭐⭐ |
-| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](internal/testing-playbook.md) | ⭐⭐ |
-| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](internal/windows-mcp-playbook.md) | ⭐⭐ |
+| ["GitHub Release — 操作手冊 (Playbook)"](github-release-playbook.md) | ⭐⭐ |
+| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](testing-playbook.md) | ⭐⭐ |
+| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](windows-mcp-playbook.md) | ⭐⭐ |

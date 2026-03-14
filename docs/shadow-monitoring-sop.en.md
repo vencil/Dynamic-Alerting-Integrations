@@ -2,7 +2,7 @@
 title: "Shadow Monitoring SRE SOP"
 tags: [migration, shadow-monitoring, sop]
 audience: [sre, platform-engineer]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Shadow Monitoring SRE SOP
@@ -34,7 +34,7 @@ Before deploying shadow rules, validate the overall configuration correctness:
 da-tools validate-config --config-dir /data/conf.d
 
 # Or run Python script locally
-python3 scripts/tools/validate_config.py --config-dir components/threshold-exporter/config/conf.d
+python3 scripts/tools/ops/validate_config.py --config-dir components/threshold-exporter/config/conf.d
 ```
 
 ### 2.2 Confirm New Rules Are Loaded
@@ -69,7 +69,7 @@ receivers:
 For critical tenants, perform load observation to establish baseline data before migration as a comparison reference:
 
 ```bash
-python3 scripts/tools/baseline_discovery.py --tenant db-a --duration 1800 --interval 30
+python3 scripts/tools/ops/baseline_discovery.py --tenant db-a --duration 1800 --interval 30
 ```
 
 Output includes p50/p90/p95/p99 statistics and threshold suggestions in CSV format, useful for comparing trends during the shadow period.
@@ -92,7 +92,7 @@ docker run --rm --network=host \
 
 > **Already cloned the project?** You can also run the Python script directly:
 > ```bash
-> python3 scripts/tools/validate_migration.py \
+> python3 scripts/tools/ops/validate_migration.py \
 >   --mapping migration_output/prefix-mapping.yaml \
 >   --prometheus http://localhost:9090 \
 >   --watch --interval 300 --rounds 4032
@@ -431,10 +431,10 @@ da-tools grafana-import \
 | Resource | Relevance |
 |----------|-----------|
 | ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ★★★ |
-| ["AST Migration Engine Architecture"](./migration-engine.en.md) | ★★ |
+| ["AST Migration Engine Architecture"] | ★★ |
 | ["Scenario: Automated Shadow Monitoring Cutover Workflow"](scenarios/shadow-monitoring-cutover.en.md) | ★★ |
 | ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"](./benchmarks.en.md) | ★★ |
-| ["BYO Alertmanager Integration Guide"](./byo-alertmanager-integration.en.md) | ★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ★★ |
-| ["da-tools CLI Reference"](./cli-reference.en.md) | ★★ |
+| ["Performance Analysis & Benchmarks"] | ★★ |
+| ["BYO Alertmanager Integration Guide"] | ★★ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★ |
+| ["da-tools CLI Reference"] | ★★ |

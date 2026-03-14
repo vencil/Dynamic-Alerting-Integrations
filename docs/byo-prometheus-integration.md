@@ -2,14 +2,14 @@
 title: "Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v2.0.0-preview.2
+> **版本**：v2.0.0-preview.3
 
 ---
 
@@ -472,7 +472,7 @@ A: `threshold-exporter` 部署在資料叢集內（靠近 tenant ConfigMap）。
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](./byo-prometheus-integration.en.md) | ⭐⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐⭐ |
 | ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |

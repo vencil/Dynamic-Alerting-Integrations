@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -126,7 +126,7 @@ volumes:
 
 ## 參考資料
 
-- [`rule-packs/README.md`](../../rule-packs/README.md) — Rule Pack 目錄結構與清單
+- [`../rule-packs/README.md`](../rule-packs/README.md) — Rule Pack 目錄結構與清單
 - [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) §Rule Pack 配置 — 自定義 Rule Pack 指南
 - [Kubernetes Projected Volume 官方文件](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
 
@@ -134,11 +134,11 @@ volumes:
 
 | 資源 | 相關性 |
 |------|--------|
-| [001-severity-dedup-via-inhibit](adr/001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum](adr/002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern](adr/003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
-| [004-federation-scenario-a-first](adr/004-federation-scenario-a-first.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs](adr/005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
-| [README](adr/README.md) | ⭐⭐⭐ |
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](./architecture-and-design.md) | ⭐⭐ |
-| ["專案 Context 圖：角色、工具與產品互動關係"](./context-diagram.md) | ⭐⭐ |
+| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
+| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
+| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
+| [004-federation-scenario-a-first](004-federation-scenario-a-first.md) | ⭐⭐⭐ |
+| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
+| [README](README.md) | ⭐⭐⭐ |
+| ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐ |
+| ["專案 Context 圖：角色、工具與產品互動關係"](../context-diagram.md) | ⭐⭐ |

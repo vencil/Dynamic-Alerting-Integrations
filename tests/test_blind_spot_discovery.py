@@ -3,15 +3,12 @@
 
 import json
 import os
-import sys
 import tempfile
 import unittest
 from unittest import mock
 
 import yaml
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import blind_spot_discovery as bsd  # noqa: E402
 

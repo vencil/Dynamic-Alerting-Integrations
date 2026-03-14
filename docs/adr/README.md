@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -65,5 +65,5 @@ lang: zh
 
 - [`docs/architecture-and-design.md`](../architecture-and-design.md) — 完整架構設計
 - [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) — 平台工程師快速入門
-- [`CLAUDE.md`](../../CLAUDE.md) — 開發上下文指引
+- [`CLAUDE.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) — 開發上下文指引
 

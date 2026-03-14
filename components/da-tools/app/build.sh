@@ -62,28 +62,28 @@ TOOL_FILES=(
     # Shared library (imported by multiple tools)
     _lib_python.py
     # Prometheus API tools (portable)
-    check_alert.py
-    diagnose.py
-    batch_diagnose.py
-    baseline_discovery.py
-    validate_migration.py
-    backtest_threshold.py
-    cutover_tenant.py
-    blind_spot_discovery.py
-    maintenance_scheduler.py
+    ops/check_alert.py
+    ops/diagnose.py
+    ops/batch_diagnose.py
+    ops/baseline_discovery.py
+    ops/validate_migration.py
+    ops/backtest_threshold.py
+    ops/cutover_tenant.py
+    ops/blind_spot_discovery.py
+    ops/maintenance_scheduler.py
     # Config generation tools
-    generate_alertmanager_routes.py
-    validate_config.py
-    analyze_rule_pack_gaps.py
-    patch_config.py
+    ops/generate_alertmanager_routes.py
+    ops/validate_config.py
+    ops/analyze_rule_pack_gaps.py
+    ops/patch_config.py
     # File system tools (offline)
-    migrate_rule.py
-    config_diff.py
-    scaffold_tenant.py
-    onboard_platform.py
-    offboard_tenant.py
-    deprecate_rule.py
-    lint_custom_rules.py
+    ops/migrate_rule.py
+    ops/config_diff.py
+    ops/scaffold_tenant.py
+    ops/onboard_platform.py
+    ops/offboard_tenant.py
+    ops/deprecate_rule.py
+    ops/lint_custom_rules.py
     # Data files
     metric-dictionary.yaml
 )
@@ -97,6 +97,16 @@ for f in "${TOOL_FILES[@]}"; do
 done
 
 echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
+
+# ── Strip repo-layout sys.path hack ──────────────────────────────────
+# In the repo, tools use dual sys.path (current dir + parent dir) to
+# support both flat Docker layout and subdir repo layout.  In Docker
+# everything is flat, so remove the parent-dir line to keep images clean.
+for py in "$SCRIPT_DIR"/tools/*.py; do
+    [ -f "$py" ] || continue
+    sed -i "/sys\.path\.insert.*os\.path\.join.*_THIS_DIR.*'\.\.')/d" "$py"
+done
+echo "  Stripped repo-layout sys.path from Docker copies"
 
 # ── Assemble-only mode (for CI — Buildx handles the docker build) ──
 if [ "$ASSEMBLE_ONLY" = true ]; then

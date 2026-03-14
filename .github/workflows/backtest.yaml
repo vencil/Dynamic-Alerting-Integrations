@@ -29,7 +29,7 @@ jobs:
         env:
           PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
         run: |
-          python3 scripts/tools/backtest_threshold.py \
+          python3 scripts/tools/ops/backtest_threshold.py \
             --git-diff \
             --prometheus "${PROMETHEUS_URL:-http://localhost:9090}" \
             --skip-if-unavailable \

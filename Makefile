@@ -119,7 +119,7 @@ shell: ## 進入 DB CLI (使用: make shell TENANT=db-a)
 
 .PHONY: inspect-tenant
 inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant TENANT=db-a)
-	@python3 ./scripts/tools/diagnose.py $(TENANT)
+	@python3 ./scripts/tools/ops/diagnose.py $(TENANT)
 
 .PHONY: port-forward
 port-forward: ## 啟動 Port-Forward (9090, 3000, 9093, 8080)
@@ -168,7 +168,7 @@ load-demo: ## 負載注入: 完整 Demo (stress-ng + connections → alert → c
 
 .PHONY: baseline-discovery
 baseline-discovery: ## Baseline Discovery: 觀測指標 + 建議閾值 (使用: make baseline-discovery TENANT=db-a)
-	@python3 ./scripts/tools/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
+	@python3 ./scripts/tools/ops/baseline_discovery.py --tenant $(TENANT) --prometheus http://localhost:9090
 
 CONFDIR := components/threshold-exporter/config/conf.d
 
@@ -180,17 +180,17 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 
 sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
 	@mkdir -p .build
-	@python3 ./scripts/tools/assemble_config_dir.py \
+	@python3 ./scripts/tools/ops/assemble_config_dir.py \
 		--sources $(SOURCES) --output .build/config-dir --validate \
 		--manifest .build/assembly-manifest.json
 	@echo "✓ manifest: .build/assembly-manifest.json"
 
 sharded-check: ## Sharded GitOps: 衝突偵測（dry-run）
-	@python3 ./scripts/tools/assemble_config_dir.py --sources $(SOURCES) --check
+	@python3 ./scripts/tools/ops/assemble_config_dir.py --sources $(SOURCES) --check
 
 assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
 	@mkdir -p .build/config-dir
-	@python3 ./scripts/tools/da_assembler.py \
+	@python3 ./scripts/tools/ops/da_assembler.py \
 		--render-cr $(CR) --config-dir .build/config-dir
 	@echo "✓ rendered to .build/config-dir/"
 
@@ -200,37 +200,38 @@ assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 	@echo "✓ CRD + RBAC installed"
 
 validate-routes: ## 驗證 Alertmanager route config (CI lint 用)
-	@python3 ./scripts/tools/generate_alertmanager_routes.py \
+	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate
 
 validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions)
-	@python3 ./scripts/tools/validate_config.py \
+	@python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check
 
 onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
-	@python3 scripts/tools/onboard_platform.py $(ARGS)
+	@python3 scripts/tools/ops/onboard_platform.py $(ARGS)
 
 version-check: ## 檢查版號一致性 (CI lint 用)
-	@python3 ./scripts/tools/bump_docs.py --check
+	@python3 ./scripts/tools/dx/bump_docs.py --check
 
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
-	@python3 ./scripts/tools/sync_tool_registry.py --verbose
+	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
+
+.PHONY: platform-data
+platform-data: ## 產生 docs/assets/platform-data.json（Rule Pack 共用資料源）
+	@python3 ./scripts/tools/dx/generate_platform_data.py
 
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
-		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes \
+		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,platform_data,tool_consistency \
 		$(ARGS)
-	@echo ""
-	@echo "=== Tool Consistency Check ==="
-	@python3 ./scripts/tools/lint_tool_consistency.py || true
 
 version-show: ## 顯示目前三條版號線
-	@python3 ./scripts/tools/bump_docs.py --show-current
+	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
 bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0)
-	@python3 ./scripts/tools/bump_docs.py \
+	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS))

@@ -2,12 +2,12 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # Dynamic Alerting Integrations
 
-> **Language / 語言：** [English](README.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-44%20pairs-blue)
 
@@ -15,7 +15,7 @@ lang: zh
 
 > **不知道從哪裡開始？** 試試 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — 回答幾個問題，取得為你量身打造的閱讀路徑。
 >
-> 或依角色直接開始：[Platform Engineer](docs/getting-started/for-platform-engineers.md) · [Domain Expert / DBA](docs/getting-started/for-domain-experts.md) · [Tenant Team](docs/getting-started/for-tenants.md)
+> 或依角色直接開始：[Platform Engineer](getting-started/for-platform-engineers.md) · [Domain Expert / DBA](getting-started/for-domain-experts.md) · [Tenant Team](getting-started/for-tenants.md)
 
 ---
 
@@ -165,7 +165,7 @@ make port-forward
 **DX Automation：**
 `shadow_verify` Shadow Monitoring 自動驗證 · `byo_check` BYO 整合檢查 · `federation_check` Federation 驗證 · `grafana_import` Dashboard 匯入
 
-完整 CLI 參考：[da-tools CLI](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md)
+完整 CLI 參考：[da-tools CLI](cli-reference.md) · [速查表](cheat-sheet.md)
 
 ---
 
@@ -173,18 +173,18 @@ make port-forward
 
 | 文件 | 說明 |
 |------|------|
-| [架構與設計](docs/architecture-and-design.md) | 核心設計、HA、Rule Pack 架構 |
-| 快速入門（按角色） | [Platform Engineer](docs/getting-started/for-platform-engineers.md) · [Domain Expert](docs/getting-started/for-domain-experts.md) · [Tenant](docs/getting-started/for-tenants.md) |
-| [遷移指南](docs/migration-guide.md) | 導入流程、AST 引擎、Shadow Monitoring |
-| [BYO Prometheus](docs/byo-prometheus-integration.md) | 整合既有 Prometheus/Thanos |
-| [BYO Alertmanager](docs/byo-alertmanager-integration.md) | Alertmanager 整合與動態 Routing |
-| [Federation](docs/federation-integration.md) | 多叢集架構藍圖 |
-| [GitOps 部署](docs/gitops-deployment.md) | ArgoCD/Flux 工作流 |
-| [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、CI Linting |
-| [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP |
-| [場景指南](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
+| [架構與設計](architecture-and-design.md) | 核心設計、HA、Rule Pack 架構 |
+| 快速入門（按角色） | [Platform Engineer](getting-started/for-platform-engineers.md) · [Domain Expert](getting-started/for-domain-experts.md) · [Tenant](getting-started/for-tenants.md) |
+| [遷移指南](migration-guide.md) | 導入流程、AST 引擎、Shadow Monitoring |
+| [BYO Prometheus](byo-prometheus-integration.md) | 整合既有 Prometheus/Thanos |
+| [BYO Alertmanager](byo-alertmanager-integration.md) | Alertmanager 整合與動態 Routing |
+| [Federation](federation-integration.md) | 多叢集架構藍圖 |
+| [GitOps 部署](gitops-deployment.md) | ArgoCD/Flux 工作流 |
+| [客製化規則治理](custom-rule-governance.md) | 三層治理模型、CI Linting |
+| [Shadow Monitoring SOP](shadow-monitoring-sop.md) | 雙軌並行完整 SOP |
+| [場景指南](scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
 
-完整文件對照表：[doc-map.md](docs/internal/doc-map.md) · 工具表：[tool-map.md](docs/internal/tool-map.md) · 互動工具：[Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
+完整文件對照表：[doc-map.md](internal/doc-map.md) · 工具表：[tool-map.md](internal/tool-map.md) · 互動工具：[Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
 ---
 

@@ -16,15 +16,12 @@
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
 import yaml
 
 # Add scripts/tools to path
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import lint_custom_rules  # noqa: E402
 

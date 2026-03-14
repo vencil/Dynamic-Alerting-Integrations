@@ -1,3 +1,5 @@
+# ⚠️  DEPRECATED — community reference only. Primary CI: .github/workflows/
+#
 # config-diff.gitlab-ci.yml — Blast Radius Report on Config MRs
 #
 # Include in your .gitlab-ci.yml:

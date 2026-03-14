@@ -2,14 +2,14 @@
 title: "Tenant Quick Start Guide"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Tenant Quick Start Guide
 
 > **v2.0.0-preview** | Audience: Tenant administrators, DBAs, SREs
 >
-> Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../../rule-packs/README.md)
+> Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
 ## Three Things You Need to Know
 
@@ -138,14 +138,14 @@ Alert notifications use `summary` and `description` written for you (the Tenant)
 
 ```bash
 # One-stop validation (YAML syntax + schema + routes + profiles)
-python3 scripts/tools/validate_config.py --config-dir conf.d/
+python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
 ### View Inheritance Chain
 
 ```bash
 # See the final resolved thresholds for your tenant
-python3 scripts/tools/diagnose.py my-tenant \
+python3 scripts/tools/ops/diagnose.py my-tenant \
   --config-dir conf.d/ --show-inheritance
 ```
 
@@ -153,7 +153,7 @@ python3 scripts/tools/diagnose.py my-tenant \
 
 ```bash
 # Compare before/after blast radius
-python3 scripts/tools/config_diff.py \
+python3 scripts/tools/ops/config_diff.py \
   --old-dir conf.d.baseline --new-dir conf.d/
 ```
 
@@ -162,7 +162,7 @@ python3 scripts/tools/config_diff.py \
 First time onboarding? Use the scaffold tool:
 
 ```bash
-python3 scripts/tools/scaffold_tenant.py
+python3 scripts/tools/ops/scaffold_tenant.py
 ```
 
 It asks a few questions (DB type, notification method), then generates a complete YAML file.
@@ -185,7 +185,7 @@ A: Check `_defaults.yaml` and the header comments in each Rule Pack YAML. You ca
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ★★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](./migration-guide.en.md) | ★★ |
-| ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ★★ |
-| ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ★★ |
+| ["Tenant Quick Start Guide"](for-tenants.en.md) | ★★★ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |
+| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ★★ |
+| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ★★ |

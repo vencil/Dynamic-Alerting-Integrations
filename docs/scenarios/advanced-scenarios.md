@@ -2,12 +2,12 @@
 title: "進階場景與測試覆蓋"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 進階場景與測試覆蓋
 
-> **Language / 語言：** [English](advanced-scenarios.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 > 相關文件：[Architecture](../architecture-and-design.md) · [Testing Playbook](../internal/testing-playbook.md) · [Alert Routing Split](alert-routing-split.md)
 
@@ -215,19 +215,19 @@ flowchart TD
 
 > 💡 **互動工具** — 下列工具可直接在 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 中測試：
 >
-> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../promql-tester.jsx) — 測試告警規則的 PromQL 運算式
-> - [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../rule-pack-matrix.jsx) — 查看現有 Rule Pack 的覆蓋範圍
-> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../config-lint.jsx) — 驗證進階場景配置
+> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx) — 測試告警規則的 PromQL 運算式
+> - [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx) — 查看現有 Rule Pack 的覆蓋範圍
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-lint.jsx) — 驗證進階場景配置
 
 ## 相關資源
 
 | 資源 | 相關性 |
 |------|--------|
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐⭐ |
-| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](scenarios/alert-routing-split.md) | ⭐⭐ |
-| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](scenarios/multi-cluster-federation.md) | ⭐⭐ |
-| ["場景：Shadow Monitoring 全自動切換工作流"](scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
-| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
-| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐ |
-| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](advanced-scenarios.md) | ⭐⭐⭐ |
+| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](alert-routing-split.md) | ⭐⭐ |
+| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](multi-cluster-federation.md) | ⭐⭐ |
+| ["場景：Shadow Monitoring 全自動切換工作流"](shadow-monitoring-cutover.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](../api/README.md) | ⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](../benchmarks.md) | ⭐⭐ |
+| ["BYO Alertmanager 整合指南"](../byo-alertmanager-integration.md) | ⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](../byo-prometheus-integration.md) | ⭐⭐ |

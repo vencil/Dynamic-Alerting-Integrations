@@ -2,12 +2,12 @@
 title: "專案 Context 圖：角色、工具與產品互動關係"
 tags: [architecture, context-diagram]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 專案 Context 圖：角色、工具與產品互動關係
 
-> **Language / 語言：** [English](context-diagram.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 > **v2.0.0-preview** | 適用對象：所有參與者（Platform Engineers、Domain Experts、Tenant Teams）
 
@@ -535,7 +535,7 @@ graph LR
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"](./context-diagram.en.md) | ⭐⭐⭐ |
+| ["Project Context Diagram: Roles, Tools, and Product Interactions"] | ⭐⭐⭐ |
 | [001-severity-dedup-via-inhibit](adr/001-severity-dedup-via-inhibit.md) | ⭐⭐ |
 | [002-oci-registry-over-chartmuseum](adr/002-oci-registry-over-chartmuseum.md) | ⭐⭐ |
 | [003-sentinel-alert-pattern](adr/003-sentinel-alert-pattern.md) | ⭐⭐ |

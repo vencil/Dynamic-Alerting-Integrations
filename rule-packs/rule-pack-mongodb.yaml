@@ -86,6 +86,7 @@ groups:
           severity: critical
         annotations:
           summary: "MongoDB instance {{ $labels.instance }} is DOWN"
+          summary_zh: "MongoDB 實例 {{ $labels.instance }} 已停機"
 
       - alert: MongoDBHighConnections
         expr: |
@@ -105,8 +106,11 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB high connection count on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線數過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached — pool sizing review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線閾值超過 — 請檢查連線池大小"
           description: "{{ $value }} current connections"
+          description_zh: "{{ $value }} 個目前連線"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -129,8 +133,11 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB replication lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 MongoDB 複製延遲"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag — check replica health"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 複製延遲 — 請檢查副本狀態"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s behind primary"
+          description_zh: "複製延遲: 落後 Primary {{ $value | printf \"%.1f\" }}s"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -153,8 +160,11 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB high operation rate on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 MongoDB 作業率過高"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated — workload review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 作業率提升 — 請檢查工作負載"
           description: "{{ $value | printf \"%.0f\" }} ops/sec"
+          description_zh: "{{ $value | printf \"%.0f\" }} 作業/秒"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -173,8 +183,11 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB high page faults on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 MongoDB Page Fault 過多"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB page fault rate high — memory sizing review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB Page Fault 率過高 — 請檢查記憶體大小"
           description: "{{ $value | printf \"%.1f\" }} page faults/sec — check memory"
+          description_zh: "{{ $value | printf \"%.1f\" }} Page Fault/秒 — 請檢查記憶體"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -193,8 +206,11 @@ groups:
           severity: warning
         annotations:
           summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線池接近飽和"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation — capacity action needed"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展"
           description: "{{ $value | printf \"%.0f\" }}% of connections used"
+          description_zh: "已使用 {{ $value | printf \"%.0f\" }}% 的連線"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

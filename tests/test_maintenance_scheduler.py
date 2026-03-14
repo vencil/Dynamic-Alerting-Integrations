@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """test_maintenance_scheduler.py — Recurring Maintenance Scheduler 測試套件。"""
 
-import os
-import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
-sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 
 import maintenance_scheduler as ms  # noqa: E402
 from conftest import write_yaml  # noqa: E402

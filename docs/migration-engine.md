@@ -2,12 +2,12 @@
 title: "AST 遷移引擎架構"
 tags: [migration, ast-engine]
 audience: [platform-engineer, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # AST 遷移引擎架構
 
-> **Language / 語言：** [English](migration-engine.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 > 相關文件：[Migration Guide](migration-guide.md) · [Architecture](architecture-and-design.md)
 
@@ -70,7 +70,7 @@ flowchart LR
 
 | 資源 | 相關性 |
 |------|--------|
-| ["AST Migration Engine Architecture"](./migration-engine.en.md) | ⭐⭐⭐ |
+| ["AST Migration Engine Architecture"] | ⭐⭐⭐ |
 | ["Migration Guide — 遷移指南"](./migration-guide.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |

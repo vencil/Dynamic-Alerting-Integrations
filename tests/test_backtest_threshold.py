@@ -12,13 +12,10 @@
 
 import json
 import os
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools"))
 
 import backtest_threshold as bt  # noqa: E402
 

@@ -2,7 +2,7 @@
 title: "Glossary"
 tags: [reference, glossary]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Glossary
@@ -150,7 +150,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 
 | Resource | Purpose |
 |----------|---------|
-| [Architecture & Design](./architecture-and-design.en.md) | Core architecture and design details |
-| [CLI Reference](./cli-reference.en.md) | Complete da-tools command reference |
-| [API Reference](./api/README.en.md) | threshold-exporter API endpoints |
-| [Alert Reference](../rule-packs/ALERT-REFERENCE.en.md) | 96 alert meanings quick reference |
+| [Architecture & Design] | Core architecture and design details |
+| [CLI Reference] | Complete da-tools command reference |
+| [API Reference] | threshold-exporter API endpoints |
+| [Alert Reference](rule-packs/ALERT-REFERENCE.en.md) | 96 alert meanings quick reference |

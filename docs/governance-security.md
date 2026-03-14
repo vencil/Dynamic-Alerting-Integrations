@@ -2,12 +2,12 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 治理、稽核與安全合規
 
-> **Language / 語言：** [English](governance-security.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 > 相關文件：[Architecture](architecture-and-design.md) · [GitOps Deployment](gitops-deployment.md) · [Custom Rule Governance](custom-rule-governance.md)
 
@@ -140,5 +140,5 @@ response = requests.get('http://localhost:8080/health')
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Governance, Audit & Security Compliance"](./governance-security.en.md) | ⭐⭐⭐ |
+| ["Governance, Audit & Security Compliance"] | ⭐⭐⭐ |
 | ["多租戶客製化規則治理規範 (Custom Rule Governance Model)"](./custom-rule-governance.md) | ⭐⭐ |

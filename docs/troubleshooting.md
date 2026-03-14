@@ -2,12 +2,12 @@
 title: "故障排查與邊界情況"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # 故障排查與邊界情況
 
-> **Language / 語言：** [English](troubleshooting.en.md) | **中文（當前）**
+> **Language / 語言：** | **中文（當前）**
 
 > 相關文件：[Architecture](architecture-and-design.md) · [HA Design](architecture-and-design.md#5-高可用性設計-high-availability)
 
@@ -87,7 +87,7 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Troubleshooting and Edge Cases"](./troubleshooting.en.md) | ⭐⭐⭐ |
+| ["Troubleshooting and Edge Cases"] | ⭐⭐⭐ |
 | ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |

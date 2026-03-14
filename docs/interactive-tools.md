@@ -2,7 +2,7 @@
 title: "互動式工具"
 tags: [interactive, tools, react]
 audience: [all]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 
@@ -20,7 +20,7 @@ lang: zh
 
 ## Tenant YAML Playground
 
-**檔案：** `docs/playground.jsx`
+**檔案：** `docs/interactive/tools/playground.jsx`
 
 互動式 Tenant YAML 編輯器，支援即時語法驗證（key 名稱、三態值、排程格式）並即時預覽產出的 Prometheus metrics。
 
@@ -28,7 +28,7 @@ lang: zh
 
 ## Rule Pack 選擇器
 
-**檔案：** `docs/rule-pack-selector.jsx`
+**檔案：** `docs/interactive/tools/rule-pack-selector.jsx`
 
 根據技術棧（MySQL / PostgreSQL / Redis / JVM / Nginx 等）推薦適用的 Rule Packs，顯示每個 Pack 的 alert 數量與涵蓋指標。
 
@@ -36,7 +36,7 @@ lang: zh
 
 ## CLI 指令建構器
 
-**檔案：** `docs/cli-playground.jsx`
+**檔案：** `docs/interactive/tools/cli-playground.jsx`
 
 選擇 da-tools 子命令 → 填入參數 → 自動產生完整 `docker run` 指令，一鍵複製。
 

@@ -2,13 +2,13 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: zh
 ---
 # Migration Guide — 遷移指南
 
 > 從傳統 Prometheus 警報遷移至動態多租戶閾值架構。
-> **其他文件：** [README](../README.md) (概覽) · [Architecture & Design](architecture-and-design.md) (技術深度) · [Rule Packs](../rule-packs/README.md) (規則包目錄)
+> **其他文件：** [README](index.md) (概覽) · [Architecture & Design](architecture-and-design.md) (技術深度) · [Rule Packs](rule-packs/README.md) (規則包目錄)
 
 > **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
 >
@@ -101,7 +101,7 @@ da-tools scaffold --tenant redis-prod --db redis,mariadb --namespaces ns1,ns2,ns
 
 # 含 routing 設定 — 產出即帶完整路由配置
 da-tools scaffold --tenant redis-prod --db redis,mariadb \
-                  --routing-receiver "https://hooks.slack.com/services/T.../B.../xxx" \
+                  --routing-receiver "https://hooks.slack.com/services/T../B../xxx" \
                   --routing-receiver-type slack --non-interactive -o /data
 
 # 查看支援的 DB 類型與指標
@@ -138,7 +138,7 @@ kubectl create configmap threshold-config \
 
 ConfigMap 變更後，exporter 會在 1-3 分鐘內自動 hot-reload（K8s propagation + SHA-256 watcher），不需重啟 Pod。
 
-> 詳細的三種注入方式（Helm / kubectl / GitOps）參見 [threshold-exporter README — K8s 部署與配置管理](../components/threshold-exporter/README.md#k8s-部署與配置管理)。
+> 詳細的三種注入方式（Helm / kubectl / GitOps）參見 [threshold-exporter README — K8s 部署與配置管理](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理)。
 
 ---
 
@@ -203,7 +203,7 @@ kubectl create configmap prometheus-rules-custom \
 #    若已有 custom rule pack slot，ConfigMap 建立後自動掛載
 ```
 
-> **Helm 使用者**：也可將 recording/alert rules 整合至 Helm chart 的 values 中統一管理。詳見 [threshold-exporter README](../components/threshold-exporter/README.md#k8s-部署與配置管理)。
+> **Helm 使用者**：也可將 recording/alert rules 整合至 Helm chart 的 values 中統一管理。詳見 [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理)。
 
 ### 聚合模式與 Auto-Suppression
 
@@ -303,7 +303,7 @@ tenants:
 | **4.4 Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum 用於「叢集總量」(慢查詢看整體) |
 | **4.5 百分比計算** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | 百分比計算在 Recording Rule 完成 |
 
-> **簡潔版本**：4.2-4.5 只需套用 4.1 的三件套模板，只改指標名稱與 Tenant Config 的 key。平台側的 Alert Rule 結構始終如一。詳見 [Rule Packs ALERT-REFERENCE](../rule-packs/ALERT-REFERENCE.md) 查實際規則。
+> **簡潔版本**：4.2-4.5 只需套用 4.1 的三件套模板，只改指標名稱與 Tenant Config 的 key。平台側的 Alert Rule 結構始終如一。詳見 [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) 查實際規則。
 
 ---
 
@@ -527,7 +527,7 @@ tenant:<component>_<metric>:<aggregation_function>
 6. 在 `_defaults.yaml` 加入預設閾值
 7. 用 `da-tools scaffold` 產生 tenant config
 
-完整 Rule Pack 結構參見 [rule-packs/README.md](../rule-packs/README.md)。
+完整 Rule Pack 結構參見 [rule-packs/README.md](rule-packs/README.md)。
 
 ---
 
@@ -757,7 +757,7 @@ da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](./migration-guide.en.md) | ⭐⭐⭐ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ⭐⭐⭐ |
 | ["Tenant 快速入門指南"](getting-started/for-tenants.md) | ⭐⭐ |
 | ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |

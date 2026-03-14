@@ -2,14 +2,14 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.0.0-preview.2
+version: v2.0.0-preview.3
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
 
 > **v2.0.0-preview** | Audience: DBAs, Database Administrators, Domain Experts
 >
-> Related docs: [Rule Packs](../../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
+> Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 
 ## Three Things You Need to Know
 
@@ -102,7 +102,7 @@ alert_rules:
 Validate new rules:
 
 ```bash
-python3 scripts/tools/lint_custom_rules.py \
+python3 scripts/tools/ops/lint_custom_rules.py \
   --rule-pack rule-packs/mariadb.yaml \
   --check
 ```
@@ -192,18 +192,18 @@ annotations:
 
 ```bash
 # 1. Reverse-analyze existing configuration
-python3 scripts/tools/onboard_platform.py \
+python3 scripts/tools/ops/onboard_platform.py \
   --existing-prometheus-rules /path/to/rules.yaml \
   --output-hints onboard-hints.json
 
 # 2. Migrate rules (AST + Triage + Prefix + Dictionary)
-python3 scripts/tools/migrate_rule.py \
+python3 scripts/tools/ops/migrate_rule.py \
   --input-rule alert.yml \
   --output-rule-pack rule-packs/my-db.yaml \
   --tenant-prefix "my-tenant"
 
 # 3. Validate migration (Shadow Monitoring value diff)
-python3 scripts/tools/validate_migration.py \
+python3 scripts/tools/ops/validate_migration.py \
   --old-prometheus-url "http://old-prometheus:9090" \
   --new-prometheus-url "http://new-prometheus:9090" \
   --compare-range "7d"
@@ -214,7 +214,7 @@ python3 scripts/tools/validate_migration.py \
 Backtest in CI environment:
 
 ```bash
-python3 scripts/tools/backtest_threshold.py \
+python3 scripts/tools/ops/backtest_threshold.py \
   --rule-pack rule-packs/mariadb.yaml \
   --tenant my-tenant \
   --look-back "7d" \
@@ -228,7 +228,7 @@ Output: Shows how many times new thresholds would fire over past 7 days compared
 ### Lint Custom Rules
 
 ```bash
-python3 scripts/tools/lint_custom_rules.py \
+python3 scripts/tools/ops/lint_custom_rules.py \
   --config-dir conf.d/ \
   --deny-list "disable=.*production.*" \
   --naming-convention "^[A-Z][a-zA-Z0-9_]+$"
@@ -288,7 +288,7 @@ A: Extract common logic to shared Rule Pack, or define common profile in `_profi
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ★★★ |
-| ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ★★ |
-| ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](./migration-guide.en.md) | ★★ |
+| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ★★★ |
+| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ★★ |
+| ["Tenant Quick Start Guide"](for-tenants.en.md) | ★★ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |

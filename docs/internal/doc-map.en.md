@@ -10,7 +10,7 @@
 | `docs/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager Integration Guide |
 | `docs/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
-| `docs/cli-playground.jsx` | All | da-tools CLI Playground |
+| `docs/interactive/tools/cli-playground.jsx` | All | da-tools CLI Playground |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/context-diagram.md` (.en.md) | All | Project Context Diagram: Roles, Tools, and Product Interactions |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
@@ -32,8 +32,8 @@
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
-| `docs/playground.jsx` | All | Playground |
-| `docs/rule-pack-selector.jsx` | Platform Engineers, SREs | Rule Pack Selector |
+| `docs/interactive/tools/playground.jsx` | All | Playground |
+| `docs/interactive/tools/rule-pack-selector.jsx` | Platform Engineers, SREs | Rule Pack Selector |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics |

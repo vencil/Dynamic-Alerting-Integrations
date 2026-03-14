@@ -125,6 +125,7 @@ groups:
           severity: critical
         annotations:
           summary: "ClickHouse instance is DOWN"
+          summary_zh: "ClickHouse 實例已關閉"
 
       # --- Query Rate ---
       - alert: ClickHouseHighQueryRate
@@ -144,7 +145,11 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse query rate exceeds threshold"
+          summary_zh: "ClickHouse 查詢率超出閾值"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse query rate elevated — workload review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：ClickHouse 查詢率升高 — 工作負載審查"
+          description: "{{ $value | printf \"%.1f\" }} queries/sec exceeds threshold"
+          description_zh: "{{ $value | printf \"%.1f\" }} 次查詢/秒超出閾值"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -167,7 +172,11 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse active connections exceed threshold"
+          summary_zh: "ClickHouse 活動連線超出閾值"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse connections exceeded — client pool review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：ClickHouse 連線已超出 — client pool 審查"
+          description: "{{ $value | printf \"%.0f\" }} active connections"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個活動連線"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -190,7 +199,11 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse max part count per partition exceeds threshold (merge pressure)"
+          summary_zh: "ClickHouse partition 最大 part 數超出閾值（merge 壓力）"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse partition merge pressure — part count review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：ClickHouse partition merge 壓力 — part 數量審查"
+          description: "Part count: {{ $value | printf \"%.0f\" }} exceeds threshold"
+          description_zh: "Part 數量：{{ $value | printf \"%.0f\" }} 超出閾值"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -213,7 +226,11 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse replication queue size exceeds threshold"
+          summary_zh: "ClickHouse 複寫隊列大小超出閾值"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse replication queue high — replica health check"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：ClickHouse 複寫隊列過高 — replica 健康檢查"
+          description: "Queue size: {{ $value | printf \"%.0f\" }} tasks pending"
+          description_zh: "隊列大小：{{ $value | printf \"%.0f\" }} 個待處理任務"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -236,7 +253,11 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse memory tracking exceeds threshold"
+          summary_zh: "ClickHouse 記憶體追蹤超出閾值"
           platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ClickHouse memory usage high — resource sizing review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：ClickHouse 記憶體使用率過高 — 資源大小調整審查"
+          description: "Memory tracked: {{ $value | humanize1024 }}B"
+          description_zh: "追蹤的記憶體：{{ $value | humanize1024 }}B"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -250,3 +271,6 @@ groups:
           severity: warning
         annotations:
           summary: "ClickHouse failed query rate > 10/s"
+          summary_zh: "ClickHouse 查詢失敗率 > 10/秒"
+          description: "Failed query rate: {{ $value | printf \"%.1f\" }} queries/sec"
+          description_zh: "查詢失敗率：{{ $value | printf \"%.1f\" }} 次查詢/秒"
