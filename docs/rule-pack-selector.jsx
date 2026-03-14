@@ -129,6 +129,22 @@ const CATEGORIES = {
   infrastructure: 'Infrastructure'
 };
 
+// Dependency hints: selecting pack X suggests also enabling pack Y
+const DEPENDENCIES = {
+  mariadb:        { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  postgresql:     { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  redis:          { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  mongodb:        { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  elasticsearch:  { suggests: ['kubernetes', 'jvm'], reason: 'ES runs on JVM; K8s monitors container resources' },
+  oracle:         { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  db2:            { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  clickhouse:     { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
+  kafka:          { suggests: ['kubernetes', 'jvm'], reason: 'Kafka brokers run on JVM; K8s monitors pods' },
+  rabbitmq:       { suggests: ['kubernetes'], reason: 'Container resource alerts complement MQ monitoring' },
+  jvm:            { suggests: ['kubernetes'], reason: 'JVM apps typically run in K8s pods' },
+  nginx:          { suggests: ['kubernetes'], reason: 'Ingress/proxy pods benefit from K8s resource alerts' },
+};
+
 export default function RulePackSelector() {
   const [selected, setSelected] = useState(new Set());
   const [expandedPacks, setExpandedPacks] = useState(new Set());
@@ -248,6 +264,39 @@ ${generateHelmValues()}`;
                 <p className="text-sm font-semibold text-blue-900">Always Included</p>
                 <p className="text-sm text-blue-700">Operational and Platform rule packs are always included (infrastructure essentials)</p>
               </div>
+
+              {/* Dependency Hints */}
+              {(() => {
+                const hints = [];
+                selected.forEach(key => {
+                  const dep = DEPENDENCIES[key];
+                  if (dep) {
+                    dep.suggests.forEach(s => {
+                      if (!selected.has(s) && !hints.some(h => h.pack === s)) {
+                        hints.push({ pack: s, label: RULE_PACKS[s].label, from: RULE_PACKS[key].label, reason: dep.reason });
+                      }
+                    });
+                  }
+                });
+                return hints.length > 0 ? (
+                  <div className="mb-8 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm font-semibold text-amber-900 mb-2">Suggested Packs</p>
+                    {hints.map(h => (
+                      <div key={h.pack} className="flex items-center justify-between text-sm text-amber-800 py-1">
+                        <span>
+                          <strong>{h.label}</strong> — {h.reason}
+                        </span>
+                        <button
+                          onClick={() => toggleSelection(h.pack)}
+                          className="ml-3 px-2 py-0.5 text-xs font-medium bg-amber-200 text-amber-900 rounded hover:bg-amber-300 transition-colors"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
 
               {/* Service Categories */}
               <div className="space-y-8">

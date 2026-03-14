@@ -358,6 +358,70 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
   );
 };
 
+// A/B comparison helper: build all path keys with labels
+const ALL_PATHS = Object.entries(RECOMMENDATIONS).map(([key, rec]) => ({
+  key,
+  label: rec.title,
+}));
+
+const PathCompare = ({ currentKey, onClose }) => {
+  const [compareKey, setCompareKey] = useState(null);
+  const currentRec = RECOMMENDATIONS[currentKey];
+  const compareRec = compareKey ? RECOMMENDATIONS[compareKey] : null;
+
+  const currentDocs = new Set(currentRec.docs.map(d => d.path));
+  const compareDocs = compareRec ? new Set(compareRec.docs.map(d => d.path)) : new Set();
+  const sharedDocs = currentRec.docs.filter(d => compareDocs.has(d.path));
+  const onlyA = currentRec.docs.filter(d => !compareDocs.has(d.path));
+  const onlyB = compareRec ? compareRec.docs.filter(d => !currentDocs.has(d.path)) : [];
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-indigo-200 p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-bold text-gray-900">{t('路徑比較', 'Compare Paths')}</h3>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm">✕ {t('關閉', 'Close')}</button>
+      </div>
+      <div>
+        <label className="text-sm font-medium text-gray-700 block mb-2">{t('選擇另一條路徑比較：', 'Compare with another path:')}</label>
+        <select
+          value={compareKey || ''}
+          onChange={(e) => setCompareKey(e.target.value || null)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        >
+          <option value="">{t('-- 選擇路徑 --', '-- Select a path --')}</option>
+          {ALL_PATHS.filter(p => p.key !== currentKey).map(p => (
+            <option key={p.key} value={p.key}>{p.label}</option>
+          ))}
+        </select>
+      </div>
+      {compareRec && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+          <div>
+            <h4 className="font-semibold text-blue-700 mb-2">{t('僅在當前路徑', 'Only in your path')} ({onlyA.length})</h4>
+            {onlyA.map(d => (
+              <div key={d.path} className="py-1 text-gray-700">{d.name}</div>
+            ))}
+            {onlyA.length === 0 && <div className="text-gray-400 italic">{t('無', 'None')}</div>}
+          </div>
+          <div>
+            <h4 className="font-semibold text-green-700 mb-2">{t('共同文件', 'Shared')} ({sharedDocs.length})</h4>
+            {sharedDocs.map(d => (
+              <div key={d.path} className="py-1 text-gray-700">{d.name}</div>
+            ))}
+          </div>
+          <div>
+            <h4 className="font-semibold text-purple-700 mb-2">{t('僅在比較路徑', 'Only in compared path')} ({onlyB.length})</h4>
+            {onlyB.map(d => (
+              <div key={d.path} className="py-1 text-gray-700">{d.name}</div>
+            ))}
+            {onlyB.length === 0 && <div className="text-gray-400 italic">{t('無', 'None')}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => {
   const total = recommendations.docs.length;
   const done = recommendations.docs.filter(d => readDocs.has(d.path)).length;
@@ -418,6 +482,7 @@ export default function GettingStartedWizard() {
     hasInitialOption ? initial.role + '-' + initial.option : null
   );
   const [readDocs, setReadDocs] = useState(initial.readDocs || new Set());
+  const [showCompare, setShowCompare] = useState(false);
 
   const toggleReadDoc = (docPath) => {
     setReadDocs(prev => {
@@ -564,12 +629,24 @@ export default function GettingStartedWizard() {
           <div className="space-y-6">
             <RecommendationsSummary recommendations={recommendations} readDocs={readDocs} onToggleRead={toggleReadDoc} />
 
+            {showCompare && recommendationKey && (
+              <PathCompare currentKey={recommendationKey} onClose={() => setShowCompare(false)} />
+            )}
+
             <div className="flex flex-col sm:flex-row gap-3">
               <button
                 onClick={() => setStep(1)}
                 className="flex-1 px-4 py-3 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
               >
                 Back
+              </button>
+              <button
+                onClick={() => setShowCompare(!showCompare)}
+                className={`flex-1 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
+                  showCompare ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                }`}
+              >
+                {showCompare ? t('隱藏比較', 'Hide Compare') : t('比較路徑', 'Compare Paths')}
               </button>
               <button
                 onClick={handleStartOver}

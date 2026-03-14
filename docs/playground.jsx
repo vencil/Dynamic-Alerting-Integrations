@@ -459,10 +459,29 @@ function computeDiff(current, template) {
   return result;
 }
 
+// Share link: compress YAML into URL-safe base64
+function encodeYAML(yamlText) {
+  try { return btoa(unescape(encodeURIComponent(yamlText))); } catch { return ''; }
+}
+function decodeYAML(encoded) {
+  try { return decodeURIComponent(escape(atob(encoded))); } catch { return null; }
+}
+function readPlaygroundHash() {
+  try {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const encoded = params.get('yaml');
+    const tpl = params.get('tpl');
+    return { yaml: encoded ? decodeYAML(encoded) : null, tpl: tpl || null };
+  } catch { return { yaml: null, tpl: null }; }
+}
+
 export default function TenantYAMLPlayground() {
-  const [yaml, setYaml] = useState(YAML_TEMPLATES.mariadb);
-  const [selectedTemplate, setSelectedTemplate] = useState('mariadb');
+  const initial = readPlaygroundHash();
+  const [yaml, setYaml] = useState(initial.yaml || YAML_TEMPLATES[initial.tpl] || YAML_TEMPLATES.mariadb);
+  const [selectedTemplate, setSelectedTemplate] = useState(initial.tpl || 'mariadb');
   const [showDiff, setShowDiff] = useState(false);
+  const [shareLink, setShareLink] = useState('');
+  const [shareCopied, setShareCopied] = useState(false);
 
   const validation = useMemo(() => validateTenantConfig(yaml), [yaml]);
   const diff = useMemo(() => computeDiff(yaml, YAML_TEMPLATES[selectedTemplate]), [yaml, selectedTemplate]);
@@ -486,6 +505,17 @@ export default function TenantYAMLPlayground() {
     a.download = 'tenant-config.yaml';
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleShareLink = () => {
+    const encoded = encodeYAML(yaml);
+    const base = window.location.origin + window.location.pathname + window.location.search;
+    const link = base + '#yaml=' + encoded;
+    setShareLink(link);
+    navigator.clipboard.writeText(link).then(() => {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2500);
+    });
   };
 
   return (
@@ -530,6 +560,14 @@ export default function TenantYAMLPlayground() {
               className="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
             >
               Export .yaml
+            </button>
+            <button
+              onClick={handleShareLink}
+              className={`px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                shareCopied ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+              }`}
+            >
+              {shareCopied ? '✓ Link Copied' : 'Share Link'}
             </button>
           </div>
         </div>

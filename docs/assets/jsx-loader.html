@@ -90,6 +90,7 @@
 </head>
 <body>
 <a class="back-home" href="../interactive/index.html">← Tools</a>
+<button class="theme-toggle" id="kbd-hint" title="Keyboard shortcuts (?)" style="right:100px;font-size:0.75rem;width:auto;padding:0 10px" onclick="document.getElementById('kbd-overlay').style.display='flex'">?</button>
 <button class="theme-toggle" id="lang-toggle" title="切換語言 / Switch language" style="right:56px;font-size:0.75rem;width:auto;padding:0 10px">EN</button>
 <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
 <div id="loading"><div class="spinner"></div><div class="label">Loading component…</div></div>
@@ -241,6 +242,54 @@
   btn.addEventListener('click', function() {
     document.documentElement.classList.toggle('dark');
     updateIcon();
+  });
+})();
+
+// Global keyboard shortcuts
+(function() {
+  // Overlay element
+  var overlay = document.createElement('div');
+  overlay.id = 'kbd-overlay';
+  overlay.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center';
+  overlay.innerHTML = '<div style="background:#1e293b;color:#e2e8f0;border-radius:12px;padding:32px 40px;max-width:380px;width:90%;font-family:system-ui,sans-serif">' +
+    '<h3 style="margin:0 0 16px;font-size:1.1rem;font-weight:700;color:#38bdf8">Keyboard Shortcuts</h3>' +
+    '<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:0.88rem">' +
+    '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">?</kbd><span>Show this help</span>' +
+    '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">d</kbd><span>Toggle dark mode</span>' +
+    '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">l</kbd><span>Toggle language</span>' +
+    '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">h</kbd><span>Go to Hub</span>' +
+    '<kbd style="background:#334155;padding:2px 8px;border-radius:4px;font-family:monospace;text-align:center">Esc</kbd><span>Close overlay</span>' +
+    '</div>' +
+    '<p style="margin-top:16px;font-size:0.75rem;color:#64748b">Press <kbd style="background:#334155;padding:1px 6px;border-radius:3px;font-family:monospace">?</kbd> or <kbd style="background:#334155;padding:1px 6px;border-radius:3px;font-family:monospace">Esc</kbd> to close</p>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  function toggleOverlay() {
+    overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+  }
+
+  document.addEventListener('keydown', function(e) {
+    // Skip if user is typing in an input/textarea
+    var tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.contentEditable === 'true') return;
+
+    if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
+      e.preventDefault();
+      toggleOverlay();
+    } else if (e.key === 'Escape') {
+      overlay.style.display = 'none';
+    } else if (e.key === 'd' && !e.ctrlKey && !e.metaKey) {
+      document.getElementById('theme-toggle').click();
+    } else if (e.key === 'l' && !e.ctrlKey && !e.metaKey) {
+      document.getElementById('lang-toggle').click();
+    } else if (e.key === 'h' && !e.ctrlKey && !e.metaKey) {
+      window.location.href = '../interactive/index.html';
+    }
+  });
+
+  // Close overlay on click outside
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) overlay.style.display = 'none';
   });
 })();
 

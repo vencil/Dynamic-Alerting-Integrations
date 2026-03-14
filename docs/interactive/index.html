@@ -500,8 +500,8 @@
     <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/benchmarks.en.md">
       <span class="link-icon">📊</span> Benchmarks
     </a>
-    <a class="link-item" href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md">
-      <span class="link-icon">📝</span> Changelog
+    <a class="link-item" href="changelog.html">
+      <span class="link-icon">📝</span> Changelog Timeline
     </a>
   </div>
 
@@ -514,6 +514,37 @@
   </p>
 </footer>
 
-<!-- Mermaid init removed: using interactive SVG diagram -->
+<!-- Dynamic badge data: load stats from badge-data.json -->
+<script>
+(function() {
+  fetch('../assets/badge-data.json')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      var stats = document.querySelectorAll('.stat');
+      var mapping = [
+        { key: 'rulePacks', idx: 0 },
+        { key: 'totalRules', idx: 1 },
+        { key: 'cliTools', idx: 2 },
+        { key: 'docPages', idx: 3 }
+      ];
+      mapping.forEach(function(m) {
+        if (stats[m.idx] && data[m.key] !== undefined) {
+          var val = stats[m.idx].querySelector('.stat-value');
+          if (val) val.textContent = data[m.key];
+        }
+      });
+      // Update footer version
+      var footer = document.querySelector('footer p a');
+      if (footer && data.version) {
+        footer.parentElement.innerHTML = footer.parentElement.innerHTML.replace(
+          /v[\d.]+-?[a-z.]*\d*/,
+          data.version
+        );
+      }
+    })
+    .catch(function() { /* badge-data.json not available, keep defaults */ });
+})();
+</script>
 </body>
 </html>
