@@ -14,6 +14,7 @@ const COMMANDS = {
     label: 'check-alert',
     description: 'Query alert status for a specific tenant',
     category: 'Prometheus API Tools',
+    popular: true,
     args: [
       { name: 'alert_name', label: 'Alert Name', required: true, placeholder: 'e.g., HighMemoryUsage' },
       { name: 'tenant', label: 'Tenant ID', required: true, placeholder: 'e.g., db-a' }
@@ -26,6 +27,7 @@ const COMMANDS = {
     label: 'diagnose',
     description: 'Single-tenant comprehensive health check',
     category: 'Prometheus API Tools',
+    popular: true,
     args: [],
     flags: [
       { name: '--tenant', label: 'Tenant ID', required: true, placeholder: 'e.g., db-a' },
@@ -82,6 +84,7 @@ const COMMANDS = {
     label: 'scaffold',
     description: 'Generate new tenant configuration',
     category: 'Filesystem Tools',
+    popular: true,
     args: [],
     flags: [
       { name: '--non-interactive', label: 'Non-Interactive Mode', required: false, type: 'checkbox' },
@@ -106,6 +109,7 @@ const COMMANDS = {
     label: 'validate-config',
     description: 'One-stop config validation: YAML + schema + routing + policy + versions',
     category: 'Filesystem Tools',
+    popular: true,
     args: [],
     flags: [
       { name: '--config-dir', label: 'Config Directory', required: true, placeholder: '/etc/config' },
@@ -173,6 +177,8 @@ export default function CLIPlayground() {
   const [args, setArgs] = useState(initial.args);
   const [flags, setFlags] = useState(initial.flags);
   const [copied, setCopied] = useState(false);
+  const [searchFilter, setSearchFilter] = useState('');
+  const [showPopularOnly, setShowPopularOnly] = useState(false);
 
   const command = COMMANDS[selectedCommand];
   const network = NETWORK_MODES[networkMode];
@@ -239,6 +245,11 @@ export default function CLIPlayground() {
 
   const commandsByCategory = {};
   Object.entries(COMMANDS).forEach(([key, cmd]) => {
+    // Apply search filter
+    const q = searchFilter.toLowerCase();
+    if (q && !cmd.label.toLowerCase().includes(q) && !cmd.description.toLowerCase().includes(q) && !cmd.category.toLowerCase().includes(q)) return;
+    // Apply popular filter
+    if (showPopularOnly && !cmd.popular) return;
     if (!commandsByCategory[cmd.category]) {
       commandsByCategory[cmd.category] = [];
     }
@@ -312,6 +323,26 @@ export default function CLIPlayground() {
               {/* Command Selection */}
               <div>
                 <h3 className="text-sm font-semibold text-slate-900 mb-3">Select Command</h3>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    type="text"
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    placeholder="Search commands..."
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 text-sm"
+                  />
+                  <button
+                    onClick={() => setShowPopularOnly(!showPopularOnly)}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                      showPopularOnly ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-slate-100 text-slate-600 border border-slate-300 hover:bg-slate-200'
+                    }`}
+                  >
+                    ★ Popular
+                  </button>
+                </div>
+                {Object.keys(commandsByCategory).length === 0 && (
+                  <p className="text-sm text-slate-500 py-4 text-center">No commands match your search.</p>
+                )}
                 <div className="space-y-2">
                   {Object.entries(commandsByCategory).map(([category, cmds]) => (
                     <div key={category}>
@@ -321,13 +352,14 @@ export default function CLIPlayground() {
                           <button
                             key={cmd.key}
                             onClick={() => handleCommandChange(cmd.key)}
-                            className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                            className={`w-full text-left px-3 py-2 rounded text-sm transition-colors flex items-center gap-2 ${
                               selectedCommand === cmd.key
                                 ? 'bg-blue-600 text-white font-medium'
                                 : 'bg-slate-100 text-slate-900 hover:bg-slate-200'
                             }`}
                           >
-                            {cmd.label}
+                            <span className="flex-1">{cmd.label}</span>
+                            {cmd.popular && <span className="text-amber-500 text-xs" title="Commonly used">★</span>}
                           </button>
                         ))}
                       </div>

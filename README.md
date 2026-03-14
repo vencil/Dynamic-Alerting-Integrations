@@ -13,6 +13,10 @@ lang: zh
 
 多租戶動態警報平台 — 配置驅動閾值管理、15 個預載規則包、租戶零 PromQL、三態運營模式、HA 部署。
 
+> **不知道從哪裡開始？** 試試 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — 回答幾個問題，取得為你量身打造的閱讀路徑。
+>
+> 或依角色直接開始：[Platform Engineer](docs/getting-started/for-platform-engineers.md) · [Domain Expert / DBA](docs/getting-started/for-domain-experts.md) · [Tenant Team](docs/getting-started/for-tenants.md)
+
 ---
 
 ## 核心問題與解法
@@ -170,7 +174,7 @@ make port-forward
 | 文件 | 說明 |
 |------|------|
 | [架構與設計](docs/architecture-and-design.md) | 核心設計、HA、Rule Pack 架構 |
-| [快速入門（按角色）](docs/getting-started/) | Platform Engineers · Domain Experts · Tenants |
+| 快速入門（按角色） | [Platform Engineer](docs/getting-started/for-platform-engineers.md) · [Domain Expert](docs/getting-started/for-domain-experts.md) · [Tenant](docs/getting-started/for-tenants.md) |
 | [遷移指南](docs/migration-guide.md) | 導入流程、AST 引擎、Shadow Monitoring |
 | [BYO Prometheus](docs/byo-prometheus-integration.md) | 整合既有 Prometheus/Thanos |
 | [BYO Alertmanager](docs/byo-alertmanager-integration.md) | Alertmanager 整合與動態 Routing |

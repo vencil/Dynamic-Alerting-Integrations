@@ -13,6 +13,10 @@ lang: en
 
 Multi-tenant dynamic alerting platform — config-driven threshold management, 15 pre-loaded rule packs, zero PromQL for tenants, three operational modes, HA deployment.
 
+> **Not sure where to start?** Try the [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — answer a few questions and get a personalized reading path.
+>
+> Or jump in by role: [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert / DBA](docs/getting-started/for-domain-experts.en.md) · [Tenant Team](docs/getting-started/for-tenants.en.md)
+
 ---
 
 ## Core Problems & Solutions
@@ -170,7 +174,7 @@ Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](do
 | Document | Description |
 |----------|-------------|
 | [Architecture & Design](docs/architecture-and-design.en.md) | Core design, HA, Rule Pack architecture |
-| [Getting Started (by role)](docs/getting-started/) | Platform Engineers · Domain Experts · Tenants |
+| Getting Started (by role) | [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert](docs/getting-started/for-domain-experts.en.md) · [Tenant](docs/getting-started/for-tenants.en.md) |
 | [Migration Guide](docs/migration-guide.en.md) | Onboarding flow, AST engine, Shadow Monitoring |
 | [BYO Prometheus](docs/byo-prometheus-integration.en.md) | Integrate with existing Prometheus/Thanos |
 | [BYO Alertmanager](docs/byo-alertmanager-integration.en.md) | Alertmanager integration & dynamic routing |

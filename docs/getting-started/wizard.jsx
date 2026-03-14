@@ -20,24 +20,60 @@ function docUrl(relativePath) {
   return `${REPO_BASE}/${resolved}`;
 }
 
+// Inline concept glossary — helps newcomers understand platform terminology
+const GLOSSARY = {
+  "Rule Pack": "A pre-built bundle of Prometheus recording rules and alert rules for a specific technology (e.g., MariaDB, Redis). You pick the ones you need — no PromQL required.",
+  "Threshold": "A numeric limit (like \"80% CPU\") that triggers an alert. Each tenant sets their own values in simple YAML.",
+  "Tenant": "A team or namespace that owns a set of services. Each tenant has isolated config and alert routing.",
+  "Three-State Mode": "Every config key supports three states: custom value, default (omit the key), or explicitly disabled (set to \"disable\").",
+  "Recording Rule": "A Prometheus rule that pre-computes metrics for faster queries. Rule Packs include these automatically.",
+  "Severity Dedup": "When a Critical alert fires, the matching Warning is automatically suppressed to reduce noise.",
+};
+
+const GlossaryTip = ({ term }) => {
+  const [show, setShow] = useState(false);
+  const def = GLOSSARY[term];
+  if (!def) return <span className="font-semibold">{term}</span>;
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setShow(!show)}
+        className="font-semibold text-blue-600 underline decoration-dotted underline-offset-4 cursor-help"
+      >
+        {term}
+      </button>
+      {show && (
+        <span className="absolute z-10 left-0 top-full mt-1 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
+          {def}
+          <button type="button" onClick={() => setShow(false)} className="block mt-1 text-blue-300 text-xs hover:underline">close</button>
+        </span>
+      )}
+    </span>
+  );
+};
+
 const ROLES = [
   {
     id: "platform",
     label: "Platform Engineer",
     icon: "⚙️",
-    desc: "Set up and manage the alerting platform",
+    desc: "Deploy, scale, and operate the alerting infrastructure",
+    hint: "You manage Kubernetes, Prometheus, or Helm in your org.",
   },
   {
     id: "domain",
     label: "Domain Expert (DBA)",
     icon: "🗄️",
-    desc: "Configure thresholds for your databases",
+    desc: "Define what \"unhealthy\" means for your databases",
+    hint: "You know your DB internals and want to set the right thresholds.",
   },
   {
     id: "tenant",
     label: "Tenant Team",
     icon: "👥",
-    desc: "Manage alerts for your team's services",
+    desc: "Get alerts for your team's services — no PromQL needed",
+    hint: "You just want to receive the right alerts in the right channel.",
   },
 ];
 
@@ -329,7 +365,8 @@ const RoleCard = ({ role, isSelected, onClick }) => {
     >
       <div className="text-3xl mb-3">{role.icon}</div>
       <h3 className="text-lg font-bold text-gray-900 mb-2">{role.label}</h3>
-      <p className="text-sm text-gray-600">{role.desc}</p>
+      <p className="text-sm text-gray-600 mb-2">{role.desc}</p>
+      {role.hint && <p className="text-xs text-gray-400 italic">{role.hint}</p>}
     </button>
   );
 };
@@ -462,13 +499,21 @@ export default function GettingStartedWizard() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
       <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
         {/* Header */}
-        <div className="text-center mb-12">
+        <div className="text-center mb-8">
           <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-3">
             Dynamic Alerting Platform
           </h1>
-          <p className="text-lg text-gray-600">
+          <p className="text-lg text-gray-600 mb-4">
             Find your personalized learning path in seconds
           </p>
+          {step === 0 && (
+            <div className="inline-flex flex-wrap justify-center gap-2 text-xs text-gray-500">
+              <span>New to the platform? Tap any term to learn more:</span>
+              {Object.keys(GLOSSARY).map(term => (
+                <GlossaryTip key={term} term={term} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Progress Indicator */}
