@@ -58,7 +58,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - **jsx-loader**: `docs/assets/jsx-loader.html` — 瀏覽器端 JSX transpiler + `TOOL_META`（related footer）
 - **離線支援**: `make vendor-download` → `docs/assets/vendor/`，jsx-loader 自動偵測
 
-變更互動工具時：先更新 `tool-registry.yaml` → 依 `doc-map.md` § Change Impact Matrix 連動 → `make lint-docs` 驗證。
+變更互動工具時：先更新 `tool-registry.yaml` → `make sync-tools`（自動同步 Hub + TOOL_META）→ 依 `doc-map.md` § Change Impact Matrix 連動 .md callout → `make lint-docs` 驗證。
 
 ## 文件導覽
 

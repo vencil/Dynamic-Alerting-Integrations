@@ -215,6 +215,9 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/bump_docs.py --check
 
+sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
+	@python3 ./scripts/tools/sync_tool_registry.py --verbose
+
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes \
