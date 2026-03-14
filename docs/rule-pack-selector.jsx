@@ -188,6 +188,15 @@ ${configMapNames.map(cm => `        - configMap:
       .join('\n');
   };
 
+  const generateHelmValues = () => {
+    const enabled = Array.from(selected).sort();
+    const disabled = Object.keys(RULE_PACKS).filter(k => !selected.has(k) && !RULE_PACKS[k].required).sort();
+    const lines = ['rulePacks:'];
+    enabled.forEach(k => lines.push(`  ${k}: { enabled: true }`));
+    disabled.forEach(k => lines.push(`  ${k}: { enabled: false }`));
+    return lines.join('\n');
+  };
+
   const yamlOutput = `# Prometheus Rule Packs Configuration
 # Auto-generated from Rule Pack Selector
 
@@ -196,7 +205,11 @@ ${generateProjectedVolume()}
 
 # Add to prometheus.yml rule_files:
 rule_files:
-${generatePrometheusRuleFiles()}`;
+${generatePrometheusRuleFiles()}
+
+# ── Helm values-override.yaml ──
+# Copy below into your values-override.yaml for helm install:
+${generateHelmValues()}`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(yamlOutput);

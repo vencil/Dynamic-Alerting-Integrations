@@ -90,6 +90,7 @@
 </head>
 <body>
 <a class="back-home" href="../interactive/index.html">← Tools</a>
+<button class="theme-toggle" id="lang-toggle" title="切換語言 / Switch language" style="right:56px;font-size:0.75rem;width:auto;padding:0 10px">EN</button>
 <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
 <div id="loading"><div class="spinner"></div><div class="label">Loading component…</div></div>
 <div id="error"></div>
@@ -98,6 +99,13 @@
 (function() {
   var params = new URLSearchParams(window.location.search);
   var componentPath = params.get('component');
+
+  // Detect language: ?lang=zh, or navigator.language, default 'en'
+  var langParam = params.get('lang');
+  var detectedLang = langParam || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en');
+  window.__DA_LANG = detectedLang;
+  // Expose a helper components can import: window.__t(zhText, enText)
+  window.__t = function(zh, en) { return window.__DA_LANG === 'zh' ? zh : en; };
 
   if (!componentPath) {
     showError('No component specified. Use ?component=playground.jsx');
@@ -206,6 +214,21 @@
     document.body.appendChild(script);
     window.Babel.transformScriptTags();
   }
+})();
+
+// Language toggle
+(function() {
+  var btn = document.getElementById('lang-toggle');
+  function updateLbl() { btn.textContent = window.__DA_LANG === 'zh' ? '中' : 'EN'; }
+  updateLbl();
+  btn.addEventListener('click', function() {
+    window.__DA_LANG = window.__DA_LANG === 'zh' ? 'en' : 'zh';
+    updateLbl();
+    // Reload component with new lang
+    var url = new URL(window.location.href);
+    url.searchParams.set('lang', window.__DA_LANG);
+    window.location.href = url.toString();
+  });
 })();
 
 // Dark mode toggle

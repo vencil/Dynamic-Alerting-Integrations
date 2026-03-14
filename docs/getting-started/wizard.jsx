@@ -1,5 +1,8 @@
 import { useState } from "react";
 
+// i18n helper — picks zh or en based on jsx-loader's detected language
+const t = window.__t || ((zh, en) => en);
+
 // Base URL for doc links — GitHub renders .md files natively
 const REPO_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main";
 
@@ -316,41 +319,48 @@ const OptionCard = ({ option, isSelected, onClick, icon = null }) => {
   );
 };
 
-const DocumentLink = ({ doc }) => {
+const DocumentLink = ({ doc, isRead, onToggleRead }) => {
   const isPriority = doc.priority === "start-here";
   const href = docUrl(doc.path);
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`block p-4 rounded-lg border transition-all hover:shadow-md ${
-        isPriority
-          ? "border-amber-300 bg-amber-50 hover:bg-amber-100"
-          : "border-gray-200 bg-white hover:bg-gray-50"
-      }`}
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <h4 className="font-semibold text-gray-900 text-sm">
-            {doc.name}
-            {isPriority && (
-              <span className="ml-2 inline-block px-2 py-1 bg-amber-200 text-amber-900 text-xs font-bold rounded">
-                START HERE
-              </span>
+    <div className={`flex items-center gap-3 p-4 rounded-lg border transition-all hover:shadow-md ${
+      isRead ? "border-green-300 bg-green-50" : isPriority ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : "border-gray-200 bg-white hover:bg-gray-50"
+    }`}>
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); onToggleRead(doc.path); }}
+        className={`flex-shrink-0 w-6 h-6 rounded border-2 flex items-center justify-center transition-colors ${
+          isRead ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-blue-400"
+        }`}
+        title={isRead ? t("標記為未讀", "Mark as unread") : t("標記為已讀", "Mark as read")}
+      >
+        {isRead && <span className="text-xs font-bold">✓</span>}
+      </button>
+      <a href={href} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <h4 className={`font-semibold text-sm ${isRead ? "text-green-800 line-through" : "text-gray-900"}`}>
+              {doc.name}
+              {isPriority && !isRead && (
+                <span className="ml-2 inline-block px-2 py-1 bg-amber-200 text-amber-900 text-xs font-bold rounded">
+                  START HERE
+                </span>
+              )}
+            </h4>
+            {doc.summary && (
+              <p className="text-xs text-gray-500 mt-1 leading-relaxed">{doc.summary}</p>
             )}
-          </h4>
-          {doc.summary && (
-            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{doc.summary}</p>
-          )}
+          </div>
+          <div className="ml-3 text-lg">→</div>
         </div>
-        <div className="ml-3 text-lg">→</div>
-      </div>
-    </a>
+      </a>
+    </div>
   );
 };
 
-const RecommendationsSummary = ({ recommendations }) => {
+const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => {
+  const total = recommendations.docs.length;
+  const done = recommendations.docs.filter(d => readDocs.has(d.path)).length;
   return (
     <div className="space-y-6">
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
@@ -358,13 +368,19 @@ const RecommendationsSummary = ({ recommendations }) => {
           {recommendations.title}
         </h2>
         <p className="text-gray-600">
-          Click any document to read. Start with "START HERE" first.
+          {t('點擊任一文件開始閱讀，優先從「START HERE」開始。', 'Click any document to read. Start with "START HERE" first.')}
         </p>
+        <div className="mt-3 flex items-center gap-3">
+          <div className="flex-1 h-2 bg-blue-100 rounded-full overflow-hidden">
+            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }} />
+          </div>
+          <span className="text-sm font-medium text-gray-600">{done}/{total}</span>
+        </div>
       </div>
 
       <div className="space-y-3">
         {recommendations.docs.map((doc, idx) => (
-          <DocumentLink key={idx} doc={doc} />
+          <DocumentLink key={idx} doc={doc} isRead={readDocs.has(doc.path)} onToggleRead={onToggleRead} />
         ))}
       </div>
     </div>
@@ -375,14 +391,20 @@ const RecommendationsSummary = ({ recommendations }) => {
 function readHash() {
   try {
     const params = new URLSearchParams(window.location.hash.slice(1));
-    return { role: params.get('role'), option: params.get('option') };
-  } catch (e) { return { role: null, option: null }; }
+    const read = params.get('read');
+    return {
+      role: params.get('role'),
+      option: params.get('option'),
+      readDocs: read ? new Set(read.split(',')) : new Set(),
+    };
+  } catch (e) { return { role: null, option: null, readDocs: new Set() }; }
 }
 
-function writeHash(role, option) {
+function writeHash(role, option, readDocs) {
   const parts = [];
   if (role) parts.push('role=' + role);
   if (option) parts.push('option=' + option);
+  if (readDocs && readDocs.size > 0) parts.push('read=' + [...readDocs].join(','));
   window.history.replaceState(null, '', parts.length ? '#' + parts.join('&') : window.location.pathname + window.location.search);
 }
 
@@ -395,6 +417,16 @@ export default function GettingStartedWizard() {
   const [recommendationKey, setRecommendationKey] = useState(
     hasInitialOption ? initial.role + '-' + initial.option : null
   );
+  const [readDocs, setReadDocs] = useState(initial.readDocs || new Set());
+
+  const toggleReadDoc = (docPath) => {
+    setReadDocs(prev => {
+      const next = new Set(prev);
+      if (next.has(docPath)) next.delete(docPath); else next.add(docPath);
+      writeHash(selectedRole, selectedOption, next);
+      return next;
+    });
+  };
 
   const getOptionsList = () => {
     if (selectedRole === "platform") return GOALS.platform;
@@ -415,7 +447,7 @@ export default function GettingStartedWizard() {
     setSelectedOption(null);
     setRecommendationKey(null);
     setStep(1);
-    writeHash(roleId, null);
+    writeHash(roleId, null, readDocs);
   };
 
   const handleOptionSelect = (optionId) => {
@@ -423,7 +455,7 @@ export default function GettingStartedWizard() {
     const key = selectedRole === "platform" ? `platform-${optionId}` : selectedRole === "domain" ? `domain-${optionId}` : `tenant-${optionId}`;
     setRecommendationKey(key);
     setStep(2);
-    writeHash(selectedRole, optionId);
+    writeHash(selectedRole, optionId, readDocs);
   };
 
   const handleStartOver = () => {
@@ -431,7 +463,8 @@ export default function GettingStartedWizard() {
     setSelectedRole(null);
     setSelectedOption(null);
     setRecommendationKey(null);
-    writeHash(null, null);
+    setReadDocs(new Set());
+    writeHash(null, null, null);
   };
 
   const selectedRoleObj = ROLES.find((r) => r.id === selectedRole);
@@ -447,14 +480,14 @@ export default function GettingStartedWizard() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-3">
-            Dynamic Alerting Platform
+            {t("動態警報平台", "Dynamic Alerting Platform")}
           </h1>
           <p className="text-lg text-gray-600 mb-4">
-            Find your personalized learning path in seconds
+            {t("幾秒內找到你的專屬學習路徑", "Find your personalized learning path in seconds")}
           </p>
           {step === 0 && (
             <div className="inline-flex flex-wrap justify-center gap-2 text-xs text-gray-500">
-              <span>New to the platform? Tap any term to learn more:</span>
+              <span>{t("第一次接觸？點擊術語了解更多：", "New to the platform? Tap any term to learn more:")}</span>
               {Object.keys(GLOSSARY).map(term => (
                 <GlossaryTip key={term} term={term} />
               ))}
@@ -470,7 +503,7 @@ export default function GettingStartedWizard() {
           <div className="space-y-6">
             <div className="bg-white rounded-lg shadow-sm p-8">
               <h2 className="text-2xl font-bold text-gray-900 mb-8">
-                Who are you?
+                {t("你的角色是？", "Who are you?")}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {ROLES.map((role) => (
@@ -499,10 +532,9 @@ export default function GettingStartedWizard() {
 
               <div className="mb-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                  {selectedRole === "platform" && "What's your goal?"}
-                  {selectedRole === "domain" &&
-                    "What database do you manage?"}
-                  {selectedRole === "tenant" && "What do you need help with?"}
+                  {selectedRole === "platform" && t("你的目標是？", "What's your goal?")}
+                  {selectedRole === "domain" && t("你管理哪種資料庫？", "What database do you manage?")}
+                  {selectedRole === "tenant" && t("你需要什麼幫助？", "What do you need help with?")}
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {optionsList.map((option) => (
@@ -530,7 +562,7 @@ export default function GettingStartedWizard() {
         {/* Step 3: Recommendations */}
         {step === 2 && recommendations && (
           <div className="space-y-6">
-            <RecommendationsSummary recommendations={recommendations} />
+            <RecommendationsSummary recommendations={recommendations} readDocs={readDocs} onToggleRead={toggleReadDoc} />
 
             <div className="flex flex-col sm:flex-row gap-3">
               <button

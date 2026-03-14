@@ -15,6 +15,15 @@ const COMMANDS = {
     description: 'Query alert status for a specific tenant',
     category: 'Prometheus API Tools',
     popular: true,
+    preview: `$ da-tools check-alert HighMemoryUsage db-a
+
+Alert:    HighMemoryUsage
+Tenant:   db-a
+State:    firing
+Severity: warning
+Value:    87.3% (threshold: 80%)
+Since:    2026-03-14T02:15:00Z (12m ago)
+Labels:   {tenant="db-a", severity="warning", namespace="db-a"}`,
     args: [
       { name: 'alert_name', label: 'Alert Name', required: true, placeholder: 'e.g., HighMemoryUsage' },
       { name: 'tenant', label: 'Tenant ID', required: true, placeholder: 'e.g., db-a' }
@@ -28,6 +37,21 @@ const COMMANDS = {
     description: 'Single-tenant comprehensive health check',
     category: 'Prometheus API Tools',
     popular: true,
+    preview: `$ da-tools diagnose --tenant db-a --prometheus http://localhost:9090
+
+╔══════════════════════════════════════╗
+║  Tenant Health Report: db-a         ║
+╚══════════════════════════════════════╝
+
+Thresholds:  12 configured (3 critical)
+Rule Packs:  mariadb, kubernetes (2 active)
+Alerts:      1 firing, 0 pending
+Routing:     webhook → https://webhook.example.com
+Mode:        normal (no silence/maintenance)
+
+✓ All recording rules producing data
+✓ Threshold metrics exported (12/12)
+⚠ 1 alert firing: MariaDBHighConnections (87% > 80%)`,
     args: [],
     flags: [
       { name: '--tenant', label: 'Tenant ID', required: true, placeholder: 'e.g., db-a' },
@@ -85,6 +109,23 @@ const COMMANDS = {
     description: 'Generate new tenant configuration',
     category: 'Filesystem Tools',
     popular: true,
+    preview: `$ da-tools scaffold --tenant my-app --db mariadb,redis
+
+Scaffolding tenant configuration...
+
+Created:
+  conf.d/my-app.yaml       (MariaDB + Redis thresholds)
+  conf.d/_defaults.yaml     (updated with new tenant)
+
+Summary:
+  Tenant:     my-app
+  Databases:  mariadb (8 thresholds), redis (6 thresholds)
+  Routing:    not configured (add _routing to enable)
+
+Next steps:
+  1. Edit conf.d/my-app.yaml to customize thresholds
+  2. Run: da-tools validate-config --config-dir conf.d/
+  3. Deploy: kubectl apply -k .`,
     args: [],
     flags: [
       { name: '--non-interactive', label: 'Non-Interactive Mode', required: false, type: 'checkbox' },
@@ -110,6 +151,18 @@ const COMMANDS = {
     description: 'One-stop config validation: YAML + schema + routing + policy + versions',
     category: 'Filesystem Tools',
     popular: true,
+    preview: `$ da-tools validate-config --config-dir conf.d/ --ci
+
+Running validation suite...
+
+[✓] YAML syntax          3/3 files valid
+[✓] Schema validation    2 tenants, 0 unknown keys
+[✓] Threshold format     18 thresholds, all numeric strings
+[✓] Routing validation   2 receivers configured
+[✓] Duration guardrails  group_wait, repeat_interval in range
+[✓] Version consistency  v2.0.0-preview.2
+
+All checks passed (6/6). Exit code: 0`,
     args: [],
     flags: [
       { name: '--config-dir', label: 'Config Directory', required: true, placeholder: '/etc/config' },
@@ -475,6 +528,19 @@ export default function CLIPlayground() {
                   <p className="mt-2 text-xs text-amber-600">Fill required fields to enable copy</p>
                 )}
               </div>
+
+              {/* Sample Output Preview */}
+              {command.preview && (
+                <div className="bg-white rounded-lg shadow-lg p-6">
+                  <h3 className="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                    <span className="text-green-500">▶</span> Sample Output
+                  </h3>
+                  <pre className="bg-slate-900 text-green-400 p-4 rounded text-xs overflow-x-auto whitespace-pre-wrap max-h-56 overflow-y-auto font-mono leading-relaxed">
+                    {command.preview}
+                  </pre>
+                  <p className="text-xs text-slate-400 mt-2 italic">Simulated output — actual results depend on your environment.</p>
+                </div>
+              )}
 
               {/* Environment Info */}
               <div className="bg-white rounded-lg shadow-lg p-6 text-sm">

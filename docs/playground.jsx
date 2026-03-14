@@ -442,11 +442,31 @@ function validateTenantConfig(yamlText) {
   };
 }
 
+// Simple line diff: compare current yaml to selected template
+function computeDiff(current, template) {
+  const curLines = current.split('\n');
+  const tplLines = template.split('\n');
+  const maxLen = Math.max(curLines.length, tplLines.length);
+  const result = [];
+  for (let i = 0; i < maxLen; i++) {
+    const cl = curLines[i];
+    const tl = tplLines[i];
+    if (cl === undefined) result.push({ type: 'removed', line: tl, num: i + 1 });
+    else if (tl === undefined) result.push({ type: 'added', line: cl, num: i + 1 });
+    else if (cl !== tl) result.push({ type: 'changed', line: cl, oldLine: tl, num: i + 1 });
+    else result.push({ type: 'same', line: cl, num: i + 1 });
+  }
+  return result;
+}
+
 export default function TenantYAMLPlayground() {
   const [yaml, setYaml] = useState(YAML_TEMPLATES.mariadb);
   const [selectedTemplate, setSelectedTemplate] = useState('mariadb');
+  const [showDiff, setShowDiff] = useState(false);
 
   const validation = useMemo(() => validateTenantConfig(yaml), [yaml]);
+  const diff = useMemo(() => computeDiff(yaml, YAML_TEMPLATES[selectedTemplate]), [yaml, selectedTemplate]);
+  const hasChanges = diff.some(d => d.type !== 'same');
 
   const handleResetExample = () => {
     setYaml(YAML_TEMPLATES[selectedTemplate]);
@@ -456,6 +476,16 @@ export default function TenantYAMLPlayground() {
     const template = e.target.value;
     setSelectedTemplate(template);
     setYaml(YAML_TEMPLATES[template]);
+  };
+
+  const handleExport = () => {
+    const blob = new Blob([yaml], { type: 'application/x-yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tenant-config.yaml';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -483,7 +513,23 @@ export default function TenantYAMLPlayground() {
               onClick={handleResetExample}
               className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm font-medium hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
             >
-              Reset Example
+              Reset
+            </button>
+            <button
+              onClick={() => setShowDiff(!showDiff)}
+              className={`px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-purple-500 ${
+                showDiff ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+              }`}
+            >
+              {showDiff ? 'Hide Diff' : 'Diff'}
+              {hasChanges && !showDiff && <span className="ml-1 text-xs">●</span>}
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={!validation.valid}
+              className="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
+            >
+              Export .yaml
             </button>
           </div>
         </div>
@@ -497,6 +543,24 @@ export default function TenantYAMLPlayground() {
             <h2 className="text-lg font-semibold text-gray-900">Tenant YAML</h2>
             <p className="text-xs text-gray-500 mt-1">Edit YAML below. Validation updates in real-time.</p>
           </div>
+          {showDiff && (
+            <div className="border-b border-gray-200 bg-gray-50 px-6 py-3 max-h-48 overflow-y-auto">
+              <div className="text-xs font-semibold text-gray-600 mb-2">Changes vs. template:</div>
+              <pre className="font-mono text-xs leading-relaxed">
+                {diff.map((d, i) => {
+                  if (d.type === 'same') return null;
+                  const color = d.type === 'added' ? 'text-green-700 bg-green-50' : d.type === 'removed' ? 'text-red-700 bg-red-50' : 'text-amber-700 bg-amber-50';
+                  return (
+                    <div key={i} className={`${color} px-2 py-0.5 rounded`}>
+                      <span className="text-gray-400 mr-2">{d.num}</span>
+                      {d.type === 'removed' ? '- ' : d.type === 'added' ? '+ ' : '~ '}{d.line}
+                    </div>
+                  );
+                })}
+                {!hasChanges && <div className="text-gray-400">No changes from template.</div>}
+              </pre>
+            </div>
+          )}
           <div className="flex-1 overflow-hidden flex">
             <div className="w-12 bg-gray-100 border-r border-gray-200 flex flex-col items-center py-4 text-xs text-gray-500 font-mono">
               {yaml.split('\n').map((_, i) => (

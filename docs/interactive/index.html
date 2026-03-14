@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dynamic Alerting — Interactive Tools</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<!-- Mermaid removed: using interactive SVG diagram instead -->
 <style>
   :root {
     --bg: #fafbfc;
@@ -347,29 +347,68 @@
     </div>
 
     <div class="diagram-section">
-      <div class="diagram-label">Platform Architecture</div>
-      <pre class="mermaid">
-graph TD
-    subgraph TL["Tenant Layer — Zero PromQL"]
-        D["_defaults.yaml"]
-        T1["db-a.yaml"]
-        T2["db-b.yaml"]
-    end
-    subgraph PL["Platform Layer"]
-        TE["threshold-exporter ×2 HA\nSHA-256 Hot-Reload · Directory Scanner"]
-        RP["Projected Volume\n15 Rule Packs"]
-    end
-    subgraph PE["Prometheus + Alertmanager"]
-        PROM["Prometheus\ngroup_left Vector Matching"]
-        AM["Alertmanager\nDynamic Routing · Severity Dedup"]
-    end
-    D --> TE
-    T1 --> TE
-    T2 --> TE
-    TE -->|"user_threshold metrics"| PROM
-    RP -->|"Recording + Alert Rules"| PROM
-    PROM -->|"alerts"| AM
-      </pre>
+      <div class="diagram-label">Platform Architecture — click any layer to explore</div>
+      <svg viewBox="0 0 600 340" style="max-width:600px;width:100%;margin:0 auto;display:block" xmlns="http://www.w3.org/2000/svg">
+        <style>
+          .box{rx:8;ry:8;stroke-width:1.5;cursor:pointer;transition:opacity .15s}
+          .box:hover{opacity:.8}
+          .lbl{font-family:system-ui,sans-serif;pointer-events:none}
+          .grp{font-size:11px;fill:var(--hero-muted);font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+          .node-t{font-size:12px;fill:#93c5fd;font-weight:500}
+          .node-s{font-size:10px;fill:var(--hero-muted)}
+          .arrow{stroke:var(--hero-muted);stroke-width:1.2;fill:none;marker-end:url(#ah)}
+          .edge-lbl{font-size:9px;fill:var(--hero-muted);font-family:system-ui,sans-serif}
+        </style>
+        <defs><marker id="ah" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="var(--hero-muted)"/></marker></defs>
+        <!-- Tenant Layer -->
+        <text x="300" y="18" text-anchor="middle" class="lbl grp">Tenant Layer — Zero PromQL</text>
+        <a href="../assets/jsx-loader.html?component=../playground.jsx" xlink:title="Validate tenant YAML">
+          <rect x="40" y="28" width="140" height="36" class="box" fill="#1e3a5f" stroke="#3b82f6"/>
+          <text x="110" y="50" text-anchor="middle" class="lbl node-t">_defaults.yaml</text>
+        </a>
+        <a href="../assets/jsx-loader.html?component=../playground.jsx" xlink:title="Validate tenant YAML">
+          <rect x="230" y="28" width="140" height="36" class="box" fill="#1e3a5f" stroke="#3b82f6"/>
+          <text x="300" y="50" text-anchor="middle" class="lbl node-t">db-a.yaml</text>
+        </a>
+        <a href="../assets/jsx-loader.html?component=../playground.jsx" xlink:title="Validate tenant YAML">
+          <rect x="420" y="28" width="140" height="36" class="box" fill="#1e3a5f" stroke="#3b82f6"/>
+          <text x="490" y="50" text-anchor="middle" class="lbl node-t">db-b.yaml</text>
+        </a>
+        <!-- Arrows -->
+        <path d="M110,64 L110,90 L250,105" class="arrow"/>
+        <path d="M300,64 L300,105" class="arrow"/>
+        <path d="M490,64 L490,90 L350,105" class="arrow"/>
+        <!-- Platform Layer -->
+        <text x="300" y="100" text-anchor="middle" class="lbl grp">Platform Layer</text>
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/architecture-and-design.md" target="_blank" xlink:title="Architecture: threshold-exporter">
+          <rect x="130" y="108" width="340" height="44" class="box" fill="#1e3a5f" stroke="#38bdf8"/>
+          <text x="300" y="128" text-anchor="middle" class="lbl node-t">threshold-exporter ×2 HA</text>
+          <text x="300" y="143" text-anchor="middle" class="lbl node-s">SHA-256 Hot-Reload · Directory Scanner</text>
+        </a>
+        <!-- Rule Packs (separate clickable) -->
+        <a href="../assets/jsx-loader.html?component=../rule-pack-selector.jsx" xlink:title="Browse Rule Packs">
+          <rect x="130" y="162" width="340" height="30" class="box" fill="#1e3a5f" stroke="#a78bfa"/>
+          <text x="300" y="182" text-anchor="middle" class="lbl" style="font-size:11px;fill:#c4b5fd;font-weight:500">Projected Volume · 15 Rule Packs</text>
+        </a>
+        <!-- Arrows -->
+        <path d="M300,152 L300,162" class="arrow" style="marker-end:none"/>
+        <path d="M300,192 L300,218" class="arrow"/>
+        <text x="246" y="210" class="edge-lbl">metrics + rules</text>
+        <!-- Observability Layer -->
+        <text x="300" y="216" text-anchor="middle" class="lbl grp">Prometheus + Alertmanager</text>
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/benchmarks.md" target="_blank" xlink:title="Benchmarks & Performance">
+          <rect x="130" y="224" width="340" height="44" class="box" fill="#1e3a5f" stroke="#a78bfa"/>
+          <text x="300" y="244" text-anchor="middle" class="lbl node-t">Prometheus</text>
+          <text x="300" y="259" text-anchor="middle" class="lbl node-s">group_left Vector Matching · 238 Rules</text>
+        </a>
+        <path d="M300,268 L300,288" class="arrow"/>
+        <text x="260" y="282" class="edge-lbl">alerts</text>
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/alert-routing-split.md" target="_blank" xlink:title="Alert Routing scenarios">
+          <rect x="130" y="290" width="340" height="44" class="box" fill="#1e3a5f" stroke="#f59e0b"/>
+          <text x="300" y="310" text-anchor="middle" class="lbl node-t">Alertmanager</text>
+          <text x="300" y="325" text-anchor="middle" class="lbl node-s">Dynamic Routing · Severity Dedup</text>
+        </a>
+      </svg>
     </div>
   </div>
 </section>
@@ -475,47 +514,6 @@ graph TD
   </p>
 </footer>
 
-<script>
-  // Initialize mermaid with theme based on color scheme
-  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: isDark ? 'dark' : 'default',
-    flowchart: {
-      useMaxWidth: true,
-      htmlLabels: true,
-      curve: 'basis'
-    },
-    themeVariables: isDark ? {
-      primaryColor: '#1e3a5f',
-      primaryTextColor: '#e2e8f0',
-      primaryBorderColor: '#38bdf8',
-      lineColor: '#475569',
-      secondaryColor: '#1e293b',
-      tertiaryColor: '#0f172a',
-      background: '#0f172a',
-      mainBkg: '#1e293b',
-      nodeBorder: '#475569',
-      clusterBkg: '#0f172a33',
-      clusterBorder: '#334155',
-      titleColor: '#e2e8f0',
-      edgeLabelBackground: '#1e293b'
-    } : {
-      primaryColor: '#eff6ff',
-      primaryTextColor: '#1e293b',
-      primaryBorderColor: '#3b82f6',
-      lineColor: '#94a3b8',
-      secondaryColor: '#f1f5f9',
-      tertiaryColor: '#fafbfc',
-      background: '#ffffff',
-      mainBkg: '#eff6ff',
-      nodeBorder: '#93c5fd',
-      clusterBkg: '#f8fafc',
-      clusterBorder: '#cbd5e1',
-      titleColor: '#1e293b',
-      edgeLabelBackground: '#ffffff'
-    }
-  });
-</script>
+<!-- Mermaid init removed: using interactive SVG diagram -->
 </body>
 </html>
