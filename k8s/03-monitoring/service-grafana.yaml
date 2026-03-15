@@ -5,6 +5,8 @@ metadata:
   namespace: monitoring
   labels:
     app: grafana
+# ⚠️ NodePort 僅供開發環境使用。生產環境請改用 ClusterIP + Ingress（搭配 TLS 和認證），
+# 或部署 auth proxy（oauth2-proxy）保護 Grafana。
 spec:
   selector:
     app: grafana

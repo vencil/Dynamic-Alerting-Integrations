@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: grafana
-          image: grafana/grafana:11.1.0
+          image: grafana/grafana:12.4.1
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -33,6 +33,8 @@ spec:
             - containerPort: 3000
               name: http
           env:
+            # ⚠️ 開發環境預設密碼 — 生產環境必須改用 K8s Secret 設定強密碼！
+            # 建議: secretKeyRef 引用 Secret，搭配 auth proxy 或 SSO 整合。
             - name: GF_SECURITY_ADMIN_USER
               value: "admin"
             - name: GF_SECURITY_ADMIN_PASSWORD
