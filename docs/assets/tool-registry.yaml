@@ -308,3 +308,15 @@ tools:
       - docs/getting-started/for-domain-experts.md
       - docs/getting-started/for-platform-engineers.md
       - docs/getting-started/for-tenants.md
+
+  - key: self-service-portal
+    title: { en: "Tenant Self-Service Portal", zh: "租戶自助入口" }
+    file: interactive/tools/self-service-portal.jsx
+    audience: [platform, domain, tenant]
+    icon: wizard
+    tags: [self-service, validation, routing, alerts, tenant]
+    desc: { en: "Validate, preview alerts, visualize routing", zh: "驗證配置、預覽告警、視覺化路由" }
+    related: [playground, config-lint, alert-simulator, schema-explorer]
+    hub_section: interactive
+    appears_in:
+      - docs/architecture-and-design.md

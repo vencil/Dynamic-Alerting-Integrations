@@ -16,10 +16,10 @@
     var vendorBase = 'vendor/';
     var cdn = {
       tailwind:  'https://cdn.tailwindcss.com',
-      react:     'https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js',
-      reactDom:  'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js',
-      babel:     'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js',
-      lucide:    'https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.min.js'
+      react:     'https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js',
+      reactDom:  'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js',
+      babel:     'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js',
+      lucide:    'https://unpkg.com/lucide-react@0.436.0/dist/umd/lucide-react.min.js'
     };
     var local = {
       tailwind:  vendorBase + 'tailwindcss.js',
@@ -435,7 +435,8 @@
     'config-lint': '../interactive/tools/config-lint.jsx',
     'architecture-quiz': '../interactive/tools/architecture-quiz.jsx',
     'promql-tester': '../interactive/tools/promql-tester.jsx',
-    'platform-demo': '../interactive/tools/platform-demo.jsx'
+    'platform-demo': '../interactive/tools/platform-demo.jsx',
+    'self-service-portal': '../interactive/tools/self-service-portal.jsx'
   };
 
   function buildCustomFlow(toolsParam) {
@@ -657,7 +658,8 @@
         'config-lint': { title: 'Config Lint Report', desc: 'Best-practice validation', path: '../interactive/tools/config-lint.jsx' },
         'architecture-quiz': { title: 'Architecture Quiz', desc: 'Find your deployment pattern', path: '../interactive/tools/architecture-quiz.jsx' },
         'promql-tester': { title: 'PromQL Tester', desc: 'Test queries & find rules', path: '../interactive/tools/promql-tester.jsx' },
-        'platform-demo': { title: 'Platform Demo', desc: 'Interactive make demo walkthrough', path: '../interactive/tools/platform-demo.jsx' }
+        'platform-demo': { title: 'Platform Demo', desc: 'Interactive make demo walkthrough', path: '../interactive/tools/platform-demo.jsx' },
+        'self-service-portal': { title: 'Tenant Self-Service Portal', desc: 'Validate, preview alerts, visualize routing', path: '../interactive/tools/self-service-portal.jsx' }
       };
       var footer = document.createElement('div');
       footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';

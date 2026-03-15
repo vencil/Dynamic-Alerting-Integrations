@@ -2,7 +2,7 @@
 title: "Config Version Diff"
 tags: [diff, compare, yaml]
 audience: ["platform-engineer"]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 related: [config-lint, playground, migration-simulator]
 ---

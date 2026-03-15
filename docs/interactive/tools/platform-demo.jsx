@@ -2,7 +2,7 @@
 title: "Platform Demo"
 tags: [demo, walkthrough, interactive]
 audience: [platform-engineer, domain-expert, tenant]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 related: [wizard, cli-playground, onboarding-checklist]
 ---
@@ -109,8 +109,8 @@ spec:
       '    - incident.demo.local: allowed',
       '',
       '  ✓ Version check',
-      '    - Platform: v2.0.0-preview.3',
-      '    - Exporter: v2.0.0-preview.3',
+      '    - Platform: v2.0.0',
+      '    - Exporter: v2.0.0',
       '',
       'Status: ALL CHECKS PASSED',
     ],

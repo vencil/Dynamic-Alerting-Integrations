@@ -2,7 +2,7 @@
 title: "Onboarding Checklist Generator"
 tags: [onboarding, checklist, progress]
 audience: [tenant, platform-engineer, domain-expert]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 related: [wizard, architecture-quiz, glossary]
 ---

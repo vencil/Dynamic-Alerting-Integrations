@@ -2,7 +2,7 @@
 title: "Getting Started Wizard"
 tags: [onboarding, guided, 3 min]
 audience: [tenant, platform-engineer, domain-expert]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 related: [onboarding-checklist, architecture-quiz, rule-pack-selector]
 ---
@@ -154,7 +154,7 @@ const RECOMMENDATIONS = {
     title: "Platform Monitoring & Scaling",
     docs: [
       { name: "Platform Engineer Quick Start", path: "for-platform-engineers.md", priority: "start-here", summary: "Deploy the platform end-to-end: Helm install, config, and verify." },
-      { name: "Benchmarks & Performance", path: "../benchmarks.md", summary: "Idle, scaling-curve, under-load, routing, and reload benchmarks." },
+      { name: "Benchmarks & Performance", path: "../benchmarks.md", summary: "Idle, under-load, routing, alertmanager, and reload benchmarks." },
       { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
       { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
       { name: "Governance & Security", path: "../governance-security.md", summary: "RBAC, webhook allowlists, cardinality guards." },

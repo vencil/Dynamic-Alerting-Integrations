@@ -2,7 +2,7 @@
 title: "Rule Pack Detail Viewer"
 tags: [rules, PromQL, reference]
 audience: [platform-engineer, domain-expert]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 related: [rule-pack-matrix, rule-pack-selector, runbook-viewer]
 ---
