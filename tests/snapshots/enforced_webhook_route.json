@@ -1,0 +1,10 @@
+{
+  "enforced_routes": [
+    {
+      "continue": true,
+      "receiver": "platform-enforced"
+    }
+  ],
+  "total_receivers": 2,
+  "total_routes": 2
+}

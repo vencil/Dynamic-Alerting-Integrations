@@ -35,6 +35,9 @@
 #       ├── validate_config.py
 #       ├── analyze_rule_pack_gaps.py
 #       ├── patch_config.py
+#       ├── alert_quality.py
+#       ├── policy_engine.py
+#       ├── cardinality_forecasting.py
 #       └── metric-dictionary.yaml
 set -euo pipefail
 
@@ -71,6 +74,7 @@ TOOL_FILES=(
     ops/cutover_tenant.py
     ops/blind_spot_discovery.py
     ops/maintenance_scheduler.py
+    ops/alert_quality.py
     # Config generation tools
     ops/generate_alertmanager_routes.py
     ops/validate_config.py
@@ -84,6 +88,9 @@ TOOL_FILES=(
     ops/offboard_tenant.py
     ops/deprecate_rule.py
     ops/lint_custom_rules.py
+    # v2.0.0 quality & governance tools
+    ops/policy_engine.py
+    ops/cardinality_forecasting.py
     # Data files
     metric-dictionary.yaml
 )

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""test_config_diff.py — Directory-level Config Diff 測試套件。"""
+"""test_config_diff.py — Directory-level Config Diff 測試套件 (Wave 12 pytest 遷移)。"""
 
 import json
 import os
 import tempfile
-import unittest
 
+import pytest
 import yaml
 
 
@@ -14,100 +14,100 @@ import config_diff as cd  # noqa: E402
 
 # ── 1. Flatten Tenant Config ────────────────────────────────────────
 
-class TestFlattenTenantConfig(unittest.TestCase):
+class TestFlattenTenantConfig:
 
     def test_basic_flatten(self):
         raw = {"mysql_connections": 50, "redis_memory": 1024}
         result = cd.flatten_tenant_config(raw)
-        self.assertEqual(result, {"mysql_connections": 50, "redis_memory": 1024})
+        assert result == {"mysql_connections": 50, "redis_memory": 1024}
 
     def test_skips_reserved_keys(self):
         raw = {"_routing": {"receiver": "slack"}, "_severity_dedup": "enable",
                "mysql_connections": 50}
         result = cd.flatten_tenant_config(raw)
-        self.assertEqual(result, {"mysql_connections": 50})
+        assert result == {"mysql_connections": 50}
 
     def test_empty_input(self):
-        self.assertEqual(cd.flatten_tenant_config(None), {})
-        self.assertEqual(cd.flatten_tenant_config({}), {})
+        assert cd.flatten_tenant_config(None) == {}
+        assert cd.flatten_tenant_config({}) == {}
 
 
 # ── 2. Classify Change ──────────────────────────────────────────────
 
-class TestClassifyChange(unittest.TestCase):
+class TestClassifyChange:
 
     def test_added(self):
-        self.assertEqual(cd.classify_change(None, 50), "added")
+        assert cd.classify_change(None, 50) == "added"
 
     def test_removed(self):
-        self.assertEqual(cd.classify_change(50, None), "removed")
+        assert cd.classify_change(50, None) == "removed"
 
     def test_tighter(self):
-        self.assertEqual(cd.classify_change(80, 50), "tighter")
+        assert cd.classify_change(80, 50) == "tighter"
 
     def test_looser(self):
-        self.assertEqual(cd.classify_change(50, 80), "looser")
+        assert cd.classify_change(50, 80) == "looser"
 
     def test_toggled_disable(self):
-        self.assertEqual(cd.classify_change(50, "disable"), "toggled")
+        assert cd.classify_change(50, "disable") == "toggled"
 
     def test_toggled_enable(self):
-        self.assertEqual(cd.classify_change("disable", 50), "toggled")
+        assert cd.classify_change("disable", 50) == "toggled"
 
     def test_modified_dict(self):
         old = {"default": 50, "schedule": []}
         new = {"default": 70, "schedule": []}
         # Different dicts → modified (can't do simple numeric compare)
         result = cd.classify_change(old, new)
-        self.assertEqual(result, "modified")
+        assert result == "modified"
 
     def test_same_value_unchanged(self):
-        self.assertEqual(cd.classify_change(50, 50), "unchanged")
+        assert cd.classify_change(50, 50) == "unchanged"
 
 
 # ── 3. Compute Diff ──────────────────────────────────────────────────
 
-class TestComputeDiff(unittest.TestCase):
+class TestComputeDiff:
 
     def test_basic_diff(self):
         old = {"db-a": {"mysql_connections": 80, "redis_memory": 1024}}
         new = {"db-a": {"mysql_connections": 50, "redis_memory": 1024}}
         diffs = cd.compute_diff(old, new)
-        self.assertIn("db-a", diffs)
-        self.assertEqual(len(diffs["db-a"]), 1)
-        self.assertEqual(diffs["db-a"][0]["change"], "tighter")
+        assert "db-a" in diffs
+        assert len(diffs["db-a"]) == 1
+        assert diffs["db-a"][0]["change"] == "tighter"
 
     def test_new_tenant(self):
         old = {}
         new = {"db-c": {"pg_cache": 0.9}}
         diffs = cd.compute_diff(old, new)
-        self.assertIn("db-c", diffs)
-        self.assertEqual(diffs["db-c"][0]["change"], "added")
+        assert "db-c" in diffs
+        assert diffs["db-c"][0]["change"] == "added"
 
     def test_removed_tenant(self):
         old = {"db-x": {"mysql_connections": 50}}
         new = {}
         diffs = cd.compute_diff(old, new)
-        self.assertIn("db-x", diffs)
-        self.assertEqual(diffs["db-x"][0]["change"], "removed")
+        assert "db-x" in diffs
+        assert diffs["db-x"][0]["change"] == "removed"
 
     def test_no_changes(self):
         old = {"db-a": {"mysql_connections": 50}}
         new = {"db-a": {"mysql_connections": 50}}
         diffs = cd.compute_diff(old, new)
-        self.assertEqual(diffs, {})
+        assert diffs == {}
 
     def test_multiple_tenants(self):
         old = {"db-a": {"mysql_connections": 50}, "db-b": {"redis_memory": 100}}
         new = {"db-a": {"mysql_connections": 70}, "db-b": {"redis_memory": 100}}
         diffs = cd.compute_diff(old, new)
-        self.assertIn("db-a", diffs)
-        self.assertNotIn("db-b", diffs)
+        assert "db-a" in diffs
+        assert "db-b" not in diffs
 
 
 # ── 4. Load Configs From Dir ────────────────────────────────────────
 
-class TestLoadConfigsFromDir(unittest.TestCase):
+class TestLoadConfigsFromDir:
 
     def test_basic_loading_flat(self):
         """Flat format (legacy): {metric: value} without tenants: wrapper."""
@@ -115,9 +115,9 @@ class TestLoadConfigsFromDir(unittest.TestCase):
             with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"mysql_connections": 50, "_routing": {}}, f)
             result = cd.load_configs_from_dir(d)
-            self.assertIn("db-a", result)
-            self.assertIn("mysql_connections", result["db-a"])
-            self.assertNotIn("_routing", result["db-a"])
+            assert "db-a" in result
+            assert "mysql_connections" in result["db-a"]
+            assert "_routing" not in result["db-a"]
 
     def test_basic_loading_wrapped(self):
         """Wrapped format (actual conf.d/): {tenants: {name: {metric: value}}}."""
@@ -128,9 +128,9 @@ class TestLoadConfigsFromDir(unittest.TestCase):
                     "_routing": {"receiver": {"type": "webhook"}},
                 }}}, f)
             result = cd.load_configs_from_dir(d)
-            self.assertIn("db-a", result)
-            self.assertIn("mysql_connections", result["db-a"])
-            self.assertNotIn("_routing", result["db-a"])
+            assert "db-a" in result
+            assert "mysql_connections" in result["db-a"]
+            assert "_routing" not in result["db-a"]
 
     def test_wrapped_multi_tenant_in_file(self):
         """Multiple tenants in a single wrapped YAML file."""
@@ -141,9 +141,9 @@ class TestLoadConfigsFromDir(unittest.TestCase):
                     "db-b": {"redis_memory": "1024"},
                 }}, f)
             result = cd.load_configs_from_dir(d)
-            self.assertIn("db-a", result)
-            self.assertIn("db-b", result)
-            self.assertEqual(result["db-a"], {"mysql_connections": "70"})
+            assert "db-a" in result
+            assert "db-b" in result
+            assert result["db-a"] == {"mysql_connections": "70"}
 
     def test_skips_defaults_and_hidden(self):
         with tempfile.TemporaryDirectory() as d:
@@ -152,75 +152,74 @@ class TestLoadConfigsFromDir(unittest.TestCase):
             with open(os.path.join(d, ".hidden.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"x": 1}, f)
             result = cd.load_configs_from_dir(d)
-            self.assertEqual(result, {})
+            assert result == {}
 
     def test_missing_dir(self):
         result = cd.load_configs_from_dir("/nonexistent")
-        self.assertEqual(result, {})
+        assert result == {}
 
 
 # ── 5. Estimate Affected Alerts ─────────────────────────────────────
 
-class TestEstimateAffectedAlerts(unittest.TestCase):
+class TestEstimateAffectedAlerts:
 
     def test_basic_conversion(self):
-        self.assertEqual(cd.estimate_affected_alerts("mysql_connections"),
-                         "*MysqlConnections*")
+        assert cd.estimate_affected_alerts("mysql_connections") == "*MysqlConnections*"
 
     def test_single_word(self):
-        self.assertEqual(cd.estimate_affected_alerts("cpu"), "*Cpu*")
+        assert cd.estimate_affected_alerts("cpu") == "*Cpu*"
 
 
 # ── 6. Render Markdown ──────────────────────────────────────────────
 
-class TestRenderMarkdown(unittest.TestCase):
+class TestRenderMarkdown:
 
     def test_no_changes(self):
         md = cd.render_markdown({}, "old", "new")
-        self.assertIn("No changes detected", md)
+        assert "No changes detected" in md
 
     def test_with_changes(self):
         diffs = {
             "db-a": [{"key": "mysql_connections", "old": 80, "new": 50, "change": "tighter"}]
         }
         md = cd.render_markdown(diffs, "old", "new")
-        self.assertIn("db-a", md)
-        self.assertIn("mysql_connections", md)
-        self.assertIn("tighter", md)
-        self.assertIn("Summary:", md)
-        self.assertIn("1 tenant(s) changed", md)
+        assert "db-a" in md
+        assert "mysql_connections" in md
+        assert "tighter" in md
+        assert "Summary:" in md
+        assert "1 tenant(s) changed" in md
 
     def test_format_value_disabled(self):
-        self.assertEqual(cd._format_value("disable"), "disabled")
-        self.assertEqual(cd._format_value(None), "—")
-        self.assertEqual(cd._format_value(50), "50")
-        self.assertEqual(cd._format_value({"schedule": []}), "(scheduled)")
+        assert cd._format_value("disable") == "disabled"
+        assert cd._format_value(None) == "—"
+        assert cd._format_value(50) == "50"
+        assert cd._format_value({"schedule": []}) == "(scheduled)"
 
 
 # ── 7. CLI ───────────────────────────────────────────────────────────
 
-class TestCLI(unittest.TestCase):
+class TestCLI:
 
     def test_required_args(self):
         parser = cd.build_parser()
         args = parser.parse_args(["--old-dir", "/a", "--new-dir", "/b"])
-        self.assertEqual(args.old_dir, "/a")
-        self.assertEqual(args.new_dir, "/b")
+        assert args.old_dir == "/a"
+        assert args.new_dir == "/b"
 
     def test_json_flag(self):
         parser = cd.build_parser()
         args = parser.parse_args(["--old-dir", "/a", "--new-dir", "/b", "--json-output"])
-        self.assertTrue(args.json_output)
+        assert args.json_output
 
     def test_missing_required(self):
         parser = cd.build_parser()
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             parser.parse_args([])
 
 
 # ── 8. End-to-End ────────────────────────────────────────────────────
 
-class TestEndToEnd(unittest.TestCase):
+class TestEndToEnd:
 
     def test_directory_comparison_flat(self):
         with tempfile.TemporaryDirectory() as old_dir, \
@@ -236,9 +235,9 @@ class TestEndToEnd(unittest.TestCase):
             new = cd.load_configs_from_dir(new_dir)
             diffs = cd.compute_diff(old, new)
 
-            self.assertEqual(len(diffs), 1)
-            self.assertEqual(diffs["db-a"][0]["key"], "mysql_connections")
-            self.assertEqual(diffs["db-a"][0]["change"], "tighter")
+            assert len(diffs) == 1
+            assert diffs["db-a"][0]["key"] == "mysql_connections"
+            assert diffs["db-a"][0]["change"] == "tighter"
 
     def test_directory_comparison_wrapped(self):
         """End-to-end test with actual conf.d/ format (tenants: wrapper)."""
@@ -261,16 +260,16 @@ class TestEndToEnd(unittest.TestCase):
             new = cd.load_configs_from_dir(new_dir)
             diffs = cd.compute_diff(old, new)
 
-            self.assertEqual(len(diffs), 1)
-            self.assertIn("db-a", diffs)
-            self.assertEqual(diffs["db-a"][0]["key"], "mysql_connections")
-            self.assertEqual(diffs["db-a"][0]["change"], "tighter")
+            assert len(diffs) == 1
+            assert "db-a" in diffs
+            assert diffs["db-a"][0]["key"] == "mysql_connections"
+            assert diffs["db-a"][0]["change"] == "tighter"
 
 
 
 # ── Exit Code Tests (v1.11.0 CI integration) ─────────────────────
 
-class TestExitCode(unittest.TestCase):
+class TestExitCode:
     """config_diff.py exit codes for CI pipeline integration."""
 
     def test_exit_0_no_changes(self):
@@ -282,7 +281,7 @@ class TestExitCode(unittest.TestCase):
             new = cd.load_configs_from_dir(d)
             diffs = cd.compute_diff(old, new)
             # Exit code logic: 1 if diffs else 0
-            self.assertEqual(1 if diffs else 0, 0)
+            assert (1 if diffs else 0) == 0
 
     def test_exit_1_changes_detected(self):
         """Different directories → exit 1 (signal to CI)."""
@@ -295,25 +294,25 @@ class TestExitCode(unittest.TestCase):
             old = cd.load_configs_from_dir(old_dir)
             new = cd.load_configs_from_dir(new_dir)
             diffs = cd.compute_diff(old, new)
-            self.assertEqual(1 if diffs else 0, 1)
+            assert (1 if diffs else 0) == 1
 
 
 # ── 9. Profile Key Diff (v1.12.0 fine-grained) ───────────────────
 
-class TestProfileKeyDiff(unittest.TestCase):
+class TestProfileKeyDiff:
     """Fine-grained profile content diff."""
 
     def test_added_profile(self):
         """New profile should show all keys as added."""
         diffs = cd.compute_profile_key_diff(None, {"mysql_connections": 80, "redis_memory": 1024})
-        self.assertEqual(len(diffs), 2)
-        self.assertTrue(all(d["change"] == "added" for d in diffs))
+        assert len(diffs) == 2
+        assert all(d["change"] == "added" for d in diffs)
 
     def test_removed_profile(self):
         """Removed profile should show all keys as removed."""
         diffs = cd.compute_profile_key_diff({"mysql_connections": 80}, None)
-        self.assertEqual(len(diffs), 1)
-        self.assertEqual(diffs[0]["change"], "removed")
+        assert len(diffs) == 1
+        assert diffs[0]["change"] == "removed"
 
     def test_modified_key(self):
         """Changed key should show tighter/looser."""
@@ -321,17 +320,17 @@ class TestProfileKeyDiff(unittest.TestCase):
             {"mysql_connections": 80},
             {"mysql_connections": 50}
         )
-        self.assertEqual(len(diffs), 1)
-        self.assertEqual(diffs[0]["change"], "tighter")
+        assert len(diffs) == 1
+        assert diffs[0]["change"] == "tighter"
 
     def test_no_changes(self):
         """Identical profiles should produce no diffs."""
         diffs = cd.compute_profile_key_diff(
             {"mysql_connections": 80}, {"mysql_connections": 80})
-        self.assertEqual(diffs, [])
+        assert diffs == []
 
 
-class TestProfileDiffEndToEnd(unittest.TestCase):
+class TestProfileDiffEndToEnd:
     """End-to-end profile diff with directories."""
 
     def test_profile_modified_with_key_diffs(self):
@@ -354,12 +353,12 @@ class TestProfileDiffEndToEnd(unittest.TestCase):
                     yaml.dump({"tenants": {"db-a": {"_profile": "standard"}}}, f)
 
             results = cd.compute_profile_diff(old_dir, new_dir)
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0]["profile"], "standard")
-            self.assertEqual(results[0]["change"], "modified")
-            self.assertEqual(len(results[0]["key_diffs"]), 1)
-            self.assertEqual(results[0]["key_diffs"][0]["key"], "mysql_connections")
-            self.assertEqual(results[0]["key_diffs"][0]["change"], "tighter")
+            assert len(results) == 1
+            assert results[0]["profile"] == "standard"
+            assert results[0]["change"] == "modified"
+            assert len(results[0]["key_diffs"]) == 1
+            assert results[0]["key_diffs"][0]["key"] == "mysql_connections"
+            assert results[0]["key_diffs"][0]["change"] == "tighter"
 
     def test_profile_added_with_key_diffs(self):
         """Added profile should list all keys as added."""
@@ -375,10 +374,10 @@ class TestProfileDiffEndToEnd(unittest.TestCase):
                 }}}, f)
 
             results = cd.compute_profile_diff(old_dir, new_dir)
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0]["change"], "added")
-            self.assertEqual(len(results[0]["key_diffs"]), 1)
-            self.assertEqual(results[0]["key_diffs"][0]["change"], "added")
+            assert len(results) == 1
+            assert results[0]["change"] == "added"
+            assert len(results[0]["key_diffs"]) == 1
+            assert results[0]["key_diffs"][0]["change"] == "added"
 
     def test_json_output_includes_key_diffs(self):
         """JSON output should include key_diffs in profile_diffs."""
@@ -393,8 +392,4 @@ class TestProfileDiffEndToEnd(unittest.TestCase):
             output = {"metric_diffs": {}, "profile_diffs": profile_diffs}
             j = json.dumps(output, default=str)
             parsed = json.loads(j)
-            self.assertIn("key_diffs", parsed["profile_diffs"][0])
-
-
-if __name__ == "__main__":
-    unittest.main()
+            assert "key_diffs" in parsed["profile_diffs"][0]

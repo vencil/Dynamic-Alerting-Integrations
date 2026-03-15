@@ -1,0 +1,21 @@
+{
+  "receivers": [
+    {
+      "email_configs": [
+        {
+          "smarthost": "smtp.example.com:587",
+          "to": "dba@example.com"
+        }
+      ],
+      "name": "tenant-db-c"
+    }
+  ],
+  "routes": [
+    {
+      "matchers": [
+        "tenant=\"db-c\""
+      ],
+      "receiver": "tenant-db-c"
+    }
+  ]
+}

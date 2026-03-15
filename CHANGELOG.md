@@ -2,249 +2,207 @@
 title: "Changelog"
 tags: [changelog, releases]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # Changelog
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
-## [v2.0.0-preview.3] — Project Structure Normalisation (2026-03-14)
+## [v2.0.0] — Alert Intelligence + Full-Stack DX Overhaul (2026-03-15)
 
-v2.0.0 release polish：專案結構正規化、DX 改善、品質閘門強化。
+v2.0.0 正式版。自 v1.11.0 起的全量升級：76 個 commits、346 個檔案變更（+73,057 / -12,023）。涵蓋 Go Exporter 增強、Rule Pack 擴展、告警智能化、互動工具生態、文件全面重構、測試工程化、專案結構正規化。
 
-### 🏗️ Project Structure Reorganisation
+> **版號說明**：v1.12.0 / v1.13.0 / v2.0.0-preview 系列皆為開發中版本（無 Git tag / GitHub Release），統一於 v2.0.0 正式釋出。
 
-- **scripts/tools/ 三層子目錄化**: 58 個 Python 工具依職責分入 `ops/`（27）、`dx/`（18）、`lint/`（12）+ root 共用（4）
-  * Docker flat layout 相容：dual sys.path + build.sh 自動 strip repo-layout hack
-  * 跨子目錄 import 相容（dx→ops: `generate_platform_data` → `scaffold_tenant`）
-- **JSX 工具搬遷**: 22 個互動工具從 `docs/` 搬至 `docs/interactive/tools/`
-  * `tool-registry.yaml`、`flows.json`、`jsx-loader.html`（CUSTOM_FLOW_MAP + TOOL_META）、`index.html` 路徑同步更新
-- **測試歸位**: `test_assemble_config_dir.py`、`test_da_assembler.py`、`test_flows_e2e.py` 統一搬入 `tests/`
-- **CRD 範例歸位**: `example-thresholdconfig.yaml` → `k8s/crd/examples/`
-- **inject_metadata_join.py** 從 `scripts/internal/` 搬入 `scripts/tools/ops/`
+### 🔧 Go Exporter 增強
 
-### 🛡️ Quality Gates
+**Tenant Profiles（四層繼承）**
+- Go schema 新增 `Profiles map[string]map[string]ScheduledValue` 欄位
+- `applyProfiles()` fill-in pattern：Load 階段展開 profile 至 tenant overrides（僅填入未設定的 key）
+- `_profiles.yaml` boundary enforcement：LoadDir 限制 profiles 只能從該檔載入
+- `ValidateTenantKeys()` 擴展：`_profile` 引用不存在的 profile → WARN
+- 繼承順序：Global Defaults → Profile → Tenant Override（tenant 永遠勝出）
+- 13 個新 Go 測試案例
 
-- **`check_structure.py`** (NEW): 專案結構正規化 pre-commit hook — 檢查 scripts/tools/ root 清潔度、JSX 位置、測試檔位置、禁追蹤目錄
-- **`check_repo_name.py`** (NEW): GitHub URL repo name 防護 hook — 掃描 `vibe-k8s-lab` 誤用（`--ci` / `--fix`）
-- **Pre-commit hooks**: 10 → 12 auto-run hooks（新增 `structure-check` + `repo-name-check`）
-- **`tests/conftest.py`**: 統一 sys.path 設定，從 24 個測試檔移除重複 boilerplate
+**Dual-Perspective Annotation**
+- `platform_summary` annotation：Alert 同時攜帶 Platform 視角（NOC）和 Tenant 視角 summary
+- 與 `_routing_enforced` 整合：NOC 收到 `platform_summary`，tenant 收到原始 `summary`
 
-### 🐳 Docker & CI
+### 📦 Rule Pack 擴展（13 → 15）
 
-- **build.sh**: 組裝時自動 `sed` 移除 repo-layout sys.path hack，Docker image 內程式碼更乾淨
-- **docs-ci.yaml**: 修正觸發路徑 `scripts/tools/*.py` → `scripts/tools/**/*.py`（子目錄化後 CI 不漏觸發）
-- **Dockerfile**: 修正 `org.opencontainers.image.source` repo name
+- **JVM Rule Pack** (`rule-pack-jvm.yaml`)：GC pause rate、heap memory usage、thread pool — 7 alert rules（含 composite `JVMPerformanceDegraded`）
+- **Nginx Rule Pack** (`rule-pack-nginx.yaml`)：active connections、request rate、connection backlog — 6 alert rules
+- Projected Volume 13 → 15 ConfigMap sources，scaffold_tenant / metric-dictionary 同步更新
 
-### 📄 Documentation
+### 🚀 告警智能化（3 個新工具 + 1 個 Self-Service Portal）
 
-- **GitLab CI**: 標記 `.gitlab/ci/` 為 deprecated（新增 README.md + YAML deprecated 標頭）
-- **tool-map.md** (zh/en): 補齊 `check_structure.py`、`fix_doc_links.py`、`check_i18n_coverage.py`、`sync_tool_registry.py` 等遺漏條目
-- **CLAUDE.md**: hook 數量 → 12、lint 工具 → 12、總工具 → 58
-- **.gitignore**: 新增 `.pytest_cache/`、`*.pyc`、`tests/_test_output/`
+**Alert Quality Scoring (`da-tools alert-quality`)**
+- 4 項品質指標：Noise（震盪偵測）、Stale（閒置 14 天）、Resolution Latency（flapping 警告）、Suppression Ratio
+- 三級評分（GOOD/WARN/BAD）+ per-tenant 加權分數（0–100）
+- 輸出：text / `--json` / `--markdown`，CI gate：`--ci --min-score 60`
+- 57 個測試，89.8% 覆蓋率
 
-### 🧹 Cleanup
+**Policy-as-Code (`da-tools evaluate-policy`)**
+- 宣告式 DSL：10 種運算子（required / forbidden / gte / lte / matches / one_of ...）
+- `when` 條件式、萬用字元目標（`*_cpu`）、dot-path 嵌套（`_routing.receiver.type`）
+- Duration 比較、tenant 排除、error/warning 雙嚴重度
+- CI gate：`--ci` 有 error 違規 exit 1
+- 106 個測試，94.0% 覆蓋率
 
-- 移除 git 追蹤的測試產出（`tests/_test_output/`、`tests/_test_multidb_output/`）
-- 移除 `.gitignore` 重複條目
+**Cardinality Forecasting (`da-tools cardinality-forecast`)**
+- 純 Python 線性回歸（無 numpy）：趨勢分類（growing/stable/declining）+ 風險等級（critical/warning/safe）
+- 觸頂天數預測 + 預計日期，可設基數上限（`--limit`）和預警天數（`--warn-days`）
+- CI gate：`--ci` 有 critical 風險 exit 1
+- 61 個測試，93.5% 覆蓋率
 
-## [v2.0.0-preview.2] — Scalable Config Governance + DX Tooling (2026-03-14)
+**Tenant Self-Service Portal (`self-service-portal.jsx`)**
+- 三分頁 SPA：YAML 驗證（schema + routing guardrails）、告警預覽（滑桿模擬）、路由視覺化（樹狀圖）
+- 瀏覽器端執行，零後端依賴，雙語支援（zh/en）
 
-Roadmap §5.3 全面實作（Sharded GitOps + Assembler Controller + CRD）、9 輪 DX 工具迭代、GitHub Pages Interactive Tools、Roadmap 重寫。
+### 🛠️ DX 自動化工具（+8 個新工具）
 
-### 🏗️ Scalable Configuration Governance (§5.3)
+**Operations**
+- **`shadow_verify.py`**：Shadow Monitoring 三階段驗證（preflight / runtime / convergence）
+- **`byo_check.py`**：BYO Prometheus & Alertmanager 整合驗證（取代手動 curl + jq）
+- **`grafana_import.py`**：Grafana Dashboard ConfigMap 匯入（sidecar 掛載 + verify + dry-run）
+- **`federation_check.py`**：多叢集 Federation 整合驗證（edge / central / e2e 三模式）
 
-- **`assemble_config_dir.py`**: Sharded GitOps 組裝工具 — 多來源 conf.d/ 合併、SHA-256 衝突偵測、assembly manifest、YAML 驗證
-  * CLI: `da-tools sharded-assemble --sources <dirs> --output <dir> [--check] [--validate] [--manifest]`
-- **`da_assembler.py`**: ThresholdConfig CRD → YAML 輕量 controller（非 Operator）
-  * Watch 模式（即時 reconcile）、One-shot 模式（`--once`）、離線渲染（`--render-cr`）、Dry-run 預覽
-  * Status subresource 更新（phase / lastRenderedHash / tenantCount）
-  * CLI: `da-tools assembler --once` / `da-tools assembler --render-cr <file>`
-- **ThresholdConfig CRD** (`k8s/crd/thresholdconfig-crd.yaml`): `dynamicalerting.io/v1alpha1`，namespace-scoped
-  * `x-kubernetes-preserve-unknown-fields` 支援彈性 tenant 閾值結構
-  * Printer columns: Phase, Tenants, Last Rendered, Age
-  * Short names: `tc`, `tconfig`
-- **RBAC** (`k8s/crd/assembler-rbac.yaml`): ServiceAccount + ClusterRole + ClusterRoleBinding
-- **Makefile**: `make sharded-assemble` / `sharded-check` / `assembler-render` / `assembler-install-crd`
+**Scalable Configuration Governance**
+- **`assemble_config_dir.py`**：Sharded GitOps 組裝工具 — 多來源 conf.d/ 合併、SHA-256 衝突偵測、assembly manifest
+- **`da_assembler.py`**：ThresholdConfig CRD → YAML 輕量 controller（Watch / One-shot / 離線渲染 / Dry-run）
+- **ThresholdConfig CRD**（`dynamicalerting.io/v1alpha1`）：namespace-scoped + RBAC + printer columns
 
-### 🛠️ DX Tooling (Rounds 7–9, 11 improvements)
+**DX 工具迭代**
+- `validate_all.py`：`--profile` + `--watch`（CSV timing trend）、`--smart`（git diff → affected-check 自動跳過）
+- `bump_docs.py`：`--what-if`（全 238 rules 審計）
+- `generate_cheat_sheet.py` / `generate_rule_pack_stats.py`：`--lang zh/en/all` 雙語
+- `check_doc_freshness.py`：false-positive 修正 + `--fix`
+- `check_translation.py`：cross-dir + lang fix
+- `check_includes_sync.py`：`--fix`（自動建立缺失 .en.md stub）
 
-- **`generate_doc_map.py`**: `--include-adr`（ADR 納入 doc-map，H1 title 萃取）
-- **`validate_docs_versions.py`**: doc-file-count 自動驗證 + auto-fix
-- **`bump_docs.py`**: `--what-if`（全 238 rules 審計）
-- **`generate_cheat_sheet.py`**: `--lang zh/en/all` 雙語速查表
-- **`check_doc_freshness.py`**: false-positive 修正（code-block-only + stopword）、`--fix`（`.doc-freshness-ignore` 自動產生）
-- **`check_translation.py`**: cross-dir + lang fix（full-path pairing + empty-lang guard）
-- **`validate_all.py`**: `--profile` + `--watch`（CSV timing trend）、`--smart`（git diff → affected-check 自動跳過）
-- **`generate_rule_pack_stats.py`**: `--lang zh/en/all` 雙語統計表
-- **`check_includes_sync.py`**: `--fix`（自動建立缺失 .en.md stub）
+### 🎯 互動工具生態（0 → 24 JSX tools）
 
-### 🌐 GitHub Pages Interactive Tools
+**工具矩陣**：23 個位於 `docs/interactive/tools/` + 1 個 `docs/getting-started/wizard.jsx`
+- Config：Playground、Lint、Diff、Schema Explorer、Template Gallery
+- Rule Pack：Selector、Matrix、Detail、PromQL Tester
+- 運維：Alert Simulator/Timeline、Health Dashboard、Capacity Planner、Threshold Calculator
+- 學習：Architecture Quiz、Glossary、Dependency Graph、Runbook Viewer、Onboarding Checklist
+- 展示：Platform Demo、Migration Simulator、CLI Playground、Self-Service Portal
 
-- **`docs/interactive/index.html`**: Landing page（Dark mode、4 card navigation）
-- **`docs/assets/jsx-loader.html`**: 瀏覽器端 JSX 載入器改寫
-  * Front matter 剝離、ES import → global reference 轉換、lucide-react CDN + SVG fallback
-  * `export default function` → auto-render
+**基礎設施**
+- **tool-registry.yaml**（單一真相源）→ `sync_tool_registry.py`（`make sync-tools`）自動同步 Hub 卡片 + TOOL_META + JSX frontmatter
+- **platform-data.json**（共用資料源）：從 Rule Pack YAML 萃取（15 packs, 139R + 99A），JSX 工具 fetch 共用
+- **jsx-loader.html**：瀏覽器端 JSX transpiler + `TOOL_META`（related footer）+ `__PLATFORM_DATA` 預載 + Guided Flow 模式
+- **tool-consistency-check**（pre-commit）：Registry ↔ Hub ↔ TOOL_META ↔ JSX ↔ MD 一致性驗證
 
-### 📄 Roadmap Rewrite (§5)
+**Guided Flows**
+- `flows.json` 多步引導流程（onboarding / tenant-setup / alert-deep-dive），`?flow=onboarding` 啟動
+- Cross-step data（`__FLOW_STATE` + sessionStorage）、progress persistence、completion tracking
+- Conditional steps + checkpoint validation（`__checkFlowGate()` Next 按鈕閘門）
+- Custom flow builder：`?flow=custom&tools=...` Hub 互動式 builder，24 工具全覆蓋
+- Flow analytics：進度條、完成率、drop-off 步驟偵測
 
-- 移除已完成項目（搬至 `docs/internal/dx-tooling-backlog.md`）
-- 新增 4 個方向：Alert Quality Scoring、Policy-as-Code、Cross-Cluster Drift Detection、Incremental Reload
-- 重新分類：近期（設計基礎已有）/ 中期（需客戶驗證）/ 遠期（探索方向）
+### 🌐 Bilingual Annotations (i18n)
 
-### 📊 Numbers
+- **Rule Pack 雙語 annotation**：`summary_zh` / `description_zh` / `platform_summary_zh` — 三個 Pilot Pack（MariaDB, PostgreSQL, Kubernetes）
+- **Alertmanager template fallback**：Go `or` function 優先中文、自動 fallback 英文（所有 receiver 類型）
+- **CLI i18n**：`detect_cli_lang()` 偵測 `DA_LANG`/`LANG` → argparse help 雙語切換（23 個 CLI 命令）
+- **check_bilingual_annotations.py**：Rule Pack 雙語覆蓋率驗證（pre-commit manual stage）
 
-- Python 工具：50 個（+4）
-- 文件：44 個（+1）
-- 單元測試：31 個新增（14 assemble + 17 assembler）
-- 驗證 pipeline：11 checks pass
+### 📄 文件全面重構
 
----
-
-## [v2.0.0-preview] — DX Automation + Documentation Overhaul (2026-03-13)
-
-Major documentation quality overhaul + 4 new DX automation tools. Breaking: version jump from v1.13.0 to v2.0.0 reflects the scope of documentation restructuring and new tooling.
-
-### 🛠️ DX Automation Tools (4 new)
-
-- **`shadow_verify.py`**: Shadow Monitoring 就緒度與收斂性三階段驗證（preflight / runtime / convergence）
-  * Preflight: mapping file, recording rules loaded, AM interception route
-  * Runtime: mismatch count, tenant coverage, three-state mode consistency
-  * Convergence: cutover-readiness assessment, 7-day zero-mismatch check
-  * CLI: `da-tools shadow-verify <phase> --mapping <file> --report-csv <file> --json`
-- **`byo_check.py`**: BYO Prometheus & Alertmanager 整合驗證（取代手動 curl + jq 步驟）
-  * Prometheus: connection, tenant label injection, threshold-exporter scrape, Rule Pack loading, vector matching
-  * Alertmanager: connection, tenant routing, inhibit_rules, active alerts, silences
-  * CLI: `da-tools byo-check <prometheus|alertmanager|all> --json`
-- **`grafana_import.py`**: Grafana Dashboard ConfigMap 匯入（sidecar 自動掛載）
-  * Single/batch import + verify mode + dry-run
-  * CLI: `da-tools grafana-import --dashboard <file> --verify --namespace <ns>`
-- **`federation_check.py`**: 多叢集 Federation 整合驗證（edge / central / e2e 三模式）
-  * Edge: external_labels, federate endpoint; Central: edge metrics reception, recording rules
-  * CLI: `da-tools federation-check <edge|central|e2e> --edge-urls <urls> --json`
-
-### 📄 Documentation Overhaul
-
-**Content Correctness & Trimming（6 document pairs, avg -23%）：**
-
-| Document Pair | Before | After | Reduction |
-|---------------|--------|-------|-----------|
-| migration-guide | ~997 | ~768 | -23% |
-| byo-prometheus-integration | ~558 | ~483 | -14% |
-| byo-alertmanager-integration | ~510 | ~468 | -8% |
-| grafana-dashboards | ~598 | ~385 | -36% |
-| tenant-lifecycle | ~706 | ~497 | -30% |
-| multi-cluster-federation | ~640 | ~468 | -27% |
-
-**Key Changes：**
-- 移除捏造/過時內容，確保所有文件描述與實際程式碼行為一致
-- 手動 `curl + jq` 驗證步驟全面替換為 `da-tools` CLI 工具引用
-- 冗長 `docker run --rm -v ...` 範例精簡為 `da-tools <cmd>` 短格式
-- 移除重複的 Python script fallback 區塊（「已 clone 專案」模式）
-- 冗長 K8s Job YAML 區塊替換為精簡描述 + cross-reference
-- 多處 verbose subsection 合併為 compact reference table
-
-**CLI Reference & Cheat Sheet：**
-- `docs/cli-reference.md` (.en.md): 新增 4 個 DX 工具完整命令文件（shadow-verify / byo-check / federation-check / grafana-import）
-- `docs/cheat-sheet.md` (.en.md): 新增 4 個工具速查行 + 快速提示分類
-- Version Compatibility 表：補上 v1.10.0–v1.13.0 版號
-
-**CLAUDE.md 瘦身：**
-- 「文件導覽」表格（46 行）提取至 `docs/internal/doc-map.md`，CLAUDE.md 僅保留 cross-reference
-
-### 📦 版號
-
-- da-tools: 1.12.0 → 2.0.0-preview（新增 4 個 DX 命令，COMMAND_MAP 20→24）
-
----
-
-## [v1.13.0] — Dual-Perspective Annotation + Documentation Infrastructure (2026-03-12)
-
-Dual-Perspective Alert Annotation（`platform_summary`）、文件大重構、全面雙語化、MkDocs Material 站點配置、文件 CI 工具鏈、互動式元件、Conventional Commits、API 健康監控。
-
-### 🏷️ Dual-Perspective Annotation
-
-- **`platform_summary` annotation**: Alert 同時攜帶 Platform 視角（NOC 用）和 Tenant 視角的 summary
-- **`_routing_enforced` 整合**: 雙視角 annotation 搭配 enforced routing，NOC 收到 platform_summary，tenant 收到原始 summary
-
-### 📄 文件大重構
-
+**結構重組**
 - architecture-and-design.md 拆分為 6 個專題文件（benchmarks / governance-security / troubleshooting / migration-engine / federation-integration / byo-prometheus-integration）
-- 3 個角色入門指南（for-platform-engineers / for-domain-experts / for-tenants）
-- Context Diagram（context-diagram.md）
-- 全面雙語化：33 對 `.en.md` 文件
+- 3 個角色入門指南（for-platform-engineers / for-domain-experts / for-tenants）zh/en
+- 全面雙語化：33 → 44 對 `.en.md` 文件
+- MkDocs Material 站點：CJK 搜尋、tags、i18n 切換、abbreviation tooltips
+- Glossary（30+ 術語）+ 5 ADRs + JSON Schema（VS Code 自動補全）
 
-### 🌐 MkDocs Material 站點
+**內容修訂**
+- 根 README (zh/en) 重寫：角色導向痛點敘事（Platform / Tenant / Domain / Enterprise）
+- architecture-and-design.en.md：補 §2.3 Tenant-Namespace Mapping、修 §3.1（15 packs + `prometheus-rules-*` 命名）、補 Bilingual Annotations
+- Benchmarks 重寫：5 輪實測數據統一採集（idle + under-load + routing + alertmanager + reload）
+- 6 份文件精簡（avg -23%）：移除過時內容、手動 curl 改為 da-tools CLI 引用
+- Scenario CLI 修正：`tenant-lifecycle.md` (zh/en) 修正 4 個不存在的 CLI flags
+- Tool-map 重生成：62 個工具完整覆蓋（之前僅 18 個）
 
-- CJK 搜尋最佳化 + tags plugin + i18n 切換 + abbreviation tooltips
-- YAML front matter（title / tags / audience / version / lang）全文件覆蓋
-
-### 🔧 文件 CI 工具鏈（12 tools）
-
+**文件 CI 工具鏈（13 tools）**
 - `validate_mermaid.py` / `check_doc_links.py` / `check_doc_freshness.py` / `doc_coverage.py`
 - `add_frontmatter.py` / `doc_impact.py` / `check_translation.py` / `check_includes_sync.py`
 - `sync_glossary_abbr.py` / `sync_schema.py` / `generate_cheat_sheet.py` / `inject_related_docs.py`
-- `generate_rule_pack_readme.py` / `generate_alert_reference.py` / `generate_nav.py` / `generate_changelog.py`
-- `validate_all.py`：統一驗證入口（11 項檢查）
+- `validate_all.py`：統一驗證入口
 
-### 🎨 互動式元件
+### 🔒 Security Audit & Hardening
 
-- `docs/getting-started/wizard.jsx`：角色導向入門精靈
-- `docs/interactive/tools/playground.jsx`：Tenant YAML 驗證 Playground
-- `docs/interactive/tools/rule-pack-selector.jsx`：Rule Pack 選擇器
-- `docs/interactive/tools/cli-playground.jsx`：CLI 指令建構器
+- **程式碼安全**：ReDoS 防護（regex 長度限制）、URL 注入白名單、SSRF scheme 白名單（http/https only）、Prototype pollution 過濾（`__proto__`/`constructor`）、YAML 100KB 上限、`os.chmod` 補齊
+- **文件安全加固**：HTTP→HTTPS 範例、webhook 驗證升為 error、`--web.enable-lifecycle` 安全註解、Grafana 密碼警告、新增「生產環境安全加固」章節
 
-### 📦 其他
+### 🏗️ 專案結構正規化
 
-- Conventional Commits + `generate_changelog.py`
-- API 端點健康監控（Blackbox Exporter）+ README badges
-- Glossary（30+ 術語）+ 5 ADRs + JSON Schema（VS Code 自動補全）
-- Doc Include 片段（docker-usage-pattern / prometheus-url-config / verify-checklist / three-state-summary）
+- **scripts/tools/ 三層子目錄化**：62 個工具分入 `ops/`（30）、`dx/`（18）、`lint/`（13）+ root（1 + 1 lib）
+  * Docker flat layout 相容（dual sys.path + build.sh 自動 strip）
+- **JSX 工具搬遷**：22 個工具 `docs/` → `docs/interactive/tools/`，registry/flows/loader/hub 路徑同步
+- **測試歸位**：`test_assemble_config_dir.py`、`test_da_assembler.py`、`test_flows_e2e.py` 統一搬入 `tests/`
+- **generate_tool_map.py 重寫**：自動掃描 ops/dx/lint/root 子目錄
 
----
+### 🧪 測試工程化（14 輪系統化重構）
 
-## [v1.12.0] — Tenant Profiles + JVM/Nginx Rule Packs (2026-03-12)
+| 項目 | v1.11.0 | v2.0.0 | 變化 |
+|------|---------|--------|------|
+| 測試檔案 | 5 | 40 | +35 |
+| 測試數量 | ~790 | 1,759 | +969 |
+| Go 測試 | 97 | 110 | +13 |
+| Coverage gate | 無 | 64%（`setup.cfg`） | NEW |
+| Test markers | 無 | 5（slow/integration/benchmark/regression/snapshot） | NEW |
+| Factories | 無 | 12（`factories.py` + `PipelineBuilder`） | NEW |
 
-Tenant Profiles 四層繼承鏈（defaults → profile → tenant override）、JVM + Nginx 兩個新 Rule Pack（13→15 ConfigMaps）、Python 工具鏈全面整合。
+**關鍵里程碑**：
+- Wave 5-6：pytest 遷移、SAST 掃描器（189 rules）、整合測試
+- Wave 7-8：property-based tests（Hypothesis）、snapshot tests（18 JSON）、coverage gate
+- Wave 9-10：factories 拆分、domain policy、deepdiff structured diff
+- Wave 11-12：unittest→pytest batch migration、metric_dictionary fixture
+- Wave 13：conftest re-export cleanup、duplicate removal、factory docstrings
+- Wave 14-16：parametrize、scaffold snapshots、benchmark baseline、validate_all coverage
+- Wave 17：coverage attack — baseline_discovery（31→55%）、backtest_threshold（32→70%）、batch_diagnose（49→71%）
+- Wave 18：parametrize sweep — 合併重複測試方法
 
-### 🏷️ Tenant Profiles（§11.4 Phase 1）
+### 🛡️ 品質閘門
 
-- **Go schema `_profile`**: Config struct 新增 `Profiles map[string]map[string]ScheduledValue` 欄位
-- **`applyProfiles()` fill-in pattern**: 在 Load 階段將 profile 值展開至 tenant overrides map（僅填入 tenant 未設定的 key），所有 Resolve* 函式無需修改
-- **`_profiles.yaml` boundary enforcement**: LoadDir 限制 profiles 只能從 `_profiles.yaml` 載入，其他 tenant 檔案含 `profiles:` → WARN + 忽略
-- **`ValidateTenantKeys()` 擴展**: `_profile` 引用不存在的 profile name → WARN
-- **四層繼承順序**: Global Defaults → Profile → Tenant Override（tenant 永遠勝出）
-- **13 個新 Go 測試案例**: Profile 基本繼承、tenant 覆寫、disable、routing/silent/metadata 繼承、ScheduledValue、LoadDir boundary 等
+- **Pre-commit hooks**：0 → 12 個 auto-run + 5 個 manual-stage（schema / translation / flow E2E / jsx-babel / i18n coverage）
+- **新增 hooks**：`tool-map-check`、`doc-map-check`、`rule-pack-stats-check`、`glossary-check`、`changelog-lint`、`version-consistency`、`includes-sync`、`platform-data-check`、`repo-name-check`、`tool-consistency-check`、`structure-check`、`doc-links-check`
+- **Docker CI 修正**：build.sh 自動 strip sys.path hack + 觸發路徑 `**/*.py` + 3 個遺漏工具打包修正
+- **Conventional Commits** + `generate_changelog.py` 自動化
 
-### 📦 Rule Pack 擴展（§11.1）
+### 📦 Dependency Upgrades
 
-- **JVM Rule Pack** (`rule-pack-jvm.yaml`): GC pause rate、heap memory usage、thread pool — 7 alert rules（含 composite `JVMPerformanceDegraded`）
-- **Nginx Rule Pack** (`rule-pack-nginx.yaml`): active connections、request rate、connection backlog — 6 alert rules
-- **Projected Volume**: 13→15 個 ConfigMap sources
-- **scaffold_tenant.py**: 新增 `jvm` + `nginx` RULE_PACKS 條目
-- **metric-dictionary.yaml**: 新增 6 個 metric 對照條目
+- **Prometheus**: v2.53.0 → v3.10.0（PromQL 相容性已驗證，15 個 Rule Pack 無影響）
+- **Alertmanager**: v0.27.0 → v0.31.1
+- **configmap-reload**: v0.14.0 → v0.15.0
+- **Grafana**: 11.1.0 → 12.4.1
+- **kube-state-metrics**: v2.10.0 → v2.18.0
+- **Go**: 1.22 → 1.26.1（go.mod + Dockerfile + CI）
+- **Frontend CDN**: React 18.2.0 → 18.3.1、Babel 7.23.9 → 7.26.4、Lucide 0.383.0 → 0.436.0
 
-### 🔧 Python 工具鏈整合
+### 📊 Numbers
 
-- **`scaffold_tenant.py`**: 新增 `--profile` CLI 參數 + 互動模式 profile 提示
-- **`config_diff.py`**: Profile 變更爆炸半徑計算（掃描引用該 profile 的 tenant 清單），JSON 輸出新增 `profile_diffs`
-- **`validate_config.py`**: 新增 Check 6 (profile references validation)，驗證所有 `_profile` 引用指向已定義的 profile
-- **`diagnose.py`**: 新增 `--config-dir` 參數，健康報告顯示 tenant 使用的 profile name
-- **`_lib_python.py`**: `VALID_RESERVED_KEYS` 新增 `_profile`
+| 項目 | v1.11.0 | v2.0.0 | 變化 |
+|------|---------|--------|------|
+| Rule Packs | 13 | 15 | +2 |
+| Python 工具 | ~20 | 62 | +42 |
+| da-tools CLI 命令 | 20 | 23 | +3 |
+| JSX 互動工具 | 0 | 24 | +24 |
+| 文件（docs/ .md） | ~20 | 66 | +46 |
+| 雙語文件對 | 0 | 44 | +44 |
+| Python 測試 | ~790 | 1,759 | +969 |
+| 測試檔案 | 5 | 40 | +35 |
+| Pre-commit hooks | 0 | 12 + 5 manual | +17 |
 
-### 📊 測試
+### 📈 Benchmark（v2.0.0，15 Rule Packs，Kind 叢集）
 
-| 項目 | v1.11.0 | v1.12.0 | 變化 |
-|------|---------|---------|------|
-| Go tests | 97 | 110 | +13 (profile 測試) |
-| Rule Packs | 13 | 15 | +2 (JVM, Nginx) |
+**Idle-State（2 tenant，237 rules，43 rule groups）：**
 
-### 📈 Benchmark（15 Rule Packs，Kind 叢集）
-
-**Idle-State 量測（2 tenant，237 rules，43 rule groups）：**
-
-| 指標 | v1.11.0 (13 packs) | v1.12.0 (15 packs) | 變化 |
+| 指標 | v1.11.0 (13 packs) | v2.0.0 (15 packs) | 變化 |
 |------|-------|-------|------|
 | Total Rules | 141 | 237 | +96 |
 | Rule Groups | 27 | 43 | +16 |
@@ -269,7 +227,7 @@ Tenant Profiles 四層繼承鏈（defaults → profile → tenant override）、
 | ResolveAt_NightWindow_1000 | 5,404,213 | 5,223,925 | 25,056 |
 | ResolveSilentModes_1000 | 86,700 | 186,086 | 10 |
 
-**Route Generation Scaling：**
+**Route Generation Scaling（Python `generate_alertmanager_routes.py`）：**
 
 | Tenants | Wall Time | Routes | Inhibit Rules |
 |---------|-----------|--------|---------------|
@@ -277,15 +235,6 @@ Tenant Profiles 四層繼承鏈（defaults → profile → tenant override）、
 | 10 | 196ms | 8 | 10 |
 | 50 | 248ms | 41 | 50 |
 | 100 | 327ms | 80 | 100 |
-
-### 📄 文件
-
-- CLAUDE.md: Rule Pack 數量 13→15
-- README.md / README.en.md: 數量同步 + Mermaid 圖新增 jvm/nginx
-- architecture-and-design.md (中/英): 數量同步 + Mermaid 圖更新
-- byo-prometheus-integration.md: 數量同步
-- rule-packs/README.md: 新增 JVM + Nginx 列
-- docs/internal/v1.12-development-plan.md: 完整開發計畫
 
 ---
 

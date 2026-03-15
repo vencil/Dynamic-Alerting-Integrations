@@ -12,10 +12,10 @@ fi
 
 # CDN resources used by jsx-loader.html and interactive/index.html
 declare -A RESOURCES=(
-  ["react.production.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"
-  ["react-dom.production.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"
-  ["babel.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"
-  ["lucide-react.min.js"]="https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.min.js"
+  ["react.production.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"
+  ["react-dom.production.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"
+  ["babel.min.js"]="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"
+  ["lucide-react.min.js"]="https://unpkg.com/lucide-react@0.436.0/dist/umd/lucide-react.min.js"
   ["tailwindcss.js"]="https://cdn.tailwindcss.com"
 )
 

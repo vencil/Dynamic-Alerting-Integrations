@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""test_diagnose_inheritance.py — Four-layer inheritance chain tests (v1.12.0).
+"""test_diagnose_inheritance.py — pytest 風格的四層繼承鏈測試 (v1.12.0)。
 
 Tests for diagnose.py resolve_inheritance_chain() and _format_chain_summary().
 """
 
 import os
 import tempfile
-import unittest
 
 import yaml
 
@@ -14,11 +13,11 @@ import yaml
 import diagnose  # noqa: E402
 
 
-class TestResolveInheritanceChain(unittest.TestCase):
-    """resolve_inheritance_chain() tests."""
+class TestResolveInheritanceChain:
+    """resolve_inheritance_chain() 測試。"""
 
     def _make_config_dir(self, tmpdir, defaults=None, profiles=None, tenants=None):
-        """Helper to create a conf.d/ directory with given config files."""
+        """輔助函數：建立 conf.d/ 目錄含給定配置檔。"""
         if defaults:
             with open(os.path.join(tmpdir, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": defaults}, f)
@@ -31,30 +30,30 @@ class TestResolveInheritanceChain(unittest.TestCase):
                     yaml.dump({"tenants": {t_name: t_data}}, f)
 
     def test_defaults_only(self):
-        """Tenant with only defaults should show single layer."""
+        """僅含 defaults 的 Tenant 應顯示單一層級。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={"mysql_connections": 80, "container_cpu": 70},
                 tenants={"db-a": {}})
             result = diagnose.resolve_inheritance_chain("db-a", d)
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result["chain"]), 1)
-            self.assertEqual(result["chain"][0]["layer"], "defaults")
-            self.assertEqual(result["resolved"]["mysql_connections"], 80)
-            self.assertIsNone(result["profile_name"])
+            assert result is not None
+            assert len(result["chain"]) == 1
+            assert result["chain"][0]["layer"] == "defaults"
+            assert result["resolved"]["mysql_connections"] == 80
+            assert result["profile_name"] is None
 
     def test_defaults_plus_tenant_override(self):
-        """Tenant override should win over defaults."""
+        """Tenant 覆寫應優於 defaults。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={"mysql_connections": 80},
                 tenants={"db-a": {"mysql_connections": "50"}})
             result = diagnose.resolve_inheritance_chain("db-a", d)
-            self.assertEqual(len(result["chain"]), 2)  # defaults + tenant
-            self.assertEqual(result["resolved"]["mysql_connections"], "50")
+            assert len(result["chain"]) == 2  # defaults + tenant
+            assert result["resolved"]["mysql_connections"] == "50"
 
     def test_full_chain_with_profile(self):
-        """Full four-layer chain: defaults + profile + tenant."""
+        """完整四層鏈：defaults + profile + tenant。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={"mysql_connections": 80, "container_cpu": 70},
@@ -67,22 +66,22 @@ class TestResolveInheritanceChain(unittest.TestCase):
                     "mysql_connections": "50",
                 }})
             result = diagnose.resolve_inheritance_chain("db-a", d)
-            self.assertEqual(result["profile_name"], "standard")
+            assert result["profile_name"] == "standard"
 
             # Should have 3 layers: defaults, profile (fill-in), tenant
-            self.assertEqual(len(result["chain"]), 3)
+            assert len(result["chain"]) == 3
             layers = [c["layer"] for c in result["chain"]]
-            self.assertEqual(layers, ["defaults", "profile", "tenant"])
+            assert layers == ["defaults", "profile", "tenant"]
 
             # Tenant override wins for mysql_connections
-            self.assertEqual(result["resolved"]["mysql_connections"], "50")
+            assert result["resolved"]["mysql_connections"] == "50"
             # Profile fills in redis_memory (tenant didn't set it)
-            self.assertEqual(result["resolved"]["redis_memory"], 1024)
+            assert result["resolved"]["redis_memory"] == 1024
             # Defaults provide container_cpu
-            self.assertEqual(result["resolved"]["container_cpu"], 70)
+            assert result["resolved"]["container_cpu"] == 70
 
     def test_profile_fillin_only_missing_keys(self):
-        """Profile should only fill keys not set by tenant."""
+        """Profile 應僅填充未由 tenant 設定的鍵。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={},
@@ -91,32 +90,32 @@ class TestResolveInheritanceChain(unittest.TestCase):
             result = diagnose.resolve_inheritance_chain("t", d)
             # Profile's effective keys = only "b" (tenant has "a")
             profile_layer = [c for c in result["chain"] if c["layer"] == "profile"]
-            self.assertEqual(len(profile_layer), 1)
-            self.assertIn("b", profile_layer[0]["keys"])
-            self.assertNotIn("a", profile_layer[0]["keys"])
+            assert len(profile_layer) == 1
+            assert "b" in profile_layer[0]["keys"]
+            assert "a" not in profile_layer[0]["keys"]
 
     def test_nonexistent_tenant(self):
-        """Non-existent tenant should return empty chain."""
+        """不存在的 tenant 應返回空鏈。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={"x": 1},
                 tenants={"db-a": {}})
             result = diagnose.resolve_inheritance_chain("nonexistent", d)
             # Should still resolve defaults
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result["chain"]), 1)
+            assert result is not None
+            assert len(result["chain"]) == 1
 
     def test_no_config_dir(self):
-        """None config_dir should return None."""
+        """None config_dir 應返回 None。"""
         result = diagnose.resolve_inheritance_chain("db-a", None)
-        self.assertIsNone(result)
+        assert result is None
 
 
-class TestFormatChainSummary(unittest.TestCase):
-    """_format_chain_summary() tests."""
+class TestFormatChainSummary:
+    """_format_chain_summary() 測試。"""
 
     def test_summary_structure(self):
-        """Summary should include layers, resolved_count, profile."""
+        """摘要應包含 layers、resolved_count、profile。"""
         inheritance = {
             "chain": [
                 {"layer": "defaults", "source": "_defaults.yaml", "keys": {"a": 1, "b": 2}},
@@ -126,12 +125,8 @@ class TestFormatChainSummary(unittest.TestCase):
             "profile_name": None,
         }
         summary = diagnose._format_chain_summary(inheritance)
-        self.assertEqual(len(summary["layers"]), 2)
-        self.assertEqual(summary["layers"][0]["key_count"], 2)
-        self.assertEqual(summary["layers"][1]["key_count"], 1)
-        self.assertEqual(summary["resolved_count"], 2)
-        self.assertIsNone(summary["profile"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(summary["layers"]) == 2
+        assert summary["layers"][0]["key_count"] == 2
+        assert summary["layers"][1]["key_count"] == 1
+        assert summary["resolved_count"] == 2
+        assert summary["profile"] is None

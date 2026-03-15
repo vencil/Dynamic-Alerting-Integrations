@@ -237,6 +237,21 @@ bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0
 		$(if $(TOOLS),--tools $(TOOLS))
 
 # ----------------------------------------------------------
+# Python 測試 & 覆蓋率
+# ----------------------------------------------------------
+.PHONY: test
+test: ## 執行 Python 單元測試 (pytest)
+	@python3 -m pytest tests/ -v --tb=short $(ARGS)
+
+.PHONY: coverage
+coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 HTML)
+	@python3 -m pytest tests/ \
+		--cov --cov-config=setup.cfg --cov-report=term-missing \
+		$(if $(findstring --html,$(ARGS)),--cov-report=html:.build/htmlcov) \
+		--tb=short -q
+	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
+
+# ----------------------------------------------------------
 # Helm Chart 發佈
 # ----------------------------------------------------------
 CHART_DIR  := components/threshold-exporter

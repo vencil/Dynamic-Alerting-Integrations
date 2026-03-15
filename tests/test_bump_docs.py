@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_bump_docs.py — 版號一致性管理工具 測試套件 (Phase 10)。
+"""test_bump_docs.py — 版號一致性管理工具 測試套件 (Wave 12 pytest 遷移)。
 
 驗證 bump_docs.py 的核心功能:
   1. _build_rules() 規則結構完整性
@@ -14,7 +14,6 @@
 import os
 import stat
 import tempfile
-import unittest
 from pathlib import Path
 
 # Add scripts/tools to path
@@ -22,43 +21,43 @@ from pathlib import Path
 import bump_docs  # noqa: E402
 
 
-class TestBuildRules(unittest.TestCase):
+class TestBuildRules:
     """測試 _build_rules() 規則結構。"""
 
     def test_returns_three_lines(self):
         rules = bump_docs._build_rules()
-        self.assertIn("platform", rules)
-        self.assertIn("exporter", rules)
-        self.assertIn("tools", rules)
+        assert "platform" in rules
+        assert "exporter" in rules
+        assert "tools" in rules
 
     def test_all_rules_have_required_keys(self):
         rules = bump_docs._build_rules()
         for line_name, line_rules in rules.items():
             for rule in line_rules:
-                self.assertIn("file", rule, f"Missing 'file' in {line_name} rule")
-                self.assertIn("desc", rule, f"Missing 'desc' in {line_name} rule")
-                self.assertIn("replacement", rule, f"Missing 'replacement' in {line_name} rule")
+                assert "file" in rule, f"Missing 'file' in {line_name} rule"
+                assert "desc" in rule, f"Missing 'desc' in {line_name} rule"
+                assert "replacement" in rule, f"Missing 'replacement' in {line_name} rule"
                 # Either 'pattern' or 'whole_file' must exist
                 has_pattern = "pattern" in rule or "whole_file" in rule
-                self.assertTrue(has_pattern, f"Missing pattern/whole_file in {line_name} rule")
+                assert has_pattern, f"Missing pattern/whole_file in {line_name} rule"
 
     def test_tools_rules_reference_da_tools(self):
         """da-tools 規則應引用 da-tools 相關檔案。"""
         rules = bump_docs._build_rules()
         tool_files = [r["file"] for r in rules["tools"]]
-        self.assertTrue(any("da-tools" in f for f in tool_files))
+        assert any("da-tools" in f for f in tool_files)
 
     def test_platform_rules_reference_chart(self):
         """Chart.yaml 版號規則應存在於 exporter rules（chart 版號 = exporter 版號）。"""
         rules = bump_docs._build_rules()
         exporter_files = [r["file"] for r in rules["exporter"]]
-        self.assertTrue(any("Chart.yaml" in f for f in exporter_files))
+        assert any("Chart.yaml" in f for f in exporter_files)
 
 
-class TestApplyRulesCheckOnly(unittest.TestCase):
+class TestApplyRulesCheckOnly:
     """測試 apply_rules() check-only 模式。"""
 
-    def test_check_detects_outdated(self):
+    def test_check_detects_outdated(self, monkeypatch):
         """Outdated 版號應被偵測為 UPDATE。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a fake file with old version
@@ -74,22 +73,18 @@ class TestApplyRulesCheckOnly(unittest.TestCase):
                 "replacement": lambda v: f"ghcr.io/vencil/da-tools:{v}",
             }]
 
-            # Override REPO_ROOT temporarily
-            orig_root = bump_docs.REPO_ROOT
-            try:
-                bump_docs.REPO_ROOT = Path(tmpdir)
-                changes = bump_docs.apply_rules(rules, "0.2.0", check_only=True)
-                statuses = [c[0] for c in changes]
-                self.assertIn("UPDATE", statuses)
+            # Override REPO_ROOT temporarily using monkeypatch
+            monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
+            changes = bump_docs.apply_rules(rules, "0.2.0", check_only=True)
+            statuses = [c[0] for c in changes]
+            assert "UPDATE" in statuses
 
-                # File should NOT be modified in check mode
-                with open(test_file, 'r') as f:
-                    content = f.read()
-                self.assertIn("0.1.0", content)
-            finally:
-                bump_docs.REPO_ROOT = orig_root
+            # File should NOT be modified in check mode
+            with open(test_file, 'r') as f:
+                content = f.read()
+            assert "0.1.0" in content
 
-    def test_check_passes_when_current(self):
+    def test_check_passes_when_current(self, monkeypatch):
         """已更新的版號應回傳 OK。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = os.path.join(tmpdir, "test.md")
@@ -104,20 +99,16 @@ class TestApplyRulesCheckOnly(unittest.TestCase):
                 "replacement": lambda v: f"ghcr.io/vencil/da-tools:{v}",
             }]
 
-            orig_root = bump_docs.REPO_ROOT
-            try:
-                bump_docs.REPO_ROOT = Path(tmpdir)
-                changes = bump_docs.apply_rules(rules, "0.2.0", check_only=True)
-                statuses = [c[0] for c in changes]
-                self.assertIn("OK", statuses)
-            finally:
-                bump_docs.REPO_ROOT = orig_root
+            monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
+            changes = bump_docs.apply_rules(rules, "0.2.0", check_only=True)
+            statuses = [c[0] for c in changes]
+            assert "OK" in statuses
 
 
-class TestApplyRulesWrite(unittest.TestCase):
+class TestApplyRulesWrite:
     """測試 apply_rules() 寫入模式。"""
 
-    def test_write_updates_file(self):
+    def test_write_updates_file(self, monkeypatch):
         """寫入模式應實際修改檔案。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = os.path.join(tmpdir, "test.md")
@@ -132,22 +123,18 @@ class TestApplyRulesWrite(unittest.TestCase):
                 "replacement": lambda v: f"ghcr.io/vencil/da-tools:{v}",
             }]
 
-            orig_root = bump_docs.REPO_ROOT
-            try:
-                bump_docs.REPO_ROOT = Path(tmpdir)
-                changes = bump_docs.apply_rules(rules, "0.3.0", check_only=False)
-                statuses = [c[0] for c in changes]
-                self.assertIn("UPDATE", statuses)
+            monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
+            changes = bump_docs.apply_rules(rules, "0.3.0", check_only=False)
+            statuses = [c[0] for c in changes]
+            assert "UPDATE" in statuses
 
-                # File should be modified
-                with open(test_file, 'r') as f:
-                    content = f.read()
-                self.assertIn("0.3.0", content)
-                self.assertNotIn("0.1.0", content)
-            finally:
-                bump_docs.REPO_ROOT = orig_root
+            # File should be modified
+            with open(test_file, 'r') as f:
+                content = f.read()
+            assert "0.3.0" in content
+            assert "0.1.0" not in content
 
-    def test_whole_file_mode(self):
+    def test_whole_file_mode(self, monkeypatch):
         """whole_file 模式應替換整個檔案內容。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = os.path.join(tmpdir, "VERSION")
@@ -163,35 +150,27 @@ class TestApplyRulesWrite(unittest.TestCase):
                 "whole_file": True,
             }]
 
-            orig_root = bump_docs.REPO_ROOT
-            try:
-                bump_docs.REPO_ROOT = Path(tmpdir)
-                bump_docs.apply_rules(rules, "0.2.0", check_only=False)
+            monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
+            bump_docs.apply_rules(rules, "0.2.0", check_only=False)
 
-                with open(test_file, 'r') as f:
-                    content = f.read()
-                self.assertEqual(content.strip(), "0.2.0")
-            finally:
-                bump_docs.REPO_ROOT = orig_root
+            with open(test_file, 'r') as f:
+                content = f.read()
+            assert content.strip() == "0.2.0"
 
 
-class TestApplyRulesEdgeCases(unittest.TestCase):
+class TestApplyRulesEdgeCases:
     """邊界案例。"""
 
-    def test_missing_file_returns_skip(self):
+    def test_missing_file_returns_skip(self, monkeypatch):
         """檔案不存在應回傳 SKIP。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             rules = [{"file": "nonexistent.md", "desc": "missing",
                        "pattern": r"v\d+", "replacement": lambda v: f"v{v}"}]
-            orig_root = bump_docs.REPO_ROOT
-            try:
-                bump_docs.REPO_ROOT = Path(tmpdir)
-                changes = bump_docs.apply_rules(rules, "1.0.0", check_only=True)
-                self.assertEqual(changes[0][0], "SKIP")
-            finally:
-                bump_docs.REPO_ROOT = orig_root
+            monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
+            changes = bump_docs.apply_rules(rules, "1.0.0", check_only=True)
+            assert changes[0][0] == "SKIP"
 
-    def test_no_match_returns_ok(self):
+    def test_no_match_returns_ok(self, monkeypatch):
         """Pattern 不匹配應回傳 OK。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = os.path.join(tmpdir, "test.md")
@@ -202,27 +181,19 @@ class TestApplyRulesEdgeCases(unittest.TestCase):
             rules = [{"file": "test.md", "desc": "test",
                        "pattern": r"v\d+\.\d+\.\d+",
                        "replacement": lambda v: f"v{v}"}]
-            orig_root = bump_docs.REPO_ROOT
-            try:
-                bump_docs.REPO_ROOT = Path(tmpdir)
-                changes = bump_docs.apply_rules(rules, "1.0.0", check_only=True)
-                self.assertEqual(changes[0][0], "OK")
-            finally:
-                bump_docs.REPO_ROOT = orig_root
+            monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
+            changes = bump_docs.apply_rules(rules, "1.0.0", check_only=True)
+            assert changes[0][0] == "OK"
 
 
-class TestReadCurrentVersions(unittest.TestCase):
+class TestReadCurrentVersions:
     """測試版號讀取。"""
 
     def test_reads_from_real_repo(self):
         """從真實 repo 讀取版號 (若 Chart.yaml 存在)。"""
         versions = bump_docs.read_current_versions()
         if bump_docs.CHART_YAML.exists():
-            self.assertIn("platform", versions)
-            self.assertIn("exporter", versions)
+            assert "platform" in versions
+            assert "exporter" in versions
         if bump_docs.DA_TOOLS_VERSION.exists():
-            self.assertIn("tools", versions)
-
-
-if __name__ == "__main__":
-    unittest.main()
+            assert "tools" in versions

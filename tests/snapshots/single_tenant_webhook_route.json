@@ -1,0 +1,22 @@
+{
+  "receivers": [
+    {
+      "name": "tenant-db-a",
+      "webhook_configs": [
+        {
+          "url": "https://hooks.example.com/alert"
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "group_wait": "30s",
+      "matchers": [
+        "tenant=\"db-a\""
+      ],
+      "receiver": "tenant-db-a",
+      "repeat_interval": "4h"
+    }
+  ]
+}

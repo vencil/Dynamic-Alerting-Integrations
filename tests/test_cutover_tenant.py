@@ -1,12 +1,12 @@
-"""Tests for cutover_tenant.py — Shadow Monitoring one-command cutover."""
+"""pytest style tests for cutover_tenant.py — Shadow Monitoring one-command cutover."""
 
 import json
 import os
 import subprocess
 import tempfile
-import unittest
 from unittest import mock
 
+import pytest
 
 import cutover_tenant as ct
 
@@ -40,41 +40,46 @@ def _make_readiness(tmp, ready=True, pct=100.0, converged=5, total=5):
 # TestLoadCutoverReadiness
 # ---------------------------------------------------------------------------
 
-class TestLoadCutoverReadiness(unittest.TestCase):
-    """load_cutover_readiness() tests."""
+class TestLoadCutoverReadiness:
+    """load_cutover_readiness() tests。"""
 
     def test_valid_json(self):
+        """有效 JSON 檔案正確載入。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp)
             data = ct.load_cutover_readiness(path)
-            self.assertTrue(data["ready"])
-            self.assertEqual(data["convergence_percentage"], 100.0)
+            assert data["ready"]
+            assert data["convergence_percentage"] == 100.0
 
     def test_not_ready(self):
+        """未準備好的狀態正確解析。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp, ready=False, pct=60.0)
             data = ct.load_cutover_readiness(path)
-            self.assertFalse(data["ready"])
+            assert not data["ready"]
 
     def test_missing_fields(self):
+        """缺失必要欄位拋出 ValueError。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "bad.json")
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump({"ready": True}, fh)
-            with self.assertRaises(ValueError) as ctx:
+            with pytest.raises(ValueError) as exc_info:
                 ct.load_cutover_readiness(path)
-            self.assertIn("Missing required fields", str(ctx.exception))
+            assert "Missing required fields" in str(exc_info.value)
 
     def test_invalid_json(self):
+        """無效 JSON 拋出 JSONDecodeError。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "bad.json")
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("not json")
-            with self.assertRaises(json.JSONDecodeError):
+            with pytest.raises(json.JSONDecodeError):
                 ct.load_cutover_readiness(path)
 
     def test_file_not_found(self):
-        with self.assertRaises(FileNotFoundError):
+        """檔案不存在拋出 FileNotFoundError。"""
+        with pytest.raises(FileNotFoundError):
             ct.load_cutover_readiness("/nonexistent/path.json")
 
 
@@ -82,166 +87,183 @@ class TestLoadCutoverReadiness(unittest.TestCase):
 # TestRunKubectl
 # ---------------------------------------------------------------------------
 
-class TestRunKubectl(unittest.TestCase):
-    """_run_kubectl() tests."""
+class TestRunKubectl:
+    """_run_kubectl() tests。"""
 
     def test_dry_run(self):
+        """Dry-run 模式返回 (dry-run) 消息。"""
         ok, msg = ct._run_kubectl(["get", "pods"], dry_run=True)
-        self.assertTrue(ok)
-        self.assertEqual(msg, "(dry-run)")
+        assert ok
+        assert msg == "(dry-run)"
 
     @mock.patch("subprocess.run")
     def test_success(self, mock_run):
+        """成功執行返回 True 和輸出。"""
         mock_run.return_value = mock.Mock(
             returncode=0, stdout="deleted\n", stderr="",
         )
         ok, msg = ct._run_kubectl(["delete", "job", "shadow-monitor"])
-        self.assertTrue(ok)
-        self.assertEqual(msg, "deleted")
+        assert ok
+        assert msg == "deleted"
 
     @mock.patch("subprocess.run")
     def test_failure(self, mock_run):
+        """失敗執行返回 False 和錯誤訊息。"""
         mock_run.return_value = mock.Mock(
             returncode=1, stdout="", stderr="not found",
         )
         ok, msg = ct._run_kubectl(["delete", "job", "shadow-monitor"])
-        self.assertFalse(ok)
-        self.assertIn("not found", msg)
+        assert not ok
+        assert "not found" in msg
 
     @mock.patch("subprocess.run", side_effect=FileNotFoundError)
     def test_kubectl_not_found(self, _mock):
+        """kubectl 不存在時報告錯誤。"""
         ok, msg = ct._run_kubectl(["get", "pods"])
-        self.assertFalse(ok)
-        self.assertIn("kubectl not found", msg)
+        assert not ok
+        assert "kubectl not found" in msg
 
     @mock.patch("subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="kubectl", timeout=30))
     def test_kubectl_timeout(self, _mock):
+        """kubectl 超時時報告錯誤。"""
         ok, msg = ct._run_kubectl(["get", "pods"])
-        self.assertFalse(ok)
-        self.assertIn("timed out", msg)
+        assert not ok
+        assert "timed out" in msg
 
 
 # ---------------------------------------------------------------------------
 # TestStepFunctions
 # ---------------------------------------------------------------------------
 
-class TestStepFunctions(unittest.TestCase):
-    """Individual step function tests."""
+class TestStepFunctions:
+    """Individual step function tests。"""
 
     @mock.patch("cutover_tenant._run_kubectl", return_value=(True, "deleted"))
     def test_stop_shadow_job(self, mock_kube):
+        """停止 shadow job 的步驟。"""
         ok, msg = ct.stop_shadow_job(namespace="monitoring")
-        self.assertTrue(ok)
+        assert ok
         mock_kube.assert_called_once()
         args = mock_kube.call_args[0][0]
-        self.assertIn("shadow-monitor", args)
+        assert "shadow-monitor" in args
 
     @mock.patch("cutover_tenant._run_kubectl", return_value=(True, "deleted"))
     def test_remove_old_rules(self, mock_kube):
+        """移除舊規則的步驟。"""
         ok, msg = ct.remove_old_rules(configmap="my-cm")
-        self.assertTrue(ok)
+        assert ok
 
     @mock.patch("cutover_tenant._run_kubectl",
                 return_value=(False, "not labeled"))
     def test_remove_shadow_label_already_absent(self, _mock):
+        """移除 shadow label (已缺失的情況)。"""
         ok, msg = ct.remove_shadow_label()
-        self.assertTrue(ok)
-        self.assertIn("already absent", msg)
+        assert ok
+        assert "already absent" in msg
 
     @mock.patch("cutover_tenant._run_kubectl", return_value=(True, "labeled"))
     def test_remove_shadow_route(self, _mock):
+        """移除 shadow route 的步驟。"""
         ok, msg = ct.remove_shadow_route()
-        self.assertTrue(ok)
+        assert ok
 
     def test_verify_health_dry_run(self):
+        """驗證健康狀態的 dry-run 模式。"""
         ok, msg = ct.verify_health("db-a", "http://localhost:9090",
                                    dry_run=True)
-        self.assertTrue(ok)
-        self.assertEqual(msg, "(dry-run)")
+        assert ok
+        assert msg == "(dry-run)"
 
 
 # ---------------------------------------------------------------------------
 # TestApplyCutover
 # ---------------------------------------------------------------------------
 
-class TestApplyCutover(unittest.TestCase):
-    """apply_cutover() integration tests."""
+class TestApplyCutover:
+    """apply_cutover() integration tests。"""
 
     @mock.patch("cutover_tenant._run_kubectl", return_value=(True, "ok"))
     @mock.patch("cutover_tenant.verify_health", return_value=(True, "healthy"))
     def test_all_steps_succeed(self, _vh, _kube):
+        """所有步驟成功。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp)
             report = ct.apply_cutover(path, "db-a", "http://prom:9090")
-            self.assertTrue(report["success"])
-            self.assertEqual(len(report["steps_completed"]), 5)
-            self.assertIsNone(report["failed_step"])
+            assert report["success"]
+            assert len(report["steps_completed"]) == 5
+            assert report["failed_step"] is None
 
     def test_not_ready_without_force(self):
+        """未準備好時不強制執行。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp, ready=False, pct=60.0)
             report = ct.apply_cutover(path, "db-a", "http://prom:9090")
-            self.assertFalse(report["success"])
-            self.assertEqual(report["failed_step"], "readiness_check")
-            self.assertIn("--force", report["message"])
+            assert not report["success"]
+            assert report["failed_step"] == "readiness_check"
+            assert "--force" in report["message"]
 
     @mock.patch("cutover_tenant._run_kubectl", return_value=(True, "ok"))
     @mock.patch("cutover_tenant.verify_health", return_value=(True, "ok"))
     def test_force_overrides_not_ready(self, _vh, _kube):
+        """--force 覆蓋未準備好的檢查。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp, ready=False, pct=60.0)
             report = ct.apply_cutover(path, "db-a", "http://prom:9090",
                                       force=True)
-            self.assertTrue(report["success"])
+            assert report["success"]
 
     @mock.patch("cutover_tenant._run_kubectl",
                 side_effect=[(True, "ok"), (False, "permission denied")])
     def test_fails_at_second_step(self, _kube):
+        """在第二步失敗。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp)
             report = ct.apply_cutover(path, "db-a", "http://prom:9090")
-            self.assertFalse(report["success"])
-            self.assertEqual(len(report["steps_completed"]), 1)
-            self.assertEqual(report["failed_step"],
-                             "Remove old Recording Rules")
+            assert not report["success"]
+            assert len(report["steps_completed"]) == 1
+            assert report["failed_step"] == "Remove old Recording Rules"
 
     @mock.patch("cutover_tenant._run_kubectl", return_value=(True, "ok"))
     @mock.patch("cutover_tenant.verify_health", return_value=(True, "ok"))
     def test_dry_run(self, _vh, _kube):
+        """Dry-run 模式。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = _make_readiness(tmp)
             report = ct.apply_cutover(path, "db-a", "http://prom:9090",
                                       dry_run=True)
-            self.assertTrue(report["success"])
+            assert report["success"]
 
     def test_missing_readiness_file(self):
+        """缺失就緒檔案。"""
         report = ct.apply_cutover("/no/such/file.json", "db-a",
                                   "http://prom:9090")
-        self.assertFalse(report["success"])
-        self.assertEqual(report["failed_step"], "load_readiness")
+        assert not report["success"]
+        assert report["failed_step"] == "load_readiness"
 
 
 # ---------------------------------------------------------------------------
 # TestCLI
 # ---------------------------------------------------------------------------
 
-class TestCLI(unittest.TestCase):
-    """CLI argument parsing tests."""
+class TestCLI:
+    """CLI argument parsing tests。"""
 
     def test_parser_required_args(self):
+        """必要引數正確解析。"""
         parser = ct.build_parser()
         args = parser.parse_args([
             "--readiness-json", "r.json",
             "--tenant", "db-a",
         ])
-        self.assertEqual(args.readiness_json, "r.json")
-        self.assertEqual(args.tenant, "db-a")
-        self.assertEqual(args.prometheus, "http://localhost:9090")
-        self.assertFalse(args.dry_run)
-        self.assertFalse(args.force)
+        assert args.readiness_json == "r.json"
+        assert args.tenant == "db-a"
+        assert args.prometheus == "http://localhost:9090"
+        assert not args.dry_run
+        assert not args.force
 
     def test_parser_all_flags(self):
+        """所有旗標正確解析。"""
         parser = ct.build_parser()
         args = parser.parse_args([
             "--readiness-json", "r.json",
@@ -252,14 +274,15 @@ class TestCLI(unittest.TestCase):
             "--force",
             "--json-output",
         ])
-        self.assertTrue(args.dry_run)
-        self.assertTrue(args.force)
-        self.assertTrue(args.json_output)
-        self.assertEqual(args.namespace, "custom-ns")
+        assert args.dry_run
+        assert args.force
+        assert args.json_output
+        assert args.namespace == "custom-ns"
 
     def test_parser_missing_required(self):
+        """缺失必要引數時退出。"""
         parser = ct.build_parser()
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             parser.parse_args([])
 
 
@@ -267,33 +290,31 @@ class TestCLI(unittest.TestCase):
 # TestEntrypointIntegration
 # ---------------------------------------------------------------------------
 
-class TestEntrypointIntegration(unittest.TestCase):
-    """Verify cutover is registered in da-tools entrypoint."""
+class TestEntrypointIntegration:
+    """Verify cutover is registered in da-tools entrypoint。"""
 
     def test_command_map_has_cutover(self):
+        """entrypoint.py 中包含 cutover 命令。"""
         ep_path = os.path.join(
             os.path.dirname(__file__), "..", "components",
             "da-tools", "app", "entrypoint.py",
         )
         if not os.path.isfile(ep_path):
-            self.skipTest("entrypoint.py not found")
+            pytest.skip("entrypoint.py not found")
         with open(ep_path, encoding="utf-8") as fh:
             content = fh.read()
-        self.assertIn('"cutover"', content)
-        self.assertIn("cutover_tenant.py", content)
+        assert '"cutover"' in content
+        assert "cutover_tenant.py" in content
 
     def test_prometheus_commands_has_cutover(self):
+        """PROMETHEUS_COMMANDS 包含 cutover 命令。"""
         ep_path = os.path.join(
             os.path.dirname(__file__), "..", "components",
             "da-tools", "app", "entrypoint.py",
         )
         if not os.path.isfile(ep_path):
-            self.skipTest("entrypoint.py not found")
+            pytest.skip("entrypoint.py not found")
         with open(ep_path, encoding="utf-8") as fh:
             content = fh.read()
         # PROMETHEUS_COMMANDS should contain "cutover"
-        self.assertIn('"cutover"', content)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert '"cutover"' in content

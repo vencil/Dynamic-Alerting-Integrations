@@ -1,0 +1,39 @@
+{
+  "enabled_tenants": [
+    "tenant=\"db-a\"",
+    "tenant=\"db-c\""
+  ],
+  "rules": [
+    {
+      "equal": [
+        "metric_group"
+      ],
+      "source_matchers": [
+        "severity=\"critical\"",
+        "metric_group=~\".+\"",
+        "tenant=\"db-a\""
+      ],
+      "target_matchers": [
+        "severity=\"warning\"",
+        "metric_group=~\".+\"",
+        "tenant=\"db-a\""
+      ]
+    },
+    {
+      "equal": [
+        "metric_group"
+      ],
+      "source_matchers": [
+        "severity=\"critical\"",
+        "metric_group=~\".+\"",
+        "tenant=\"db-c\""
+      ],
+      "target_matchers": [
+        "severity=\"warning\"",
+        "metric_group=~\".+\"",
+        "tenant=\"db-c\""
+      ]
+    }
+  ],
+  "warning_count": 1
+}

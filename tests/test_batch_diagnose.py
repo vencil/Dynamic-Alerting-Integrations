@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_batch_diagnose.py — batch_diagnose.py 測試。
+"""test_batch_diagnose.py — batch_diagnose.py pytest 風格測試。
 
 驗證:
   1. discover_tenants() — ConfigMap key 解析
@@ -9,14 +9,16 @@
 """
 
 import json
-import unittest
+import subprocess
+import sys
 from unittest.mock import patch, MagicMock
 
+import pytest
 
 import batch_diagnose as bd  # noqa: E402
 
 
-class TestDiscoverTenants(unittest.TestCase):
+class TestDiscoverTenants:
     """discover_tenants() 測試。"""
 
     @patch("batch_diagnose.subprocess.run")
@@ -33,7 +35,7 @@ class TestDiscoverTenants(unittest.TestCase):
             returncode=0, stdout=json.dumps(cm_data),
         )
         result = bd.discover_tenants()
-        self.assertEqual(result, ["db-a", "db-b"])
+        assert result == ["db-a", "db-b"]
 
     @patch("batch_diagnose.subprocess.run")
     def test_skip_underscore_keys(self, mock_run):
@@ -49,14 +51,14 @@ class TestDiscoverTenants(unittest.TestCase):
             returncode=0, stdout=json.dumps(cm_data),
         )
         result = bd.discover_tenants()
-        self.assertEqual(result, ["db-a"])
+        assert result == ["db-a"]
 
     @patch("batch_diagnose.subprocess.run")
     def test_kubectl_failure(self, mock_run):
         """kubectl 失敗應返回空列表。"""
         mock_run.return_value = MagicMock(returncode=1, stderr="error")
         result = bd.discover_tenants()
-        self.assertEqual(result, [])
+        assert result == []
 
     @patch("batch_diagnose.subprocess.run")
     def test_kubectl_timeout(self, mock_run):
@@ -64,7 +66,7 @@ class TestDiscoverTenants(unittest.TestCase):
         import subprocess
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="kubectl", timeout=15)
         result = bd.discover_tenants()
-        self.assertEqual(result, [])
+        assert result == []
 
     @patch("batch_diagnose.subprocess.run")
     def test_empty_configmap(self, mock_run):
@@ -74,10 +76,10 @@ class TestDiscoverTenants(unittest.TestCase):
             returncode=0, stdout=json.dumps(cm_data),
         )
         result = bd.discover_tenants()
-        self.assertEqual(result, [])
+        assert result == []
 
 
-class TestGenerateReport(unittest.TestCase):
+class TestGenerateReport:
     """generate_report() 測試。"""
 
     def test_all_healthy(self):
@@ -87,9 +89,9 @@ class TestGenerateReport(unittest.TestCase):
             {"tenant": "db-b", "status": "healthy"},
         ]
         report = bd.generate_report(results, "http://localhost:9090")
-        self.assertEqual(report["health_score"], 1.0)
-        self.assertEqual(report["healthy_count"], 2)
-        self.assertEqual(report["issue_count"], 0)
+        assert report["health_score"] == 1.0
+        assert report["healthy_count"] == 2
+        assert report["issue_count"] == 0
 
     def test_partial_health(self):
         """部分健康時 health_score 正確計算。"""
@@ -98,9 +100,9 @@ class TestGenerateReport(unittest.TestCase):
             {"tenant": "db-b", "status": "error", "issues": ["Pod not found"]},
         ]
         report = bd.generate_report(results, "http://localhost:9090")
-        self.assertEqual(report["health_score"], 0.5)
-        self.assertEqual(report["healthy_count"], 1)
-        self.assertEqual(report["issue_count"], 1)
+        assert report["health_score"] == 0.5
+        assert report["healthy_count"] == 1
+        assert report["issue_count"] == 1
 
     def test_recommendations_pod_issue(self):
         """Pod 相關 issue 應產生 kubectl get pods 建議。"""
@@ -108,7 +110,7 @@ class TestGenerateReport(unittest.TestCase):
             {"tenant": "db-a", "status": "error", "issues": ["Pod not found"]},
         ]
         report = bd.generate_report(results, "http://localhost:9090")
-        self.assertTrue(any("kubectl get pods" in r for r in report["recommendations"]))
+        assert any("kubectl get pods" in r for r in report["recommendations"])
 
     def test_recommendations_exporter_issue(self):
         """Exporter 相關 issue 應產生 kubectl logs 建議。"""
@@ -116,22 +118,22 @@ class TestGenerateReport(unittest.TestCase):
             {"tenant": "db-a", "status": "error", "issues": ["Exporter DOWN"]},
         ]
         report = bd.generate_report(results, "http://localhost:9090")
-        self.assertTrue(any("kubectl logs" in r for r in report["recommendations"]))
+        assert any("kubectl logs" in r for r in report["recommendations"])
 
     def test_empty_results(self):
         """空結果應返回 0 health_score。"""
         report = bd.generate_report([], "http://localhost:9090")
-        self.assertEqual(report["health_score"], 0.0)
-        self.assertEqual(report["total_tenants"], 0)
+        assert report["health_score"] == 0.0
+        assert report["total_tenants"] == 0
 
     def test_report_has_timestamp(self):
         """報告應包含 timestamp。"""
         results = [{"tenant": "db-a", "status": "healthy"}]
         report = bd.generate_report(results, "http://localhost:9090")
-        self.assertIn("timestamp", report)
+        assert "timestamp" in report
 
 
-class TestPrintTextReport(unittest.TestCase):
+class TestPrintTextReport:
     """print_text_report() 格式驗證。"""
 
     def test_no_crash_on_healthy(self):
@@ -144,6 +146,147 @@ class TestPrintTextReport(unittest.TestCase):
         # Should not raise
         bd.print_text_report(report)
 
+    def test_healthy_section(self, capsys):
+        """健康 tenant 區塊正確顯示。"""
+        report = bd.generate_report(
+            [{"tenant": "db-a", "status": "healthy", "operational_mode": "normal",
+              "elapsed_seconds": 1.2}],
+            "http://localhost:9090",
+        )
+        bd.print_text_report(report)
+        out = capsys.readouterr().out
+        assert "Health Score" in out
+        assert "db-a" in out
+        assert "100%" in out
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_issues_section(self, capsys):
+        """問題 tenant 區塊顯示 issue 清單。"""
+        report = bd.generate_report(
+            [{"tenant": "db-a", "status": "error", "issues": ["Pod missing"]}],
+            "http://prom",
+        )
+        bd.print_text_report(report)
+        out = capsys.readouterr().out
+        assert "Issues" in out
+        assert "Pod missing" in out
+
+    def test_recommendations_section(self, capsys):
+        """補救步驟區塊正確顯示。"""
+        report = bd.generate_report(
+            [{"tenant": "db-a", "status": "error", "issues": ["Prometheus timeout"]}],
+            "http://prom",
+        )
+        bd.print_text_report(report)
+        out = capsys.readouterr().out
+        assert "Remediation" in out
+
+    def test_silent_mode_suffix(self, capsys):
+        """非 normal 模式顯示 [mode] 後綴。"""
+        report = bd.generate_report(
+            [{"tenant": "db-a", "status": "healthy",
+              "operational_mode": "maintenance", "elapsed_seconds": 0.5}],
+            "http://prom",
+        )
+        bd.print_text_report(report)
+        out = capsys.readouterr().out
+        assert "[maintenance]" in out
+
+
+# ── generate_report recommendations 分支覆蓋 ─────────────────────
+
+
+class TestRecommendations:
+    """generate_report() recommendations 分支完整覆蓋。"""
+
+    def test_prometheus_issue(self):
+        """Prometheus 相關 issue 建議連線檢查。"""
+        results = [
+            {"tenant": "db-a", "status": "error",
+             "issues": ["Prometheus query timeout"]},
+        ]
+        report = bd.generate_report(results, "http://prom")
+        assert any("Prometheus" in r for r in report["recommendations"])
+
+    def test_down_issue(self):
+        """DOWN 狀態 issue 建議查看 exporter logs。"""
+        results = [
+            {"tenant": "db-a", "status": "error",
+             "issues": ["Service DOWN"]},
+        ]
+        report = bd.generate_report(results, "http://prom")
+        assert any("kubectl logs" in r for r in report["recommendations"])
+
+    def test_generic_issue(self):
+        """未分類 issue 直接顯示原文。"""
+        results = [
+            {"tenant": "db-a", "status": "error",
+             "issues": ["some random error"]},
+        ]
+        report = bd.generate_report(results, "http://prom")
+        assert any("some random error" in r for r in report["recommendations"])
+
+    def test_multiple_issues(self):
+        """多個 issue 產生多條建議。"""
+        results = [
+            {"tenant": "db-a", "status": "error",
+             "issues": ["Pod not ready", "Exporter DOWN"]},
+        ]
+        report = bd.generate_report(results, "http://prom")
+        assert len(report["recommendations"]) == 2
+
+
+# ── run_diagnose_for_tenant（mock diagnose_check）─────────────────
+
+
+class TestRunDiagnoseForTenant:
+    """run_diagnose_for_tenant() 單租戶診斷。"""
+
+    def test_healthy_result(self, monkeypatch):
+        """正常診斷回傳 JSON 結果。"""
+        def mock_check(tenant, prom_url):
+            import sys
+            sys.stdout.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+        monkeypatch.setattr(bd, "diagnose_check", mock_check)
+        result = bd.run_diagnose_for_tenant("db-a", "http://prom")
+        assert result["tenant"] == "db-a"
+        assert result["status"] == "healthy"
+        assert "elapsed_seconds" in result
+
+    def test_empty_output(self, monkeypatch):
+        """空輸出回傳 error 狀態。"""
+        monkeypatch.setattr(bd, "diagnose_check", lambda t, p: None)
+        result = bd.run_diagnose_for_tenant("db-a", "http://prom")
+        assert result["status"] == "error"
+        assert "empty output" in result["issues"][0]
+
+    def test_exception_caught(self, monkeypatch):
+        """例外回傳 error 狀態。"""
+        def mock_check(tenant, prom_url):
+            raise OSError("connection refused")
+        monkeypatch.setattr(bd, "diagnose_check", mock_check)
+        result = bd.run_diagnose_for_tenant("db-a", "http://prom")
+        assert result["status"] == "error"
+        assert "connection refused" in result["issues"][0]
+
+
+# ── discover_tenants JSON decode ──────────────────────────────────
+
+
+class TestDiscoverTenantsEdge:
+    """discover_tenants() 邊際案例。"""
+
+    @patch("batch_diagnose.subprocess.run")
+    def test_invalid_json(self, mock_run):
+        """無效 JSON 回傳空清單。"""
+        mock_run.return_value = MagicMock(returncode=0, stdout="not json")
+        result = bd.discover_tenants()
+        assert result == []
+
+    @patch("batch_diagnose.subprocess.run")
+    def test_non_yaml_keys_ignored(self, mock_run):
+        """非 .yaml 結尾的 key 被忽略。"""
+        cm_data = {"data": {"readme.txt": "info", "db-a.yaml": "tenants: {}"}}
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=json.dumps(cm_data))
+        result = bd.discover_tenants()
+        assert result == ["db-a"]

@@ -2,7 +2,7 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Dynamic Alerting Integrations
@@ -11,7 +11,7 @@ lang: en
 
 ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-44%20pairs-blue)
 
-Multi-tenant dynamic alerting platform — config-driven threshold management, 15 pre-loaded rule packs, zero PromQL for tenants, three operational modes, HA deployment.
+Multi-tenant dynamic alerting platform. Tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
 
 > **Not sure where to start?** Try the [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — answer a few questions and get a personalized reading path.
 >
@@ -19,17 +19,16 @@ Multi-tenant dynamic alerting platform — config-driven threshold management, 1
 
 ---
 
-## Core Problems & Solutions
+## Why This Platform
 
-> **Before:** N tenants × M rules = N×M PromQL expressions — each tenant hand-writes rules, separate PRs, separate routing config.
-> **After:** Fixed 238 rules (independent of tenant count), tenants write YAML only, thresholds → routing → notifications → maintenance windows all config-driven.
+### Platform Teams: Rule Explosion and Maintenance Bottleneck
 
-### Rule Explosion
+In traditional multi-tenant monitoring, each tenant requires its own PromQL rules and routing config. 100 tenants × 50 rules = 5,000 independent expressions, each needing its own PR, review, and deployment. The platform team becomes the bottleneck for every tenant change, and config drift worsens over time.
 
-Traditional approach: 100 tenants × 50 rules = 5,000 independent PromQL evaluations. This platform uses `group_left` vector matching — a fixed set of M rules evaluates once and matches all tenant thresholds simultaneously. Complexity drops from O(N×M) to O(M).
+This platform uses `group_left` vector matching to reduce complexity from O(N×M) to O(M) — rule count depends only on metric types, not tenant count:
 
 ```yaml
-# Traditional: one rule per tenant
+# Traditional: one rule per tenant, N tenants = N rules
 - alert: MySQLHighConnections_db-a
   expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
 
@@ -41,41 +40,42 @@ Traditional approach: 100 tenants × 50 rules = 5,000 independent PromQL evaluat
     tenant:alert_threshold:connections
 ```
 
-Tenants write YAML only, no PromQL:
+Routing, notifications, and maintenance windows are equally config-driven. 15 Rule Packs are independently maintained via Projected Volume — zero PR conflicts between teams. SHA-256 hash hot-reload means changes take effect without restarting Prometheus.
+
+### Tenant Teams: PromQL Barrier and Change Delays
+
+Tenants know their business best — what connection count is normal, what latency is acceptable. But adjusting thresholds requires PromQL expertise, and every change goes through a ticket → platform team → PR → deploy cycle.
+
+This platform lets tenants write YAML only:
 
 ```yaml
 tenants:
   db-a:
     mysql_connections: "100"
-  db-b:
-    mysql_connections: "80"
+    _severity_dedup: true
+    _routing:
+      default_receiver: { type: webhook, url: "https://hooks.slack.com/..." }
 ```
 
-### Tenant Onboarding Cost
+`da-tools scaffold` generates config interactively, `da-tools validate-config` validates locally, and changes take effect via hot-reload. Scheduled thresholds (auto-relax at night) and recurring maintenance windows (cron + duration auto-silence) let tenants manage their own operational rhythm.
 
-All tools are packaged in the `da-tools` container — `docker pull` and go, no cloning or dependency installation required. `da-tools scaffold` generates config interactively; `da-tools migrate` auto-converts legacy rules via AST engine.
+### Domain Experts: Alert Quality and Standardization
 
-```bash
-docker run --rm -it ghcr.io/vencil/da-tools scaffold --tenant my-app --db mariadb,redis
-```
+DBAs and SREs need to ensure alert quality and consistency across the organization. In practice, rules are scattered across tenant configs, severity definitions vary, Warning and Critical fire simultaneously causing notification fatigue, and there's no systematic way to analyze coverage.
 
-### Alert Fatigue
+The platform provides: 15 pre-loaded Rule Packs encoding domain best practices (MariaDB, PostgreSQL, Kafka, and 10 more technology stacks); Severity Dedup at the Alertmanager inhibit layer automatically suppresses duplicate notifications (TSDB retains full records); Alert Quality Scoring quantifies noise and staleness metrics; Policy-as-Code enforces organization-level governance rules in CI.
 
-Built-in maintenance mode (suppress all alerts), silent mode (retain TSDB records but intercept notifications), recurring maintenance windows (cron + duration auto-silence), multi-layer severity with Severity Dedup (Critical suppresses Warning notifications), scheduled thresholds (auto-relax at night).
+### Enterprise Benefits
 
-### Deployment & Maintenance
+| Aspect | Traditional (100 tenants) | Dynamic Platform (100 tenants) |
+|--------|--------------------------|-------------------------------|
+| Rule evaluations | 9,600 (N×M) | 237 (fixed) |
+| Prometheus memory | ~600MB+ | ~154MB |
+| New tenant onboarding | Days to weeks | Minutes (scaffold → validate) |
+| Threshold change flow | Ticket → PR → Deploy | Tenant self-service YAML + Hot-Reload |
+| Governance | Ad-hoc review | Schema Validation + Policy-as-Code + CI |
 
-15 independent Rule Pack ConfigMaps mounted via Projected Volume, each team maintains their own. SHA-256 hash hot-reload without Prometheus restart. Helm chart published to OCI registry for one-command install:
-
-```bash
-helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
-  -n monitoring --create-namespace -f values-override.yaml
-```
-
-### Legacy Rule Migration
-
-`migrate_rule.py` with AST migration engine (`promql-parser` Rust PyO3) auto-converts existing PromQL rules. Shadow Monitoring validates numerical consistency (tolerance ≤ 5%) with auto-convergence detection for zero-risk progressive cutover.
+Measured: scaling from 2 to 102 tenants, rule evaluation time stayed at 59.1ms → 60.6ms ([Benchmark §1](benchmarks.md#1-向量匹配複雜度分析)).
 
 ---
 
@@ -130,7 +130,7 @@ make port-forward
 
 ## Rule Packs
 
-15 Rule Packs pre-loaded via Projected Volume, each with an independent ConfigMap (`optional: true`). Unused packs cost near-zero evaluation.
+15 Rule Packs pre-loaded via Projected Volume, each with an independent ConfigMap (`optional: true`). Unused packs cost near-zero evaluation ([Benchmark §3](benchmarks.md#3-空向量零成本-empty-vector-zero-cost)).
 
 | Rule Pack | Exporter | Recording | Alert |
 |-----------|----------|-----------|-------|
@@ -157,15 +157,27 @@ See [Rule Packs Directory](rule-packs/README.md) · [Alert Reference](rule-packs
 
 ## Tools
 
-All tools available via `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`) or locally with `python3 scripts/tools/<tool>.py`.
+All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`) — no cloning or dependency installation required.
 
-**Operations:**
-`scaffold_tenant` config generation · `onboard_platform` reverse analysis · `migrate_rule` AST engine · `validate_migration` Shadow Monitoring · `cutover_tenant` one-click cutover · `batch_diagnose` multi-tenant health · `patch_config` safe updates with `--diff` · `diagnose` single-tenant check · `check_alert` alert status · `baseline_discovery` threshold suggestions · `backtest_threshold` historical replay · `analyze_rule_pack_gaps` coverage analysis · `offboard_tenant` safe removal · `deprecate_rule` rule retirement · `generate_alertmanager_routes` routing · `validate_config` all-in-one validation · `config_diff` diff report · `maintenance_scheduler` scheduled silence · `blind_spot_discovery` blind spot scan
+**Tenant Lifecycle:** `scaffold_tenant` config generation → `onboard_platform` existing environment analysis → `migrate_rule` AST migration engine → `validate_migration` Shadow dual-track verification → `cutover_tenant` one-click cutover → `offboard_tenant` safe removal
 
-**DX Automation:**
-`shadow_verify` Shadow Monitoring auto-verify · `byo_check` BYO integration check · `federation_check` Federation verify · `grafana_import` dashboard import
+**Day-to-Day Operations:** `diagnose` / `batch_diagnose` health checks · `patch_config` safe updates (with `--diff`) · `check_alert` alert status · `maintenance_scheduler` scheduled silence · `generate_alertmanager_routes` routing generation
+
+**Quality & Governance:** `validate_config` all-in-one validation · `alert_quality` alert quality scoring · Policy-as-Code engine · `cardinality_forecast` trend prediction · `backtest_threshold` historical replay · `baseline_discovery` threshold recommendations · `config_diff` diff report
 
 Full CLI reference: [da-tools CLI](cli-reference.en.md) · [Cheat Sheet](cheat-sheet.en.md)
+
+---
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| O(M) Rule Complexity | `group_left` vector matching — rule count depends only on metric types, not tenant count |
+| TSDB Completeness First | Severity Dedup at Alertmanager inhibit layer — TSDB always retains full warning + critical records |
+| Projected Volume Isolation | 15 independent Rule Pack ConfigMaps (`optional: true`), zero PR conflicts |
+| Config-Driven Full Chain | Thresholds → routing → notifications → behavior control, all YAML-driven |
+| Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard (per-tenant 500 limit) |
 
 ---
 
@@ -182,6 +194,7 @@ Full CLI reference: [da-tools CLI](cli-reference.en.md) · [Cheat Sheet](cheat-s
 | [GitOps Deployment](gitops-deployment.en.md) | ArgoCD/Flux workflow |
 | [Custom Rule Governance](custom-rule-governance.en.md) | Three-tier governance, CI linting |
 | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) | Dual-track SOP |
+| [Benchmarks](benchmarks.md) | Full benchmark data and methodology |
 | [Scenarios](scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
 
 Full doc map: [doc-map.md](internal/doc-map.md) · Tool map: [tool-map.md](internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
@@ -193,17 +206,6 @@ Full doc map: [doc-map.md](internal/doc-map.md) · Tool map: [tool-map.md](inter
 - [Docker Engine](https://docs.docker.com/engine/install/) or Docker Desktop
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - (Recommended) VS Code + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-
----
-
-## Key Design Decisions
-
-- **O(M) Rule Complexity**: `group_left` vector matching — rule count depends only on metric types, not tenant count
-- **TSDB Completeness First**: Severity Dedup at Alertmanager inhibit layer — TSDB always retains full warning + critical records
-- **Projected Volume Isolation**: 15 independent Rule Pack ConfigMaps (`optional: true`), zero PR conflicts
-- **Config-Driven Full Chain**: Thresholds → routing → notifications → behavior control, all YAML-driven
-- **Dual-Side Consistency**: Go exporter and Python tools share identical constants and validation logic
-- **Security Guardrails Built-in**: Webhook Domain Allowlist (SSRF), Schema Validation (typo prevention), Cardinality Guard (metric explosion prevention)
 
 ---
 

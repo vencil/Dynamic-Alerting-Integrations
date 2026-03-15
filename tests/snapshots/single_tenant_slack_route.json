@@ -1,0 +1,21 @@
+{
+  "receivers": [
+    {
+      "name": "tenant-db-b",
+      "slack_configs": [
+        {
+          "api_url": "https://hooks.slack.com/services/T/B/X",
+          "channel": "#db-alerts"
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "matchers": [
+        "tenant=\"db-b\""
+      ],
+      "receiver": "tenant-db-b"
+    }
+  ]
+}

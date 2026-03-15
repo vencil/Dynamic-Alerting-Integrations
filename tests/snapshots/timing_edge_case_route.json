@@ -1,0 +1,12 @@
+{
+  "has_group_interval": true,
+  "has_group_wait": true,
+  "has_repeat_interval": true,
+  "route_keys": [
+    "group_interval",
+    "group_wait",
+    "matchers",
+    "receiver",
+    "repeat_interval"
+  ]
+}

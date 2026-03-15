@@ -29,6 +29,7 @@ def _build_help_text(lang):
     cutover           一鍵影子監控轉換 (§7.1 所有步驟)
     blind-spot        掃描叢集目標並查找未監控實例
     maintenance-scheduler  評估週期性維護並建立 AM 靜默規則
+    alert-quality     警報品質評估 (震盪/閒置/延遲/壓制分析)
 
 命令 (配置生成 — 讀取租戶 YAML):
     generate-routes   租戶 YAML → Alertmanager route/receiver/inhibit 片段
@@ -43,6 +44,8 @@ def _build_help_text(lang):
     lint              針對治理禁止列表驗證自訂規則
     onboard           分析現有 Alertmanager/Prometheus 配置以供遷移
     config-diff       GitOps PR 審查的目錄級配置差異
+    evaluate-policy   Policy-as-Code 策略評估 (宣告式 DSL)
+    cardinality-forecast  基數預測 (線性回歸趨勢分析)
 
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
@@ -67,6 +70,7 @@ Commands (Prometheus API — portable):
     cutover           One-command Shadow Monitoring cutover (§7.1 all steps)
     blind-spot        Scan cluster targets and find unmonitored instances
     maintenance-scheduler  Evaluate recurring maintenance and create AM silences
+    alert-quality     Alert quality scoring (noise/stale/latency/suppression)
 
 Commands (Config Generation — reads tenant YAML):
     generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
@@ -81,6 +85,8 @@ Commands (File System — offline):
     lint              Validate custom rules against governance deny-list
     onboard           Analyze existing Alertmanager/Prometheus configs for migration
     config-diff       Directory-level config diff for GitOps PR review
+    evaluate-policy   Policy-as-Code evaluation (declarative DSL)
+    cardinality-forecast  Cardinality forecasting (linear regression trend)
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -120,6 +126,7 @@ COMMAND_MAP = {
     "cutover": "cutover_tenant.py",
     "blind-spot": "blind_spot_discovery.py",
     "maintenance-scheduler": "maintenance_scheduler.py",
+    "alert-quality": "alert_quality.py",
     # Group B: Prometheus + file system (config generation)
     "generate-routes": "generate_alertmanager_routes.py",
     # Group C: File system only (offline)
@@ -133,11 +140,14 @@ COMMAND_MAP = {
     "analyze-gaps": "analyze_rule_pack_gaps.py",
     "patch-config": "patch_config.py",
     "config-diff": "config_diff.py",
+    "evaluate-policy": "policy_engine.py",
+    "cardinality-forecast": "cardinality_forecasting.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
 PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
-                       "batch-diagnose", "backtest", "cutover", "blind-spot"}
+                       "batch-diagnose", "backtest", "cutover", "blind-spot",
+                       "alert-quality", "cardinality-forecast"}
 
 
 def print_usage():

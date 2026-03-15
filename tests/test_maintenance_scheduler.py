@@ -1,100 +1,91 @@
 #!/usr/bin/env python3
-"""test_maintenance_scheduler.py — Recurring Maintenance Scheduler 測試套件。"""
+"""test_maintenance_scheduler.py — Recurring Maintenance Scheduler 測試套件。
+
+Wave 12 pytest 遷移。
+"""
 
 import tempfile
-import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+import pytest
 
 import maintenance_scheduler as ms  # noqa: E402
-from conftest import write_yaml  # noqa: E402
+from factories import mock_http_response, write_yaml  # noqa: E402
 
 
 # ── 1. parse_duration ─────────────────────────────────────────────
 
-class TestParseDuration(unittest.TestCase):
+class TestParseDuration:
     """Test Go-style duration string parsing."""
 
-    def test_hours(self):
-        self.assertEqual(ms.parse_duration("4h"), timedelta(hours=4))
+    @pytest.mark.parametrize("duration_str,expected", [
+        ("4h", timedelta(hours=4)),
+        ("30m", timedelta(minutes=30)),
+        ("90s", timedelta(seconds=90)),
+        ("2h30m", timedelta(hours=2, minutes=30)),
+        ("1h15m30s", timedelta(hours=1, minutes=15, seconds=30)),
+        ("60", timedelta(minutes=60)),
+        ("1d", timedelta(days=1)),
+        ("1d12h", timedelta(days=1, hours=12)),
+        ("2d", timedelta(days=2)),
+    ], ids=["hours", "minutes", "seconds", "composite-hm", "composite-hms",
+            "integer-fallback", "days", "days-hours", "multi-days"])
+    def test_valid_duration(self, duration_str, expected):
+        """各種合法 duration 字串正確解析。"""
+        assert ms.parse_duration(duration_str) == expected
 
-    def test_minutes(self):
-        self.assertEqual(ms.parse_duration("30m"), timedelta(minutes=30))
-
-    def test_seconds(self):
-        self.assertEqual(ms.parse_duration("90s"), timedelta(seconds=90))
-
-    def test_composite(self):
-        self.assertEqual(ms.parse_duration("2h30m"), timedelta(hours=2, minutes=30))
-
-    def test_full_composite(self):
-        self.assertEqual(ms.parse_duration("1h15m30s"),
-                         timedelta(hours=1, minutes=15, seconds=30))
-
-    def test_integer_fallback_as_minutes(self):
-        self.assertEqual(ms.parse_duration("60"), timedelta(minutes=60))
-
-    def test_days(self):
-        self.assertEqual(ms.parse_duration("1d"), timedelta(days=1))
-
-    def test_days_composite(self):
-        self.assertEqual(ms.parse_duration("1d12h"), timedelta(days=1, hours=12))
-
-    def test_multi_days(self):
-        self.assertEqual(ms.parse_duration("2d"), timedelta(days=2))
-
-    def test_invalid_returns_none(self):
-        self.assertIsNone(ms.parse_duration("abc"))
-
-    def test_zero_units(self):
-        """'0h' should parse but 0 total → fallback fails → None."""
-        self.assertIsNone(ms.parse_duration("0h"))
+    @pytest.mark.parametrize("duration_str", ["abc", "0h"],
+                             ids=["invalid", "zero-units"])
+    def test_invalid_returns_none(self, duration_str):
+        """無效 duration 字串回傳 None。"""
+        assert ms.parse_duration(duration_str) is None
 
 
 # ── 2. is_in_window ──────────────────────────────────────────────
 
-class TestIsInWindow(unittest.TestCase):
+class TestIsInWindow:
     """Test cron-based maintenance window detection."""
 
     def test_inside_window(self):
         """now=02:30 UTC, cron triggers every hour, duration=4h → in window."""
         now = datetime(2025, 6, 15, 2, 30, tzinfo=timezone.utc)
         in_w, start, end = ms.is_in_window("0 * * * *", "4h", now=now)
-        self.assertTrue(in_w)
-        self.assertEqual(start.hour, 2)
-        self.assertEqual(end.hour, 6)
+        assert in_w
+        assert start.hour == 2
+        assert end.hour == 6
 
     def test_outside_window(self):
         """now=10:00 UTC, cron at 03:00 daily, duration=1h → not in window."""
         now = datetime(2025, 6, 15, 10, 0, tzinfo=timezone.utc)
         in_w, start, end = ms.is_in_window("0 3 * * *", "1h", now=now)
-        self.assertFalse(in_w)
-        self.assertIsNone(start)
-        self.assertIsNone(end)
+        assert not in_w
+        assert start is None
+        assert end is None
 
     def test_at_boundary(self):
         """now exactly at window end → still in window (<=)."""
         now = datetime(2025, 6, 15, 4, 0, tzinfo=timezone.utc)
         in_w, start, end = ms.is_in_window("0 3 * * *", "1h", now=now)
-        self.assertTrue(in_w)
+        assert in_w
 
     def test_weekly_cron(self):
         """Weekly maintenance: every Sunday at 02:00, 4h duration."""
         # 2025-06-15 is a Sunday
         now = datetime(2025, 6, 15, 3, 0, tzinfo=timezone.utc)
         in_w, start, end = ms.is_in_window("0 2 * * 0", "4h", now=now)
-        self.assertTrue(in_w)
+        assert in_w
 
     def test_invalid_duration(self):
         now = datetime(2025, 6, 15, 3, 0, tzinfo=timezone.utc)
         in_w, start, end = ms.is_in_window("0 * * * *", "xyz", now=now)
-        self.assertFalse(in_w)
+        assert not in_w
 
 
 # ── 3. load_recurring_schedules ───────────────────────────────────
 
-class TestLoadRecurringSchedules(unittest.TestCase):
+class TestLoadRecurringSchedules:
     """Test loading tenant recurring schedules from YAML files."""
 
     def test_basic_load(self):
@@ -109,11 +100,11 @@ tenants:
           reason: "Weekly backup"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertIn("db-a", schedules)
-            self.assertEqual(len(schedules["db-a"]), 1)
-            self.assertEqual(schedules["db-a"][0]["cron"], "0 2 * * 0")
-            self.assertEqual(schedules["db-a"][0]["duration"], "4h")
-            self.assertEqual(schedules["db-a"][0]["reason"], "Weekly backup")
+            assert "db-a" in schedules
+            assert len(schedules["db-a"]) == 1
+            assert schedules["db-a"][0]["cron"] == "0 2 * * 0"
+            assert schedules["db-a"][0]["duration"] == "4h"
+            assert schedules["db-a"][0]["reason"] == "Weekly backup"
 
     def test_multiple_schedules(self):
         with tempfile.TemporaryDirectory() as d:
@@ -130,7 +121,7 @@ tenants:
           reason: "Weekday maintenance"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertEqual(len(schedules["db-a"]), 2)
+            assert len(schedules["db-a"]) == 2
 
     def test_skip_hidden_files(self):
         with tempfile.TemporaryDirectory() as d:
@@ -143,7 +134,7 @@ tenants:
           duration: "4h"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertEqual(schedules, {})
+            assert schedules == {}
 
     def test_skip_missing_cron(self):
         with tempfile.TemporaryDirectory() as d:
@@ -156,7 +147,7 @@ tenants:
           reason: "no cron"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertEqual(schedules, {})
+            assert schedules == {}
 
     def test_skip_missing_duration(self):
         with tempfile.TemporaryDirectory() as d:
@@ -169,7 +160,7 @@ tenants:
           reason: "no duration"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertEqual(schedules, {})
+            assert schedules == {}
 
     def test_default_reason(self):
         with tempfile.TemporaryDirectory() as d:
@@ -182,7 +173,7 @@ tenants:
           duration: "4h"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertEqual(schedules["db-a"][0]["reason"], "Recurring maintenance")
+            assert schedules["db-a"][0]["reason"] == "Recurring maintenance"
 
     def test_no_recurring_key(self):
         with tempfile.TemporaryDirectory() as d:
@@ -193,11 +184,11 @@ tenants:
       target: all
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertEqual(schedules, {})
+            assert schedules == {}
 
     def test_nonexistent_dir(self):
         schedules = ms.load_recurring_schedules("/nonexistent/path")
-        self.assertEqual(schedules, {})
+        assert schedules == {}
 
     def test_multi_tenant(self):
         with tempfile.TemporaryDirectory() as d:
@@ -218,36 +209,36 @@ tenants:
           duration: "2h"
 """)
             schedules = ms.load_recurring_schedules(d)
-            self.assertIn("db-a", schedules)
-            self.assertIn("db-b", schedules)
+            assert "db-a" in schedules
+            assert "db-b" in schedules
 
 
 # ── 3b. _parse_iso ────────────────────────────────────────────────
 
-class TestParseIso(unittest.TestCase):
+class TestParseIso:
     """Test ISO 8601 datetime parsing helper."""
 
     def test_basic_utc(self):
         dt = ms._parse_iso("2025-06-15T06:00:00+00:00")
-        self.assertEqual(dt, datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc))
+        assert dt == datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
 
     def test_z_suffix(self):
         dt = ms._parse_iso("2025-06-15T06:00:00Z")
-        self.assertEqual(dt, datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc))
+        assert dt == datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
 
     def test_empty_string(self):
-        self.assertIsNone(ms._parse_iso(""))
+        assert ms._parse_iso("") is None
 
     def test_none_input(self):
-        self.assertIsNone(ms._parse_iso(None))
+        assert ms._parse_iso(None) is None
 
     def test_invalid_string(self):
-        self.assertIsNone(ms._parse_iso("not-a-date"))
+        assert ms._parse_iso("not-a-date") is None
 
 
 # ── 4. get_existing_silences ──────────────────────────────────────
 
-class TestGetExistingSilences(unittest.TestCase):
+class TestGetExistingSilences:
     """Test Alertmanager silence listing and filtering."""
 
     def _mock_silences(self):
@@ -282,23 +273,22 @@ class TestGetExistingSilences(unittest.TestCase):
     def test_filters_active_and_creator(self, mock_api):
         mock_api.return_value = self._mock_silences()
         result = ms.get_existing_silences("http://alertmanager:9093")
-        self.assertEqual(len(result), 1)
-        self.assertIn(("db-a", "Weekly backup"), result)
+        assert len(result) == 1
+        assert ("db-a", "Weekly backup") in result
         info = result[("db-a", "Weekly backup")]
-        self.assertEqual(info["id"], "abc-123")
-        self.assertEqual(info["endsAt"],
-                         datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc))
+        assert info["id"] == "abc-123"
+        assert info["endsAt"] == datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
 
     @mock.patch.object(ms, "_api_request")
     def test_api_error_returns_empty(self, mock_api):
         mock_api.side_effect = Exception("connection refused")
         result = ms.get_existing_silences("http://alertmanager:9093")
-        self.assertEqual(result, {})
+        assert result == {}
 
 
 # ── 5. create_silence ─────────────────────────────────────────────
 
-class TestCreateSilence(unittest.TestCase):
+class TestCreateSilence:
     """Test silence creation and dry-run mode."""
 
     @mock.patch.object(ms, "_api_request")
@@ -306,28 +296,28 @@ class TestCreateSilence(unittest.TestCase):
         mock_api.return_value = {"silenceID": "new-001"}
         ends = datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
         sid = ms.create_silence("http://am:9093", "db-a", "backup", ends)
-        self.assertEqual(sid, "new-001")
+        assert sid == "new-001"
         mock_api.assert_called_once()
         call_args = mock_api.call_args
-        self.assertIn("/api/v2/silences", call_args[0][0])
+        assert "/api/v2/silences" in call_args[0][0]
 
     def test_dry_run_returns_none(self):
         ends = datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
         sid = ms.create_silence("http://am:9093", "db-a", "backup", ends,
                                 dry_run=True)
-        self.assertIsNone(sid)
+        assert sid is None
 
     @mock.patch.object(ms, "_api_request")
     def test_api_error_returns_none(self, mock_api):
-        mock_api.side_effect = Exception("500 Internal Server Error")
+        mock_api.side_effect = urllib.error.URLError("500 Internal Server Error")
         ends = datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
         sid = ms.create_silence("http://am:9093", "db-a", "backup", ends)
-        self.assertIsNone(sid)
+        assert sid is None
 
 
 # ── 5b. extend_silence ───────────────────────────────────────────
 
-class TestExtendSilence(unittest.TestCase):
+class TestExtendSilence:
     """Test silence extension (self-healing)."""
 
     @mock.patch.object(ms, "_api_request")
@@ -335,36 +325,33 @@ class TestExtendSilence(unittest.TestCase):
         mock_api.return_value = {"silenceID": "abc-123"}
         ends = datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc)
         sid = ms.extend_silence("http://am:9093", "abc-123", "db-a", "backup", ends)
-        self.assertEqual(sid, "abc-123")
+        assert sid == "abc-123"
         mock_api.assert_called_once()
         payload = mock_api.call_args[1]["payload"]
-        self.assertEqual(payload["id"], "abc-123")
+        assert payload["id"] == "abc-123"
 
     def test_dry_run_returns_id(self):
         ends = datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc)
         sid = ms.extend_silence("http://am:9093", "abc-123", "db-a", "backup",
                                 ends, dry_run=True)
-        self.assertEqual(sid, "abc-123")
+        assert sid == "abc-123"
 
     @mock.patch.object(ms, "_api_request")
     def test_api_error_returns_none(self, mock_api):
-        mock_api.side_effect = Exception("503 Service Unavailable")
+        mock_api.side_effect = urllib.error.URLError("503 Service Unavailable")
         ends = datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc)
         sid = ms.extend_silence("http://am:9093", "abc-123", "db-a", "backup", ends)
-        self.assertIsNone(sid)
+        assert sid is None
 
 
 # ── 5c. push_metrics ─────────────────────────────────────────────
 
-class TestPushMetrics(unittest.TestCase):
+class TestPushMetrics:
     """Test Pushgateway metric push (observability)."""
 
     @mock.patch("maintenance_scheduler.urllib.request.urlopen")
     def test_push_success(self, mock_urlopen):
-        mock_resp = mock.MagicMock()
-        mock_resp.read.return_value = b""
-        mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = mock.MagicMock(return_value=False)
+        mock_resp = mock_http_response(body=b"")
         mock_urlopen.return_value = mock_resp
         # Should not raise
         ms.push_metrics("http://pushgateway:9091", 2, 1, 0, 0.5)
@@ -372,27 +359,27 @@ class TestPushMetrics(unittest.TestCase):
         call_args = mock_urlopen.call_args
         data = call_args[1].get("data") or call_args[0][1]
         body = data.decode("utf-8")
-        self.assertIn("# TYPE maintenance_scheduler_last_run_timestamp_seconds gauge", body)
-        self.assertIn("maintenance_scheduler_silences_created 2", body)
-        self.assertIn("maintenance_scheduler_errors 0", body)
+        assert "# TYPE maintenance_scheduler_last_run_timestamp_seconds gauge" in body
+        assert "maintenance_scheduler_silences_created 2" in body
+        assert "maintenance_scheduler_errors 0" in body
 
     @mock.patch("maintenance_scheduler.urllib.request.urlopen")
     def test_push_failure_nonfatal(self, mock_urlopen):
         """Pushgateway failure should not raise."""
-        mock_urlopen.side_effect = Exception("connection refused")
+        mock_urlopen.side_effect = urllib.error.URLError("connection refused")
         # Should NOT raise — just print warning
         ms.push_metrics("http://pushgateway:9091", 0, 0, 0, 0.1)
 
 
 # ── 6. evaluate_and_apply (integration) ──────────────────────────
 
-class TestEvaluateAndApply(unittest.TestCase):
+class TestEvaluateAndApply:
     """Test the main orchestration logic."""
 
     def test_no_schedules(self):
         with tempfile.TemporaryDirectory() as d:
             created, skipped, errors = ms.evaluate_and_apply(d, None)
-            self.assertEqual((created, skipped, errors), (0, 0, 0))
+            assert (created, skipped, errors) == (0, 0, 0)
 
     def test_active_window_report_only(self):
         """Without --alertmanager, just report active windows."""
@@ -410,8 +397,8 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, None, now=now)
-            self.assertEqual(created, 1)
-            self.assertEqual(errors, 0)
+            assert created == 1
+            assert errors == 0
 
     def test_not_in_window_skips(self):
         """Window not active → nothing created."""
@@ -429,7 +416,7 @@ tenants:
             now = datetime(2025, 6, 15, 10, 0, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, None, now=now)
-            self.assertEqual(created, 0)
+            assert created == 0
 
     @mock.patch.object(ms, "get_existing_silences")
     @mock.patch.object(ms, "create_silence")
@@ -457,8 +444,8 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, "http://am:9093", now=now)
-            self.assertEqual(skipped, 1)
-            self.assertEqual(created, 0)
+            assert skipped == 1
+            assert created == 0
             mock_create.assert_not_called()
 
     @mock.patch.object(ms, "get_existing_silences")
@@ -481,8 +468,8 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, "http://am:9093", now=now)
-            self.assertEqual(created, 1)
-            self.assertEqual(errors, 0)
+            assert created == 1
+            assert errors == 0
             mock_create.assert_called_once()
 
     @mock.patch.object(ms, "get_existing_silences")
@@ -513,8 +500,8 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, "http://am:9093", now=now)
-            self.assertEqual(created, 1)  # extended counts as created
-            self.assertEqual(skipped, 0)
+            assert created == 1  # extended counts as created
+            assert skipped == 0
             mock_extend.assert_called_once()
             mock_create.assert_not_called()
 
@@ -545,8 +532,8 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, "http://am:9093", now=now)
-            self.assertEqual(created, 0)
-            self.assertEqual(errors, 1)
+            assert created == 0
+            assert errors == 1
 
     @mock.patch.object(ms, "get_existing_silences")
     @mock.patch.object(ms, "create_silence")
@@ -572,8 +559,8 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, "http://am:9093", now=now)
-            self.assertEqual(skipped, 1)
-            self.assertEqual(created, 0)
+            assert skipped == 1
+            assert created == 0
             mock_create.assert_not_called()
 
     def test_dry_run_mode(self):
@@ -591,13 +578,13 @@ tenants:
             now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
             created, skipped, errors = ms.evaluate_and_apply(
                 d, "http://am:9093", dry_run=True, now=now)
-            self.assertEqual(created, 1)
-            self.assertEqual(errors, 0)
+            assert created == 1
+            assert errors == 0
 
 
 # ── 7. _api_request retry ────────────────────────────────────────
 
-class TestApiRequest(unittest.TestCase):
+class TestApiRequest:
     """Test HTTP retry logic."""
 
     @mock.patch("maintenance_scheduler.time.sleep")
@@ -605,9 +592,9 @@ class TestApiRequest(unittest.TestCase):
     def test_4xx_not_retried(self, mock_urlopen, mock_sleep):
         mock_urlopen.side_effect = ms.urllib.error.HTTPError(
             "http://x", 400, "Bad Request", {}, None)
-        with self.assertRaises(ms.urllib.error.HTTPError) as ctx:
+        with pytest.raises(ms.urllib.error.HTTPError) as exc_info:
             ms._api_request("http://x", max_retries=3)
-        self.assertEqual(ctx.exception.code, 400)
+        assert exc_info.value.code == 400
         mock_sleep.assert_not_called()
 
     @mock.patch("maintenance_scheduler.time.sleep")
@@ -615,29 +602,26 @@ class TestApiRequest(unittest.TestCase):
     def test_5xx_retried(self, mock_urlopen, mock_sleep):
         mock_urlopen.side_effect = ms.urllib.error.HTTPError(
             "http://x", 503, "Service Unavailable", {}, None)
-        with self.assertRaises(ms.urllib.error.HTTPError):
+        with pytest.raises(ms.urllib.error.HTTPError):
             ms._api_request("http://x", max_retries=3)
-        self.assertEqual(mock_sleep.call_count, 2)  # retries: 0→1→2, sleeps between
+        assert mock_sleep.call_count == 2  # retries: 0→1→2, sleeps between
 
     @mock.patch("maintenance_scheduler.urllib.request.urlopen")
     def test_success(self, mock_urlopen):
-        mock_resp = mock.MagicMock()
-        mock_resp.read.return_value = b'{"silenceID":"abc"}'
-        mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = mock.MagicMock(return_value=False)
+        mock_resp = mock_http_response(body=b'{"silenceID":"abc"}')
         mock_urlopen.return_value = mock_resp
         result = ms._api_request("http://x")
-        self.assertEqual(result, {"silenceID": "abc"})
+        assert result == {"silenceID": "abc"}
 
 
 # ── 8. build_parser ──────────────────────────────────────────────
 
-class TestBuildParser(unittest.TestCase):
+class TestBuildParser:
     """Test CLI argument parsing."""
 
     def test_required_config_dir(self):
         parser = ms.build_parser()
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             parser.parse_args([])
 
     def test_all_flags(self):
@@ -649,20 +633,16 @@ class TestBuildParser(unittest.TestCase):
             "--dry-run",
             "--json-output",
         ])
-        self.assertEqual(args.config_dir, "conf.d/")
-        self.assertEqual(args.alertmanager, "http://am:9093")
-        self.assertEqual(args.pushgateway, "http://pushgateway:9091")
-        self.assertTrue(args.dry_run)
-        self.assertTrue(args.json_output)
+        assert args.config_dir == "conf.d/"
+        assert args.alertmanager == "http://am:9093"
+        assert args.pushgateway == "http://pushgateway:9091"
+        assert args.dry_run
+        assert args.json_output
 
     def test_defaults(self):
         parser = ms.build_parser()
         args = parser.parse_args(["--config-dir", "conf.d/"])
-        self.assertIsNone(args.alertmanager)
-        self.assertIsNone(args.pushgateway)
-        self.assertFalse(args.dry_run)
-        self.assertFalse(args.json_output)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert args.alertmanager is None
+        assert args.pushgateway is None
+        assert not args.dry_run
+        assert not args.json_output

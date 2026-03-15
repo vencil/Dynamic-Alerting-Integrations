@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "equal": [
+        "metric_group"
+      ],
+      "source_matchers": [
+        "severity=\"critical\"",
+        "metric_group=~\".+\"",
+        "tenant=\"db-a\""
+      ],
+      "target_matchers": [
+        "severity=\"warning\"",
+        "metric_group=~\".+\"",
+        "tenant=\"db-a\""
+      ]
+    }
+  ],
+  "warnings": []
+}

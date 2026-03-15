@@ -1,0 +1,9 @@
+{
+  "receivers_count": 3,
+  "routes_count": 3,
+  "tenant_order": [
+    "db-a",
+    "db-b",
+    "db-c"
+  ]
+}

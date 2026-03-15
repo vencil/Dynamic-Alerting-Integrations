@@ -1,0 +1,11 @@
+{
+  "inhibit_count": 1,
+  "receivers_count": 1,
+  "routes_count": 1,
+  "top_level_keys": [
+    "inhibit_rules",
+    "receivers",
+    "route"
+  ],
+  "yaml_length": 396
+}

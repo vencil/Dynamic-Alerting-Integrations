@@ -1,0 +1,8 @@
+{
+  "has_metric_keys": false,
+  "has_tenants": true,
+  "tenant_key_count": 0,
+  "top_level_keys": [
+    "tenants"
+  ]
+}

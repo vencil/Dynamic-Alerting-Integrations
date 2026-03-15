@@ -2,7 +2,7 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # Dynamic Alerting Integrations
@@ -11,7 +11,7 @@ lang: zh
 
 ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-44%20pairs-blue)
 
-多租戶動態警報平台 — 配置驅動閾值管理、15 個預載規則包、租戶零 PromQL、三態運營模式、HA 部署。
+多租戶動態警報平台。租戶寫 YAML，平台管規則——閾值、路由、通知、維護窗口全配置驅動，規則數不隨租戶增長。
 
 > **不知道從哪裡開始？** 試試 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — 回答幾個問題，取得為你量身打造的閱讀路徑。
 >
@@ -19,17 +19,16 @@ lang: zh
 
 ---
 
-## 核心問題與解法
+## 為什麼需要這個平台
 
-> **Before：** N tenants × M rules = N×M 條 PromQL，每個 tenant 手寫規則、獨立 PR、獨立路由設定。
-> **After：** 固定 238 條規則（不隨租戶數增長），租戶只寫 YAML，閾值 → 路由 → 通知 → 維護窗口全配置驅動。
+### 平台團隊：規則膨脹與維護瓶頸
 
-### 規則膨脹
+傳統多租戶監控中，每個租戶需要獨立的 PromQL 規則和路由設定。100 個租戶 × 50 條規則 = 5,000 條獨立表達式，各自需要 PR、Review、部署。平台團隊成為所有租戶的變更瓶頸，config drift 隨時間惡化。
 
-傳統做法中，100 個租戶 × 50 條規則 = 5,000 次獨立 PromQL 評估。本平台透過 `group_left` 向量匹配，維護固定 M 條規則，Prometheus 一次評估即匹配所有租戶閾值。複雜度從 O(N×M) 降為 O(M)。
+本平台透過 `group_left` 向量匹配，將複雜度從 O(N×M) 降為 O(M)——規則數只與 metric 種類相關，與租戶數無關：
 
 ```yaml
-# 傳統：每個 tenant 一條 rule
+# 傳統：每個 tenant 一條 rule，N 個 tenant = N 條
 - alert: MySQLHighConnections_db-a
   expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
 
@@ -41,41 +40,42 @@ lang: zh
     tenant:alert_threshold:connections
 ```
 
-租戶只寫 YAML，不需 PromQL：
+路由、通知、維護窗口同樣配置驅動。15 個 Rule Pack 透過 Projected Volume 各自獨立維護，團隊間零 PR 衝突。SHA-256 hash 熱重載，變更不需重啟 Prometheus。
+
+### 租戶團隊：PromQL 門檻與變更延遲
+
+租戶最了解自己的業務——什麼連線數正常、什麼延遲可接受。但調整閾值需要 PromQL 知識，每次變更都是 ticket → 平台團隊 → PR → 部署的循環。
+
+本平台讓租戶只寫 YAML：
 
 ```yaml
 tenants:
   db-a:
     mysql_connections: "100"
-  db-b:
-    mysql_connections: "80"
+    _severity_dedup: true
+    _routing:
+      default_receiver: { type: webhook, url: "https://hooks.slack.com/..." }
 ```
 
-### 租戶導入成本
+`da-tools scaffold` 互動式產生配置，`da-tools validate-config` 本地驗證，變更透過 hot-reload 即時生效。支援排程式閾值（夜間自動放寬）和排程式維護窗口（cron + duration 自動 silence），租戶可自主管理運維節奏。
 
-所有工具封裝在 `da-tools` 容器中，`docker pull` 即用，不需 clone 專案或安裝依賴。`da-tools scaffold` 互動式產生配置，`da-tools migrate` 自動轉換舊規則（AST 引擎）。
+### 領域專家：警報品質與標準化
 
-```bash
-docker run --rm -it ghcr.io/vencil/da-tools scaffold --tenant my-app --db mariadb,redis
-```
+DBA 和 SRE 需要確保全組織的警報品質與一致性。現實中，規則散落各租戶配置、嚴重度定義不統一、Warning 和 Critical 同時觸發造成通知疲勞，缺乏系統性的覆蓋分析手段。
 
-### 警報疲勞
+平台提供：15 個預載 Rule Pack 封裝領域最佳實踐（MariaDB、PostgreSQL、Kafka 等 13 種技術棧）；Severity Dedup 在 Alertmanager inhibit 層自動抑制重複通知（TSDB 保有完整紀錄）；Alert Quality Scoring 量化噪音與陳腐指標；Policy-as-Code 在 CI 層強制執行組織級治理規則。
 
-內建維護模式（抑制所有警報）、Silent 模式（保留 TSDB 紀錄但攔截通知）、排程式維護窗口（cron + duration 自動 silence）、多層嚴重度搭配 Severity Dedup（Critical 觸發時抑制 Warning 通知）、排程式閾值（夜間自動放寬）。
+### 企業整體效益
 
-### 部署與維護
+| 面向 | 傳統方案（100 租戶） | 動態平台（100 租戶） |
+|------|---------------------|---------------------|
+| 規則評估數 | 9,600（N×M） | 237（固定） |
+| Prometheus 記憶體 | ~600MB+ | ~154MB |
+| 新租戶導入週期 | 天～週 | 分鐘（scaffold → validate） |
+| 閾值變更流程 | Ticket → PR → Deploy | 租戶自助 YAML + Hot-Reload |
+| 治理機制 | Ad-hoc Review | Schema Validation + Policy-as-Code + CI |
 
-15 個獨立 Rule Pack ConfigMap 透過 Projected Volume 掛載，各團隊獨立維護。SHA-256 hash 熱重載，不需重啟 Prometheus。Helm chart 發佈至 OCI registry，一行指令完成安裝：
-
-```bash
-helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
-  -n monitoring --create-namespace -f values-override.yaml
-```
-
-### 舊規則遷移
-
-`migrate_rule.py` 搭載 AST 遷移引擎（`promql-parser` Rust PyO3），自動轉換既有 PromQL 規則。Shadow Monitoring 雙軌並行驗證遷移前後數值一致（容差 ≤ 5%），支援自動穩態偵測。
+實測驗證：2→102 租戶，規則評估時間從 59.1ms 到 60.6ms 幾乎不變（[Benchmark §1](benchmarks.md#1-向量匹配複雜度分析)）。
 
 ---
 
@@ -130,7 +130,7 @@ make port-forward
 
 ## 規則包
 
-15 個 Rule Pack 透過 Projected Volume 預載，各自擁有獨立 ConfigMap（`optional: true`）。未使用的規則包評估成本近乎零。
+15 個 Rule Pack 透過 Projected Volume 預載，各自擁有獨立 ConfigMap（`optional: true`）。未使用的規則包評估成本近乎零（[Benchmark §3](benchmarks.md#3-空向量零成本-empty-vector-zero-cost)）。
 
 | 規則包 | Exporter | Recording | Alert |
 |--------|----------|-----------|-------|
@@ -155,17 +155,29 @@ make port-forward
 
 ---
 
-## 工具
+## 工具生態
 
-所有工具可透過 `da-tools` 容器執行（`docker run --rm ghcr.io/vencil/da-tools`），或在已 clone 的環境中直接用 `python3 scripts/tools/<tool>.py`。
+所有工具封裝在 `da-tools` 容器中（`docker run --rm ghcr.io/vencil/da-tools`），不需 clone 專案或安裝依賴。
 
-**運維工具：**
-`scaffold_tenant` 新租戶配置產生 · `onboard_platform` 既有配置反向分析 · `migrate_rule` AST 遷移引擎 · `validate_migration` Shadow Monitoring 驗證 · `cutover_tenant` 一鍵切換 · `batch_diagnose` 多租戶健康報告 · `patch_config` 安全局部更新（含 `--diff` preview）· `diagnose` 單租戶檢查 · `check_alert` 警報狀態查詢 · `baseline_discovery` 負載觀測閾值建議 · `backtest_threshold` 歷史回測 · `analyze_rule_pack_gaps` 覆蓋分析 · `offboard_tenant` 安全下架 · `deprecate_rule` 規則下架 · `generate_alertmanager_routes` 路由產生 · `validate_config` 一站式驗證 · `config_diff` 配置差異比對 · `maintenance_scheduler` 排程維護 · `blind_spot_discovery` 盲區掃描
+**租戶生命週期：** `scaffold_tenant` 配置產生 → `onboard_platform` 既有環境分析 → `migrate_rule` AST 遷移引擎 → `validate_migration` Shadow 雙軌驗證 → `cutover_tenant` 一鍵切換 → `offboard_tenant` 安全下架
 
-**DX Automation：**
-`shadow_verify` Shadow Monitoring 自動驗證 · `byo_check` BYO 整合檢查 · `federation_check` Federation 驗證 · `grafana_import` Dashboard 匯入
+**日常運維：** `diagnose` / `batch_diagnose` 健康檢查 · `patch_config` 安全更新（含 `--diff`）· `check_alert` 警報狀態 · `maintenance_scheduler` 排程維護 · `generate_alertmanager_routes` 路由產生
+
+**品質與治理：** `validate_config` 一站式驗證 · `alert_quality` 告警品質評分 · Policy-as-Code 引擎 · `cardinality_forecast` 趨勢預測 · `backtest_threshold` 歷史回測 · `baseline_discovery` 閾值建議 · `config_diff` 配置差異
 
 完整 CLI 參考：[da-tools CLI](cli-reference.md) · [速查表](cheat-sheet.md)
+
+---
+
+## 關鍵設計決策
+
+| 決策 | 說明 |
+|------|------|
+| O(M) 規則複雜度 | `group_left` 向量匹配，規則數只與 metric 種類相關，與租戶數無關 |
+| TSDB 完整性優先 | Severity Dedup 在 Alertmanager inhibit 層實現，TSDB 保有完整 warning + critical 紀錄 |
+| Projected Volume 隔離 | 15 個 Rule Pack ConfigMap 各自獨立（`optional: true`），零 PR 衝突 |
+| Config-Driven 全鏈路 | 閾值 → 路由 → 通知 → 行為控制，全部 YAML 驅動 |
+| 安全護欄內建 | Webhook Domain Allowlist · Schema Validation · Cardinality Guard（per-tenant 500 上限） |
 
 ---
 
@@ -182,6 +194,7 @@ make port-forward
 | [GitOps 部署](gitops-deployment.md) | ArgoCD/Flux 工作流 |
 | [客製化規則治理](custom-rule-governance.md) | 三層治理模型、CI Linting |
 | [Shadow Monitoring SOP](shadow-monitoring-sop.md) | 雙軌並行完整 SOP |
+| [性能基準](benchmarks.md) | 完整 benchmark 數據與方法論 |
 | [場景指南](scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
 
 完整文件對照表：[doc-map.md](internal/doc-map.md) · 工具表：[tool-map.md](internal/tool-map.md) · 互動工具：[Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
@@ -193,17 +206,6 @@ make port-forward
 - [Docker Engine](https://docs.docker.com/engine/install/) 或 Docker Desktop
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - （建議）VS Code + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-
----
-
-## 關鍵設計決策
-
-- **O(M) 規則複雜度**：`group_left` 向量匹配，規則數只與 metric 種類相關，與租戶數無關
-- **TSDB 完整性優先**：Severity Dedup 在 Alertmanager inhibit 層實現，TSDB 保有完整 warning + critical 紀錄
-- **Projected Volume 隔離**：15 個 Rule Pack ConfigMap 各自獨立（`optional: true`），零 PR 衝突
-- **Config-Driven 全鏈路**：閾值 → 路由 → 通知 → 行為控制，全部 YAML 驅動
-- **雙端一致性**：Go exporter 與 Python 工具共用相同常數與驗證邏輯
-- **安全護欄內建**：Webhook Domain Allowlist（防 SSRF）、Schema Validation（防 typo）、Cardinality Guard（防 metric 爆炸）
 
 ---
 
