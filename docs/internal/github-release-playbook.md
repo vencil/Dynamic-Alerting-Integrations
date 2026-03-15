@@ -183,8 +183,10 @@ git push origin "tools/v<VERSION>"
 | 12 | `v*` tag 觸發 exporter build 但版號不匹配 | 已修正：`v*` 不再觸發 CI；exporter 改用 `exporter/v*` tag |
 | 13 | `replace_all` 批次改版號誤改跨元件版號 | 改完後 `bump_docs.py --check` 驗證；手動確認 exporter 版號未被誤改 |
 | 14 | Release `already_exists`（tag 已被 CI 或先前操作建立） | 先 GET `/releases/tags/<tag>` 取 `id`，再 PATCH `/releases/<id>` 更新 name + body |
-| 15 | Windows MCP Shell 長 body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 結束後刪暫存 |
+| 15 | Windows MCP Shell 長 body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入（⚠️ 須 `[string]` cast，見 #17）→ 結束後刪暫存 |
 | 16 | 合併版號時遺漏語義更新 | 全局 sed 改版號後，需手動校正：CHANGELOG（合併 section）、da-tools 版號表（Git Tag + 說明）、architecture 底部版本戳（日期 + 功能摘要 + CLI 命令數） |
+| 17 | 刪除遠端 tag 會連帶刪除關聯 Release | `git push origin :refs/tags/v*` 刪除 tag 後，GitHub 自動刪除該 tag 的 Release；重推 tag 後須重新 `POST /releases` 建立 |
+| 18 | `Get-Content -Raw` 回傳 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata（PSPath/PSDrive/PSProvider 數千行）；須 `[string]` cast 或改用 here-string `@"..."@`（詳見 [Windows MCP Playbook](windows-mcp-playbook.md#長-body-的建議做法)） |
 
 ## 版號合併流程
 

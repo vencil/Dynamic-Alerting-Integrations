@@ -168,16 +168,31 @@ $headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.gith
 
 詳見 [GitHub Release Playbook](github-release-playbook.md)。
 
-### 長 Body 的 File Staging 模式
+### 長 Body 的建議做法
 
-Windows MCP Shell 有 timeout 限制，inline 長 body 容易超時。用 Desktop Commander 寫暫存檔再讀入更可靠：
+**優先用 here-string（`@"..."@`）**，避免 File Staging 的 PSObject 陷阱：
+
+```powershell
+# ✅ 推薦：here-string 直接定義 body（結果是純 [string]）
+$body = @"
+## Highlights
+- Feature A
+- Feature B（支援 CJK）
+"@
+$payload = @{ name = "title"; body = $body } | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Uri $url -Method Patch -Headers $headers `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
+    -ContentType "application/json; charset=utf-8"
+```
+
+**File Staging 模式**（body 太長超出 here-string 限制時）：
 
 ```powershell
 # Step 1: Desktop Commander write_file 寫 body 到暫存路徑
 #   C:/Users/<user>/AppData/Local/Temp/release-body.txt
 
-# Step 2: PowerShell 讀檔 + API 呼叫
-$bodyText = Get-Content "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Raw
+# Step 2: PowerShell 讀檔 — ⚠️ 必須 .ToString() 或 [string] 轉型
+$bodyText = [string](Get-Content "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Raw)
 $payload = @{ name = "title"; body = $bodyText } | ConvertTo-Json -Depth 3
 Invoke-RestMethod -Uri $url -Method Patch -Headers $headers `
     -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
@@ -186,6 +201,8 @@ Invoke-RestMethod -Uri $url -Method Patch -Headers $headers `
 # Step 3: 清理
 Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 ```
+
+> **⚠️ 已知陷阱**：`Get-Content -Raw` 回傳的是 PSObject（帶 PSPath、PSDrive、PSProvider 等 metadata），不是純字串。若直接放入 hashtable 再 `ConvertTo-Json`，會把整個 filesystem metadata 序列化進 JSON body，導致 API payload 變成數千行的物件 dump。必須用 `[string]` cast 或 `.ToString()` 確保是純文字。
 
 ## 已知陷阱速查
 
@@ -212,6 +229,8 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 19 | Dev Container `Exited (255)` 未啟動 | `docker start vibe-dev-container`；每次 session 開始先 `docker ps` 確認 |
 | 20 | Benchmark / Go test 複雜指令在 PowerShell 下失敗 | 寫 `.sh` 輔助腳本 → `docker exec [-d] bash script.sh`（見 [Benchmark Playbook → 在 Dev Container 內執行](benchmark-playbook.md#在-dev-container-內執行)）|
 | 21 | Go test 從 repo root 執行失敗 | `go.mod` 在 `components/threshold-exporter/app/`，必須 `-w` 指定或 `cd` 進去 |
+| 22 | `Get-Content -Raw` 是 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata；用 `[string]` cast 或改用 here-string `@"..."@` |
+| 23 | 刪除再重建 GitHub tag 導致 Release 消失 | `git push origin :refs/tags/v*` 會連帶刪除關聯 Release；重推 tag 後須重新 create release |
 
 ## 指令快速參考
 
