@@ -49,3 +49,4 @@ site/
 # --- Validation ---
 .validation-baseline.json
 .validation-profile.csv
+.release-please-manifest.json
