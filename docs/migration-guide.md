@@ -2,7 +2,7 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # Migration Guide — 遷移指南
@@ -12,7 +12,7 @@ lang: zh
 
 > **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
 >
-> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v1.11.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
+> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.0.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
 
 ## 你在哪個階段？(Where Are You?)
 
@@ -127,7 +127,7 @@ scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-expor
 # 方式 A (推薦): Helm values 覆寫 — OCI registry
 #   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.0.0 \
   -n monitoring -f values-override.yaml
 
 # 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
@@ -222,7 +222,7 @@ kubectl create configmap prometheus-rules-custom \
 ```bash
 # 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.0.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -248,9 +248,9 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### 在 K8s 叢集內使用 da-tools
 
-da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v1.11.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
+da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v2.0.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
 
-> Job 產出可透過 `kubectl cp` 取回，再注入 `threshold-config` ConfigMap。長期運行的 Shadow Monitoring Job 範例參見 [§11 企業級遷移 Phase B](#11-企業級遷移--大型租戶-1000-條規則)。
+> Job 產出可透過 `kubectl cp` 取回，再注入 `threshold-config` ConfigMap。長期運行的 Shadow Monitoring Job 範例參見 [§11 企業級遷移 Phase B](#11-企業級遷移-大型租戶-1000-條規則)。
 
 ---
 
@@ -373,9 +373,9 @@ da-tools generate-routes --config-dir conf.d/ --apply --yes
 
 | 功能 | 說明 | 詳見 |
 |------|------|------|
-| Per-rule Routing Overrides | `_routing.overrides[]` 指定特定 alertname/metric_group 使用不同 receiver | [BYO Alertmanager §7](byo-alertmanager-integration.md#7-per-rule-routing-overridesv180) |
+| Per-rule Routing Overrides | `_routing.overrides[]` 指定特定 alertname/metric_group 使用不同 receiver | [BYO Alertmanager §7](byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
 | Silent / Maintenance Mode | `_silent_mode` / `_state_maintenance` + `expires` 自動失效 | [Architecture §2.7](architecture-and-design.md) |
-| Platform Enforced Routing | `_routing_enforced` NOC 必收（雙軌通知） | [BYO Alertmanager §8](byo-alertmanager-integration.md#8-platform-enforced-routingv170) |
+| Platform Enforced Routing | `_routing_enforced` NOC 必收（雙軌通知） | [BYO Alertmanager §8](byo-alertmanager-integration.md#8-platform-enforced-routing) |
 
 ---
 
@@ -397,7 +397,7 @@ da-tools diagnose db-a
 
 ### 完整驗證清單
 
-詳見 [Tenant 生命週期 — 上線驗證](scenarios/tenant-lifecycle.md#上線驗證) 的完整驗證檢查表，涵蓋 YAML 驗證、alert 狀態、三態測試、routing、operational_mode 確認與盲區掃描。
+詳見 [Tenant 生命週期 — 上線階段](scenarios/tenant-lifecycle.md#階段-12上線day-0) 的完整驗證檢查表，涵蓋 YAML 驗證、alert 狀態、三態測試、routing、operational_mode 確認與盲區掃描。
 
 ### 遷移完成後：Tenant 自助管理
 

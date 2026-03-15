@@ -2,14 +2,14 @@
 title: "故障排查與邊界情況"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 故障排查與邊界情況
 
 > **Language / 語言：** | **中文（當前）**
 
-> 相關文件：[Architecture](architecture-and-design.md) · [HA Design](architecture-and-design.md#5-高可用性設計-high-availability)
+> 相關文件：[Architecture](architecture-and-design.md) · [HA Design](architecture-and-design.md#4-高可用性設計-high-availability)
 
 ## SHA-256 熱重新加載延遲
 

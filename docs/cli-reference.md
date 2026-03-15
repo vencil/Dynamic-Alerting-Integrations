@@ -2,15 +2,15 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 
 # da-tools CLI Reference
 
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
-> **容器映像**：`ghcr.io/vencil/da-tools:v1.11.0`
-> **版本**：v2.0.0-preview（與平台版本同步）
+> **容器映像**：`ghcr.io/vencil/da-tools:v2.0.0`
+> **版本**：v2.0.0（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
 
@@ -36,7 +36,7 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 
 ```bash
 # 從 OCI registry 拉取（需要 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:v1.11.0
+docker pull ghcr.io/vencil/da-tools:v2.0.0
 
 # 本地建構（開發用）
 cd components/da-tools/app && ./build.sh v1.11.0
@@ -45,8 +45,8 @@ cd components/da-tools/app && ./build.sh v1.11.0
 ### 查看說明
 
 ```bash
-docker run --rm ghcr.io/vencil/da-tools:v1.11.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v1.11.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v2.0.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.0.0 --version
 da-tools <command> --help
 ```
 
@@ -94,6 +94,8 @@ da-tools <command> --help
 | `byo-check` | BYO Prometheus & Alertmanager 整合驗證 | `<target>` |
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |
 | `grafana-import` | Grafana Dashboard ConfigMap 匯入（sidecar 自動掛載） | `--dashboard <file>` 或 `--verify` |
+| `alert-quality` | 警報品質評估（4 指標、三級評分、CI gate） | `--prometheus <url>` |
+| `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | `--prometheus <url>` |
 
 ### 配置生成工具
 
@@ -117,6 +119,7 @@ da-tools <command> --help
 | `onboard` | 分析既有 Alertmanager/Prometheus 配置進行遷移 | `<config_file>` 或 `--alertmanager-config <file>` |
 | `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
+| `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 
 ---
 
@@ -795,6 +798,97 @@ da-tools grafana-import --dashboard overview.json --dry-run
 
 ---
 
+#### alert-quality
+
+分析 Alertmanager 歷史記錄，識別問題告警。4 項品質指標（Noise / Stale / Latency / Suppression）、三級評分（GOOD / WARN / BAD）、per-tenant 加權分數。
+
+**用法**
+
+```bash
+da-tools alert-quality --prometheus <URL> [--alertmanager <URL>] [--period <DURATION>] [--tenant <NAME>] [--json] [--markdown] [--ci] [--min-score <N>]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--prometheus` | Prometheus URL（必填） | - |
+| `--alertmanager` | Alertmanager URL（用於 suppression 資料） | - |
+| `--period` | 分析期間 | `30d` |
+| `--tenant` | 篩選特定 tenant | 全部 |
+| `--json` | JSON 輸出 | - |
+| `--markdown` | Markdown 輸出 | - |
+| `--ci` | CI 模式：任何 BAD 告警時 exit 1 | - |
+| `--min-score` | CI 最低分數閾值 | `0` |
+
+**範例**
+
+```bash
+# 基本品質報告
+da-tools alert-quality --prometheus http://prometheus:9090
+
+# 特定 tenant，Markdown 輸出
+da-tools alert-quality --prometheus http://prometheus:9090 --tenant db-a --markdown
+
+# CI gate（低於 60 分 fail）
+da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功（CI 模式：所有告警品質達標） |
+| `1` | CI 模式：有 BAD 告警或分數低於閾值 |
+
+---
+
+#### cardinality-forecast
+
+分析 per-tenant 時序基數增長趨勢，預測何時觸及上限。使用純 Python 線性回歸（無 numpy 依賴）。
+
+**用法**
+
+```bash
+da-tools cardinality-forecast --prometheus <URL> [--lookback <DURATION>] [--limit <N>] [--warn-days <N>] [--tenant <NAME>] [--json] [--markdown] [--ci]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--prometheus` | Prometheus URL（必填） | - |
+| `--lookback` | 回溯期間 | `30d` |
+| `--limit` | 基數上限 | `500` |
+| `--warn-days` | 預警天數 | `7` |
+| `--tenant` | 篩選特定 tenant | 全部 |
+| `--json` | JSON 輸出 | - |
+| `--markdown` | Markdown 輸出 | - |
+| `--ci` | CI 模式：有 critical 風險時 exit 1 | - |
+
+**範例**
+
+```bash
+# 基本預測報告
+da-tools cardinality-forecast --prometheus http://prometheus:9090
+
+# 自訂上限與預警天數
+da-tools cardinality-forecast --prometheus http://prometheus:9090 --limit 1000 --warn-days 14
+
+# CI gate
+da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
+```
+
+**風險等級**
+
+| 等級 | 條件 |
+|------|------|
+| `critical` | 預測在 `--warn-days` 天內觸頂 |
+| `warning` | 趨勢為 growing 但尚未觸及預警 |
+| `safe` | 趨勢穩定或下降 |
+
+---
+
 ### 配置生成工具
 
 #### generate-routes
@@ -1159,7 +1253,7 @@ da-tools deprecate <metric_keys...> [options]
 # 標記多個指標為 disabled
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v1.11.0 \
+  ghcr.io/vencil/da-tools:v2.0.0 \
   deprecate old_metric_1 old_metric_2 \
     --reason "Replaced by new_metric; migration complete"
 ```
@@ -1369,6 +1463,51 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 
 ---
 
+#### evaluate-policy
+
+宣告式策略引擎 — 使用內建 DSL 評估 tenant 配置合規性，零外部依賴。
+
+**用法**
+
+```bash
+da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir` | conf.d/ 目錄路徑（必填） | - |
+| `--policy` | 獨立策略檔路徑（頂層 `policies:` key） | `_defaults.yaml` 中的 `_policies` |
+| `--json` | JSON 輸出 | - |
+| `--ci` | CI 模式：有 error 違規時 exit 1 | - |
+
+**支援的運算子**
+
+`required`、`forbidden`、`equals`、`not_equals`、`gte`、`lte`、`gt`、`lt`、`matches`、`one_of`、`contains`
+
+**範例**
+
+```bash
+# 評估預設策略
+da-tools evaluate-policy --config-dir conf.d/
+
+# 使用獨立策略檔
+da-tools evaluate-policy --config-dir conf.d/ --policy policies/production.yaml
+
+# CI gate
+da-tools evaluate-policy --config-dir conf.d/ --ci
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 無 error 違規 |
+| `1` | CI 模式：有 error 級別違規 |
+
+---
+
 ## 環境變數
 
 | 變數 | 用途 | 預設值 | 說明 |
@@ -1394,7 +1533,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v1.11.0
+          image: ghcr.io/vencil/da-tools:v2.0.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

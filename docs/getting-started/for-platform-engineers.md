@@ -2,12 +2,12 @@
 title: "Platform Engineer 快速入門指南"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # Platform Engineer 快速入門指南
 
-> **v2.0.0-preview** | 適用對象：Platform Engineers、SRE、基礎設施管理員
+> **v2.0.0** | 適用對象：Platform Engineers、SRE、基礎設施管理員
 >
 > 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md)
 
@@ -163,7 +163,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --validate
 ```
 
-空清單表示不限制；fnmatch 模式支援萬用字元。
+fnmatch 模式支援萬用字元。⚠️ 空清單表示不限制 — **生產環境強烈建議設定白名單**，避免 tenant 將告警發送到未授權的外部端點。
 
 ## 驗證工具
 
@@ -181,6 +181,36 @@ python3 scripts/tools/ops/validate_config.py \
 - Route 轉換成功
 - Policy 檢查通過
 - 版本一致性
+
+### 告警品質評估（v2.0.0）
+
+```bash
+# 掃描所有 tenant 的告警品質（Noise / Stale / Latency / Suppression）
+da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+
+# CI gate：低於 60 分 exit 1
+da-tools alert-quality --prometheus http://localhost:9090 --ci --min-score 60
+```
+
+### Policy-as-Code 策略驗證（v2.0.0）
+
+```bash
+# 用 _defaults.yaml 中的 _policies DSL 評估所有 tenant
+da-tools evaluate-policy --config-dir conf.d/
+
+# CI gate：有 error 違規時 exit 1
+da-tools evaluate-policy --config-dir conf.d/ --ci
+```
+
+### 基數趨勢預測（v2.0.0）
+
+```bash
+# 預測 per-tenant 基數成長趨勢、觸頂天數
+da-tools cardinality-forecast --prometheus http://localhost:9090
+
+# CI gate：有 critical 風險時 exit 1
+da-tools cardinality-forecast --prometheus http://localhost:9090 --ci
+```
 
 ### 配置差異比對
 
@@ -207,7 +237,7 @@ python3 scripts/tools/dx/bump_docs.py --check
 ### 執行 Benchmark
 
 ```bash
-make benchmark ARGS="--under-load --scaling-curve --routing-bench --alertmanager-bench --reload-bench --json"
+make benchmark ARGS="--under-load --routing-bench --alertmanager-bench --reload-bench --json"
 ```
 
 輸出指標：
@@ -226,6 +256,245 @@ Platform 本身提供 Rule Pack alert（如 exporter 離線、Alertmanager delay
 ```bash
 kubectl get alerts -n monitoring | grep platform
 ```
+
+## 生產環境安全加固
+
+### Lifecycle Endpoint 保護
+
+Prometheus 和 Alertmanager 的 `--web.enable-lifecycle` 會暴露 `/-/reload` 和 `/-/quit` 端點，**不需要任何認證**即可觸發。任何能存取該 port 的人都能透過 `POST /-/quit` 關閉服務。
+
+建議做法：
+
+```yaml
+# NetworkPolicy：僅允許 configmap-reload sidecar 存取 lifecycle 端點
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-lifecycle-restrict
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: prometheus
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus  # 同 pod 內的 sidecar
+      ports:
+        - port: 9090
+```
+
+或部署 auth proxy（如 oauth2-proxy）保護 `/-/` 路徑。
+
+### Grafana 預設密碼
+
+本專案的 `deployment-grafana.yaml` 使用 `admin:admin` 作為初始密碼，**僅供開發環境使用**。生產環境部署前**必須**透過 K8s Secret 設定強密碼，並建議搭配 auth proxy 或 SSO 整合。
+
+### Webhook Domain Allowlist
+
+`generate_alertmanager_routes.py --policy` 的空清單表示不限制。**生產環境強烈建議設定白名單**，防止 tenant 配置將告警通知發送到未經授權的外部端點。
+
+### Port-forward 安全
+
+本地 `kubectl port-forward` 預設綁定 `127.0.0.1`（僅本機）。**切勿使用 `--address 0.0.0.0`**，這會將 Prometheus/Alertmanager/Grafana 暴露到所有網路介面，任何能存取該機器的人都能直接存取服務。
+
+### Secrets 管理 — 從 ConfigMap 遷移至 K8s Secret
+
+Alertmanager receiver 配置中的敏感資訊（Slack token、webhook URL、PagerDuty service key 等）不應以明文存放在 ConfigMap 中。`kubectl get configmap -o yaml` 即可看到所有內容，而 K8s Secret 至少提供 base64 編碼並支援 RBAC 細粒度存取控制。
+
+**基本做法 — K8s Secret + secretKeyRef：**
+
+```yaml
+# 1. 建立 Secret（一次性，或由 CI 管理）
+kubectl create secret generic alertmanager-secrets \
+  --from-literal=slack-api-url='https://hooks.slack.com/services/T.../B.../xxx' \
+  --from-literal=pagerduty-key='your-service-key' \
+  -n monitoring
+
+# 2. 在 Alertmanager Deployment 中引用
+env:
+  - name: SLACK_API_URL
+    valueFrom:
+      secretKeyRef:
+        name: alertmanager-secrets
+        key: slack-api-url
+  - name: PAGERDUTY_KEY
+    valueFrom:
+      secretKeyRef:
+        name: alertmanager-secrets
+        key: pagerduty-key
+```
+
+`generate_alertmanager_routes.py` 產生的 receiver config 中，使用 `<secret>` 或環境變數引用取代明文值。
+
+**進階做法 — External Secrets Operator + HashiCorp Vault：**
+
+對於需要集中式 secrets 管理、自動輪換、審計日誌的生產環境，建議整合 External Secrets Operator (ESO)：
+
+```yaml
+# 1. 安裝 External Secrets Operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
+
+# 2. 設定 SecretStore（連接 Vault）
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: vault-backend
+  namespace: monitoring
+spec:
+  provider:
+    vault:
+      server: "https://vault.internal:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "alertmanager"
+          serviceAccountRef:
+            name: alertmanager
+
+# 3. 定義 ExternalSecret（自動同步 Vault → K8s Secret）
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: alertmanager-secrets
+  namespace: monitoring
+spec:
+  refreshInterval: 1h          # 每小時同步，支援自動輪換
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStore
+  target:
+    name: alertmanager-secrets  # 產生的 K8s Secret 名稱
+    creationPolicy: Owner
+  data:
+    - secretKey: slack-api-url
+      remoteRef:
+        key: dynamic-alerting/alertmanager
+        property: slack-api-url
+    - secretKey: pagerduty-key
+      remoteRef:
+        key: dynamic-alerting/alertmanager
+        property: pagerduty-key
+```
+
+Vault 側設定：
+
+```bash
+# 啟用 KV v2 引擎
+vault secrets enable -path=secret kv-v2
+
+# 寫入 secrets
+vault kv put secret/dynamic-alerting/alertmanager \
+  slack-api-url="https://hooks.slack.com/services/T.../B.../xxx" \
+  pagerduty-key="your-service-key"
+
+# 建立 policy（最小權限）
+vault policy write alertmanager - <<EOF
+path "secret/data/dynamic-alerting/alertmanager" {
+  capabilities = ["read"]
+}
+EOF
+
+# 綁定 K8s ServiceAccount
+vault write auth/kubernetes/role/alertmanager \
+  bound_service_account_names=alertmanager \
+  bound_service_account_namespaces=monitoring \
+  policies=alertmanager \
+  ttl=1h
+```
+
+此架構的優勢：secrets 永遠不進 Git、支援自動輪換（`refreshInterval`）、Vault 提供完整審計日誌、RBAC 可精確控制誰能存取哪些 secrets。
+
+### TLS 加密通訊指引
+
+生產環境中，threshold-exporter、Prometheus、Alertmanager 之間的通訊應啟用 TLS，防止 metrics 資料和告警內容在網路傳輸中被竊聽。
+
+**Step 1 — 使用 cert-manager 簽發憑證（推薦）：**
+
+```yaml
+# 安裝 cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+
+# 建立自簽 CA（開發環境）或引用正式 CA（生產環境）
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: monitoring-ca
+spec:
+  selfSigned: {}  # 生產環境改用 ACME 或內部 CA
+
+# 簽發 Prometheus TLS 憑證
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: prometheus-tls
+  namespace: monitoring
+spec:
+  secretName: prometheus-tls
+  issuerRef:
+    name: monitoring-ca
+    kind: ClusterIssuer
+  commonName: prometheus.monitoring.svc.cluster.local
+  dnsNames:
+    - prometheus.monitoring.svc.cluster.local
+    - prometheus.monitoring.svc
+    - prometheus
+```
+
+**Step 2 — threshold-exporter 啟用 TLS：**
+
+```yaml
+# Deployment args 增加 TLS 參數
+args:
+  - "--tls-cert-file=/etc/tls/tls.crt"
+  - "--tls-key-file=/etc/tls/tls.key"
+volumeMounts:
+  - name: tls
+    mountPath: /etc/tls
+    readOnly: true
+volumes:
+  - name: tls
+    secret:
+      secretName: exporter-tls
+```
+
+**Step 3 — Prometheus scrape_configs 加上 TLS：**
+
+```yaml
+scrape_configs:
+  - job_name: "dynamic-thresholds"
+    scheme: https
+    tls_config:
+      ca_file: /etc/prometheus/tls/ca.crt
+      # 如使用 mTLS，加上 client cert
+      # cert_file: /etc/prometheus/tls/tls.crt
+      # key_file: /etc/prometheus/tls/tls.key
+```
+
+**Step 4 — Alertmanager HTTP config TLS：**
+
+```yaml
+# alertmanager.yml 中 webhook_configs 加上 TLS
+receivers:
+  - name: "secure-webhook"
+    webhook_configs:
+      - url: "https://internal-webhook.example.com/alert"
+        http_config:
+          tls_config:
+            ca_file: /etc/alertmanager/tls/ca.crt
+```
+
+### Config Reload Endpoint 安全
+
+Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是 HTTP POST 端點，用於觸發配置重新載入。本專案透過 `configmap-reload` sidecar 自動呼叫此端點。
+
+**安全影響：** 這些端點不需要認證。若攻擊者能存取 Prometheus/Alertmanager 的 port，可以反覆觸發 reload 造成效能影響，或在 `/-/quit` 啟用時直接關閉服務。
+
+**生產環境建議：** 使用上方「Lifecycle Endpoint 保護」章節的 NetworkPolicy 限制存取。確保 Prometheus 和 Alertmanager 使用 ClusterIP Service（非 NodePort/LoadBalancer），僅在叢集內部可達。
 
 ## 常見問題
 

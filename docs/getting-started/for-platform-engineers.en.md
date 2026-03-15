@@ -2,12 +2,12 @@
 title: "Platform Engineer Quick Start Guide"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Platform Engineer Quick Start Guide
 
-> **v2.0.0-preview** | Audience: Platform Engineers, SREs, Infrastructure Managers
+> **v2.0.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
 > Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md)
 
@@ -161,7 +161,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --validate
 ```
 
-Empty list means no restriction; fnmatch patterns support wildcards.
+fnmatch patterns support wildcards. ⚠️ Empty list means no restriction — **production environments should always configure an allowlist** to prevent tenants from routing alerts to unauthorized external endpoints.
 
 ## Validation Tools
 
@@ -179,6 +179,36 @@ Checked items:
 - Route generation success
 - Policy checks pass
 - Version consistency
+
+### Alert Quality Scoring (v2.0.0)
+
+```bash
+# Scan all tenants for alert quality (Noise / Stale / Latency / Suppression)
+da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+
+# CI gate: exit 1 if score below 60
+da-tools alert-quality --prometheus http://localhost:9090 --ci --min-score 60
+```
+
+### Policy-as-Code Validation (v2.0.0)
+
+```bash
+# Evaluate all tenants against _policies DSL in _defaults.yaml
+da-tools evaluate-policy --config-dir conf.d/
+
+# CI gate: exit 1 on error violations
+da-tools evaluate-policy --config-dir conf.d/ --ci
+```
+
+### Cardinality Forecasting (v2.0.0)
+
+```bash
+# Predict per-tenant cardinality growth trend and days-to-limit
+da-tools cardinality-forecast --prometheus http://localhost:9090
+
+# CI gate: exit 1 on critical risk
+da-tools cardinality-forecast --prometheus http://localhost:9090 --ci
+```
 
 ### Configuration Difference Analysis
 
@@ -205,7 +235,7 @@ Ensure versions in CLAUDE.md, README, and CHANGELOG are synchronized.
 ### Run Benchmarks
 
 ```bash
-make benchmark ARGS="--under-load --scaling-curve --routing-bench --alertmanager-bench --reload-bench --json"
+make benchmark ARGS="--under-load --routing-bench --alertmanager-bench --reload-bench --json"
 ```
 
 Output metrics:
@@ -224,6 +254,245 @@ The platform itself provides Rule Pack alerts (e.g., exporter offline, Alertmana
 ```bash
 kubectl get alerts -n monitoring | grep platform
 ```
+
+## Production Security Hardening
+
+### Lifecycle Endpoint Protection
+
+Prometheus and Alertmanager's `--web.enable-lifecycle` exposes `/-/reload` and `/-/quit` endpoints **without any authentication**. Anyone with access to the port can shut down the service via `POST /-/quit`.
+
+Recommended approach:
+
+```yaml
+# NetworkPolicy: restrict lifecycle endpoints to configmap-reload sidecar only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-lifecycle-restrict
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: prometheus
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus  # sidecar within same pod
+      ports:
+        - port: 9090
+```
+
+Alternatively, deploy an auth proxy (e.g., oauth2-proxy) to protect `/-/` paths.
+
+### Grafana Default Password
+
+This project's `deployment-grafana.yaml` uses `admin:admin` as initial password, **for development environments only**. Before production deployment, you **must** set a strong password via K8s Secret, and consider integrating auth proxy or SSO.
+
+### Webhook Domain Allowlist
+
+An empty `--policy` list in `generate_alertmanager_routes.py` means no restriction. **Production environments should always configure an allowlist** to prevent tenants from routing alert notifications to unauthorized external endpoints.
+
+### Port-forward Security
+
+Local `kubectl port-forward` binds to `127.0.0.1` (localhost only) by default. **Never use `--address 0.0.0.0`** — this exposes Prometheus/Alertmanager/Grafana to all network interfaces, allowing anyone with network access to the machine to reach these services directly.
+
+### Secrets Management — Migrating from ConfigMap to K8s Secret
+
+Sensitive information in Alertmanager receiver configs (Slack tokens, webhook URLs, PagerDuty service keys, etc.) should not be stored in plaintext within ConfigMaps. `kubectl get configmap -o yaml` reveals all contents, while K8s Secrets provide at least base64 encoding and support fine-grained RBAC access control.
+
+**Basic approach — K8s Secret + secretKeyRef:**
+
+```yaml
+# 1. Create Secret (one-time, or managed by CI)
+kubectl create secret generic alertmanager-secrets \
+  --from-literal=slack-api-url='https://hooks.slack.com/services/T.../B.../xxx' \
+  --from-literal=pagerduty-key='your-service-key' \
+  -n monitoring
+
+# 2. Reference in Alertmanager Deployment
+env:
+  - name: SLACK_API_URL
+    valueFrom:
+      secretKeyRef:
+        name: alertmanager-secrets
+        key: slack-api-url
+  - name: PAGERDUTY_KEY
+    valueFrom:
+      secretKeyRef:
+        name: alertmanager-secrets
+        key: pagerduty-key
+```
+
+In receiver configs generated by `generate_alertmanager_routes.py`, use `<secret>` or environment variable references instead of plaintext values.
+
+**Advanced approach — External Secrets Operator + HashiCorp Vault:**
+
+For production environments requiring centralized secrets management, automatic rotation, and audit logs, integrate External Secrets Operator (ESO):
+
+```yaml
+# 1. Install External Secrets Operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
+
+# 2. Configure SecretStore (connect to Vault)
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: vault-backend
+  namespace: monitoring
+spec:
+  provider:
+    vault:
+      server: "https://vault.internal:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "alertmanager"
+          serviceAccountRef:
+            name: alertmanager
+
+# 3. Define ExternalSecret (auto-sync Vault → K8s Secret)
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: alertmanager-secrets
+  namespace: monitoring
+spec:
+  refreshInterval: 1h          # Sync hourly, supports automatic rotation
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStore
+  target:
+    name: alertmanager-secrets  # Generated K8s Secret name
+    creationPolicy: Owner
+  data:
+    - secretKey: slack-api-url
+      remoteRef:
+        key: dynamic-alerting/alertmanager
+        property: slack-api-url
+    - secretKey: pagerduty-key
+      remoteRef:
+        key: dynamic-alerting/alertmanager
+        property: pagerduty-key
+```
+
+Vault-side configuration:
+
+```bash
+# Enable KV v2 engine
+vault secrets enable -path=secret kv-v2
+
+# Write secrets
+vault kv put secret/dynamic-alerting/alertmanager \
+  slack-api-url="https://hooks.slack.com/services/T.../B.../xxx" \
+  pagerduty-key="your-service-key"
+
+# Create policy (least privilege)
+vault policy write alertmanager - <<EOF
+path "secret/data/dynamic-alerting/alertmanager" {
+  capabilities = ["read"]
+}
+EOF
+
+# Bind K8s ServiceAccount
+vault write auth/kubernetes/role/alertmanager \
+  bound_service_account_names=alertmanager \
+  bound_service_account_namespaces=monitoring \
+  policies=alertmanager \
+  ttl=1h
+```
+
+Benefits of this architecture: secrets never enter Git, automatic rotation via `refreshInterval`, Vault provides full audit logs, RBAC precisely controls who can access which secrets.
+
+### TLS Encrypted Communication Guide
+
+In production environments, communication between threshold-exporter, Prometheus, and Alertmanager should use TLS to prevent metrics data and alert content from being intercepted during network transmission.
+
+**Step 1 — Issue certificates with cert-manager (recommended):**
+
+```yaml
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+
+# Create self-signed CA (dev) or reference production CA
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: monitoring-ca
+spec:
+  selfSigned: {}  # Use ACME or internal CA in production
+
+# Issue Prometheus TLS certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: prometheus-tls
+  namespace: monitoring
+spec:
+  secretName: prometheus-tls
+  issuerRef:
+    name: monitoring-ca
+    kind: ClusterIssuer
+  commonName: prometheus.monitoring.svc.cluster.local
+  dnsNames:
+    - prometheus.monitoring.svc.cluster.local
+    - prometheus.monitoring.svc
+    - prometheus
+```
+
+**Step 2 — Enable TLS on threshold-exporter:**
+
+```yaml
+# Add TLS args to Deployment
+args:
+  - "--tls-cert-file=/etc/tls/tls.crt"
+  - "--tls-key-file=/etc/tls/tls.key"
+volumeMounts:
+  - name: tls
+    mountPath: /etc/tls
+    readOnly: true
+volumes:
+  - name: tls
+    secret:
+      secretName: exporter-tls
+```
+
+**Step 3 — Configure Prometheus scrape_configs with TLS:**
+
+```yaml
+scrape_configs:
+  - job_name: "dynamic-thresholds"
+    scheme: https
+    tls_config:
+      ca_file: /etc/prometheus/tls/ca.crt
+      # For mTLS, add client cert
+      # cert_file: /etc/prometheus/tls/tls.crt
+      # key_file: /etc/prometheus/tls/tls.key
+```
+
+**Step 4 — Alertmanager HTTP config TLS:**
+
+```yaml
+# Add TLS to webhook_configs in alertmanager.yml
+receivers:
+  - name: "secure-webhook"
+    webhook_configs:
+      - url: "https://internal-webhook.example.com/alert"
+        http_config:
+          tls_config:
+            ca_file: /etc/alertmanager/tls/ca.crt
+```
+
+### Config Reload Endpoint Security
+
+Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints for triggering configuration reload. This project uses `configmap-reload` sidecar to automatically call these endpoints.
+
+**Security implications:** These endpoints require no authentication. If an attacker can reach the Prometheus/Alertmanager port, they can repeatedly trigger reloads causing performance impact, or shut down the service via `/-/quit` if enabled.
+
+**Production recommendation:** Use the NetworkPolicy from the "Lifecycle Endpoint Protection" section above to restrict access. Ensure Prometheus and Alertmanager use ClusterIP Services (not NodePort/LoadBalancer), reachable only within the cluster.
 
 ## FAQ
 
@@ -249,7 +518,7 @@ A: Don't modify Rule Packs directly. Use `_routing.overrides[]` in tenant YAML t
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ★★★ |
-| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ★★ |
-| ["Tenant Quick Start Guide"](for-tenants.en.md) | ★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |
+| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ⭐⭐⭐ |
+| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ⭐⭐ |
+| ["Tenant Quick Start Guide"](for-tenants.en.md) | ⭐⭐ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](../migration-guide.en.md) | ⭐⭐ |

@@ -2,13 +2,13 @@
 title: "Grafana Dashboard Guide"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 
 # Grafana Dashboard Guide
 
-> **v2.0.0-preview** | Audience: Platform Engineers, SREs, DevOps
+> **v2.0.0** | Audience: Platform Engineers, SREs, DevOps
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 
@@ -68,7 +68,7 @@ The sidecar will automatically detect the `grafana_dashboard=1` label and mount 
 
 #### 9-10. Thresholds per Tenant (BarChart) + Active State Filters (Table)
 
-- **Thresholds per Tenant**: `count by(tenant) (user_threshold)` — Threshold count per tenant. Turns red near 500 limit (Cardinality Guard). See [Architecture §2.3](./architecture-and-design.en.md#cardinality-guard).
+- **Thresholds per Tenant**: `count by(tenant) (user_threshold)` — Threshold count per tenant. Turns red near 500 limit (Cardinality Guard). See [Architecture §2](./architecture-and-design.en.md#2-core-design-config-driven-architecture).
 - **Active State Filters**: `user_state_filter` — Detailed list of active state filters (maintenance, crashloop, etc.), typically empty except during planned maintenance.
 
 ---

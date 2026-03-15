@@ -2,7 +2,7 @@
 title: "GitHub Release — 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # GitHub Release — 操作手冊 (Playbook)

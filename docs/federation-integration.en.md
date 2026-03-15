@@ -2,14 +2,14 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Federation Integration Guide
 
 > **Language / 語言：** **English (Current)** | [中文](federation-integration.md)
 
-> **v2.0.0-preview.3** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
+> **v2.0.0** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
 
 ## 1. Overview
 
@@ -403,5 +403,5 @@ This architecture requires Rule Pack YAML to support partitioning markers (such 
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Federation Integration Guide"](./federation-integration.md) | ★★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](scenarios/multi-cluster-federation.en.md) | ★★★ |
+| ["Federation Integration Guide"](./federation-integration.md) | ⭐⭐⭐ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](scenarios/multi-cluster-federation.en.md) | ⭐⭐⭐ |

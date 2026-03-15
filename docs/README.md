@@ -2,7 +2,7 @@
 title: "文件導覽"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 文件導覽
@@ -83,7 +83,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | 主題 | 文件 | 內容概要 |
 |------|------|---------|
 | 系統設計 | [architecture-and-design.md](architecture-and-design.md) | Severity Dedup、Sentinel Alert、告警路由、Per-rule Overrides、Platform Enforced Routing、Regex 維度閾值、排程式閾值、Dynamic Runbook Injection、Recurring Maintenance |
-| 性能分析 | [benchmarks.md](benchmarks.md) | idle、scaling-curve、under-load、routing、alertmanager、reload 基準；詳細測試方法論 |
+| 性能分析 | [benchmarks.md](benchmarks.md) | idle、under-load、routing、alertmanager、reload 基準；詳細測試方法論 |
 | 治理與稽核 | [governance-security.md](governance-security.md) | RBAC、稽核日誌、Cardinality Guard、Schema 驗證、Secret 管理、安全最佳實踐 |
 | 遷移引擎 | [migration-engine.md](migration-engine.md) | AST 架構、方言支援、Triage、Dictionary 映射、Prefix 管理、轉換規則 |
 | 遷移指南 | [migration-guide.md](migration-guide.md) | 逐步遷移說明、檢查清單、前置條件、驗證步驟 |

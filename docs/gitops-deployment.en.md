@@ -2,7 +2,7 @@
 title: "GitOps Deployment Guide"
 tags: [gitops, deployment, ci-cd]
 audience: [platform-engineer, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # GitOps Deployment Guide
@@ -110,7 +110,7 @@ steps:
 
 ```bash
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.0.0 \
   -n monitoring \
   -f values-override.yaml
 ```
@@ -129,7 +129,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
 
 The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux. Use together with Method A (threshold-config) to achieve complete GitOps closure for threshold-exporter and Alertmanager configuration.
 
-When `--base-config` is not provided, built-in defaults are used. If you need custom `global` settings (e.g., SMTP settings), default receiver, or base inhibit_rules, it's recommended to maintain a `base-alertmanager.yaml` as input. See [BYO Alertmanager Integration Guide Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap).
+When `--base-config` is not provided, built-in defaults are used. If you need custom `global` settings (e.g., SMTP settings), default receiver, or base inhibit_rules, it's recommended to maintain a `base-alertmanager.yaml` as input. See [BYO Alertmanager Integration Guide Step 5](byo-alertmanager-integration.md#step-5-合併至-alertmanager-configmap).
 
 ## 4. ArgoCD Example
 
@@ -255,7 +255,7 @@ Platform Team-controlled settings (in `_defaults.yaml`) include global defaults,
 
 | Resource | Relevance |
 |----------|-----------|
-| ["GitOps 部署指南"](./gitops-deployment.md) | ★★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["Grafana Dashboard Guide"] | ★★ |
-| ["AST Migration Engine Architecture"] | ★★ |
+| ["GitOps 部署指南"](./gitops-deployment.md) | ⭐⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐ |
+| ["Grafana Dashboard Guide"] | ⭐⭐ |
+| ["AST Migration Engine Architecture"] | ⭐⭐ |

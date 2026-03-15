@@ -6,3 +6,5 @@
 > | Linux Docker (--network=host) | `http://localhost:9090` |
 >
 > Configure via `--prometheus <URL>` flag or `PROMETHEUS_URL` environment variable.
+>
+> ⚠️ HTTP URLs above are for local development and in-cluster communication only. For production environments where Prometheus is exposed outside the cluster, use HTTPS with proper authentication (e.g., reverse proxy + mTLS).

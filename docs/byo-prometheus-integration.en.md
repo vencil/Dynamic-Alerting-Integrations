@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide
@@ -97,7 +97,7 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
         regex: "db-.+"                    # ← Adjust to your tenant namespace naming pattern
-      # ★ Core: Inject namespace name as tenant label
+      # ⭐ Core: Inject namespace name as tenant label
       - source_labels: [__meta_kubernetes_namespace]
         target_label: tenant
       # Use the port specified in the Service annotation
@@ -143,7 +143,7 @@ Option A assumes 1:1 (one namespace = one tenant). The platform also supports ot
 
 - **1:N (one Namespace → multiple Tenants)**: For shared namespace scenarios, use Option B with Service labels/annotations to distinguish tenants.
 
-**Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Architecture Document §2.3](architecture-and-design.md#23-tenant-namespace-mapping) for details.
+**Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Architecture Document §2.3](architecture-and-design.md#52-1n-tenant-mapping-進階支援) for details.
 
 ---
 
@@ -161,7 +161,7 @@ Add a new scrape job to your `prometheus.yml`:
 scrape_configs:
   # ... your existing jobs ...
 
-  # ★ Dynamic threshold engine
+  # ⭐ Dynamic threshold engine
   - job_name: "dynamic-thresholds"
     scrape_interval: 15s
     # Method 1: Static configuration (simplest)
@@ -276,7 +276,7 @@ Declare the new rules directory in `rule_files`:
 ```yaml
 rule_files:
   - "/etc/prometheus/rules/*.yml"                    # Your existing rules (do not touch)
-  - "/etc/prometheus/rules/dynamic-alerts/*.yml"     # ★ Added: Dynamic threshold rule packs
+  - "/etc/prometheus/rules/dynamic-alerts/*.yml"     # ⭐ Added: Dynamic threshold rule packs
 ```
 
 **Step 3c — Trigger Prometheus Reload**
@@ -345,7 +345,7 @@ da-tools diagnose db-a
 da-tools validate-config --config-dir /data/conf.d
 ```
 
-> **Tip**: `da-tools` doesn't require cloning the entire project, just `docker pull ghcr.io/vencil/da-tools:v1.11.0` is enough.
+> **Tip**: `da-tools` doesn't require cloning the entire project, just `docker pull ghcr.io/vencil/da-tools:v2.0.0` is enough.
 
 ---
 
@@ -386,7 +386,7 @@ spec:
     - port: metrics                       # ← Adjust based on your exporter Service definition
       interval: 10s
       relabelings:
-        # ★ Inject namespace as tenant label
+        # ⭐ Inject namespace as tenant label
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: tenant
 ```
@@ -474,11 +474,11 @@ A: `threshold-exporter` is deployed in the data cluster (near tenant ConfigMaps)
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ★★★ |
-| ["BYO Alertmanager Integration Guide"] | ★★★ |
-| ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"] | ★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["Grafana Dashboard Guide"] | ★★ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"] | ★★ |
+| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐⭐ |
+| ["BYO Alertmanager Integration Guide"] | ⭐⭐⭐ |
+| ["Threshold Exporter API Reference"](api/README.en.md) | ⭐⭐ |
+| ["Performance Analysis & Benchmarks"] | ⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐ |
+| ["Grafana Dashboard Guide"] | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

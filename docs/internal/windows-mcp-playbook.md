@@ -2,13 +2,13 @@
 title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
 
 > AI Agent 透過 Windows-MCP Shell / Desktop Commander / Cowork VM 操作 Dev Container 的最佳實踐與已知陷阱。
-> **相關文件：** [Testing Playbook](testing-playbook.md) (K8s/測試排錯、Benchmark) | [GitHub Release Playbook](github-release-playbook.md) (push + release 流程)
+> **相關文件：** [Testing Playbook](testing-playbook.md)（K8s/測試排錯）· [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [GitHub Release Playbook](github-release-playbook.md)（push + release 流程）
 
 ## 環境概覽
 
@@ -210,7 +210,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 17 | Windows MCP Shell 長 REST body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 完成後 `Remove-Item` |
 | 18 | GitHub Release `already_exists` 422 | tag 推送後 GitHub 可能自動建 release；改用 PATCH 更新（GET tag → 取 id → PATCH body） |
 | 19 | Dev Container `Exited (255)` 未啟動 | `docker start vibe-dev-container`；每次 session 開始先 `docker ps` 確認 |
-| 20 | Benchmark / Go test 複雜指令在 PowerShell 下失敗 | 寫 `.sh` 輔助腳本 → `docker exec [-d] bash script.sh`（見 [Testing Playbook → Benchmark 在 Dev Container 內執行](testing-playbook.md#benchmark-在-dev-container-內執行)）|
+| 20 | Benchmark / Go test 複雜指令在 PowerShell 下失敗 | 寫 `.sh` 輔助腳本 → `docker exec [-d] bash script.sh`（見 [Benchmark Playbook → 在 Dev Container 內執行](benchmark-playbook.md#在-dev-container-內執行)）|
 | 21 | Go test 從 repo root 執行失敗 | `go.mod` 在 `components/threshold-exporter/app/`，必須 `-w` 指定或 `cd` 進去 |
 
 ## 指令快速參考

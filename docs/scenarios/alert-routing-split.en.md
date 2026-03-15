@@ -2,12 +2,12 @@
 title: "Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications
 
-> **v2.0.0-preview** | Related docs: [`architecture-and-design.md` §2.9](../architecture-and-design.md), [`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
+> **v2.0.0** | Related docs: [`architecture-and-design.en.md` §2.9](../architecture-and-design.en.md), [`byo-alertmanager-integration.en.md`](../byo-alertmanager-integration.en.md)
 
 ## Problem
 
@@ -190,8 +190,8 @@ Organizations needing fully different semantics can fork Rule Packs:
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★★ |
-| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★ |
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★ |
-| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ★★ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ⭐⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ⭐⭐ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ⭐⭐ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐ |
+| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ⭐⭐ |

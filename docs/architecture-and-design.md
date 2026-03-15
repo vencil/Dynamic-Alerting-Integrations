@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -356,6 +356,8 @@ tenants:
 
 v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換不同閾值。典型場景：夜間維護窗口放寬閾值、尖峰時段收緊閾值。
 
+> **時區注意事項：** 所有時間窗口 (`window`) 與 recurring maintenance 的 cron 表達式均使用 **UTC 時區**。配置時請將本地時間轉換為 UTC。例如 UTC+8 的 06:00-14:00 在此應寫為 `"22:00-06:00"`。
+
 **配置語法：**
 ```yaml
 tenants:
@@ -625,7 +627,7 @@ _routing_enforced:
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 
-`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](byo-alertmanager-integration.md#8-platform-enforced-routingv170)。
+`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](byo-alertmanager-integration.md#8-platform-enforced-routing)。
 
 ---
 
@@ -878,24 +880,26 @@ spec:
 
 ## 5. 未來擴展路線 (Future Roadmap)
 
-以下為按優先序排列的技術方向。已完成項目請查閱 [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md) 及 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
+以下為按優先序排列的技術方向。v2.0.0 已完成的項目（Alert Quality Scoring、Policy-as-Code Path A、Tenant Self-Service Portal、Cardinality Forecasting）已移至 [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md)。DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
 ```mermaid
 graph LR
     subgraph Near["近期 (已有設計基礎)"]
-        FB["Federation B<br/>Rule Pack 分層"]
-        NM["1:N Mapping"]
-        QS["Alert Quality<br/>Scoring"]
+        FB["§5.1 Federation B<br/>Rule Pack 分層"]
+        NM["§5.2 1:N Mapping"]
+        PB["§5.3 Policy Path B<br/>(OPA)"]
+        TR["§5.4 Threshold<br/>Recommendation"]
     end
     subgraph Mid["中期 (需客戶驗證)"]
-        PS["Policy-as-Code"]
-        CD["Cross-Cluster<br/>Drift Detection"]
-        IR["Incremental<br/>Reload"]
+        CD["§5.5 Cross-Cluster<br/>Drift Detection"]
+        IR["§5.6 Incremental<br/>Reload"]
+        AC["§5.7 Alert Correlation<br/>Engine"]
+        NT["§5.8 Notification<br/>Testing"]
     end
     subgraph Far["遠期 (探索方向)"]
-        SP["Tenant Self-Service<br/>Portal"]
-        CF["Cardinality<br/>Forecasting"]
-        LM["Log-to-Metric<br/>Bridge"]
+        LM["§5.9 Log-to-Metric<br/>Bridge"]
+        CV["§5.10 Config<br/>Versioning"]
+        GD["§5.11 Dashboard<br/>as Code"]
     end
 ```
 
@@ -909,35 +913,24 @@ graph LR
 
 一個 Namespace 內多個邏輯 Tenant（透過 Service annotation/Pod label 區分）。需要 `scaffold_tenant.py --shared-namespace --tenant-source annotation` 模式及 `_tenant_mappings` 配置 section。目前 §2.3 已有 relabel 範例，工具化待需求確認。
 
-### 5.3 Alert Quality Scoring（警報品質評估）
+### 5.3 Policy-as-Code Path B：OPA/Rego 整合
 
-**動機**：隨著租戶數與 Rule Pack 數量增長，低品質警報會侵蝕值班人員的注意力預算。目前缺乏系統化方式識別問題警報。
+**動機**：Path A（內建 DSL）已於 v2.0.0 實作，適合輕量場景。對於已投資 OPA 生態系的企業用戶，需要將 tenant 配置驗證納入既有 OPA 治理流程。
 
-**做法**：分析 Alertmanager 歷史紀錄，對每個 alertname × tenant 組合計算品質指標：
+**做法**：新增 `policy_opa_bridge.py` 工具，將 tenant YAML 轉為 OPA input JSON，呼叫 OPA REST API 或本地 `opa eval`，將 OPA 回應轉換回本平台的 `Violation` 格式。可與 `validate_config.py` Check 9 整合，讓 Path A/B 共存互補。
 
-- **Noise Score**：單位時間內 firing 次數過高（反覆 fire/resolve 震盪）
-- **Stale Score**：長期未 fire 的警報（閾值可能已失去意義）
-- **Resolution Latency**：從 firing 到 resolved 的平均時間（過短 = flapping，過長 = 無人處理）
-- **Suppression Ratio**：被 inhibit 或 silence 壓掉的比例（過高 = 規則設計需調整）
+**技術切入點**：`policy_engine.py` 的 `PolicyResult` / `Violation` 資料模型可直接復用。需定義 Rego 範本庫（`rego/` 目錄）對應平台常見檢查場景。
 
-**產出**：`da-tools alert-quality --period 30d --json` → per-tenant 報告，可嵌入 Grafana dashboard 或作為 CI gate。
+### 5.4 Threshold Recommendation Engine（閾值推薦引擎）
 
-### 5.4 Policy-as-Code（配置策略引擎）
+**動機**：新 tenant onboarding 時，常見問題是「閾值該設多少？」。目前依賴經驗值或文件範例，缺乏數據驅動的建議機制。
 
-**動機**：目前 `ValidateTenantKeys()` 做結構驗證（schema），但無法表達組織層級的策略約束，例如「所有 critical alert 必須配置 pagerduty receiver」或「repeat_interval 不得低於 5m」。隨著 Sharded GitOps 讓更多 team 自主管理配置，策略護欄變得更重要。
+**做法**：基於 Prometheus 歷史指標（如 `container_cpu_usage_seconds_total`），計算 P95/P99 百分位數，搭配當前閾值產生建議。利用已有的 `alert_quality.py` Noise Score 指標，辨識設定過低（頻繁觸發）或過高（從未觸發）的閾值。
 
-**做法**：
-
-```
-tenant.yaml → Schema Validation (現有) → Policy Evaluation (新增) → config-dir
-```
-
-引入輕量策略層，以宣告式規則表達約束。兩種可能路徑：
-
-- **Path A — 內建 DSL**：在 `_defaults.yaml` 新增 `_policies` section，用簡潔的 key-operator-value 語法。優點是零外部依賴，學習成本低。
-- **Path B — OPA/Rego 整合**：策略表達力強，適合已有 OPA 基礎設施的團隊。缺點是引入外部依賴。
-
-兩條路徑都透過 `validate_config.py` 的 plugin 機制掛載，不侵入 threshold-exporter 核心。
+**技術切入點**：
+- `da-tools threshold-recommend --prometheus URL --tenant db-a`
+- 輸出：每個 metric 的建議閾值 + 信心區間 + 當前值比較
+- 與 Self-Service Portal 整合：在 Alert Preview tab 新增「推薦值」參考線
 
 ### 5.5 Cross-Cluster Drift Detection（跨叢集漂移偵測）
 
@@ -963,23 +956,21 @@ Cluster-C config-dir ──┘
 
 **風險**：delta merge 的一致性保證比全量重載複雜。需要完善的 benchmark 對比（`make benchmark` 已有 reload-bench 基礎），確認增量模式在各規模下皆不退化。
 
-### 5.7 Tenant Self-Service Portal（租戶自助入口）
+### 5.7 Alert Correlation Engine（告警關聯分析）
 
-**動機**：目前租戶互動完全依賴 YAML 檔案 + CLI 工具。對於非 DevOps 背景的 tenant team，提供視覺化的配置體驗可降低上手門檻。
+**動機**：多 tenant 環境中，同一根因事件常觸發跨 tenant 的多個告警（例如底層儲存異常同時影響 db-a、db-b 的 IO 指標）。現有 inhibit 機制僅處理同一 tenant 內的嚴重度去重，缺乏跨 tenant / 跨指標的關聯分析。
 
-**功能範圍**（輕量，非完整 UI 平台）：
+**做法**：
+- **時間窗口聚合**：在 Alertmanager webhook receiver 後端收集告警，以可配置的時間窗口（如 5min）聚合。
+- **關聯規則**：基於 tenant topology（同 namespace、同 node pool）和時間重疊度，計算告警之間的關聯分數。
+- **根因推斷**：當關聯分數超過閾值時，合併為單一事件，標註最可能的根因告警。
+- **輸出**：Correlation Report（`da-tools alert-correlate`），可嵌入 Grafana dashboard 或 webhook 通知。
 
-- **YAML 驗證**：貼上 tenant YAML，即時回饋 schema error + policy violation
-- **Alert 預覽**：輸入樣本 metric 值，預覽哪些 alert 會 fire（基於 `validate_config.py` 的 dry-evaluate 能力）
-- **Routing 視覺化**：以樹狀圖呈現 Alertmanager route 結構，highlight 該 tenant 的 routing path
+### 5.8 Multi-Channel Notification Testing（多通道通知測試）
 
-**技術基礎**：`docs/interactive/` 下的 React 元件（Tenant YAML Validator、Rule Pack Selector）已驗證了瀏覽器端執行的可行性。可進一步整合為獨立的 SPA。
+**動機**：tenant 配置 routing 後，常見的問題是「配完了但不知道 webhook URL 是否正確、Slack token 是否有效」。目前只能等真正的告警觸發才能驗證。
 
-### 5.8 Cardinality Forecasting（基數預測）
-
-**動機**：per-tenant 500 cardinality guard（§2.6）是事後防護。若能根據歷史趨勢預測基數增長，Platform team 可提前介入而非被動 truncate。
-
-**做法**：基於 Prometheus `scrape_series_added` 和 `tenant_threshold_*` metric family 的時序資料，用簡單的線性回歸 / 指數平滑預測未來 N 天的基數上限。產出 warning-level alert 在觸頂前 7 天通知。
+**做法**：`da-tools test-notification --config-dir conf.d/ --tenant db-a` 對該 tenant 配置的所有 receiver 發送測試訊息，回報每個通道的連通性。需遵循 rate limit 和 dry-run 安全措施。
 
 ### 5.9 Log-to-Metric Bridge（日誌轉指標橋接）
 
@@ -991,11 +982,26 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力，而不需要在核心架構中引入日誌處理邏輯。未來若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
 
+### 5.10 Tenant Config Versioning & Rollback（配置版本控制與回滾）
+
+**動機**：config-dir 的變更透過 Git 管理，但在 runtime 端缺乏細粒度的版本追蹤和快速回滾能力。當 hot-reload 載入了有問題的配置時，需要能一鍵恢復到上一個已知正常的版本。
+
+**做法**：
+- threshold-exporter 在每次 reload 成功後，保留前 N 版的配置快照（in-memory 或本地檔案）。
+- 新增 `/admin/rollback?version=N` API，觸發回滾。
+- `da-tools config-history --prometheus URL` 查詢歷史 reload 事件及對應的 config hash。
+
+### 5.11 Grafana Dashboard as Code（Dashboard 程式化管理）
+
+**動機**：平台已有完整的告警規則管理，但 Grafana dashboard 仍是手動維護。tenant onboarding 時需手動建立 dashboard，容易遺漏。
+
+**做法**：`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。
+
 ---
 
 ## 相關資源
 
-- - [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
+- [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
 - [ADR 總覽](adr/README.md) — 5 個架構決策紀錄
 - [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
 - [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
@@ -1003,5 +1009,5 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 
 ---
 
-**文件版本：** v2.0.0-preview.3 — 2026-03-14
+**文件版本：** v2.0.0 — 2026-03-14
 **維護者：** Platform Engineering Team

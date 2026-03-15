@@ -2,12 +2,12 @@
 title: "Scenario: Automated Shadow Monitoring Cutover Workflow"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Scenario: Automated Shadow Monitoring Cutover Workflow
 
-> **v2.0.0-preview** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
+> **v2.0.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
 
 ## Problem
 
@@ -428,11 +428,11 @@ After cutover:
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★★ |
-| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"] | ★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["Grafana Dashboard Guide"] | ★★ |
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★ |
-| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ★★ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.en.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](../cli-reference.en.md) | ⭐⭐ |
+| ["Grafana Dashboard Guide"](../grafana-dashboards.en.md) | ⭐⭐ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ⭐⭐ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ⭐⭐ |
+| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ⭐⭐ |

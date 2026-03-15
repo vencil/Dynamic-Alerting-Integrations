@@ -2,12 +2,12 @@
 title: "場景：Shadow Monitoring 全自動切換工作流"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 場景：Shadow Monitoring 全自動切換工作流
 
-> **v2.0.0-preview** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
+> **v2.0.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
 
 ## 問題
 

@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 
@@ -130,11 +130,11 @@ No direct architectural dependencies. This decision is purely a prioritization c
 
 | Resource | Relevance |
 |----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ★★★ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ★★★ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ★★★ |
-| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ★★★ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ★★★ |
-| [README.en](README.en.md) | ★★★ |
-| ["Architecture and Design"](../architecture-and-design.md) | ★★ |
-| ["Project Context Diagram"](../context-diagram.md) | ★★ |
+| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐⭐ |
+| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐⭐⭐ |
+| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐⭐ |
+| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ⭐⭐⭐ |
+| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
+| [README.en](README.en.md) | ⭐⭐⭐ |
+| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
+| ["Project Context Diagram"](../context-diagram.md) | ⭐⭐ |

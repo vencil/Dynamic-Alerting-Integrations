@@ -2,7 +2,7 @@
 title: "Documentation Guide"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Documentation Guide
@@ -83,7 +83,7 @@ In-depth discussions on specific technical domains.
 | Topic | Document | Overview |
 |-------|----------|----------|
 | System Design | [architecture-and-design.en.md](architecture-and-design.en.md) | Severity Dedup, Sentinel Alert, alert routing, per-rule overrides, platform enforced routing, regex dimensions, scheduled thresholds, dynamic runbook injection, recurring maintenance |
-| Performance Analysis | [benchmarks.en.md](benchmarks.en.md) | idle, scaling-curve, under-load, routing, alertmanager, reload benchmarks; detailed testing methodology |
+| Performance Analysis | [benchmarks.en.md](benchmarks.en.md) | idle, under-load, routing, alertmanager, reload benchmarks; detailed testing methodology |
 | Governance & Audit | [governance-security.en.md](governance-security.en.md) | RBAC, audit logs, cardinality guards, schema validation, secret management, security best practices |
 | Migration Engine | [migration-engine.en.md](migration-engine.en.md) | AST architecture, dialect support, triage, dictionary mapping, prefix management, transformation rules |
 | Migration Guide | [migration-guide.en.md](migration-guide.en.md) | Step-by-step migration instructions, checklists, prerequisites, validation steps |
@@ -178,4 +178,4 @@ Found documentation issues or improvements? Please submit an issue or PR. All do
 
 | Resource | Relevance |
 |----------|-----------|
-| ["文件導覽"](./README.md) | ★★★ |
+| ["文件導覽"](./README.md) | ⭐⭐⭐ |

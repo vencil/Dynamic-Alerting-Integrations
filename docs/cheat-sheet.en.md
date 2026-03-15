@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 
@@ -16,30 +16,33 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 
 | Command | Description | Key Flags | Example |
 |---------|-------------|-----------|---------|
-| `check-alert` | 查詢特定 alert 在某個 tenant 上的狀態 | - | `da-tools check-alert --help` |
-| `diagnose` | 對單一 tenant 執行全面健康檢查 | --config-dir <PATH>, --namespace <NS> | `da-tools diagnose --help` |
-| `batch-diagnose` | 對所有 tenant 執行並行健康檢查 | --tenants <LIST>, --workers <N>, --timeout <SEC> | `da-tools batch-diagnose --help` |
-| `baseline` | 觀測指標時間序列，計算統計摘要（p50/p90/p95/p99/max），產出閾值建議 | --tenant <NAME>, --duration <SEC>, --interval <SEC> | `da-tools baseline --help` |
-| `validate` | Shadow Monitoring 驗證工具：比對新舊 Recording Rule 數值，偵測自動... | --watch, --interval <SEC>, --rounds <N> | `da-tools validate --help` |
-| `cutover` | Shadow Monitoring 一鍵切換：停止舊規則、啟用新規則、驗證健康 | --tenant <NAME>, --readiness-json <FILE>, --dry-run | `da-tools cutover --help` |
-| `blind-spot` | 掃描 Prometheus 叢集的活躍 targets，與 tenant 配置交叉比對，找出盲區（有... | --config-dir <PATH>, --exclude-jobs <LIST>, --json-output | `da-tools blind-spot --help` |
-| `maintenance-scheduler` | 評估排程式維護窗口（`_state_maintenance | --config-dir <PATH>, --output <FILE>, --timezone <TZ> | `da-tools maintenance-scheduler --help` |
-| `backtest` | 執行 PR 中 threshold 變更的歷史回測 | --lookback <DAYS>, --output <FILE> | `da-tools backtest --help` |
-| `shadow-verify` | Shadow Monitoring 就緒度與收斂性三階段驗證 | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
-| `byo-check` | 自動化 BYO Prometheus & Alertmanager 整合驗證（取代手動 curl +... | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
-| `federation-check` | 多叢集 Federation 整合驗證（自動化 federation-integration | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |
-| `grafana-import` | Grafana Dashboard 匯入工具（透過 ConfigMap sidecar 自動掛載） | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
-| `generate-routes` | 從 tenant YAML 產出 Alertmanager route + receiver + i... | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
-| `patch-config` | ConfigMap 局部更新工具，支援 preview（--diff）和直接應用 | --namespace <NS>, --configmap <CM>, --dry-run | `da-tools patch-config --help` |
-| `scaffold` | 產生新 tenant 配置（互動式或非互動式） | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
-| `migrate` | 將傳統 Prometheus 規則轉換為動態格式（AST 引擎） | --output <DIR>, --dry-run, --triage | `da-tools migrate --help` |
-| `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <DOMAINS>, --ci | `da-tools validate-config --help` |
-| `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
-| `deprecate` | 標記指標為 disabled，防止誤用 | --config-dir <PATH>, --reason <TEXT>, --dry-run | `da-tools deprecate --help` |
-| `lint` | 檢查 Custom Rule 的治理合規性（根據 `custom_` 前綴規則） | --strict, --json-output | `da-tools lint --help` |
-| `onboard` | 分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示 | --alertmanager-config <FILE>, --output <FILE> | `da-tools onboard --help` |
-| `analyze-gaps` | 比對 custom rule 與 Rule Pack，找出重複/缺口 | --config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |
-| `config-diff` | 比較兩個配置目錄（conf | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
+| `check-alert` | Query alert status for a specific tenant | - | `da-tools check-alert --help` |
+| `diagnose` | Full health check for a single tenant | --config-dir <PATH>, --namespace <NS> | `da-tools diagnose --help` |
+| `batch-diagnose` | Parallel health check for all tenants | --tenants <LIST>, --workers <N>, --timeout <SEC> | `da-tools batch-diagnose --help` |
+| `baseline` | Observe metric time series, compute stats (p50/p90/p95/p99/max), suggest thresholds | --tenant <NAME>, --duration <SEC>, --interval <SEC> | `da-tools baseline --help` |
+| `validate` | Shadow Monitoring validation: compare old/new Recording Rule values | --watch, --interval <SEC>, --rounds <N> | `da-tools validate --help` |
+| `cutover` | Shadow Monitoring one-click switchover: stop old rules, enable new, verify health | --tenant <NAME>, --readiness-json <FILE>, --dry-run | `da-tools cutover --help` |
+| `blind-spot` | Scan Prometheus active targets, cross-check with tenant config for blind spots | --config-dir <PATH>, --exclude-jobs <LIST>, --json-output | `da-tools blind-spot --help` |
+| `maintenance-scheduler` | Evaluate scheduled maintenance windows (`_state_maintenance`) | --config-dir <PATH>, --output <FILE>, --timezone <TZ> | `da-tools maintenance-scheduler --help` |
+| `backtest` | Historical backtest for PR threshold changes | --lookback <DAYS>, --output <FILE> | `da-tools backtest --help` |
+| `shadow-verify` | Shadow Monitoring readiness & convergence 3-phase verification | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
+| `byo-check` | Automated BYO Prometheus & Alertmanager integration verification | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
+| `federation-check` | Multi-cluster Federation integration verification | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |
+| `grafana-import` | Grafana Dashboard import via ConfigMap sidecar auto-mount | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
+| `alert-quality` | Alert quality scoring: 4 metrics, 3 grades, CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
+| `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |
+| `evaluate-policy` | Policy-as-Code evaluation: declarative DSL policy checks | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools evaluate-policy --help` |
+| `generate-routes` | Generate Alertmanager route + receiver + inhibit from tenant YAML | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
+| `patch-config` | ConfigMap partial update with preview (--diff) | --namespace <NS>, --configmap <CM>, --dry-run | `da-tools patch-config --help` |
+| `scaffold` | Generate new tenant config (interactive or non-interactive) | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
+| `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | --output <DIR>, --dry-run, --triage | `da-tools migrate --help` |
+| `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <DOMAINS>, --ci | `da-tools validate-config --help` |
+| `offboard` | Offboard tenant config and related resources | --config-dir <PATH>, --backup <DIR>, --cleanup-rules | `da-tools offboard --help` |
+| `deprecate` | Mark metrics as disabled to prevent misuse | --config-dir <PATH>, --reason <TEXT>, --dry-run | `da-tools deprecate --help` |
+| `lint` | Check Custom Rule governance compliance (`custom_` prefix rules) | --strict, --json-output | `da-tools lint --help` |
+| `onboard` | Analyze existing Alertmanager/Prometheus config for migration hints | --alertmanager-config <FILE>, --output <FILE> | `da-tools onboard --help` |
+| `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |
+| `config-diff` | Compare two config directories (GitOps PR review) | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
 
 ## Quick Tips
 
@@ -50,6 +53,8 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `validate` — Shadow Monitoring comparison
   - `cutover` — One-click switchover (final migration step)
   - Others: `blind-spot`, `maintenance-scheduler`, `backtest`
+  - `alert-quality` — Alert quality scoring (noise, stale, latency, suppression)
+  - `cardinality-forecast` — Per-tenant cardinality trend prediction
 
 - **Config Generation Tools**
   - `generate-routes` — Tenant YAML → Alertmanager fragment
@@ -61,6 +66,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `validate-config` — Config validation
   - `offboard` / `deprecate` — Tenant offboarding / metric deprecation
   - `lint` / `onboard` / `analyze-gaps` / `config-diff` — Governance tools
+  - `evaluate-policy` — Policy-as-Code evaluation (declarative DSL)
 
 ## Network Configuration
 
@@ -81,14 +87,14 @@ export PROMETHEUS_URL=http://localhost:9090
 # Basic command
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v1.11.0 \
+  ghcr.io/vencil/da-tools:v2.0.0 \
   <command> [arguments]
 
 # With local files
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v1.11.0 \
+  ghcr.io/vencil/da-tools:v2.0.0 \
   <command> --config-dir /etc/config
 ```
 
@@ -100,7 +106,7 @@ Full reference at [cli-reference.en.md](cli-reference.en.md).
 
 | Resource | Relevance |
 |----------|-----------|
-| ["da-tools Quick Reference"](./cheat-sheet.md) | ★★★ |
-| ["da-tools CLI Reference"] | ★★★ |
-| ["Glossary"] | ★★ |
-| ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
+| [da-tools Quick Reference (中文)](./cheat-sheet.md) | ⭐⭐⭐ |
+| [da-tools CLI Reference](./cli-reference.en.md) | ⭐⭐⭐ |
+| [Glossary](./glossary.en.md) | ⭐⭐ |
+| [Threshold Exporter API Reference](api/README.en.md) | ⭐⭐ |

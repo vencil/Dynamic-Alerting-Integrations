@@ -2,7 +2,7 @@
 title: "Multi-Tenant Custom Rule Governance Model"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Multi-Tenant Custom Rule Governance Model
@@ -207,7 +207,7 @@ python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --policy .gith
 # Via da-tools container (no repo clone needed)
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:v1.11.0 \
+  ghcr.io/vencil/da-tools:v2.0.0 \
   lint /data/rules --ci
 
 # Example output
@@ -278,5 +278,5 @@ If a specific tenant's Tier 3 count keeps rising, this signals that Tier 2 scena
 
 | Resource | Relevance |
 |----------|-----------|
-| ["多租戶客製化規則治理規範 (Custom Rule Governance Model)"](./custom-rule-governance.md) | ★★★ |
-| ["Governance, Audit & Security Compliance"] | ★★ |
+| ["多租戶客製化規則治理規範 (Custom Rule Governance Model)"](./custom-rule-governance.md) | ⭐⭐⭐ |
+| ["Governance, Audit & Security Compliance"] | ⭐⭐ |

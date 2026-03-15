@@ -2,12 +2,12 @@
 title: "Tenant Quick Start Guide"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Tenant Quick Start Guide
 
-> **v2.0.0-preview** | Audience: Tenant administrators, DBAs, SREs
+> **v2.0.0** | Audience: Tenant administrators, DBAs, SREs
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
@@ -44,6 +44,8 @@ tenants:
 ```
 
 Tri-state design: each metric can be **custom value**, **omitted** (use default), or `"disable"` (suppress alert).
+
+> 💡 **Interactive Tools** — Want to validate your YAML in real-time? Try [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx). Unsure how to set thresholds? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx) to derive values from p50/p90/p99.
 
 ```yaml
 tenants:
@@ -96,6 +98,8 @@ tenants:
 
 In maintenance mode, alerts don't fire (PromQL-level suppression). Automatically resumes after expiry.
 
+> **Timezone:** The `expires` field uses RFC 3339 format (with timezone). Scheduled thresholds' `window` and recurring maintenance's `cron` both use **UTC timezone**.
+
 ### Silencing Specific Severities
 
 ```yaml
@@ -132,6 +136,8 @@ Alert notifications use `summary` and `description` written for you (the Tenant)
 
 > If your Platform team enabled `_routing_enforced`, they receive a parallel platform-perspective summary (`platform_summary`) focused on capacity planning and escalation decisions. You don't need to worry about this — your notifications are unaffected.
 
+> 💡 **Interactive Tools** — Want to see which alerts you'll receive? Use [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx). Not sure which Rule Pack to use? Try [Rule Pack Selector](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-selector.jsx).
+
 ## Self-Service Verification
 
 ### Validate Configuration
@@ -157,6 +163,15 @@ python3 scripts/tools/ops/config_diff.py \
   --old-dir conf.d.baseline --new-dir conf.d/
 ```
 
+### Check Alert Quality (v2.0.0)
+
+```bash
+# Check your tenant's alert quality for noise (flapping) / stale (idle) issues
+da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+```
+
+Output: per-tenant quality score (0–100) and specific issue list.
+
 ## Generate Config (Interactive)
 
 First time onboarding? Use the scaffold tool:
@@ -181,11 +196,13 @@ A: Profiles are fill-in only — they apply only when the tenant hasn't set that
 **Q: How do I find available metric keys?**
 A: Check `_defaults.yaml` and the header comments in each Rule Pack YAML. You can also run `diagnose.py --show-inheritance` to see all resolved keys.
 
+> 💡 **First time going live?** Use [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx) for a complete step-by-step guide, or start with the [interactive setup wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx). Want to see the complete platform in action? [Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) demonstrates real scenarios. See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/).
+
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Tenant Quick Start Guide"](for-tenants.en.md) | ★★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |
-| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ★★ |
-| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ★★ |
+| ["Tenant Quick Start Guide"](for-tenants.en.md) | ⭐⭐⭐ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](../migration-guide.en.md) | ⭐⭐ |
+| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ⭐⭐ |
+| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ⭐⭐ |

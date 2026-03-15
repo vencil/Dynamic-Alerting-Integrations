@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 
@@ -13,11 +13,11 @@ lang: zh
 
 | ID | 標題 | 狀態 | 摘要 |
 |:---|:-----|:-----|:-----|
-| [001](#001-severity-dedup-via-inhibit) | 嚴重度 Dedup 採用 Inhibit 規則 | ✅ Accepted | 使用 Alertmanager inhibit_rules 而非 PromQL 進行嚴重度去重，保留 TSDB 完整性 |
-| [002](#002-oci-registry-over-chartmuseum) | OCI Registry 替代 ChartMuseum | ✅ Accepted | 選擇 ghcr.io OCI 統一分發 Helm charts 與 Docker images，簡化基礎設施 |
-| [003](#003-sentinel-alert-pattern) | Sentinel Alert 模式 | ✅ Accepted | 利用哨兵告警 + inhibit 實現三態控制，取代直接 PromQL 抑制 |
-| [004](#004-federation-scenario-a-first) | Federation 場景 A 優先 | ✅ Accepted | 優先實現中央 exporter + 邊緣 Prometheus 的聯邦模式 |
-| [005](#005-projected-volume-for-rule-packs) | 投影卷掛載 Rule Pack | ✅ Accepted | 採用 Projected Volume 與 optional:true 實現可選 Rule Pack 卸載 |
+| [001](#001-嚴重度-dedup-採用-inhibit-規則) | 嚴重度 Dedup 採用 Inhibit 規則 | ✅ Accepted | 使用 Alertmanager inhibit_rules 而非 PromQL 進行嚴重度去重，保留 TSDB 完整性 |
+| [002](#002-oci-registry-替代-chartmuseum) | OCI Registry 替代 ChartMuseum | ✅ Accepted | 選擇 ghcr.io OCI 統一分發 Helm charts 與 Docker images，簡化基礎設施 |
+| [003](#003-sentinel-alert-模式) | Sentinel Alert 模式 | ✅ Accepted | 利用哨兵告警 + inhibit 實現三態控制，取代直接 PromQL 抑制 |
+| [004](#004-federation-場景-a-優先) | Federation 場景 A 優先 | ✅ Accepted | 優先實現中央 exporter + 邊緣 Prometheus 的聯邦模式 |
+| [005](#005-投影卷掛載-rule-pack) | 投影卷掛載 Rule Pack | ✅ Accepted | 採用 Projected Volume 與 optional:true 實現可選 Rule Pack 卸載 |
 
 ---
 

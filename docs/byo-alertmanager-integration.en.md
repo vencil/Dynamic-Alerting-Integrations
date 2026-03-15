@@ -2,7 +2,7 @@
 title: "BYO Alertmanager Integration Guide"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # BYO Alertmanager Integration Guide
@@ -459,11 +459,11 @@ This path is mutually exclusive with the `generate_alertmanager_routes.py` Confi
 
 | Resource | Relevance |
 |----------|-----------|
-| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ★★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★★ |
-| ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"] | ★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["Grafana Dashboard Guide"] | ★★ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"] | ★★ |
+| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐⭐ |
+| ["Threshold Exporter API Reference"](api/README.en.md) | ⭐⭐ |
+| ["Performance Analysis & Benchmarks"] | ⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐ |
+| ["Grafana Dashboard Guide"] | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

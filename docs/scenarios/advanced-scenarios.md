@@ -2,7 +2,7 @@
 title: "進階場景與測試覆蓋"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 進階場景與測試覆蓋
@@ -35,7 +35,7 @@ tenants:
 
 ## 企業級測試覆蓋矩陣 (Enterprise Test Coverage Matrix)
 
-測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，790+ 測試案例）。
+測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，1,759 測試案例）。
 
 ### E2E Scenario Tests（`make test-scenario-*`）
 
@@ -51,7 +51,7 @@ tenants:
 
 ### Unit/Integration Tests（`make test` / `pytest`）
 
-v1.7.0–v1.11.0 新增大量企業功能，其測試覆蓋集中在 unit/integration 層：
+v1.7.0–v2.0.0 新增大量企業功能，其測試覆蓋集中在 unit/integration 層：
 
 | 功能域 | 企業防護需求 | 覆蓋範圍 | 測試數 |
 |--------|-------------|----------|--------|
@@ -70,8 +70,14 @@ v1.7.0–v1.11.0 新增大量企業功能，其測試覆蓋集中在 unit/integr
 | **Config Diff** | 配置差異 blast radius | wrapped/flat 格式載入、變更分類、Markdown 產出 | ~20 |
 | **AM GitOps ConfigMap** | 完整 ConfigMap 產出 | base-config 載入、互斥驗證、YAML 結構 | ~30 |
 | **Recurring Maintenance** | 排程式維護窗口自動化 | parse_duration（含 `d`）、is_in_window cron 判定、silence CRUD + extend、Pushgateway 指標推送 | ~55 |
+| **Alert Quality Scoring** | 告警品質四維評估 | noise/stale/latency/suppression 四指標計算、三級評分、tenant 報告、Markdown 產出 | 57 |
+| **Policy-as-Code** | 配置策略引擎 | 10 運算子驗證、when 條件篩選、tenant 排除、severity 分級、違規報告 | 106 |
+| **Cardinality Forecasting** | 基數趨勢預測 | 線性回歸、風險分級、觸頂天數計算、Markdown/JSON 報告 | 61 |
+| **SAST Compliance** | 靜態安全分析合規 | Go G112、Python CWE-276、B602、encoding 規範、全倉庫掃描 | 189 |
+| **Migration Engine v3** | AST 遷移引擎 | PromQL 解析、prefix injection、triage 分類、shadow mapping | 67 |
+| **Offboard & Deprecate** | 租戶下架與規則下架 | 清理流程、審計日誌、deprecation 標記 | 34 |
 
-> 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 790+ passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。
+> 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 1,759 passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。完整測試架構導覽見 [Test Map](../internal/test-map.md)。
 
 ### 斷言細節補充
 

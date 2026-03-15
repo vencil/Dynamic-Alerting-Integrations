@@ -2,14 +2,14 @@
 title: "專案 Context 圖：角色、工具與產品互動關係"
 tags: [architecture, context-diagram]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 專案 Context 圖：角色、工具與產品互動關係
 
 > **Language / 語言：** | **中文（當前）**
 
-> **v2.0.0-preview** | 適用對象：所有參與者（Platform Engineers、Domain Experts、Tenant Teams）
+> **v2.0.0** | 適用對象：所有參與者（Platform Engineers、Domain Experts、Tenant Teams）
 
 ## 簡介
 
@@ -17,8 +17,9 @@ lang: zh
 
 **核心概念：**
 - **三層角色分工**：Platform Engineer（平台層）、Domain Expert（專業領域）、Tenant Team（租戶層）
-- **21 個支援工具**：涵蓋 Onboarding、Daily Ops、Migration、Governance 四大工作流
-- **五類基礎設施**：Config、Compute、Evaluation、Routing、Notification
+- **62 個 Python 工具**：涵蓋 Onboarding、Daily Ops、Migration、Governance、Advanced Ops 五大工作流
+- **24 個互動 JSX 工具**：瀏覽器端視覺化操作（Interactive Tools Hub）
+- **六類基礎設施**：Config、Compute、Evaluation、Routing、Notification、Interactive UI
 
 此圖幫助新加入者快速理解：
 1. 我在這個系統中的角色是什麼？
@@ -44,7 +45,7 @@ graph TB
         TenantYAML["tenant YAML<br/>(conf.d/)"]
     end
 
-    subgraph Tools["🛠 工具生態（21個）"]
+    subgraph Tools["🛠 工具生態（62 Python + 24 JSX）"]
         subgraph OnboardTools["Onboarding"]
             ScaffoldTool["scaffold_tenant.py"]
             OnboardAnalyze["onboard_platform.py"]
@@ -71,7 +72,7 @@ graph TB
             OffboardTool["offboard_tenant.py"]
         end
 
-        subgraph AdvTools["Advanced"]
+        subgraph AdvTools["Advanced Ops"]
             BlindSpot["blind_spot_discovery.py"]
             BaselineDisc["baseline_discovery.py"]
             BacktestThresh["backtest_threshold.py"]
@@ -79,6 +80,17 @@ graph TB
             BumpDocs["bump_docs.py"]
             GenerateRoutes["generate_alertmanager_routes.py"]
         end
+
+        subgraph V2Tools["v2.0.0 新功能"]
+            AlertQuality["alert_quality.py"]
+            PolicyEngine["policy_engine.py"]
+            CardinalityForecast["cardinality_forecasting.py"]
+        end
+    end
+
+    subgraph InteractiveUI["🌐 Interactive Tools Hub（24 JSX）"]
+        SelfServicePortal["Self-Service Portal<br/>（Tenant 自助操作）"]
+        ToolsHub["Interactive Tools Hub<br/>（視覺化工具入口）"]
     end
 
     subgraph Infra["🏗 基礎設施產品"]
@@ -160,6 +172,17 @@ graph TB
     MaintScheduler -->|建立| AlertMgr
     BumpDocs -->|版號一致| GitRepo
 
+    %% v2.0.0 tools
+    AlertQuality -->|查詢| Prom
+    AlertQuality -->|查詢| AlertMgr
+    PolicyEngine -->|驗證| TenantYAML
+    CardinalityForecast -->|查詢| Prom
+
+    %% Interactive UI
+    TT -->|自助操作| SelfServicePortal
+    SelfServicePortal -->|生成| TenantYAML
+    ToolsHub -->|視覺化| RulePacks
+
     %% Styling
     classDef roleStyle fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000
     classDef configStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
@@ -169,9 +192,12 @@ graph TB
 
     class PE,DX,TT roleStyle
     class Defaults,Profiles,RulePacks,TenantYAML configStyle
-    class ScaffoldTool,OnboardAnalyze,DiagnoseTool,BatchDiag,CheckAlert,PatchConfig,MigrateRule,ValidateMig,CutoverTool,ValidateConfig,ConfigDiff,LintRules,DeprecateRule,OffboardTool,BlindSpot,BaselineDisc,BacktestThresh,MaintScheduler,BumpDocs,GenerateRoutes toolStyle
+    classDef interactiveStyle fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#000
+
+    class ScaffoldTool,OnboardAnalyze,DiagnoseTool,BatchDiag,CheckAlert,PatchConfig,MigrateRule,ValidateMig,CutoverTool,ValidateConfig,ConfigDiff,LintRules,DeprecateRule,OffboardTool,BlindSpot,BaselineDisc,BacktestThresh,MaintScheduler,BumpDocs,GenerateRoutes,AlertQuality,PolicyEngine,CardinalityForecast toolStyle
     class ThreshConfig,Exporter,Prom,AlertMgr,Channels infraStyle
     class GitRepo gitStyle
+    class SelfServicePortal,ToolsHub interactiveStyle
 ```
 
 ---
@@ -367,9 +393,9 @@ graph TD
 
 | 角色 | 主責 | 核心工具 | 偶用工具 |
 |------|------|---------|---------|
-| **Platform Engineer** | 平台級配置、Rule Pack 維護、基礎設施 | `validate_config.py`<br/>`generate_alertmanager_routes.py`<br/>`config_diff.py` | `bump_docs.py`<br/>`maintenance_scheduler.py` |
-| **Domain Expert (DBA/SRE)** | 特定 Rule Pack、metric dictionary、governance | `lint_custom_rules.py`<br/>`migrate_rule.py`<br/>`deprecate_rule.py` | `validate_config.py`<br/>`backtest_threshold.py` |
-| **Tenant Team (SRE/DBA)** | 租戶配置、閾值、路由、三態、metadata | `scaffold_tenant.py`<br/>`diagnose.py`<br/>`check_alert.py` | `validate_migration.py`<br/>`offboard_tenant.py`<br/>`patch_config.py` |
+| **Platform Engineer** | 平台級配置、Rule Pack 維護、基礎設施 | `validate_config.py`<br/>`generate_alertmanager_routes.py`<br/>`config_diff.py`<br/>`policy_engine.py` | `bump_docs.py`<br/>`maintenance_scheduler.py`<br/>`alert_quality.py`<br/>`cardinality_forecasting.py` |
+| **Domain Expert (DBA/SRE)** | 特定 Rule Pack、metric dictionary、governance | `lint_custom_rules.py`<br/>`migrate_rule.py`<br/>`deprecate_rule.py` | `validate_config.py`<br/>`backtest_threshold.py`<br/>`alert_quality.py` |
+| **Tenant Team (SRE/DBA)** | 租戶配置、閾值、路由、三態、metadata | `scaffold_tenant.py`<br/>`diagnose.py`<br/>`check_alert.py`<br/>Self-Service Portal | `validate_migration.py`<br/>`offboard_tenant.py`<br/>`patch_config.py` |
 
 ---
 
@@ -398,6 +424,11 @@ graph TD
 | | Version Management | `bump_docs.py` | Platform/Exporter/Tools 版號 | 更新 CHANGELOG + docs | 5 sec |
 | | AM Route Generation | `generate_alertmanager_routes.py` | Tenant YAML | Alertmanager fragment | 1–2 sec |
 | | Maintenance Scheduling | `maintenance_scheduler.py` | Cron + duration | AlertManager silence CronJob | 10 sec |
+| **v2.0.0** | Alert Quality Scoring | `alert_quality.py` | Prometheus + Alertmanager | 品質報告（四維評分） | 3–5 sec |
+| | Policy Evaluation | `policy_engine.py` | `_defaults.yaml` policies + tenant configs | 違規報告 | <1 sec |
+| | Cardinality Forecast | `cardinality_forecasting.py` | Prometheus range query | 趨勢預測 + 風險報告 | 3–5 sec |
+| **Interactive** | Self-Service Portal | JSX (瀏覽器) | Tenant 自助操作 | YAML 配置 + 驗證 | 即時 |
+| | Tools Hub | JSX (瀏覽器) | 24 個互動工具 | 視覺化分析 | 即時 |
 
 ---
 
@@ -444,6 +475,12 @@ graph LR
         Webhook["Webhook"]
     end
 
+    subgraph UILayer["🌐 Interactive UI層"]
+        Hub["Tools Hub<br/>(24 JSX tools)"]
+        Portal["Self-Service Portal<br/>(Tenant 自助)"]
+        GHPages["GitHub Pages<br/>(靜態部署)"]
+    end
+
     Defaults -->|1. Merge in| GitRepo
     Profiles -->|2. Merge in| GitRepo
     RulePacks -->|3. Mount via| PV
@@ -472,6 +509,12 @@ graph LR
     AM -->|Alert Routes| RChat
     AM -->|Alert Routes| Webhook
 
+    %% Interactive UI
+    Hub -->|Fetch| RulePacks
+    Portal -->|生成| TenantYAML
+    GHPages -->|託管| Hub
+    GHPages -->|託管| Portal
+
     classDef cfgLayerStyle fill:#f3e5f5,stroke:#7b1fa2,color:#000
     classDef gitLayerStyle fill:#f0f0f0,stroke:#616161,color:#000
     classDef platformLayerStyle fill:#fce4ec,stroke:#c2185b,color:#000
@@ -479,6 +522,7 @@ graph LR
     classDef evalLayerStyle fill:#e8f5e9,stroke:#388e3c,color:#000
     classDef routingLayerStyle fill:#fff3e0,stroke:#e65100,color:#000
     classDef notifLayerStyle fill:#f1f8e9,stroke:#558b2f,color:#000
+    classDef uiLayerStyle fill:#e0f7fa,stroke:#00838f,color:#000
 
     class Defaults,Profiles,RulePacks,TenantYAML cfgLayerStyle
     class GitRepo gitLayerStyle
@@ -487,6 +531,7 @@ graph LR
     class PV,Prom evalLayerStyle
     class RuleGen,AM routingLayerStyle
     class Slack,PD,Email,Teams,RChat,Webhook notifLayerStyle
+    class Hub,Portal,GHPages uiLayerStyle
 ```
 
 ---
@@ -507,10 +552,11 @@ graph LR
 
 **我是 Tenant Team (SRE/DBA)，我該：**
 1. 讀 [getting-started/for-tenants.md](getting-started/for-tenants.md) 快速上手
-2. 用 `scaffold_tenant.py` 生成初始配置
-3. 用 `diagnose.py` 定期檢查健康狀態
-4. 用 `check_alert.py` 查詢 Alert 狀態
-5. 用 `patch_config.py` 做局部更新（無需全量重新部署）
+2. 用 [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx) 進行自助操作（配置、驗證、預覽）
+3. 用 `scaffold_tenant.py` 生成初始配置
+4. 用 `diagnose.py` 定期檢查健康狀態
+5. 用 `check_alert.py` 查詢 Alert 狀態
+6. 用 `patch_config.py` 做局部更新（無需全量重新部署）
 
 ---
 
@@ -522,6 +568,8 @@ graph LR
 - **治理與安全** → [governance-security.md](governance-security.md) 和 [custom-rule-governance.md](custom-rule-governance.md)
 - **GitOps 部署** → [gitops-deployment.md](gitops-deployment.md)
 - **故障排查** → [troubleshooting.md](troubleshooting.md)
+- **互動工具** → [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 和 [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx)
+- **效能基準** → [benchmarks.md](benchmarks.md)
 - **Playbooks**（AI Agent 專用）
   - [docs/internal/testing-playbook.md](internal/testing-playbook.md)
   - [docs/internal/windows-mcp-playbook.md](internal/windows-mcp-playbook.md)
@@ -529,7 +577,7 @@ graph LR
 
 ---
 
-**最後更新**：v2.0.0-preview | **維護者**：Platform Team
+**最後更新**：v2.0.0 | **維護者**：Platform Team
 
 ## 相關資源
 

@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 治理、稽核與安全合規

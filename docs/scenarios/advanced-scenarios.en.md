@@ -2,7 +2,7 @@
 title: "Advanced Scenarios & Test Coverage"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Advanced Scenarios & Test Coverage
@@ -183,17 +183,17 @@ flowchart TD
 
 ---
 
-> This document was extracted from [`architecture-and-design.en.md`].
+> This document was extracted from [`architecture-and-design.en.md`](../architecture-and-design.en.md).
 
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★★ |
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★ |
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★ |
-| [Threshold Exporter API Reference](../api/README.md) | ★★ |
-| ["Performance Analysis & Benchmarks"] | ★★ |
-| ["BYO Alertmanager Integration Guide"] | ★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ⭐⭐⭐ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ⭐⭐ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ⭐⭐ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐ |
+| [Threshold Exporter API Reference](../api/README.en.md) | ⭐⭐ |
+| ["Performance Analysis & Benchmarks"](../benchmarks.en.md) | ⭐⭐ |
+| ["BYO Alertmanager Integration Guide"](../byo-alertmanager-integration.en.md) | ⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"](../byo-prometheus-integration.en.md) | ⭐⭐ |

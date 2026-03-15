@@ -2,14 +2,14 @@
 title: "Troubleshooting and Edge Cases"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Troubleshooting and Edge Cases
 
 > **Language / 語言：** **English (Current)** | [中文](troubleshooting.md)
 
-> Related docs: [Architecture](architecture-and-design.en.md) · [HA Design](architecture-and-design.en.md#5-high-availability-design)
+> Related docs: [Architecture](architecture-and-design.en.md) · [HA Design](architecture-and-design.en.md#4-high-availability-design)
 
 ## SHA-256 Hot-Reload Delay
 
@@ -87,11 +87,11 @@ On the other hand, **data recording rules** use context-dependent aggregation. F
 
 | Resource | Relevance |
 |----------|-----------|
-| ["故障排查與邊界情況"](./troubleshooting.md) | ★★★ |
-| ["Grafana Dashboard Guide"] | ★★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["Threshold Exporter API Reference"](api/README.en.md) | ★★ |
-| ["Performance Analysis & Benchmarks"] | ★★ |
-| ["BYO Alertmanager Integration Guide"] | ★★ |
-| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ★★ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ★★ |
+| ["故障排查與邊界情況"](./troubleshooting.md) | ⭐⭐⭐ |
+| ["Grafana Dashboard Guide"] | ⭐⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐ |
+| ["Threshold Exporter API Reference"](api/README.en.md) | ⭐⭐ |
+| ["Performance Analysis & Benchmarks"] | ⭐⭐ |
+| ["BYO Alertmanager Integration Guide"] | ⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |

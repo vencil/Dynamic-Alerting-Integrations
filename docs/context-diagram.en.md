@@ -2,14 +2,14 @@
 title: "Project Context Diagram: Roles, Tools, and Product Interactions"
 tags: [architecture, context-diagram]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Project Context Diagram: Roles, Tools, and Product Interactions
 
 > **Language / 語言：** **English (Current)** | [中文](context-diagram.md)
 
-> **v2.0.0-preview** | Audience: All Participants (Platform Engineers, Domain Experts, Tenant Teams)
+> **v2.0.0** | Audience: All Participants (Platform Engineers, Domain Experts, Tenant Teams)
 
 ## Introduction
 
@@ -535,11 +535,11 @@ graph LR
 
 | Resource | Relevance |
 |----------|-----------|
-| ["專案 Context 圖：角色、工具與產品互動關係"](./context-diagram.md) | ★★★ |
-| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ★★ |
-| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ★★ |
-| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ★★ |
-| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★ |
-| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★ |
-| [README.en](adr/README.en.md) | ★★ |
-| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"] | ★★ |
+| ["專案 Context 圖：角色、工具與產品互動關係"](./context-diagram.md) | ⭐⭐⭐ |
+| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
+| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ⭐⭐ |
+| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ⭐⭐ |
+| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ⭐⭐ |
+| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ⭐⭐ |
+| [README.en](adr/README.en.md) | ⭐⭐ |
+| ["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"] | ⭐⭐ |

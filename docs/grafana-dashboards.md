@@ -2,13 +2,13 @@
 title: "Grafana Dashboard 導覽"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 
 # Grafana Dashboard 導覽
 
-> **v2.0.0-preview** | 適用對象：Platform Engineer、SRE、DevOps
+> **v2.0.0** | 適用對象：Platform Engineer、SRE、DevOps
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.md)
 
@@ -68,7 +68,7 @@ Sidecar 會自動偵測 `grafana_dashboard=1` label，將 ConfigMap 掛載至 Gr
 
 #### 9-10. Thresholds per Tenant (BarChart) + Active State Filters (Table)
 
-- **Thresholds per Tenant**: `count by(tenant) (user_threshold)` — 各 Tenant 的 Threshold 序列數。接近 500 上限時變紅（Cardinality Guard）。詳見 [Architecture §2.3](./architecture-and-design.md#cardinality-guard)。
+- **Thresholds per Tenant**: `count by(tenant) (user_threshold)` — 各 Tenant 的 Threshold 序列數。接近 500 上限時變紅（Cardinality Guard）。詳見 [Architecture §2](./architecture-and-design.md#2-核心設計config-driven-架構)。
 - **Active State Filters**: `user_state_filter` — 目前啟用的 State Filter 詳細列表（maintenance、crashloop 等），通常為空或計畫維護。
 
 ---

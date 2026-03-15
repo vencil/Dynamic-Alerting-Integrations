@@ -2,12 +2,12 @@
 title: "場景：租戶完整生命週期管理"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # 場景：租戶完整生命週期管理
 
-> **v2.0.0-preview** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.0.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## 概述
 
@@ -109,7 +109,7 @@ python3 scripts/tools/ops/scaffold_tenant.py \
 
 ```bash
 # 1. 驗證配置正確性
-da-tools validate-config --config-dir conf.d/ --tenant db-product-01
+da-tools validate-config --config-dir conf.d/
 
 # 2. 應用配置至 ConfigMap（詳見 migration-guide §1 注入方法）
 kubectl create configmap threshold-config --from-file=conf.d/ -n monitoring --dry-run=client -o yaml | kubectl apply -f -
@@ -221,9 +221,8 @@ da-tools check-alert PostgreSQLHighConnections db-product-01
 #### 回測閾值變更
 
 ```bash
-# 修改前用歷史數據回測影響
-da-tools backtest --tenant db-product-01 --metric pg_connections \
-  --old-threshold 80 --new-threshold 75 --duration 7d
+# 修改前用歷史數據回測影響（比較新舊配置目錄）
+da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
 ```
 
 ### 2.3 運營模式管理
@@ -359,11 +358,11 @@ tenants:
 cp conf.d/db-product-01.yaml conf.d.archive/
 
 # 3. 自動化下架（推薦）
-da-tools offboard db-product-01           # 預檢
-da-tools offboard db-product-01 --execute  # 執行
+da-tools offboard db-product-01 --dry-run  # 預檢
+da-tools offboard db-product-01            # 執行
 
 # 4. 下架舊 custom rules（若有遷移過）
-da-tools deprecate custom_pg_connections custom_pg_replication_lag --execute
+da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d
 ```
 
 ### 4.2 驗證與歸檔

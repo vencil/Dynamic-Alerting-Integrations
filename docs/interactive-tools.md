@@ -2,7 +2,7 @@
 title: "互動式工具"
 tags: [interactive, tools, react]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 

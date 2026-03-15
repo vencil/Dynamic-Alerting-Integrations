@@ -2,7 +2,7 @@
 title: "Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform
@@ -14,7 +14,7 @@ lang: en
 
 > **⚠️ Migration Safety Guarantee:** The migration process on this platform is designed to be **progressive and reversible**. Your legacy rules don't need to be switched all at once—new rules via the `custom_` prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's `optional: true` mechanism ensures that deleting any rule pack will not affect Prometheus operation.
 >
-> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v1.11.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
+> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.0.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
 
 ## Where Are You? (你在哪個階段？)
 
@@ -252,9 +252,9 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### Use da-tools in K8s Cluster
 
-da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:v1.11.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
+da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:v2.0.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
 
-> Job output can be retrieved via `kubectl cp`, then injected into `threshold-config` ConfigMap. For long-running Shadow Monitoring Job examples, see [§11 Enterprise-Grade Migration Phase B](#phase-b-conversion--shadow-monitoring).
+> Job output can be retrieved via `kubectl cp`, then injected into `threshold-config` ConfigMap. For long-running Shadow Monitoring Job examples, see [§11 Enterprise-Grade Migration Phase B](#phase-b-conversion-shadow-monitoring).
 
 ---
 
@@ -371,15 +371,15 @@ da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
-Platform has guardrails for timing parameters (group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h), with out-of-range values automatically clamped. Complete receiver type examples and Go template message customization details see [BYO Alertmanager Integration Guide §5](byo-alertmanager-integration.md#5-receiver-types).
+Platform has guardrails for timing parameters (group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h), with out-of-range values automatically clamped. Complete receiver type examples and Go template message customization details see [BYO Alertmanager Integration Guide §5](byo-alertmanager-integration.md#5-receiver-類型).
 
 ### Advanced Routing Features
 
 | Feature | Description | Details |
 |---------|-------------|---------|
-| Per-rule Routing Overrides | `_routing.overrides[]` specify different receiver for specific alertname/metric_group | [BYO Alertmanager §7](byo-alertmanager-integration.md#7-per-rule-routing-overridesv180) |
+| Per-rule Routing Overrides | `_routing.overrides[]` specify different receiver for specific alertname/metric_group | [BYO Alertmanager §7](byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
 | Silent / Maintenance Mode | `_silent_mode` / `_state_maintenance` + `expires` auto-expiry | [Architecture §2.7](architecture-and-design.md) |
-| Platform Enforced Routing | `_routing_enforced` ensures NOC receives all alerts (dual-channel) | [BYO Alertmanager §8](byo-alertmanager-integration.md#8-platform-enforced-routingv170) |
+| Platform Enforced Routing | `_routing_enforced` ensures NOC receives all alerts (dual-channel) | [BYO Alertmanager §8](byo-alertmanager-integration.md#8-platform-enforced-routing) |
 
 ---
 
@@ -401,7 +401,7 @@ da-tools diagnose db-a
 
 ### Complete Verification Checklist
 
-See [Tenant Lifecycle — Onboarding Verification](scenarios/tenant-lifecycle.md#onboarding-verification) for the complete verification checklist, covering YAML validation, alert status, three-state testing, routing, operational_mode confirmation, and blind spot scanning.
+See [Tenant Lifecycle — Onboarding Phase](scenarios/tenant-lifecycle.md#階段-12上線day-0) for the complete verification checklist, covering YAML validation, alert status, three-state testing, routing, operational_mode confirmation, and blind spot scanning.
 
 ### Post-Migration: Tenant Self-Management
 
@@ -417,7 +417,7 @@ After migration completes, Tenants can self-manage the following in their own YA
 | `_state_maintenance` | Maintenance mode (completely no firing) | Same as above, supports `expires` auto-expiry |
 | `_severity_dedup` | Severity deduplication | `enabled: true` |
 
-Platform Team controlled settings (in `_defaults.yaml`) include global defaults, `_routing_defaults`, `_routing_enforced`. See [GitOps Deployment Guide §7](gitops-deployment.md#7-tenant-self-management-scope).
+Platform Team controlled settings (in `_defaults.yaml`) include global defaults, `_routing_defaults`, `_routing_enforced`. See [GitOps Deployment Guide §7](gitops-deployment.en.md#7-tenant-self-service-configuration-scope).
 
 ---
 
@@ -634,7 +634,7 @@ da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a --d
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 ```
 
-`cutover-readiness.json` is auto-produced by `validate --auto-detect-convergence` when convergence criteria are met. If manually confirming convergence (no readiness JSON), use `--force` to skip readiness check. See [Shadow Monitoring SOP §7](shadow-monitoring-sop.md#7-exit-shadow-monitoring).
+`cutover-readiness.json` is auto-produced by `validate --auto-detect-convergence` when convergence criteria are met. If manually confirming convergence (no readiness JSON), use `--force` to skip readiness check. See [Shadow Monitoring SOP §7](shadow-monitoring-sop.md#7-退出-shadow-monitoring).
 
 > **Tip**: Before switchover, use `da-tools shadow-verify all` for a one-command full readiness check (preflight + runtime + convergence), replacing manual step-by-step verification.
 
@@ -761,10 +761,10 @@ Three-step automation:
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Migration Guide — 遷移指南"](./migration-guide.md) | ★★★ |
-| ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ★★ |
-| ["AST Migration Engine Architecture"] | ★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ★★ |
-| ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ★★ |
-| ["Shadow Monitoring SRE SOP"] | ★★ |
+| ["Migration Guide — 遷移指南"](./migration-guide.md) | ⭐⭐⭐ |
+| ["Tenant Quick Start Guide"](getting-started/for-tenants.en.md) | ⭐⭐ |
+| ["AST Migration Engine Architecture"] | ⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐ |
+| ["Domain Expert (DBA) Quick Start Guide"](getting-started/for-domain-experts.en.md) | ⭐⭐ |
+| ["Platform Engineer Quick Start Guide"](getting-started/for-platform-engineers.en.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

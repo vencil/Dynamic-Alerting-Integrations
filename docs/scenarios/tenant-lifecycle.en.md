@@ -2,12 +2,12 @@
 title: "Scenario: Complete Tenant Lifecycle Management"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
 
-> **v2.0.0-preview** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.0.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Overview
 
@@ -108,7 +108,7 @@ Three strategies:
 
 ```bash
 # 1. Verify config correctness
-da-tools validate-config --config-dir conf.d/ --tenant db-product-01
+da-tools validate-config --config-dir conf.d/
 
 # 2. Apply config to ConfigMap (see migration-guide §1 for injection methods)
 kubectl create configmap threshold-config --from-file=conf.d/ -n monitoring --dry-run=client -o yaml | kubectl apply -f -
@@ -220,9 +220,8 @@ da-tools check-alert PostgreSQLHighConnections db-product-01
 #### Backtest Threshold Changes
 
 ```bash
-# Before modifying, backtest impact using historical data
-da-tools backtest --tenant db-product-01 --metric pg_connections \
-  --old-threshold 80 --new-threshold 75 --duration 7d
+# Before modifying, backtest impact using historical data (compare new vs old config)
+da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
 ```
 
 ### 2.3 Operational Mode Management
@@ -358,11 +357,11 @@ tenants:
 cp conf.d/db-product-01.yaml conf.d.archive/
 
 # 3. Automated offboarding (recommended)
-da-tools offboard db-product-01           # Pre-check
-da-tools offboard db-product-01 --execute  # Execute
+da-tools offboard db-product-01 --dry-run  # Pre-check
+da-tools offboard db-product-01            # Execute
 
 # 4. Offboard legacy custom rules (if migrated)
-da-tools deprecate custom_pg_connections custom_pg_replication_lag --execute
+da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d
 ```
 
 ### 4.2 Verify and Archive
@@ -489,8 +488,8 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ★★★ |
-| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ★★ |
-| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ★★ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ★★ |
-| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ★★ |
+| ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ⭐⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ⭐⭐ |
+| ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ⭐⭐ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ⭐⭐ |
+| ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐ |

@@ -1,0 +1,123 @@
+# 測試架構導覽 (Test Map)
+
+> 測試基礎設施結構與慣例速查，供 AI Agent 與開發者快速掌握測試配置。
+>
+> **相關文件：** [Testing Playbook](testing-playbook.md)（排錯手冊）· [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [進階場景與測試覆蓋](../scenarios/advanced-scenarios.md)（E2E + 功能域矩陣）· [Benchmarks](../benchmarks.md)（效能數據）
+
+## 測試基礎設施
+
+| 檔案 | 職責 |
+|------|------|
+| `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope） |
+| `tests/factories.py` | 所有 factory helpers + PipelineBuilder + mock_http_response（含完整 docstring） |
+| `setup.cfg` | pytest markers + coverage config（fail_under=64） |
+
+## Factory 清單
+
+| Factory | 用途 | 位置 |
+|---------|------|------|
+| `write_yaml()` | 寫入 YAML 到暫存目錄 | factories.py |
+| `make_receiver()` | 產生 receiver dict（5 types） | factories.py |
+| `make_routing_config()` | 產生 routing config | factories.py |
+| `make_tenant_yaml()` | 產生 tenant YAML 字串 | factories.py |
+| `make_defaults_yaml()` | 產生 _defaults.yaml 字串 | factories.py |
+| `make_am_receiver()` | 產生 AM 原生格式 receiver | factories.py |
+| `make_am_config()` | 產生完整 AM config dict | factories.py |
+| `make_override()` | 產生 per-rule routing override | factories.py |
+| `make_enforced_routing()` | 產生 enforced routing config | factories.py |
+| `mock_http_response()` | 模擬 HTTP response（urlopen mock） | factories.py |
+| `populate_routing_dir()` | 預載多 tenant routing YAML | factories.py |
+| `PipelineBuilder` | 鏈式建構 scaffold → routes 管線 | factories.py |
+
+## Test Markers
+
+| Marker | 用途 | 選擇執行 |
+|--------|------|---------|
+| `slow` | 執行較慢（benchmark, property-based） | `pytest -m "not slow"` 跳過 |
+| `integration` | 跨模組整合測試 | `pytest -m integration` |
+| `benchmark` | 效能基線測試 | `pytest -m benchmark` |
+| `regression` | 已知 bug 回歸 | `pytest -m regression` |
+| `snapshot` | 輸出格式穩定性快照 | `pytest -m snapshot` |
+
+## 測試檔案對照
+
+| 測試檔案 | 測試目標 | 測試數 | 備註 |
+|---------|---------|--------|------|
+| `test_generate_alertmanager_routes.py` | routing / receiver / inhibit / enforced | 142 | 最大功能測試（Wave 13 去重 -13） |
+| `test_scaffold_db.py` | RULE_PACKS catalogue / scaffold generation / YAML validation | 129 | parametrize 瘦身後 |
+| `test_scaffold_tenant.py` | scaffold_tenant.py 核心功能 | 54 | |
+| `test_lib_python.py` | _lib_python 共用函式庫 | 82 | |
+| `test_entrypoint.py` | da-tools CLI entrypoint | 24 | monkeypatch 完成 |
+| `test_onboard_platform.py` | 完整 onboard 管線 | 71 | parametrize receiver types |
+| `test_integration.py` | 跨模組 routing + PipelineBuilder | 17 | integration marker |
+| `test_snapshot.py` | 18 個 JSON snapshot | 18 | snapshot marker |
+| `test_domain_policy.py` | webhook domain allowlist + fnmatch | 26 | |
+| `test_error_consistency.py` | warning format 一致性 | 14 | |
+| `test_mutation_guards.py` | 函式行為精確值 | 49 | |
+| `test_regression.py` | 已知 bug 回歸 | 9 | regression marker |
+| `test_validate_config.py` | validate_config.py 配置驗證 | 25 | Wave 12 unittest→pytest |
+| `test_config_diff.py` | config_diff.py 差異偵測 | 40 | Wave 12 unittest→pytest |
+| `test_bump_docs.py` | bump_docs.py 版號更新 | 11 | Wave 12 unittest→pytest |
+| `test_maintenance_scheduler.py` | maintenance_scheduler.py 排程 | 55 | Wave 12 mock 統一 |
+| `test_performance.py` | 效能曲線（scaling / load） | 7 | slow marker |
+| `test_benchmark.py` | 效能基線 | 14 | benchmark + slow markers |
+| `test_property.py` | Hypothesis property-based | 15 | slow marker |
+| `test_analyze_gaps.py` | analyze_rule_pack_gaps.py gap 分析 | 34 | Wave 15 unittest→pytest + 新增 |
+| `test_assemble_config_dir.py` | assemble_config_dir.py 組裝工具 | 34 | Wave 15 unittest→pytest + 新增 |
+| `test_validate_all.py` | validate_all.py 驗證入口 | 58 | Wave 16 覆蓋率攻略（14→41%） |
+| `test_baseline_discovery.py` | baseline_discovery.py 基線觀測 | 38 | Wave 17 覆蓋率攻略（31→55%） |
+| `test_backtest_threshold.py` | backtest_threshold.py 閾值回測 | 39 | Wave 17 覆蓋率攻略（32→70%）+ W18 parametrize |
+| `test_batch_diagnose.py` | batch_diagnose.py 批次診斷 | 25 | Wave 17 覆蓋率攻略（49→71%） |
+| `test_alert_quality.py` | alert_quality.py 警報品質評估 | 57 | v2.0.0 新功能，89.8% 覆蓋率 |
+| `test_policy_engine.py` | policy_engine.py Policy-as-Code 引擎 | 106 | v2.0.0 新功能，94.0% 覆蓋率 |
+| `test_cardinality_forecasting.py` | cardinality_forecasting.py 基數預測 | 61 | v2.0.0 新功能，93.5% 覆蓋率 |
+| `test_sast.py` | 全倉庫 SAST 合規掃描 | 189 | v2.0.0 安全審計新增 |
+| `test_migrate_ast.py` | migrate_rule AST 引擎 | 67 | |
+| `test_migrate_v3.py` | migrate_rule v3 引擎 | 38 | |
+| `test_blind_spot_discovery.py` | blind_spot_discovery.py 盲區掃描 | 39 | |
+| `test_lint_custom_rules.py` | lint_custom_rules.py 規則 lint | 40 | |
+| `test_offboard_deprecate.py` | offboard/deprecate 生命週期 | 34 | |
+| `test_cutover_tenant.py` | cutover_tenant.py 自動切換 | 26 | |
+| `test_patch_config.py` | patch_config.py 局部更新 | 14 | |
+| `test_diagnose_inheritance.py` | diagnose 繼承鏈 | 7 | |
+| `test_da_assembler.py` | da_assembler 組裝 | 17 | |
+| `test_lib_helpers.py` | _lib 輔助函式 | 34 | |
+
+## Import 慣例
+
+- Factory helpers：**直接** `from factories import make_receiver, ...`（Wave 13 統一）
+- conftest.py 只提供 pytest fixtures（session/function scope），不做 re-export
+- 測試檔案不應 `from conftest import` factory 函式
+
+## Snapshot 工作流
+
+快照位於 `tests/snapshots/*.json`，首次執行自動建立。
+
+- 更新快照：`UPDATE_SNAPSHOTS=1 pytest -m snapshot`
+- 結構化 diff：整合 deepdiff 顯示差異
+
+## Benchmark 基線
+
+使用 `pytest -m benchmark` 執行效能基線測試（需 pytest-benchmark）。
+
+| 測試 | v2.0.0-preview.4 基線 | 說明 |
+|------|----------------------|------|
+| `test_10_tenants` | ~38 µs | 10 tenant routing 產生 |
+| `test_50_tenants` | ~197 µs | 50 tenant routing 產生 |
+| `test_100_tenants` | ~394 µs | 100 tenant routing 產生 |
+| `test_100_tenants` (inhibit) | ~32 µs | 100 tenant inhibit rules |
+| `test_10_tenants_from_disk` | ~5.4 ms | 10 tenant 含 YAML I/O |
+| `test_parse_integer` | ~102 ns | parse_duration_seconds 微基準 |
+
+基線數據從 Cowork VM 測量（min_rounds=20, warmup=on），用於趨勢偵測而非絕對值。版本升級時更新此表。完整 benchmark 方法論見 [Benchmark Playbook](benchmark-playbook.md)。
+
+## 常用指令
+
+```bash
+make test                           # 全量測試
+make test ARGS="-m 'not slow'"     # 跳過慢速測試
+make coverage                       # 覆蓋率報告
+make coverage ARGS="--html"        # HTML 覆蓋率
+pytest -m integration              # 僅跑整合測試
+pytest -m regression               # 僅跑回歸測試
+```

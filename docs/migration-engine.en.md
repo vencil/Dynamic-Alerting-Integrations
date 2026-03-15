@@ -2,7 +2,7 @@
 title: "AST Migration Engine Architecture"
 tags: [migration, ast-engine]
 audience: [platform-engineer, devops]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # AST Migration Engine Architecture
@@ -70,9 +70,9 @@ The complete migration path integrates the AST engine, Shadow Monitoring, and Tr
 
 | Resource | Relevance |
 |----------|-----------|
-| ["AST 遷移引擎架構"](./migration-engine.md) | ★★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |
-| ["Shadow Monitoring SRE SOP"] | ★★ |
-| ["da-tools CLI Reference"] | ★★ |
-| ["GitOps Deployment Guide"] | ★★ |
-| ["Grafana Dashboard Guide"] | ★★ |
+| ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐⭐ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"] | ⭐⭐ |
+| ["da-tools CLI Reference"] | ⭐⭐ |
+| ["GitOps Deployment Guide"] | ⭐⭐ |
+| ["Grafana Dashboard Guide"] | ⭐⭐ |

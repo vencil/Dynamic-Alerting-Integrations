@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -91,19 +91,21 @@ graph TB
             end
 
             subgraph Rules["Projected Volume<br/>Rule Packs (×15)"]
-                RP1["configmap-rules-mariadb.yaml"]
-                RP2["configmap-rules-kubernetes.yaml"]
-                RP3["configmap-rules-redis.yaml"]
-                RP4["configmap-rules-mongodb.yaml"]
-                RP5["configmap-rules-elasticsearch.yaml"]
-                RP7["configmap-rules-oracle.yaml"]
-                RP8["configmap-rules-db2.yaml"]
-                RP9["configmap-rules-clickhouse.yaml"]
-                RP10["configmap-rules-rabbitmq.yaml"]
-                RP11["configmap-rules-kafka.yaml"]
-                RP12["configmap-rules-jvm.yaml"]
-                RP13["configmap-rules-nginx.yaml"]
-                RP6["configmap-rules-platform.yaml"]
+                RP1["prometheus-rules-mariadb"]
+                RP2["prometheus-rules-postgresql"]
+                RP3["prometheus-rules-kubernetes"]
+                RP4["prometheus-rules-redis"]
+                RP5["prometheus-rules-mongodb"]
+                RP6["prometheus-rules-elasticsearch"]
+                RP7["prometheus-rules-oracle"]
+                RP8["prometheus-rules-db2"]
+                RP9["prometheus-rules-clickhouse"]
+                RP10["prometheus-rules-kafka"]
+                RP11["prometheus-rules-rabbitmq"]
+                RP12["prometheus-rules-jvm"]
+                RP13["prometheus-rules-nginx"]
+                RP14["prometheus-rules-operational"]
+                RP15["prometheus-rules-platform"]
             end
 
             Prom["Prometheus<br/>(Scrape: TE, Rule Evaluation)"]
@@ -233,7 +235,52 @@ ghi789... conf.d/db-b.yaml
 - Kubernetes ConfigMap creates a symlink layer, ModTime is unreliable
 - Same content = same hash, avoid unnecessary reloads
 
-### 2.3 Multi-tier Severity
+### 2.3 Tenant-Namespace Mapping
+
+The platform's `tenant` is a **logical identity** determined by two independent sources:
+
+1. **Threshold side**: threshold-exporter derives tenant from the YAML config key (`tenants.db-a`), zero coupling with K8s namespace
+2. **Data side**: Prometheus `relabel_configs` injects a `tenant` label into scraped metrics
+
+Both sides must produce an exact match, but **their sources can differ**. This enables three mapping modes:
+
+| Mode | Description | Prometheus relabel Strategy | Use Case |
+|------|------------|---------------------------|----------|
+| **1:1** (standard) | One Namespace = One Tenant | `source_labels: [__meta_kubernetes_namespace]` → `target_label: tenant` | Most deployments |
+| **N:1** | Multiple Namespaces → One Tenant | Multiple namespace metrics relabeled to the same tenant value | Read/write split (`db-a-read` + `db-a-write` → `db-a`) |
+| **1:N** | One Namespace → Multiple Tenants | Use Service label/annotation instead of namespace as tenant source | Shared-namespace multi-tenant architecture |
+
+**N:1 relabel example** (multiple namespaces → one tenant):
+
+```yaml
+relabel_configs:
+  - source_labels: [__meta_kubernetes_namespace]
+    action: keep
+    regex: "db-a-(read|write)"
+  # Unify to db-a
+  - source_labels: [__meta_kubernetes_namespace]
+    target_label: tenant
+    regex: "(db-[^-]+).*"    # Extract first segment as tenant
+    replacement: "$1"
+```
+
+**1:N relabel example** (one namespace → multiple tenants):
+
+```yaml
+relabel_configs:
+  - source_labels: [__meta_kubernetes_namespace]
+    action: keep
+    regex: "shared-db"
+  # Read tenant identity from Service annotation
+  - source_labels: [__meta_kubernetes_service_annotation_alerting_tenant]
+    target_label: tenant
+```
+
+**Automation**: `scaffold_tenant.py --namespaces ns1,ns2` auto-generates N:1 relabel_configs snippet and writes a `_namespaces` metadata field in the tenant YAML for tool reference (does not affect metric logic).
+
+**Design principle**: The platform core (threshold-exporter + Rule Packs) is completely namespace-agnostic. Mapping flexibility is entirely provided by Prometheus scrape config — no platform component changes needed. See [BYO Prometheus Integration Guide](byo-prometheus-integration.en.md).
+
+### 2.4 Multi-tier Severity
 
 Support both `_critical` suffix and `"value:severity"` syntax:
 
@@ -306,7 +353,7 @@ inhibit_rules:
 - Connection count 100–150 (warning only): Warning alert fires, critical does not. Warning notification sends.
 - **TSDB completeness:** All alert firings remain in Prometheus TSDB regardless of notification suppression.
 
-### 2.4 Regex Dimension Thresholds
+### 2.5 Regex Dimension Thresholds
 
 Since v0.12.0, the config parser supports the `=~` operator, enabling regex-based fine-grained matching on dimension labels. This design allows thresholds to target specific dimension subsets without introducing external data dependencies.
 
@@ -330,7 +377,7 @@ tenants:
 2. **Recording rule layer**: PromQL uses `label_replace` + `=~` for actual matching at query time
 3. **Design principle**: The exporter remains a pure config→metric converter; matching logic is entirely handled by Prometheus native vector operations
 
-### 2.5 Scheduled Thresholds
+### 2.6 Scheduled Thresholds
 
 Since v0.12.0, thresholds support time-window scheduling, allowing automatic threshold switching across different time periods. Typical use cases: relaxed thresholds during nighttime maintenance windows, tightened thresholds during peak hours.
 
@@ -603,7 +650,7 @@ _routing_enforced:
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 
-`generate_alertmanager_routes.py` inserts platform route before tenant routes. Mode A generates a single shared route; Mode B generates N per-tenant routes (each with `tenant="<name>"` matcher + `continue: true`). Disabled by default; Platform Team enables as needed. See [BYO Alertmanager Integration Guide §8](byo-alertmanager-integration.md#8-platform-enforced-routingv170).
+`generate_alertmanager_routes.py` inserts platform route before tenant routes. Mode A generates a single shared route; Mode B generates N per-tenant routes (each with `tenant="<name>"` matcher + `continue: true`). Disabled by default; Platform Team enables as needed. See [BYO Alertmanager Integration Guide §8](byo-alertmanager-integration.md#8-platform-enforced-routing).
 
 ---
 
@@ -613,19 +660,21 @@ _routing_enforced:
 
 | Rule Pack | Owning Team | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|------------|-----------------|----------------|-------------|
-| MariaDB | DBA | `configmap-rules-mariadb` | 7 | 8 |
-| Kubernetes | Infra | `configmap-rules-kubernetes` | 5 | 4 |
-| Redis | Cache | `configmap-rules-redis` | 7 | 6 |
-| MongoDB | AppData | `configmap-rules-mongodb` | 7 | 6 |
-| Elasticsearch | Search | `configmap-rules-elasticsearch` | 7 | 7 |
-| Oracle | DBA / Oracle | `configmap-rules-oracle` | 6 | 7 |
-| DB2 | DBA / DB2 | `configmap-rules-db2` | 7 | 7 |
-| ClickHouse | Analytics | `configmap-rules-clickhouse` | 7 | 7 |
-| Kafka | Messaging | `configmap-rules-kafka` | 7 | 6 |
-| RabbitMQ | Messaging | `configmap-rules-rabbitmq` | 7 | 6 |
-| JVM | App Runtime | `configmap-rules-jvm` | 9 | 7 |
-| Nginx | WebServer | `configmap-rules-nginx` | 9 | 6 |
-| Platform | Platform | `configmap-rules-platform` | 0 | 4 |
+| MariaDB | DBA | `prometheus-rules-mariadb` | 11 | 8 |
+| PostgreSQL | DBA | `prometheus-rules-postgresql` | 11 | 9 |
+| Kubernetes | Infra | `prometheus-rules-kubernetes` | 7 | 4 |
+| Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
+| MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 6 |
+| Elasticsearch | Search | `prometheus-rules-elasticsearch` | 11 | 7 |
+| Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
+| DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
+| ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
+| Kafka | Messaging | `prometheus-rules-kafka` | 13 | 9 |
+| RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 12 | 8 |
+| JVM | AppDev | `prometheus-rules-jvm` | 9 | 7 |
+| Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
+| Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
+| Platform | Platform | `prometheus-rules-platform` | 0 | 4 |
 | **Total** | | | **139** | **99** |
 
 ### 3.2 Self-Contained Three-Part Structure
@@ -680,6 +729,43 @@ groups:
         annotations:
           summary: "MariaDB connections {{ $value }} exceeds threshold ({{ $labels.tenant }})"
 ```
+
+#### v2.0.0 Bilingual Annotations (i18n) for Alerts
+
+Starting with v2.0.0, Rule Packs support **bilingual annotations** to enable multi-language notifications:
+
+- **`summary`** (English): Brief alert summary
+- **`summary_zh`** (Chinese): Brief alert summary in Chinese (optional)
+- **`description`** (English): Detailed explanation
+- **`description_zh`** (Chinese): Detailed explanation in Chinese (optional)
+- **`platform_summary`** (English): NOC/Platform perspective annotation (used in enforced routing §2.11)
+- **`platform_summary_zh`** (Chinese): NOC/Platform perspective annotation in Chinese (optional)
+
+**Alertmanager Fallback Logic:**
+
+Alertmanager templates use Go's `or` function to prefer Chinese annotations when available, with automatic fallback to English:
+
+```go
+{{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
+{{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+{{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+```
+
+This pattern is applied in all receiver types (email, webhook, Slack, Teams, PagerDuty) via Alertmanager's global templates (see `k8s/03-monitoring/configmap-alertmanager.yaml`).
+
+**Backward Compatibility:**
+
+- Rule Packs without `*_zh` annotations continue to work — notifications automatically fall back to English
+- Existing Prometheus rules need no changes
+- New rules should include both English and Chinese for better UX in multi-region deployments
+
+**Three Pilot Rule Packs (v2.0.0):**
+
+- `rule-pack-mariadb.yaml` — 8 alerts with bilingual annotations
+- `rule-pack-postgresql.yaml` — 9 alerts with bilingual annotations
+- `rule-pack-kubernetes.yaml` — 4 alerts with bilingual annotations (Operational alerts)
+
+For full examples, see `rule-packs/` directory.
 
 ### 3.3 Advantages
 
@@ -788,30 +874,32 @@ spec:
 
 ## 5. Future Roadmap
 
-The following items are listed by priority. Completed items — see [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md) and [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
+The following items are listed by priority. Items completed in v2.0.0 (Alert Quality Scoring, Policy-as-Code Path A, Tenant Self-Service Portal, Cardinality Forecasting) have been moved to [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md). DX tooling improvements are tracked in [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
 
 ```mermaid
 graph LR
     subgraph Near["Near-term (design foundations exist)"]
-        FB["Federation B<br/>Rule Pack Layering"]
-        NM["1:N Mapping"]
-        QS["Alert Quality<br/>Scoring"]
+        FB["§5.1 Federation B<br/>Rule Pack Layering"]
+        NM["§5.2 1:N Mapping"]
+        PB["§5.3 Policy Path B<br/>(OPA)"]
+        TR["§5.4 Threshold<br/>Recommendation"]
     end
     subgraph Mid["Mid-term (customer-validated)"]
-        PS["Policy-as-Code"]
-        CD["Cross-Cluster<br/>Drift Detection"]
-        IR["Incremental<br/>Reload"]
+        CD["§5.5 Cross-Cluster<br/>Drift Detection"]
+        IR["§5.6 Incremental<br/>Reload"]
+        AC["§5.7 Alert Correlation<br/>Engine"]
+        NT["§5.8 Notification<br/>Testing"]
     end
     subgraph Far["Long-term (exploratory)"]
-        SP["Tenant Self-Service<br/>Portal"]
-        CF["Cardinality<br/>Forecasting"]
-        LM["Log-to-Metric<br/>Bridge"]
+        LM["§5.9 Log-to-Metric<br/>Bridge"]
+        CV["§5.10 Config<br/>Versioning"]
+        GD["§5.11 Dashboard<br/>as Code"]
     end
 ```
 
 ### 5.1 Federation Scenario B: Rule Pack Layering
 
-Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts).
+Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.en.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts).
 
 **Technical entry point**: `generate_rule_pack_readme.py` already has Part classification data, which can be extended to produce `edge-rules.yaml` / `central-rules.yaml` split files. Requires pairing with `federation_check.py` to validate recording rule reference integrity after the split.
 
@@ -819,35 +907,24 @@ Scenario A (central threshold-exporter + edge Prometheus instances) already has 
 
 Multiple logical tenants within a single namespace (differentiated by Service annotation / Pod label). Requires `scaffold_tenant.py --shared-namespace --tenant-source annotation` mode and `_tenant_mappings` config section. §2.3 already has relabel examples; tooling awaits requirement confirmation.
 
-### 5.3 Alert Quality Scoring
+### 5.3 Policy-as-Code Path B: OPA/Rego Integration
 
-**Motivation**: As tenant and Rule Pack counts grow, low-quality alerts erode on-call engineers' attention budget. There is currently no systematic way to identify problematic alerts.
+**Motivation**: Path A (built-in DSL) was implemented in v2.0.0 and suits lightweight scenarios. For enterprise users already invested in the OPA ecosystem, tenant configuration validation needs to integrate into existing OPA governance workflows.
 
-**Approach**: Analyze Alertmanager history to compute quality metrics for each alertname × tenant combination:
+**Approach**: Add a `policy_opa_bridge.py` tool to convert tenant YAML to OPA input JSON, call OPA REST API or local `opa eval`, and convert OPA responses back to the platform's `Violation` format. Can integrate with `validate_config.py` Check 9, allowing Path A/B to coexist complementarily.
 
-- **Noise Score**: Excessive firing rate per time window (rapid fire/resolve oscillation)
-- **Stale Score**: Alerts that have not fired for an extended period (thresholds may have lost relevance)
-- **Resolution Latency**: Average time from firing to resolved (too short = flapping, too long = unattended)
-- **Suppression Ratio**: Proportion suppressed by inhibit or silence (too high = rule design needs adjustment)
+**Technical entry point**: `policy_engine.py`'s `PolicyResult` / `Violation` data models can be directly reused. Requires defining a Rego template library (`rego/` directory) for common platform check scenarios.
 
-**Output**: `da-tools alert-quality --period 30d --json` → per-tenant report, embeddable in Grafana dashboards or usable as a CI gate.
+### 5.4 Threshold Recommendation Engine
 
-### 5.4 Policy-as-Code (Configuration Policy Engine)
+**Motivation**: When onboarding new tenants, the common question is "what threshold should I set?". Currently this relies on experience or documentation examples, lacking a data-driven recommendation mechanism.
 
-**Motivation**: The current `ValidateTenantKeys()` performs structural validation (schema) but cannot express organization-level policy constraints such as "all critical alerts must have a pagerduty receiver" or "repeat_interval must not be less than 5m". As Sharded GitOps enables more teams to self-manage configurations, policy guardrails become increasingly important.
+**Approach**: Based on Prometheus historical metrics (e.g., `container_cpu_usage_seconds_total`), compute P95/P99 percentiles and generate recommendations alongside current thresholds. Leverage the existing `alert_quality.py` Noise Score metrics to identify thresholds set too low (frequent firing) or too high (never firing).
 
-**Approach**:
-
-```
-tenant.yaml → Schema Validation (existing) → Policy Evaluation (new) → config-dir
-```
-
-Introduce a lightweight policy layer with declarative constraint rules. Two possible paths:
-
-- **Path A — Built-in DSL**: Add a `_policies` section to `_defaults.yaml` using concise key-operator-value syntax. Advantages: zero external dependencies, low learning curve.
-- **Path B — OPA/Rego integration**: Greater policy expressiveness, suitable for teams with existing OPA infrastructure. Disadvantage: introduces an external dependency.
-
-Both paths plug into `validate_config.py` via a plugin mechanism, with no intrusion into the threshold-exporter core.
+**Technical entry point**:
+- `da-tools threshold-recommend --prometheus URL --tenant db-a`
+- Output: recommended threshold + confidence interval + current value comparison per metric
+- Self-Service Portal integration: add "recommended value" reference line in Alert Preview tab
 
 ### 5.5 Cross-Cluster Drift Detection
 
@@ -873,23 +950,21 @@ Cluster-C config-dir ──┘
 
 **Risk**: Delta merge consistency guarantees are more complex than full reload. Requires thorough benchmark comparison (`make benchmark` already has reload-bench as a foundation) to confirm the incremental mode does not regress at any scale.
 
-### 5.7 Tenant Self-Service Portal
+### 5.7 Alert Correlation Engine
 
-**Motivation**: Currently all tenant interaction relies on YAML files and CLI tools. For tenant teams without a DevOps background, a visual configuration experience can lower the onboarding barrier.
+**Motivation**: In multi-tenant environments, a single root cause often triggers alerts across multiple tenants (e.g., underlying storage failure simultaneously affecting db-a and db-b IO metrics). The existing inhibit mechanism only handles severity dedup within a single tenant, lacking cross-tenant / cross-metric correlation analysis.
 
-**Scope** (lightweight — not a full UI platform):
+**Approach**:
+- **Time-window aggregation**: Collect alerts at the Alertmanager webhook receiver backend, aggregate within a configurable time window (e.g., 5min).
+- **Correlation rules**: Compute correlation scores between alerts based on tenant topology (same namespace, same node pool) and temporal overlap.
+- **Root cause inference**: When correlation scores exceed a threshold, merge into a single event, annotating the most likely root cause alert.
+- **Output**: Correlation Report (`da-tools alert-correlate`), embeddable in Grafana dashboards or webhook notifications.
 
-- **YAML Validation**: Paste tenant YAML and get instant feedback on schema errors and policy violations
-- **Alert Preview**: Input sample metric values and preview which alerts would fire (based on `validate_config.py` dry-evaluate capability)
-- **Routing Visualization**: Display the Alertmanager route structure as a tree diagram, highlighting the tenant's routing path
+### 5.8 Multi-Channel Notification Testing
 
-**Technical foundation**: The React components under `docs/interactive/` (Tenant YAML Validator, Rule Pack Selector) have already validated browser-side execution feasibility. These can be further integrated into a standalone SPA.
+**Motivation**: After configuring routing, the common question is "I've configured it, but how do I know if the webhook URL is correct or if the Slack token works?". Currently the only way to verify is waiting for a real alert to fire.
 
-### 5.8 Cardinality Forecasting
-
-**Motivation**: The per-tenant 500 cardinality guard (§2.6) is a reactive safeguard. If cardinality growth can be predicted from historical trends, the Platform team can intervene proactively rather than truncating reactively.
-
-**Approach**: Based on time-series data from Prometheus `scrape_series_added` and `tenant_threshold_*` metric families, apply simple linear regression or exponential smoothing to project cardinality ceilings N days ahead. Generate a warning-level alert 7 days before the limit is reached.
+**Approach**: `da-tools test-notification --config-dir conf.d/ --tenant db-a` sends test messages to all configured receivers for the tenant, reporting connectivity for each channel. Must comply with rate limits and dry-run safety measures.
 
 ### 5.9 Log-to-Metric Bridge
 
@@ -901,31 +976,45 @@ Application Log → grok_exporter / mtail → Prometheus metric → Platform thr
 
 This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture. If demand materializes, a `log_bridge_check.py` tool can validate grok_exporter configuration alignment with Rule Packs.
 
+### 5.10 Tenant Config Versioning & Rollback
+
+**Motivation**: Config-dir changes are managed through Git, but the runtime side lacks fine-grained version tracking and fast rollback capabilities. When hot-reload loads a problematic configuration, one-click restoration to the last known-good version is needed.
+
+**Approach**:
+- threshold-exporter retains the previous N config snapshots after each successful reload (in-memory or local files).
+- New `/admin/rollback?version=N` API to trigger rollback.
+- `da-tools config-history --prometheus URL` to query historical reload events and corresponding config hashes.
+
+### 5.11 Grafana Dashboard as Code
+
+**Motivation**: The platform has comprehensive alert rule management, but Grafana dashboards are still manually maintained. During tenant onboarding, dashboards must be created manually, which is error-prone.
+
+**Approach**: `scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json`'s existing Rule Pack / metric information to generate corresponding panels. Paired with Grafana provisioning or API for automatic deployment.
+
 ---
 
 ## References
 
-- **README.en.md** — Quick start and overview
-- **migration-guide.md** — Migration from traditional approach
-- **custom-rule-governance.md** — Multi-tenant custom rule governance model
-- **rule-packs/README.md** — Rule pack development and extension
-- **components/threshold-exporter/README.md** — Exporter internal implementation
+- [Context Diagram](./context-diagram.en.md) — Roles, tools, and product interactions
+- [ADR Overview](adr/README.en.md) — 5 architecture decision records
+- [Benchmarks](benchmarks.en.md) · [Governance & Security](governance-security.en.md) · [Troubleshooting](troubleshooting.en.md)
+- [Migration Guide](migration-guide.en.md) · [Migration Engine](migration-engine.en.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.en.md)
+- [Rule Packs](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 
 ---
 
-**Document version:** v2.0.0-preview.3 — 2026-03-14
-**Last updated:** — Auto-Suppression redesign (PromQL `unless` → Alertmanager inhibit), Roadmap consolidation (Tenant Profiles + Rule Pack Expansion completed), 15 Rule Packs, 238 total rules
+**Document version:** v2.0.0 — 2026-03-14
 **Maintainer:** Platform Engineering Team
 
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](./architecture-and-design.md) | ★★★ |
-| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ★★ |
-| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ★★ |
-| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ★★ |
-| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ★★ |
-| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ★★ |
-| [README.en](adr/README.en.md) | ★★ |
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"] | ★★ |
+| ["架構與設計 — 動態多租戶警報平台技術白皮書"](./architecture-and-design.md) | ⭐⭐⭐ |
+| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
+| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ⭐⭐ |
+| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ⭐⭐ |
+| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ⭐⭐ |
+| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ⭐⭐ |
+| [README.en](adr/README.en.md) | ⭐⭐ |
+| ["Project Context Diagram: Roles, Tools, and Product Interactions"] | ⭐⭐ |

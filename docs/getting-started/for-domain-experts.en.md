@@ -2,12 +2,12 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
 
-> **v2.0.0-preview** | Audience: DBAs, Database Administrators, Domain Experts
+> **v2.0.0** | Audience: DBAs, Database Administrators, Domain Experts
 >
 > Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 
@@ -54,6 +54,8 @@ thresholds:
     default: "5s"
     dimensions_re: ["role=~^primary|replica$"]  # Regex dimensions
 ```
+
+> 💡 **Interactive Tools** — Want to browse all Rule Packs' recording/alert rules? Use [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx). Compare metrics across all 15 Rule Packs? Try [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx). Calculate recommended thresholds from p50/p90/p99? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx).
 
 ### Part 3: Alert Rules
 
@@ -203,9 +205,10 @@ python3 scripts/tools/ops/migrate_rule.py \
   --tenant-prefix "my-tenant"
 
 # 3. Validate migration (Shadow Monitoring value diff)
+# ⚠️ Use HTTPS in production; HTTP shown here for local dev only
 python3 scripts/tools/ops/validate_migration.py \
-  --old-prometheus-url "http://old-prometheus:9090" \
-  --new-prometheus-url "http://new-prometheus:9090" \
+  --old-prometheus-url "https://old-prometheus:9090" \
+  --new-prometheus-url "https://new-prometheus:9090" \
   --compare-range "7d"
 ```
 
@@ -250,6 +253,34 @@ Checked items:
 
 Custom rules must pass lint_custom_rules.py and include test data in PR.
 
+### Policy-as-Code (v2.0.0)
+
+Declare `_policies` DSL in `_defaults.yaml` to automatically validate all tenant configs:
+
+```yaml
+_policies:
+  - name: require-routing
+    target: "*"
+    check: required
+    path: "_routing"
+    severity: error
+  - name: max-connections-cap
+    target: "mysql_connections"
+    check: lte
+    value: 500
+    severity: warning
+```
+
+Run: `da-tools evaluate-policy --config-dir conf.d/ --ci`. Supports 10 operators, `when` conditionals, and wildcard targets.
+
+### Cardinality Forecasting (v2.0.0)
+
+Proactively monitor per-tenant cardinality growth trends to prevent Cardinality Guard truncation:
+
+```bash
+da-tools cardinality-forecast --prometheus http://localhost:9090 --warn-days 7
+```
+
 ## FAQ
 
 **Q: Can I modify PromQL expressions in a Rule Pack?**
@@ -284,11 +315,13 @@ A: Use the shadow monitoring environment. Set up parallel Prometheus + threshold
 **Q: How do I share threshold logic across multiple databases?**
 A: Extract common logic to shared Rule Pack, or define common profile in `_profiles.yaml`, letting multiple tenants inherit. For example, all MySQL instances inherit `mysql-standard` profile.
 
+> 💡 **Interactive Tools** — Browse all valid YAML keys and types? Use [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx). Test PromQL expressions and their recording rules? Use [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx). Migrate existing rules? Use [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx). View platform terminology? Use [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/glossary.jsx). Watch how the platform handles multi-tenant configurations in the browser? [Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) demonstrates the complete flow. See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/).
+
 ## Related Resources
 
 | Resource | Relevance |
 |----------|-----------|
-| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ★★★ |
-| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ★★ |
-| ["Tenant Quick Start Guide"](for-tenants.en.md) | ★★ |
-| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"] | ★★ |
+| ["Domain Expert (DBA) Quick Start Guide"](for-domain-experts.en.md) | ⭐⭐⭐ |
+| ["Platform Engineer Quick Start Guide"](for-platform-engineers.en.md) | ⭐⭐ |
+| ["Tenant Quick Start Guide"](for-tenants.en.md) | ⭐⭐ |
+| ["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"](../migration-guide.en.md) | ⭐⭐ |

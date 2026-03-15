@@ -2,12 +2,12 @@
 title: "Tenant 快速入門指南"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.0.0-preview.3
+version: v2.0.0
 lang: zh
 ---
 # Tenant 快速入門指南
 
-> **v2.0.0-preview** | 適用對象：租戶（Tenant）管理者、DBA、SRE
+> **v2.0.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
 >
 > 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
@@ -98,6 +98,8 @@ tenants:
 
 維護模式下，alert 不會觸發（PromQL 層抑制）。到期後自動恢復。
 
+> **時區：** `expires` 使用 RFC 3339 格式（含時區），排程式閾值的 `window` 和 recurring maintenance 的 `cron` 均使用 **UTC 時區**。
+
 ### 靜默特定嚴重度
 
 ```yaml
@@ -160,6 +162,15 @@ python3 scripts/tools/ops/diagnose.py my-tenant \
 python3 scripts/tools/ops/config_diff.py \
   --old-dir conf.d.baseline --new-dir conf.d/
 ```
+
+### 檢查告警品質（v2.0.0）
+
+```bash
+# 查看你的 tenant 告警是否有 noise（震盪）/ stale（閒置）等品質問題
+da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+```
+
+輸出：每個 tenant 的品質分數（0–100）和具體問題清單。
 
 ## 產生配置（互動式）
 
