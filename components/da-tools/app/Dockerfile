@@ -26,8 +26,8 @@ RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \
 
 ENV PROMETHEUS_URL=""
 
-RUN addgroup -g 65534 -S nonroot && \
-    adduser -S -D -H -u 65534 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
+RUN addgroup -g 10001 -S nonroot && \
+    adduser -S -D -H -u 10001 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
 USER nonroot:nonroot
 
 ENTRYPOINT ["python3", "/opt/da-tools/entrypoint.py"]

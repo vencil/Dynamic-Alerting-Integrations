@@ -7,10 +7,10 @@ RUN go mod download
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /threshold-exporter .
 
-FROM alpine:3.23
+FROM alpine:3.21
 RUN apk --no-cache add ca-certificates && \
-    addgroup -g 65534 -S nonroot && \
-    adduser -S -D -H -u 65534 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
+    addgroup -g 10001 -S nonroot && \
+    adduser -S -D -H -u 10001 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
 COPY --from=builder /threshold-exporter /usr/local/bin/threshold-exporter
 
 USER nonroot:nonroot
