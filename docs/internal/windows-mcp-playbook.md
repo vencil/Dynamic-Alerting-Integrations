@@ -231,6 +231,8 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 21 | Go test 從 repo root 執行失敗 | `go.mod` 在 `components/threshold-exporter/app/`，必須 `-w` 指定或 `cd` 進去 |
 | 22 | `Get-Content -Raw` 是 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata；用 `[string]` cast 或改用 here-string `@"..."@` |
 | 23 | 刪除再重建 GitHub tag 導致 Release 消失 | `git push origin :refs/tags/v*` 會連帶刪除關聯 Release；重推 tag 後須重新 create release |
+| 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
+| 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
 
 ## 指令快速參考
 

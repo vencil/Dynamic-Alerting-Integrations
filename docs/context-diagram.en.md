@@ -507,10 +507,11 @@ graph LR
 
 **I am a Tenant Team (SRE/DBA), I should:**
 1. Read [getting-started/for-tenants.en.md](getting-started/for-tenants.en.md) to get started quickly
-2. Use `scaffold_tenant.py` to generate initial configuration
-3. Use `diagnose.py` to regularly check health status
-4. Use `check_alert.py` to query alert status
-5. Use `patch_config.py` for partial updates (no need for full redeployment)
+2. Use [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx) for self-service operations (config, validation, preview). For enterprise intranet, use the `da-portal` Docker image ([deployment guide](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md))
+3. Use `scaffold_tenant.py` to generate initial configuration
+4. Use `diagnose.py` to regularly check health status
+5. Use `check_alert.py` to query alert status
+6. Use `patch_config.py` for partial updates (no need for full redeployment)
 
 ---
 
@@ -522,6 +523,7 @@ graph LR
 - **Governance & Security** → [governance-security.en.md](governance-security.en.md) and [custom-rule-governance.en.md](custom-rule-governance.en.md)
 - **GitOps Deployment** → [gitops-deployment.md](gitops-deployment.md)
 - **Troubleshooting** → [troubleshooting.en.md](troubleshooting.en.md)
+- **Interactive Tools** → [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) and [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx). Enterprise intranet deployment: [da-portal](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)
 - **Playbooks** (AI Agent exclusive)
   - [docs/internal/testing-playbook.md](internal/testing-playbook.md)
   - [docs/internal/windows-mcp-playbook.md](internal/windows-mcp-playbook.md)

@@ -77,28 +77,30 @@ git push origin main
 
 ### Step 3: 建立 Tag
 
-三條版號線各有對應 tag：
+四條版號線各有對應 tag：
 
 | 版號線 | Tag 格式 | 建立方式 | CI 觸發（release.yaml） |
 |--------|---------|---------|---------|
 | Platform (docs) | `v1.9.0` | `git tag v1.9.0` | **不觸發 build**（僅作 GitHub Release 錨點） |
 | Exporter (Go) | `exporter/v1.8.0` | `make release-tag-exporter`（從 Chart.yaml 推導） | `release-exporter` job → Docker image + Helm chart |
 | da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image |
+| da-portal (Static) | `portal/v2.0.0` | `make release-tag-portal` | `release-portal` job → Docker image |
 
 **Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
 
 ```bash
-# 情況 A：三線全升（exporter 有 code change）
+# 情況 A：四線全升（exporter + portal 有變更）
 git tag v<PLATFORM>
 make release-tag-exporter   # 自動建 exporter/v<CHART_VER> tag
 git tag tools/v<TOOLS>
-git push origin v<PLATFORM> exporter/v<CHART_VER> tools/v<TOOLS>
+git tag portal/v<PORTAL>
+git push origin v<PLATFORM> exporter/v<CHART_VER> tools/v<TOOLS> portal/v<PORTAL>
 
-# 情況 B：僅 platform + da-tools（exporter 未變，如 v1.9.0）
+# 情況 B：僅 platform + da-tools（exporter / portal 未變）
 git tag v<PLATFORM>
 git tag tools/v<TOOLS>
 git push origin v<PLATFORM> tools/v<TOOLS>
-# ⚠️ 不推 exporter tag — Chart.yaml 版號不變
+# ⚠️ 不推 exporter / portal tag — 版號不變時不推
 ```
 
 ### Step 4: 建立 GitHub Release（透過 Windows MCP）
@@ -187,6 +189,8 @@ git push origin "tools/v<VERSION>"
 | 16 | 合併版號時遺漏語義更新 | 全局 sed 改版號後，需手動校正：CHANGELOG（合併 section）、da-tools 版號表（Git Tag + 說明）、architecture 底部版本戳（日期 + 功能摘要 + CLI 命令數） |
 | 17 | 刪除遠端 tag 會連帶刪除關聯 Release | `git push origin :refs/tags/v*` 刪除 tag 後，GitHub 自動刪除該 tag 的 Release；重推 tag 後須重新 `POST /releases` 建立 |
 | 18 | `Get-Content -Raw` 回傳 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata（PSPath/PSDrive/PSProvider 數千行）；須 `[string]` cast 或改用 here-string `@"..."@`（詳見 [Windows MCP Playbook](windows-mcp-playbook.md#長-body-的建議做法)） |
+| 19 | Repo rename 導致 Release API POST 靜默失敗 | 改名後 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect（靜默回 401）。必須用**新 repo name** 或 **repo ID URL**（`/repositories/{id}/releases`）。詳見 [Windows MCP Playbook #24](windows-mcp-playbook.md) |
+| 20 | Fine-grained PAT 預設無 Release 寫入權限 | 需在 GitHub Settings → Fine-grained PAT → Permissions 加上 **Contents: Read and Write** 才能建立 Release |
 
 ## 版號合併流程
 

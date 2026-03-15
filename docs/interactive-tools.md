@@ -48,16 +48,22 @@ lang: zh
 
 這些 `.jsx` 檔案可在以下環境直接執行：
 
-1. **GitHub Pages（推薦）** — 開啟 repo Settings → Pages → Source 選 `main` / `/docs`，即可透過 `docs/interactive/index.html` 入口頁直接在瀏覽器試用。元件透過 `docs/assets/jsx-loader.html` 在瀏覽器端以 Babel standalone 即時轉譯，無需 build step
-2. **Claude Artifacts** — 將 `.jsx` 內容貼入對話，Claude 會即時渲染
-3. **React 開發環境** — `npx create-react-app` 後將元件引入使用
-4. **CodeSandbox / StackBlitz** — 線上即時預覽
+1. **GitHub Pages（公開環境推薦）** — 開啟 repo Settings → Pages → Source 選 `main` / `/docs`，即可透過 `docs/interactive/index.html` 入口頁直接在瀏覽器試用。元件透過 `docs/assets/jsx-loader.html` 在瀏覽器端以 Babel standalone 即時轉譯，無需 build step
+2. **da-portal Docker Image（企業內網 / air-gapped 推薦）** — `docker run -p 8080:80 ghcr.io/vencil/da-portal` 即可在內網架設完整的互動工具 Portal。支援 volume mount 客製化 `platform-data.json` 和 `flows.json`，nginx reverse proxy 可解決 Prometheus CORS 問題。詳見 [components/da-portal/](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)
+3. **Claude Artifacts** — 將 `.jsx` 內容貼入對話，Claude 會即時渲染
+4. **React 開發環境** — `npx create-react-app` 後將元件引入使用
+5. **CodeSandbox / StackBlitz** — 線上即時預覽
 
 每個元件均為獨立的 React functional component，無需額外 state management library。
 
-### GitHub Pages 本機預覽
+### 本機預覽
 
 ```bash
+# 方式 A：Python http.server（快速驗證）
 cd docs && python3 -m http.server 8888
 # 開啟 http://localhost:8888/interactive/
+
+# 方式 B：da-portal Docker（與部署環境一致）
+make portal-image && make portal-run
+# 開啟 http://localhost:8080
 ```

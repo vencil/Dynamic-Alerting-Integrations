@@ -68,6 +68,7 @@
 | `docs/internal/doc-map.md` | AI Agent | 本文件（文件導覽總表） |
 | `docs/internal/tool-map.md` | AI Agent | 工具導覽（自動生成） |
 | `docs/schemas/tenant-config.schema.json` | All | Tenant YAML JSON Schema（VS Code 自動補全） |
+| `components/da-portal/README.md` | Platform Engineers, Tenants | da-portal Self-Hosted Interactive Tools Portal |
 | `rule-packs/README.md` | All | 15 Rule Packs + optional 卸載 |
 | `rule-packs/ALERT-REFERENCE.md (.en.md)` | Tenants, SREs | 96 個 Alert 含義 + 建議動作速查 |
 | `k8s/03-monitoring/dynamic-alerting-overview.json` | SRE | Grafana Dashboard |

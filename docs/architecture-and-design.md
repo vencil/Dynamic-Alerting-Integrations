@@ -880,7 +880,7 @@ spec:
 
 ## 5. 未來擴展路線 (Future Roadmap)
 
-以下為按優先序排列的技術方向。v2.0.0 已完成的項目（Alert Quality Scoring、Policy-as-Code Path A、Tenant Self-Service Portal、Cardinality Forecasting）已移至 [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md)。DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
+以下為按優先序排列的技術方向。v2.0.0 已完成的項目（Alert Quality Scoring、Policy-as-Code Path A、Tenant Self-Service Portal、Cardinality Forecasting、Self-Hosted Portal Docker Image）已移至 [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md)。DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
 ```mermaid
 graph LR

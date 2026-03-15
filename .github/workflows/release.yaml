@@ -1,13 +1,15 @@
 # release.yaml — Build & push container images + Helm chart on tag
 #
-# 觸發條件（三線版號策略）：
+# 觸發條件（四線版號策略）：
 #   - exporter/v* → threshold-exporter Docker image + Helm chart
 #   - tools/v*    → da-tools Docker image
+#   - portal/v*   → da-portal Docker image (Interactive Tools Portal)
 #   - v*          → platform tag，僅用於 GitHub Release 錨點，不觸發 build
 #
 # 產出：
 #   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
+#   - ghcr.io/vencil/da-portal:v<version>             (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
 #
 # 前置條件：
@@ -21,6 +23,7 @@ on:
     tags:
       - "exporter/v*"
       - "tools/v*"
+      - "portal/v*"
 
 env:
   REGISTRY: ghcr.io
@@ -123,3 +126,39 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest
+
+  # ----------------------------------------------------------------
+  # Job 3: Build & push da-portal image (Interactive Tools Portal)
+  # ----------------------------------------------------------------
+  release-portal:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/portal/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#portal/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download vendor files for offline mode
+        run: bash scripts/tools/vendor_download.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push da-portal image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: components/da-portal/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:latest

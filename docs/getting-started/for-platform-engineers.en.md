@@ -514,6 +514,8 @@ A: A Kubernetes Projected Volume feature. With `optional: true`, if the ConfigMa
 **Q: Do I need to customize rules within a Rule Pack?**
 A: Don't modify Rule Packs directly. Use `_routing.overrides[]` in tenant YAML to override routing for single rules, or add custom rules via custom rule governance (lint_custom_rules.py).
 
+> 💡 **Interactive Tools** — Validate configs with [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-lint.jsx). Compare config changes with [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx). View Rule Pack dependencies with [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/dependency-graph.jsx). Track onboarding progress with [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx). See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/). For enterprise intranet deployment, use the `da-portal` Docker image: `docker run -p 8080:80 ghcr.io/vencil/da-portal` ([deployment guide](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)).
+
 ## Related Resources
 
 | Resource | Relevance |

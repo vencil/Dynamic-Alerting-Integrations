@@ -874,7 +874,7 @@ spec:
 
 ## 5. Future Roadmap
 
-The following items are listed by priority. Items completed in v2.0.0 (Alert Quality Scoring, Policy-as-Code Path A, Tenant Self-Service Portal, Cardinality Forecasting) have been moved to [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md). DX tooling improvements are tracked in [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
+The following items are listed by priority. Items completed in v2.0.0 (Alert Quality Scoring, Policy-as-Code Path A, Tenant Self-Service Portal, Cardinality Forecasting, Self-Hosted Portal Docker Image) have been moved to [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md). DX tooling improvements are tracked in [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
 
 ```mermaid
 graph LR

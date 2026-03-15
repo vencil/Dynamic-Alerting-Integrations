@@ -254,6 +254,12 @@
 <div id="error"></div>
 <div id="root"></div>
 <script>
+// Prevent stale DOM from bfcache when navigating back in flow mode.
+// Without this, browser back/forward may show the wrong step's UI.
+window.addEventListener('pageshow', function(e) {
+  if (e.persisted) window.location.reload();
+});
+
 (function() {
   var params = new URLSearchParams(window.location.search);
   var componentPath = params.get('component');

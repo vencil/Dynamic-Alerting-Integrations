@@ -157,7 +157,7 @@ See [Rule Packs Directory](rule-packs/README.md) · [Alert Reference](rule-packs
 
 ## Tools
 
-All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`) — no cloning or dependency installation required.
+All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`) — no cloning or dependency installation required. The Interactive Tools Portal is available as a separate image (`docker run -p 8080:80 ghcr.io/vencil/da-portal`) for enterprise intranet / air-gapped deployment.
 
 **Tenant Lifecycle:** `scaffold_tenant` config generation → `onboard_platform` existing environment analysis → `migrate_rule` AST migration engine → `validate_migration` Shadow dual-track verification → `cutover_tenant` one-click cutover → `offboard_tenant` safe removal
 

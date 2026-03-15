@@ -9,7 +9,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 - **Prometheus**: Projected Volume 掛載 15 個 Rule Pack (`optional: true`)
 - **Alertmanager**: 動態 route/receiver/inhibit 產生 + `configmap-reload` sidecar 自動 reload
 - **三態運營模式**: Normal / Silent (`_silent_mode`) / Maintenance (`_state_maintenance`)，均支援 `expires` 自動失效
-- **Distribution**: OCI registry + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`)
+- **Distribution**: OCI registry + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`, `ghcr.io/vencil/da-portal`)
 
 版本歷程詳見 `CHANGELOG.md`。
 
@@ -35,7 +35,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`。變更連動規則見 `docs/internal/doc-map.md` § Change Impact Matrix
 5. **SAST**: Go `ReadHeaderTimeout`; Python `os.chmod(path, 0o600)` + `encoding="utf-8"`; `subprocess` 禁止 `shell=True`
 6. **推銷語言不進 repo**: README 保持客觀工程語言
-7. **版號治理**: `make version-check` → `make bump-docs` → 三線 tag（`v*` platform / `exporter/v*` / `tools/v*`）
+7. **版號治理**: `make version-check` → `make bump-docs` → 四線 tag（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*`）
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
 9. **i18n 三層架構**: JSX 用 `window.__t(zh, en)` + Rule Pack 用 `*_zh` 後綴 annotation + Python CLI 用 `detect_cli_lang()` 切換 argparse help
 
@@ -59,7 +59,7 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（67 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（68 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
 快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (6 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (5 ADRs)
 
@@ -86,12 +86,13 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 | `make version-check` / `bump-docs` | 版號治理 |
 | `make benchmark` | 效能基準（idle + routing + alertmanager + reload） |
 | `make validate-config` | 一站式配置驗證 |
+| `make portal-image` / `portal-run` | Self-Hosted Portal Docker image |
 
 完整目標見 `make help`。
 
 ## Release 流程
 
-三線版號（`v*` platform / `exporter/v*` / `tools/v*`）。完整步驟與踩坑記錄見 `docs/internal/github-release-playbook.md`。
+四線版號（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*`）。完整步驟與踩坑記錄見 `docs/internal/github-release-playbook.md`。
 
 ## AI Agent 環境
 

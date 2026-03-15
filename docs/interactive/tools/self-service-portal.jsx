@@ -554,6 +554,9 @@ function RoutingVizTab() {
     setTree(buildRoutingTree(config));
   }, [yaml]);
 
+  const connectorStyle = { left: '-12px' };
+  const branchStyle = { left: '-12px', top: '50%' };
+
   const typeColors = {
     webhook: 'bg-purple-100 text-purple-800 border-purple-200',
     email: 'bg-blue-100 text-blue-800 border-blue-200',
@@ -601,8 +604,8 @@ function RoutingVizTab() {
           <div className="ml-6 space-y-3">
             {tree.children.map((node, i) => (
               <div key={i} className="relative">
-                <div className="absolute left-0 top-0 bottom-0 w-px bg-gray-300" style={{ left: '-12px' }}></div>
-                <div className="absolute w-3 h-px bg-gray-300" style={{ left: '-12px', top: '50%' }}></div>
+                <div className="absolute left-0 top-0 bottom-0 w-px bg-gray-300" style={connectorStyle}></div>
+                <div className="absolute w-3 h-px bg-gray-300" style={branchStyle}></div>
 
                 <div className={`p-3 rounded-lg border ${typeColors[node.type] || typeColors.default}`}>
                   <div className="flex items-center justify-between">

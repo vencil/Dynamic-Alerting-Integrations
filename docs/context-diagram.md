@@ -552,7 +552,7 @@ graph LR
 
 **我是 Tenant Team (SRE/DBA)，我該：**
 1. 讀 [getting-started/for-tenants.md](getting-started/for-tenants.md) 快速上手
-2. 用 [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx) 進行自助操作（配置、驗證、預覽）
+2. 用 [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx) 進行自助操作（配置、驗證、預覽）。企業內網環境可用 `da-portal` Docker image 自建（[部署說明](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)）
 3. 用 `scaffold_tenant.py` 生成初始配置
 4. 用 `diagnose.py` 定期檢查健康狀態
 5. 用 `check_alert.py` 查詢 Alert 狀態
@@ -568,7 +568,7 @@ graph LR
 - **治理與安全** → [governance-security.md](governance-security.md) 和 [custom-rule-governance.md](custom-rule-governance.md)
 - **GitOps 部署** → [gitops-deployment.md](gitops-deployment.md)
 - **故障排查** → [troubleshooting.md](troubleshooting.md)
-- **互動工具** → [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 和 [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx)
+- **互動工具** → [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/) 和 [Self-Service Portal](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx)。企業內網部署見 [da-portal](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)
 - **效能基準** → [benchmarks.md](benchmarks.md)
 - **Playbooks**（AI Agent 專用）
   - [docs/internal/testing-playbook.md](internal/testing-playbook.md)

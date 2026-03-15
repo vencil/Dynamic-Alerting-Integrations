@@ -157,7 +157,7 @@ make port-forward
 
 ## 工具生態
 
-所有工具封裝在 `da-tools` 容器中（`docker run --rm ghcr.io/vencil/da-tools`），不需 clone 專案或安裝依賴。
+所有工具封裝在 `da-tools` 容器中（`docker run --rm ghcr.io/vencil/da-tools`），不需 clone 專案或安裝依賴。互動工具 Portal 另有獨立 image（`docker run -p 8080:80 ghcr.io/vencil/da-portal`），支援企業內網 / air-gapped 部署。
 
 **租戶生命週期：** `scaffold_tenant` 配置產生 → `onboard_platform` 既有環境分析 → `migrate_rule` AST 遷移引擎 → `validate_migration` Shadow 雙軌驗證 → `cutover_tenant` 一鍵切換 → `offboard_tenant` 安全下架
 
