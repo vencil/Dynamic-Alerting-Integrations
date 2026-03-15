@@ -9,6 +9,28 @@ lang: zh
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [2.1.0-preview](https://github.com/vencil/Dynamic-Alerting-Integrations/compare/v2.0.0-preview...v2.1.0-preview) (2026-03-15)
+
+
+### Features
+
+* add JSX Babel parse lint (manual-stage pre-commit hook) ([27370c4](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/27370c498cebda818a1cf5fac3a225753c8d5d5b))
+* interactive tools ecosystem (24 JSX) + guided flows ([ee8c859](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/ee8c859e0b10be747a4a3b9e3b4cb45110a7133f))
+
+
+### Bug Fixes
+
+* add Tailwind CSS CDN to jsx-loader for component styling ([bdeaa23](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/bdeaa23d46936d23e06058be880fd84b0c510fcd))
+* Architecture Quiz pre whitespace + PromQL Tester rate detection ([ec77bf0](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/ec77bf00f3e438ae9d8f02ed8aff7b4ff698a9c1))
+* **ci:** resolve three CI workflow failures ([8f540bd](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/8f540bd4b5469adb38e83578db39d4805b182ce9))
+* **docker:** use GID/UID 10001 to avoid Alpine nobody conflict ([a8b62d5](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/a8b62d57aa9265f7db851970ab82c00a49c7fdc4))
+* **dx:** add 13 missing version patterns to bump_docs.py ([830e21d](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/830e21db14f9779df02dd1da1cb9476ed4347e1d))
+* eliminate style={{ }} patterns that break browser Babel standalone ([f05ad6c](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/f05ad6c20b6fb0c35b46a64f9d699e55ffa7a764))
+* JSX Babel parse errors + Platform Demo typing animation ([071b3cd](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/071b3cd6e426b62e55696c3405c277e381d7c67c))
+* playground.jsx 簡體中文轉繁體中文 ([f9ef51f](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/f9ef51f7fc910e8f79d054595939d7708393fdad))
+* resolve bugs in all four interactive React components ([905b07b](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/905b07b59c1adc00ff4cc5048cd7a1bca189268c))
+* resolve wizard doc links to GitHub blob URLs instead of 404 Pages paths ([a6720db](https://github.com/vencil/Dynamic-Alerting-Integrations/commit/a6720db54ef6e33cdcba3690113031bd169b5ed7))
+
 ## [v2.0.0] — Alert Intelligence + Full-Stack DX Overhaul (2026-03-15)
 
 v2.0.0 正式版。自 v1.11.0 起的全量升級：76 個 commits、346 個檔案變更（+73,057 / -12,023）。涵蓋 Go Exporter 增強、Rule Pack 擴展、告警智能化、互動工具生態、文件全面重構、測試工程化、專案結構正規化。
