@@ -46,7 +46,7 @@ graph TB
         TE["threshold-exporter<br/>conf.d/*.yaml<br/>×2 HA replicas"]
         CP["中央 Prometheus<br/>• scrape threshold-exporter<br/>• federation / remote-write<br/>• Rule Packs (all parts)<br/>• Alert evaluation"]
         AM["Alertmanager<br/>generated routes.yaml<br/>（per-tenant routing）"]
-        CP -->|scrape :8080| TE
+        CP -->|"scrape :8080"| TE
         CP -->|alert rules| AM
     end
 

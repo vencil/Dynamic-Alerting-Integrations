@@ -145,11 +145,11 @@ graph TB
     ConfigDiff -->|compares| GitRepo
 
     %% GitOps -> Infra
-    GitRepo -->|GitOps Sync<br/>(ArgoCD/Flux)| ThreshConfig
+    GitRepo -->|GitOps Sync<br/>ArgoCD / Flux| ThreshConfig
 
     %% Infrastructure Flow
     ThreshConfig -->|SHA-256<br/>hot-reload| Exporter
-    Exporter -->|Metrics :8080| Prom
+    Exporter -->|"Metrics :8080"| Prom
     Prom -->|Alert Rules<br/>Evaluation| AlertMgr
     AlertMgr -->|Routes & Groups| Channels
 
@@ -449,13 +449,13 @@ graph LR
     RulePacks -->|3. Mount via| PV
     TenantYAML -->|4. Merge in| GitRepo
 
-    GitRepo -->|GitOps Sync<br/>(ArgoCD/Flux)| CM
+    GitRepo -->|GitOps Sync<br/>ArgoCD / Flux| CM
 
     CM -->|SHA-256 hot-reload| Exp1
     CM -->|SHA-256 hot-reload| Exp2
 
-    Exp1 -->|/metrics<br/>(metrics + flags)| Prom
-    Exp2 -->|/metrics<br/>(metrics + flags)| Prom
+    Exp1 -->|"/metrics<br/>(metrics + flags)"| Prom
+    Exp2 -->|"/metrics<br/>(metrics + flags)"| Prom
 
     PV -->|Mounted Rules| Prom
 

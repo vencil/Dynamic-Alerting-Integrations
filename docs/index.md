@@ -226,7 +226,7 @@ tenants:
 ```mermaid
 graph TB
     A["Tenant Config\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
-    B -->|Prometheus metric\n(tenant:alert_threshold:*)| C["Prometheus\n(15 Rule Packs)"]
+    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(15 Rule Packs)"]
     C -->|group_left matching| D["Alert Rules\n(56 rules, fixed)"]
     D -->|AlertGroup| E["Alertmanager"]
     E -->|dynamic route| F["Receivers\nwebhook/email/slack/teams"]
