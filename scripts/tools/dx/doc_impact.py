@@ -68,7 +68,7 @@ def parse_front_matter(content: str) -> Tuple[Dict, str]:
             fm[key] = value
 
         return fm, body
-    except Exception:
+    except re.error:
         return {}, content
 
 
@@ -351,6 +351,7 @@ def generate_json_report(
 # =============================================================================
 
 def main():
+    """CLI entry point: 文件變更影響分析."""
     parser = argparse.ArgumentParser(
         description='分析文件變更的影響範圍 (Analyze doc change impact)'
     )

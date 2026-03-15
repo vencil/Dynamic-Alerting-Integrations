@@ -38,8 +38,12 @@ import json
 import time
 import math
 import argparse
-import urllib.request
 import urllib.parse
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
+from _lib_python import http_get_json  # noqa: E402
 
 # 預設觀測指標：PromQL 模板 (tenant 會被替換)
 DEFAULT_METRICS = {
@@ -77,12 +81,9 @@ def query_prometheus(prom_url, promql):
     params = urllib.parse.urlencode({"query": promql})
     full_url = f"{url}?{params}"
 
-    try:
-        req = urllib.request.Request(full_url)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        return None, str(e)
+    data, err = http_get_json(full_url)
+    if err:
+        return None, err
 
     if data.get("status") != "success":
         return None, data.get("error", "Unknown error")
@@ -169,6 +170,7 @@ def suggest_threshold(stats, metric_name):
 
 
 def main():
+    """CLI entry point: Baseline Discovery 工具。."""
     parser = argparse.ArgumentParser(
         description="Baseline Discovery — 負載觀測 + 閾值建議工具",
     )

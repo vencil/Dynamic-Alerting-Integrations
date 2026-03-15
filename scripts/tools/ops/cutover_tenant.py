@@ -172,25 +172,26 @@ def verify_health(tenant, prometheus_url, dry_run=False):
         print(f"  [dry-run] query {prometheus_url} for tenant={tenant} health")
         return True, "(dry-run)"
 
-    import urllib.request
     import urllib.parse
+
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, _this_dir)
+    sys.path.insert(0, os.path.join(_this_dir, '..'))
+    from _lib_python import http_get_json  # noqa: E402
 
     # Check threshold metrics exist for tenant
     query = f'count(user_threshold{{tenant="{tenant}"}})'
     params = urllib.parse.urlencode({"query": query})
     url = f"{prometheus_url}/api/v1/query?{params}"
 
-    try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        results = data.get("data", {}).get("result", [])
-        if not results:
-            return False, f"No threshold metrics found for tenant={tenant}"
-        count = results[0].get("value", [None, "0"])[1]
-        return True, f"tenant={tenant}: {count} threshold metrics active"
-    except Exception as exc:
-        return False, f"Prometheus query failed: {exc}"
+    data, err = http_get_json(url, headers={"Accept": "application/json"})
+    if err:
+        return False, f"Prometheus query failed: {err}"
+    results = data.get("data", {}).get("result", [])
+    if not results:
+        return False, f"No threshold metrics found for tenant={tenant}"
+    count = results[0].get("value", [None, "0"])[1]
+    return True, f"tenant={tenant}: {count} threshold metrics active"
 
 
 # ---------------------------------------------------------------------------

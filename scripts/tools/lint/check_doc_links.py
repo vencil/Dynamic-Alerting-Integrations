@@ -98,7 +98,7 @@ class DocLinkChecker:
                         matches = self.section_pattern.findall(line)
                         for major, minor in matches:
                             sections.add(f"{major}.{minor}")
-            except Exception:
+            except OSError:
                 pass
         
         return sections
@@ -179,7 +179,7 @@ class DocLinkChecker:
                     anchor = self._heading_to_anchor(heading_text)
                     if anchor:
                         anchors.add(anchor)
-        except Exception:
+        except OSError:
             pass
 
         self._heading_cache[resolved] = anchors
@@ -324,7 +324,7 @@ class DocLinkChecker:
         try:
             with open(md_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-        except Exception as e:
+        except OSError as e:
             print(f"ERROR: Cannot read {md_file}: {e}", file=sys.stderr)
             return
         
@@ -522,6 +522,7 @@ def _fix_broken_anchors(broken_anchors: list, repo_root: Path) -> int:
 
 
 def main():
+    """CLI entry point: 文件間交叉引用一致性檢查."""
     parser = argparse.ArgumentParser(
         description="Check markdown cross-references for consistency"
     )

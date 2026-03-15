@@ -139,11 +139,13 @@ def fix_links_in_file(filepath, dry_run=False, verbose=False):
         if not dry_run:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
+            os.chmod(filepath, 0o644)
         return fixes
     return 0
 
 
 def main():
+    """CLI entry point: Auto-fix broken MkDocs cross-reference links."""
     parser = argparse.ArgumentParser(description='Fix broken MkDocs links')
     parser.add_argument('--dry-run', action='store_true', help='Preview fixes without writing')
     parser.add_argument('--verbose', '-v', action='store_true', help='Show details')

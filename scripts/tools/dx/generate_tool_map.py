@@ -19,57 +19,38 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
-TOOLS_DIR = SCRIPT_DIR
+TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
 TOOL_MAP = REPO_ROOT / "docs" / "internal" / "tool-map.md"
 
 # Skip patterns
 SKIP_PREFIXES = ("_lib", "__init__", "__pycache__")
 
-# Category mapping — each tool belongs to one category
-# Key: script filename (without .py), Value: category name
-CATEGORIES = {
-    # --- 運維工具 ---
-    "patch_config": "ops",
-    "check_alert": "ops",
-    "diagnose": "ops",
-    "batch_diagnose": "ops",
-    "onboard_platform": "ops",
-    "migrate_rule": "ops",
-    "scaffold_tenant": "ops",
-    "validate_migration": "ops",
-    "analyze_rule_pack_gaps": "ops",
-    "backtest_threshold": "ops",
-    "offboard_tenant": "ops",
-    "deprecate_rule": "ops",
-    "baseline_discovery": "ops",
-    "generate_alertmanager_routes": "ops",
-    "validate_config": "ops",
-    "cutover_tenant": "ops",
-    "blind_spot_discovery": "ops",
-    "config_diff": "ops",
-    "maintenance_scheduler": "ops",
-    # --- DX Automation ---
-    "shadow_verify": "dx",
-    "byo_check": "dx",
-    "grafana_import": "dx",
-    "federation_check": "dx",
-    # --- 文件 CI ---  (everything else defaults to "ci")
+# Subdirectory → category mapping (auto-detect from filesystem)
+SUBDIR_CATEGORY = {
+    "ops": "ops",
+    "dx": "dx",
+    "lint": "lint",
+}
+
+# Override: tools in dx/ that are DX-automation rather than doc-CI
+DX_AUTOMATION = {
+    "shadow_verify", "byo_check", "grafana_import", "federation_check",
 }
 
 CATEGORY_HEADERS = {
     "zh": {
         "ops": "## 運維工具（da-tools CLI 封裝）",
-        "dx": "## DX Automation 工具",
-        "ci": "## 文件 CI 工具",
+        "dx": "## DX / 自動化工具",
+        "lint": "## 文件 Lint / CI 工具",
     },
     "en": {
         "ops": "## Operations Tools (da-tools CLI)",
-        "dx": "## DX Automation Tools",
-        "ci": "## Documentation CI Tools",
+        "dx": "## DX / Automation Tools",
+        "lint": "## Documentation Lint / CI Tools",
     },
 }
 
-CATEGORY_ORDER = ["ops", "dx", "ci"]
+CATEGORY_ORDER = ["ops", "dx", "lint"]
 
 TOOL_MAP_EN = REPO_ROOT / "docs" / "internal" / "tool-map.en.md"
 
@@ -99,26 +80,39 @@ def extract_tool_description(filepath: Path) -> str:
     return ""
 
 
-def get_tool_category(name: str) -> str:
-    """Determine category for a tool."""
-    return CATEGORIES.get(name, "ci")
+def get_tool_category(name: str, subdir: str) -> str:
+    """Determine category from subdirectory location."""
+    if subdir == "dx" and name in DX_AUTOMATION:
+        return "dx"
+    return SUBDIR_CATEGORY.get(subdir, "dx")
 
 
 def gather_tools() -> dict:
-    """Gather all tools grouped by category.
+    """Gather all tools from ops/, dx/, lint/ grouped by category.
 
     Returns: {category: [(filename, description), ...]}
     """
     categorized = {cat: [] for cat in CATEGORY_ORDER}
 
-    for f in sorted(TOOLS_DIR.glob("*.py")):
+    # Scan each subdirectory
+    for subdir in ("ops", "dx", "lint"):
+        subdir_path = TOOLS_ROOT / subdir
+        if not subdir_path.is_dir():
+            continue
+        for f in sorted(subdir_path.glob("*.py")):
+            if any(f.name.startswith(p) for p in SKIP_PREFIXES):
+                continue
+            name = f.stem
+            desc = extract_tool_description(f)
+            cat = get_tool_category(name, subdir)
+            categorized[cat].append((f.name, desc))
+
+    # Root-level tools (validate_all.py etc.)
+    for f in sorted(TOOLS_ROOT.glob("*.py")):
         if any(f.name.startswith(p) for p in SKIP_PREFIXES):
             continue
-
-        name = f.stem
         desc = extract_tool_description(f)
-        cat = get_tool_category(name)
-        categorized[cat].append((f.name, desc))
+        categorized["ops"].append((f.name, desc))
 
     return categorized
 
@@ -184,6 +178,7 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
 
 
 def main():
+    """CLI entry point: 工具導覽自動生成."""
     parser = argparse.ArgumentParser(
         description="Generate docs/internal/tool-map.md from scripts/tools/*.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,

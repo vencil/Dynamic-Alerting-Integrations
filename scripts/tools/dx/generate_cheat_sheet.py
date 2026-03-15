@@ -27,7 +27,7 @@ from typing import List
 # Repo root detection
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent  # scripts/tools/ -> repo root
+REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 
 # ---------------------------------------------------------------------------
 # Bilingual templates
@@ -189,7 +189,7 @@ def _extract_key_flags(section: str) -> str:
 def _read_versions():
     """Read platform and da-tools versions from source-of-truth files."""
     # Platform version from CLAUDE.md
-    version = 'v2.0.0-preview'  # fallback
+    version = 'v2.0.0'  # fallback
     claude_md = REPO_ROOT / 'CLAUDE.md'
     if claude_md.exists():
         content = claude_md.read_text(encoding='utf-8')
@@ -287,6 +287,7 @@ def _get_output_path(lang: str) -> Path:
 
 
 def main():
+    """CLI entry point: Auto-generate da-tools cheat sheet from CLI reference."""
     parser = argparse.ArgumentParser(
         description='Generate da-tools cheat sheet from cli-reference.md'
     )

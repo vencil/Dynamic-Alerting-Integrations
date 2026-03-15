@@ -36,7 +36,7 @@ def load_yaml_file(path):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
-    except Exception as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"  ⚠️  無法讀取 {path}: {e}")
         return None
 
@@ -190,6 +190,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
 
 
 def main():
+    """CLI entry point: 規則/指標下架工具。."""
     parser = argparse.ArgumentParser(
         description="規則/指標下架工具 — 三步安全淘汰 metric key"
     )

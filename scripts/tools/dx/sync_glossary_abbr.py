@@ -168,6 +168,7 @@ def generate_abbreviations_file(abbreviations: dict) -> str:
 
 
 def main():
+    """CLI entry point: Sync abbreviations from glossary.md to MkDocs snippet."""
     parser = argparse.ArgumentParser(
         description="Sync abbreviations from glossary.md to MkDocs snippet file."
     )

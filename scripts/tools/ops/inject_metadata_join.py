@@ -70,6 +70,7 @@ def process_file(filepath):
     if modified:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write("\n".join(new_lines))
+        os.chmod(filepath, 0o600)
         print(f"  MODIFIED {os.path.basename(filepath)}")
         return True
 
@@ -191,6 +192,7 @@ def inject_metadata(block, alert_name):
 
 
 def main():
+    """CLI entry point: One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules."""
     count = 0
     for fname in sorted(os.listdir(RULE_PACKS_DIR)):
         if not fname.endswith(".yaml"):

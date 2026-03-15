@@ -219,6 +219,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
 
 
 def main():
+    """CLI entry point: Generate rule-packs/README.md from actual YAML rule pack files."""
     parser = argparse.ArgumentParser(
         description="Auto-generate rule-packs/README.md from YAML files"
     )
@@ -278,6 +279,7 @@ def main():
         try:
             with open(readme_path, "w", encoding="utf-8") as f:
                 f.write(generated_content)
+            os.chmod(readme_path, 0o644)
             print(f"Updated {readme_path}", file=sys.stderr)
         except IOError as e:
             print(f"Error: Failed to write {readme_path}: {e}", file=sys.stderr)

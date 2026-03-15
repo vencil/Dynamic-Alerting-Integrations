@@ -90,7 +90,7 @@ class DocCoverageAnalyzer:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-        except Exception:
+        except OSError:
             return False, {}
 
         # 檢查是否以 --- 開始
@@ -168,7 +168,7 @@ class DocCoverageAnalyzer:
                         matches = self.section_pattern.findall(line)
                         for major, minor in matches:
                             self.known_sections.add(f"{major}.{minor}")
-            except Exception:
+            except OSError:
                 pass
 
     def _is_external_url(self, url: str) -> bool:
@@ -214,7 +214,7 @@ class DocCoverageAnalyzer:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-        except Exception:
+        except OSError:
             return
 
         link_pattern = re.compile(r'\[([^\]]+)\]\(([^\)]+)\)')
@@ -419,6 +419,7 @@ class DocCoverageAnalyzer:
 
 
 def main():
+    """CLI entry point: 文件覆蓋率 Dashboard."""
     parser = argparse.ArgumentParser(
         description="Documentation coverage dashboard"
     )

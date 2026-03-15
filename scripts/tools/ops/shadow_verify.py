@@ -37,11 +37,15 @@ import os
 import subprocess
 import sys
 import urllib.parse
-import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone
 
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import http_get_json  # noqa: E402
 
 
 def run_cmd(cmd):
@@ -59,12 +63,9 @@ def query_prometheus(prom_url, promql):
     url = f"{prom_url}/api/v1/query"
     params = urllib.parse.urlencode({"query": promql})
     full_url = f"{url}?{params}"
-    try:
-        req = urllib.request.Request(full_url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        return None, str(e)
+    data, err = http_get_json(full_url)
+    if err:
+        return None, err
     if data.get("status") != "success":
         return None, data.get("error", "Unknown error")
     return data.get("data", {}).get("result", []), None
@@ -101,7 +102,9 @@ def check_preflight(args):
 
     # 2. Prometheus reachable
     prom_url = args.prometheus
+    import urllib.error
     try:
+        import urllib.request
         req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
         with urllib.request.urlopen(req, timeout=10) as resp:
             healthy = resp.read().decode().strip()
@@ -110,7 +113,7 @@ def check_preflight(args):
             "status": "pass" if "ok" in healthy.lower() or resp.status == 200 else "warn",
             "detail": healthy[:80],
         })
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         checks.append({
             "check": "prometheus_healthy",
             "status": "fail",
@@ -150,10 +153,14 @@ def check_preflight(args):
         })
 
     # 5. Alertmanager shadow interception route
-    try:
-        req = urllib.request.Request(f"{args.alertmanager}/api/v2/status")  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            am_status = json.loads(resp.read().decode())
+    am_status, err = http_get_json(f"{args.alertmanager}/api/v2/status")
+    if err:
+        checks.append({
+            "check": "alertmanager_shadow_route",
+            "status": "skip",
+            "detail": f"Alertmanager not reachable: {err[:60]}",
+        })
+    else:
         config_str = am_status.get("config", {}).get("original", "")
         has_shadow_route = "migration_status" in config_str
         checks.append({
@@ -161,12 +168,6 @@ def check_preflight(args):
             "status": "pass" if has_shadow_route else "warn",
             "detail": "Shadow interception route found" if has_shadow_route
                       else "No migration_status matcher found in AM config",
-        })
-    except Exception as e:
-        checks.append({
-            "check": "alertmanager_shadow_route",
-            "status": "skip",
-            "detail": f"Alertmanager not reachable: {str(e)[:60]}",
         })
 
     return checks
@@ -192,7 +193,7 @@ def check_runtime(args):
                     tenant = row.get("Tenant", "").strip()
                     if tenant:
                         tenants.add(tenant)
-        except Exception as e:
+        except OSError as e:
             checks.append({
                 "check": "csv_report",
                 "status": "fail",
@@ -340,6 +341,7 @@ def format_output(phase, checks, json_output=False):
 
 
 def main():
+    """CLI entry point: Shadow Monitoring readiness and convergence verification."""
     parser = argparse.ArgumentParser(
         description="Shadow Monitoring readiness and convergence verification",
     )

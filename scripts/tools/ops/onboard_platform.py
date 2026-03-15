@@ -46,13 +46,10 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _lib_python import (  # noqa: E402
     load_yaml_file,
-    parse_duration_seconds,
-    format_duration,
     validate_and_clamp,
     write_onboard_hints,
     RECEIVER_TYPES,
-    GUARDRAILS,
-    PLATFORM_DEFAULTS,
+    METRIC_PREFIX_DB_MAP,
 )
 
 # Conditionally import migrate_rule AST functions
@@ -61,7 +58,6 @@ try:
         parse_expr,
         guess_aggregation,
         load_metric_dictionary,
-        extract_all_metrics,
     )
     HAS_MIGRATE = True
 except ImportError:
@@ -407,11 +403,67 @@ def classify_rule(rule):
     return "unknown"
 
 
+def _clean_alert_expr(expr):
+    """清理 PromQL 告警運算式以利解析。
+
+    處理步驟：
+    1. 合併多行為單行
+    2. 移除 ``unless on(...) (user_state_filter{...} == N)`` 維護模式子句
+    3. 移除最外層平衡括號
+
+    Returns:
+        str — 清理後的運算式。
+    """
+    # 合併多行
+    clean = " ".join(expr.strip().split())
+    # 移除維護模式 unless 子句
+    clean = re.sub(
+        r'\s*unless\s+on\s*\([^)]*\)\s*\(user_state_filter\{[^}]*\}\s*==\s*\d+\)',
+        '', clean)
+    clean = clean.strip()
+    # 移除最外層平衡括號
+    if clean.startswith("(") and clean.endswith(")"):
+        inner = clean[1:-1].strip()
+        depth = 0
+        balanced = True
+        for c in inner:
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth < 0:
+                    balanced = False
+                    break
+        if balanced and depth == 0:
+            clean = inner
+    return clean
+
+
+def _enrich_parsed_result(result, parsed, metric_dict):
+    """從 parse_expr 結果填充閾值候選資訊（aggregation、dict_match）。
+
+    就地修改 *result* dict。
+    """
+    result["metric_key"] = parsed["base_key"]
+    result["threshold_value"] = parsed["val"]
+    result["operator"] = parsed["op"]
+    result["status"] = "complex" if parsed["is_complex"] else "perfect"
+
+    # 推測 aggregation 方式
+    agg, reason = guess_aggregation(parsed["base_key"], parsed["lhs"])
+    result["aggregation"] = agg
+    result["agg_reason"] = reason
+
+    # Metric dictionary 比對
+    if parsed["base_key"] in metric_dict:
+        result["dict_match"] = metric_dict[parsed["base_key"]]
+
+
 def extract_threshold_candidates(alert_rule, metric_dict=None):
     """Extract threshold candidates from an alert rule expression.
 
-    Attempts to parse the expression into LHS op RHS format to identify
-    the metric and threshold value.
+    委派至 :func:`_clean_alert_expr` 清理運算式，再由
+    :func:`_enrich_parsed_result` 填充解析結果。
 
     Returns dict:
       {metric_key, threshold_value, operator, severity, aggregation,
@@ -421,7 +473,6 @@ def extract_threshold_candidates(alert_rule, metric_dict=None):
         metric_dict = {}
 
     alert_name = alert_rule.get("alert", "unknown")
-    expr = alert_rule.get("expr", "")
     labels = alert_rule.get("labels", {})
     severity = labels.get("severity", "warning")
 
@@ -441,48 +492,12 @@ def extract_threshold_candidates(alert_rule, metric_dict=None):
     if not HAS_MIGRATE:
         return result
 
-    # Clean multi-line expr
-    clean_expr = " ".join(expr.strip().split())
-    # Remove unless maintenance clause for parsing
-    clean_expr = re.sub(
-        r'\s*unless\s+on\s*\([^)]*\)\s*\(user_state_filter\{[^}]*\}\s*==\s*\d+\)',
-        '', clean_expr)
-    clean_expr = clean_expr.strip()
-    # Remove wrapping parens if present
-    if clean_expr.startswith("(") and clean_expr.endswith(")"):
-        inner = clean_expr[1:-1].strip()
-        # Only unwrap if balanced
-        depth = 0
-        balanced = True
-        for c in inner:
-            if c == '(':
-                depth += 1
-            elif c == ')':
-                depth -= 1
-                if depth < 0:
-                    balanced = False
-                    break
-        if balanced and depth == 0:
-            clean_expr = inner
-
+    clean_expr = _clean_alert_expr(alert_rule.get("expr", ""))
     parsed = parse_expr(clean_expr)
     if parsed is None:
         return result
 
-    result["metric_key"] = parsed["base_key"]
-    result["threshold_value"] = parsed["val"]
-    result["operator"] = parsed["op"]
-    result["status"] = "complex" if parsed["is_complex"] else "perfect"
-
-    # Guess aggregation
-    agg, reason = guess_aggregation(parsed["base_key"], parsed["lhs"])
-    result["aggregation"] = agg
-    result["agg_reason"] = reason
-
-    # Dictionary match
-    if parsed["base_key"] in metric_dict:
-        result["dict_match"] = metric_dict[parsed["base_key"]]
-
+    _enrich_parsed_result(result, parsed, metric_dict)
     return result
 
 
@@ -732,9 +747,158 @@ def analyze_scrape_configs(scrape_configs, tenant_label=DEFAULT_TENANT_LABEL):
 # Output Generation
 # ============================================================
 
+def _write_phase1_outputs(output_dir, phase1_results, report):
+    """寫入 Phase 1（Alertmanager 逆向分析）輸出檔案。
+
+    Args:
+        output_dir: 輸出目錄路徑。
+        phase1_results: ``(tenant_routings, summary)`` 二元組。
+        report: 報告 dict，會被就地更新。
+    """
+    tenant_routings, summary = phase1_results
+    dedup_info = summary.get("dedup_tenants", {})
+    yamls = generate_tenant_routing_yamls(tenant_routings, dedup_info)
+
+    phase1_dir = os.path.join(output_dir, "phase1-routing")
+    os.makedirs(phase1_dir, exist_ok=True)
+
+    for tenant, content in yamls.items():
+        fpath = os.path.join(phase1_dir, f"{tenant}.yaml")
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write("# Generated by onboard_platform.py — Phase 1\n")
+            f.write("# Source: Alertmanager config reverse analysis\n")
+            f.write(f"# Review and merge into conf.d/{tenant}.yaml\n\n")
+            f.write(content)
+        os.chmod(fpath, 0o600)
+        report["files_written"].append(fpath)
+
+    # Summary CSV
+    csv_path = os.path.join(phase1_dir, "routing-summary.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["tenant", "receiver_type", "group_wait",
+                         "group_interval", "repeat_interval", "severity_dedup"])
+        for tenant in sorted(tenant_routings.keys()):
+            r = tenant_routings[tenant]
+            recv = r.get("receiver", {})
+            writer.writerow([
+                tenant,
+                recv.get("type", "unknown"),
+                r.get("group_wait", ""),
+                r.get("group_interval", ""),
+                r.get("repeat_interval", ""),
+                dedup_info.get(tenant, "unknown"),
+            ])
+    os.chmod(csv_path, 0o600)
+    report["files_written"].append(csv_path)
+
+    report["phases"]["phase1"] = {
+        "tenant_count": len(tenant_routings),
+        "tenants": sorted(tenant_routings.keys()),
+        "summary": summary,
+    }
+
+
+def _write_phase2_outputs(output_dir, phase2_results, report):
+    """寫入 Phase 2（Prometheus rule 分析）輸出檔案。
+
+    Args:
+        output_dir: 輸出目錄路徑。
+        phase2_results: ``(candidates, recording_rules, summary)`` 三元組。
+        report: 報告 dict，會被就地更新。
+    """
+    candidates, recording_rules, summary = phase2_results
+
+    phase2_dir = os.path.join(output_dir, "phase2-rules")
+    os.makedirs(phase2_dir, exist_ok=True)
+
+    # Migration plan CSV
+    csv_path = os.path.join(phase2_dir, "migration-plan.csv")
+    write_migration_csv(candidates, csv_path)
+    report["files_written"].append(csv_path)
+
+    # Suggested _defaults.yaml
+    defaults = generate_defaults_from_candidates(candidates)
+    if defaults:
+        defaults_path = os.path.join(phase2_dir, "_defaults-suggestion.yaml")
+        with open(defaults_path, "w", encoding="utf-8") as f:
+            f.write("# Generated by onboard_platform.py — Phase 2\n")
+            f.write("# Suggested platform defaults from rule analysis\n")
+            f.write("# Review and merge into conf.d/_defaults.yaml\n\n")
+            yaml.dump(defaults, f, default_flow_style=False,
+                      allow_unicode=True, sort_keys=False)
+        os.chmod(defaults_path, 0o600)
+        report["files_written"].append(defaults_path)
+
+    report["phases"]["phase2"] = {
+        "candidates": len(candidates),
+        "recording_rules": len(recording_rules),
+        "summary": summary,
+    }
+
+
+def _write_phase3_outputs(output_dir, phase3_results, report):
+    """寫入 Phase 3（Scrape config 分析）輸出檔案。
+
+    Args:
+        output_dir: 輸出目錄路徑。
+        phase3_results: ``(job_analyses, summary)`` 二元組。
+        report: 報告 dict，會被就地更新。
+    """
+    job_analyses, summary = phase3_results
+
+    phase3_dir = os.path.join(output_dir, "phase3-scrape")
+    os.makedirs(phase3_dir, exist_ok=True)
+
+    # Per-job analysis + suggestions
+    for analysis in job_analyses:
+        if not analysis["suggestions"]:
+            continue
+        job_name = analysis["job_name"].replace("/", "_")
+        fpath = os.path.join(phase3_dir, f"{job_name}-relabel-suggestion.yaml")
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write("# Generated by onboard_platform.py — Phase 3\n")
+            f.write(f"# Suggested relabel_configs for job: {analysis['job_name']}\n")
+            f.write("# Add to scrape_configs[].relabel_configs\n\n")
+            for suggestion in analysis["suggestions"]:
+                f.write(f"# {suggestion['description']}\n")
+                yaml.dump(suggestion["snippet"], f, default_flow_style=False,
+                          allow_unicode=True, sort_keys=False)
+                f.write("\n")
+        os.chmod(fpath, 0o600)
+        report["files_written"].append(fpath)
+
+    # Summary
+    summary_path = os.path.join(phase3_dir, "scrape-analysis.yaml")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write("# Generated by onboard_platform.py — Phase 3\n")
+        f.write("# Scrape config analysis summary\n\n")
+        yaml.dump({
+            "summary": summary,
+            "jobs": [
+                {
+                    "job_name": j["job_name"],
+                    "has_tenant_mapping": j["has_tenant_mapping"],
+                    "mapping_type": j["mapping_type"],
+                }
+                for j in job_analyses
+            ],
+        }, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    os.chmod(summary_path, 0o600)
+    report["files_written"].append(summary_path)
+
+    report["phases"]["phase3"] = {
+        "jobs_analyzed": len(job_analyses),
+        "summary": summary,
+    }
+
+
 def write_outputs(output_dir, phase1_results=None, phase2_results=None,
                   phase3_results=None, dry_run=False, json_output=False):
     """Write all analysis outputs to the output directory.
+
+    委派至 :func:`_write_phase1_outputs`、:func:`_write_phase2_outputs`、
+    :func:`_write_phase3_outputs` 分別處理各階段輸出。
 
     Returns report dict summarizing what was generated.
     """
@@ -766,130 +930,14 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Phase 1 outputs
     if phase1_results:
-        tenant_routings, summary = phase1_results
-        dedup_info = summary.get("dedup_tenants", {})
-        yamls = generate_tenant_routing_yamls(tenant_routings, dedup_info)
+        _write_phase1_outputs(output_dir, phase1_results, report)
 
-        phase1_dir = os.path.join(output_dir, "phase1-routing")
-        os.makedirs(phase1_dir, exist_ok=True)
-
-        for tenant, content in yamls.items():
-            fpath = os.path.join(phase1_dir, f"{tenant}.yaml")
-            with open(fpath, "w", encoding="utf-8") as f:
-                f.write(f"# Generated by onboard_platform.py — Phase 1\n")
-                f.write(f"# Source: Alertmanager config reverse analysis\n")
-                f.write(f"# Review and merge into conf.d/{tenant}.yaml\n\n")
-                f.write(content)
-            os.chmod(fpath, 0o600)
-            report["files_written"].append(fpath)
-
-        # Summary CSV
-        csv_path = os.path.join(phase1_dir, "routing-summary.csv")
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["tenant", "receiver_type", "group_wait",
-                             "group_interval", "repeat_interval", "severity_dedup"])
-            for tenant in sorted(tenant_routings.keys()):
-                r = tenant_routings[tenant]
-                recv = r.get("receiver", {})
-                writer.writerow([
-                    tenant,
-                    recv.get("type", "unknown"),
-                    r.get("group_wait", ""),
-                    r.get("group_interval", ""),
-                    r.get("repeat_interval", ""),
-                    dedup_info.get(tenant, "unknown"),
-                ])
-        os.chmod(csv_path, 0o600)
-        report["files_written"].append(csv_path)
-
-        report["phases"]["phase1"] = {
-            "tenant_count": len(tenant_routings),
-            "tenants": sorted(tenant_routings.keys()),
-            "summary": summary,
-        }
-
-    # Phase 2 outputs
     if phase2_results:
-        candidates, recording_rules, summary = phase2_results
+        _write_phase2_outputs(output_dir, phase2_results, report)
 
-        phase2_dir = os.path.join(output_dir, "phase2-rules")
-        os.makedirs(phase2_dir, exist_ok=True)
-
-        # Migration plan CSV
-        csv_path = os.path.join(phase2_dir, "migration-plan.csv")
-        write_migration_csv(candidates, csv_path)
-        report["files_written"].append(csv_path)
-
-        # Suggested _defaults.yaml
-        defaults = generate_defaults_from_candidates(candidates)
-        if defaults:
-            defaults_path = os.path.join(phase2_dir, "_defaults-suggestion.yaml")
-            with open(defaults_path, "w", encoding="utf-8") as f:
-                f.write("# Generated by onboard_platform.py — Phase 2\n")
-                f.write("# Suggested platform defaults from rule analysis\n")
-                f.write("# Review and merge into conf.d/_defaults.yaml\n\n")
-                yaml.dump(defaults, f, default_flow_style=False,
-                          allow_unicode=True, sort_keys=False)
-            os.chmod(defaults_path, 0o600)
-            report["files_written"].append(defaults_path)
-
-        report["phases"]["phase2"] = {
-            "candidates": len(candidates),
-            "recording_rules": len(recording_rules),
-            "summary": summary,
-        }
-
-    # Phase 3 outputs
     if phase3_results:
-        job_analyses, summary = phase3_results
-
-        phase3_dir = os.path.join(output_dir, "phase3-scrape")
-        os.makedirs(phase3_dir, exist_ok=True)
-
-        # Per-job analysis + suggestions
-        for analysis in job_analyses:
-            if not analysis["suggestions"]:
-                continue
-            job_name = analysis["job_name"].replace("/", "_")
-            fpath = os.path.join(phase3_dir, f"{job_name}-relabel-suggestion.yaml")
-            with open(fpath, "w", encoding="utf-8") as f:
-                f.write(f"# Generated by onboard_platform.py — Phase 3\n")
-                f.write(f"# Suggested relabel_configs for job: {analysis['job_name']}\n")
-                f.write(f"# Add to scrape_configs[].relabel_configs\n\n")
-                for suggestion in analysis["suggestions"]:
-                    f.write(f"# {suggestion['description']}\n")
-                    yaml.dump(suggestion["snippet"], f, default_flow_style=False,
-                              allow_unicode=True, sort_keys=False)
-                    f.write("\n")
-            os.chmod(fpath, 0o600)
-            report["files_written"].append(fpath)
-
-        # Summary
-        summary_path = os.path.join(phase3_dir, "scrape-analysis.yaml")
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write("# Generated by onboard_platform.py — Phase 3\n")
-            f.write("# Scrape config analysis summary\n\n")
-            yaml.dump({
-                "summary": summary,
-                "jobs": [
-                    {
-                        "job_name": j["job_name"],
-                        "has_tenant_mapping": j["has_tenant_mapping"],
-                        "mapping_type": j["mapping_type"],
-                    }
-                    for j in job_analyses
-                ],
-            }, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        os.chmod(summary_path, 0o600)
-        report["files_written"].append(summary_path)
-
-        report["phases"]["phase3"] = {
-            "jobs_analyzed": len(job_analyses),
-            "summary": summary,
-        }
+        _write_phase3_outputs(output_dir, phase3_results, report)
 
     # Write onboard hints for scaffold pipeline (--auto-scaffold)
     if not dry_run and not json_output:
@@ -923,18 +971,9 @@ def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
     # From Phase 2: DB types inferred from rule metric prefixes
     if phase2_results:
         candidates, _, summary = phase2_results
-        db_prefix_map = {
-            "mysql_": "mariadb", "mariadb_": "mariadb",
-            "pg_": "postgresql", "postgres_": "postgresql",
-            "redis_": "redis", "mongodb_": "mongodb",
-            "elasticsearch_": "elasticsearch", "es_": "elasticsearch",
-            "oracle_": "oracle", "db2_": "db2",
-            "clickhouse_": "clickhouse", "kafka_": "kafka",
-            "rabbitmq_": "rabbitmq",
-        }
         for c in candidates:
             metric = c.get("alert", c.get("record", "")).lower()
-            for prefix, db_type in db_prefix_map.items():
+            for prefix, db_type in METRIC_PREFIX_DB_MAP.items():
                 if prefix in metric:
                     # Associate with all known tenants
                     for t in hints["tenants"]:
@@ -954,6 +993,7 @@ def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
 # ============================================================
 
 def main():
+    """CLI entry point: Reverse-analyze existing configs for Dynamic Alerting onboarding."""
     parser = argparse.ArgumentParser(
         description="Reverse-analyze existing configs for Dynamic Alerting onboarding",
         formatter_class=argparse.RawDescriptionHelpFormatter,

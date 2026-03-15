@@ -181,6 +181,7 @@ def generate_markdown_table(stats: dict, lang: str = "zh") -> str:
 
 
 def main():
+    """CLI entry point: Rule Pack 統計單一來源產生器."""
     parser = argparse.ArgumentParser(
         description="Generate Rule Pack statistics from source YAML files",
         formatter_class=argparse.RawDescriptionHelpFormatter,

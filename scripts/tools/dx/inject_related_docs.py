@@ -236,10 +236,11 @@ def process_file(
         elif mode == "update":
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
+            os.chmod(file_path, 0o644)
             print(f"Updated: {file_path}")
             return True, None
 
-    except Exception as e:
+    except OSError as e:
         return False, str(e)
 
 
@@ -258,6 +259,7 @@ def _dict_to_yaml(d: Dict[str, any]) -> str:
 
 
 def main():
+    """CLI entry point: Auto-generate "相關資源 / Related Resources" tables in documentation files."""
     parser = argparse.ArgumentParser(
         description="Auto-generate 相關資源 / Related Resources tables in markdown docs"
     )
@@ -289,7 +291,7 @@ def main():
                     title = fm.get("title", fname.replace(".md", ""))
                     rel_path = os.path.relpath(fpath, docs_dir)
                     all_docs[rel_path] = (title, fm)
-                except Exception:
+                except OSError:
                     pass
 
     # Process each file

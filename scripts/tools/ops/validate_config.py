@@ -10,7 +10,9 @@ Checks:
   3. Routes        — Alertmanager route generation with --validate semantics
   4. Policy        — Webhook domain allowlist (if --policy provided)
   5. Custom rules  — Deny-list linting on rule-packs/ (if --rule-packs provided)
-  6. Versions      — bump_docs.py --check version consistency (if --version-check)
+  6. Profiles      — Tenant _profile references validation
+  7. Versions      — bump_docs.py --check version consistency (if --version-check)
+  8. Policy-as-Code — Declarative DSL policy evaluation (if _policies in _defaults.yaml or --policy-dsl)
 
 Usage:
   # Minimal (YAML + schema + routes):
@@ -69,6 +71,10 @@ _HELP = {
     'json': {
         'zh': '將結果輸出為 JSON (供 CI 使用)',
         'en': 'Output results as JSON (for CI consumption)'
+    },
+    'policy_dsl': {
+        'zh': '獨立 Policy-as-Code DSL 檔案路徑（頂層 policies: key）',
+        'en': 'Path to standalone Policy-as-Code DSL file (top-level policies: key)'
     }
 }
 
@@ -360,6 +366,61 @@ def check_profiles(config_dir):
 
 
 # ============================================================
+# Check 8: Policy-as-Code (DSL evaluation)
+# ============================================================
+def check_policy_dsl(config_dir, policy_dsl_file=None):
+    """Evaluate declarative policies from _defaults.yaml _policies or standalone file.
+
+    Loads policy rules from _defaults.yaml ``_policies`` section and/or
+    a standalone policy DSL file, then evaluates against all tenant configs.
+    """
+    try:
+        import policy_engine as pe
+    except ImportError:
+        return _make_result("policy_dsl", PASS,
+                            ["policy_engine.py not available — skipped"])
+
+    rules = []
+
+    # From _defaults.yaml
+    defaults_path = os.path.join(config_dir, "_defaults.yaml")
+    if os.path.isfile(defaults_path):
+        rules.extend(pe.load_policies(defaults_path))
+
+    # From standalone policy DSL file
+    if policy_dsl_file and os.path.isfile(policy_dsl_file):
+        rules.extend(pe.load_policies(policy_dsl_file))
+
+    if not rules:
+        return _make_result("policy_dsl", PASS,
+                            ["No _policies defined — skipped"])
+
+    tenant_configs = pe.load_tenant_configs(config_dir)
+    if not tenant_configs:
+        return _make_result("policy_dsl", PASS,
+                            ["No tenant configs found — skipped"])
+
+    result = pe.evaluate_policies(rules, tenant_configs)
+
+    details = []
+    for v in result.violations:
+        icon = "ERROR" if v.severity == "error" else "WARN"
+        details.append(f"[{icon}] {v.tenant}: {v.rule_name} — {v.message}")
+
+    if result.error_count > 0:
+        details.append(f"{result.error_count} error(s), {result.warning_count} warning(s) "
+                       f"across {result.tenants_evaluated} tenants")
+        return _make_result("policy_dsl", FAIL, details)
+    if result.warning_count > 0:
+        details.append(f"{result.warning_count} warning(s) "
+                       f"across {result.tenants_evaluated} tenants")
+        return _make_result("policy_dsl", WARN, details)
+    return _make_result("policy_dsl", PASS,
+                        [f"{len(rules)} rules evaluated across "
+                         f"{result.tenants_evaluated} tenants — all passed"])
+
+
+# ============================================================
 # Check 7: Version consistency
 # ============================================================
 def check_versions():
@@ -428,6 +489,7 @@ def print_report(results, as_json=False):
 # Main
 # ============================================================
 def main():
+    """CLI entry point: One-stop configuration validation."""
     parser = argparse.ArgumentParser(
         description=_h('description'))
     parser.add_argument("--config-dir", required=True,
@@ -440,6 +502,8 @@ def main():
                         help=_h('version_check'))
     parser.add_argument("--json", action="store_true",
                         help=_h('json'))
+    parser.add_argument("--policy-dsl",
+                        help=_h('policy_dsl'))
     args = parser.parse_args()
 
     if not os.path.isdir(args.config_dir):
@@ -477,6 +541,10 @@ def main():
     # 7. Version consistency (if requested)
     if args.version_check:
         results.append(check_versions())
+
+    # 8. Policy-as-Code (DSL evaluation)
+    results.append(check_policy_dsl(args.config_dir,
+                                     getattr(args, 'policy_dsl', None)))
 
     # Report
     print_report(results, as_json=args.json)

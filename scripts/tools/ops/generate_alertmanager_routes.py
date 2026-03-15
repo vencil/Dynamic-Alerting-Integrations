@@ -204,37 +204,25 @@ def validate_tenant_keys(tenant, keys, defaults_keys):
     return warnings
 
 
-def load_tenant_configs(config_dir):
-    """Load all tenant YAML files from a config directory.
+def _parse_config_files(config_dir):
+    """Parse all YAML files in config_dir and extract raw data.
 
-    Returns tuple of:
-      - routing_configs: {tenant_name: routing_config} for tenants that have _routing
-      - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
-      - schema_warnings: list of validation warning strings
-      - enforced_routing: dict or None — platform enforced routing config (v1.7.0)
-      - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0)
-
-    Supports _routing_defaults in _defaults.yaml (v1.4.0):
-      - Tenants without _routing inherit from _routing_defaults
-      - Tenants with _routing get defaults merged (tenant wins)
-      - _routing: "disable" → skip tenant
-      - {{tenant}} placeholder substituted in all string values
-
-    v1.7.0: _routing_enforced in _defaults.yaml:
-      - Platform-level route inserted BEFORE tenant routes with continue: true
-      - Tenants cannot override or disable this route
-      - Schema: {enabled: bool, receiver: {type, ...}, match: [matchers], group_by, timing...}
+    Returns a dict with keys:
+        all_tenants, defaults_keys, routing_defaults, enforced_routing,
+        explicit_routing, disabled_tenants, dedup_configs, metadata_configs,
+        tenant_keys.
     """
-    routing_configs = {}
-    dedup_configs = {}
-    metadata_configs = {}  # v1.11.0: {tenant: {runbook_url, owner, tier, ...}}
-    routing_defaults = {}
-    enforced_routing = None  # v1.7.0: platform enforced routing
-    explicit_routing = {}  # track which tenants have explicit _routing
-    disabled_tenants = set()
-    all_tenants = []
-    defaults_keys = set()    # keys from defaults section (for schema validation)
-    tenant_keys = {}         # {tenant: set of keys} for schema validation
+    result = {
+        "all_tenants": [],
+        "defaults_keys": set(),
+        "routing_defaults": {},
+        "enforced_routing": None,
+        "explicit_routing": {},
+        "disabled_tenants": set(),
+        "dedup_configs": {},
+        "metadata_configs": {},
+        "tenant_keys": {},
+    }
 
     if not os.path.isdir(config_dir):
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
@@ -258,13 +246,13 @@ def load_tenant_configs(config_dir):
 
         # Collect defaults keys for schema validation
         if isinstance(data.get("defaults"), dict):
-            defaults_keys.update(data["defaults"].keys())
+            result["defaults_keys"].update(data["defaults"].keys())
 
         # Extract _routing_defaults (only from _ prefixed files)
         is_defaults_file = os.path.basename(fname).startswith("_")
         if "_routing_defaults" in data:
             if is_defaults_file:
-                routing_defaults = data["_routing_defaults"]
+                result["routing_defaults"] = data["_routing_defaults"]
             else:
                 print(f"  WARN: _routing_defaults in {fname} ignored "
                       "(only allowed in _ prefixed files)", file=sys.stderr)
@@ -274,7 +262,7 @@ def load_tenant_configs(config_dir):
             if is_defaults_file:
                 raw = data["_routing_enforced"]
                 if isinstance(raw, dict) and raw.get("enabled", False):
-                    enforced_routing = raw
+                    result["enforced_routing"] = raw
                 elif isinstance(raw, dict) and not raw.get("enabled", False):
                     pass  # explicitly disabled → None
                 else:
@@ -291,58 +279,86 @@ def load_tenant_configs(config_dir):
             if not isinstance(overrides, dict):
                 continue
 
-            all_tenants.append(tenant)
+            result["all_tenants"].append(tenant)
 
             # Collect tenant keys for schema validation
-            if tenant not in tenant_keys:
-                tenant_keys[tenant] = set()
-            tenant_keys[tenant].update(overrides.keys())
+            if tenant not in result["tenant_keys"]:
+                result["tenant_keys"][tenant] = set()
+            result["tenant_keys"][tenant].update(overrides.keys())
 
             # Severity dedup: default "enable", explicit "disable" to opt out
-            # (tracked before routing disable check — dedup is independent of routing)
             raw_dedup = overrides.get("_severity_dedup", "enable")
             dedup_val = str(raw_dedup).strip().lower()
             if _is_disabled(dedup_val):
-                dedup_configs[tenant] = "disable"
+                result["dedup_configs"][tenant] = "disable"
             else:
-                dedup_configs[tenant] = "enable"
+                result["dedup_configs"][tenant] = "enable"
 
-            # v1.11.0: Metadata extraction (runbook_url, owner, tier, etc.)
+            # v1.11.0: Metadata extraction
             metadata = overrides.get("_metadata")
             if metadata and isinstance(metadata, dict):
-                metadata_configs[tenant] = _substitute_tenant(metadata, tenant)
+                result["metadata_configs"][tenant] = _substitute_tenant(metadata, tenant)
 
-            # Routing: "disable" string → skip routing (dedup still tracked above)
+            # Routing: "disable" string → skip routing
             routing = overrides.get("_routing")
             if isinstance(routing, str) and _is_disabled(routing):
-                disabled_tenants.add(tenant)
+                result["disabled_tenants"].add(tenant)
                 continue
 
             if routing and isinstance(routing, dict):
-                explicit_routing[tenant] = routing
+                result["explicit_routing"][tenant] = routing
 
-    # Merge routing defaults with tenant configs
+    return result
+
+
+def _merge_tenant_routing(parsed, routing_defaults):
+    """Merge routing defaults with explicit tenant routing configs.
+
+    Returns routing_configs dict {tenant: merged_routing}.
+    """
+    routing_configs = {}
     seen_tenants = set()
-    for tenant in sorted(set(all_tenants)):
-        if tenant in disabled_tenants or tenant in seen_tenants:
+    for tenant in sorted(set(parsed["all_tenants"])):
+        if tenant in parsed["disabled_tenants"] or tenant in seen_tenants:
             continue
         seen_tenants.add(tenant)
 
-        if tenant in explicit_routing:
-            # Tenant has explicit _routing → merge with defaults
+        if tenant in parsed["explicit_routing"]:
             routing_configs[tenant] = merge_routing_with_defaults(
-                routing_defaults, explicit_routing[tenant], tenant)
+                routing_defaults, parsed["explicit_routing"][tenant], tenant)
         elif routing_defaults:
-            # No explicit _routing but defaults exist → inherit defaults
             routing_configs[tenant] = merge_routing_with_defaults(
                 routing_defaults, {}, tenant)
 
+    return routing_configs
+
+
+def load_tenant_configs(config_dir):
+    """Load all tenant YAML files from a config directory.
+
+    Returns tuple of:
+      - routing_configs: {tenant_name: routing_config} for tenants that have _routing
+      - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
+      - schema_warnings: list of validation warning strings
+      - enforced_routing: dict or None — platform enforced routing config (v1.7.0)
+      - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0)
+
+    Delegates to _parse_config_files() for YAML parsing and
+    _merge_tenant_routing() for defaults merging.
+    """
+    parsed = _parse_config_files(config_dir)
+
+    routing_configs = _merge_tenant_routing(
+        parsed, parsed["routing_defaults"])
+
     # Schema validation: check tenant keys against defaults
     schema_warnings = []
-    for tenant, keys in sorted(tenant_keys.items()):
-        schema_warnings.extend(validate_tenant_keys(tenant, keys, defaults_keys))
+    for tenant, keys in sorted(parsed["tenant_keys"].items()):
+        schema_warnings.extend(
+            validate_tenant_keys(tenant, keys, parsed["defaults_keys"]))
 
-    return routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs
+    return (routing_configs, parsed["dedup_configs"], schema_warnings,
+            parsed["enforced_routing"], parsed["metadata_configs"])
 
 
 def build_receiver_config(receiver_obj, tenant):
@@ -505,170 +521,225 @@ def expand_routing_overrides(tenant, routing_config, allowed_domains=None):
     return sub_routes, override_receivers, warnings
 
 
-def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None):
-    """Generate Alertmanager route tree + receivers from routing configs.
+def _build_enforced_routes(enforced_routing, routing_configs, allowed_domains=None):
+    """產生 Platform Enforced Routing 的 routes 和 receivers。
 
-    v1.7.0: When enforced_routing is provided and enabled, a platform-level route
-    is inserted BEFORE all tenant routes with continue: true. This ensures the
-    platform NOC always receives notifications regardless of tenant routing config.
+    v1.7.0: 單一平台 enforced route（``continue: true``）確保 NOC 永遠收到通知。
+    v1.10.0: 當 enforced_routing 含 ``{{tenant}}`` 佔位符時，為每個 tenant
+    展開獨立的 enforced route。
 
-    v1.8.0: Tenant routes may have 'overrides' list for per-rule receiver overrides.
-    Override sub-routes are inserted before the main tenant route.
+    Args:
+        enforced_routing: ``_routing_enforced`` 設定 dict。
+        routing_configs: tenant routing configs（用於 ``{{tenant}}`` 展開）。
+        allowed_domains: Webhook domain allowlist（SSRF 防護）。
 
-    Returns (routes_yaml_dict, receivers_list, all_warnings).
+    Returns:
+        ``(routes, receivers, warnings)`` 三元組。
     """
     routes = []
     receivers = []
-    all_warnings = []
+    warnings = []
 
-    # v1.7.0: Platform Enforced Routing — NOC always receives
-    # v1.10.0: {{tenant}} expansion — per-tenant enforced routes when placeholder present
-    if enforced_routing and isinstance(enforced_routing, dict):
-        enforced_receiver = enforced_routing.get("receiver")
-        if not enforced_receiver:
-            all_warnings.append("  WARN: _routing_enforced: missing 'receiver', skipping enforced route")
-        elif _contains_tenant_placeholder(enforced_routing):
-            # Per-tenant enforced routes: expand {{tenant}} for each tenant
-            for tenant in sorted(routing_configs.keys()):
-                substituted = _substitute_tenant(enforced_routing, tenant)
-                sub_receiver = substituted.get("receiver")
-                am_config, recv_warnings = build_receiver_config(
-                    sub_receiver, f"platform-enforced-{tenant}")
-                all_warnings.extend(recv_warnings)
-                if am_config is None:
+    if not enforced_routing or not isinstance(enforced_routing, dict):
+        return routes, receivers, warnings
+
+    enforced_receiver = enforced_routing.get("receiver")
+    if not enforced_receiver:
+        warnings.append("  WARN: _routing_enforced: missing 'receiver', skipping enforced route")
+        return routes, receivers, warnings
+
+    if _contains_tenant_placeholder(enforced_routing):
+        # Per-tenant enforced routes: 為每個 tenant 展開 {{tenant}} 佔位符
+        for tenant in sorted(routing_configs.keys()):
+            substituted = _substitute_tenant(enforced_routing, tenant)
+            sub_receiver = substituted.get("receiver")
+            am_config, recv_warnings = build_receiver_config(
+                sub_receiver, f"platform-enforced-{tenant}")
+            warnings.extend(recv_warnings)
+            if am_config is None:
+                continue
+
+            if allowed_domains:
+                domain_warnings = validate_receiver_domains(
+                    sub_receiver, f"platform-enforced-{tenant}", allowed_domains)
+                warnings.extend(domain_warnings)
+                if any("not in allowed_domains" in w for w in domain_warnings):
                     continue
 
-                if allowed_domains:
-                    domain_warnings = validate_receiver_domains(
-                        sub_receiver, f"platform-enforced-{tenant}", allowed_domains)
-                    all_warnings.extend(domain_warnings)
-                    if any("not in allowed_domains" in w for w in domain_warnings):
-                        continue
+            receiver_name = f"platform-enforced-{tenant}"
+            route = {
+                "matchers": [f'tenant="{tenant}"'],
+                "receiver": receiver_name,
+                "continue": True,
+            }
 
-                receiver_name = f"platform-enforced-{tenant}"
-                route = {
-                    "matchers": [f'tenant="{tenant}"'],
-                    "receiver": receiver_name,
-                    "continue": True,
-                }
+            # Optional extra matchers (also substituted)
+            match = substituted.get("match")
+            if match and isinstance(match, list):
+                route["matchers"].extend(match)
 
-                # Optional extra matchers (also substituted)
-                match = substituted.get("match")
-                if match and isinstance(match, list):
-                    route["matchers"].extend(match)
+            group_by = substituted.get("group_by")
+            if group_by and isinstance(group_by, list):
+                route["group_by"] = group_by
 
-                group_by = substituted.get("group_by")
-                if group_by and isinstance(group_by, list):
-                    route["group_by"] = group_by
+            timing, timing_warnings = _apply_timing_params(
+                substituted, f"platform-enforced-{tenant}")
+            warnings.extend(timing_warnings)
+            route.update(timing)
 
-                timing, timing_warnings = _apply_timing_params(
-                    substituted, f"platform-enforced-{tenant}")
-                all_warnings.extend(timing_warnings)
-                route.update(timing)
+            routes.append(route)
+            receiver = {"name": receiver_name}
+            receiver.update(am_config)
+            receivers.append(receiver)
+    else:
+        # 單一平台 enforced route（無 {{tenant}} 佔位符）
+        am_config, recv_warnings = build_receiver_config(enforced_receiver, "platform-enforced")
+        warnings.extend(recv_warnings)
+        if am_config is not None:
+            # Domain allowlist check for platform receiver too
+            if allowed_domains:
+                domain_warnings = validate_receiver_domains(
+                    enforced_receiver, "platform-enforced", allowed_domains)
+                warnings.extend(domain_warnings)
+                if any("not in allowed_domains" in w for w in domain_warnings):
+                    warnings.append("  WARN: _routing_enforced: receiver blocked by domain policy")
+                    am_config = None
 
-                routes.append(route)
-                receiver = {"name": receiver_name}
-                receiver.update(am_config)
-                receivers.append(receiver)
-        else:
-            # Single platform-level enforced route (no {{tenant}})
-            am_config, recv_warnings = build_receiver_config(enforced_receiver, "platform-enforced")
-            all_warnings.extend(recv_warnings)
-            if am_config is not None:
-                # Domain allowlist check for platform receiver too
-                if allowed_domains:
-                    domain_warnings = validate_receiver_domains(
-                        enforced_receiver, "platform-enforced", allowed_domains)
-                    all_warnings.extend(domain_warnings)
-                    if any("not in allowed_domains" in w for w in domain_warnings):
-                        all_warnings.append("  WARN: _routing_enforced: receiver blocked by domain policy")
-                        am_config = None
+        if am_config is not None:
+            receiver_name = "platform-enforced"
+            route = {
+                "receiver": receiver_name,
+                "continue": True,  # critical: alert 繼續比對 tenant routes
+            }
 
-            if am_config is not None:
-                receiver_name = "platform-enforced"
-                route = {
-                    "receiver": receiver_name,
-                    "continue": True,  # critical: alert continues to match tenant routes
-                }
+            # Optional matchers — 若指定，僅符合的 alert 傳送至 NOC
+            match = enforced_routing.get("match")
+            if match and isinstance(match, list):
+                route["matchers"] = match
 
-                # Optional matchers — if specified, only matching alerts go to NOC
-                match = enforced_routing.get("match")
-                if match and isinstance(match, list):
-                    route["matchers"] = match
+            # Optional group_by
+            group_by = enforced_routing.get("group_by")
+            if group_by and isinstance(group_by, list):
+                route["group_by"] = group_by
 
-                # Optional group_by
-                group_by = enforced_routing.get("group_by")
-                if group_by and isinstance(group_by, list):
-                    route["group_by"] = group_by
+            # Timing parameters with guardrails
+            timing, timing_warnings = _apply_timing_params(
+                enforced_routing, "platform-enforced")
+            warnings.extend(timing_warnings)
+            route.update(timing)
 
-                # Timing parameters with guardrails
-                timing, timing_warnings = _apply_timing_params(
-                    enforced_routing, "platform-enforced")
-                all_warnings.extend(timing_warnings)
-                route.update(timing)
+            routes.append(route)
 
-                routes.append(route)
+            receiver = {"name": receiver_name}
+            receiver.update(am_config)
+            receivers.append(receiver)
 
-                receiver = {"name": receiver_name}
-                receiver.update(am_config)
-                receivers.append(receiver)
+    return routes, receivers, warnings
 
-    # Tenant routes (after platform enforced route)
+
+def _build_tenant_routes(routing_configs, allowed_domains=None):
+    """產生各 tenant 的 routes 和 receivers（含 per-rule overrides）。
+
+    Args:
+        routing_configs: tenant routing configs dict。
+        allowed_domains: Webhook domain allowlist（SSRF 防護）。
+
+    Returns:
+        ``(routes, receivers, warnings)`` 三元組。
+    """
+    routes = []
+    receivers = []
+    warnings = []
+
     for tenant in sorted(routing_configs.keys()):
         cfg = routing_configs[tenant]
 
-        # Validate receiver (required, must be dict with type)
+        # 驗證 receiver（必要欄位，須為含 type 的 dict）
         receiver_obj = cfg.get("receiver")
         if not receiver_obj:
-            all_warnings.append(f"  WARN: {tenant}: missing required 'receiver', skipping")
+            warnings.append(f"  WARN: {tenant}: missing required 'receiver', skipping")
             continue
 
-        # Build receiver config from structured object
+        # 從結構化物件建立 receiver config
         am_config, recv_warnings = build_receiver_config(receiver_obj, tenant)
-        all_warnings.extend(recv_warnings)
+        warnings.extend(recv_warnings)
         if am_config is None:
             continue
 
-        # Domain allowlist check (SSRF prevention)
+        # Domain allowlist 檢查（SSRF 防護）
         if allowed_domains:
             domain_warnings = validate_receiver_domains(
                 receiver_obj, tenant, allowed_domains)
-            all_warnings.extend(domain_warnings)
+            warnings.extend(domain_warnings)
             if any("not in allowed_domains" in w for w in domain_warnings):
                 continue
 
-        # v1.8.0: Expand per-rule routing overrides (inserted before main tenant route)
+        # v1.8.0: 展開 per-rule routing overrides（插入在 tenant 主 route 之前）
         override_sub_routes, override_receivers, override_warnings = \
             expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains)
-        all_warnings.extend(override_warnings)
+        warnings.extend(override_warnings)
         routes.extend(override_sub_routes)
         receivers.extend(override_receivers)
 
-        # Receiver name derived from tenant
+        # Receiver name 由 tenant 推導
         receiver_name = f"tenant-{tenant}"
 
-        # Build route entry
+        # 建立 route 項目
         route = {
             "matchers": [f'tenant="{tenant}"'],
             "receiver": receiver_name,
         }
 
-        # group_by (optional)
+        # group_by（可選）
         group_by = cfg.get("group_by")
         if group_by and isinstance(group_by, list):
             route["group_by"] = group_by
 
         # Timing parameters with guardrails
         timing, timing_warnings = _apply_timing_params(cfg, tenant)
-        all_warnings.extend(timing_warnings)
+        warnings.extend(timing_warnings)
         route.update(timing)
 
         routes.append(route)
 
-        # Build receiver entry
+        # 建立 receiver 項目
         receiver = {"name": receiver_name}
         receiver.update(am_config)
         receivers.append(receiver)
+
+    return routes, receivers, warnings
+
+
+def generate_routes(routing_configs, allowed_domains=None, enforced_routing=None):
+    """Generate Alertmanager route tree + receivers from routing configs.
+
+    委派至 :func:`_build_enforced_routes` 和 :func:`_build_tenant_routes`，
+    依序產生 enforced routes（NOC 通知）和 tenant routes。
+
+    v1.7.0: Platform Enforced Routing（``continue: true``）。
+    v1.8.0: Per-rule routing overrides。
+    v1.10.0: ``{{tenant}}`` 佔位符展開。
+
+    Returns:
+        ``(routes_yaml_dict, receivers_list, all_warnings)`` 三元組。
+    """
+    routes = []
+    receivers = []
+    all_warnings = []
+
+    # Platform Enforced Routing — NOC 永遠收到通知
+    enf_routes, enf_receivers, enf_warnings = _build_enforced_routes(
+        enforced_routing, routing_configs, allowed_domains)
+    routes.extend(enf_routes)
+    receivers.extend(enf_receivers)
+    all_warnings.extend(enf_warnings)
+
+    # Tenant routes（在 enforced route 之後）
+    t_routes, t_receivers, t_warnings = _build_tenant_routes(
+        routing_configs, allowed_domains)
+    routes.extend(t_routes)
+    receivers.extend(t_receivers)
+    all_warnings.extend(t_warnings)
 
     return routes, receivers, all_warnings
 
@@ -897,6 +968,7 @@ def apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_na
 
 
 def main():
+    """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
     parser = argparse.ArgumentParser(
         description="Generate Alertmanager route + receiver config from tenant YAML",
         formatter_class=argparse.RawDescriptionHelpFormatter,

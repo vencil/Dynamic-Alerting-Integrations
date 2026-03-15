@@ -260,6 +260,7 @@ def check_doc_file(file_path, repo_root, platform_version, tools, issues):
 
 
 def main():
+    """CLI entry point: check_doc_freshness.py."""
     parser = argparse.ArgumentParser(
         description='Check markdown documentation for stale references'
     )

@@ -282,6 +282,7 @@ def _get_map_path(lang: str) -> Path:
 
 
 def main():
+    """CLI entry point: 文件導覽自動生成."""
     parser = argparse.ArgumentParser(
         description="Generate docs/internal/doc-map.md from front matter",
         formatter_class=argparse.RawDescriptionHelpFormatter,

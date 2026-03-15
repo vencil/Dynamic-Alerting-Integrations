@@ -89,6 +89,13 @@ repos:
         pass_filenames: false
         files: \.(py|jsx|yaml)$
 
+      - id: doc-links-check
+        name: Documentation link validation
+        entry: python3 scripts/tools/lint/check_doc_links.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.md$
+
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
         name: Go→JSON Schema drift

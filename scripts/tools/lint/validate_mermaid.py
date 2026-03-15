@@ -40,7 +40,7 @@ class MermaidValidator:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except Exception as e:
+        except OSError as e:
             error = {
                 'file': str(filepath),
                 'line': 0,
@@ -258,7 +258,7 @@ class MermaidValidator:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except Exception as e:
+        except OSError as e:
             print(f"Error reading {filepath}: {e}")
             return False
 
@@ -345,7 +345,7 @@ class MermaidValidator:
             }
             self.errors.append(error)
             return False
-        except Exception as e:
+        except (ValueError, TypeError, IndexError) as e:
             error = {
                 'file': str(filepath),
                 'line': line_number,
@@ -377,6 +377,7 @@ class MermaidValidator:
 
 
 def main():
+    """CLI entry point: Mermaid 圖渲染驗證."""
     parser = argparse.ArgumentParser(
         description='Validate Mermaid diagrams in Markdown files'
     )

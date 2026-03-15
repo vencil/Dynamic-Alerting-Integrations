@@ -22,19 +22,21 @@ Returns JSON: {"alert", "tenant", "state": "firing"|"pending"|"inactive"}
     * 叢集外: port-forward 或 Ingress
     * 多叢集: Thanos Query / VictoriaMetrics 等統一查詢端點亦可
 """
-import urllib.request
 import json
+import os
 import sys
 import argparse
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
+from _lib_python import http_get_json  # noqa: E402
+
 
 def check_alert(alert_name, tenant, prom_url):
-    try:
-        req = urllib.request.Request(f'{prom_url}/api/v1/alerts')  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode())
-    except Exception as e:
-        print(json.dumps({"error": f"Cannot connect to Prometheus API ({prom_url}): {e}"}))
+    data, err = http_get_json(f'{prom_url}/api/v1/alerts')
+    if err:
+        print(json.dumps({"error": f"Cannot connect to Prometheus API ({prom_url}): {err}"}))
         sys.exit(1)
 
     alerts = data.get('data', {}).get('alerts', [])

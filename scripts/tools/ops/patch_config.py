@@ -258,6 +258,7 @@ def apply_patch(cm_data, mode, tenant, metric_key, value):
 
 
 def main():
+    """CLI entry point: Patch threshold-config ConfigMap for a specific tenant."""
     parser = argparse.ArgumentParser(
         description="Patch threshold-config ConfigMap for a specific tenant",
     )

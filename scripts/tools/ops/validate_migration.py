@@ -47,11 +47,15 @@ import csv
 import json
 import time
 import argparse
-import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
 
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import http_get_json  # noqa: E402
 
 
 def query_prometheus(prom_url, promql):
@@ -60,12 +64,9 @@ def query_prometheus(prom_url, promql):
     params = urllib.parse.urlencode({"query": promql})
     full_url = f"{url}?{params}"
 
-    try:
-        req = urllib.request.Request(full_url)  # nosec B310 — localhost only
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        return None, str(e)
+    data, err = http_get_json(full_url)
+    if err:
+        return None, err
 
     if data.get("status") != "success":
         return None, data.get("error", "Unknown error")
@@ -332,6 +333,7 @@ class ConvergenceTracker:
 
 
 def main():
+    """CLI entry point: Shadow Monitoring 驗證工具。."""
     parser = argparse.ArgumentParser(
         description="Shadow Monitoring 驗證工具 — 比對新舊 Recording Rule 數值",
     )

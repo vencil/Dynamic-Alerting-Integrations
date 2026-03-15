@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
 
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "assets" / "tool-registry.yaml"
 HUB_PATH = PROJECT_ROOT / "docs" / "interactive" / "index.html"
@@ -418,6 +418,7 @@ def scan_appears_in(tools: list, verbose: bool) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    """CLI entry point: 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META + JSX frontmatter."""
     parser = argparse.ArgumentParser(
         description="Sync tool-registry.yaml → Hub + TOOL_META + JSX frontmatter"
     )

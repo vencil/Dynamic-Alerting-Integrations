@@ -174,16 +174,17 @@ def _ensure_babel(node_modules: Path) -> bool:
         return True
     try:
         subprocess.run(
-            ["npm", "install", "--prefix", str(node_modules.parent), "@babel/standalone@7.23.9"],
+            ["npm", "install", "--prefix", str(node_modules.parent), "@babel/standalone@7.26.4"],
             capture_output=True,
             timeout=60,
         )
         return babel_dir.exists()
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
 def main() -> int:
+    """CLI entry point: Validate JSX files parse correctly via Babel standalone."""
     parser = argparse.ArgumentParser(description="Lint JSX files with Babel standalone")
     parser.add_argument("--ci", action="store_true", help="Exit 1 on failures")
     args = parser.parse_args()

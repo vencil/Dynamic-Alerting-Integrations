@@ -31,7 +31,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
 K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
 OUTPUT_PATH = REPO_ROOT / "docs" / "assets" / "platform-data.json"
-SCAFFOLD_PATH = SCRIPT_DIR / "scaffold_tenant.py"
+SCAFFOLD_PATH = SCRIPT_DIR.parent / "ops" / "scaffold_tenant.py"
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ def load_scaffold_rule_packs() -> dict:
     sys.modules["scaffold_tenant"] = mod
     try:
         spec.loader.exec_module(mod)
-    except Exception as e:
+    except (ImportError, AttributeError) as e:
         print(f"WARNING: Error loading scaffold_tenant: {e}", file=sys.stderr)
         return {}
     return getattr(mod, "RULE_PACKS", {})
@@ -300,6 +300,7 @@ def build_platform_data() -> dict:
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    """CLI entry point: 共用平台資料產生器."""
     parser = argparse.ArgumentParser(
         description="Generate docs/assets/platform-data.json from source YAML",
     )

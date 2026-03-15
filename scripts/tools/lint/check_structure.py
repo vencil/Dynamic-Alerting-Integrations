@@ -130,6 +130,7 @@ def check_banned_dirs(project_root: Path, tracked: list[str]) -> list[str]:
 # ── Main ────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """CLI entry point: Project structure enforcement."""
     parser = argparse.ArgumentParser(
         description="Validate project directory structure",
     )

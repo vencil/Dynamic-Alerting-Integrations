@@ -279,6 +279,7 @@ def print_report(results):
 
 
 def main():
+    """CLI entry point: Rule Pack gap analysis for custom rules."""
     parser = argparse.ArgumentParser(
         description="Analyze custom_ rules and recommend official Rule Pack substitutes",
     )

@@ -153,7 +153,7 @@ def extract_version(filepath: str, base_dir: str) -> str:
             match = re.search(r'v(\d+\.\d+\.\d+)', content)
             if match:
                 return f'v{match.group(1)}'
-    except Exception:
+    except OSError:
         pass
 
     # Fallback: try to read CLAUDE.md for version
@@ -165,7 +165,7 @@ def extract_version(filepath: str, base_dir: str) -> str:
                 match = re.search(r'v(\d+\.\d+\.\d+)', content)
                 if match:
                     return f'v{match.group(1)}'
-        except Exception:
+        except OSError:
             pass
 
     return 'v1.13.0'
@@ -180,7 +180,7 @@ def extract_title(filepath: str, filename: str) -> str:
                 if line.startswith('# ') and not line.startswith('##'):
                     title = line[2:].strip()
                     return title
-    except Exception:
+    except OSError:
         pass
 
     # Fallback: use filename without extension
@@ -216,7 +216,7 @@ def has_frontmatter(filepath: str) -> bool:
         with open(filepath, 'r', encoding='utf-8') as f:
             first_line = f.readline().strip()
             return first_line == '---'
-    except Exception:
+    except OSError:
         return False
 
 
@@ -312,6 +312,7 @@ def find_markdown_files(base_dir: str) -> List[str]:
 
 
 def main():
+    """CLI entry point: Add YAML front matter to documentation files for MkDocs/Docusaurus integration."""
     parser = argparse.ArgumentParser(
         description='Add YAML front matter to documentation files'
     )

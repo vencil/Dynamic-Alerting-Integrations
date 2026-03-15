@@ -50,7 +50,7 @@ def load_all_configs(config_dir):
             with open(path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
             configs[filename] = {"path": path, "data": data}
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             print(f"  ⚠️  無法讀取 {filename}: {e}")
     return configs
 
@@ -148,12 +148,13 @@ def execute_offboard(tenant, config_dir):
         print(f"  3. 所有相關 Alert 將自動解除")
         print(f"  4. 請記得一併清理 Alertmanager 中 tenant={tenant} 的 routing 設定")
         return True
-    except Exception as e:
+    except (ValueError, TypeError, IndexError) as e:
         print(f"❌ 刪除失敗: {e}", file=sys.stderr)
         return False
 
 
 def main():
+    """CLI entry point: 安全的 Tenant 下架工具。."""
     parser = argparse.ArgumentParser(
         description="安全的 Tenant 下架工具 — Pre-check + 安全移除"
     )

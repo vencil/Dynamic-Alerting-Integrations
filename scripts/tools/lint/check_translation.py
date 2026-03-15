@@ -183,6 +183,7 @@ def format_element_name(key: str) -> str:
 
 
 def main():
+    """CLI entry point: 自動化翻譯品質檢查."""
     parser = argparse.ArgumentParser(
         description='Validate bilingual markdown document consistency'
     )

@@ -126,6 +126,7 @@ def _create_en_stub(zh_path: Path, en_path: Path) -> None:
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """CLI entry point: Check that Chinese and English include snippets stay in sync."""
     parser = argparse.ArgumentParser(
         description="Check Chinese/English include snippet sync"
     )

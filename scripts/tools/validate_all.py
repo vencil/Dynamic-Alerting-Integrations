@@ -104,7 +104,7 @@ def _run_one(
     except subprocess.TimeoutExpired:
         elapsed = time.time() - start
         return short_name, "error", elapsed, "Timeout after 120s", ""
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         elapsed = time.time() - start
         return short_name, "error", elapsed, str(e)[:80], ""
 
@@ -370,6 +370,7 @@ def _compare_baseline(current: dict) -> None:
 
 
 def main():
+    """CLI entry point: Unified validation entry point for all documentation and config validation tools."""
     parser = argparse.ArgumentParser(
         description="Unified validation for documentation and configuration.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -606,7 +607,7 @@ def main():
     # --profile: append timing data to CSV
     if args.profile and results:
         import stat
-        from datetime import datetime
+        from datetime import datetime, timezone
         write_header = not PROFILE_CSV.exists()
         with open(PROFILE_CSV, "a", encoding="utf-8") as csvf:
             if write_header:
@@ -616,7 +617,7 @@ def main():
                            + "\n")
             all_names = [n for n, _, _, _ in TOOLS]
             row_parts = [
-                datetime.now().isoformat(timespec="seconds"),
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "parallel" if args.parallel else "sequential",
                 f"{wall_elapsed:.2f}",
             ]
@@ -662,7 +663,7 @@ def main():
                 else:
                     print(f"  ✗ {name:20} ... fix failed "
                           f"(exit {result.returncode})")
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError) as e:
                 print(f"  ✗ {name:20} ... fix error: {e}")
 
         if fix_count > 0:

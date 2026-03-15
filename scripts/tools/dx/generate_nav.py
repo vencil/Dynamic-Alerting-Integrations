@@ -114,6 +114,7 @@ def classify_section(tags_str: str) -> str:
 
 
 def main():
+    """CLI entry point: 從 docs/ 目錄自動生成 MkDocs nav 結構."""
     parser = argparse.ArgumentParser(
         description='Auto-generate MkDocs nav from docs/ front matter'
     )

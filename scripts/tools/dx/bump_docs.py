@@ -49,7 +49,7 @@ from pathlib import Path
 # Repo root detection
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent  # scripts/tools/ -> repo root
+REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 
 # ---------------------------------------------------------------------------
 # Version source-of-truth files
@@ -70,14 +70,13 @@ _SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
 _SEMVER_STRICT = r"[0-9]+\.[0-9]+\.[0-9]+"
 
 
-def _build_rules():
-    """Build replacement rules. Called after REPO_ROOT is resolved."""
+def _build_tools_rules():
+    """Build version replacement rules for da-tools (image tags, VERSION file).
 
-    # --- da-tools image tag rules ---
-    # Use glob to catch all files referencing the da-tools image tag
-    # instead of a hardcoded list (prevents missed files on expansion)
-    tools_rules = []
-    tools_rules.append({
+    Returns list of rule dicts for the 'tools' version line.
+    """
+    rules = []
+    rules.append({
         "file": "__glob__",
         "glob_dir": "docs",
         "glob_pattern": "**/*.md",
@@ -85,7 +84,7 @@ def _build_rules():
         "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
         "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
     })
-    tools_rules.append({
+    rules.append({
         "file": "__glob__",
         "glob_dir": "docs",
         "glob_pattern": "**/*.jsx",
@@ -96,7 +95,7 @@ def _build_rules():
     for f in ["README.md", "README.en.md",
               "components/da-tools/README.md",
               "components/threshold-exporter/README.md"]:
-        tools_rules.append({
+        rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
             "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
@@ -104,7 +103,7 @@ def _build_rules():
         })
 
     # VERSION file (exact content)
-    tools_rules.append({
+    rules.append({
         "file": "components/da-tools/app/VERSION",
         "desc": "da-tools VERSION file",
         "pattern": r"^[0-9]+\.[0-9]+\.[0-9]+\s*$",
@@ -113,7 +112,7 @@ def _build_rules():
     })
 
     # da-tools README build.sh version
-    tools_rules.append({
+    rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools build.sh version",
         "pattern": r"\./build\.sh [0-9]+\.[0-9]+\.[0-9]+",
@@ -121,7 +120,7 @@ def _build_rules():
     })
 
     # da-tools README version header
-    tools_rules.append({
+    rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools README version header",
         "pattern": r"\*\*版本\*\*：[0-9]+\.[0-9]+\.[0-9]+（獨立版號",
@@ -129,22 +128,29 @@ def _build_rules():
     })
 
     # da-tools README version strategy table
-    tools_rules.append({
+    rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (da-tools row)",
         "pattern": r"\| \*\*da-tools\*\* \| \*\*v?[0-9]+\.[0-9]+\.[0-9]+\*\*",
         "replacement": lambda v: f"| **da-tools** | **v{v}**",
     })
-    tools_rules.append({
+    rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (git tag)",
         "pattern": r"\*\*`tools/v[0-9]+\.[0-9]+\.[0-9]+`\*\*",
         "replacement": lambda v: f"**`tools/v{v}`**",
     })
 
-    # --- exporter version rules ---
-    # Chart.yaml version 與 appVersion 同步（chart 版號 = exporter 版號）
-    exporter_rules = [
+    return rules
+
+
+def _build_exporter_rules():
+    """Build version replacement rules for threshold-exporter.
+
+    Covers Chart.yaml version/appVersion and OCI chart references.
+    Returns list of rule dicts for the 'exporter' version line.
+    """
+    return [
         {
             "file": "components/threshold-exporter/Chart.yaml",
             "desc": "Chart.yaml version (chart release)",
@@ -207,17 +213,23 @@ def _build_rules():
         },
     ]
 
-    # --- platform version rules ---
-    platform_rules = []
+
+def _build_platform_rules():
+    """Build version replacement rules for platform docs.
+
+    Covers doc footers, headers, front matter, README intros, and mkdocs.yml.
+    Returns list of rule dicts for the 'platform' version line.
+    """
+    rules = []
 
     # Doc footers: **文件版本：** vX.Y.Z or **Document version:** vX.Y.Z
-    platform_rules.append({
+    rules.append({
         "file": "docs/architecture-and-design.md",
         "desc": "architecture-and-design.md footer",
         "pattern": r"\*\*文件版本：\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**文件版本：** v{v}",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/architecture-and-design.en.md",
         "desc": "architecture-and-design.en.md footer",
         "pattern": r"\*\*Document version:\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
@@ -225,13 +237,13 @@ def _build_rules():
     })
 
     # Doc headers with inline version
-    platform_rules.append({
+    rules.append({
         "file": "docs/architecture-and-design.md",
         "desc": "architecture-and-design.md header version",
         "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)? 的技術架構",
         "replacement": lambda v: f"v{v} 的技術架構",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/architecture-and-design.en.md",
         "desc": "architecture-and-design.en.md header version",
         "pattern": r"\(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)\.",
@@ -239,13 +251,13 @@ def _build_rules():
     })
 
     # BYO guides version headers
-    platform_rules.append({
+    rules.append({
         "file": "docs/byo-prometheus-integration.md",
         "desc": "BYOP guide version",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/byo-alertmanager-integration.md",
         "desc": "BYO Alertmanager guide version",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
@@ -253,13 +265,13 @@ def _build_rules():
     })
 
     # Governance doc version headers
-    platform_rules.append({
+    rules.append({
         "file": "docs/custom-rule-governance.md",
         "desc": "governance doc (zh) version header",
         "pattern": r"\*\*版本\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**: v{v}",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/custom-rule-governance.en.md",
         "desc": "governance doc (en) version header",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
@@ -267,7 +279,7 @@ def _build_rules():
     })
 
     # GitOps deployment guide version header
-    platform_rules.append({
+    rules.append({
         "file": "docs/gitops-deployment.md",
         "desc": "gitops-deployment.md version header",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
@@ -275,19 +287,19 @@ def _build_rules():
     })
 
     # English doc version headers (BYO guides and gitops)
-    platform_rules.append({
+    rules.append({
         "file": "docs/byo-prometheus-integration.en.md",
         "desc": "BYOP guide (en) version",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/byo-alertmanager-integration.en.md",
         "desc": "BYO Alertmanager guide (en) version",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/gitops-deployment.en.md",
         "desc": "gitops-deployment.en.md version header",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
@@ -295,13 +307,13 @@ def _build_rules():
     })
 
     # Federation integration guide version header
-    platform_rules.append({
+    rules.append({
         "file": "docs/federation-integration.md",
         "desc": "federation-integration.md version header",
         "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*",
         "replacement": lambda v: f"> **v{v}**",
     })
-    platform_rules.append({
+    rules.append({
         "file": "docs/federation-integration.en.md",
         "desc": "federation-integration.en.md version header",
         "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*",
@@ -309,17 +321,17 @@ def _build_rules():
     })
 
     # threshold-exporter README title
-    platform_rules.append({
+    rules.append({
         "file": "components/threshold-exporter/README.md",
         "desc": "threshold-exporter README title version",
         "pattern": r"# Threshold Exporter \(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)",
         "replacement": lambda v: f"# Threshold Exporter (v{v})",
     })
 
-    # NOTE: Chart.yaml version 已移至 exporter_rules（chart 版號 = exporter 版號）
+    # NOTE: Chart.yaml version 已移至 _build_exporter_rules()
 
     # CLAUDE.md project overview (only the "## 專案概覽 (vX.Y.Z)" line)
-    platform_rules.append({
+    rules.append({
         "file": "CLAUDE.md",
         "desc": "CLAUDE.md project overview version",
         "pattern": r"專案概覽 \(v[0-9]+\.[0-9]+[^)]*\)",
@@ -327,13 +339,13 @@ def _build_rules():
     })
 
     # da-tools README platform version reference
-    platform_rules.append({
+    rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools README platform version ref",
         "pattern": r"平台版本（v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\+）",
         "replacement": lambda v: f"平台版本（v{v}+）",
     })
-    platform_rules.append({
+    rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (platform row)",
         "pattern": r"\| 平台文件 \| v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
@@ -341,9 +353,8 @@ def _build_rules():
     })
 
     # Front matter `version: vX.Y.Z` in all docs/ .md and .jsx files
-    # Uses a glob scan instead of per-file rules
     for ext in ("**/*.md", "**/*.jsx"):
-        platform_rules.append({
+        rules.append({
             "file": "__glob__",
             "glob_dir": "docs",
             "glob_pattern": ext,
@@ -352,11 +363,8 @@ def _build_rules():
             "replacement": lambda v: f"version: v{v}",
         })
 
-    # NOTE: cli-reference da-tools image tags are handled by tools_rules glob
-    # (no longer duplicated here as platform rules)
-
     # mkdocs.yml extra.platform_version / tools_version
-    platform_rules.append({
+    rules.append({
         "file": "mkdocs.yml",
         "desc": "mkdocs.yml extra.platform_version",
         "pattern": r'platform_version:\s*\"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"',
@@ -364,23 +372,31 @@ def _build_rules():
     })
 
     # README.md / README.en.md intro version
-    platform_rules.append({
+    rules.append({
         "file": "README.md",
         "desc": "README.md intro version",
         "pattern": r"治理平台\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"治理平台** v{v}",
     })
-    platform_rules.append({
+    rules.append({
         "file": "README.en.md",
         "desc": "README.en.md intro version",
         "pattern": r"Governance Platform\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"Governance Platform** v{v}",
     })
 
+    return rules
+
+
+def _build_rules():
+    """Build all version replacement rules, grouped by version line.
+
+    Returns {"platform": [...], "exporter": [...], "tools": [...]}.
+    """
     return {
-        "platform": platform_rules,
-        "exporter": exporter_rules,
-        "tools": tools_rules,
+        "platform": _build_platform_rules(),
+        "exporter": _build_exporter_rules(),
+        "tools": _build_tools_rules(),
     }
 
 
@@ -531,7 +547,7 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
     if lang in ("en", "all"):
         targets.append("en")
 
-    today = date.today().isoformat()
+    today = date.today().isoformat()  # Local date — intentional for release notes
 
     for target_lang in targets:
         if target_lang == "zh":
@@ -609,6 +625,7 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
 
 
 def main():
+    """CLI entry point: 版號一致性管理工具."""
     parser = argparse.ArgumentParser(
         description="Bump version references across docs and configs",
         formatter_class=argparse.RawDescriptionHelpFormatter,

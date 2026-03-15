@@ -95,7 +95,7 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
             result = json.loads(output)
         else:
             result = {"status": "error", "tenant": tenant, "issues": ["empty output"]}
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         result = {"status": "error", "tenant": tenant, "issues": [str(exc)]}
 
     elapsed = time.monotonic() - start
@@ -193,6 +193,7 @@ def print_text_report(report):
 
 
 def main():
+    """CLI entry point: Post-cutover multi-tenant health report."""
     parser = argparse.ArgumentParser(
         description="Post-cutover multi-tenant health report",
     )

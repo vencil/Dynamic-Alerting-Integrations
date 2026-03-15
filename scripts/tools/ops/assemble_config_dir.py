@@ -185,6 +185,7 @@ def validate_merged(output_dir: Path) -> List[str]:
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """CLI entry point: merge multiple conf.d/ sources into one config-dir."""
     parser = argparse.ArgumentParser(
         description="Merge multiple conf.d/ sources into a single config-dir.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

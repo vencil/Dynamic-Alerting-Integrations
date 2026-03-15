@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "assets" / "tool-registry.yaml"
 
 
@@ -148,6 +148,7 @@ def suggest(tools: list, top_n: int = 3) -> dict:
 
 
 def main():
+    """CLI entry point: 基於 audience 重疊 + tags 相似度推薦 related tools."""
     parser = argparse.ArgumentParser(description="Suggest related tools")
     parser.add_argument("--top", type=int, default=3, help="Number of suggestions")
     parser.add_argument("--show-scores", action="store_true", help="Show similarity scores")

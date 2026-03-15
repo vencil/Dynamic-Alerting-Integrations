@@ -19,6 +19,10 @@ components/*/app/threshold-exporter
 __pycache__/
 *.pyc
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
 
 # --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔

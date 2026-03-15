@@ -92,7 +92,7 @@ def get_latest_tag() -> Optional[str]:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return None
 
@@ -255,6 +255,7 @@ def lint_changelog(changelog_path: str = "CHANGELOG.md") -> List[str]:
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """CLI entry point: Generate CHANGELOG draft entries from conventional commits."""
     parser = argparse.ArgumentParser(
         description="Generate CHANGELOG draft from conventional commits"
     )

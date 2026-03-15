@@ -498,10 +498,15 @@ def check_bilingual_number_consistency() -> List[Issue]:
         (r"bilingual-(\d+)", "Bilingual badge"),
     ]
 
+    # Files with legitimate historical number references
+    skip_basenames = {"benchmarks.md", "CHANGELOG.md"}
+
     # Find zh/en pairs
     pairs = []
     for zh_file in sorted(DOCS_DIR.rglob("*.md")):
         if ".en." in zh_file.name:
+            continue
+        if zh_file.name in skip_basenames:
             continue
         en_file = zh_file.with_name(
             zh_file.name.replace(".md", ".en.md"))
@@ -622,8 +627,14 @@ def check_tool_count_in_docs() -> List[Issue]:
         return issues
 
     skip_prefixes = ("_lib", "__init__", "__pycache__")
+    # Scan all subdirectories (ops/, dx/, lint/) + root
+    all_py_files = list(tools_dir.glob("*.py"))
+    for subdir in ("ops", "dx", "lint"):
+        sub_path = tools_dir / subdir
+        if sub_path.is_dir():
+            all_py_files.extend(sub_path.glob("*.py"))
     actual_count = sum(
-        1 for f in tools_dir.glob("*.py")
+        1 for f in all_py_files
         if not any(f.name.startswith(p) for p in skip_prefixes)
     )
 
@@ -871,6 +882,7 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
 # ---------------------------------------------------------------------------
 
 def main():
+    """CLI entry point: 文件版號與計數一致性檢查."""
     parser = argparse.ArgumentParser(
         description="Validate version numbers and counts across documentation",
         formatter_class=argparse.RawDescriptionHelpFormatter,

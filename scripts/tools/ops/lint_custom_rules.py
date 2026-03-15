@@ -200,7 +200,7 @@ def lint_file(filepath, policy):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-    except Exception as e:
+    except OSError as e:
         results.append(LintResult(filepath, None, None, "ERROR", f"cannot read file: {e}"))
         return results, rule_count
 
@@ -280,7 +280,7 @@ def load_policy(policy_path):
         merged = DEFAULT_POLICY.copy()
         merged.update(custom)
         return merged
-    except Exception as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"⚠️  Cannot load policy file {policy_path}: {e}", file=sys.stderr)
         print("    Falling back to built-in defaults.", file=sys.stderr)
         return DEFAULT_POLICY.copy()
@@ -303,6 +303,7 @@ def collect_files(paths):
 
 
 def main():
+    """CLI entry point: Custom Rule deny-list linter。."""
     parser = argparse.ArgumentParser(
         description="Lint custom Prometheus rules against platform governance policy."
     )

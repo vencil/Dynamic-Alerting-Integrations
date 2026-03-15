@@ -15,8 +15,12 @@ Domain constants (single source of truth for Python tools):
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any, Optional, Union
 
 import yaml
@@ -117,6 +121,217 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     return data if data is not None else default
 
 
+# ---------------------------------------------------------------------------
+# HTTP helpers (shared across ops tools that query Prometheus / Alertmanager)
+# ---------------------------------------------------------------------------
+def http_get_json(
+    url: str,
+    *,
+    timeout: int = 10,
+    headers: Optional[dict[str, str]] = None,
+) -> tuple[Optional[dict], Optional[str]]:
+    """HTTP GET with JSON response parsing.
+
+    A thin wrapper around :mod:`urllib.request` that covers the common
+    pattern used by 11+ ops tools: build request, open with timeout,
+    decode JSON, catch network errors.
+
+    Args:
+        url: Full URL to fetch (e.g. ``http://localhost:9090/api/v1/query``).
+        timeout: Socket timeout in seconds (default 10).
+        headers: Optional extra headers to set on the request.
+
+    Returns:
+        ``(data_dict, None)`` on success, or ``(None, error_message)`` on
+        failure (network error, JSON decode error, etc.).
+    """
+    try:
+        # SSRF 防護：僅允許 http/https scheme
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return None, f"Unsupported URL scheme: {parsed.scheme}"
+
+        req = urllib.request.Request(url)  # nosec B310
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+            body = resp.read().decode("utf-8")
+            data = json.loads(body) if body else {}
+            return data, None
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            ValueError, OSError) as exc:
+        return None, str(exc)
+
+
+def http_post_json(
+    url: str,
+    payload: Any = None,
+    *,
+    timeout: int = 10,
+    headers: Optional[dict[str, str]] = None,
+    method: str = "POST",
+) -> tuple[Optional[dict], Optional[str]]:
+    """HTTP POST (or custom method) with JSON request/response.
+
+    Args:
+        url: Full URL to send the request to.
+        payload: Python object to JSON-encode as the request body.
+            If ``None``, sends an empty body.
+        timeout: Socket timeout in seconds (default 10).
+        headers: Optional extra headers.
+        method: HTTP method (default ``POST``).
+
+    Returns:
+        ``(response_dict, None)`` on success, or ``(None, error_message)``
+        on failure.
+    """
+    try:
+        # SSRF 防護：僅允許 http/https scheme
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return None, f"Unsupported URL scheme: {parsed.scheme}"
+
+        req = urllib.request.Request(url, method=method)  # nosec B310
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return (json.loads(body) if body else {}), None
+    except urllib.error.HTTPError as exc:
+        return None, f"HTTP {exc.code}: {exc.reason}"
+    except (urllib.error.URLError, ValueError, OSError) as exc:
+        return None, str(exc)
+
+
+def http_request_with_retry(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Any = None,
+    timeout: int = 10,
+    max_retries: int = 3,
+) -> dict:
+    """HTTP request with exponential backoff retry（5xx / 連線錯誤自動重試）。
+
+    與 :func:`http_post_json` 不同，此函式在最終失敗時 **raise** 而非回傳
+    ``(None, error)``，適用於必須成功的 API 呼叫（如 Alertmanager silence 管理）。
+
+    重試策略：
+    - 4xx 錯誤：不重試，立即 raise
+    - 5xx / 連線錯誤：最多重試 *max_retries* 次，間隔 1s → 2s → 4s
+
+    Args:
+        url: 完整 URL。
+        method: HTTP method（預設 ``GET``）。
+        payload: JSON-serializable payload（``None`` 表示無 body）。
+        timeout: Socket timeout 秒數。
+        max_retries: 最大重試次數（預設 3）。
+
+    Returns:
+        解析後的 JSON dict。
+
+    Raises:
+        urllib.error.HTTPError: 4xx 錯誤或重試耗盡後的 5xx 錯誤。
+        urllib.error.URLError: 連線錯誤且重試耗盡。
+    """
+    import time
+    last_error: Optional[Exception] = None
+
+    # SSRF 防護：僅允許 http/https scheme
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, method=method)  # nosec B310
+            req.add_header("Content-Type", "application/json")
+            data = None
+            if payload is not None:
+                data = json.dumps(payload).encode("utf-8")
+            with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                raise  # 4xx: 不重試
+            last_error = exc
+        except (urllib.error.URLError, OSError) as exc:
+            last_error = exc
+
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)  # 1s, 2s, 4s
+
+    raise last_error  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Config directory walking
+# ---------------------------------------------------------------------------
+def iter_yaml_files(
+    config_dir: str,
+    *,
+    skip_reserved: bool = True,
+) -> list[tuple[str, str]]:
+    """List YAML files in *config_dir*, sorted deterministically.
+
+    Args:
+        config_dir: Path to the configuration directory.
+        skip_reserved: If ``True`` (default), skip files whose names
+                       start with ``_`` or ``.`` (reserved / dotfiles).
+
+    Returns:
+        List of ``(filename, full_path)`` tuples, sorted by filename.
+    """
+    if not config_dir or not os.path.isdir(config_dir):
+        return []
+    result: list[tuple[str, str]] = []
+    for fname in sorted(os.listdir(config_dir)):
+        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
+            continue
+        if skip_reserved and (fname.startswith("_") or fname.startswith(".")):
+            continue
+        fpath = os.path.join(config_dir, fname)
+        if os.path.isfile(fpath):
+            result.append((fname, fpath))
+    return result
+
+
+def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
+    """Load all tenant configurations from a config directory.
+
+    Handles both the ``{tenants: {name: {...}}}`` wrapper format
+    (used in ``conf.d/``) and the flat single-tenant format.
+    Files starting with ``_`` or ``.`` are skipped.
+
+    Args:
+        config_dir: Path to the configuration directory.
+
+    Returns:
+        Dict mapping ``tenant_name`` → ``config_dict``.  Empty dict
+        on any error or if *config_dir* is missing.
+    """
+    configs: dict[str, dict[str, Any]] = {}
+    for fname, fpath in iter_yaml_files(config_dir):
+        raw = load_yaml_file(fpath, default={})
+        if not isinstance(raw, dict):
+            continue
+        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
+            for t_name, t_data in raw["tenants"].items():
+                if isinstance(t_data, dict):
+                    configs[t_name] = t_data
+        else:
+            tenant = fname.rsplit(".", 1)[0]
+            configs[tenant] = raw
+    return configs
+
+
 # ============================================================
 # Reserved Tenant Config Keys (Python source of truth)
 # ============================================================
@@ -200,6 +415,52 @@ RECEIVER_URL_FIELDS: dict[str, list[str]] = {
     "teams":      ["webhook_url"],
     "rocketchat": ["url"],
     "pagerduty":  [],                 # service_key only, no URL
+}
+
+
+# ============================================================
+# DB Type Inference Maps (Job name + Metric prefix → DB type)
+# ============================================================
+# 用於 blind_spot_discovery 和 onboard_platform 的 DB 類型推斷。
+# JOB_DB_MAP: Prometheus job name → DB type（完整比對 + 關鍵字比對）
+# METRIC_PREFIX_DB_MAP: Metric 名稱前綴 → DB type
+JOB_DB_MAP: dict[str, str] = {
+    # MariaDB / MySQL
+    "mysql": "mariadb", "mariadb": "mariadb", "mysqld": "mariadb",
+    "mysqld_exporter": "mariadb", "mysql_exporter": "mariadb",
+    # PostgreSQL
+    "postgres": "postgresql", "postgresql": "postgresql", "pg": "postgresql",
+    "postgres_exporter": "postgresql",
+    # Redis
+    "redis": "redis", "redis_exporter": "redis",
+    # MongoDB
+    "mongo": "mongodb", "mongodb": "mongodb", "mongodb_exporter": "mongodb",
+    # Kafka
+    "kafka": "kafka", "kafka_exporter": "kafka",
+    # RabbitMQ
+    "rabbitmq": "rabbitmq", "rabbit": "rabbitmq",
+    # Elasticsearch
+    "elasticsearch": "elasticsearch", "elastic": "elasticsearch",
+    "es": "elasticsearch",
+    # Oracle
+    "oracle": "oracle", "oracledb": "oracle", "oracledb_exporter": "oracle",
+    # ClickHouse
+    "clickhouse": "clickhouse",
+    # DB2
+    "db2": "db2",
+}
+
+METRIC_PREFIX_DB_MAP: dict[str, str] = {
+    "mysql_": "mariadb", "mariadb_": "mariadb",
+    "pg_": "postgresql", "postgres_": "postgresql",
+    "redis_": "redis",
+    "mongo_": "mongodb", "mongodb_": "mongodb",
+    "kafka_": "kafka",
+    "rabbitmq_": "rabbitmq", "rabbit_": "rabbitmq",
+    "elasticsearch_": "elasticsearch", "es_": "elasticsearch",
+    "oracle_": "oracle",
+    "clickhouse_": "clickhouse",
+    "db2_": "db2",
 }
 
 

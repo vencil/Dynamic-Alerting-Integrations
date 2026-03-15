@@ -128,6 +128,7 @@ def print_drift_report(missing_in_schema, extra_in_schema):
 
 
 def main():
+    """CLI entry point: Sync JSON Schema with Go source definitions."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--go-source",

@@ -128,7 +128,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
                     "detail": f"kubectl apply failed: {proc.stderr[:60]}",
                 })
                 return results
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
@@ -234,6 +234,7 @@ def auto_name(dashboard_path):
 
 
 def main():
+    """CLI entry point: Grafana dashboard import via ConfigMap sidecar."""
     parser = argparse.ArgumentParser(
         description="Grafana dashboard import via ConfigMap sidecar",
     )

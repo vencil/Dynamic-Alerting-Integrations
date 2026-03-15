@@ -27,7 +27,6 @@ import subprocess
 import sys
 import json
 import argparse
-import urllib.request
 import urllib.parse
 
 import yaml
@@ -36,7 +35,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -90,12 +89,10 @@ def query_prometheus(prom_url, promql):
     url = f"{prom_url}/api/v1/query"
     params = urllib.parse.urlencode({"query": promql})
     full_url = f"{url}?{params}"
-    try:
-        req = urllib.request.Request(full_url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read().decode()
-    except Exception:
+    data, err = http_get_json(full_url)
+    if err:
         return None
+    return json.dumps(data)
 
 
 def lookup_tenant_profile(tenant, config_dir):
@@ -116,7 +113,7 @@ def lookup_tenant_profile(tenant, config_dir):
         try:
             with open(fpath, encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
-        except Exception:
+        except (OSError, yaml.YAMLError):
             continue
         if not isinstance(raw, dict):
             continue
@@ -156,7 +153,7 @@ def resolve_inheritance_chain(tenant, config_dir):
         with open(defaults_path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
         defaults_raw = raw.get("defaults", {}) if isinstance(raw, dict) else {}
-    except Exception:
+    except (OSError, yaml.YAMLError):
         pass
 
     # Find tenant config
@@ -170,7 +167,7 @@ def resolve_inheritance_chain(tenant, config_dir):
         try:
             with open(fpath, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
-        except Exception:
+        except (OSError, yaml.YAMLError):
             continue
         if not isinstance(raw, dict):
             continue
@@ -196,7 +193,7 @@ def resolve_inheritance_chain(tenant, config_dir):
                 raw = yaml.safe_load(f) or {}
             all_profiles = raw.get("profiles", {}) if isinstance(raw, dict) else {}
             profile_keys = all_profiles.get(profile_name, {})
-        except Exception:
+        except (OSError, yaml.YAMLError):
             pass
 
     # Layer 3: Tenant-specific (non-reserved metric keys only)
@@ -305,7 +302,7 @@ def check(tenant, prom_url, config_dir=None):
                         operational_mode = "silent:all"
                     elif severities:
                         operational_mode = f"silent:{severities[0]}"
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError):
         pass  # Non-fatal: mode query failure doesn't affect health status
 
     # 4. Profile lookup + inheritance chain (v1.12.0, optional — requires --config-dir)

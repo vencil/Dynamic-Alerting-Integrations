@@ -200,6 +200,7 @@ class BilingualAnnotationChecker:
 
 
 def main():
+    """CLI entry point: check_bilingual_annotations.py."""
     parser = argparse.ArgumentParser(
         description="Check bilingual annotations in Prometheus rule packs"
     )
@@ -228,7 +229,7 @@ def main():
 
     # Determine rule pack directory
     script_dir = Path(__file__).parent
-    rule_pack_dir = script_dir.parent.parent / "rule-packs"
+    rule_pack_dir = script_dir.parent.parent.parent / "rule-packs"
 
     if not rule_pack_dir.exists():
         print(f"Error: rule-packs directory not found at {rule_pack_dir}", file=sys.stderr)

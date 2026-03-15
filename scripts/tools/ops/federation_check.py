@@ -26,9 +26,14 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import urllib.parse
-import urllib.request
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import http_get_json  # noqa: E402
 
 
 def query_prometheus(prom_url, promql):
@@ -36,25 +41,12 @@ def query_prometheus(prom_url, promql):
     url = f"{prom_url}/api/v1/query"
     params = urllib.parse.urlencode({"query": promql})
     full_url = f"{url}?{params}"
-    try:
-        req = urllib.request.Request(full_url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        return None, str(e)
+    data, err = http_get_json(full_url)
+    if err:
+        return None, err
     if data.get("status") != "success":
         return None, data.get("error", "Unknown error")
     return data.get("data", {}).get("result", []), None
-
-
-def fetch_json(url):
-    """Fetch JSON from URL, return (data, error)."""
-    try:
-        req = urllib.request.Request(url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode()), None
-    except Exception as e:
-        return None, str(e)
 
 
 def check_edge(prom_url):
@@ -62,6 +54,8 @@ def check_edge(prom_url):
     checks = []
 
     # 1. Prometheus reachable
+    import urllib.error
+    import urllib.request
     try:
         req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -71,7 +65,7 @@ def check_edge(prom_url):
             "status": "pass",
             "detail": f"Prometheus at {prom_url} is healthy",
         })
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         checks.append({
             "check": "edge_prometheus_reachable",
             "status": "fail",
@@ -80,7 +74,7 @@ def check_edge(prom_url):
         return checks
 
     # 2. external_labels configured
-    data, err = fetch_json(f"{prom_url}/api/v1/status/config")
+    data, err = http_get_json(f"{prom_url}/api/v1/status/config")
     if err:
         checks.append({
             "check": "edge_external_labels",
@@ -144,7 +138,7 @@ def check_edge(prom_url):
             "status": "pass" if line_count > 0 else "warn",
             "detail": f"Federate endpoint returned {line_count} lines",
         })
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         checks.append({
             "check": "edge_federate_endpoint",
             "status": "warn",
@@ -159,6 +153,8 @@ def check_central(prom_url):
     checks = []
 
     # 1. Prometheus reachable
+    import urllib.error
+    import urllib.request
     try:
         req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -168,7 +164,7 @@ def check_central(prom_url):
             "status": "pass",
             "detail": f"Prometheus at {prom_url} is healthy",
         })
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         checks.append({
             "check": "central_prometheus_reachable",
             "status": "fail",
@@ -249,7 +245,7 @@ def check_central(prom_url):
         })
 
     # 5. Alert rules loaded
-    data, err = fetch_json(f"{prom_url}/api/v1/rules?type=alert")
+    data, err = http_get_json(f"{prom_url}/api/v1/rules?type=alert")
     if err:
         checks.append({
             "check": "central_alert_rules",
@@ -327,6 +323,7 @@ def format_output(section, checks):
 
 
 def main():
+    """CLI entry point: Multi-cluster federation integration verification."""
     parser = argparse.ArgumentParser(
         description="Multi-cluster federation integration verification",
     )

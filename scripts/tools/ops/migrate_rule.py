@@ -464,11 +464,114 @@ def lookup_dictionary(metric_name, dictionary):
     return dictionary.get(metric_name)
 
 
+def _build_unparseable_result(alert_name, expr, severity, rule, dictionary):
+    """處理無法解析的規則，嘗試字典比對並產生 LLM prompt。"""
+    result = MigrationResult(alert_name, "unparseable", severity)
+    result.original_expr = expr
+    result.triage_action = "skip"
+    result.llm_prompt = (
+        f"請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：\n"
+        f"要求：\n"
+        f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
+        f"2. 提供包含 sum/max by(tenant) 的 Recording Rule。\n"
+        f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n"
+        f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" "
+        f"語法提供範例。\n\n"
+        f"原始規則：\n{yaml.dump([rule], sort_keys=False)}"
+    )
+    # Check dictionary for guidance even on unparseable
+    all_metrics = extract_all_metrics(expr)
+    for m in all_metrics:
+        match = lookup_dictionary(m, dictionary)
+        if match and match.get("golden_rule"):
+            result.dict_match = match
+            result.triage_action = "use_golden"
+            result.notes.append(
+                f"字典建議: {m} → 黃金標準 {match['golden_rule']} ({match.get('note', '')})"
+            )
+            break
+    return result
+
+
+def _build_recording_rules(parsed, prefixed_key, severity, agg_mode,
+                           prefix, has_golden, use_ast):
+    """產生 Recording Rules（含 AST 改寫）。
+
+    Returns (recording_rules_list, record_name, threshold_name).
+    """
+    record_name = f"tenant:{prefixed_key}:{agg_mode}"
+    threshold_suffix = "_critical" if severity == "critical" else ""
+    threshold_name = f"tenant:alert_threshold:{prefixed_key}{threshold_suffix}"
+
+    # v4: AST-Informed String Surgery — 改寫 LHS 表達式
+    recording_lhs = parsed['lhs']
+    if use_ast and HAS_AST:
+        all_metrics = parsed.get('all_metrics', [])
+        # Step 1: Prefix injection (如果需要)
+        if prefix and not has_golden and all_metrics:
+            rename_map = {}
+            for m_name in all_metrics:
+                if not m_name.startswith(prefix):
+                    rename_map[m_name] = f"{prefix}{m_name}"
+            if rename_map:
+                recording_lhs = rewrite_expr_prefix(recording_lhs, rename_map)
+        # Step 2: Tenant label injection
+        rewritten_metrics = extract_metrics_ast(recording_lhs) or all_metrics
+        if rewritten_metrics:
+            recording_lhs = rewrite_expr_tenant_label(recording_lhs, rewritten_metrics)
+
+    rules = [
+        {
+            "record": record_name,
+            "expr": f"{agg_mode} by(tenant) ({recording_lhs})",
+        },
+        {
+            "record": threshold_name,
+            "expr": (f'max by(tenant) (user_threshold'
+                     f'{{metric="{prefixed_key}", severity="{severity}"}})'),
+        },
+    ]
+    return rules, record_name, threshold_name
+
+
+def _build_alert_rule(rule, alert_name, parsed, record_name,
+                      threshold_name, prefix):
+    """產生 Alert Rule（含 labels/annotations 繼承）。"""
+    alert_prefix = "Custom" if prefix else ""
+    alert_rule = {
+        "alert": f"{alert_prefix}{alert_name}" if prefix else alert_name,
+        "expr": (
+            f"(\n"
+            f"  {record_name}\n"
+            f"  {parsed['op']} on(tenant) group_left\n"
+            f"  {threshold_name}\n"
+            f")\n"
+            f'unless on(tenant) (user_state_filter{{filter="maintenance"}} == 1)'
+        ),
+    }
+    if 'for' in rule:
+        alert_rule['for'] = rule['for']
+    labels = dict(rule.get('labels', {}))
+    if prefix:
+        labels['source'] = 'legacy'
+        labels['migration_status'] = 'shadow'
+    if labels:
+        alert_rule['labels'] = labels
+    if 'annotations' in rule:
+        alert_rule['annotations'] = rule['annotations']
+    return alert_rule
+
+
 def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
                   use_ast=True):
     """處理單條傳統 Prometheus 規則，回傳 MigrationResult。
 
     v4: use_ast=True 啟用 AST 引擎進行精準 metric 辨識與表達式改寫。
+
+    主要步驟：
+    1. 解析表達式 → 無法解析時委派 _build_unparseable_result()
+    2. 字典比對 + prefix/severity 決策 + 聚合模式推斷
+    3. 產生三件套：tenant config / recording rules / alert rule
     """
     alert_name = rule.get('alert')
     if not alert_name:
@@ -478,32 +581,10 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     severity = rule.get('labels', {}).get('severity', 'warning')
     parsed = parse_expr(expr, use_ast=use_ast)
 
-    # 情境 3: 無法解析
+    # 情境: 無法解析 — 委派子函式
     if not parsed:
-        result = MigrationResult(alert_name, "unparseable", severity)
-        result.original_expr = expr
-        result.triage_action = "skip"
-        result.llm_prompt = (
-            f"請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：\n"
-            f"要求：\n"
-            f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
-            f"2. 提供包含 sum/max by(tenant) 的 Recording Rule。\n"
-            f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n"
-            f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" 語法提供範例。\n\n"
-            f"原始規則：\n{yaml.dump([rule], sort_keys=False)}"
-        )
-        # Check dictionary for guidance even on unparseable
-        all_metrics = extract_all_metrics(expr)
-        for m in all_metrics:
-            match = lookup_dictionary(m, dictionary)
-            if match and match.get("golden_rule"):
-                result.dict_match = match
-                result.triage_action = "use_golden"
-                result.notes.append(
-                    f"字典建議: {m} → 黃金標準 {match['golden_rule']} ({match.get('note', '')})"
-                )
-                break
-        return result
+        return _build_unparseable_result(
+            alert_name, expr, severity, rule, dictionary)
 
     metric_key = parsed["base_key"]
 
@@ -517,7 +598,8 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     else:
         prefixed_key = metric_key
 
-    metric_key_yaml = f"{prefixed_key}_critical" if severity == "critical" else prefixed_key
+    metric_key_yaml = (f"{prefixed_key}_critical"
+                       if severity == "critical" else prefixed_key)
 
     # 智能猜測聚合模式
     agg_mode, agg_reason = guess_aggregation(parsed["base_key"], parsed["lhs"])
@@ -529,7 +611,9 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
         print(f"   🤖 AI 猜測: {agg_mode} ({agg_reason})")
         if has_golden:
             print(f"   📖 字典建議: 改用黃金標準 {dict_match['golden_rule']}")
-        choice = input(f"   選擇聚合模式 [s=sum / m=max / Enter=採用猜測]: ").strip().lower()
+        choice = input(
+            "   選擇聚合模式 [s=sum / m=max / Enter=採用猜測]: "
+        ).strip().lower()
         if choice == 's':
             agg_mode = "sum"
             agg_reason = "使用者手動選擇"
@@ -564,60 +648,13 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     result.tenant_config[metric_key_yaml] = parsed['val']
 
     # === 產出 2. Recording Rules ===
-    record_name = f"tenant:{prefixed_key}:{agg_mode}"
-    threshold_suffix = "_critical" if severity == "critical" else ""
-    threshold_name = f"tenant:alert_threshold:{prefixed_key}{threshold_suffix}"
-
-    # v4: AST-Informed String Surgery — 改寫 LHS 表達式
-    recording_lhs = parsed['lhs']
-    if use_ast and HAS_AST:
-        all_metrics = parsed.get('all_metrics', [])
-        # Step 1: Prefix injection (如果需要)
-        if prefix and not has_golden and all_metrics:
-            rename_map = {}
-            for m_name in all_metrics:
-                if not m_name.startswith(prefix):
-                    rename_map[m_name] = f"{prefix}{m_name}"
-            if rename_map:
-                recording_lhs = rewrite_expr_prefix(recording_lhs, rename_map)
-        # Step 2: Tenant label injection
-        rewritten_metrics = extract_metrics_ast(recording_lhs) or all_metrics
-        if rewritten_metrics:
-            recording_lhs = rewrite_expr_tenant_label(recording_lhs, rewritten_metrics)
-
-    result.recording_rules.append({
-        "record": record_name,
-        "expr": f"{agg_mode} by(tenant) ({recording_lhs})",
-    })
-    result.recording_rules.append({
-        "record": threshold_name,
-        "expr": f'max by(tenant) (user_threshold{{metric="{prefixed_key}", severity="{severity}"}})',
-    })
+    rec_rules, record_name, threshold_name = _build_recording_rules(
+        parsed, prefixed_key, severity, agg_mode, prefix, has_golden, use_ast)
+    result.recording_rules.extend(rec_rules)
 
     # === 產出 3. Alert Rule ===
-    alert_prefix = f"Custom" if prefix else ""
-    alert_rule = {
-        "alert": f"{alert_prefix}{alert_name}" if prefix else alert_name,
-        "expr": (
-            f"(\n"
-            f"  {record_name}\n"
-            f"  {parsed['op']} on(tenant) group_left\n"
-            f"  {threshold_name}\n"
-            f")\n"
-            f'unless on(tenant) (user_state_filter{{filter="maintenance"}} == 1)'
-        ),
-    }
-    if 'for' in rule:
-        alert_rule['for'] = rule['for']
-    labels = dict(rule.get('labels', {}))
-    if prefix:
-        labels['source'] = 'legacy'
-        labels['migration_status'] = 'shadow'
-    if labels:
-        alert_rule['labels'] = labels
-    if 'annotations' in rule:
-        alert_rule['annotations'] = rule['annotations']
-    result.alert_rules.append(alert_rule)
+    result.alert_rules.append(_build_alert_rule(
+        rule, alert_name, parsed, record_name, threshold_name, prefix))
 
     return result
 
@@ -1078,6 +1115,7 @@ def print_triage(results):
 # ============================================================
 
 def main():
+    """CLI entry point: 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。."""
     parser = argparse.ArgumentParser(
         description="傳統 Prometheus 警報規則遷移輔助工具 (v4 AST) — 自動轉換為動態多租戶三件套"
     )
@@ -1115,7 +1153,7 @@ def main():
     try:
         with open(args.input_file, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
-    except Exception as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"Error reading YAML file: {e}", file=sys.stderr)
         sys.exit(1)
 

@@ -23,9 +23,9 @@ import re
 import sys
 from pathlib import Path
 
-# Resolve project root (two levels up from this script)
+# Resolve project root (three levels up: scripts/tools/lint/ -> repo root)
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
 
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "assets" / "tool-registry.yaml"
 HUB_PATH = PROJECT_ROOT / "docs" / "interactive" / "index.html"
@@ -403,6 +403,7 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    """CLI entry point: 互動工具一致性驗證."""
     parser = argparse.ArgumentParser(description="Lint tool consistency")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument(

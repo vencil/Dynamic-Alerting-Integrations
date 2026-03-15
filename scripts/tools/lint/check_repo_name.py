@@ -79,11 +79,13 @@ def scan_file(filepath, fix=False):
     if fix and changed:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.writelines(fixed_lines)
+        os.chmod(filepath, 0o644)
 
     return violations
 
 
 def main():
+    """CLI entry point: Prevent wrong repository name in source files."""
     parser = argparse.ArgumentParser(
         description='Check for wrong repository name in source files'
     )

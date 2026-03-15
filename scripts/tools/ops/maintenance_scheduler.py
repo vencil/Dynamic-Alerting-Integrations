@@ -27,7 +27,10 @@ from datetime import datetime, timedelta, timezone
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file  # noqa: E402
+from _lib_python import (  # noqa: E402
+    load_tenant_configs,
+    http_request_with_retry,
+)
 
 # Creator label for idempotency checks
 SILENCE_CREATOR = "da-tools/maintenance-scheduler"
@@ -47,49 +50,33 @@ def load_recurring_schedules(config_dir):
 
     schedules = {}
 
-    for fname in sorted(os.listdir(config_dir)):
-        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
-            continue
-        if fname.startswith("_") or fname.startswith("."):
-            continue
-
-        path = os.path.join(config_dir, fname)
-        raw = load_yaml_file(path, default={})
-
-        tenants = raw.get("tenants", {})
-        if not isinstance(tenants, dict):
+    for tenant, overrides in load_tenant_configs(config_dir).items():
+        maint = overrides.get("_state_maintenance")
+        if not isinstance(maint, dict):
             continue
 
-        for tenant, overrides in tenants.items():
-            if not isinstance(overrides, dict):
+        recurring = maint.get("recurring")
+        if not isinstance(recurring, list) or not recurring:
+            continue
+
+        valid = []
+        for entry in recurring:
+            if not isinstance(entry, dict):
                 continue
-
-            maint = overrides.get("_state_maintenance")
-            if not isinstance(maint, dict):
+            cron = entry.get("cron", "").strip()
+            duration = entry.get("duration", "").strip()
+            if not cron or not duration:
+                print(f"  WARN: {tenant}: recurring entry missing cron/duration, skipping",
+                      file=sys.stderr)
                 continue
+            valid.append({
+                "cron": cron,
+                "duration": duration,
+                "reason": entry.get("reason", "Recurring maintenance"),
+            })
 
-            recurring = maint.get("recurring")
-            if not isinstance(recurring, list) or not recurring:
-                continue
-
-            valid = []
-            for entry in recurring:
-                if not isinstance(entry, dict):
-                    continue
-                cron = entry.get("cron", "").strip()
-                duration = entry.get("duration", "").strip()
-                if not cron or not duration:
-                    print(f"  WARN: {tenant}: recurring entry missing cron/duration, skipping",
-                          file=sys.stderr)
-                    continue
-                valid.append({
-                    "cron": cron,
-                    "duration": duration,
-                    "reason": entry.get("reason", "Recurring maintenance"),
-                })
-
-            if valid:
-                schedules[tenant] = valid
+        if valid:
+            schedules[tenant] = valid
 
     return schedules
 
@@ -234,7 +221,7 @@ def create_silence(alertmanager_url, tenant, reason, ends_at, dry_run=False):
         silence_id = result.get("silenceID", "unknown")
         print(f"  Created silence {silence_id} for {tenant} until {ends_at.isoformat()}")
         return silence_id
-    except Exception as e:
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
         print(f"  ERROR: failed to create silence for {tenant}: {e}", file=sys.stderr)
         return None
 
@@ -269,7 +256,7 @@ def extend_silence(alertmanager_url, silence_id, tenant, reason, ends_at,
         new_id = result.get("silenceID", silence_id)
         print(f"  Extended silence {new_id} for {tenant} until {ends_at.isoformat()}")
         return new_id
-    except Exception as e:
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
         print(f"  ERROR: failed to extend silence {silence_id} for {tenant}: {e}",
               file=sys.stderr)
         return None
@@ -279,34 +266,10 @@ def _api_request(url, method="GET", payload=None, max_retries=3):
     """Make HTTP request to Alertmanager API with exponential backoff retry.
 
     Only retries on 5xx and connection errors; 4xx are not retried.
+    委派至 :func:`_lib_python.http_request_with_retry`。
     """
-    last_error = None
-
-    for attempt in range(max_retries):
-        try:
-            req = urllib.request.Request(url, method=method)
-            req.add_header("Content-Type", "application/json")
-
-            data = None
-            if payload is not None:
-                data = json.dumps(payload).encode("utf-8")
-
-            with urllib.request.urlopen(req, data=data, timeout=10) as resp:
-                body = resp.read().decode("utf-8")
-                return json.loads(body) if body else {}
-
-        except urllib.error.HTTPError as e:
-            if e.code < 500:
-                raise  # 4xx: don't retry
-            last_error = e
-        except (urllib.error.URLError, OSError) as e:
-            last_error = e
-
-        if attempt < max_retries - 1:
-            wait = 2 ** attempt  # 1s, 2s, 4s
-            time.sleep(wait)
-
-    raise last_error
+    return http_request_with_retry(
+        url, method=method, payload=payload, max_retries=max_retries)
 
 
 def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
@@ -407,7 +370,7 @@ def push_metrics(pushgateway_url, created, skipped, errors, duration_s):
         with urllib.request.urlopen(req, data=data, timeout=5) as resp:
             resp.read()
         print(f"  Pushed metrics to {pushgateway_url}")
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         # Non-fatal: observability failure should not fail the CronJob
         print(f"  WARN: failed to push metrics to Pushgateway: {e}",
               file=sys.stderr)

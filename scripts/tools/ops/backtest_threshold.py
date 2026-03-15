@@ -35,15 +35,13 @@ import os
 import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled  # noqa: E402
+from _lib_python import load_yaml_file, is_disabled, http_get_json  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -70,13 +68,9 @@ def parse_lookback(lookback_str):
 
 def prometheus_available(prom_url, timeout=5):
     """Check if Prometheus is reachable."""
-    try:
-        url = f"{prom_url}/api/v1/status/buildinfo"
-        req = urllib.request.Request(url, method="GET")
-        urllib.request.urlopen(req, timeout=timeout)
-        return True
-    except (urllib.error.URLError, OSError):
-        return False
+    url = f"{prom_url}/api/v1/status/buildinfo"
+    data, err = http_get_json(url, timeout=timeout)
+    return err is None
 
 
 def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
@@ -93,14 +87,11 @@ def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
     })
     url = f"{prom_url}/api/v1/query_range?{params}"
 
-    try:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if data.get("status") == "success":
-            return data.get("data", {}).get("result", [])
-    except (urllib.error.URLError, OSError, json.JSONDecodeError):
-        pass
+    data, err = http_get_json(url, timeout=30)
+    if err:
+        return []
+    if data.get("status") == "success":
+        return data.get("data", {}).get("result", [])
     return []
 
 
@@ -437,6 +428,7 @@ def generate_markdown(report):
 
 
 def main():
+    """CLI entry point: Backtest threshold changes against historical Prometheus data."""
     parser = argparse.ArgumentParser(
         description="Backtest threshold changes against historical Prometheus data",
     )

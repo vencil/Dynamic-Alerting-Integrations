@@ -321,7 +321,7 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
         except yaml.YAMLError as e:
             print(f"Error parsing {yaml_file}: {e}", file=sys.stderr)
             sys.exit(1)
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             print(f"Error reading {yaml_file}: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -329,6 +329,7 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
 
 
 def main():
+    """CLI entry point: generate_alert_reference.py - Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files."""
     parser = argparse.ArgumentParser(
         description="Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files"
     )
@@ -438,10 +439,12 @@ def main():
     try:
         with open(file_zh, "w", encoding="utf-8") as f:
             f.write(content_zh)
+        os.chmod(file_zh, 0o644)
         print(f"Generated {file_zh}")
 
         with open(file_en, "w", encoding="utf-8") as f:
             f.write(content_en)
+        os.chmod(file_en, 0o644)
         print(f"Generated {file_en}")
 
     except IOError as e:

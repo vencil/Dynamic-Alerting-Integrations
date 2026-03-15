@@ -412,7 +412,8 @@ def print_json_report(
 ) -> int:
     """Print JSON report for badge generation."""
     report = {
-        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc).isoformat(),
         "layers": {
             "jsx": {
                 "files_with_i18n": jsx_result["files_with_i18n"],
@@ -444,6 +445,7 @@ def print_json_report(
 
 
 def main():
+    """CLI entry point: check_i18n_coverage.py."""
     parser = argparse.ArgumentParser(
         description="Check i18n coverage across JSX, Rule Packs, and Python CLI tools"
     )
@@ -467,7 +469,7 @@ def main():
 
     # Determine base directories
     script_dir = Path(__file__).parent
-    repo_root = script_dir.parent.parent
+    repo_root = script_dir.parent.parent.parent
     docs_dir = repo_root / "docs"
     rule_pack_dir = repo_root / "rule-packs"
     scripts_dir = script_dir

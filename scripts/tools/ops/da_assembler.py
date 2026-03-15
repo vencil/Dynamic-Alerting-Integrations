@@ -331,7 +331,7 @@ def render_cr_file(
     try:
         with open(cr_path, encoding="utf-8") as fh:
             cr = yaml.safe_load(fh)
-    except Exception as e:
+    except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return 2
 
@@ -346,6 +346,7 @@ def render_cr_file(
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """CLI entry point: Lightweight ThresholdConfig CRD → YAML renderer."""
     parser = argparse.ArgumentParser(
         description="Lightweight ThresholdConfig CRD → YAML assembler.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

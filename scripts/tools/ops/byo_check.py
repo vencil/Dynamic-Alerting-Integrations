@@ -25,9 +25,14 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import urllib.parse
-import urllib.request
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import http_get_json  # noqa: E402
 
 
 def query_prometheus(prom_url, promql):
@@ -35,25 +40,12 @@ def query_prometheus(prom_url, promql):
     url = f"{prom_url}/api/v1/query"
     params = urllib.parse.urlencode({"query": promql})
     full_url = f"{url}?{params}"
-    try:
-        req = urllib.request.Request(full_url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        return None, str(e)
+    data, err = http_get_json(full_url)
+    if err:
+        return None, err
     if data.get("status") != "success":
         return None, data.get("error", "Unknown error")
     return data.get("data", {}).get("result", []), None
-
-
-def fetch_json(url):
-    """Fetch JSON from URL, return (data, error)."""
-    try:
-        req = urllib.request.Request(url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode()), None
-    except Exception as e:
-        return None, str(e)
 
 
 def check_prometheus(args):
@@ -62,6 +54,8 @@ def check_prometheus(args):
     prom_url = args.prometheus
 
     # 0. Prometheus reachable
+    import urllib.error
+    import urllib.request
     try:
         req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -71,7 +65,7 @@ def check_prometheus(args):
             "status": "pass",
             "detail": "Prometheus is healthy",
         })
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         checks.append({
             "check": "prometheus_reachable",
             "status": "fail",
@@ -154,7 +148,7 @@ def check_prometheus(args):
         })
 
     # Step 3: Rule Packs loaded
-    data, err = fetch_json(f"{prom_url}/api/v1/rules")
+    data, err = http_get_json(f"{prom_url}/api/v1/rules")
     if err:
         checks.append({
             "check": "step3_rule_packs_loaded",
@@ -241,6 +235,8 @@ def check_alertmanager(args):
     am_url = args.alertmanager
 
     # 1. Alertmanager reachable + lifecycle API
+    import urllib.error
+    import urllib.request
     try:
         req = urllib.request.Request(f"{am_url}/-/ready")  # nosec B310
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -250,7 +246,7 @@ def check_alertmanager(args):
             "status": "pass",
             "detail": "Alertmanager is ready",
         })
-    except Exception as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
         checks.append({
             "check": "alertmanager_ready",
             "status": "fail",
@@ -259,7 +255,7 @@ def check_alertmanager(args):
         return checks
 
     # 2. Check AM config for tenant routes
-    data, err = fetch_json(f"{am_url}/api/v2/status")
+    data, err = http_get_json(f"{am_url}/api/v2/status")
     if err:
         checks.append({
             "check": "alertmanager_config",
@@ -286,7 +282,7 @@ def check_alertmanager(args):
         })
 
     # 3. Check current alerts
-    data, err = fetch_json(f"{am_url}/api/v2/alerts")
+    data, err = http_get_json(f"{am_url}/api/v2/alerts")
     if err:
         checks.append({
             "check": "alertmanager_alerts",
@@ -302,7 +298,7 @@ def check_alertmanager(args):
         })
 
     # 4. Check silences (maintenance windows)
-    data, err = fetch_json(f"{am_url}/api/v2/silences")
+    data, err = http_get_json(f"{am_url}/api/v2/silences")
     if err:
         checks.append({
             "check": "alertmanager_silences",
@@ -339,6 +335,7 @@ def format_output(section, checks, json_output=False):
 
 
 def main():
+    """CLI entry point: BYO Prometheus & Alertmanager integration verification."""
     parser = argparse.ArgumentParser(
         description="BYO Prometheus & Alertmanager integration verification",
     )

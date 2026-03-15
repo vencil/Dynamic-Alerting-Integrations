@@ -16,58 +16,17 @@ import os
 import re
 import sys
 import textwrap
-import urllib.parse
-import urllib.request
-
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file  # noqa: E402
-
-
-# ── Job name → DB type mapping (aligned with rule-packs/) ──────────
-
-JOB_DB_MAP = {
-    # MariaDB / MySQL
-    "mysql": "mariadb", "mariadb": "mariadb", "mysqld": "mariadb",
-    "mysqld_exporter": "mariadb", "mysql_exporter": "mariadb",
-    # PostgreSQL
-    "postgres": "postgresql", "postgresql": "postgresql", "pg": "postgresql",
-    "postgres_exporter": "postgresql",
-    # Redis
-    "redis": "redis", "redis_exporter": "redis",
-    # MongoDB
-    "mongo": "mongodb", "mongodb": "mongodb", "mongodb_exporter": "mongodb",
-    # Kafka
-    "kafka": "kafka", "kafka_exporter": "kafka",
-    # RabbitMQ
-    "rabbitmq": "rabbitmq", "rabbit": "rabbitmq",
-    # Elasticsearch
-    "elasticsearch": "elasticsearch", "elastic": "elasticsearch",
-    "es": "elasticsearch",
-    # Oracle
-    "oracle": "oracle", "oracledb": "oracle", "oracledb_exporter": "oracle",
-    # ClickHouse
-    "clickhouse": "clickhouse",
-    # DB2
-    "db2": "db2",
-}
-
-# Metric prefix → DB type (for tenant config inference)
-METRIC_PREFIX_DB_MAP = {
-    "mysql": "mariadb", "mariadb": "mariadb",
-    "pg": "postgresql", "postgres": "postgresql",
-    "redis": "redis",
-    "mongo": "mongodb", "mongodb": "mongodb",
-    "kafka": "kafka",
-    "rabbitmq": "rabbitmq", "rabbit": "rabbitmq",
-    "elasticsearch": "elasticsearch", "es": "elasticsearch",
-    "oracle": "oracle",
-    "clickhouse": "clickhouse",
-    "db2": "db2",
-}
+from _lib_python import (  # noqa: E402
+    http_get_json,
+    load_tenant_configs,
+    load_yaml_file,
+    JOB_DB_MAP,
+    METRIC_PREFIX_DB_MAP,
+)
 
 
 def query_prometheus_targets(prom_url):
@@ -76,12 +35,9 @@ def query_prometheus_targets(prom_url):
     Returns list of dicts: [{job, instance, namespace, labels}].
     """
     url = f"{prom_url}/api/v1/targets?state=active"
-    try:
-        req = urllib.request.Request(url)  # nosec B310
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as exc:
-        print(f"WARN: Cannot reach Prometheus: {exc}", file=sys.stderr)
+    data, err = http_get_json(url)
+    if err:
+        print(f"WARN: Cannot reach Prometheus: {err}", file=sys.stderr)
         return []
 
     if data.get("status") != "success":
@@ -146,45 +102,19 @@ def load_monitored_db_types(config_dir):
     """Load tenant configs and infer which DB types are monitored per namespace.
 
     Returns {db_type: set(tenant_ids)}.
-
-    Supports both YAML formats:
-      - Wrapped: {tenants: {name: {metric: value}}}  (actual conf.d/ format)
-      - Flat: {metric: value}  (simplified / legacy)
     """
     result = {}
     if not os.path.isdir(config_dir):
         print(f"WARN: config-dir not found: {config_dir}", file=sys.stderr)
         return result
 
-    for fname in sorted(os.listdir(config_dir)):
-        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
-            continue
-        if fname.startswith("_") or fname.startswith("."):
-            continue
-
-        path = os.path.join(config_dir, fname)
-        data = load_yaml_file(path, default={})
-
-        # Handle tenants: wrapper format (actual conf.d/ structure)
-        if "tenants" in data and isinstance(data.get("tenants"), dict):
-            for t_name, t_data in data["tenants"].items():
-                if not isinstance(t_data, dict):
-                    continue
-                for key in t_data:
-                    if key.startswith("_"):
-                        continue
-                    db_type = _infer_db_type_from_metric(key)
-                    if db_type:
-                        result.setdefault(db_type, set()).add(t_name)
-        else:
-            # Flat format (legacy / simplified)
-            tenant = fname.rsplit(".", 1)[0]
-            for key in data:
-                if key.startswith("_"):
-                    continue
-                db_type = _infer_db_type_from_metric(key)
-                if db_type:
-                    result.setdefault(db_type, set()).add(tenant)
+    for t_name, t_data in load_tenant_configs(config_dir).items():
+        for key in t_data:
+            if key.startswith("_"):
+                continue
+            db_type = _infer_db_type_from_metric(key)
+            if db_type:
+                result.setdefault(db_type, set()).add(t_name)
 
     return result
 

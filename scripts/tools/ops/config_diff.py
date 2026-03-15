@@ -26,6 +26,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     is_disabled as _is_disabled,
+    iter_yaml_files,
+    load_tenant_configs as _load_tenant_configs_raw,
     load_yaml_file,
     VALID_RESERVED_KEYS,
 )
@@ -45,27 +47,8 @@ def load_configs_from_dir(dir_path):
         print(f"WARN: directory not found: {dir_path}", file=sys.stderr)
         return {}
 
-    configs = {}
-    for fname in sorted(os.listdir(dir_path)):
-        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
-            continue
-        if fname.startswith("_") or fname.startswith("."):
-            continue
-
-        path = os.path.join(dir_path, fname)
-        raw = load_yaml_file(path, default={})
-
-        # Handle tenants: wrapper format (actual conf.d/ structure)
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            for t_name, t_data in raw["tenants"].items():
-                if isinstance(t_data, dict):
-                    configs[t_name] = flatten_tenant_config(t_data)
-        else:
-            # Flat format (legacy / simplified)
-            tenant = fname.rsplit(".", 1)[0]
-            configs[tenant] = flatten_tenant_config(raw)
-
-    return configs
+    raw_configs = _load_tenant_configs_raw(dir_path)
+    return {t: flatten_tenant_config(d) for t, d in raw_configs.items()}
 
 
 def load_profiles_from_dir(dir_path):
@@ -86,27 +69,11 @@ def load_tenant_profile_refs(dir_path):
     Returns {profile_name: [tenant1, tenant2, ...]}.
     """
     refs = {}
-    if not os.path.isdir(dir_path):
-        return refs
-    for fname in sorted(os.listdir(dir_path)):
-        if not (fname.endswith(".yaml") or fname.endswith(".yml")):
-            continue
-        if fname.startswith("_") or fname.startswith("."):
-            continue
-        path = os.path.join(dir_path, fname)
-        raw = load_yaml_file(path, default={})
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            for t_name, t_data in raw["tenants"].items():
-                if isinstance(t_data, dict):
-                    profile = t_data.get("_profile")
-                    if profile and isinstance(profile, str):
-                        refs.setdefault(profile, []).append(t_name)
-        else:
-            tenant = fname.rsplit(".", 1)[0]
-            if isinstance(raw, dict):
-                profile = raw.get("_profile")
-                if profile and isinstance(profile, str):
-                    refs.setdefault(profile, []).append(tenant)
+    raw_configs = _load_tenant_configs_raw(dir_path)
+    for t_name, t_data in raw_configs.items():
+        profile = t_data.get("_profile")
+        if profile and isinstance(profile, str):
+            refs.setdefault(profile, []).append(t_name)
     return refs
 
 

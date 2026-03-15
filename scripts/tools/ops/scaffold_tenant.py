@@ -16,15 +16,13 @@ Usage:
 import argparse
 import os
 import sys
-import textwrap
 
 import yaml
 
-import sys
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES, read_onboard_hints, detect_cli_lang  # noqa: E402
+from _lib_python import read_onboard_hints, detect_cli_lang  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -610,6 +608,37 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
     return {"tenants": {tenant_name: tenant_config}} if tenant_config else {"tenants": {tenant_name: {}}}
 
 
+def build_receiver_from_args(receiver_type, receiver_value, smarthost=None):
+    """從 CLI 參數建立 receiver dict。
+
+    將 receiver_type + receiver_value 組合為結構化的 receiver 物件，
+    供 generate_alertmanager_routes.py 消費。
+
+    Args:
+        receiver_type: 接收器類型（webhook, email, slack, teams, rocketchat, pagerduty）。
+        receiver_value: 接收器地址（URL、email 清單、service key 等）。
+        smarthost: 僅 email 類型需要的 SMTP smarthost。
+
+    Returns:
+        dict — 結構化 receiver 物件，如 ``{"type": "webhook", "url": "..."}}``。
+    """
+    receiver_obj = {"type": receiver_type}
+    if receiver_type == "webhook":
+        receiver_obj["url"] = receiver_value
+    elif receiver_type == "email":
+        receiver_obj["to"] = [t.strip() for t in receiver_value.split(",")]
+        receiver_obj["smarthost"] = smarthost or "localhost:25"
+    elif receiver_type == "slack":
+        receiver_obj["api_url"] = receiver_value
+    elif receiver_type == "teams":
+        receiver_obj["webhook_url"] = receiver_value
+    elif receiver_type == "rocketchat":
+        receiver_obj["url"] = receiver_value
+    elif receiver_type == "pagerduty":
+        receiver_obj["service_key"] = receiver_value
+    return receiver_obj
+
+
 def generate_report(tenant_name, selected_dbs, output_dir, namespaces=None):
     """Generate scaffold report with deployment instructions."""
     lines = [
@@ -898,20 +927,8 @@ def run_non_interactive(args):
     routing_receiver = getattr(args, "routing_receiver", None)
     if routing_receiver:
         receiver_type = getattr(args, "routing_receiver_type", "webhook")
-        receiver_obj = {"type": receiver_type}
-        if receiver_type == "webhook":
-            receiver_obj["url"] = routing_receiver
-        elif receiver_type == "email":
-            receiver_obj["to"] = [t.strip() for t in routing_receiver.split(",")]
-            receiver_obj["smarthost"] = getattr(args, "routing_smarthost", None) or "localhost:25"
-        elif receiver_type == "slack":
-            receiver_obj["api_url"] = routing_receiver
-        elif receiver_type == "teams":
-            receiver_obj["webhook_url"] = routing_receiver
-        elif receiver_type == "rocketchat":
-            receiver_obj["url"] = routing_receiver
-        elif receiver_type == "pagerduty":
-            receiver_obj["service_key"] = routing_receiver
+        smarthost = getattr(args, "routing_smarthost", None)
+        receiver_obj = build_receiver_from_args(receiver_type, routing_receiver, smarthost)
         routing = {"receiver": receiver_obj}
 
         # group_by: use explicit value or platform default
@@ -995,6 +1012,7 @@ def run_from_onboard(args):
 
 
 def main():
+    """CLI entry point: Interactive tenant config generator for Dynamic Alerting."""
     parser = argparse.ArgumentParser(
         description=_h('description'),
         formatter_class=argparse.RawDescriptionHelpFormatter,
