@@ -363,6 +363,80 @@ def _build_platform_rules():
             "replacement": lambda v: f"version: v{v}",
         })
 
+    # Doc header blockquote pattern: `> **vX.Y.Z |` (common in doc headers)
+    rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "doc header blockquote version (> **vX.Y.Z |)",
+        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*\s*\|",
+        "replacement": lambda v: f"> **v{v}** |",
+    })
+
+    # Inline text version in doc headers: **v2.0.0-preview** 統一採集 etc.
+    rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "inline doc header version (bold blockquote, no pipe)",
+        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*\s*$",
+        "replacement": lambda v: f"> **v{v}**",
+    })
+
+    # Inline version text: `於 v2.0.0 統一採集` or similar inline version strings in doc content
+    rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "inline version text in doc content",
+        "pattern": r"於\s+v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?(?=\s|\）|。)",
+        "replacement": lambda v: f"於 v{v}",
+    })
+
+    # **版本**：vX.Y.Z（與... pattern common in doc headers
+    rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "doc header **版本**：vX.Y.Z pattern",
+        "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?(?=（|：)",
+        "replacement": lambda v: f"**版本**：v{v}",
+    })
+
+    # Footer pattern: **最後更新**：v2.0.0 |
+    rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "doc footer **最後更新**：vX.Y.Z pattern",
+        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?(?=\s*\|)",
+        "replacement": lambda v: f"**最後更新**：v{v}",
+    })
+
+    # JSON schema "version" field: docs/schemas files
+    rules.append({
+        "file": "docs/schemas/tenant-config.schema.json",
+        "desc": "tenant-config.schema.json version field",
+        "pattern": r'"version"\s*:\s*"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"',
+        "replacement": lambda v: f'"version": "v{v}"',
+    })
+
+    # docs/schemas/README.md version header
+    rules.append({
+        "file": "docs/schemas/README.md",
+        "desc": "schemas README version header",
+        "pattern": r"\*\*Version\*\*:\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
+        "replacement": lambda v: f"**Version**: v{v}",
+    })
+
+    # Badge data JSON: docs/assets/badge-data.json
+    rules.append({
+        "file": "docs/assets/badge-data.json",
+        "desc": "badge-data.json version field",
+        "pattern": r'"version"\s*:\s*"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"',
+        "replacement": lambda v: f'"version": "v{v}"',
+    })
+
     # mkdocs.yml extra.platform_version / tools_version
     rules.append({
         "file": "mkdocs.yml",
@@ -383,6 +457,44 @@ def _build_platform_rules():
         "desc": "README.en.md intro version",
         "pattern": r"Governance Platform\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"Governance Platform** v{v}",
+    })
+
+    # Interactive HTML files version subtitle
+    rules.append({
+        "file": "docs/interactive/index.html",
+        "desc": "interactive index.html subtitle version",
+        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\s+—\s+Multi-Tenant",
+        "replacement": lambda v: f"v{v} — Multi-Tenant",
+    })
+
+    # Interactive JSX front matter and version consistency
+    rules.append({
+        "file": "docs/interactive/tools/cli-playground.jsx",
+        "desc": "cli-playground.jsx front matter version",
+        "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
+        "replacement": lambda v: f"version: v{v}",
+    })
+
+    rules.append({
+        "file": "docs/interactive/tools/cli-playground.jsx",
+        "desc": "cli-playground.jsx version consistency output",
+        "pattern": r"\[✓\]\s+Version consistency\s+v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
+        "replacement": lambda v: f"[✓] Version consistency  v{v}",
+    })
+
+    rules.append({
+        "file": "docs/interactive/tools/platform-demo.jsx",
+        "desc": "platform-demo.jsx version display",
+        "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
+        "replacement": lambda v: f"version: v{v}",
+    })
+
+    # Python tools fallback version string: generate_cheat_sheet.py
+    rules.append({
+        "file": "scripts/tools/dx/generate_cheat_sheet.py",
+        "desc": "generate_cheat_sheet.py platform version fallback",
+        "pattern": r"version\s*=\s*'v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?'(?=\s*#\s*fallback)",
+        "replacement": lambda v: f"version = 'v{v}'",
     })
 
     return rules
