@@ -59,9 +59,9 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（66 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（67 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
-快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (5 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (5 ADRs)
+快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (6 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (5 ADRs)
 
 ## 工具 (scripts/tools/)
 

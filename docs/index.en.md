@@ -4,18 +4,18 @@ description: "Enterprise-grade Multi-Tenant Dynamic Alerting for Kubernetes"
 tags: [home, overview]
 audience: [all]
 version: v2.0.0
-lang: zh
+lang: en
 ---
 
 # Dynamic Alerting Platform
 
-> **Language / 語言：** | **中文（當前）**
+> **Language / 語言：** | **English (current)**
 
 ## Overview
 
-Prometheus 告警在多租戶環境中不具備擴展性：100 個租戶 × 50 條規則 = 每 15 秒 5,000 次獨立 PromQL 評估，租戶必須學習 PromQL 才能自助修改閾值，而每次門檻變更都需要數小時的 PR → Review → Deploy 流程。
+Prometheus alerting does not scale in multi-tenant environments: 100 tenants × 50 rules = 5,000 independent PromQL evaluations every 15 seconds, tenants must learn PromQL to self-service threshold changes, and every threshold update requires hours of PR → Review → Deploy workflow.
 
-Dynamic Alerting 將分散在各團隊的 Prometheus 告警設定，收斂為**可治理、可審計、可自助**的統一架構：租戶只寫 YAML，平台以固定 56 條規則涵蓋所有租戶的閾值評估，變更在 5 分鐘內透過 hot-reload 生效。
+Dynamic Alerting consolidates scattered per-team Prometheus alert configurations into a **governable, auditable, self-service** unified architecture: tenants write YAML only, the platform evaluates all tenant thresholds with a fixed set of 56 rules, and changes take effect within 5 minutes via hot-reload.
 
 ### Key Highlights
 
@@ -203,19 +203,19 @@ tenants:
 
 - **:material-rocket: Platform Engineers**
 
-    Deploy & operate the platform. [**Get Started →**](getting-started/for-platform-engineers.md)
+    Deploy & operate the platform. [**Get Started →**](getting-started/for-platform-engineers.en.md)
 
     Learn HA architecture, Helm integration, Prometheus/Alertmanager routing.
 
 - **:material-database: Domain Experts**
 
-    Define monitoring standards. [**Get Started →**](getting-started/for-domain-experts.md)
+    Define monitoring standards. [**Get Started →**](getting-started/for-domain-experts.en.md)
 
     Create rule packs, baseline discovery, custom governance.
 
 - **:material-account-multiple: Tenants**
 
-    Onboard & configure thresholds. [**Get Started →**](getting-started/for-tenants.md)
+    Onboard & configure thresholds. [**Get Started →**](getting-started/for-tenants.en.md)
 
     Use `da-tools scaffold`, manage YAML, zero PromQL.
 
@@ -281,17 +281,17 @@ graph TB
 
 | Document | For | Learn |
 |----------|-----|-------|
-| [Architecture & Design](architecture-and-design.md) | Platform Engineers, SREs | System design, HA, roadmap |
-| [Migration Guide](migration-guide.md) | DevOps, Tenants | Step-by-step onboarding |
-| [Governance & Security](governance-security.md) | Platform Leads, Compliance | Three-layer governance, audit |
-| [Performance Benchmarks](benchmarks.md) | Platform Engineers | Idle, scaling, routing, reload |
-| [BYO Prometheus](byo-prometheus-integration.md) | Platform Engineers | Minimal integration for existing Prometheus |
-| [BYO Alertmanager](byo-alertmanager-integration.md) | Platform Engineers | Alertmanager integration guide |
-| [GitOps Deployment](gitops-deployment.md) | DevOps | ArgoCD/Flux + RBAC patterns |
+| [Architecture & Design](architecture-and-design.en.md) | Platform Engineers, SREs | System design, HA, roadmap |
+| [Migration Guide](migration-guide.en.md) | DevOps, Tenants | Step-by-step onboarding |
+| [Governance & Security](governance-security.en.md) | Platform Leads, Compliance | Three-layer governance, audit |
+| [Performance Benchmarks](benchmarks.en.md) | Platform Engineers | Idle, scaling, routing, reload |
+| [BYO Prometheus](byo-prometheus-integration.en.md) | Platform Engineers | Minimal integration for existing Prometheus |
+| [BYO Alertmanager](byo-alertmanager-integration.en.md) | Platform Engineers | Alertmanager integration guide |
+| [GitOps Deployment](gitops-deployment.en.md) | DevOps | ArgoCD/Flux + RBAC patterns |
 | [Rule Packs Reference](rule-packs/README.md) | All | 15 rule packs + optional carve-out |
 | [Alert Reference](rule-packs/ALERT-REFERENCE.md) | Tenants, SREs | 96 alerts + remediation guide |
-| [Shadow Audit](scenarios/shadow-audit.md) | Platform Engineers, Tenants | Evaluate alert health without migration |
-| [Troubleshooting](troubleshooting.md) | All | Common issues & solutions |
+| [Shadow Audit](scenarios/shadow-audit.en.md) | Platform Engineers, Tenants | Evaluate alert health without migration |
+| [Troubleshooting](troubleshooting.en.md) | All | Common issues & solutions |
 
 ---
 
@@ -324,8 +324,8 @@ graph TB
 
 Apache License 2.0 — See [LICENSE](../LICENSE) in the repository.
 
-## 相關資源
+## Related Resources
 
-| 資源 | 相關性 |
-|------|--------|
-| ["文件導覽"](index.md) | ⭐⭐ |
+| Resource | Relevance |
+|----------|-----------|
+| ["Documentation Map"](index.en.md) | ⭐⭐ |

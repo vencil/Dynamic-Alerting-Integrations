@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-44%20pairs-blue)
+![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
 
 Multi-tenant dynamic alerting platform. Tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
 

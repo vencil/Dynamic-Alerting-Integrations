@@ -895,6 +895,8 @@ graph LR
         CV["§5.10 Config<br/>Versioning"]
         GD["§5.11 Dashboard<br/>as Code"]
         AD["§5.12 Tenant<br/>Auto-Discovery"]
+        BS["§5.13 Backstage<br/>Plugin"]
+        RC["§5.14 ROI<br/>Calculator"]
     end
 ```
 
@@ -1003,6 +1005,32 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 - **Explicit Override Priority**: If an explicit tenant YAML already exists in config-dir, it takes precedence — auto-discovery does not override manual configuration.
 
 **Risk**: Auto-discovery blurs the boundary of "which namespaces are managed tenants." An allowlist/denylist mechanism (e.g., `_auto_discovery.excludeNamespaces: [kube-system, monitoring]`) is needed to prevent system namespaces from being mistakenly registered.
+
+### 5.13 Backstage Plugin (Developer Portal Integration)
+
+**Motivation**: Enterprises that have invested in [Backstage](https://backstage.io/) as their internal developer portal expect alert management to be integrated into the existing service catalog experience, rather than requiring teams to switch to a separate UI or CLI.
+
+**Approach**:
+
+- **Minimal Plugin**: A Backstage frontend plugin that adds a "Dynamic Alerting" tab to the Service Entity page, displaying the tenant's current thresholds, alert quality scores, and recent alert history.
+- **Data Source**: Reads threshold metrics via Prometheus API + `alert_quality.py` JSON output — no additional backend service required.
+- **Advanced Integration**: Support triggering `scaffold` / `patch-config` from the Backstage UI (requires Backstage backend proxy forwarding to `da-tools` container).
+
+**Prerequisites**: Requires a stable REST API interface (currently threshold-exporter only exposes `/metrics`), or data retrieval via Prometheus queries. Recommended to complete §5.4 Threshold Recommendation first so the plugin has richer data to display.
+
+### 5.14 ROI Calculator (Adoption Benefit Estimator)
+
+**Motivation**: During platform evaluation, decision-makers need to quantify "how much benefit would adopting Dynamic Alerting bring." Currently only qualitative descriptions exist (Problems Solved section) without an interactive numerical estimate.
+
+**Approach**:
+
+- **Interactive Tool**: A new JSX interactive tool (registered in `tool-registry.yaml`). Users input current tenant count, rule count, average change time, on-call headcount, etc., and the tool calculates:
+  - Rule maintenance time savings (based on O(N×M) → O(M) model)
+  - Alert storm reduction ratio (based on auto-suppression + maintenance mode expected effect)
+  - Onboarding time reduction (based on scaffold + migration engine automation ratio)
+- **Data-Driven**: If Shadow Audit (`alert_quality.py`) has been run, actual quality scores can be imported for more realistic estimates.
+
+**Positioning**: This is an adoption decision-support tool, not a core platform feature. Priority is lower than technical roadmap items.
 
 ---
 

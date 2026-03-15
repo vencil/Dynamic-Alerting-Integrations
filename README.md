@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** | **中文（當前）**
 
-![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-44%20pairs-blue)
+![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
 
 多租戶動態警報平台。租戶寫 YAML，平台管規則——閾值、路由、通知、維護窗口全配置驅動，規則數不隨租戶增長。
 

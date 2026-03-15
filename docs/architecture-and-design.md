@@ -901,6 +901,8 @@ graph LR
         CV["§5.10 Config<br/>Versioning"]
         GD["§5.11 Dashboard<br/>as Code"]
         AD["§5.12 Tenant<br/>Auto-Discovery"]
+        BS["§5.13 Backstage<br/>Plugin"]
+        RC["§5.14 ROI<br/>Calculator"]
     end
 ```
 
@@ -1009,6 +1011,32 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 - **Override 優先**：若 config-dir 中已存在該 tenant 的明確 YAML，以明確配置為準（auto-discovery 不覆蓋）。
 
 **風險**：auto-discovery 會模糊「哪些 namespace 是受管租戶」的邊界。需要 allowlist/denylist 機制（如 `_auto_discovery.excludeNamespaces: [kube-system, monitoring]`）避免系統 namespace 被誤註冊。
+
+### 5.13 Backstage Plugin（開發者入口整合）
+
+**動機**：已投資 [Backstage](https://backstage.io/) 作為內部開發者入口的企業，期望將告警管理納入既有的 service catalog 體驗，而非要求團隊切換到獨立的 UI 或 CLI。
+
+**做法**：
+
+- **Minimal Plugin**：Backstage frontend plugin，在 Service Entity 頁面新增 "Dynamic Alerting" tab，顯示該 tenant 的當前閾值、告警品質分數、最近告警歷史。
+- **資料來源**：透過 Prometheus API 讀取 threshold metric + `alert_quality.py` JSON 輸出，不需要額外後端服務。
+- **進階整合**：支援從 Backstage UI 發起 `scaffold` / `patch-config`（需 Backstage backend proxy 轉發至 `da-tools` container）。
+
+**前置條件**：需要穩定的 REST API 介面（目前 threshold-exporter 僅暴露 `/metrics`），或透過 Prometheus query 間接取得資料。建議先完成 §5.4 Threshold Recommendation，讓 plugin 有更豐富的資料可呈現。
+
+### 5.14 ROI Calculator（採用效益試算器）
+
+**動機**：平台評估階段，決策者需要量化「導入 Dynamic Alerting 能帶來多少效益」。目前只有定性描述（Problems Solved 章節），缺乏可互動的數字化試算。
+
+**做法**：
+
+- **互動工具**：新增 JSX 互動工具（納入 `tool-registry.yaml`），輸入當前租戶數、規則數、平均變更時間、on-call 人數等參數，計算：
+  - 規則維護時間節省（基於 O(N×M) → O(M) 模型）
+  - 告警風暴減少比例（基於 auto-suppression + maintenance mode 預期效果）
+  - 上線時間縮短（基於 scaffold + migration engine 自動化比例）
+- **資料驅動**：若已執行 Shadow Audit（`alert_quality.py`），可匯入實際品質分數，讓試算更貼近真實環境。
+
+**定位**：此為採用決策輔助工具，非核心平台功能。優先順序低於技術 roadmap 項目。
 
 ---
 

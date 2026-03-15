@@ -22,7 +22,7 @@
 | `docs/glossary.md` (.en.md) | All | 術語表 |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, 安全合規 | 治理、稽核與安全合規 |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard 導覽 |
-| `docs/index.md` | All | Dynamic Alerting Platform — Home |
+| `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
 | `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
 | `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
 | `docs/interactive/tools/architecture-quiz.jsx` | Platform Engineers | Architecture Decision Quiz |
@@ -59,6 +59,7 @@
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標 |
+| `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | 場景：Shadow Audit — 不遷移也能評估告警健康度 |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | SREs, DevOps | 場景：Shadow Monitoring 全自動切換工作流 |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | 場景：租戶完整生命週期管理 |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |
