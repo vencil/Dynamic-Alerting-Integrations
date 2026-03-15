@@ -141,6 +141,17 @@ def _build_tools_rules():
         "replacement": lambda v: f"**`tools/v{v}`**",
     })
 
+    # CI workflow and K8s manifest image tags
+    for f in [".github/workflows/config-diff.yaml",
+              ".gitlab/ci/config-diff.gitlab-ci.yml",
+              "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"]:
+        rules.append({
+            "file": f,
+            "desc": f"da-tools image tag in {f}",
+            "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+        })
+
     return rules
 
 
@@ -210,6 +221,45 @@ def _build_exporter_rules():
             "desc": "exporter git tag in da-tools strategy table",
             "pattern": r"`exporter/v[0-9]+\.[0-9]+\.[0-9]+`",
             "replacement": lambda v: f"`exporter/v{v}`",
+        },
+        # OCI chart inline version (colon-style, no --version flag)
+        {
+            "file": "docs/index.md",
+            "desc": "OCI chart inline version in index.md",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter:[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter:{v}",
+        },
+        # Exporter image tag in API docs
+        {
+            "file": "docs/api/README.md",
+            "desc": "exporter image tag in API docs (zh)",
+            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"ghcr.io/vencil/threshold-exporter:v{v}",
+        },
+        {
+            "file": "docs/api/README.en.md",
+            "desc": "exporter image tag in API docs (en)",
+            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"ghcr.io/vencil/threshold-exporter:v{v}",
+        },
+        # OCI chart --version in scenario docs
+        {
+            "file": "docs/scenarios/multi-cluster-federation.md",
+            "desc": "OCI chart --version in federation scenario (zh)",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "docs/scenarios/multi-cluster-federation.en.md",
+            "desc": "OCI chart --version in federation scenario (en)",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "docs/migration-guide.en.md",
+            "desc": "OCI chart --version in migration guide (en)",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
     ]
 

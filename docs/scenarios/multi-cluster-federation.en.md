@@ -259,7 +259,7 @@ prometheus --web.enable-remote-write-receiver \
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.0.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml   # replicaCount: 2 for HA
 ```

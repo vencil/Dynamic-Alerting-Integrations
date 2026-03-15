@@ -129,7 +129,7 @@ The files produced by scaffold need to be injected into the `threshold-config` C
 # Method A (recommended): Helm values override — OCI registry
 #   Merge the output tenant config into values-override.yaml, then helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.0.0 \
   -n monitoring -f values-override.yaml
 
 # Method B: Direct ConfigMap reconstruction (suitable for non-Helm environments)
@@ -226,7 +226,7 @@ When input rules include both warning and critical versions (same base metric ke
 ```bash
 # Production deployment — install chart from OCI registry with custom values-override to inject tenant config
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 1.9.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.0.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```

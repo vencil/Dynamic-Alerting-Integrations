@@ -45,7 +45,7 @@ jobs:
           docker run --rm \
             -v /tmp/old-conf.d:/data/old:ro \
             -v ${{ github.workspace }}/components/threshold-exporter/config/conf.d:/data/new:ro \
-            ghcr.io/vencil/da-tools:1.10.0 \
+            ghcr.io/vencil/da-tools:v2.0.0 \
             config-diff --old-dir /data/old --new-dir /data/new \
             > /tmp/diff-report.md || true
           # config-diff exits 1 when changes exist (expected)

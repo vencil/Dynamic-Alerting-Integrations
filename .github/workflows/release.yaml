@@ -6,8 +6,8 @@
 #   - v*          → platform tag，僅用於 GitHub Release 錨點，不觸發 build
 #
 # 產出：
-#   - ghcr.io/vencil/threshold-exporter:<version>  (Docker image)
-#   - ghcr.io/vencil/da-tools:<da-tools-version>    (Docker image)
+#   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
+#   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
 #
 # 前置條件：
@@ -70,7 +70,7 @@ jobs:
           context: components/threshold-exporter/app
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:latest
 
       # --- Helm chart ---
@@ -121,5 +121,5 @@ jobs:
           context: components/da-tools/app
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest

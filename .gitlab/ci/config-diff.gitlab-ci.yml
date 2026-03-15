@@ -12,7 +12,7 @@
 
 config-diff:
   stage: review
-  image: ghcr.io/vencil/da-tools:1.10.0
+  image: ghcr.io/vencil/da-tools:v2.0.0
   rules:
     - if: $CI_MERGE_REQUEST_IID
       changes:

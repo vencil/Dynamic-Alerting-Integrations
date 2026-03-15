@@ -185,21 +185,35 @@ def _scan_file(filepath: Path, pattern: str, flags: int = 0) -> List[Tuple[int, 
     return matches
 
 
+def _collect_scannable_files(extensions: Tuple[str, ...] = (".md", ".jsx"),
+                             include_ci: bool = True) -> List[Path]:
+    """Collect files to scan across docs, CI workflows, and K8s manifests."""
+    files: List[Path] = []
+    # Docs
+    for ext in extensions:
+        files.extend(DOCS_DIR.rglob(f"*{ext}"))
+    # Root READMEs
+    for name in ("README.md", "README.en.md"):
+        p = REPO_ROOT / name
+        if p.is_file():
+            files.append(p)
+    if include_ci:
+        # CI workflows + K8s manifests
+        for scan_dir in (REPO_ROOT / ".github",
+                         REPO_ROOT / ".gitlab",
+                         REPO_ROOT / "k8s"):
+            if scan_dir.is_dir():
+                files.extend(scan_dir.rglob("*.yaml"))
+                files.extend(scan_dir.rglob("*.yml"))
+    return files
+
+
 def check_da_tools_version(expected: str) -> List[Issue]:
     """Check all da-tools image tag references match VERSION file."""
     issues = []
     tag_pattern = r"da-tools:v?([0-9]+\.[0-9]+\.[0-9]+)"
 
-    scan_dirs = [DOCS_DIR, REPO_ROOT / "README.md", REPO_ROOT / "README.en.md"]
-    files_to_scan = []
-    for d in scan_dirs:
-        if d.is_dir():
-            files_to_scan.extend(d.rglob("*.md"))
-            files_to_scan.extend(d.rglob("*.jsx"))
-        elif d.is_file():
-            files_to_scan.append(d)
-
-    for f in files_to_scan:
+    for f in _collect_scannable_files():
         content = f.read_text(encoding="utf-8")
         for i, line in enumerate(content.splitlines(), 1):
             for m in re.finditer(tag_pattern, line):
@@ -220,14 +234,17 @@ def check_exporter_version(expected: str) -> List[Issue]:
         (r"threshold-exporter:v?([0-9]+\.[0-9]+\.[0-9]+)", "image tag"),
         (r"charts/threshold-exporter --version ([0-9]+\.[0-9]+\.[0-9]+)",
          "OCI chart version"),
+        (r"charts/threshold-exporter:([0-9]+\.[0-9]+\.[0-9]+)",
+         "OCI chart inline version"),
     ]
 
-    files_to_scan = list(DOCS_DIR.rglob("*.md"))
-    files_to_scan.append(REPO_ROOT / "README.md")
-    files_to_scan.append(REPO_ROOT / "README.en.md")
+    # Skip release.yaml — it uses CI variable interpolation, not literal tags
+    skip_names = {"release.yaml"}
 
-    for f in files_to_scan:
+    for f in _collect_scannable_files():
         if not f.exists():
+            continue
+        if f.name in skip_names:
             continue
         content = f.read_text(encoding="utf-8")
         for i, line in enumerate(content.splitlines(), 1):
@@ -877,6 +894,44 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
     return fixed
 
 
+def check_image_tag_v_prefix() -> List[Issue]:
+    """Ensure Docker image tags use v-prefix convention consistently.
+
+    Convention (aligned with CI release.yaml):
+      - Docker images: da-tools:v<ver>, threshold-exporter:v<ver> (v-prefixed)
+      - Helm OCI chart: charts/threshold-exporter:<ver> (no v, SemVer)
+
+    Detects bare version tags (e.g. da-tools:2.0.0) that should be v-prefixed.
+    Skips CI release.yaml (uses variable interpolation) and CHANGELOG (historical).
+    """
+    issues = []
+    # Match image:VERSION without v prefix (negative lookbehind for 'charts/')
+    bare_tag_pattern = r"(?<!charts/)(?:da-tools|threshold-exporter):(\d+\.\d+\.\d+)"
+
+    skip_names = {"release.yaml", "CHANGELOG.md", "CHANGELOG.en.md"}
+
+    for f in _collect_scannable_files():
+        if not f.exists() or f.name in skip_names:
+            continue
+        content = f.read_text(encoding="utf-8")
+        for i, line in enumerate(content.splitlines(), 1):
+            for m in re.finditer(bare_tag_pattern, line):
+                rel = f.relative_to(REPO_ROOT)
+                ver = m.group(1)
+                # Find which image it is
+                start = max(0, m.start() - 30)
+                context = line[start:m.end()]
+                if "da-tools" in context:
+                    img = "da-tools"
+                else:
+                    img = "threshold-exporter"
+                issues.append(Issue(
+                    "image-tag-v-prefix", "error", str(rel), i,
+                    f"{img}:{ver} missing v prefix, should be {img}:v{ver}",
+                ))
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -933,6 +988,7 @@ def main():
     all_issues.extend(check_adr_count_in_docs())
     all_issues.extend(check_doc_file_count_in_docs())
     all_issues.extend(check_scenario_count_in_docs())
+    all_issues.extend(check_image_tag_v_prefix())
 
     # --fix mode: auto-fix fixable issues
     if args.fix and all_issues:
