@@ -1,0 +1,4724 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-guide/">
+      
+      
+        <link rel="prev" href="../gitops-deployment/">
+      
+      
+        <link rel="next" href="../migration-engine/">
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../en/migration-guide/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.5">
+    
+    
+      
+        <title>Migration Guide — 遷移指南 - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migration-guide" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href=".." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migration Guide — 遷移指南
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../en/migration-guide/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../context-diagram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context 圖
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/004-federation-scenario-a-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Scenario A First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#where-are-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        你在哪個階段？(Where Are You?)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zero-friction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zero-Friction 導入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-da-tools-onboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. 企業級反向分析 — da-tools onboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. 企業級反向分析 — da-tools onboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具輸出
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-da-tools-scaffold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 新租戶快速接入 — da-tools scaffold
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. 新租戶快速接入 — da-tools scaffold">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具產出
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        注入 K8s 叢集
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-da-tools-migrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 既有規則遷移 — da-tools migrate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 既有規則遷移 — da-tools migrate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        三種處理情境
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具輸出的「三件套」
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        部署至 K8s 叢集
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-suppression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        聚合模式與 Auto-Suppression
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-threshold-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. 部署 threshold-exporter
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. 部署 threshold-exporter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-oci-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        選項 A (推薦): OCI Registry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        選項 B: 本地建置
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        驗證部署
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s-da-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        在 K8s 叢集內使用 da-tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 實戰範例：五種遷移場景
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. 實戰範例：五種遷移場景">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 基本數值比較 (連線數)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-45" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2-4.5 其他常見模式 — 快速參考表
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-alertmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Alertmanager 路由遷移
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Alertmanager 路由遷移">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        傳統 (基於 instance)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        遷移後 (基於 tenant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-driven-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config-Driven Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        進階路由功能
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. 遷移後驗證
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. 遷移後驗證">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        完整驗證清單
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        遷移完成後：Tenant 自助管理
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. 維度標籤 — 多 DB 類型支援
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. 維度標籤 — 多 DB 類型支援">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        語法
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        設計約束
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#promql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        平台團隊 PromQL 適配 (重要)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        參考範本
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-llm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. LLM 輔助手動轉換
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. 進階：擴展不支援的 DB 類型
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. 進階：擴展不支援的 DB 類型">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        正規化命名規範
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#max-vs-sum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        聚合模式選擇 — Max vs. Sum
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        建立步驟
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q-threshold-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 修改 threshold-config 後多久生效？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 新增一種指標需要改哪些東西？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 遷移過渡期可以新舊並存嗎？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-key-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 維度 key 可以設定在 defaults 裡嗎？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-key-critical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 維度 key 怎麼指定 critical？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-hot-reload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 如何確認 hot-reload 成功？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-1000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. 企業級遷移 — 大型租戶 (1000+ 條規則)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. 企業級遷移 — 大型租戶 (1000+ 條規則)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-a-triage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase A: Triage 分析
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-b-shadow-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase B: 轉換 + Shadow Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase C: 切換與收斂
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metric Dictionary 自動比對
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        遷移自動化工具
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-rule-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Rule Pack 動態開關
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Rule Pack 動態開關">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rule-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        卸載不需要的 Rule Pack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        重新啟用
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        典型場景
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-tenant-rulemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. 下架流程 — Tenant 與 Rule/Metric
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. 下架流程 — Tenant 與 Rule/Metric">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenant_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant 下架
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rulemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule/Metric 下架
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關資源
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/advanced-scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    進階場景
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#where-are-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        你在哪個階段？(Where Are You?)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zero-friction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zero-Friction 導入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-da-tools-onboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. 企業級反向分析 — da-tools onboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. 企業級反向分析 — da-tools onboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具輸出
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-da-tools-scaffold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 新租戶快速接入 — da-tools scaffold
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. 新租戶快速接入 — da-tools scaffold">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具產出
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        注入 K8s 叢集
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-da-tools-migrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 既有規則遷移 — da-tools migrate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 既有規則遷移 — da-tools migrate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        三種處理情境
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具輸出的「三件套」
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        部署至 K8s 叢集
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-suppression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        聚合模式與 Auto-Suppression
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-threshold-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. 部署 threshold-exporter
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. 部署 threshold-exporter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-oci-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        選項 A (推薦): OCI Registry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        選項 B: 本地建置
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        驗證部署
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s-da-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        在 K8s 叢集內使用 da-tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 實戰範例：五種遷移場景
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. 實戰範例：五種遷移場景">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 基本數值比較 (連線數)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-45" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2-4.5 其他常見模式 — 快速參考表
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-alertmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Alertmanager 路由遷移
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Alertmanager 路由遷移">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        傳統 (基於 instance)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        遷移後 (基於 tenant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-driven-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config-Driven Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        進階路由功能
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. 遷移後驗證
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. 遷移後驗證">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        完整驗證清單
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        遷移完成後：Tenant 自助管理
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. 維度標籤 — 多 DB 類型支援
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. 維度標籤 — 多 DB 類型支援">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        語法
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        設計約束
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#promql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        平台團隊 PromQL 適配 (重要)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        參考範本
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-llm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. LLM 輔助手動轉換
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. 進階：擴展不支援的 DB 類型
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. 進階：擴展不支援的 DB 類型">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        正規化命名規範
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#max-vs-sum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        聚合模式選擇 — Max vs. Sum
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        建立步驟
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q-threshold-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 修改 threshold-config 後多久生效？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 新增一種指標需要改哪些東西？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 遷移過渡期可以新舊並存嗎？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-key-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 維度 key 可以設定在 defaults 裡嗎？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-key-critical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 維度 key 怎麼指定 critical？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-hot-reload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: 如何確認 hot-reload 成功？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-1000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. 企業級遷移 — 大型租戶 (1000+ 條規則)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. 企業級遷移 — 大型租戶 (1000+ 條規則)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-a-triage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase A: Triage 分析
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-b-shadow-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase B: 轉換 + Shadow Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase C: 切換與收斂
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metric Dictionary 自動比對
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        遷移自動化工具
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-rule-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Rule Pack 動態開關
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Rule Pack 動態開關">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rule-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        卸載不需要的 Rule Pack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        重新啟用
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        典型場景
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-tenant-rulemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. 下架流程 — Tenant 與 Rule/Metric
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. 下架流程 — Tenant 與 Rule/Metric">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenant_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant 下架
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rulemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule/Metric 下架
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關資源
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">getting-started</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">migration</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/migration-guide.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/migration-guide.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="migration-guide">Migration Guide — 遷移指南<a class="headerlink" href="#migration-guide" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>從傳統 Prometheus 警報遷移至動態多租戶閾值架構。
+<strong>其他文件：</strong> <a href="../">README</a> (概覽) · <a href="../architecture-and-design/">Architecture &amp; Design</a> (技術深度) · <a href="../rule-packs/">Rule Packs</a> (規則包目錄)</p>
+<p><strong>⚠️ 遷移安全保證：</strong> 本平台的遷移流程設計為<strong>漸進式且可回退</strong>。你的舊規則不需要一次性切換 — 新規則透過 <code>custom_</code> Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 <code>optional: true</code> 機制確保刪除任何規則包不會影響 Prometheus 運行。</p>
+<p><strong>提示：</strong> 所有 <code>da-tools</code> 指令可透過 Docker 直接執行（<code>docker run --rm --network=host ghcr.io/vencil/da-tools:v2.0.0 &lt;cmd&gt;</code>），以下範例使用簡寫 <code>da-tools &lt;cmd&gt;</code> 形式。</p>
+</blockquote>
+<h2 id="where-are-you">你在哪個階段？(Where Are You?)<a class="headerlink" href="#where-are-you" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>你的情境</th>
+<th>推薦路徑</th>
+<th>工具 (<code>da-tools</code> 命令)</th>
+<th>預估時間</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>全新租戶</strong> — 首次接入</td>
+<td>互動式產生 tenant config</td>
+<td><code>da-tools scaffold</code></td>
+<td>~5 min</td>
+</tr>
+<tr>
+<td><strong>既有成熟監控體系</strong> — 企業反向分析</td>
+<td>自動生成遷移計畫</td>
+<td><code>da-tools onboard</code></td>
+<td>~10 min</td>
+</tr>
+<tr>
+<td><strong>已有傳統 alert rules</strong> — 要遷移</td>
+<td>自動轉換為三件套</td>
+<td><code>da-tools migrate</code></td>
+<td>~15 min</td>
+</tr>
+<tr>
+<td><strong>大型租戶 (1000+ 條)</strong> — 企業級遷移</td>
+<td>Triage → Shadow → 切換</td>
+<td><code>da-tools migrate --triage</code> + <code>da-tools validate</code></td>
+<td>~1-2 週</td>
+</tr>
+<tr>
+<td><strong>不支援的 DB 類型</strong> — 需擴展</td>
+<td>手動建立 Recording + Alert Rules</td>
+<td>參見 <a href="#9-進階擴展不支援的-db-類型">§9</a></td>
+<td>~30 min</td>
+</tr>
+<tr>
+<td><strong>下架租戶/指標</strong></td>
+<td>安全移除</td>
+<td><code>da-tools offboard</code> / <code>da-tools deprecate</code></td>
+<td>~5 min</td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>flowchart TD
+    Start["開始遷移"] --&gt; Q0{"有既有&lt;br/&gt;Alertmanager/&lt;br/&gt;Rules/Scrape?"}
+    Q0 --&gt;|"有成熟監控"| S0["da-tools onboard&lt;br/&gt;反向分析 → 遷移計畫"]
+    Q0 --&gt;|"沒有"| Q1{"有既有&lt;br/&gt;alert rules?"}
+    S0 --&gt; Q1
+    Q1 --&gt;|"沒有"| S1["da-tools scaffold&lt;br/&gt;互動式產生配置"]
+    Q1 --&gt;|"有"| Q2{"規則數量?"}
+    Q2 --&gt;|"&lt; 100 條"| S2["da-tools migrate&lt;br/&gt;--dry-run 預覽"]
+    Q2 --&gt;|"100+ 條"| S3["da-tools migrate&lt;br/&gt;--triage 分類"]
+    S2 --&gt; V["da-tools validate-config&lt;br/&gt;一站式驗證"]
+    S3 --&gt; S4["Shadow Monitoring&lt;br/&gt;da-tools validate"]
+    S4 --&gt; S5["漸進切換&lt;br/&gt;(數週並行觀察)"]
+    S1 --&gt; V
+    V --&gt; Done["完成"]
+    S5 --&gt; Done
+
+    style Done fill:#c8e6c9,stroke:#2e7d32
+    style Start fill:#e3f2fd,stroke:#1565c0</code></pre>
+<h2 id="zero-friction">Zero-Friction 導入<a class="headerlink" href="#zero-friction" title="Permanent link">&para;</a></h2>
+<p>本平台已預載 <strong>15 個 Rule Pack ConfigMap</strong> (MariaDB、PostgreSQL、Kubernetes、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Operational、Platform 自我監控)，透過 Kubernetes <strong>Projected Volume</strong> 架構分散於獨立 ConfigMap 中。每個 Rule Pack 包含完整的三件套：Normalization Recording Rules + Threshold Normalization + Alert Rules。</p>
+<p><strong>未部署 exporter 的 Rule Pack 不會產生 metrics，alert 也不會誤觸發 (near-zero cost)</strong>。新增 exporter 後，只需配置 <code>_defaults.yaml</code> + tenant YAML，不需修改 Prometheus 設定。</p>
+<hr />
+<h2 id="0-da-tools-onboard">0. 企業級反向分析 — da-tools onboard<a class="headerlink" href="#0-da-tools-onboard" title="Permanent link">&para;</a></h2>
+<p>對於已有成熟監控體系的企業，<code>onboard_platform.py</code> 支援<strong>反向分析</strong>既有配置，自動生成遷移計畫：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 分析既有 Alertmanager 設定</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--alertmanager-config<span class="w"> </span>/data/alertmanager.yml<span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># 分析既有 Prometheus rules</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--rule-files<span class="w"> </span><span class="s1">&#39;/data/rules/*.yml&#39;</span><span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># 分析 scrape config（用於 Tenant-NS mapping）</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--scrape-config<span class="w"> </span>/data/prometheus.yml<span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/<span class="w"> </span>--tenant-label<span class="w"> </span>cluster
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># 一次分析全部（三 phase 合併執行）</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--alertmanager-config<span class="w"> </span>/data/alertmanager.yml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">                  </span>--rule-files<span class="w"> </span><span class="s1">&#39;/data/rules/*.yml&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">                  </span>--scrape-config<span class="w"> </span>/data/prometheus.yml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">                  </span>--tenant-label<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/
+</code></pre></div>
+<h3 id="_1">工具輸出<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>檔案</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>extracted-tenants.yaml</code></td>
+<td>自動識別的租戶列表與 Alertmanager receiver 映射</td>
+</tr>
+<tr>
+<td><code>migration-plan.csv</code></td>
+<td>規則分桶清單（auto/review/skip/use_golden） + 映射建議</td>
+</tr>
+<tr>
+<td><code>relabel-config-suggestions.txt</code></td>
+<td>Prometheus scrape config relabel 片段（用於 Tenant-NS mapping）</td>
+</tr>
+</tbody>
+</table>
+<p>反向分析完成後，可直接將 <code>extracted-tenants.yaml</code> 用作 <code>scaffold</code> 和 <code>migrate</code> 的配置入口，加速企業級遷移上線。</p>
+<hr />
+<h2 id="1-da-tools-scaffold">1. 新租戶快速接入 — da-tools scaffold<a class="headerlink" href="#1-da-tools-scaffold" title="Permanent link">&para;</a></h2>
+<p>對於全新租戶，使用互動式產生器即可在 30 秒內完成設定：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># CLI 模式 — 一行搞定</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--db<span class="w"> </span>redis,mariadb<span class="w"> </span>--non-interactive<span class="w"> </span>-o<span class="w"> </span>/data
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># 含 N:1 namespace-tenant mapping</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--db<span class="w"> </span>redis,mariadb<span class="w"> </span>--namespaces<span class="w"> </span>ns1,ns2,ns3<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">                  </span>--non-interactive<span class="w"> </span>-o<span class="w"> </span>/data
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># 含 routing 設定 — 產出即帶完整路由配置</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--db<span class="w"> </span>redis,mariadb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">                  </span>--routing-receiver<span class="w"> </span><span class="s2">&quot;https://hooks.slack.com/services/T../B../xxx&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">                  </span>--routing-receiver-type<span class="w"> </span>slack<span class="w"> </span>--non-interactive<span class="w"> </span>-o<span class="w"> </span>/data
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="c1"># 查看支援的 DB 類型與指標</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--catalog
+</code></pre></div>
+<h3 id="_2">工具產出<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>檔案</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_defaults.yaml</code></td>
+<td>平台全域預設值 (含所有選擇的 DB 指標)</td>
+</tr>
+<tr>
+<td><code>&lt;tenant&gt;.yaml</code></td>
+<td>租戶覆寫設定 (含三態範例 + <code>_routing</code> + <code>_severity_dedup</code>)</td>
+</tr>
+<tr>
+<td><code>scaffold-report.txt</code></td>
+<td>部署步驟與 Rule Pack 狀態摘要</td>
+</tr>
+<tr>
+<td><code>relabel-config-snippet.yaml</code></td>
+<td>Prometheus relabel_configs 片段（僅 <code>--namespaces</code> 時產出）</td>
+</tr>
+</tbody>
+</table>
+<p>所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，產出的 config 直接複製至 <code>conf.d/</code> 即可使用，無需額外掛載。</p>
+<h3 id="k8s">注入 K8s 叢集<a class="headerlink" href="#k8s" title="Permanent link">&para;</a></h3>
+<p>scaffold 產出的檔案需注入 <code>threshold-config</code> ConfigMap，threshold-exporter 才能讀取：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># 方式 A (推薦): Helm values 覆寫 — OCI registry</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1">#   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>threshold-exporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>oci://ghcr.io/vencil/charts/threshold-exporter<span class="w"> </span>--version<span class="w"> </span><span class="m">2</span>.0.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>-f<span class="w"> </span>values-override.yaml
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>threshold-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span>--from-file<span class="o">=</span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<p>ConfigMap 變更後，exporter 會在 1-3 分鐘內自動 hot-reload（K8s propagation + SHA-256 watcher），不需重啟 Pod。</p>
+<blockquote>
+<p>詳細的三種注入方式（Helm / kubectl / GitOps）參見 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理">threshold-exporter README — K8s 部署與配置管理</a>。</p>
+</blockquote>
+<hr />
+<h2 id="2-da-tools-migrate">2. 既有規則遷移 — da-tools migrate<a class="headerlink" href="#2-da-tools-migrate" title="Permanent link">&para;</a></h2>
+<p>已有傳統 Prometheus alert rules 的團隊，使用自動轉換工具（v4 — AST + regex 雙引擎）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># 預覽模式 — 不產出檔案，只顯示分析結果</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>--dry-run
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># 正式轉換 — 輸出至 output/</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>-o<span class="w"> </span>/data/output
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Triage + Dry Run（企業級遷移推薦）</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>-o<span class="w"> </span>/data/output<span class="w"> </span>--dry-run<span class="w"> </span>--triage
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1"># 強制使用 regex 模式 (不使用 AST 引擎)</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>--no-ast
+</code></pre></div>
+<blockquote>
+<p>工具預設使用 PromQL AST 引擎 (<code>promql-parser</code>) 精準辨識 metric name，自動注入 <code>custom_</code> 前綴與 <code>tenant</code> label。AST 解析失敗時自動降級至 regex 路徑，確保向後相容。</p>
+</blockquote>
+<h3 id="_3">三種處理情境<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>情境</th>
+<th>觸發條件</th>
+<th>工具行為</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✅ <strong>完美解析</strong></td>
+<td>簡單的 <code>指標 &gt; 數值</code></td>
+<td>自動產出完整三件套</td>
+</tr>
+<tr>
+<td>⚠️ <strong>複雜表達式</strong></td>
+<td>含 <code>rate()</code>, <code>[5m]</code>, 數學運算</td>
+<td>產出三件套 + ASCII 警告方塊提醒確認聚合模式</td>
+</tr>
+<tr>
+<td>🚨 <strong>無法解析</strong></td>
+<td><code>absent()</code>, <code>predict_linear()</code> 等</td>
+<td>不產出，改給可交 LLM 的 Prompt</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">工具輸出的「三件套」<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>轉換後產出 4 個檔案：</p>
+<table>
+<thead>
+<tr>
+<th>檔案</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tenant-config.yaml</code></td>
+<td>租戶需填入 <code>db-*.yaml</code> 的 YAML 片段</td>
+</tr>
+<tr>
+<td><code>platform-recording-rules.yaml</code></td>
+<td>平台團隊的正規化 Recording Rules (合法 YAML，含 <code>groups:</code> boilerplate)</td>
+</tr>
+<tr>
+<td><code>platform-alert-rules.yaml</code></td>
+<td>包含 <code>group_left</code> + <code>unless maintenance</code> + Auto-Suppression 的 Alert Rules</td>
+</tr>
+<tr>
+<td><code>migration-report.txt</code></td>
+<td>轉換摘要與未解析規則的 LLM Prompt</td>
+</tr>
+</tbody>
+</table>
+<h3 id="k8s_1">部署至 K8s 叢集<a class="headerlink" href="#k8s_1" title="Permanent link">&para;</a></h3>
+<p>轉換後的三件套需分別部署至不同位置：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 1. tenant-config.yaml → 合併至 threshold-config ConfigMap</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1">#    將 tenant-config.yaml 內容合併至 conf.d/&lt;tenant&gt;.yaml，再更新 ConfigMap</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>threshold-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--from-file<span class="o">=</span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># 2. Recording Rules + Alert Rules → 建立為獨立 ConfigMap，掛載至 Prometheus</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>prometheus-rules-custom<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>--from-file<span class="o">=</span>platform-recording-rules.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>--from-file<span class="o">=</span>platform-alert-rules.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># 3. 確認 Prometheus Projected Volume 已包含此 ConfigMap</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1">#    若使用 Helm，在 values.yaml 中加入新 source；</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1">#    若已有 custom rule pack slot，ConfigMap 建立後自動掛載</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Helm 使用者</strong>：也可將 recording/alert rules 整合至 Helm chart 的 values 中統一管理。詳見 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理">threshold-exporter README</a>。</p>
+</blockquote>
+<h3 id="auto-suppression">聚合模式與 Auto-Suppression<a class="headerlink" href="#auto-suppression" title="Permanent link">&para;</a></h3>
+<p>對於複雜表達式，工具會依據 6 條啟發規則自動猜測 <code>sum</code> 或 <code>max</code>。猜測的 recording rule 會帶有醒目的 ASCII 警告方塊，提醒使用者在複製貼上前確認聚合模式（<code>sum</code>=叢集總量, <code>max</code>=單點瓶頸）。如不確定，可用 <code>--interactive</code> 模式重新執行。</p>
+<p>當輸入的規則同時包含 warning 和 critical 版本（相同 base metric key），工具會自動配對並為 warning alert 注入第二層 <code>unless</code> 子句（Auto-Suppression），確保 critical 觸發時抑制 warning。配對邏輯：warning key <code>custom_X</code> 對應 critical key <code>custom_X_critical</code>。若只有單一嚴重度則不注入。</p>
+<hr />
+<h2 id="3-threshold-exporter">3. 部署 threshold-exporter<a class="headerlink" href="#3-threshold-exporter" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Config 分離原則</strong>：Helm chart 和 Docker image <strong>均不包含測試租戶資料</strong>。<code>values.yaml</code> 的 <code>thresholdConfig.tenants</code> 預設為空。你需要透過 values-override 或 GitOps 注入自身的租戶設定（參見 <a href="#注入-k8s-叢集">§1 注入 K8s 叢集</a>）。開發測試環境使用 <code>environments/local/threshold-exporter.yaml</code>，其中已包含 db-a、db-b 範例租戶。</p>
+</blockquote>
+<h3 id="a-oci-registry">選項 A (推薦): OCI Registry<a class="headerlink" href="#a-oci-registry" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>threshold-exporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>oci://ghcr.io/vencil/charts/threshold-exporter<span class="w"> </span>--version<span class="w"> </span><span class="m">2</span>.0.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>-f<span class="w"> </span>values-override.yaml
+</code></pre></div>
+<blockquote>
+<p>不需要 clone repo 或指定 image tag——chart 內已綁定對應版本的 image。</p>
+</blockquote>
+<h3 id="b">選項 B: 本地建置<a class="headerlink" href="#b" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>components/threshold-exporter/app
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>threshold-exporter:dev<span class="w"> </span>.
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>threshold-exporter:dev<span class="w"> </span>--name<span class="w"> </span>dynamic-alerting-cluster
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>make<span class="w"> </span>component-deploy<span class="w"> </span><span class="nv">COMP</span><span class="o">=</span>threshold-exporter<span class="w"> </span><span class="nv">ENV</span><span class="o">=</span><span class="nb">local</span>
+</code></pre></div>
+<h3 id="_5">驗證部署<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>threshold-exporter
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8080/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>user_threshold
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8080/api/v1/config<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<h3 id="k8s-da-tools">在 K8s 叢集內使用 da-tools<a class="headerlink" href="#k8s-da-tools" title="Permanent link">&para;</a></h3>
+<p>da-tools 也可以直接作為 K8s Job 運行（<code>image: ghcr.io/vencil/da-tools:v2.0.0</code>），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（<code>http://prometheus.monitoring.svc.cluster.local:9090</code>），適合 <code>check-alert</code>、<code>validate</code>、<code>baseline</code> 等需要 Prometheus API 的命令。</p>
+<blockquote>
+<p>Job 產出可透過 <code>kubectl cp</code> 取回，再注入 <code>threshold-config</code> ConfigMap。長期運行的 Shadow Monitoring Job 範例參見 <a href="#11-企業級遷移-大型租戶-1000-條規則">§11 企業級遷移 Phase B</a>。</p>
+</blockquote>
+<hr />
+<h2 id="4">4. 實戰範例：五種遷移場景<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>以 Percona MariaDB Alert Rules 為範本，示範完整遷移路徑。</p>
+<h3 id="41">4.1 基本數值比較 (連線數)<a class="headerlink" href="#41" title="Permanent link">&para;</a></h3>
+<p><strong>傳統寫法</strong>：
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MySQLTooManyConnections</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mysql_global_status_threads_connected &gt; 100</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> severity</span><span class="p">:</span><span class="w"> </span><span class="nv">warning</span><span class="w"> </span><span class="p p-Indicator">}</span>
+</code></pre></div></p>
+<p><strong>遷移三件套</strong>：
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># 1. Recording Rule (平台)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:mysql_threads_connected:max</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max by(tenant) (mysql_global_status_threads_connected)</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># 2. Alert Rule (平台) — group_left + unless maintenance</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MariaDBHighConnections</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="no">(</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="no">tenant:mysql_threads_connected:max</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="no">&gt; on(tenant) group_left</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">      </span><span class="no">tenant:alert_threshold:connections</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">    </span><span class="no">)</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">    </span><span class="no">unless on(tenant) (user_state_filter{filter=&quot;maintenance&quot;} == 1)</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">  </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> severity</span><span class="p">:</span><span class="w"> </span><span class="nv">warning</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="c1"># 3. Tenant Config (租戶)</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;100&quot;</span>
+</code></pre></div></p>
+<h3 id="42-45">4.2-4.5 其他常見模式 — 快速參考表<a class="headerlink" href="#42-45" title="Permanent link">&para;</a></h3>
+<p>上面 4.1 示範的三件套結構對所有場景適用。以下表格列出常見指標的關鍵差異：</p>
+<table>
+<thead>
+<tr>
+<th>場景</th>
+<th>原始指標</th>
+<th>Recording Rule</th>
+<th>Tenant Config 範例</th>
+<th>特殊說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>4.2 多層嚴重度</strong></td>
+<td><code>mysql_global_status_threads_connected</code></td>
+<td><code>max by(tenant) (...)</code></td>
+<td><code>mysql_connections: "100"</code> + <code>mysql_connections_critical: "150"</code></td>
+<td>Alert Rule 自動處理 <code>_critical</code> 降級邏輯</td>
+</tr>
+<tr>
+<td><strong>4.3 Replication Lag</strong></td>
+<td><code>mysql_slave_status_seconds_behind_master</code></td>
+<td><code>max by(tenant) (...)</code></td>
+<td><code>mysql_slave_lag: "30"</code> 或 <code>"disable"</code></td>
+<td>Max 用於「最弱環節」(最落後的 slave)</td>
+</tr>
+<tr>
+<td><strong>4.4 Rate 指標</strong></td>
+<td><code>rate(mysql_global_status_slow_queries[5m])</code></td>
+<td><code>sum by(tenant) (rate(...))</code></td>
+<td><code>mysql_slow_queries: "0.1"</code></td>
+<td>Sum 用於「叢集總量」(慢查詢看整體)</td>
+</tr>
+<tr>
+<td><strong>4.5 百分比計算</strong></td>
+<td><code>buffer_pool_pages_data / buffer_pool_pages_total * 100</code></td>
+<td><code>max by(...) (...) / max by(...) (...) * 100</code></td>
+<td><code>mysql_innodb_buffer_pool: "95"</code></td>
+<td>百分比計算在 Recording Rule 完成</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>簡潔版本</strong>：4.2-4.5 只需套用 4.1 的三件套模板，只改指標名稱與 Tenant Config 的 key。平台側的 Alert Rule 結構始終如一。詳見 <a href="../rule-packs/ALERT-REFERENCE/">Rule Packs ALERT-REFERENCE</a> 查實際規則。</p>
+</blockquote>
+<hr />
+<h2 id="5-alertmanager">5. Alertmanager 路由遷移<a class="headerlink" href="#5-alertmanager" title="Permanent link">&para;</a></h2>
+<h3 id="instance">傳統 (基於 instance)<a class="headerlink" href="#instance" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&#39;alertname&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;instance&#39;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">instance=~&quot;db-a-.*&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;team-a-slack&quot;</span>
+</code></pre></div>
+<h3 id="tenant">遷移後 (基於 tenant)<a class="headerlink" href="#tenant" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&#39;tenant&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;alertname&#39;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">tenant=&quot;db-a&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;team-a-slack&quot;</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">      </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">severity=&quot;critical&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">          </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;team-a-pagerduty&quot;</span>
+</code></pre></div>
+<p>以 <code>tenant</code> 為第一維度分派，支援嵌套路由實現嚴重度分層。</p>
+<h3 id="config-driven-routing">Config-Driven Routing<a class="headerlink" href="#config-driven-routing" title="Permanent link">&para;</a></h3>
+<p>Tenant 可在自己的 YAML 中設定 <code>_routing</code> section，由平台工具自動產出 Alertmanager route + receiver config。</p>
+<blockquote>
+<p><strong>v1.3.0 Breaking Change</strong>：<code>receiver</code> 從純 URL 字串改為結構化物件（含 <code>type</code> 欄位）。v1.2.0 格式不再相容。</p>
+</blockquote>
+<p>支援六種 receiver 類型：<code>webhook</code>、<code>email</code>、<code>slack</code>、<code>teams</code>、<code>rocketchat</code>、<code>pagerduty</code>。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># tenant YAML (conf.d/db-a.yaml)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nt">_routing</span><span class="p">:</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;webhook&quot;</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">        </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://hooks.slack.com/services/T00/B00/xxx&quot;</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">      </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;alertname&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;severity&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">      </span><span class="nt">group_wait</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;30s&quot;</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">      </span><span class="nt">repeat_interval</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4h&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># 驗證 config 合法性（含 webhook domain allowlist 檢查）</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--validate<span class="w"> </span>--policy<span class="w"> </span>.github/custom-rule-policy.yaml
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># 產出 Alertmanager fragment</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>-o<span class="w"> </span>alertmanager-routes.yaml
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># 一站式合併至 Alertmanager ConfigMap + reload</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--apply<span class="w"> </span>--yes
+</code></pre></div>
+<p>平台對時序參數設有 guardrails（group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h），超限值自動 clamp。完整 receiver 類型範例與 Go template 訊息客製化詳見 <a href="../byo-alertmanager-integration/#5-receiver-類型">BYO Alertmanager 整合指南 §5</a>。</p>
+<h3 id="_6">進階路由功能<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>說明</th>
+<th>詳見</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Per-rule Routing Overrides</td>
+<td><code>_routing.overrides[]</code> 指定特定 alertname/metric_group 使用不同 receiver</td>
+<td><a href="../byo-alertmanager-integration/#7-per-rule-routing-overrides">BYO Alertmanager §7</a></td>
+</tr>
+<tr>
+<td>Silent / Maintenance Mode</td>
+<td><code>_silent_mode</code> / <code>_state_maintenance</code> + <code>expires</code> 自動失效</td>
+<td><a href="../architecture-and-design/">Architecture §2.7</a></td>
+</tr>
+<tr>
+<td>Platform Enforced Routing</td>
+<td><code>_routing_enforced</code> NOC 必收（雙軌通知）</td>
+<td><a href="../byo-alertmanager-integration/#8-platform-enforced-routing">BYO Alertmanager §8</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6">6. 遷移後驗證<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># 0. 一站式配置驗證（建議部署前先跑，v1.7.0）</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>da-tools<span class="w"> </span>validate-config<span class="w"> </span>--config-dir<span class="w"> </span>/data/conf.d
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># 1. 確認閾值正確輸出</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8080/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;user_threshold{.*connections&#39;</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="c1"># 2. 確認 Alert 狀態</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>da-tools<span class="w"> </span>check-alert<span class="w"> </span>MariaDBHighConnections<span class="w"> </span>db-a
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="c1"># 3. 租戶健康總檢（含 operational_mode、閾值解析、alert 狀態）</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>da-tools<span class="w"> </span>diagnose<span class="w"> </span>db-a
+</code></pre></div>
+<h3 id="_7">完整驗證清單<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p>詳見 <a href="../scenarios/tenant-lifecycle/#階段-12上線day-0">Tenant 生命週期 — 上線階段</a> 的完整驗證檢查表，涵蓋 YAML 驗證、alert 狀態、三態測試、routing、operational_mode 確認與盲區掃描。</p>
+<h3 id="tenant_1">遷移完成後：Tenant 自助管理<a class="headerlink" href="#tenant_1" title="Permanent link">&para;</a></h3>
+<p>遷移完成後，Tenant 可在自己的 YAML 中自行管理以下設定（透過 PR → CI → GitOps 工作流，無需 Platform Team 介入）：</p>
+<table>
+<thead>
+<tr>
+<th>設定</th>
+<th>說明</th>
+<th>範例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>閾值三態</td>
+<td>自訂值 / 省略用預設 / <code>"disable"</code> 停用</td>
+<td><code>mysql_connections: "70"</code></td>
+</tr>
+<tr>
+<td><code>_critical</code> 後綴</td>
+<td>多層嚴重度</td>
+<td><code>mysql_connections_critical: "95"</code></td>
+</tr>
+<tr>
+<td><code>_routing</code></td>
+<td>通知路由（6 種 receiver type）</td>
+<td><code>receiver: {type: "slack", ...}</code></td>
+</tr>
+<tr>
+<td><code>_routing.overrides[]</code></td>
+<td>特定 alert 使用不同 receiver</td>
+<td><code>alertname: "..."</code> + <code>receiver: {...}</code></td>
+</tr>
+<tr>
+<td><code>_silent_mode</code></td>
+<td>靜默模式（TSDB 有紀錄但不通知）</td>
+<td><code>{target: "all", expires: "..."}</code></td>
+</tr>
+<tr>
+<td><code>_state_maintenance</code></td>
+<td>維護模式（完全不觸發）</td>
+<td>同上，支援 <code>expires</code> 自動失效</td>
+</tr>
+<tr>
+<td><code>_severity_dedup</code></td>
+<td>嚴重度去重</td>
+<td><code>enabled: true</code></td>
+</tr>
+</tbody>
+</table>
+<p>Platform Team 控制的設定（<code>_defaults.yaml</code>）包括全域預設、<code>_routing_defaults</code>、<code>_routing_enforced</code>。詳見 <a href="../gitops-deployment/#7-tenant-自助設定範圍">GitOps 部署指南 §7</a>。</p>
+<hr />
+<h2 id="7-db">7. 維度標籤 — 多 DB 類型支援<a class="headerlink" href="#7-db" title="Permanent link">&para;</a></h2>
+<p>當平台支援 Redis、ES、MongoDB 等多種 DB 時，同一指標可依「維度」設定不同閾值。</p>
+<h3 id="_8">語法<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">redis-prod</span><span class="p">:</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">    </span><span class="nt">redis_queue_length</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1000&quot;</span><span class="w">                              </span><span class="c1"># 全域預設</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=\&quot;order-processing\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;100&quot;</span><span class="w">  </span><span class="c1"># 嚴格</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=\&quot;analytics\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;5000&quot;</span><span class="w">        </span><span class="c1"># 寬鬆</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=\&quot;temp\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;disable&quot;</span><span class="w">          </span><span class="c1"># 停用</span>
+</code></pre></div>
+<p>多重 label：
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="w">    </span><span class="s">&quot;mongodb_collection_count{database=\&quot;orders\&quot;,collection=\&quot;transactions\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;10000000&quot;</span>
+</code></pre></div></p>
+<h3 id="_9">設計約束<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>約束</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>YAML 需加引號</strong></td>
+<td>含 <code>{</code> 的 key 必須用雙引號包裹</td>
+</tr>
+<tr>
+<td><strong>不支援 <code>_critical</code> 後綴</strong></td>
+<td>改用 <code>"value:severity"</code> 語法，如 <code>"500:critical"</code></td>
+</tr>
+<tr>
+<td><strong>Tenant-only</strong></td>
+<td>維度 key 不繼承 <code>defaults</code>，僅允許在租戶設定中</td>
+</tr>
+<tr>
+<td><strong>三態仍適用</strong></td>
+<td>數值=Custom, 省略=Default (僅基本 key), <code>"disable"</code>=停用</td>
+</tr>
+</tbody>
+</table>
+<h3 id="promql">平台團隊 PromQL 適配 (重要)<a class="headerlink" href="#promql" title="Permanent link">&para;</a></h3>
+<p>維度 label 必須出現在 Recording Rule 的 <code>by()</code> 和 Alert Rule 的 <code>on()</code> 中：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Recording Rule — 必須 by(tenant, queue)</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:redis_queue_length:max</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max by(tenant, queue) (redis_queue_length)</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="c1"># Threshold Normalization — 必須 by(tenant, queue)</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:alert_threshold:redis_queue_length</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max by(tenant, queue) (user_threshold{metric=&quot;redis_queue_length&quot;})</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="c1"># Alert Rule — 必須 on(tenant, queue) group_left</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">RedisQueueTooLong</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="w">    </span><span class="no">(</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="w">      </span><span class="no">tenant:redis_queue_length:max</span>
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="w">      </span><span class="no">&gt; on(tenant, queue) group_left</span>
+<a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="w">      </span><span class="no">tenant:alert_threshold:redis_queue_length</span>
+<a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a><span class="w">    </span><span class="no">)</span>
+<a id="__codelineno-17-17" name="__codelineno-17-17" href="#__codelineno-17-17"></a><span class="w">    </span><span class="no">unless on(tenant) (user_state_filter{filter=&quot;maintenance&quot;} == 1)</span>
+</code></pre></div>
+<h3 id="_10">參考範本<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h3>
+<p><code>components/threshold-exporter/config/conf.d/examples/</code> 目錄：</p>
+<table>
+<thead>
+<tr>
+<th>檔案</th>
+<th>DB 類型</th>
+<th>維度範例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redis-tenant.yaml</code></td>
+<td>Redis</td>
+<td>queue, db</td>
+</tr>
+<tr>
+<td><code>elasticsearch-tenant.yaml</code></td>
+<td>Elasticsearch</td>
+<td>index, node</td>
+</tr>
+<tr>
+<td><code>mongodb-tenant.yaml</code></td>
+<td>MongoDB</td>
+<td>database, collection</td>
+</tr>
+<tr>
+<td><code>_defaults-multidb.yaml</code></td>
+<td>多 DB 全域預設</td>
+<td>(無維度)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-llm">8. LLM 輔助手動轉換<a class="headerlink" href="#8-llm" title="Permanent link">&para;</a></h2>
+<p>當 <code>da-tools migrate</code> 遇到無法解析的規則，它會產出可直接交 LLM 的 Prompt。<code>migration-report.txt</code> 中包含可直接交 LLM 的 System Prompt 模板，指導 LLM 抽取閾值、產出 Recording Rule（含 sum/max 選擇理由）、Alert Rule（含 <code>group_left</code> + <code>unless maintenance</code>），並標記需要平台額外處理的項目。</p>
+<hr />
+<h2 id="9-db">9. 進階：擴展不支援的 DB 類型<a class="headerlink" href="#9-db" title="Permanent link">&para;</a></h2>
+<p>v1.8.0 已預載 13 個 Rule Pack ConfigMap，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、Kubernetes、Operational 及 Platform 自我監控。若需支援尚無 Rule Pack 的 DB 類型，需手動建立正規化層。</p>
+<h3 id="_11">正規化命名規範<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>tenant:&lt;component&gt;_&lt;metric&gt;:&lt;aggregation_function&gt;
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>原始指標</th>
+<th>正規化後</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mysql_global_status_threads_connected</code></td>
+<td><code>tenant:mysql_threads_connected:max</code></td>
+<td>單點上限，取 max</td>
+</tr>
+<tr>
+<td><code>rate(mysql_global_status_slow_queries[5m])</code></td>
+<td><code>tenant:mysql_slow_queries:rate5m</code></td>
+<td>叢集加總 rate</td>
+</tr>
+</tbody>
+</table>
+<h3 id="max-vs-sum">聚合模式選擇 — Max vs. Sum<a class="headerlink" href="#max-vs-sum" title="Permanent link">&para;</a></h3>
+<p>決策矩陣：
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>問自己：「一個節點超標，其他節點正常，是否代表有問題？」
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>  ├── 是 → max by(tenant) (最弱環節)
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>  └── 否 → sum by(tenant) (叢集總量)
+</code></pre></div></p>
+<p><strong>max by(tenant)</strong> — 有「單點物理上限」的資源 (連線數上限、磁碟空間、replication lag)。</p>
+<p><strong>sum by(tenant)</strong> — 評估「整體系統負載」(慢查詢、流量、CPU 使用)。</p>
+<h3 id="_12">建立步驟<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h3>
+<ol>
+<li>建立 Recording Rule (正規化層)</li>
+<li>建立 Threshold Normalization Rule</li>
+<li>建立 Alert Rule (含 <code>group_left</code> + <code>unless maintenance</code>)</li>
+<li>建立獨立 ConfigMap (<code>configmap-rules-&lt;db&gt;.yaml</code>)</li>
+<li>在 <code>deployment-prometheus.yaml</code> 的 projected volume 中加入新 source</li>
+<li>在 <code>_defaults.yaml</code> 加入預設閾值</li>
+<li>用 <code>da-tools scaffold</code> 產生 tenant config</li>
+</ol>
+<p>完整 Rule Pack 結構參見 <a href="../rule-packs/">rule-packs/README.md</a>。</p>
+<hr />
+<h2 id="10-faq">10. FAQ<a class="headerlink" href="#10-faq" title="Permanent link">&para;</a></h2>
+<h3 id="q-threshold-config">Q: 修改 threshold-config 後多久生效？<a class="headerlink" href="#q-threshold-config" title="Permanent link">&para;</a></h3>
+<p>Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。預期 1-3 分鐘。</p>
+<h3 id="q">Q: 新增一種指標需要改哪些東西？<a class="headerlink" href="#q" title="Permanent link">&para;</a></h3>
+<p>已支援的 DB 類型 (有 Rule Pack)：只需在 <code>_defaults.yaml</code> 加預設值 + 租戶 YAML 加閾值。不支援的 DB：需額外建立 Recording Rule + Alert Rule + ConfigMap。</p>
+<h3 id="q_1">Q: 遷移過渡期可以新舊並存嗎？<a class="headerlink" href="#q_1" title="Permanent link">&para;</a></h3>
+<p>可以。新架構的 alert 使用不同 alertname，不會衝突。建議先部署新 alert 觀察，確認行為一致後再移除舊 rules。</p>
+<h3 id="q-key-defaults">Q: 維度 key 可以設定在 defaults 裡嗎？<a class="headerlink" href="#q-key-defaults" title="Permanent link">&para;</a></h3>
+<p>不行。維度 key 是 tenant-only 功能，因為每個租戶的 queue/index/database 都不同，全域預設沒有意義。</p>
+<h3 id="q-key-critical">Q: 維度 key 怎麼指定 critical？<a class="headerlink" href="#q-key-critical" title="Permanent link">&para;</a></h3>
+<p>使用 <code>"value:severity"</code> 語法：<code>"redis_queue_length{queue=\"orders\"}": "500:critical"</code>。</p>
+<h3 id="q-hot-reload">Q: 如何確認 hot-reload 成功？<a class="headerlink" href="#q-hot-reload" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>threshold-exporter<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1"># 預期: &quot;Config loaded (directory): X defaults, Y state_filters, Z tenants, N resolved thresholds, M resolved state filters&quot;</span>
+</code></pre></div>
+<hr />
+<h2 id="11-1000">11. 企業級遷移 — 大型租戶 (1000+ 條規則)<a class="headerlink" href="#11-1000" title="Permanent link">&para;</a></h2>
+<p>對於擁有 1600+ 條規則的大型租戶，建議採用以下三階段遷移策略：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>Phase A              Phase B                    Phase C
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>Triage 分析          Shadow Monitoring          切換與收斂
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>(~1 天)              (~1-2 週)                  (~1 天)
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>┌──────────┐     ┌──────────────────────┐    ┌──────────────┐
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>│ migrate   │     │ validate --watch     │    │ 移除舊規則    │
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>│ --triage  │────►│ --tolerance 0.001    │───►│ 啟用黃金標準  │
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>│ CSV 分桶  │     │ 持續比對新舊數值       │    │ diagnose 驗收 │
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>└──────────┘     └──────────────────────┘    └──────────────┘
+</code></pre></div>
+<h3 id="phase-a-triage">Phase A: Triage 分析<a class="headerlink" href="#phase-a-triage" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># 產出 CSV 分桶報告 — 在 Excel 中批次決策</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>--triage<span class="w"> </span>-o<span class="w"> </span>/data/triage_output/
+</code></pre></div>
+<p>工具自動將規則分為四桶：</p>
+<table>
+<thead>
+<tr>
+<th>Triage Action</th>
+<th>說明</th>
+<th>建議處理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auto</code></td>
+<td>簡單表達式，可自動轉換</td>
+<td>直接採用</td>
+</tr>
+<tr>
+<td><code>review</code></td>
+<td>複雜表達式，已猜測聚合模式</td>
+<td>在 CSV 中確認</td>
+</tr>
+<tr>
+<td><code>skip</code></td>
+<td>無法自動轉換</td>
+<td>交 LLM 或手動處理</td>
+</tr>
+<tr>
+<td><code>use_golden</code></td>
+<td>字典比對到黃金標準</td>
+<td>直接用 <code>da-tools scaffold</code> 設定閾值</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-b-shadow-monitoring">Phase B: 轉換 + Shadow Monitoring<a class="headerlink" href="#phase-b-shadow-monitoring" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># 1. 正式轉換 (自動帶 custom_ 前綴)</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>-o<span class="w"> </span>/data/migration_output/
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># 2. 部署新規則 (帶 shadow label，不觸發通知)</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>migration_output/platform-recording-rules.yaml
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>migration_output/platform-alert-rules.yaml
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="c1"># 3. 在 Alertmanager 攔截 shadow 警報</span>
+<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a><span class="c1"># 設定 route: matchers: [migration_status=&quot;shadow&quot;] → null receiver</span>
+<a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a>
+<a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a><span class="c1"># 4. 持續比對新舊 Recording Rule 數值（叢集內）</span>
+<a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a>da-tools<span class="w"> </span>validate<span class="w"> </span>--mapping<span class="w"> </span>/data/prefix-mapping.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a><span class="w">                  </span>--tolerance<span class="w"> </span><span class="m">0</span>.001<span class="w"> </span>--watch<span class="w"> </span>--interval<span class="w"> </span><span class="m">60</span><span class="w"> </span>--rounds<span class="w"> </span><span class="m">1440</span>
+<a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a>
+<a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a><span class="c1"># 或本地開發: 先 port-forward，再執行上述指令</span>
+<a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/prometheus<span class="w"> </span><span class="m">9090</span>:9090<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="p">&amp;</span>
+</code></pre></div>
+<p><strong>長期 Shadow Monitoring (K8s Job)</strong>：大型客戶建議將 <code>da-tools validate --watch</code> 包成 K8s Job，在叢集內持續運行 1-2 週（例如 <code>--interval 300 --rounds 4032</code> = 每 5 分鐘一次 × 14 天）。K8s Job 模式參見 <a href="#在-k8s-叢集內使用-da-tools">§3 在 K8s 叢集內使用 da-tools</a>。</p>
+<h3 id="phase-c">Phase C: 切換與收斂<a class="headerlink" href="#phase-c" title="Permanent link">&para;</a></h3>
+<p>運行 1-2 週，<code>da-tools validate</code> 持續比對所有規則對的數值輸出。確認所有 mismatch 均已調查並排除後：</p>
+<p><strong>自動化切換：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Dry run 預覽</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span>--readiness-json<span class="w"> </span>/data/cutover-readiness.json<span class="w"> </span>--tenant<span class="w"> </span>db-a<span class="w"> </span>--dry-run
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="c1"># 執行切換（自動完成：停 Job → 移除舊規則 → 去 label → 移除 shadow route → 驗證）</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span>--readiness-json<span class="w"> </span>/data/cutover-readiness.json<span class="w"> </span>--tenant<span class="w"> </span>db-a
+</code></pre></div>
+<blockquote>
+<p><strong>提示</strong>：切換前可用 <code>da-tools shadow-verify all</code> 一鍵執行完整就緒度檢查（preflight + runtime + convergence），替代手動逐步驗證。</p>
+</blockquote>
+<p><code>cutover-readiness.json</code> 由 <code>validate --auto-detect-convergence</code> 在達到收斂條件時自動產出。如果是手動確認收斂（無 readiness JSON），可用 <code>--force</code> 跳過 readiness 檢查。詳見 <a href="../shadow-monitoring-sop/#7-退出-shadow-monitoring">Shadow Monitoring SOP §7</a>。</p>
+<p><strong>手動切換步驟</strong>（如不使用自動化工具）：</p>
+<ol>
+<li>移除舊規則</li>
+<li>拿掉新規則的 <code>migration_status: shadow</code> label</li>
+<li>逐步啟用黃金標準 Rule Pack，替代 <code>custom_</code> 規則</li>
+<li>參考 <code>prefix-mapping.yaml</code> 對照收斂</li>
+</ol>
+<p><strong>切換後驗證：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># 批次健康檢查</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>da-tools<span class="w"> </span>batch-diagnose
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="c1"># 監控盲區掃描 — 確認所有叢集內的 DB instance 都有對應 tenant 配置</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>da-tools<span class="w"> </span>blind-spot<span class="w"> </span>--config-dir<span class="w"> </span>/data/conf.d
+</code></pre></div>
+<p><code>blind-spot</code> 會列出叢集中有 exporter 在跑但未被 tenant 配置涵蓋的 instance（blind spots）。遷移完成後建議定期執行（如每次新增 exporter 時），確保所有 DB instance 都受閾值監控保護。</p>
+<h3 id="metric-dictionary">Metric Dictionary 自動比對<a class="headerlink" href="#metric-dictionary" title="Permanent link">&para;</a></h3>
+<p><code>da-tools migrate</code> (v4) 內建啟發式字典 (<code>metric-dictionary.yaml</code>)，自動比對傳統指標與黃金標準：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>📖 MySQLTooManyConnections: 建議改用黃金標準 MariaDBHighConnections (da-tools scaffold)
+</code></pre></div>
+<p>平台團隊可直接編輯 <code>scripts/tools/metric-dictionary.yaml</code> 擴充字典，不需改 Python code。</p>
+<h3 id="_13">遷移自動化工具<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h3>
+<p>以下工具降低大型遷移的人工介入：</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>用法</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Onboard→Scaffold pipeline</strong></td>
+<td><code>onboard</code> → <code>scaffold --from-onboard &lt;hints&gt;</code></td>
+<td>一鍵完成遷移準備</td>
+</tr>
+<tr>
+<td><strong>Auto-convergence detection</strong></td>
+<td><code>validate --auto-detect-convergence --stability-window 5</code></td>
+<td>連續 N 輪 match 後自動產出 <code>cutover-readiness.json</code></td>
+</tr>
+<tr>
+<td><strong>One-command cutover</strong></td>
+<td><code>cutover --readiness-json &lt;path&gt; --tenant &lt;t&gt;</code></td>
+<td>單一指令完成 Shadow Monitoring 切換全流程</td>
+</tr>
+<tr>
+<td><strong>Post-cutover health report</strong></td>
+<td><code>batch-diagnose</code></td>
+<td>自動發現 tenants → 並行 <code>diagnose</code> → health score</td>
+</tr>
+<tr>
+<td><strong>Blind spot discovery</strong></td>
+<td><code>blind-spot --config-dir &lt;dir&gt;</code></td>
+<td>掃描叢集 targets 與 tenant 配置交叉比對盲區</td>
+</tr>
+<tr>
+<td><strong>Rule Pack gap analysis</strong></td>
+<td><code>analyze-gaps --config &lt;path&gt;</code></td>
+<td>三層匹配分析 <code>custom_</code> 規則對應的官方 Rule Pack</td>
+</tr>
+<tr>
+<td><strong>Threshold backtest</strong></td>
+<td><code>backtest --git-diff --prometheus &lt;url&gt;</code></td>
+<td>PR threshold 變更 7 天歷史回測 + 風險等級</td>
+</tr>
+<tr>
+<td><strong>Config diff</strong></td>
+<td><code>config-diff --old-dir &lt;old&gt; --new-dir &lt;new&gt;</code></td>
+<td>目錄級配置差異 blast radius 報告</td>
+</tr>
+<tr>
+<td><strong>Config patch preview</strong></td>
+<td><code>patch-config --diff &lt;tenant&gt; &lt;metric&gt; &lt;value&gt;</code></td>
+<td>單一 metric 的 live before/after 對比</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-rule-pack">12. Rule Pack 動態開關<a class="headerlink" href="#12-rule-pack" title="Permanent link">&para;</a></h2>
+<p>所有 15 個 Rule Pack ConfigMap 在 Projected Volume 中設定了 <code>optional: true</code>，允許選擇性卸載。</p>
+<h3 id="rule-pack">卸載不需要的 Rule Pack<a class="headerlink" href="#rule-pack" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># 大型客戶自帶 MariaDB 規則，關閉黃金標準避免衝突</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>cm<span class="w"> </span>prometheus-rules-mariadb<span class="w"> </span>-n<span class="w"> </span>monitoring
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="c1"># Prometheus 下次 reload 時會優雅地忽略缺少的 ConfigMap</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="c1"># 不需要重啟 Prometheus</span>
+</code></pre></div>
+<h3 id="_14">重新啟用<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># 從 rule-packs/ 目錄重新建立 ConfigMap</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>prometheus-rules-mariadb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span>--from-file<span class="o">=</span>rule-pack-mariadb.yaml<span class="o">=</span>rule-packs/rule-pack-mariadb.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">  </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<h3 id="_15">典型場景<a class="headerlink" href="#_15" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>客戶類型</th>
+<th>建議 Rule Pack 設定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全新租戶</td>
+<td>全部保留 (預設)</td>
+</tr>
+<tr>
+<td>自帶 MariaDB 規則</td>
+<td>關閉 <code>prometheus-rules-mariadb</code></td>
+</tr>
+<tr>
+<td>只用 Redis</td>
+<td>關閉 MariaDB, MongoDB, Elasticsearch</td>
+</tr>
+<tr>
+<td>全部自帶</td>
+<td>只保留 <code>prometheus-rules-platform</code> (自我監控)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="13-tenant-rulemetric">13. 下架流程 — Tenant 與 Rule/Metric<a class="headerlink" href="#13-tenant-rulemetric" title="Permanent link">&para;</a></h2>
+<h3 id="tenant_2">Tenant 下架<a class="headerlink" href="#tenant_2" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># 預檢模式 — 確認無外部依賴</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>da-tools<span class="w"> </span>offboard<span class="w"> </span>db-a
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1"># 確認後執行</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>da-tools<span class="w"> </span>offboard<span class="w"> </span>db-a<span class="w"> </span>--execute
+</code></pre></div>
+<p>Pre-check 項目：設定檔存在性、跨檔案引用掃描、已設定指標清單。</p>
+<p>下架後效果：
+- threshold-exporter 下次 reload (30s) 自動清除閾值
+- Prometheus 下次 scrape 時向量消失
+- 所有相關 Alert 自動解除
+- <strong>不影響其他 Tenant</strong></p>
+<h3 id="rulemetric">Rule/Metric 下架<a class="headerlink" href="#rulemetric" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># 預覽模式</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>da-tools<span class="w"> </span>deprecate<span class="w"> </span>mysql_slave_lag
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c1"># 執行 (修改檔案)</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>da-tools<span class="w"> </span>deprecate<span class="w"> </span>mysql_slave_lag<span class="w"> </span>--execute
+<a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a>
+<a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="c1"># 批次處理</span>
+<a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a>da-tools<span class="w"> </span>deprecate<span class="w"> </span>mysql_slave_lag<span class="w"> </span>mysql_innodb_buffer_pool<span class="w"> </span>--execute
+</code></pre></div>
+<p>三步自動化：
+1. <code>_defaults.yaml</code> 中設為 <code>"disable"</code>
+2. 掃描清除所有 tenant config 中的殘留
+3. 產出 ConfigMap 清理指引 (下個 Release Cycle 手動執行)</p>
+<h2 id="_16">相關資源<a class="headerlink" href="#_16" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>資源</th>
+<th>相關性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>["Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"]</td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../getting-started/for-tenants/">"Tenant 快速入門指南"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../migration-engine/">"AST 遷移引擎架構"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../cli-reference/">"da-tools CLI Reference"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../getting-started/for-domain-experts/">"Domain Expert (DBA) 快速入門指南"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../getting-started/for-platform-engineers/">"Platform Engineer 快速入門指南"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../shadow-monitoring-sop/">"Shadow Monitoring SRE SOP"</a></td>
+<td>⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

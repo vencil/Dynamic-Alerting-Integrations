@@ -1,0 +1,258 @@
+openapi: 3.0.0
+info:
+  title: Threshold Exporter API
+  version: 1.13.0
+  description: Multi-tenant dynamic alerting platform - threshold exporter service exposing Prometheus metrics, health probes, and configuration debugging endpoints.
+  contact:
+    name: Vibe K8s Lab Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Default threshold-exporter service (port 8080)
+    variables:
+      protocol:
+        default: http
+        enum:
+          - http
+          - https
+      host:
+        default: localhost
+      port:
+        default: '8080'
+
+paths:
+  /metrics:
+    get:
+      summary: Prometheus Metrics Export
+      description: |
+        Exports metrics in Prometheus text format (application/openmetrics-text).
+        Includes threshold states, silent modes, severity deduplication flags, and tenant metadata.
+        
+        **Metric Types:**
+        - `user_threshold{tenant, alertname, metric_group, dimension_labels}`: Threshold values with multi-dimensional labels
+        - `user_state_filter{tenant, alertname, metric_group}`: Alert suppression state (0=active, 1=suppressed)
+        - `user_silent_mode{tenant}`: Tenant silent mode status (0=normal, 1=silent)
+        - `user_severity_dedup{tenant, alertname}`: Severity deduplication flag
+        - `tenant_metadata_info{tenant, metadata_labels}`: Tenant metadata key-value pairs as labels
+        - `da_config_event{event_type}`: Configuration reload events (reload_count, last_reload_timestamp, error_count)
+      operationId: getMetrics
+      tags:
+        - Metrics
+      responses:
+        '200':
+          description: Metrics exported successfully in Prometheus text format
+          content:
+            application/openmetrics-text; version=1.0.0:
+              schema:
+                type: string
+              example: |
+                # HELP user_threshold Threshold values by tenant, alert, and dimensions
+                # TYPE user_threshold gauge
+                user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute"} 80.0
+                user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute",dimension="instance=prod-01"} 85.0
+                user_threshold{tenant="db-b",alertname="HighMemory",metric_group="memory"} 75.0
+                
+                # HELP user_state_filter Alert suppression state
+                # TYPE user_state_filter gauge
+                user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
+                user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
+                
+                # HELP user_silent_mode Tenant silent mode status
+                # TYPE user_silent_mode gauge
+                user_silent_mode{tenant="db-a"} 0
+                user_silent_mode{tenant="db-b"} 1
+                
+                # HELP user_severity_dedup Severity deduplication flag
+                # TYPE user_severity_dedup gauge
+                user_severity_dedup{tenant="db-a",alertname="HighCPU"} 1
+                user_severity_dedup{tenant="db-b",alertname="HighMemory"} 0
+                
+                # HELP tenant_metadata_info Tenant metadata information
+                # TYPE tenant_metadata_info info
+                tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
+                tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
+                
+                # HELP da_config_event Configuration event counter
+                # TYPE da_config_event counter
+                da_config_event{event_type="reload_success"} 42
+                da_config_event{event_type="reload_error"} 2
+                
+                # EOF
+      x-code-samples:
+        - lang: bash
+          label: curl
+          source: |
+            curl -s http://localhost:8080/metrics | head -50
+
+  /health:
+    get:
+      summary: Liveness Probe
+      description: |
+        Liveness probe endpoint. Returns "ok" if the service is running.
+        Use this for Kubernetes livenessProbe configuration.
+      operationId: getHealth
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+      x-code-samples:
+        - lang: bash
+          label: curl
+          source: |
+            curl -s http://localhost:8080/health
+
+  /ready:
+    get:
+      summary: Readiness Probe
+      description: |
+        Readiness probe endpoint. Returns 200 "ready" when config is loaded,
+        or 503 "config not loaded" during initialization or after config reload.
+        Use this for Kubernetes readinessProbe configuration.
+      operationId: getReady
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is ready and config is loaded
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ready
+        '503':
+          description: Service is not ready - config not loaded
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: config not loaded
+      x-code-samples:
+        - lang: bash
+          label: curl
+          source: |
+            curl -s http://localhost:8080/ready
+
+  /api/v1/config:
+    get:
+      summary: Configuration State Debug Endpoint
+      description: |
+        Debug endpoint exposing current configuration state in plain text format.
+        Supports RFC3339 timestamp query parameter for inspecting scheduled value overrides.
+        
+        **Use Cases:**
+        - Verify tenant configuration is loaded correctly
+        - Debug scheduled threshold override state at specific timestamp
+        - Inspect tenant metadata and routing configuration
+      operationId: getConfigDebug
+      tags:
+        - Debug
+      parameters:
+        - name: at
+          in: query
+          description: |
+            RFC3339 timestamp (e.g., "2026-03-12T14:30:00Z") to inspect configuration
+            state at a specific point in time. Useful for debugging scheduled overrides.
+            If omitted, returns current state.
+          schema:
+            type: string
+            format: date-time
+          example: "2026-03-12T14:30:00Z"
+      responses:
+        '200':
+          description: Configuration state dump
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                === Threshold Exporter Configuration ===
+                
+                Loaded At: 2026-03-12T10:00:00Z
+                Config File: /etc/config/thresholds.yaml
+                Hash: 82a4d... (SHA-256)
+                
+                === Tenants (2) ===
+                
+                [db-a]
+                  Severity Dedup: enabled
+                  Silent Mode: false (expires: never)
+                  State Filter: [compute/HighCPU]
+                  Thresholds:
+                    compute/HighCPU: 80.0
+                    compute/HighCPU[instance=prod-01]: 85.0
+                    memory/HighMemory: 75.0
+                  Metadata:
+                    team: platform
+                    env: prod
+                    sla_tier: gold
+                  Scheduled Overrides:
+                    ├─ compute/HighCPU: 75.0 @ 09:00-17:00 (weekdays)
+                    └─ memory/HighMemory: 70.0 @ maintenance window (Mon 02:00-04:00)
+                
+                [db-b]
+                  Severity Dedup: disabled
+                  Silent Mode: true (expires: 2026-03-12T15:30:00Z)
+                  State Filter: []
+                  Thresholds:
+                    memory/HighMemory: 65.0
+                  Metadata:
+                    team: data
+                    env: staging
+                    sla_tier: silver
+                  Scheduled Overrides: (none)
+      x-code-samples:
+        - lang: bash
+          label: Current configuration
+          source: |
+            curl -s http://localhost:8080/api/v1/config | head -50
+        - lang: bash
+          label: Configuration at specific time
+          source: |
+            curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T14:30:00Z" | head -50
+
+components:
+  schemas:
+    PrometheusMetric:
+      type: object
+      description: Prometheus metric in OpenMetrics text format
+      properties:
+        name:
+          type: string
+          example: user_threshold
+        help:
+          type: string
+          example: Threshold values by tenant, alert, and dimensions
+        type:
+          type: string
+          enum: [gauge, counter, histogram, summary, untyped]
+          example: gauge
+        samples:
+          type: array
+          items:
+            type: object
+            properties:
+              labels:
+                type: object
+                additionalProperties:
+                  type: string
+              value:
+                type: number
+              timestamp:
+                type: integer
+                description: Unix timestamp in milliseconds
+
+tags:
+  - name: Metrics
+    description: Prometheus metrics export endpoints
+  - name: Health
+    description: Health and readiness probes
+  - name: Debug
+    description: Configuration debugging endpoints
