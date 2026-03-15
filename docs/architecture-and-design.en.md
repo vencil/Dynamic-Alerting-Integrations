@@ -894,6 +894,7 @@ graph LR
         LM["§5.9 Log-to-Metric<br/>Bridge"]
         CV["§5.10 Config<br/>Versioning"]
         GD["§5.11 Dashboard<br/>as Code"]
+        AD["§5.12 Tenant<br/>Auto-Discovery"]
     end
 ```
 
@@ -990,6 +991,18 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 **Motivation**: The platform has comprehensive alert rule management, but Grafana dashboards are still manually maintained. During tenant onboarding, dashboards must be created manually, which is error-prone.
 
 **Approach**: `scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json`'s existing Rule Pack / metric information to generate corresponding panels. Paired with Grafana provisioning or API for automatic deployment.
+
+### 5.12 Tenant Auto-Discovery
+
+**Motivation**: Currently, onboarding a new tenant requires manually creating a tenant YAML file — even if the tenant uses all defaults, a minimal `tenants: { db-new: {} }` entry is still needed. Without it, threshold-exporter won't generate threshold metrics for that tenant, and `group_left` vector matching won't take effect. In Kubernetes-native environments, automatically registering tenants based on namespace labels would further lower the onboarding barrier.
+
+**Approach**:
+
+- **Namespace Label Convention**: Define a standard label (e.g., `dynamic-alerting.io/tenant: "true"`). threshold-exporter watches namespaces with this label via the K8s API and automatically creates in-memory tenant entries using `_defaults.yaml` values.
+- **Sidecar Pattern (alternative)**: A standalone sidecar periodically scans namespace labels and generates tenant YAML files into config-dir, which are then picked up by the existing Directory Scanner mechanism. This approach avoids modifying the exporter core.
+- **Explicit Override Priority**: If an explicit tenant YAML already exists in config-dir, it takes precedence — auto-discovery does not override manual configuration.
+
+**Risk**: Auto-discovery blurs the boundary of "which namespaces are managed tenants." An allowlist/denylist mechanism (e.g., `_auto_discovery.excludeNamespaces: [kube-system, monitoring]`) is needed to prevent system namespaces from being mistakenly registered.
 
 ---
 

@@ -900,6 +900,7 @@ graph LR
         LM["§5.9 Log-to-Metric<br/>Bridge"]
         CV["§5.10 Config<br/>Versioning"]
         GD["§5.11 Dashboard<br/>as Code"]
+        AD["§5.12 Tenant<br/>Auto-Discovery"]
     end
 ```
 
@@ -996,6 +997,18 @@ Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾
 **動機**：平台已有完整的告警規則管理，但 Grafana dashboard 仍是手動維護。tenant onboarding 時需手動建立 dashboard，容易遺漏。
 
 **做法**：`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。
+
+### 5.12 Tenant Auto-Discovery（租戶自動發現）
+
+**動機**：目前新租戶上線需要手動建立 tenant YAML（即使只用預設值，仍需 `tenants: { db-new: {} }`），否則 threshold-exporter 不會產生該租戶的 threshold metric，`group_left` 向量匹配無法生效。對於 Kubernetes-native 環境，若能根據 namespace label 自動註冊租戶，可進一步降低 onboarding 門檻。
+
+**做法**：
+
+- **Namespace Label Convention**：定義標準 label（如 `dynamic-alerting.io/tenant: "true"`），threshold-exporter 透過 K8s API watch 帶有該 label 的 namespace，自動以 `_defaults.yaml` 建立 in-memory tenant entry。
+- **Sidecar 模式（替代方案）**：獨立 sidecar 定期掃描 namespace label，產生 tenant YAML 寫入 config-dir，由既有 Directory Scanner 機制載入。此方案不改動 exporter 核心。
+- **Override 優先**：若 config-dir 中已存在該 tenant 的明確 YAML，以明確配置為準（auto-discovery 不覆蓋）。
+
+**風險**：auto-discovery 會模糊「哪些 namespace 是受管租戶」的邊界。需要 allowlist/denylist 機制（如 `_auto_discovery.excludeNamespaces: [kube-system, monitoring]`）避免系統 namespace 被誤註冊。
 
 ---
 
