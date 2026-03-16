@@ -448,23 +448,22 @@ v1.2.0 新增 **Silent Mode**，與既有的 Maintenance Mode 形成三態運營
 ```mermaid
 stateDiagram-v2
     [*] --> Normal
-    Normal --> Silent : _silent_mode: "warning" / "all"
-    Normal --> Maintenance : _state_maintenance: "enable"
-    Silent --> Normal : _silent_mode: "disable" / expires 到期
-    Maintenance --> Normal : _state_maintenance: "disable" / expires 到期
+    Normal --> Silent : _silent_mode = warning / all
+    Normal --> Maintenance : _state_maintenance = enable
+    Silent --> Normal : _silent_mode = disable / expires 到期
+    Maintenance --> Normal : _state_maintenance = disable / expires 到期
 
-    state Normal {
-        direction LR
-        note right of Normal : Alert ✅ TSDB ✅ 通知 ✅
-    }
-    state Silent {
-        direction LR
-        note right of Silent : Alert ✅ TSDB ✅ 通知 ❌\n控制層: Alertmanager inhibit
-    }
-    state Maintenance {
-        direction LR
-        note right of Maintenance : Alert ❌ TSDB ❌ 通知 ❌\n控制層: PromQL unless
-    }
+    note right of Normal
+        Alert ✅ TSDB ✅ 通知 ✅
+    end note
+    note right of Silent
+        Alert ✅ TSDB ✅ 通知 ❌
+        控制層 — Alertmanager inhibit
+    end note
+    note right of Maintenance
+        Alert ❌ TSDB ❌ 通知 ❌
+        控制層 — PromQL unless
+    end note
 ```
 
 **設計原則**：Prometheus 管「什麼該 alert」，Alertmanager 管「要不要通知」。

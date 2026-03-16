@@ -426,23 +426,22 @@ v1.2.0 introduced **Silent Mode**, which together with the existing Maintenance 
 ```mermaid
 stateDiagram-v2
     [*] --> Normal
-    Normal --> Silent : _silent_mode: "warning" / "all"
-    Normal --> Maintenance : _state_maintenance: "enable"
-    Silent --> Normal : _silent_mode: "disable" / expires expired
-    Maintenance --> Normal : _state_maintenance: "disable" / expires expired
+    Normal --> Silent : _silent_mode = warning / all
+    Normal --> Maintenance : _state_maintenance = enable
+    Silent --> Normal : _silent_mode = disable / expires expired
+    Maintenance --> Normal : _state_maintenance = disable / expires expired
 
-    state Normal {
-        direction LR
-        note right of Normal : Alert ✅ TSDB ✅ Notification ✅
-    }
-    state Silent {
-        direction LR
-        note right of Silent : Alert ✅ TSDB ✅ Notification ❌\nControl: Alertmanager inhibit
-    }
-    state Maintenance {
-        direction LR
-        note right of Maintenance : Alert ❌ TSDB ❌ Notification ❌\nControl: PromQL unless
-    }
+    note right of Normal
+        Alert ✅ TSDB ✅ Notification ✅
+    end note
+    note right of Silent
+        Alert ✅ TSDB ✅ Notification ❌
+        Control — Alertmanager inhibit
+    end note
+    note right of Maintenance
+        Alert ❌ TSDB ❌ Notification ❌
+        Control — PromQL unless
+    end note
 ```
 
 **Design principle:** Prometheus controls "what should trigger an alert," Alertmanager controls "whether to send notification."
