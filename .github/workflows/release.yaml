@@ -76,16 +76,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:latest
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
-          format: table
-          exit-code: 1
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-
-      # --- Helm chart ---
+      # --- Helm chart (before scan so Trivy failure doesn't block distribution) ---
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
@@ -98,6 +89,16 @@ jobs:
         run: |
           helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
             oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+
+      # --- Security scan (post-push, informational) ---
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:v${{ steps.version.outputs.VERSION }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
 
   # ----------------------------------------------------------------
   # Job 2: Build & push da-tools image
@@ -137,7 +138,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:latest
 
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${{ steps.version.outputs.VERSION }}
           format: table
@@ -182,7 +183,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:latest
 
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
           format: table
