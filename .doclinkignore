@@ -1,0 +1,72 @@
+# .doclinkignore — Known false positives for check_doc_links.py
+#
+# docs/README-root.md is a symlink to ../README.md.
+# Links use docs/ prefix (correct for GitHub repo root) but check_doc_links.py
+# resolves them relative to docs/ (producing docs/docs/...).
+# These are NOT broken on GitHub — only a tool limitation.
+
+# zh README symlink (docs/README-root.md → ../README.md)
+docs/README-root.md:docs/getting-started/for-platform-engineers.md
+docs/README-root.md:docs/getting-started/for-domain-experts.md
+docs/README-root.md:docs/getting-started/for-tenants.md
+docs/README-root.md:docs/benchmarks.md#1-向量匹配複雜度分析
+docs/README-root.md:docs/benchmarks.md#3-空向量零成本-empty-vector-zero-cost
+docs/README-root.md:docs/gitops-deployment.md
+docs/README-root.md:docs/byo-prometheus-integration.md
+docs/README-root.md:docs/cli-reference.md
+docs/README-root.md:docs/cheat-sheet.md
+docs/README-root.md:docs/architecture-and-design.md
+docs/README-root.md:docs/migration-guide.md
+docs/README-root.md:docs/byo-prometheus-integration.md
+docs/README-root.md:docs/byo-alertmanager-integration.md
+docs/README-root.md:docs/federation-integration.md
+docs/README-root.md:docs/gitops-deployment.md
+docs/README-root.md:docs/custom-rule-governance.md
+docs/README-root.md:docs/shadow-monitoring-sop.md
+docs/README-root.md:docs/benchmarks.md
+docs/README-root.md:docs/scenarios/
+docs/README-root.md:docs/internal/doc-map.md
+docs/README-root.md:docs/internal/tool-map.md
+docs/README-root.md:docs/adr/001-severity-dedup-via-inhibit.md
+docs/README-root.md:docs/adr/003-sentinel-alert-pattern.md
+docs/README-root.md:docs/adr/005-projected-volume-for-rule-packs.md
+docs/README-root.md:docs/adr/007-cross-domain-routing-profiles.md
+
+# en README symlink (docs/README-root.en.md → ../README.en.md)
+docs/README-root.en.md:docs/getting-started/for-platform-engineers.en.md
+docs/README-root.en.md:docs/getting-started/for-domain-experts.en.md
+docs/README-root.en.md:docs/getting-started/for-tenants.en.md
+docs/README-root.en.md:docs/benchmarks.md#1-向量匹配複雜度分析
+docs/README-root.en.md:docs/benchmarks.md#3-空向量零成本-empty-vector-zero-cost
+docs/README-root.en.md:docs/gitops-deployment.en.md
+docs/README-root.en.md:docs/byo-prometheus-integration.en.md
+docs/README-root.en.md:docs/cli-reference.en.md
+docs/README-root.en.md:docs/cheat-sheet.en.md
+docs/README-root.en.md:docs/architecture-and-design.en.md
+docs/README-root.en.md:docs/migration-guide.en.md
+docs/README-root.en.md:docs/byo-prometheus-integration.en.md
+docs/README-root.en.md:docs/byo-alertmanager-integration.en.md
+docs/README-root.en.md:docs/federation-integration.en.md
+docs/README-root.en.md:docs/gitops-deployment.en.md
+docs/README-root.en.md:docs/custom-rule-governance.en.md
+docs/README-root.en.md:docs/shadow-monitoring-sop.en.md
+docs/README-root.en.md:docs/benchmarks.md
+docs/README-root.en.md:docs/scenarios/
+docs/README-root.en.md:docs/internal/doc-map.md
+docs/README-root.en.md:docs/internal/tool-map.md
+docs/README-root.en.md:docs/adr/001-severity-dedup-via-inhibit.en.md
+docs/README-root.en.md:docs/adr/003-sentinel-alert-pattern.en.md
+docs/README-root.en.md:docs/adr/005-projected-volume-for-rule-packs.en.md
+docs/README-root.en.md:docs/adr/007-cross-domain-routing-profiles.en.md
+
+# components/ path — works from GitHub repo root, not from docs/
+docs/README-root.md:components/threshold-exporter/README.md#部署-helm
+docs/README-root.en.md:components/threshold-exporter/README.md#部署-helm
+
+# CHANGELOG archive (placeholder for future split)
+CHANGELOG-archive.md
+
+# rule-packs/README.md — MkDocs-only relative paths (../index.md etc.)
+rule-packs/README.md:../index.md
+rule-packs/README.md:../migration-guide.md
+rule-packs/README.md:../architecture-and-design.md

@@ -247,6 +247,46 @@ flowchart LR
 - Kubernetes ConfigMap 會建立符號鏈接層，ModTime 不可靠
 - 內容相同 = 雜湊相同，避免不必要的重新加載
 
+#### Incremental Reload 內部機制 (v2.1.0)
+
+`ConfigManager.IncrementalLoad()` 實現四階段增量重載，避免每次 reload 都全量解析：
+
+```
+Phase 1: Mtime Guard — 快速篩選
+  ├─ 每檔 stat() 取 mtime + size
+  ├─ 若 (mtime + size 不變) 且 (檔齡 > 2s) → 複用快取 SHA-256
+  ├─ 否則 → 讀檔 + 計算 SHA-256
+  └─ 組合所有 per-file hash → composite hash
+     └─ composite hash == 前次 → 直接 RETURN（零成本）
+
+Phase 2: Per-File Hash Diff
+  ├─ 新 hash 不在舊表 → ADDED
+  ├─ hash 值不同 → CHANGED
+  └─ 舊 hash 不在新表 → REMOVED
+
+Phase 3: Selective Re-Parse
+  ├─ 僅重新解析 ADDED + CHANGED 檔案（YAML unmarshal）
+  ├─ REMOVED 檔案的快取清除
+  └─ Boundary enforcement（租戶檔不允許 state_filters 等）
+
+Phase 4: Incremental Merge
+  ├─ 若僅 tenant 檔變更（非 _defaults / _profiles）
+  │   → shallow-copy 前次 config + patch 受影響 tenant（快速路徑）
+  └─ 否則 → 全量 merge 所有 partial configs
+```
+
+**Atomic Swap**：`RWMutex` 保護 config / hash / cache 的原子更新。讀端（Prometheus scrape）用 `RLock()`，reload 用 `Lock()`，確保 scrape 期間不會讀到半更新的狀態。
+
+**效能特性**（benchmark 數據見 [§11](benchmarks.md#11-incremental-hot-reload-效能)）：
+
+| 場景 | 延遲 | 程式路徑 |
+|------|------|---------|
+| 1000 tenant，無變更（mtime guard 命中） | ~1.5ms | stat-only + hash 比對 |
+| 1000 tenant，1 檔變更 | ~6.9ms | scan 6.2ms + re-parse 0.2ms + merge 0.5ms |
+| 100 tenant，無變更 | ~129µs | per-file stat |
+
+**Fallback**：若快取為空或損壞，自動退回 `fullDirLoad()`（全量載入）。
+
 ### 2.3 Tenant-Namespace 映射模式 (Tenant-Namespace Mapping)
 
 平台的 `tenant` 是**邏輯身分**，由兩個獨立來源決定：

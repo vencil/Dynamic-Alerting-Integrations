@@ -351,74 +351,88 @@ function simulateAlerts(config, metricValues) {
   return alerts;
 }
 
-/* ── Routing tree builder ── */
-function buildRoutingTree(config) {
-  const tree = {
-    name: 'root',
-    match: 'default',
-    children: [],
-  };
+/* ── Four-layer routing resolver (ADR-007) ── */
+const ROUTING_DEFAULTS = {
+  receiver_type: 'webhook',
+  group_by: ['alertname', 'tenant'],
+  group_wait: '30s',
+  group_interval: '5m',
+  repeat_interval: '4h',
+};
 
-  const routing = config._routing;
-  const profileRef = config._routing_profile;
-  const profile = profileRef ? ROUTING_PROFILES[profileRef] : null;
+function resolveRoutingLayers(config) {
+  const layers = [];
 
-  if (!routing && !profile) {
-    tree.children.push({
-      name: t('平台預設路由', 'Platform default route'),
-      match: t('繼承 _routing_defaults', 'Inherits _routing_defaults'),
-      type: 'default',
-    });
-    return tree;
-  }
-
-  // Show profile layer if referenced (ADR-007)
-  if (profile) {
-    tree.children.push({
-      name: `Profile: ${profileRef}`,
-      match: t(`routing_profiles[${profileRef}]`, `routing_profiles[${profileRef}]`),
-      type: 'profile',
-      details: { ...profile },
-    });
-  }
-
-  const rtype = routing?.receiver_type || profile?.receiver_type || 'unknown';
-  const mainRoute = {
-    name: `${rtype} receiver`,
-    match: t('所有告警', 'All alerts'),
-    type: rtype,
-    details: {
-      group_by: routing?.group_by || profile?.group_by || ['alertname', 'tenant'],
-      group_wait: routing?.group_wait || profile?.group_wait || '30s',
-      repeat_interval: routing?.repeat_interval || profile?.repeat_interval || '4h',
-    },
-  };
-
-  if (routing?.webhook_url || profile?.webhook_url) mainRoute.details.url = routing?.webhook_url || profile?.webhook_url;
-  if (routing?.email_to || profile?.email_to) mainRoute.details.to = routing?.email_to || profile?.email_to;
-
-  tree.children.push(mainRoute);
-
-  // Overrides (from tenant _routing or profile)
-  const overrides = routing?.overrides || profile?.overrides;
-  if (Array.isArray(overrides)) {
-    for (const ovr of overrides) {
-      tree.children.push({
-        name: `Override: ${ovr.alertname || ovr.metric_group || '?'}`,
-        match: ovr.alertname ? `alertname="${ovr.alertname}"` : `metric_group="${ovr.metric_group}"`,
-        type: ovr.receiver?.type || 'override',
-      });
-    }
-  }
-
-  // Severity dedup is always handled by Alertmanager inhibit rules (not a tenant config key)
-  tree.children.push({
-    name: t('嚴重度去重 (inhibit)', 'Severity dedup (inhibit)'),
-    match: 'severity=critical → inhibit warning',
-    type: 'inhibit',
+  // Layer 1: _routing_defaults (always present)
+  const L1 = { ...ROUTING_DEFAULTS };
+  layers.push({
+    layer: 1,
+    name: '_routing_defaults',
+    label: t('平台預設', 'Platform Defaults'),
+    values: { ...L1 },
+    overrides: {},
+    source: 'platform',
   });
 
-  return tree;
+  // Layer 2: routing_profiles[ref] (if _routing_profile specified)
+  const profileRef = config._routing_profile;
+  const profile = profileRef ? ROUTING_PROFILES[profileRef] : null;
+  const L2 = { ...L1 };
+  const L2overrides = {};
+  if (profile) {
+    for (const [k, v] of Object.entries(profile)) {
+      if (v !== undefined && v !== L2[k]) {
+        L2overrides[k] = { from: L2[k], to: v };
+        L2[k] = v;
+      }
+    }
+  }
+  layers.push({
+    layer: 2,
+    name: profileRef ? `routing_profiles[${profileRef}]` : t('（未指定 profile）', '(no profile)'),
+    label: t('路由 Profile', 'Routing Profile'),
+    values: { ...L2 },
+    overrides: L2overrides,
+    source: profileRef ? 'profile' : 'skip',
+  });
+
+  // Layer 3: tenant _routing (inline overrides)
+  const routing = config._routing;
+  const L3 = { ...L2 };
+  const L3overrides = {};
+  if (routing && typeof routing === 'object') {
+    for (const [k, v] of Object.entries(routing)) {
+      if (v !== undefined && k !== 'overrides' && v !== L3[k]) {
+        L3overrides[k] = { from: L3[k], to: v };
+        L3[k] = v;
+      }
+    }
+  }
+  layers.push({
+    layer: 3,
+    name: '_routing',
+    label: t('租戶覆蓋', 'Tenant Override'),
+    values: { ...L3 },
+    overrides: L3overrides,
+    source: routing ? 'tenant' : 'skip',
+  });
+
+  // Layer 4: _routing_enforced (platform NOC — always present conceptually)
+  layers.push({
+    layer: 4,
+    name: '_routing_enforced',
+    label: t('平台強制 (NOC)', 'Platform Enforced (NOC)'),
+    values: { ...L3 },
+    overrides: {},
+    source: 'enforced',
+  });
+
+  return { layers, resolved: L3 };
+}
+
+/* ── Routing tree builder (four-layer, ADR-007) ── */
+function buildRoutingTree(config) {
+  return resolveRoutingLayers(config);
 }
 
 /* ── Tab: YAML Validator ── */
@@ -636,40 +650,48 @@ function AlertPreviewTab() {
   );
 }
 
-/* ── Tab: Routing Visualization ── */
+/* ── Tab: Routing Visualization (Four-Layer, ADR-007) ── */
 function RoutingVizTab() {
-  const [yaml, setYaml] = useState(SAMPLE_YAML);
-  const [tree, setTree] = useState(null);
+  const [yaml, setYaml] = useState(SAMPLE_YAML_PROFILE);
+  const [result, setResult] = useState(null);
 
   const visualize = useCallback(() => {
     const { config } = parseYaml(yaml);
-    setTree(buildRoutingTree(config));
+    setResult(buildRoutingTree(config));
   }, [yaml]);
 
-  const connectorStyle = { left: '-12px' };
-  const branchStyle = { left: '-12px', top: '50%' };
-
-  const typeColors = {
-    webhook: 'bg-purple-100 text-purple-800 border-purple-200',
-    email: 'bg-blue-100 text-blue-800 border-blue-200',
-    slack: 'bg-green-100 text-green-800 border-green-200',
-    teams: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-    pagerduty: 'bg-red-100 text-red-800 border-red-200',
-    rocketchat: 'bg-orange-100 text-orange-800 border-orange-200',
-    default: 'bg-gray-100 text-gray-800 border-gray-200',
-    inhibit: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-    override: 'bg-pink-100 text-pink-800 border-pink-200',
+  const layerColors = {
+    platform: 'bg-slate-100 text-slate-800 border-slate-300',
+    profile: 'bg-blue-50 text-blue-800 border-blue-300',
+    tenant: 'bg-amber-50 text-amber-800 border-amber-300',
+    enforced: 'bg-red-50 text-red-800 border-red-300',
+    skip: 'bg-gray-50 text-gray-400 border-gray-200',
   };
+
+  const layerIcons = { platform: '1', profile: '2', tenant: '3', enforced: '4', skip: '-' };
+
+  const ROUTING_KEYS = ['receiver_type', 'group_by', 'group_wait', 'group_interval', 'repeat_interval', 'webhook_url', 'email_to'];
 
   return (
     <div>
       <h3 className="text-lg font-semibold mb-3">
-        {t('路由視覺化', 'Routing Visualization')}
+        {t('四層路由合併視覺化 (ADR-007)', 'Four-Layer Routing Merge (ADR-007)')}
       </h3>
       <p className="text-sm text-gray-600 mb-4">
-        {t('以樹狀圖呈現 Alertmanager 路由結構。',
-           'Tree view of your Alertmanager routing structure.')}
+        {t('展示 _routing_defaults → profile → tenant _routing → _routing_enforced 的四層合併過程，標示每層覆蓋的欄位。',
+           'Shows the four-layer merge: _routing_defaults → profile → tenant _routing → _routing_enforced, highlighting overrides at each layer.')}
       </p>
+
+      <div className="flex gap-2 mb-2">
+        <button
+          onClick={() => setYaml(SAMPLE_YAML)}
+          className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
+        >{t('範例：直接 routing', 'Example: Direct routing')}</button>
+        <button
+          onClick={() => setYaml(SAMPLE_YAML_PROFILE)}
+          className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
+        >{t('範例：Routing Profile', 'Example: Routing Profile')}</button>
+      </div>
 
       <textarea
         value={yaml}
@@ -684,44 +706,105 @@ function RoutingVizTab() {
         {t('產生路由圖', 'Generate Route Tree')}
       </button>
 
-      {tree && (
-        <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-          {/* Root */}
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-3 h-3 bg-gray-400 rounded-full"></div>
-            <span className="font-medium">{t('Alertmanager 根路由', 'Alertmanager Root Route')}</span>
-          </div>
+      {result && (
+        <div className="mt-4 space-y-0">
+          {/* Layer cascade */}
+          {result.layers.map((layer, i) => {
+            const isSkip = layer.source === 'skip';
+            const hasOverrides = Object.keys(layer.overrides).length > 0;
 
-          {/* Children */}
-          <div className="ml-6 space-y-3">
-            {tree.children.map((node, i) => (
-              <div key={i} className="relative">
-                <div className="absolute left-0 top-0 bottom-0 w-px bg-gray-300" style={connectorStyle}></div>
-                <div className="absolute w-3 h-px bg-gray-300" style={branchStyle}></div>
+            return (
+              <div key={i}>
+                {/* Connector arrow */}
+                {i > 0 && (
+                  <div className="flex justify-center py-1">
+                    <div className="w-px h-4 bg-gray-300"></div>
+                  </div>
+                )}
 
-                <div className={`p-3 rounded-lg border ${typeColors[node.type] || typeColors.default}`}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-sm">{node.name}</span>
-                    <span className="text-xs px-2 py-0.5 bg-white bg-opacity-50 rounded">
-                      {node.type}
-                    </span>
+                <div className={`p-4 rounded-lg border-2 ${layerColors[layer.source]} ${isSkip ? 'opacity-50' : ''}`}>
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                        isSkip ? 'bg-gray-200 text-gray-500' : 'bg-white text-gray-700'
+                      }`}>{layerIcons[layer.source]}</span>
+                      <span className="font-semibold text-sm">{layer.label}</span>
+                    </div>
+                    <code className="text-xs font-mono px-2 py-0.5 bg-white bg-opacity-60 rounded">
+                      {layer.name}
+                    </code>
                   </div>
-                  <div className="text-xs mt-1 opacity-75">
-                    {t('匹配', 'Match')}: {node.match}
-                  </div>
-                  {node.details && (
-                    <div className="mt-2 text-xs space-y-0.5 opacity-75">
-                      {node.details.group_by && (
-                        <div>group_by: [{Array.isArray(node.details.group_by) ? node.details.group_by.join(', ') : node.details.group_by}]</div>
-                      )}
-                      {node.details.group_wait && <div>group_wait: {node.details.group_wait}</div>}
-                      {node.details.repeat_interval && <div>repeat_interval: {node.details.repeat_interval}</div>}
-                      {node.details.url && <div>url: {node.details.url}</div>}
+
+                  {/* Override highlights */}
+                  {hasOverrides && (
+                    <div className="mb-2 space-y-1">
+                      {Object.entries(layer.overrides).map(([key, change]) => (
+                        <div key={key} className="text-xs flex items-center gap-1">
+                          <span className="font-mono font-medium">{key}:</span>
+                          <span className="line-through opacity-50">{String(change.from || t('（未設）', '(unset)'))}</span>
+                          <span className="mx-1">&rarr;</span>
+                          <span className="font-bold">{String(change.to)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Resolved values at this layer */}
+                  {!isSkip && (
+                    <div className="text-xs font-mono bg-white bg-opacity-40 rounded p-2 space-y-0.5">
+                      {ROUTING_KEYS.map(k => {
+                        const v = layer.values[k];
+                        if (v === undefined) return null;
+                        const isOverridden = layer.overrides[k] !== undefined;
+                        return (
+                          <div key={k} className={isOverridden ? 'font-bold' : 'opacity-60'}>
+                            {k}: {Array.isArray(v) ? `[${v.join(', ')}]` : String(v)}
+                            {isOverridden && <span className="ml-1 text-green-700">{t(' ← 本層覆蓋', ' ← this layer')}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {isSkip && (
+                    <div className="text-xs italic">
+                      {t('本層未配置，繼承上層值', 'Not configured, inherits from above')}
                     </div>
                   )}
                 </div>
               </div>
-            ))}
+            );
+          })}
+
+          {/* Final resolved result */}
+          <div className="flex justify-center py-1">
+            <div className="w-px h-4 bg-gray-300"></div>
+          </div>
+          <div className="p-4 rounded-lg border-2 border-green-400 bg-green-50">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-green-700 font-bold text-sm">
+                {t('最終 Resolved 路由', 'Final Resolved Route')}
+              </span>
+            </div>
+            <div className="text-xs font-mono bg-white bg-opacity-60 rounded p-2 space-y-0.5">
+              {ROUTING_KEYS.map(k => {
+                const v = result.resolved[k];
+                if (v === undefined) return null;
+                return (
+                  <div key={k}>
+                    {k}: {Array.isArray(v) ? `[${v.join(', ')}]` : String(v)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Severity dedup note */}
+          <div className="mt-3 p-3 rounded-lg bg-yellow-50 border border-yellow-200 text-xs text-yellow-800">
+            <span className="font-medium">{t('嚴重度去重', 'Severity Dedup')}:</span>{' '}
+            {t('severity=critical 觸發 inhibit rule 抑制 warning — 由 Alertmanager 自動處理，不在 tenant 配置中。',
+               'severity=critical triggers inhibit rule to suppress warning — handled automatically by Alertmanager, not in tenant config.')}
           </div>
         </div>
       )}
