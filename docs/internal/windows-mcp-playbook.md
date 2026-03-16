@@ -234,6 +234,12 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
 | 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
 | 26 | PAT 查 GHCR packages 回 403 | GitHub Packages API 需要 `packages:read` scope；PAT 沒此 scope 時 GET `/users/{owner}/packages` 回 403，但 **CI 用 `GITHUB_TOKEN` 有 `packages:write` 所以 push 成功**。驗證 image 是否存在最快的方式是瀏覽器開 `github.com/{owner}?tab=packages`，不繞 API |
+| 27 | `.git/*.lock` 殘留阻擋 git 操作 | Cowork VM 無法刪除 `.git/index.lock` / `HEAD.lock`（`Operation not permitted`）；用 Windows MCP `Remove-Item "path\.git\*.lock" -Force` 清理。每次 git 操作異常中斷後必須先清 lock |
+| 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
+| 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |
+| 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
+| 31 | Cowork VM proxy 封鎖 `api.github.com` | `git push` 走得通（git 協議通道），但 `requests` / `curl` 對 `api.github.com` 回 403 Forbidden（proxy 層封鎖）。GitHub API 操作必須透過 Windows MCP 的 `curl.exe` |
+| 32 | `Set-Content` 預設加 BOM 導致 JSON parse 失敗 | GitHub API `curl.exe --data-binary @file` 讀入含 BOM 的 UTF-8 檔案會回 `Problems parsing JSON`。用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫入無 BOM 版本 |
 
 ## 指令快速參考
 

@@ -191,6 +191,9 @@ git push origin "tools/v<VERSION>"
 | 18 | `Get-Content -Raw` 回傳 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata（PSPath/PSDrive/PSProvider 數千行）；須 `[string]` cast 或改用 here-string `@"..."@`（詳見 [Windows MCP Playbook](windows-mcp-playbook.md#長-body-的建議做法)） |
 | 19 | Repo rename 導致 Release API POST 靜默失敗 | 改名後 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect（靜默回 401）。必須用**新 repo name** 或 **repo ID URL**（`/repositories/{id}/releases`）。詳見 [Windows MCP Playbook #24](windows-mcp-playbook.md) |
 | 20 | Fine-grained PAT 預設無 Release 寫入權限 | 需在 GitHub Settings → Fine-grained PAT → Permissions 加上 **Contents: Read and Write** 才能建立 Release |
+| 21 | Re-tag 完整 SOP（同版號新 commit） | ① push main → ② 逐一刪遠端 tag（`git push origin --delete <tag>`，v2.1.0 可能已被刪，逐一操作避免 `--delete` 批次錯誤中斷）→ ③ 刪本地 tag（`git tag -d`）→ ④ 建新 tag on HEAD → ⑤ **逐一** push tag（避免同時推送不觸發 CI）→ ⑥ 重建 Release（因 #17 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
+| 22 | `Invoke-RestMethod` 在 Windows MCP 下頻繁 timeout | 原因：PowerShell 模組初始化 + TLS 協商累計超過 MCP 60s timeout。改用 `curl.exe`：JSON body 用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫無 BOM 暫存 → `curl.exe --data-binary @file`。注意 `Set-Content` 預設加 BOM 會導致 `Problems parsing JSON` |
+| 23 | `mkdocs gh-deploy` 連續失敗（site/ 權限 + ghp_import bytes bug） | `site/` 一旦建出 Cowork VM 無法清除（`Operation not permitted`），須 Windows MCP `Remove-Item` 清理。`ghp_import` 在 Python 3.10 下有 `TypeError: write() argument must be str, not bytes`；Workaround：手動建 temp git repo → 複製 `site/*` → commit → push `gh-pages --force` |
 
 ## 版號合併流程
 
