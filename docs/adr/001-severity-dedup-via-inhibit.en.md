@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 
@@ -12,6 +12,8 @@ lang: en
 ## Status
 
 ✅ **Accepted** (v1.0.0)
+
+> **v2.1.0 Status:** This mechanism remains actively in use. Severity Dedup generates inhibit_rules automatically via `generate_alertmanager_routes.py`, covering `_critical` multi-severity tiers, validated by 3070+ tests.
 
 ## Background
 

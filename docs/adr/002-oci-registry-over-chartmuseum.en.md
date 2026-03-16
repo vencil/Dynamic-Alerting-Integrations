@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 
@@ -78,7 +78,7 @@ Helm 3.8+ natively supports OCI-level artifact distribution standards. Helm char
 
 ## Related Decisions
 
-No direct dependencies. This decision purely affects distribution mechanism without changing platform architecture.
+- [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — Rule Packs distributed via OCI registry are mounted into Prometheus using Projected Volumes
 
 ## Implementation Checklist
 

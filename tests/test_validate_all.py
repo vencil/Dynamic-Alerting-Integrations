@@ -11,6 +11,7 @@ pytest style：使用 plain assert + conftest fixtures。
   6. _snapshot_mtimes() — 檔案 mtime 快照
   7. TOOLS / FIX_COMMANDS 常數一致性
   8. WATCH_TRIGGERS 覆蓋率
+  9. _send_notification() — 跨平台桌面通知
 """
 import json
 import os
@@ -24,6 +25,7 @@ import validate_all as va
 from validate_all import (
     _extract_detail,
     _run_one,
+    _send_notification,
     _status_symbol,
     _format_time,
     _detect_changed_checks,
@@ -547,3 +549,222 @@ class TestMainCLI:
         out = capsys.readouterr().out
         for name, _, _, _ in TOOLS:
             assert name in out, f"--list 未顯示 '{name}'"
+
+
+# ============================================================
+# _generate_diff_report()
+# ============================================================
+
+class TestGenerateDiffReport:
+    """--diff-report 功能測試。"""
+
+    def test_no_fixable_checks(self, tmp_path):
+        """No fixable failed checks returns informative message."""
+        # Use a check name that's not in FIX_COMMANDS
+        result = va._generate_diff_report(
+            {"structure": "fail"}, tmp_path, tmp_path)
+        assert "No auto-fixable" in result
+
+    def test_fix_produces_diff(self, tmp_path, monkeypatch):
+        """Fixable check runs fix and captures git diff."""
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            mock = MagicMock()
+            mock.returncode = 0
+            if "diff" in cmd:
+                mock.stdout = "diff --git a/foo b/foo\n--- a/foo\n+++ b/foo"
+            else:
+                mock.stdout = ""
+            return mock
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+        result = va._generate_diff_report(
+            {"versions": "fail"}, tmp_path, tmp_path)
+        assert "versions" in result
+        assert "diff --git" in result
+        # Should have called: fix command, git diff, git checkout
+        assert len(calls) == 3
+
+    def test_fix_timeout(self, tmp_path, monkeypatch):
+        """Timeout during fix is handled gracefully."""
+        call_count = [0]
+
+        def mock_run(cmd, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise subprocess.TimeoutExpired(cmd, 60)
+            mock = MagicMock()
+            mock.returncode = 0
+            mock.stdout = ""
+            return mock
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+        result = va._generate_diff_report(
+            {"versions": "fail"}, tmp_path, tmp_path)
+        assert "timeout" in result
+
+    def test_no_diff_produced(self, tmp_path, monkeypatch):
+        """Fix that produces no diff shows informative message."""
+        def mock_run(cmd, **kwargs):
+            mock = MagicMock()
+            mock.returncode = 0
+            mock.stdout = ""
+            return mock
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+        result = va._generate_diff_report(
+            {"versions": "fail"}, tmp_path, tmp_path)
+        assert "no diff produced" in result
+
+
+class TestMainCLI:
+    """main() CLI 路徑覆蓋。"""
+
+    def _mock_run_one(self, short_name, script_path, tool_args,
+                      project_root):
+        """Mock _run_one that always passes."""
+        return (short_name, "pass", 0.1, "ok", "output")
+
+    def _mock_run_one_fail(self, short_name, script_path, tool_args,
+                           project_root):
+        """Mock _run_one that always fails."""
+        return (short_name, "fail", 0.2, "error", "failure output")
+
+    def test_list_flag(self, monkeypatch, capsys):
+        """--list 列出所有 checks。"""
+        monkeypatch.setattr(sys, "argv", ["validate_all", "--list"])
+        va.main()
+        out = capsys.readouterr().out
+        assert "versions" in out or "links" in out
+
+    def test_sequential_json(self, monkeypatch, capsys):
+        """Sequential + --json 輸出。"""
+        monkeypatch.setattr(sys, "argv", [
+            "validate_all", "--json", "--only", "versions",
+        ])
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one)
+        with pytest.raises(SystemExit) as exc_info:
+            va.main()
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["passed"] >= 1
+        assert data["mode"] == "sequential"
+
+    def test_sequential_text(self, monkeypatch, capsys):
+        """Sequential text 輸出。"""
+        monkeypatch.setattr(sys, "argv", [
+            "validate_all", "--only", "versions",
+        ])
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one)
+        with pytest.raises(SystemExit) as exc_info:
+            va.main()
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "Validation Report" in out
+
+    def test_skip_flag(self, monkeypatch, capsys):
+        """--skip 跳過指定 check。"""
+        monkeypatch.setattr(sys, "argv", [
+            "validate_all", "--skip", "versions,links",
+            "--only", "freshness",
+        ])
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one)
+        with pytest.raises(SystemExit) as exc_info:
+            va.main()
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert len(out) > 0
+
+    def test_ci_stops_on_failure(self, monkeypatch):
+        """--ci 模式遇到失敗時 exit 1。"""
+        monkeypatch.setattr(sys, "argv", [
+            "validate_all", "--ci", "--only", "versions",
+        ])
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
+        with pytest.raises(SystemExit) as exc_info:
+            va.main()
+        assert exc_info.value.code == 1
+
+    def test_verbose_flag(self, monkeypatch, capsys):
+        """--verbose 顯示完整輸出。"""
+        monkeypatch.setattr(sys, "argv", [
+            "validate_all", "--verbose", "--only", "versions",
+        ])
+        monkeypatch.setattr(va, "_run_one", self._mock_run_one)
+        with pytest.raises(SystemExit) as exc_info:
+            va.main()
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "output" in out or "VERSIONS" in out
+
+
+# ============================================================
+# _send_notification (cross-platform desktop notification)
+# ============================================================
+
+class TestSendNotification:
+    """_send_notification() 跨平台桌面通知測試。"""
+
+    def _mock_platform(self, monkeypatch, system_name):
+        """Helper: mock platform.system() 回傳指定 OS 名稱。"""
+        import platform as _platform
+        monkeypatch.setattr(_platform, "system", lambda: system_name)
+
+    def test_linux_notify_send(self, monkeypatch):
+        """Linux 平台使用 notify-send。"""
+        self._mock_platform(monkeypatch, "Linux")
+        calls = []
+        monkeypatch.setattr(va.subprocess, "run", lambda *a, **kw: calls.append(a[0]))
+        _send_notification("Test Title", "Test Message")
+        assert len(calls) == 1
+        assert calls[0][0] == "notify-send"
+        assert "Test Title" in calls[0]
+        assert "Test Message" in calls[0]
+
+    def test_macos_osascript(self, monkeypatch):
+        """macOS 平台使用 osascript。"""
+        self._mock_platform(monkeypatch, "Darwin")
+        calls = []
+        monkeypatch.setattr(va.subprocess, "run", lambda *a, **kw: calls.append(a[0]))
+        _send_notification("Title", "Msg")
+        assert len(calls) == 1
+        assert calls[0][0] == "osascript"
+
+    def test_windows_powershell(self, monkeypatch):
+        """Windows 平台使用 PowerShell。"""
+        self._mock_platform(monkeypatch, "Windows")
+        calls = []
+        monkeypatch.setattr(va.subprocess, "run", lambda *a, **kw: calls.append(a[0]))
+        _send_notification("Title", "Msg")
+        assert len(calls) == 1
+        assert calls[0][0] == "powershell"
+
+    def test_fallback_on_file_not_found(self, monkeypatch, capsys):
+        """notify-send 不存在時 fallback 到 terminal bell。"""
+        self._mock_platform(monkeypatch, "Linux")
+        def raise_fnf(*a, **kw):
+            raise FileNotFoundError("notify-send")
+        monkeypatch.setattr(va.subprocess, "run", raise_fnf)
+        _send_notification("Title", "Msg")
+        out = capsys.readouterr().out
+        assert "\a" in out
+
+    def test_fallback_on_timeout(self, monkeypatch, capsys):
+        """subprocess timeout 時 fallback 到 terminal bell。"""
+        self._mock_platform(monkeypatch, "Linux")
+        def raise_timeout(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd="notify-send", timeout=5)
+        monkeypatch.setattr(va.subprocess, "run", raise_timeout)
+        _send_notification("Title", "Msg")
+        out = capsys.readouterr().out
+        assert "\a" in out
+
+    def test_unknown_os_fallback(self, monkeypatch, capsys):
+        """未知 OS 直接 fallback 到 terminal bell。"""
+        self._mock_platform(monkeypatch, "FreeBSD")
+        _send_notification("Title", "Msg")
+        out = capsys.readouterr().out
+        assert "\a" in out

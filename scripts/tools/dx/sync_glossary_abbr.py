@@ -33,6 +33,11 @@ import re
 import sys
 from pathlib import Path
 
+# Add script dir to path for lib imports
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
+from _lib_python import write_text_secure  # noqa: E402
+
 
 # Known abbreviations that don't require parentheses to be recognized
 # Maps abbreviation → (full_expansion, none if to be extracted from context)
@@ -237,11 +242,7 @@ def main():
 
     # Write mode
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(new_content)
-
-    # Set permissions to 0o600 for security (SAST convention)
-    os.chmod(output_path, 0o600)
+    write_text_secure(str(output_path), new_content)
 
     print(f"Synced {len(abbreviations)} abbreviations from glossary.md → abbreviations.md")
 

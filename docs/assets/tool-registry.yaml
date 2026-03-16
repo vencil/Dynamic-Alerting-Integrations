@@ -201,6 +201,17 @@ tools:
     hub_section: advanced
     appears_in: []
 
+  - key: alert-noise-analyzer
+    title: { en: "Alert Noise Analyzer", zh: "告警噪音分析器" }
+    file: interactive/tools/alert-noise-analyzer.jsx
+    audience: [platform, domain-expert]
+    icon: chart
+    tags: [alerts, noise, MTTA, MTTR, analysis]
+    desc: { en: "Analyze alert noise and find optimization opportunities", zh: "分析告警噪音，找出優化機會" }
+    related: [alert-simulator, alert-timeline, health-dashboard]
+    hub_section: advanced
+    appears_in: []
+
   - key: schema-explorer
     title: { en: "YAML Schema Explorer", zh: "YAML 結構探索器" }
     file: interactive/tools/schema-explorer.jsx
@@ -309,6 +320,18 @@ tools:
       - docs/getting-started/for-platform-engineers.md
       - docs/getting-started/for-tenants.md
 
+  - key: roi-calculator
+    title: { en: "ROI Calculator", zh: "採用效益試算器" }
+    file: interactive/tools/roi-calculator.jsx
+    audience: [platform]
+    icon: wizard
+    tags: [roi, cost, adoption, evaluation]
+    desc: { en: "Calculate adoption benefits", zh: "計算平台採用效益" }
+    related: [capacity-planner, health-dashboard, self-service-portal]
+    hub_section: advanced
+    appears_in:
+      - docs/architecture-and-design.md
+
   - key: self-service-portal
     title: { en: "Tenant Self-Service Portal", zh: "租戶自助入口" }
     file: interactive/tools/self-service-portal.jsx
@@ -320,3 +343,14 @@ tools:
     hub_section: interactive
     appears_in:
       - docs/architecture-and-design.md
+
+  - key: multi-tenant-comparison
+    title: { en: "Multi-Tenant Comparison", zh: "多租戶閾值比較" }
+    file: interactive/tools/multi-tenant-comparison.jsx
+    audience: [platform, domain-expert]
+    icon: chart
+    tags: [tenant, comparison, threshold, outlier, analysis]
+    desc: { en: "Compare thresholds across tenants, detect outliers", zh: "跨租戶閾值比較，偵測離群值" }
+    related: [capacity-planner, roi-calculator, alert-noise-analyzer]
+    hub_section: advanced
+    appears_in: []

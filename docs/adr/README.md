@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 
@@ -18,6 +18,8 @@ lang: zh
 | [003](#003-sentinel-alert-模式) | Sentinel Alert 模式 | ✅ Accepted | 利用哨兵告警 + inhibit 實現三態控制，取代直接 PromQL 抑制 |
 | [004](#004-federation-場景-a-優先) | Federation 場景 A 優先 | ✅ Accepted | 優先實現中央 exporter + 邊緣 Prometheus 的聯邦模式 |
 | [005](#005-投影卷掛載-rule-pack) | 投影卷掛載 Rule Pack | ✅ Accepted | 採用 Projected Volume 與 optional:true 實現可選 Rule Pack 卸載 |
+| [006](#006-租戶映射拓撲-11-n1-1n) | 租戶映射拓撲 (1:1, N:1, 1:N) | ✅ Accepted | 資料平面 Recording Rules 解決三種實例-租戶映射拓撲，Exporter 零變更 |
+| [007](#007-跨域路由設定檔與域策略) | 跨域路由設定檔與域策略 | ✅ Accepted | Routing Profiles（重用）+ Domain Policies（約束）兩層架構 |
 
 ---
 
@@ -58,6 +60,22 @@ lang: zh
 **文件**: [`005-projected-volume-for-rule-packs.md`](./005-projected-volume-for-rule-packs.md)
 
 採用 Projected Volume 與 `optional: true` 實現 15 個 Rule Pack 的可選卸載。租戶可刪除個別 ConfigMap 來禁用特定 Rule Pack，Prometheus 不會因缺失 pack 而失敗。
+
+---
+
+## 006: 租戶映射拓撲 (1:1, N:1, 1:N)
+
+**文件**: [`006-tenant-mapping-topologies.md`](./006-tenant-mapping-topologies.md)
+
+在資料平面透過 Prometheus Recording Rules 解決三種實例-租戶映射拓撲 (1:1, N:1, 1:N)。1:N 拓撲（Oracle 多 schema、DB2 多 tablespace）透過 config-driven `instance_tenant_mapping` 自動產生 Recording Rules，threshold-exporter 保持零變更。
+
+---
+
+## 007: 跨域路由設定檔與域策略
+
+**文件**: [`007-cross-domain-routing-profiles.md`](./007-cross-domain-routing-profiles.md)
+
+兩層架構：Routing Profiles（命名路由配置，供多租戶共用）+ Domain Policies（業務域合規約束，驗證而非繼承）。配置重複從 O(N) 降為 O(1)，域策略提供機器可驗證的合規約束。
 
 ---
 

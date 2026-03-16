@@ -9,9 +9,14 @@
 - generate_relabel_snippet: Prometheus relabel_configs snippet 產生
 - write_outputs: 檔案輸出驗證
 - RULE_PACKS 常數完整性
+- print_catalog: Exporter 目錄輸出
+- run_non_interactive / run_from_onboard / main: CLI 路徑
 """
+import argparse
+import json
 import os
 import tempfile
+from unittest import mock
 
 import pytest
 import yaml
@@ -23,6 +28,9 @@ from scaffold_tenant import (
     generate_profile,
     generate_report,
     generate_relabel_snippet,
+    print_catalog,
+    run_non_interactive,
+    run_from_onboard,
     write_outputs,
     RULE_PACKS,
 )
@@ -34,16 +42,18 @@ from scaffold_tenant import (
 class TestBuildReceiverFromArgs:
     """build_receiver_from_args() CLI 參數轉換測試。"""
 
-    def test_webhook(self):
-        """Webhook receiver 正確建立。"""
-        obj = build_receiver_from_args("webhook", "https://hooks.example.com/alert")
-        assert obj == {"type": "webhook", "url": "https://hooks.example.com/alert"}
-
-    def test_slack(self):
-        """Slack receiver 使用 api_url 欄位。"""
-        obj = build_receiver_from_args("slack", "https://hooks.slack.com/T/B/X")
-        assert obj["type"] == "slack"
-        assert obj["api_url"] == "https://hooks.slack.com/T/B/X"
+    @pytest.mark.parametrize("rtype,value,expected_field,expected_value", [
+        ("webhook", "https://hooks.example.com/alert", "url", "https://hooks.example.com/alert"),
+        ("slack", "https://hooks.slack.com/T/B/X", "api_url", "https://hooks.slack.com/T/B/X"),
+        ("teams", "https://outlook.office.com/webhook/test", "webhook_url", "https://outlook.office.com/webhook/test"),
+        ("pagerduty", "abc123", "service_key", "abc123"),
+        ("rocketchat", "https://chat.example.com/hooks/abc", "url", "https://chat.example.com/hooks/abc"),
+    ], ids=["webhook", "slack", "teams", "pagerduty", "rocketchat"])
+    def test_simple_receiver(self, rtype, value, expected_field, expected_value):
+        """各類 receiver 正確建立（type + 對應欄位）。"""
+        obj = build_receiver_from_args(rtype, value)
+        assert obj["type"] == rtype
+        assert obj[expected_field] == expected_value
 
     def test_email_with_smarthost(self):
         """Email receiver 包含 to 清單和 smarthost。"""
@@ -58,24 +68,6 @@ class TestBuildReceiverFromArgs:
         """Email receiver 缺少 smarthost 時使用預設值。"""
         obj = build_receiver_from_args("email", "admin@example.com")
         assert obj["smarthost"] == "localhost:25"
-
-    def test_teams(self):
-        """Teams receiver 使用 webhook_url 欄位。"""
-        obj = build_receiver_from_args("teams", "https://outlook.office.com/webhook/test")
-        assert obj["type"] == "teams"
-        assert obj["webhook_url"] == "https://outlook.office.com/webhook/test"
-
-    def test_pagerduty(self):
-        """PagerDuty receiver 使用 service_key 欄位。"""
-        obj = build_receiver_from_args("pagerduty", "abc123")
-        assert obj["type"] == "pagerduty"
-        assert obj["service_key"] == "abc123"
-
-    def test_rocketchat(self):
-        """Rocket.Chat receiver 使用 url 欄位。"""
-        obj = build_receiver_from_args("rocketchat", "https://chat.example.com/hooks/abc")
-        assert obj["type"] == "rocketchat"
-        assert obj["url"] == "https://chat.example.com/hooks/abc"
 
 
 # ============================================================
@@ -411,8 +403,8 @@ class TestWriteOutputsFixture:
         with open(os.path.join(config_dir, "db-z.yaml"), encoding="utf-8") as f:
             parsed = yaml.safe_load(f)
         t = parsed["tenants"]["db-z"]
-        allowed_reserved = {"_routing", "_severity_dedup", "_metadata",
-                            "_silent_mode", "_state_maintenance"}
+        allowed_reserved = {"_routing", "_routing_profile", "_severity_dedup",
+                            "_metadata", "_silent_mode", "_state_maintenance"}
         for key in t:
             if key.startswith("_"):
                 assert key in allowed_reserved, f"非預期 reserved key: {key}"
@@ -429,3 +421,447 @@ class TestWriteOutputsFixture:
             content = f.read()
         assert "db-z" in content
         assert len(content) > 50  # 非空報告
+
+
+# ---------------------------------------------------------------------------
+# print_catalog
+# ---------------------------------------------------------------------------
+
+class TestPrintCatalog:
+    """print_catalog() 測試。"""
+
+    def test_outputs_all_rule_packs(self, capsys):
+        print_catalog()
+        out = capsys.readouterr().out
+        for key, pack in RULE_PACKS.items():
+            assert pack["display"] in out
+            assert pack["exporter"] in out
+
+
+# ---------------------------------------------------------------------------
+# run_non_interactive
+# ---------------------------------------------------------------------------
+
+class TestRunNonInteractive:
+    """run_non_interactive() CLI 路徑測試。"""
+
+    def test_basic(self, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None, severity_dedup="enable",
+                routing_receiver=None, namespaces=None,
+            )
+            run_non_interactive(args)
+            assert os.path.exists(os.path.join(d, "db-x.yaml"))
+            assert os.path.exists(os.path.join(d, "_defaults.yaml"))
+
+    def test_with_profile(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile="high-load", silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert data["tenants"]["db-x"]["_profile"] == "high-load"
+
+    def test_with_silent_mode(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode="warning",
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert data["tenants"]["db-x"]["_silent_mode"] == "warning"
+
+    def test_with_severity_dedup_disable(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="disable", routing_receiver=None,
+                namespaces=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert data["tenants"]["db-x"]["_severity_dedup"] == "disable"
+
+    def test_with_routing(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable",
+                routing_receiver="https://hooks.example.com/alert",
+                routing_receiver_type="webhook",
+                routing_smarthost=None,
+                routing_group_by=None,
+                routing_group_wait=None,
+                routing_group_interval=None,
+                routing_repeat_interval=None,
+                namespaces=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            routing = data["tenants"]["db-x"]["_routing"]
+            assert routing["receiver"]["type"] == "webhook"
+            assert routing["group_wait"] == "30s"
+
+    def test_with_namespaces(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces="ns1,ns2",
+            )
+            run_non_interactive(args)
+            relabel_file = os.path.join(d, "relabel_configs-db-x.yaml")
+            assert os.path.exists(relabel_file)
+
+    def test_invalid_db_exits(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="nonexistent_db", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+            )
+            with pytest.raises(SystemExit):
+                run_non_interactive(args)
+
+    # ── ADR-007: --routing-profile ────────────────────────────────────
+
+    def test_with_routing_profile(self):
+        """--routing-profile adds _routing_profile key to tenant YAML."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile="team-sre-apac",
+                topology="1:1",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert data["tenants"]["db-x"]["_routing_profile"] == "team-sre-apac"
+
+    def test_routing_profile_none_omitted(self):
+        """Without --routing-profile, _routing_profile is absent."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile=None,
+                topology="1:1",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert "_routing_profile" not in data["tenants"]["db-x"]
+
+    def test_routing_profile_with_routing(self):
+        """--routing-profile coexists with --routing-receiver."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable",
+                routing_receiver="https://hooks.example.com/alert",
+                routing_receiver_type="webhook",
+                routing_smarthost=None,
+                routing_group_by=None,
+                routing_group_wait=None,
+                routing_group_interval=None,
+                routing_repeat_interval=None,
+                namespaces=None,
+                routing_profile="team-dba-global",
+                topology="1:1",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            t = data["tenants"]["db-x"]
+            assert t["_routing_profile"] == "team-dba-global"
+            assert t["_routing"]["receiver"]["type"] == "webhook"
+
+    # ── ADR-006: --topology ───────────────────────────────────────────
+
+    def test_topology_1n_generates_mapping(self):
+        """--topology=1:N with --mapping-instance and --mapping-filter produces _instance_mapping.yaml."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile=None,
+                topology="1:N",
+                mapping_instance="oracle-prod-01",
+                mapping_filter='schema=~"app_a_.*"',
+            )
+            run_non_interactive(args)
+            mapping_path = os.path.join(d, "_instance_mapping.yaml")
+            assert os.path.exists(mapping_path)
+            with open(mapping_path, encoding="utf-8") as f:
+                content = f.read()
+            data = yaml.safe_load(content.split("---")[-1] if "---" in content else content)
+            # May be None if comment-only; parse lines after comments
+            if data is None:
+                lines = [l for l in content.splitlines() if not l.startswith("#")]
+                data = yaml.safe_load("\n".join(lines))
+            assert "instance_tenant_mapping" in data
+            assert "oracle-prod-01" in data["instance_tenant_mapping"]
+            mapping = data["instance_tenant_mapping"]["oracle-prod-01"]
+            assert mapping[0]["tenant"] == "db-x"
+            assert mapping[0]["filter"] == 'schema=~"app_a_.*"'
+
+    def test_topology_1n_missing_args_warns(self, capsys):
+        """--topology=1:N without --mapping-instance warns and skips mapping file."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile=None,
+                topology="1:N",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            mapping_path = os.path.join(d, "_instance_mapping.yaml")
+            assert not os.path.exists(mapping_path)
+            captured = capsys.readouterr()
+            assert "WARN" in captured.err
+
+    def test_topology_n1_with_namespaces(self):
+        """--topology=N:1 with --namespaces generates relabel_configs."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces="ns-a,ns-b",
+                routing_profile=None,
+                topology="N:1",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            relabel_file = os.path.join(d, "relabel_configs-db-x.yaml")
+            assert os.path.exists(relabel_file)
+
+    def test_topology_n1_without_namespaces_warns(self, capsys):
+        """--topology=N:1 without --namespaces warns."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile=None,
+                topology="N:1",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            captured = capsys.readouterr()
+            assert "WARN" in captured.err
+
+    def test_topology_default_no_extra_files(self):
+        """Default topology (1:1) produces no mapping or relabel files."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile=None,
+                topology="1:1",
+                mapping_instance=None, mapping_filter=None,
+            )
+            run_non_interactive(args)
+            assert not os.path.exists(os.path.join(d, "_instance_mapping.yaml"))
+            assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.yaml"))
+
+    def test_mapping_file_secure_permissions(self):
+        """_instance_mapping.yaml has secure 0o600 permissions."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+                routing_profile=None,
+                topology="1:N",
+                mapping_instance="inst-01",
+                mapping_filter='schema=~"test"',
+            )
+            run_non_interactive(args)
+            mapping_path = os.path.join(d, "_instance_mapping.yaml")
+            mode = os.stat(mapping_path).st_mode & 0o777
+            assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# run_from_onboard
+# ---------------------------------------------------------------------------
+
+class TestRunFromOnboard:
+    """run_from_onboard() 測試。"""
+
+    def test_basic(self):
+        with tempfile.TemporaryDirectory() as d:
+            hints = {
+                "tenants": ["db-a", "db-b"],
+                "db_types": {
+                    "db-a": ["mariadb"],
+                    "db-b": ["mariadb"],
+                },
+                "routing_hints": {},
+            }
+            hints_path = os.path.join(d, "hints.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump(hints, f)
+
+            args = argparse.Namespace(
+                from_onboard=hints_path, output_dir=d,
+            )
+            run_from_onboard(args)
+            assert os.path.exists(os.path.join(d, "db-a.yaml"))
+            assert os.path.exists(os.path.join(d, "db-b.yaml"))
+
+    def test_with_routing_hints(self):
+        with tempfile.TemporaryDirectory() as d:
+            hints = {
+                "tenants": ["db-a"],
+                "db_types": {"db-a": ["mariadb"]},
+                "routing_hints": {
+                    "db-a": {
+                        "receiver_type": "webhook",
+                        "group_wait": "10s",
+                        "group_interval": "1m",
+                        "repeat_interval": "2h",
+                    }
+                },
+            }
+            hints_path = os.path.join(d, "hints.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump(hints, f)
+
+            args = argparse.Namespace(
+                from_onboard=hints_path, output_dir=d,
+            )
+            run_from_onboard(args)
+            with open(os.path.join(d, "db-a.yaml"), encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            routing = data["tenants"]["db-a"]["_routing"]
+            assert routing["group_wait"] == "10s"
+
+    def test_invalid_hints_exits(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                from_onboard=os.path.join(d, "nonexistent.json"),
+                output_dir=d,
+            )
+            with pytest.raises(SystemExit):
+                run_from_onboard(args)
+
+    def test_no_tenants_exits(self):
+        with tempfile.TemporaryDirectory() as d:
+            hints_path = os.path.join(d, "empty.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump({"tenants": []}, f)
+
+            args = argparse.Namespace(
+                from_onboard=hints_path, output_dir=d,
+            )
+            with pytest.raises(SystemExit):
+                run_from_onboard(args)
+
+
+# ---------------------------------------------------------------------------
+# main — CLI entry points
+# ---------------------------------------------------------------------------
+
+class TestMainCLI:
+    """main() CLI 路徑測試。"""
+
+    def test_catalog_mode(self, capsys):
+        import scaffold_tenant
+        with mock.patch("sys.argv", ["scaffold_tenant.py", "--catalog"]):
+            with pytest.raises(SystemExit) as exc_info:
+                scaffold_tenant.main()
+            assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "Supported Exporters" in out
+
+    def test_generate_profile_mode(self):
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", [
+                "scaffold_tenant.py",
+                "--generate-profile", "standard-prod",
+                "--db", "mariadb",
+                "-o", d,
+            ]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.main()
+                assert exc_info.value.code == 0
+            assert os.path.exists(os.path.join(d, "_profiles.yaml"))
+
+    def test_generate_profile_no_db_exits(self):
+        import scaffold_tenant
+        with mock.patch("sys.argv", [
+            "scaffold_tenant.py", "--generate-profile", "test",
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                scaffold_tenant.main()
+            assert exc_info.value.code == 1
+
+    def test_generate_profile_invalid_db_exits(self):
+        import scaffold_tenant
+        with mock.patch("sys.argv", [
+            "scaffold_tenant.py",
+            "--generate-profile", "test",
+            "--db", "invalid_db_type",
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                scaffold_tenant.main()
+            assert exc_info.value.code == 1
+
+    def test_non_interactive_mode(self):
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", [
+                "scaffold_tenant.py",
+                "--tenant", "db-test",
+                "--db", "mariadb",
+                "-o", d,
+                "--non-interactive",
+            ]):
+                scaffold_tenant.main()
+            assert os.path.exists(os.path.join(d, "db-test.yaml"))
+
+    def test_non_interactive_missing_args_exits(self):
+        import scaffold_tenant
+        with mock.patch("sys.argv", [
+            "scaffold_tenant.py", "--non-interactive",
+        ]):
+            with pytest.raises(SystemExit):
+                scaffold_tenant.main()

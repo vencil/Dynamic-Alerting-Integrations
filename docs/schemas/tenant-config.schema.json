@@ -3,7 +3,7 @@
   "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/tenant-config.schema.json",
   "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
   "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
-  "version": "v2.0.0",
+  "version": "v2.1.0",
   "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/tenant-config.schema.json\": \"conf.d/*.yaml\" }",
   "type": "object",
   "required": ["tenants"],
@@ -62,6 +62,13 @@
             "minLength": 1
           },
           "examples": [["ns-prod-db-a", "ns-backup-db-a"]]
+        },
+        "_routing_profile": {
+          "type": "string",
+          "title": "Routing Profile Reference (v2.1.0 ADR-007)",
+          "description": "Reference to a named routing profile defined in _routing_profiles.yaml. Profile values act as Layer 2 in the four-layer merge: _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced. Tenant _routing keys override profile values.",
+          "minLength": 1,
+          "examples": ["team-sre-apac", "team-dba-global", "domain-finance-tier1"]
         },
         "_routing": {
           "$ref": "#/definitions/routing",

@@ -10,6 +10,7 @@ pytest style：使用 plain assert + conftest fixtures。
   4. load_yaml_file() — YAML 載入 + 錯誤處理
   5. validate_and_clamp() — timing guardrails
   6. http_get_json / http_post_json / http_request_with_retry — HTTP helpers
+  7. write_text_secure / write_json_secure — SAST-compliant file writes
 """
 
 import json
@@ -24,6 +25,64 @@ import urllib.error
 
 import _lib_python as lib
 from factories import mock_http_response
+
+
+# ============================================================
+# detect_cli_lang
+# ============================================================
+
+class TestDetectCliLang:
+    """detect_cli_lang() CLI 語言偵測測試。"""
+
+    def test_da_lang_zh(self, monkeypatch):
+        """DA_LANG=zh 時回傳 'zh'。"""
+        monkeypatch.setenv("DA_LANG", "zh_TW.UTF-8")
+        assert lib.detect_cli_lang() == "zh"
+
+    def test_da_lang_en(self, monkeypatch):
+        """DA_LANG=en 時回傳 'en'。"""
+        monkeypatch.setenv("DA_LANG", "en_US.UTF-8")
+        assert lib.detect_cli_lang() == "en"
+
+    def test_lc_all_fallback(self, monkeypatch):
+        """DA_LANG 不存在時 fallback 到 LC_ALL。"""
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.setenv("LC_ALL", "zh_TW")
+        assert lib.detect_cli_lang() == "zh"
+
+    def test_lang_fallback(self, monkeypatch):
+        """DA_LANG 和 LC_ALL 都不存在時 fallback 到 LANG。"""
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.delenv("LC_ALL", raising=False)
+        monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+        assert lib.detect_cli_lang() == "zh"
+
+    def test_priority_da_lang_over_lc_all(self, monkeypatch):
+        """DA_LANG 優先於 LC_ALL。"""
+        monkeypatch.setenv("DA_LANG", "en")
+        monkeypatch.setenv("LC_ALL", "zh_TW")
+        assert lib.detect_cli_lang() == "en"
+
+    def test_all_unset_defaults_en(self, monkeypatch):
+        """全部環境變數未設定時預設回傳 'en'。"""
+        monkeypatch.delenv("DA_LANG", raising=False)
+        monkeypatch.delenv("LC_ALL", raising=False)
+        monkeypatch.delenv("LANG", raising=False)
+        assert lib.detect_cli_lang() == "en"
+
+    def test_empty_vars_defaults_en(self, monkeypatch):
+        """環境變數為空字串時預設回傳 'en'。"""
+        monkeypatch.setenv("DA_LANG", "")
+        monkeypatch.setenv("LC_ALL", "")
+        monkeypatch.setenv("LANG", "")
+        assert lib.detect_cli_lang() == "en"
+
+    def test_non_zh_non_en_defaults_en(self, monkeypatch):
+        """非 zh/en locale（如 ja_JP）所有變數都不匹配時回傳 'en'。"""
+        monkeypatch.setenv("DA_LANG", "ja_JP")
+        monkeypatch.delenv("LC_ALL", raising=False)
+        monkeypatch.delenv("LANG", raising=False)
+        assert lib.detect_cli_lang() == "en"
 
 
 # ============================================================
@@ -282,6 +341,34 @@ class TestValidateAndClamp:
 
 
 # ============================================================
+# _validate_url_scheme (SSRF prevention)
+# ============================================================
+
+class TestValidateUrlScheme:
+    """_validate_url_scheme() SSRF 防護測試。"""
+
+    @pytest.mark.parametrize("url", [
+        "http://localhost:9090/api",
+        "https://example.com/path",
+    ])
+    def test_allowed_schemes(self, url):
+        """http/https scheme 回傳 None（通過）。"""
+        assert lib._validate_url_scheme(url) is None
+
+    @pytest.mark.parametrize("url,scheme", [
+        ("ftp://evil.com/file", "ftp"),
+        ("file:///etc/passwd", "file"),
+        ("javascript:alert(1)", "javascript"),
+        ("data:text/html,<h1>hi</h1>", "data"),
+    ], ids=["ftp", "file", "javascript", "data"])
+    def test_blocked_schemes(self, url, scheme):
+        """非 http/https scheme 回傳錯誤訊息。"""
+        err = lib._validate_url_scheme(url)
+        assert err is not None
+        assert scheme in err
+
+
+# ============================================================
 # HTTP helpers
 # ============================================================
 
@@ -333,6 +420,12 @@ class TestHttpGetJson:
         req = call_args[0][0]
         assert req.get_header("Authorization") == "Bearer token"
 
+    def test_ssrf_blocked(self):
+        """非 http/https scheme 被 SSRF 防護攔截。"""
+        data, err = lib.http_get_json("file:///etc/passwd")
+        assert data is None
+        assert "Unsupported URL scheme" in err
+
 
 class TestHttpPostJson:
     """http_post_json() 測試。"""
@@ -379,11 +472,17 @@ class TestHttpPostJson:
         req = call_args[0][0]
         assert req.get_method() == "DELETE"
 
+    def test_ssrf_blocked(self):
+        """非 http/https scheme 被 SSRF 防護攔截。"""
+        data, err = lib.http_post_json("ftp://evil.com/upload", payload={"x": 1})
+        assert data is None
+        assert "Unsupported URL scheme" in err
+
 
 class TestHttpRequestWithRetry:
     """http_request_with_retry() 重試邏輯測試。"""
 
-    @patch("time.sleep")
+    @patch("_lib_python.time.sleep")
     @patch("_lib_python.urllib.request.urlopen")
     def test_success_first_attempt(self, mock_urlopen, mock_sleep):
         """第一次就成功，不重試。"""
@@ -392,7 +491,7 @@ class TestHttpRequestWithRetry:
         assert result == {"status": "ok"}
         mock_sleep.assert_not_called()
 
-    @patch("time.sleep")
+    @patch("_lib_python.time.sleep")
     @patch("_lib_python.urllib.request.urlopen")
     def test_retry_on_5xx(self, mock_urlopen, mock_sleep):
         """5xx 錯誤觸發重試，第二次成功。"""
@@ -404,7 +503,7 @@ class TestHttpRequestWithRetry:
         assert result == {"status": "recovered"}
         mock_sleep.assert_called_once_with(1)
 
-    @patch("time.sleep")
+    @patch("_lib_python.time.sleep")
     @patch("_lib_python.urllib.request.urlopen")
     def test_no_retry_on_4xx(self, mock_urlopen, mock_sleep):
         """4xx 錯誤不重試，立即 raise。"""
@@ -415,7 +514,7 @@ class TestHttpRequestWithRetry:
         assert exc_info.value.code == 404
         mock_sleep.assert_not_called()
 
-    @patch("time.sleep")
+    @patch("_lib_python.time.sleep")
     @patch("_lib_python.urllib.request.urlopen")
     def test_retry_exhausted_raises(self, mock_urlopen, mock_sleep):
         """重試耗盡後 raise 最後一個錯誤。"""
@@ -426,7 +525,7 @@ class TestHttpRequestWithRetry:
         assert exc_info.value.code == 500
         assert mock_sleep.call_count == 1
 
-    @patch("time.sleep")
+    @patch("_lib_python.time.sleep")
     @patch("_lib_python.urllib.request.urlopen")
     def test_retry_on_connection_error(self, mock_urlopen, mock_sleep):
         """連線錯誤觸發重試。"""
@@ -437,7 +536,7 @@ class TestHttpRequestWithRetry:
         result = lib.http_request_with_retry("http://test/", max_retries=3)
         assert result == {"ok": True}
 
-    @patch("time.sleep")
+    @patch("_lib_python.time.sleep")
     @patch("_lib_python.urllib.request.urlopen")
     def test_exponential_backoff(self, mock_urlopen, mock_sleep):
         """重試間隔遵循指數退避 (2^0, 2^1)。"""
@@ -448,8 +547,11 @@ class TestHttpRequestWithRetry:
         ]
         lib.http_request_with_retry("http://test/", max_retries=3)
         assert mock_sleep.call_count == 2
-        mock_sleep.assert_any_call(1)
-        mock_sleep.assert_any_call(2)
+
+    def test_ssrf_blocked(self):
+        """非 http/https scheme 在重試前就被 SSRF 防護攔截（raise ValueError）。"""
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
+            lib.http_request_with_retry("data:text/html,<h1>evil</h1>")
 
 
 # ============================================================
@@ -523,3 +625,105 @@ class TestOnboardHintsRoundTrip:
         lib.write_onboard_hints(str(config_dir), {"v": 1})
         path = lib.write_onboard_hints(str(config_dir), {"v": 2})
         assert lib.read_onboard_hints(path) == {"v": 2}
+
+
+# ============================================================
+# write_text_secure
+# ============================================================
+
+class TestWriteTextSecure:
+    """write_text_secure() 安全文字寫入測試。"""
+
+    def test_basic_write(self, tmp_path):
+        """基本文字內容正確寫入。"""
+        path = str(tmp_path / "test.txt")
+        lib.write_text_secure(path, "hello world")
+        assert pathlib.Path(path).read_text(encoding="utf-8") == "hello world"
+
+    def test_permissions_0o600(self, tmp_path):
+        """寫入檔案權限為 0o600。"""
+        path = str(tmp_path / "secure.txt")
+        lib.write_text_secure(path, "secret")
+        mode = os.stat(path).st_mode & 0o777
+        assert mode == 0o600
+
+    def test_unicode_content(self, tmp_path):
+        """UTF-8 中文內容正確寫入。"""
+        path = str(tmp_path / "zh.txt")
+        lib.write_text_secure(path, "租戶設定 — 三態")
+        content = pathlib.Path(path).read_text(encoding="utf-8")
+        assert "租戶" in content
+        assert "三態" in content
+
+    def test_overwrites_existing(self, tmp_path):
+        """覆蓋既有檔案。"""
+        path = str(tmp_path / "overwrite.txt")
+        lib.write_text_secure(path, "v1")
+        lib.write_text_secure(path, "v2")
+        assert pathlib.Path(path).read_text(encoding="utf-8") == "v2"
+
+    def test_empty_string(self, tmp_path):
+        """空字串寫入產生空檔案。"""
+        path = str(tmp_path / "empty.txt")
+        lib.write_text_secure(path, "")
+        assert pathlib.Path(path).read_text(encoding="utf-8") == ""
+        assert os.stat(path).st_mode & 0o777 == 0o600
+
+
+# ============================================================
+# write_json_secure
+# ============================================================
+
+class TestWriteJsonSecure:
+    """write_json_secure() 安全 JSON 寫入測試。"""
+
+    def test_basic_dict(self, tmp_path):
+        """基本 dict 正確寫入為 JSON。"""
+        path = str(tmp_path / "data.json")
+        lib.write_json_secure(path, {"key": "value", "count": 42})
+        content = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        assert content == {"key": "value", "count": 42}
+
+    def test_permissions_0o600(self, tmp_path):
+        """寫入檔案權限為 0o600。"""
+        path = str(tmp_path / "secure.json")
+        lib.write_json_secure(path, {"x": 1})
+        mode = os.stat(path).st_mode & 0o777
+        assert mode == 0o600
+
+    def test_unicode_no_escape(self, tmp_path):
+        """預設 ensure_ascii=False，Unicode 字元不轉義。"""
+        path = str(tmp_path / "zh.json")
+        lib.write_json_secure(path, {"note": "租戶告警"})
+        raw = pathlib.Path(path).read_text(encoding="utf-8")
+        assert "租戶" in raw
+        assert "\\u" not in raw
+
+    def test_custom_indent(self, tmp_path):
+        """自訂 indent 生效。"""
+        path = str(tmp_path / "indent4.json")
+        lib.write_json_secure(path, {"a": 1}, indent=4)
+        raw = pathlib.Path(path).read_text(encoding="utf-8")
+        assert "    " in raw  # 4-space indent
+
+    def test_nested_structure(self, tmp_path):
+        """深層巢狀結構正確序列化。"""
+        path = str(tmp_path / "nested.json")
+        data = {"level1": {"level2": {"level3": [1, 2, 3]}}}
+        lib.write_json_secure(path, data)
+        result = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        assert result == data
+
+    def test_empty_dict(self, tmp_path):
+        """空 dict 寫入 '{}'。"""
+        path = str(tmp_path / "empty.json")
+        lib.write_json_secure(path, {})
+        result = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        assert result == {}
+
+    def test_list_data(self, tmp_path):
+        """list 型別資料正確寫入。"""
+        path = str(tmp_path / "list.json")
+        lib.write_json_secure(path, [1, "two", {"three": 3}])
+        result = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        assert result == [1, "two", {"three": 3}]

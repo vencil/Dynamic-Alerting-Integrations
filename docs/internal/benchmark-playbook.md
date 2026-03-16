@@ -2,7 +2,7 @@
 title: "Benchmark 操作手冊 (Benchmark Playbook)"
 tags: [documentation, performance]
 audience: [platform-engineer, sre]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # Benchmark 操作手冊 (Benchmark Playbook)
@@ -25,7 +25,7 @@ make benchmark ARGS="--under-load --routing-bench --alertmanager-bench --reload-
 |----------------|---------|---------|------|
 | idle-state | 5 輪，間隔 45s | mean ± stddev | ~4min |
 | under-load (N=100) | 5 輪 | median ± stddev | ~15min |
-| Go micro-bench (`-count=N`) | 5 次 | median, stddev | ~1min |
+| Go micro-bench (`-count=N`) | 5 次 | median, stddev | ~1min (8 benchmarks), ~3min (含 1000-tenant) |
 | routing-bench (N=2/10/50/100/200) | 10 輪 | median ± stddev | ~2min |
 | alertmanager-bench | 5 輪 (idle) / under-load | 快照 | ~1min |
 | reload-bench | 5 輪 | median | ~2min |
@@ -74,11 +74,13 @@ wsl docker exec -d vibe-dev-container bash -c \
 wsl docker exec vibe-dev-container tail -20 /tmp/bench.log
 ```
 
-**Go micro-bench 同理：**
+**Go micro-bench 同理（建議 redirect 到檔案以避免 log 噪音影響）：**
 ```bash
 cd /workspaces/vibe-k8s-lab/components/threshold-exporter/app
-go test -bench=. -benchmem -count=5 ./...
+go test -bench=. -benchmem -count=5 -run="^$" ./... > /tmp/bench.txt 2>/tmp/bench_err.txt
+grep "ns/op" /tmp/bench.txt   # 僅看結果行
 ```
+> 注意：incremental reload benchmark 已內建 `silenceLogs(b)`，但 `Resolve*` 系列不需要（無 log 輸出）。
 
 ## benchmark.sh 已知問題
 
@@ -139,6 +141,27 @@ go test -bench=. -benchmem -count=5 ./...
 - Alertmanager 的 email_configs schema 對型別嚴格（string vs list），YAML dump 時需注意
 - 有 email receiver 時，`global.smtp_from` 為必填
 - 測試 Alertmanager config 時，先用 `amtool check-config` 本地驗證再 patch
+
+### Go benchmark log 噪音致 output 爆量 (v2.1.0)
+
+**現象：** `go test -bench="FullDirLoad|IncrementalLoad" -benchmem -count=5` 產出 ~732KB 的 stdout，benchmark 結果行被淹沒在 log 噪音中。`2>/dev/null` 在某些 Docker exec 管線下無效（stdout 也被丟棄）。
+
+**根因：** `fullDirLoad()` 和 `IncrementalLoad()` 每次呼叫都寫一行 `log.Printf("Config loaded ...")`，100 tenant × N iterations × 5 rounds = 數千行 log。
+
+**修復：** 在 benchmark 函數中加入 `silenceLogs(b)` helper：
+
+```go
+func silenceLogs(b *testing.B) {
+    b.Helper()
+    orig := log.Writer()
+    log.SetOutput(io.Discard)
+    b.Cleanup(func() { log.SetOutput(orig) })
+}
+```
+
+**關鍵：** `silenceLogs(b)` 要放在 setup `fullDirLoad()` **之前**（不只是 `b.ResetTimer()` 前），否則每次 benchmark invocation 的 setup phase 仍會產生 log。`b.Cleanup()` 確保 benchmark 結束後恢復正常 log 輸出。
+
+**延伸：** Docker exec + PowerShell 的引號嵌套問題使得 `2>/dev/null` / `grep` 管線不可靠。最可靠的做法是：(1) 將 output redirect 到容器內檔案（`> /tmp/bench.txt 2>/tmp/err.txt`），(2) 事後用 `grep ns/op` 過濾。
 
 ### 連續多輪 benchmark port-forward 不穩定 (v2.0.0-preview.4)
 

@@ -119,7 +119,7 @@ def is_in_window(cron_expr, duration_str, now=None):
     except ImportError:
         print("ERROR: 'croniter' library required. Install with: pip install croniter",
               file=sys.stderr)
-        sys.exit(2)
+        sys.exit(1)
 
     if now is None:
         now = datetime.now(timezone.utc)
@@ -416,7 +416,7 @@ def main():
 
     if not os.path.isdir(args.config_dir):
         print(f"ERROR: config directory not found: {args.config_dir}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(1)
 
     t0 = time.monotonic()
 

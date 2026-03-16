@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 治理、稽核與安全合規
@@ -74,63 +74,92 @@ da-tools validate-config --config-dir conf.d/ --json
 
 ---
 
-## 安全合規 (Security Compliance — SAST)
+## 安全合規 (Security Compliance)
+
+### SAST 自動化測試（6 條規則）
+
+`tests/test_sast.py` 對 `scripts/tools/` 全部 Python 檔案進行 AST 層掃描，每次 commit 自動執行（426 tests）。
+
+| # | 規則 | 偵測方式 | 嚴重度 |
+|---|------|---------|--------|
+| 1 | `open()` 必須帶 `encoding="utf-8"` | AST 掃描 open() call，排除二進位模式 | High |
+| 2 | `subprocess` 禁止 `shell=True` | AST 掃描 subprocess.run/call/Popen keywords | Critical |
+| 3 | 寫入檔案需搭配 `os.chmod(0o600)` | 同函式內 write-open + chmod 配對（advisory） | Medium |
+| 4 | 禁止 `yaml.load()`，強制 `yaml.safe_load()` | AST 掃描 yaml.load 缺少 SafeLoader | Critical |
+| 5 | 禁止硬編碼機密（password/token/secret/api_key） | Regex 掃描，排除環境變數引用和 placeholder | High |
+| 6 | 禁止危險函式（eval/exec/pickle.load/os.system） | AST 掃描內建函式 + 模組函式 | Critical |
 
 ### Go 元件安全
 
-#### ReadHeaderTimeout (Gosec G112 — Slowloris)
-```go
-// ✓ 正確
-server := &http.Server{
-    Addr:              ":8080",
-    Handler:           mux,
-    ReadHeaderTimeout: 10 * time.Second,  // 必須設置
-}
+| 檢查 | 說明 |
+|------|------|
+| ReadHeaderTimeout (G112) | 防 Slowloris 攻擊，`http.Server` 必須設置（目前 3s） |
+| 完整 Timeout 套件 | ReadTimeout 5s, WriteTimeout 10s, IdleTimeout 30s, MaxHeaderBytes 8192 |
+| G113 | Uncontrolled memory consumption |
+| G114 | 禁止使用 `http.Request.RequestURI`（不安全，用 URL.Path） |
 
-// ✗ 違反
-server := &http.Server{
-    Addr:    ":8080",
-    Handler: mux,
-    // 無 ReadHeaderTimeout → Slowloris 攻擊風險
-}
-```
+### Python SSRF 保護
 
-**為什麼：** 防止客戶端傳送緩慢的 HTTP 標頭，耗盡伺服器資源
+`_lib_python.py` 中的 `_validate_url_scheme()` 對所有 HTTP 請求做 URL scheme 白名單驗證（僅允許 http/https），搭配 timeout 限制。
 
-#### 其他檢查
-- **G113** — Potential uncontrolled memory consumption
-- **G114** — Use of `http.Request.RequestURI` (不安全，用 URL.Path)
+### 機密管理 (Secret Management)
 
-### Python 元件安全
+| 元件 | 機制 |
+|------|------|
+| MariaDB | K8s Secret (`mariadb-credentials`) + `.my.cnf` 掛載（`defaultMode: 0400`） |
+| Grafana | K8s Secret (`grafana-credentials`) + `secretKeyRef` 引用 |
+| Makefile `shell` target | `--defaults-file=/etc/mysql/credentials/.my.cnf`（不在指令中暴露密碼） |
+| Helm values | 密碼預設為空字串，必須在安裝時提供：`--set mariadb.rootPassword=$(openssl rand -base64 24)` |
 
-#### 檔案權限 (CWE-276)
-```python
-# ✓ 正確
-with open(path, 'w') as f:
-    f.write(config_content)
-os.chmod(path, 0o600)  # rw-------
+### Container 安全加固
 
-# ✗ 違反
-# 預設檔案權限 0o644 (rw-r--r--) → 其他使用者可讀
-```
+所有容器遵循最小權限原則：
 
-#### 無 Shell 注入 (Command Injection)
-```python
-# ✓ 正確
-result = subprocess.run(['kubectl', 'patch', 'configmap', ...], check=True)
+| 容器 | runAsNonRoot | readOnlyRootFilesystem | drop ALL caps | allowPrivilegeEscalation |
+|------|:-----------:|:---------------------:|:-------------:|:------------------------:|
+| threshold-exporter | ✓ | ✓ | ✓ | ✓ |
+| Prometheus | ✓ | ✓ | ✓ | ✓ |
+| Alertmanager | ✓ | ✓ | ✓ | ✓ |
+| config-reloader | ✓ | ✓ | ✓ | ✓ |
+| Grafana | ✓ | ✓ | ✓ | ✓ |
+| MariaDB | — | — | ✓ | ✓ |
+| mysqld-exporter | — | ✓ | ✓ | ✓ |
+| kube-state-metrics | ✓ | ✓ | ✓ | ✓ |
 
-# ✗ 違反
-result = os.system(f"kubectl patch configmap {name}")  # shell=True 風險
-```
+所有 Pod 設定 `seccompProfile: RuntimeDefault`。Docker image 全部 pin 到具體 patch 版本。
 
-### SSRF 保護
+### Container Image Security（v2.1.0）
 
-所有本地 API 呼叫註記為 `# nosec B602`：
+**CVE 緩解策略：** 所有 Dockerfile 在建置時執行 `apk --no-cache upgrade` 拉取最新安全修補。
 
-```python
-# nosec B602 — localhost-only, no SSRF risk
-response = requests.get('http://localhost:8080/health')
-```
+| Image | Base | Pin 策略 | 關鍵 CVE 緩解 |
+|-------|------|---------|-------------|
+| threshold-exporter | `alpine:3.21` | 版本 pin | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
+| da-tools | `python:3.13.2-alpine3.21` | 完整版本+Alpine pin | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
+| da-portal | `nginx:1.27.4-alpine` | 版本 pin | CVE-2025-15467 (openssl/nginx), CVE-2025-48174 (libavif) |
+
+**CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時阻斷 release。見 `.github/workflows/release.yaml`。
+
+**CVE 追蹤紀錄：**
+
+- **CVE-2025-15467 (openssl, CVSS 9.8)**：CMS AuthEnvelopedData stack buffer overflow → pre-auth RCE。影響 OpenSSL 3.0–3.6。修復：`apk upgrade` 拉取 Alpine 已修補的 `libssl3`。
+- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：`apk upgrade` 拉取 Alpine 已修補版本。本平台不直接使用 libavif，但 Alpine base 可能含此套件。
+
+### NetworkPolicy（Ingress + Egress）
+
+Default deny-all（Ingress + Egress）+ 逐元件白名單：
+
+| 元件 | Ingress 來源 | Egress 目的 |
+|------|-------------|------------|
+| Prometheus | monitoring namespace (9090) | tenant ns 9104/8080, Alertmanager 9093, kube-state-metrics, DNS, K8s API 6443 |
+| Alertmanager | Prometheus (9093) | DNS, webhook HTTPS 443（封鎖 cloud metadata 169.254.169.254） |
+| Grafana | monitoring namespace (3000) | Prometheus 9090, DNS |
+| threshold-exporter | Prometheus (8080) | DNS only |
+| kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
+
+### Portal 安全標頭
+
+`nginx.conf` 設定：X-Frame-Options (SAMEORIGIN), X-Content-Type-Options (nosniff), Referrer-Policy, Content-Security-Policy（限制 script/style/connect 來源）, Strict-Transport-Security (HSTS)。
 
 ---
 
@@ -140,5 +169,6 @@ response = requests.get('http://localhost:8080/health')
 
 | 資源 | 相關性 |
 |------|--------|
-| ["Governance, Audit & Security Compliance"] | ⭐⭐⭐ |
-| ["多租戶客製化規則治理規範 (Custom Rule Governance Model)"](./custom-rule-governance.md) | ⭐⭐ |
+| [Custom Rule Governance](./custom-rule-governance.md) | 規則治理模型 |
+| [GitOps Deployment](./gitops-deployment.md) | 部署安全、RBAC |
+| [Testing Playbook](./internal/testing-playbook.md) | SAST 測試執行 |

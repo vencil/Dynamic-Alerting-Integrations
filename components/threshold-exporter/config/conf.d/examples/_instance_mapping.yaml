@@ -1,0 +1,32 @@
+# _instance_mapping.yaml — 1:N Tenant Mapping Configuration (ADR-006)
+#
+# Maps a single database instance to multiple logical tenants.
+# Used by: generate_tenant_mapping_rules.py → Prometheus Recording Rules
+# Note: threshold-exporter ignores this file (no matching struct fields).
+#
+# Topology support:
+#   1:1 — namespace = tenant (default, no config needed)
+#   N:1 — relabel_configs regex (use scaffold_tenant.py --namespaces)
+#   1:N — this file → Recording Rules (Rule Pack Part 1: Data Normalization)
+
+instance_tenant_mapping:
+  # Oracle: single instance, multiple schemas → multiple tenants
+  oracle-prod-01:
+    - tenant: db-a
+      filter: 'schema=~"app_a_.*"'
+    - tenant: db-b
+      filter: 'schema=~"app_b_.*"'
+
+  # DB2: single instance, multiple tablespaces → multiple tenants
+  db2-shared-01:
+    - tenant: db-c
+      filter: 'tablespace="ts_client_c"'
+    - tenant: db-d
+      filter: 'tablespace="ts_client_d"'
+
+  # Generic: any label-based filtering
+  # shared-rds-01:
+  #   - tenant: db-e
+  #     filter: 'dbname="app_e", env="prod"'
+  #   - tenant: db-f
+  #     filter: 'dbname="app_f", env="prod"'

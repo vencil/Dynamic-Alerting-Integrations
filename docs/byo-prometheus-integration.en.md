@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide
@@ -143,7 +143,7 @@ Option A assumes 1:1 (one namespace = one tenant). The platform also supports ot
 
 - **1:N (one Namespace → multiple Tenants)**: For shared namespace scenarios, use Option B with Service labels/annotations to distinguish tenants.
 
-**Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Architecture Document §2.3](architecture-and-design.md#52-1n-tenant-mapping-進階支援) for details.
+**Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Architecture Document §2.3](architecture-and-design.md#23-tenant-namespace-映射模式-tenant-namespace-mapping) and [ADR-006](adr/006-tenant-mapping-topologies.en.md) for details.
 
 ---
 
@@ -345,7 +345,7 @@ da-tools diagnose db-a
 da-tools validate-config --config-dir /data/conf.d
 ```
 
-> **Tip**: `da-tools` doesn't require cloning the entire project, just `docker pull ghcr.io/vencil/da-tools:v2.0.0` is enough.
+> **Tip**: `da-tools` doesn't require cloning the entire project, just `docker pull ghcr.io/vencil/da-tools:v2.1.0` is enough.
 
 ---
 

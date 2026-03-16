@@ -2,12 +2,12 @@
 title: "Domain Expert (DBA) 快速入門指南"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # Domain Expert (DBA) 快速入門指南
 
-> **v2.0.0** | 適用對象：DBA、資料庫管理員、領域專家
+> **v2.1.0** | 適用對象：DBA、資料庫管理員、領域專家
 >
 > 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 
@@ -253,7 +253,7 @@ python3 scripts/tools/ops/lint_custom_rules.py \
 
 Custom rule 必須通過 lint_custom_rules.py 檢查，並在 PR 中附加測試數據。
 
-### Policy-as-Code（v2.0.0）
+### Policy-as-Code（v2.1.0）
 
 在 `_defaults.yaml` 中宣告 `_policies` DSL，自動驗證所有 tenant 配置：
 
@@ -273,7 +273,44 @@ _policies:
 
 執行：`da-tools evaluate-policy --config-dir conf.d/ --ci`。支援 10 種運算子、`when` 條件式、萬用字元目標。
 
-### 基數趨勢預測（v2.0.0）
+### Cross-Domain Routing Profiles & Domain Policies（v2.1.0 ADR-007）
+
+當多個租戶共享相同的告警路由配置時，可使用 **Routing Profiles** 避免重複。在 `_routing_profiles.yaml` 中定義命名配置，租戶透過 `_routing_profile` 引用：
+
+```yaml
+# _routing_profiles.yaml
+routing_profiles:
+  team-dba-global:
+    receiver:
+      type: pagerduty
+      service_key: "dba-key-123"
+    group_by: [alertname, tenant, severity]
+    repeat_interval: 1h
+
+# db-finance.yaml
+tenants:
+  db-finance:
+    _routing_profile: "team-dba-global"   # 引用 profile
+    mysql_connections: "60"
+```
+
+四層合併順序：`_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`。租戶的 `_routing` 可覆蓋 profile 中的個別欄位。
+
+**Domain Policies** 在路由解析後進行合規驗證。在 `_domain_policy.yaml` 中定義約束條件：
+
+```yaml
+# _domain_policy.yaml
+domain_policies:
+  finance:
+    tenants: [db-finance, db-audit]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+執行：`da-tools check-routing-profiles --config-dir conf.d/`。偵錯工具：`da-tools explain-route --config-dir conf.d/ --tenant db-finance`。
+
+### 基數趨勢預測（v2.1.0）
 
 主動監控 per-tenant 基數成長趨勢，防止 Cardinality Guard 觸頂截斷：
 

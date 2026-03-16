@@ -232,3 +232,192 @@ class TestFileWritePermissions:
                 f"{_short_path(py_file)} 有 {len(violations)} 個潛在權限問題 "
                 "(advisory):\n" + "\n".join(f"  {v}" for v in violations)
             )
+
+
+# ============================================================
+# 4. 禁止 yaml.load()（必須使用 yaml.safe_load）
+# ============================================================
+
+class TestNoUnsafeYamlLoad:
+    """掃描 yaml.load() 呼叫，強制使用 yaml.safe_load()。
+
+    yaml.load() 不帶 Loader 參數會允許任意 Python 物件反序列化，
+    可能導致遠端程式碼執行 (RCE)。
+    """
+
+    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
+    def test_no_unsafe_yaml_load(self, py_file):
+        """yaml.load() 呼叫必須使用 SafeLoader，或改用 yaml.safe_load()。"""
+        source = _read_source(py_file)
+        try:
+            tree = ast.parse(source, filename=py_file)
+        except SyntaxError:
+            pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
+            return
+
+        violations = []
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+
+            # 偵測 yaml.load(...) 呼叫
+            if not (isinstance(func, ast.Attribute) and func.attr == "load"):
+                continue
+            if not (isinstance(func.value, ast.Name) and func.value.id == "yaml"):
+                continue
+
+            # 檢查是否帶有 Loader 參數
+            has_safe_loader = False
+            for kw in node.keywords:
+                if kw.arg == "Loader" and isinstance(kw.value, ast.Attribute):
+                    if kw.value.attr in ("SafeLoader", "CSafeLoader"):
+                        has_safe_loader = True
+
+            if not has_safe_loader:
+                violations.append(
+                    f"L{node.lineno}: yaml.load() 缺少 SafeLoader — "
+                    "請改用 yaml.safe_load()"
+                )
+
+        assert not violations, (
+            f"{_short_path(py_file)} 有 {len(violations)} 個不安全 YAML 載入:\n"
+            + "\n".join(f"  {v}" for v in violations)
+        )
+
+
+# ============================================================
+# 5. 禁止硬編碼機密（密碼、Token、API Key）
+# ============================================================
+
+# 排除清單：已知安全的 pattern（測試用假值、常量名稱等）
+_CREDENTIAL_SAFE_VALUES = frozenset({
+    "password",        # 變數命名或 placeholder
+    "changeme",
+    "xxx",
+    "***",
+    "REDACTED",
+    "",
+})
+
+# 匹配 password = "...", token = "...", secret = "...", api_key = "..." 等
+_CREDENTIAL_PATTERN = re.compile(
+    r"""(?:password|passwd|token|secret|api_key|apikey|auth_token)"""
+    r"""\s*=\s*["']([^"']{4,})["']""",
+    re.IGNORECASE,
+)
+
+# 排除引用環境變數的 pattern
+_ENV_REF_PATTERN = re.compile(
+    r"""\$\{?\w+\}?|os\.environ|os\.getenv|valueFrom|secretKeyRef""",
+    re.IGNORECASE,
+)
+
+
+class TestNoHardcodedCredentials:
+    """掃描 Python 原始碼，禁止硬編碼機密值。"""
+
+    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
+    def test_no_hardcoded_credentials(self, py_file):
+        """程式碼中不得出現硬編碼的密碼、Token 或 API Key。"""
+        source = _read_source(py_file)
+        violations = []
+
+        for i, line in enumerate(source.splitlines(), 1):
+            # 跳過註解行
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+
+            for match in _CREDENTIAL_PATTERN.finditer(line):
+                value = match.group(1).strip()
+
+                # 排除已知安全值
+                if value.lower() in _CREDENTIAL_SAFE_VALUES:
+                    continue
+
+                # 排除環境變數引用
+                if _ENV_REF_PATTERN.search(value):
+                    continue
+
+                # 排除格式化字串佔位符
+                if "{" in value and "}" in value:
+                    continue
+
+                # 排除 argparse help 文字（含空白的描述句）
+                if " " in value and len(value.split()) > 3:
+                    continue
+
+                violations.append(
+                    f"L{i}: 疑似硬編碼機密: {match.group(0)[:60]}..."
+                )
+
+        assert not violations, (
+            f"{_short_path(py_file)} 有 {len(violations)} 個疑似硬編碼機密:\n"
+            + "\n".join(f"  {v}" for v in violations)
+        )
+
+
+# ============================================================
+# 6. 禁止危險函式（eval / exec / pickle / os.system / compile）
+# ============================================================
+
+# 危險的內建函式呼叫
+_DANGEROUS_BUILTINS = {"eval", "exec", "compile"}
+
+# 危險的模組.函式呼叫 (module_name, func_name)
+_DANGEROUS_MODULE_CALLS = {
+    ("os", "system"),
+    ("os", "popen"),
+    ("pickle", "load"),
+    ("pickle", "loads"),
+    ("cPickle", "load"),
+    ("cPickle", "loads"),
+    ("marshal", "load"),
+    ("marshal", "loads"),
+}
+
+
+class TestNoDangerousFunctions:
+    """掃描危險函式呼叫：eval, exec, pickle.load, os.system 等。
+
+    這些函式可能導致任意程式碼執行 (ACE)，在生產工具中禁止使用。
+    """
+
+    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
+    def test_no_dangerous_functions(self, py_file):
+        """程式碼中不得使用 eval/exec/pickle.load/os.system 等危險函式。"""
+        source = _read_source(py_file)
+        try:
+            tree = ast.parse(source, filename=py_file)
+        except SyntaxError:
+            pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
+            return
+
+        violations = []
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+
+            # 偵測 eval() / exec() / compile() 等危險內建函式
+            if isinstance(func, ast.Name) and func.id in _DANGEROUS_BUILTINS:
+                violations.append(
+                    f"L{node.lineno}: {func.id}() — 禁止使用危險內建函式"
+                )
+
+            # 偵測 os.system() / pickle.load() 等危險模組函式
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                pair = (func.value.id, func.attr)
+                if pair in _DANGEROUS_MODULE_CALLS:
+                    violations.append(
+                        f"L{node.lineno}: {func.value.id}.{func.attr}() — "
+                        "禁止使用危險模組函式"
+                    )
+
+        assert not violations, (
+            f"{_short_path(py_file)} 有 {len(violations)} 個危險函式呼叫:\n"
+            + "\n".join(f"  {v}" for v in violations)
+        )

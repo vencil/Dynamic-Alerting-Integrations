@@ -4,7 +4,7 @@
 instance: db-a
 
 mariadb:
-  image: mariadb:11.8
+  image: mariadb:11.8.1
   # SECURITY: Override these via --set or external secret manager in production.
   # Example: helm install ... --set mariadb.rootPassword=$(openssl rand -base64 24)
   rootPassword: ""    # REQUIRED — must be provided at install time

@@ -1,0 +1,30 @@
+{
+  "cluster_count": 1,
+  "clusters": [
+    {
+      "alert_count": 2,
+      "alerts": [
+        {
+          "alertname": "MariaDBHighConnections",
+          "severity": "warning",
+          "tenant": "db-a"
+        },
+        {
+          "alertname": "MariaDBHighCPU",
+          "severity": "warning",
+          "tenant": "db-a"
+        }
+      ],
+      "avg_correlation": 0.92,
+      "cluster_id": 0,
+      "root_cause": {
+        "alertname": "MariaDBHighConnections",
+        "severity": "warning",
+        "tenant": "db-a"
+      },
+      "tenant_count": 1
+    }
+  ],
+  "timestamp": "2025-01-15T10:00:00+00:00",
+  "total_alerts": 3
+}

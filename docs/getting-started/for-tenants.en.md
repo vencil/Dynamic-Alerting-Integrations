@@ -2,12 +2,12 @@
 title: "Tenant Quick Start Guide"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Tenant Quick Start Guide
 
-> **v2.0.0** | Audience: Tenant administrators, DBAs, SREs
+> **v2.1.0** | Audience: Tenant administrators, DBAs, SREs
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
@@ -84,6 +84,20 @@ tenants:
 ```
 
 Inheritance order: `_defaults.yaml` → `_profiles.yaml` → tenant overrides. Tenant values always win.
+
+### Using Routing Profiles (v2.1.0)
+
+If your Platform Team has defined shared routing profiles (`_routing_profiles.yaml`), you can reference them via `_routing_profile` instead of writing full `_routing` config:
+
+```yaml
+tenants:
+  my-tenant:
+    _routing_profile: "team-sre-apac"   # Use shared routing profile
+    _routing:
+      repeat_interval: "2h"             # Override individual fields from profile
+```
+
+Four-layer merge order: `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`. Your `_routing` fields always take precedence over profile values. Debug tool: `da-tools explain-route --config-dir conf.d/ --tenant my-tenant`.
 
 ### Entering Maintenance Mode
 
@@ -163,7 +177,7 @@ python3 scripts/tools/ops/config_diff.py \
   --old-dir conf.d.baseline --new-dir conf.d/
 ```
 
-### Check Alert Quality (v2.0.0)
+### Check Alert Quality (v2.1.0)
 
 ```bash
 # Check your tenant's alert quality for noise (flapping) / stale (idle) issues

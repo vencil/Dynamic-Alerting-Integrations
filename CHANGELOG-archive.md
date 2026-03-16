@@ -1,6 +1,125 @@
 # Changelog Archive
 
-This file contains the full change history for versions prior to v1.10.0. For recent changes, see [CHANGELOG.md](CHANGELOG.md).
+This file contains the full change history for versions prior to v2.0.0. For recent changes, see [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## [v1.11.0] — Dynamic Runbook Injection + Recurring Maintenance + Config Drift CI (2026-03-08)
+
+PromQL 層級 Runbook 注入（`tenant_metadata_info` info metric + Rule Pack `group_left` join）、排程式維護窗口自動 Alertmanager silence、Config Drift CI 模板。
+
+### 🏷️ Dynamic Runbook Injection
+
+- **Go schema `_metadata`**: 新增 `TenantMetadata` struct（`runbook_url` / `owner` / `tier`），透過 `ResolveMetadata()` 解析
+- **`tenant_metadata_info` info metric**: Exporter 無條件輸出所有 tenant 的 metadata labels（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant
+- **11 個 Rule Pack 自動注入**: 所有含 `unless on(tenant)` 的 alert expr 加上 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info`，annotations 新增 `runbook_url` / `owner` / `tier`
+- **Python metadata extraction**: `load_tenant_configs()` 回傳 5-tuple（新增 `metadata_configs`），支援 `{{tenant}}` 佔位符替換
+
+### 🔧 Recurring Maintenance Schedules
+
+- **Go schema `RecurringSchedule`**: `_state_maintenance.recurring[]` 欄位（`cron` / `duration` / `reason`）
+- **`maintenance_scheduler.py`**: CronJob 工具，每 5 分鐘評估排程式維護窗口
+  * 讀取 conf.d/ 的 `_state_maintenance.recurring` 配置
+  * `croniter` 計算 cron 視窗，`parse_duration()` 支援 Go-style 時間格式（`1d` / `4h` / `2h30m` / `1d12h`）
+  * Alertmanager API `/api/v2/silences` 冪等建立 silence（相同 tenant+reason 不重複建立）
+  * **Silence 自動延展**：既有 silence 到期時間早於視窗結束時，自動 extend（`POST` with existing ID）；解析失敗時安全 skip
+  * HTTP retry with exponential backoff（1s→2s→4s），僅重試 5xx + 連線錯誤
+  * **Pushgateway 可觀測性**：`--pushgateway` flag 推送 5 個 gauge metrics（`# TYPE` 註解符合 Prometheus exposition format），CronJob 運行狀態可被 Prometheus 主動抓取
+  * CLI：`--config-dir`、`--alertmanager`、`--pushgateway`、`--dry-run`、`--json-output`
+- **K8s CronJob manifest**: `cronjob-maintenance-scheduler.yaml`，`*/5 * * * *` 排程（含預留 `--pushgateway` 參數註解）
+
+### 🔄 Config Drift CI
+
+- **`config_diff.py` exit codes**: 0=無變更、1=有變更（CI signal）、2=錯誤
+- **CI 模板**: `.github/workflows/config-diff.yaml`（GitHub Actions）、`.gitlab/ci/config-diff.gitlab-ci.yml`（GitLab CI）
+- **`gitops-deployment.md`**: 新增 CI 模板對照表 + exit code 表 + Data-Driven Threshold Review 雙引擎概念
+
+### 📦 版號
+
+- threshold-exporter: 1.8.0 → 1.9.0（新增 `tenant_metadata_info` metric + `_metadata` reserved key + `RecurringSchedule` schema）
+- da-tools: 1.10.0 → 1.11.0（新增 `maintenance-scheduler` 命令，COMMAND_MAP 19→20）
+
+### 📊 測試
+
+| 項目 | v1.10.0 | v1.11.0 | 變化 |
+|------|---------|---------|------|
+| Python tests | 750+ | 790+ | +40+ |
+| Go tests | +6 | +6 | metadata + schema |
+| 新增測試檔 | — | `test_maintenance_scheduler.py` | 1 file |
+
+### 📄 文件
+
+- architecture-and-design.md §11 roadmap: Runbook Injection / Recurring Maintenance / Config Drift CI 移入「已完成」
+- CLAUDE.md 工具表 +1（maintenance_scheduler）、長期展望移除已完成項
+- README 工具數 19→20
+- CronJob manifest 新增
+
+---
+
+## [v1.10.0] — Shadow Monitoring 自動化 + AM GitOps 閉環 + 盲區掃描 + 配置差異比對 (Shadow Monitoring Automation + AM GitOps + Blind Spot Discovery + Config Diff) (2026-03-08)
+
+Shadow Monitoring 工具鏈完善（One-command 切換 + Grafana 儀表板）、Alertmanager 配置 GitOps 閉環、Cluster 監控盲區掃描、Directory-level 配置差異比對。
+
+### 🎯 Shadow Monitoring 自動化
+
+- **`cutover_tenant.py`**: 一鍵執行 shadow-monitoring-sop.md §7.1 所有切換步驟
+  * 消費 `cutover-readiness.json`（由 validate_migration.py 自動生成）
+  * 順序執行：停止 Shadow Monitor Job → 移除舊 Recording Rules → 移除 migration_status:shadow label → 移除 Alertmanager shadow route → check-alert + diagnose 驗證
+  * 支援 `--dry-run` 預覽、`--force` 跳過 readiness 檢查
+  * da-tools CLI 新增 `cutover` 命令
+
+### 📊 Shadow Monitoring 可視化
+
+- **`shadow-monitoring-dashboard.json`**: Grafana 儀表板
+  * 5 個面板：Shadow Rules Active、Per-Tenant Status Table、Old vs New Comparison、Delta Trend、Inhibited Shadow Alerts
+  * Prometheus 數據源（Recording Rule 直接查詢，不依賴 CSV）
+  * Template Variables：`$tenant`（auto-discover）、`$old_metric` / `$new_metric`（手動輸入配對）
+
+### 🔧 AM GitOps 閉環
+
+- **`generate_alertmanager_routes.py --output-configmap`**: 產出完整 Alertmanager ConfigMap YAML（不只 fragment），供 Git PR flow 使用
+  * `--base-config <path>` 載入基礎配置（global + default route/receiver），缺失時使用內建預設
+  * 與 `--apply` 互斥（`argparse` mutually_exclusive_group）
+  * 支援 `--dry-run`（僅印不寫）和 `-o <file>`（寫入檔案）
+  * ConfigMap 結構：`apiVersion: v1` / `kind: ConfigMap` / `data.alertmanager.yml`
+
+### 🔍 Blind Spot Discovery
+
+- **`blind_spot_discovery.py`**: 掃描 Prometheus cluster targets 與 tenant config 交叉比對，找出未被監控的 DB instance
+  * 呼叫 `/api/v1/targets?state=active` 擷取活躍目標
+  * `JOB_DB_MAP` 對齊 rule-packs/ 目錄名
+  * 三種狀態：`covered`、`blind_spot`、`unrecognized`
+  * CLI：`--prometheus`、`--config-dir`、`--json-output`、`--exclude-jobs`
+
+### 📊 Directory-level Config Diff
+
+- **`config_diff.py`**: 比較兩個 `conf.d/` 目錄，產出 per-tenant blast radius 報告
+  * 變更分類：`tighter` / `looser` / `added` / `removed` / `toggled` / `modified`
+  * CLI：`--old-dir`、`--new-dir`、`--json-output`
+
+### 🔧 Bug Fix
+
+- **da-tools `build.sh`**: TOOL_FILES 從 10 補齊至 19
+
+### 📦 da-tools CLI
+
+- 新增命令: `cutover`, `blind-spot`, `config-diff`
+- COMMAND_MAP: 16 → 19 個命令
+- da-tools 版號: 1.9.0 → 1.10.0
+
+### 📊 測試
+
+| 項目 | v1.9.0 | v1.10.0 | 變化 |
+|------|--------|---------|------|
+| Python tests | 632 | 750+ | +120+ |
+| 新增測試檔 | — | `test_cutover_tenant.py`, `test_blind_spot_discovery.py`, `test_config_diff.py` | 3 files |
+
+### 📄 文件
+
+- shadow-monitoring-sop.md §8: Shadow Dashboard + cutover 標記為已實現
+- architecture-and-design.md §11 roadmap: 多項移入「已完成」
+- CLAUDE.md 工具表 +3
+- README 工具數 17→19
 
 ---
 

@@ -9,10 +9,12 @@ Usage:
   python3 scripts/tools/validate_all.py --json          # JSON summary output
   python3 scripts/tools/validate_all.py --json --baseline  # save JSON as baseline
   python3 scripts/tools/validate_all.py --json --compare   # compare against baseline
+  python3 scripts/tools/validate_all.py --diff-report       # show what --fix would change
   python3 scripts/tools/validate_all.py --fix              # auto-fix all drift
   python3 scripts/tools/validate_all.py --profile          # append timing to CSV
   python3 scripts/tools/validate_all.py --watch            # file-watch auto-rerun
   python3 scripts/tools/validate_all.py --smart            # git-diff based auto-skip
+  python3 scripts/tools/validate_all.py --notify           # desktop notification on completion
 """
 
 import argparse
@@ -44,6 +46,7 @@ FIX_COMMANDS: Dict[str, List[str]] = {
     "freshness": ["lint/check_doc_freshness.py", "--fix"],
     "platform_data": ["dx/generate_platform_data.py"],
     "repo_name": ["lint/check_repo_name.py", "--fix"],
+    "frontmatter_versions": ["lint/check_frontmatter_versions.py", "--fix"],
 }
 
 TOOLS = [
@@ -67,6 +70,9 @@ TOOLS = [
     ("repo_name", "lint/check_repo_name.py", ["--ci"], "Repo name guard (no vibe-k8s-lab in URLs)"),
     ("structure", "lint/check_structure.py", ["--ci"], "Project structure enforcement"),
     ("jsx_babel", "lint/lint_jsx_babel.py", ["--ci"], "JSX Babel standalone parse validation"),
+    ("cli_coverage", "lint/check_cli_coverage.py", ["--ci"], "CLI command coverage (entrypoint ↔ docs)"),
+    ("bilingual_content", "lint/check_bilingual_content.py", ["--ci"], "Bilingual content CJK ratio check"),
+    ("frontmatter_versions", "lint/check_frontmatter_versions.py", ["--ci"], "Frontmatter version global scan"),
 ]
 
 
@@ -136,18 +142,72 @@ def _format_time(elapsed: float) -> str:
 # Patterns are prefix-matched against relative paths.
 WATCH_TRIGGERS: Dict[str, List[str]] = {
     "docs/": ["links", "translation", "freshness", "includes", "versions",
-              "doc_map", "tool_consistency"],
+              "doc_map", "tool_consistency", "bilingual_content",
+              "frontmatter_versions"],
     "docs/assets/": ["platform_data", "tool_consistency"],
     "rule-packs/": ["alerts", "rule_packs", "rule_pack_stats", "versions",
                     "platform_data"],
-    "scripts/tools/": ["tool_map", "cheatsheet"],
+    "scripts/tools/": ["tool_map", "cheatsheet", "cli_coverage"],
     "CLAUDE.md": ["versions", "doc_map"],
     "CHANGELOG.md": ["changelog"],
     "CHANGELOG.en.md": ["changelog"],
     ".pre-commit-config.yaml": [],
-    "components/": ["versions"],
+    "components/": ["versions", "cli_coverage"],
     "mkdocs.yml": ["versions"],
 }
+
+
+def _send_notification(title: str, message: str) -> None:
+    """Send an OS-native desktop notification (best-effort, cross-platform).
+
+    Supported backends (tried in order):
+    - Linux: notify-send (libnotify)
+    - macOS: osascript (AppleScript)
+    - Windows: PowerShell toast notification via BurntToast or fallback
+    - Fallback: terminal bell (\\a)
+    """
+    import platform
+    system = platform.system()
+
+    try:
+        if system == "Linux":
+            subprocess.run(
+                ["notify-send", "--app-name=validate_all", title, message],
+                timeout=5,
+                capture_output=True,
+            )
+            return
+        if system == "Darwin":
+            script = (
+                f'display notification "{message}" '
+                f'with title "{title}"'
+            )
+            subprocess.run(
+                ["osascript", "-e", script],
+                timeout=5,
+                capture_output=True,
+            )
+            return
+        if system == "Windows":
+            ps_cmd = (
+                f'[System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null; '
+                f'$n = New-Object System.Windows.Forms.NotifyIcon; '
+                f'$n.Icon = [System.Drawing.SystemIcons]::Information; '
+                f'$n.Visible = $true; '
+                f'$n.ShowBalloonTip(5000, "{title}", "{message}", '
+                f'[System.Windows.Forms.ToolTipIcon]::Info)'
+            )
+            subprocess.run(
+                ["powershell", "-Command", ps_cmd],
+                timeout=10,
+                capture_output=True,
+            )
+            return
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    # Fallback: terminal bell
+    print("\a", end="", flush=True)
 
 
 def _snapshot_mtimes(repo_root: Path) -> Dict[str, float]:
@@ -369,6 +429,78 @@ def _compare_baseline(current: dict) -> None:
     print("=" * 60, file=sys.stderr)
 
 
+def _generate_diff_report(failed_checks: dict, tools_dir: Path,
+                          project_root: Path) -> str:
+    """Generate unified diff for failed checks that have fix commands.
+
+    For each failed check with a fix command:
+    1. Capture current state of potentially affected files
+    2. Run the fix command
+    3. Capture git diff
+    4. Restore original files
+
+    Returns formatted diff report string.
+    """
+    lines = []
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("Diff Report (what --fix would change)")
+    lines.append("=" * 60)
+
+    fixable = {n for n in failed_checks if n in FIX_COMMANDS}
+    if not fixable:
+        lines.append("  No auto-fixable checks failed.")
+        return "\n".join(lines)
+
+    for name in sorted(fixable):
+        cmd = FIX_COMMANDS[name]
+        script_path = str(tools_dir / cmd[0])
+        fix_args = cmd[1:]
+
+        lines.append(f"\n--- {name} ---")
+
+        try:
+            # Run fix command
+            subprocess.run(
+                [sys.executable, script_path] + fix_args,
+                capture_output=True, text=True, timeout=60,
+                cwd=str(project_root),
+            )
+
+            # Capture diff
+            diff_result = subprocess.run(
+                ["git", "diff", "--no-color"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+
+            if diff_result.stdout.strip():
+                lines.append(diff_result.stdout.rstrip())
+            else:
+                lines.append("  (no diff produced — fix may need manual review)")
+
+            # Restore changed files
+            subprocess.run(
+                ["git", "checkout", "."],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+        except subprocess.TimeoutExpired:
+            lines.append("  (timeout running fix command)")
+            # Attempt restore anyway
+            subprocess.run(
+                ["git", "checkout", "."],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            lines.append(f"  (error: {e})")
+
+    lines.append("")
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+
 def main():
     """CLI entry point: Unified validation entry point for all documentation and config validation tools."""
     parser = argparse.ArgumentParser(
@@ -428,6 +560,15 @@ def main():
         "--smart", action="store_true",
         help="Only run checks affected by files changed since last commit "
              "(uses git diff HEAD)",
+    )
+    parser.add_argument(
+        "--diff-report", action="store_true",
+        help="Show unified diff of what --fix would change for failed checks",
+    )
+    parser.add_argument(
+        "--notify", action="store_true",
+        help="Send desktop notification when validation completes "
+             "(useful with --watch or long-running parallel runs)",
     )
 
     args = parser.parse_args()
@@ -634,6 +775,13 @@ def main():
         if not args.json:
             print(f"\n📊 Timing appended to {PROFILE_CSV.name}")
 
+    # --diff-report: show what --fix would change
+    if args.diff_report and failed > 0:
+        failed_checks = {n: s for n, (s, _, _) in results.items()
+                         if s in ("fail", "error")}
+        print(_generate_diff_report(
+            failed_checks, tools_dir, project_root))
+
     # --fix: auto-fix failed checks that have fix commands
     if args.fix and failed > 0:
         print()
@@ -668,6 +816,19 @@ def main():
 
         if fix_count > 0:
             print(f"\n🔧 Fixed {fix_count} check(s). Re-run to verify.")
+
+    # --notify: send desktop notification
+    if args.notify:
+        if failed == 0:
+            _send_notification(
+                "Validation Passed",
+                f"All {passed}/{total} checks passed ({wall_elapsed:.1f}s)",
+            )
+        else:
+            _send_notification(
+                "Validation Failed",
+                f"{failed}/{total} checks failed ({wall_elapsed:.1f}s)",
+            )
 
     sys.exit(0 if failed == 0 else 1)
 

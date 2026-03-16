@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 
@@ -10,6 +10,8 @@ lang: zh
 ## 狀態
 
 ✅ **Accepted** (v1.0.0)
+
+> **v2.1.0 現況：** 此機制持續運作中。Severity Dedup 透過 `generate_alertmanager_routes.py` 自動生成 inhibit_rules，涵蓋 `_critical` 多層嚴重度，已通過 3070+ tests 驗證。
 
 ## 背景
 

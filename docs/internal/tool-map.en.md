@@ -7,6 +7,7 @@
 
 | Tool | Description |
 |------|------|
+| `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
 | `assemble_config_dir.py` | Sharded GitOps Assembly Tool — merge multiple conf.d/ sources into one config-dir. |
@@ -22,19 +23,24 @@
 | `da_assembler.py` | da-assembler-controller — Lightweight ThresholdConfig CRD → YAML renderer. |
 | `deprecate_rule.py` | 規則/指標下架工具。 |
 | `diagnose.py` | Quick health check for a tenant's MariaDB and monitoring stack. |
+| `drift_detect.py` | Cross-Cluster Configuration Drift Detection |
 | `federation_check.py` | Multi-cluster federation integration verification. |
 | `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
+| `explain_route.py` | Routing merge pipeline debugger — shows four-layer expansion per tenant (ADR-007). |
+| `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping (ADR-006). |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
 | `inject_metadata_join.py` | One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
+| `notification_tester.py` | Multi-channel notification connectivity testing. |
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
+| `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |
 | `validate_all.py` | Unified validation entry point for all documentation and config validation tools. |
@@ -45,6 +51,7 @@
 |------|------|
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `bump_docs.py` | 版號一致性管理工具 |
+| `coverage_gap_analysis.py` | Per-file coverage ranking report |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
@@ -67,8 +74,12 @@
 | Tool | Description |
 |------|------|
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
+| `check_bilingual_content.py` | 雙語內容一致性 lint |
+| `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_doc_freshness.py` | check_doc_freshness.py |
+| `check_routing_profiles.py` | ADR-007 routing profiles & domain policies lint (unknown refs, orphan profiles, malformed constraints). |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
+| `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |

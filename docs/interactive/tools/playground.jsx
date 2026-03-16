@@ -2,7 +2,7 @@
 title: "YAML Playground"
 tags: [validation, yaml, live preview]
 audience: ["platform-engineer", tenant]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [config-lint, schema-explorer, template-gallery]
 ---
@@ -22,13 +22,9 @@ tenants:
     mysql_connections_critical: "95"
     mysql_cpu: "80"
     _silent_mode: "disable"
-    _severity_dedup:
-      enabled: true
     _routing:
-      receiver:
-        type: "webhook"
-        url: "https://webhook.example.com/alerts"
-      group_by: ["alertname", "severity"]
+      receiver_type: "webhook"
+      webhook_url: "https://webhook.example.com/alerts"
       group_wait: "30s"
       repeat_interval: "4h"`,
   postgresql: `tenants:
@@ -40,9 +36,8 @@ tenants:
     _state_maintenance:
       expires: "2026-03-20T06:00:00Z"
     _routing:
-      receiver:
-        type: "slack"
-        channel: "#alerts"
+      receiver_type: "slack"
+      webhook_url: "https://hooks.slack.com/services/example"
       group_wait: "1m"
       group_interval: "5m"
       repeat_interval: "12h"`,
@@ -54,12 +49,9 @@ tenants:
     redis_connected_clients: "5000"
     _silent_mode:
       expires: "2026-03-13T00:00:00Z"
-    _severity_dedup:
-      enabled: false
     _routing:
-      receiver:
-        type: "email"
-        to: "ops@example.com"
+      receiver_type: "email"
+      webhook_url: "mailto:ops@example.com"
       group_wait: "45s"
       repeat_interval: "6h"`,
   kafka: `tenants:
@@ -70,13 +62,42 @@ tenants:
     kafka_controller_active: "1"
     kafka_isr_shrank: "0"
     _routing:
-      receiver:
-        type: "teams"
-        webhook_url: "https://teams.example.com/webhook"
-      group_by: ["topic", "partition"]
+      receiver_type: "teams"
+      webhook_url: "https://teams.example.com/webhook"
       group_wait: "2m"
       group_interval: "3m"
-      repeat_interval: "24h"`
+      repeat_interval: "24h"`,
+  'routing-profiles': `# v2.1.0: Cross-Domain Routing Profiles (ADR-007)
+_routing_defaults:
+  receiver_type: "webhook"
+  group_wait: "30s"
+  repeat_interval: "4h"
+
+routing_profiles:
+  standard-webhook:
+    receiver_type: "webhook"
+    group_wait: "30s"
+    repeat_interval: "4h"
+  urgent-slack:
+    receiver_type: "slack"
+    group_wait: "10s"
+    repeat_interval: "1h"
+
+tenants:
+  db-a:
+    mysql_connections: "80"
+    _routing:
+      profile: "standard-webhook"
+      webhook_url: "https://hooks.example.com/db-a"
+  db-b:
+    pg_connections: "120"
+    _routing:
+      profile: "urgent-slack"
+      webhook_url: "https://hooks.slack.com/services/db-b"
+
+_domain_policy:
+  allowed_domains: ["*.example.com", "hooks.slack.com"]
+  denied_domains: ["*.internal.corp"]`
 };
 
 const KNOWN_METRIC_KEYS = new Set([
@@ -362,39 +383,22 @@ function validateTenantConfig(yamlText) {
               message: t(`${tenantId}._state_maintenance: 必須是對象`, `${tenantId}._state_maintenance: must be object`)
             });
           }
-        } else if (key === '_severity_dedup') {
-          if (typeof value === 'object' && value !== null && 'enabled' in value) {
-            if (typeof value.enabled !== 'boolean') {
-              errors.push({
-                rule: '_severity_dedup',
-                message: t(`${tenantId}._severity_dedup.enabled: 必須是布林值 (true/false)`, `${tenantId}._severity_dedup.enabled: must be boolean (true/false)`)
-              });
-            }
-          }
         } else if (key === '_routing') {
           routingStatus = 'configured';
           if (typeof value === 'object' && value !== null) {
             const routing = value;
-            // receiver can be a nested object { type: "webhook", url: "..." }
-            // or missing entirely
-            const receiver = routing.receiver;
-            if (!receiver) {
+            // v2.1.0: receiver_type (flat) or legacy receiver.type (nested)
+            const recType = routing.receiver_type || (routing.receiver && routing.receiver.type);
+            if (!recType && !routing.profile) {
               errors.push({
                 rule: '_routing',
-                message: t(`${tenantId}._routing: 必須有 "receiver" 欄位`, `${tenantId}._routing: must have "receiver" field`)
+                message: t(`${tenantId}._routing: 需要 "receiver_type"、"profile" 或 "receiver" 之一`, `${tenantId}._routing: needs "receiver_type", "profile", or "receiver"`)
               });
-            } else if (typeof receiver === 'object') {
-              if (!receiver.type) {
-                errors.push({
-                  rule: '_routing.receiver',
-                  message: t(`${tenantId}._routing.receiver: 必須有 "type" 欄位`, `${tenantId}._routing.receiver: must have "type" field`)
-                });
-              } else if (!RECEIVER_TYPES.has(receiver.type)) {
-                errors.push({
-                  rule: '_routing.receiver.type',
-                  message: t(`${tenantId}._routing.receiver.type: 未知的類型 "${receiver.type}"`, `${tenantId}._routing.receiver.type: unknown type "${receiver.type}"`)
-                });
-              }
+            } else if (recType && !RECEIVER_TYPES.has(recType)) {
+              errors.push({
+                rule: '_routing.receiver_type',
+                message: t(`${tenantId}._routing.receiver_type: 未知的類型 "${recType}"`, `${tenantId}._routing.receiver_type: unknown type "${recType}"`)
+              });
             }
 
             // Timing guardrails (values are already unquoted strings)

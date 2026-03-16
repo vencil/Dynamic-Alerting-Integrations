@@ -2,12 +2,12 @@
 title: "Tenant 快速入門指南"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # Tenant 快速入門指南
 
-> **v2.0.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
+> **v2.1.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
 >
 > 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
@@ -84,6 +84,20 @@ tenants:
 ```
 
 繼承順序：`_defaults.yaml` → `_profiles.yaml` → tenant 自訂值。Tenant 的值永遠最優先。
+
+### 使用 Routing Profile（v2.1.0）
+
+如果 Platform Team 定義了共用的路由設定檔（`_routing_profiles.yaml`），你可以透過 `_routing_profile` 引用，無需重複寫 `_routing`：
+
+```yaml
+tenants:
+  my-tenant:
+    _routing_profile: "team-sre-apac"   # 使用共用的路由設定檔
+    _routing:
+      repeat_interval: "2h"             # 可覆蓋 profile 中的個別欄位
+```
+
+四層合併順序：`_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`。你的 `_routing` 欄位永遠優先於 profile。偵錯工具：`da-tools explain-route --config-dir conf.d/ --tenant my-tenant`。
 
 ### 進入維護模式
 
@@ -163,7 +177,7 @@ python3 scripts/tools/ops/config_diff.py \
   --old-dir conf.d.baseline --new-dir conf.d/
 ```
 
-### 檢查告警品質（v2.0.0）
+### 檢查告警品質（v2.1.0）
 
 ```bash
 # 查看你的 tenant 告警是否有 noise（震盪）/ stale（閒置）等品質問題

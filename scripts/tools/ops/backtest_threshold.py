@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled, http_get_json  # noqa: E402
+from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -533,17 +533,13 @@ def main():
         print_text_report(report)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
-        os.chmod(args.output, 0o600)
+        write_json_secure(args.output, report)
         if not args.json:
             print(f"  JSON report: {args.output}")
 
     if args.markdown_output:
         md = generate_markdown(report)
-        with open(args.markdown_output, "w", encoding="utf-8") as f:
-            f.write(md)
-        os.chmod(args.markdown_output, 0o600)
+        write_text_secure(args.markdown_output, md)
         if not args.json:
             print(f"  Markdown report: {args.markdown_output}")
 

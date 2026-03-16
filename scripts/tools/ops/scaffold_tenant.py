@@ -13,6 +13,8 @@ Usage:
   python3 scripts/tools/scaffold_tenant.py --non-interactive --tenant db-c --db mariadb
   python3 scripts/tools/scaffold_tenant.py --tenant db-c --db mariadb --namespaces ns1,ns2,ns3
 """
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -22,7 +24,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import read_onboard_hints, detect_cli_lang  # noqa: E402
+from _lib_python import read_onboard_hints, detect_cli_lang, write_text_secure  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -97,6 +99,22 @@ _HELP = {
         'zh': '租戶設定檔名稱 (例如 standard-mariadb-prod)。設定時，租戶 YAML 將參考此設定檔，並僅包含明確覆寫',
         'en': 'Tenant profile name (e.g., standard-mariadb-prod). When set, tenant YAML will reference the named profile and only contain explicit overrides.'
     },
+    'routing_profile': {
+        'zh': '路由設定檔名稱 (ADR-007)，例如 team-sre-apac。設定時，租戶 YAML 將包含 _routing_profile 引用',
+        'en': 'Routing profile name (ADR-007), e.g., team-sre-apac. When set, tenant YAML will include _routing_profile reference'
+    },
+    'topology': {
+        'zh': '租戶映射拓撲 (ADR-006): 1:1 (預設), N:1 (需要 --namespaces), 1:N (產生 mapping hint)',
+        'en': 'Tenant mapping topology (ADR-006): 1:1 (default), N:1 (requires --namespaces), 1:N (generates mapping hint)'
+    },
+    'mapping_instance': {
+        'zh': '1:N 拓撲的來源實例名稱 (例如 oracle-prod-01)',
+        'en': 'Source instance name for 1:N topology (e.g., oracle-prod-01)'
+    },
+    'mapping_filter': {
+        'zh': '1:N 拓撲的 PromQL filter (例如 schema=~"app_a_.*")',
+        'en': 'PromQL filter for 1:N topology (e.g., schema=~"app_a_.*")'
+    },
     'from_onboard': {
         'zh': 'onboard-hints.json 的路徑 (自動從上船結果生成)',
         'en': 'Path to onboard-hints.json (auto-scaffold from onboard results)'
@@ -125,7 +143,7 @@ _HELP = {
     }
 }
 
-def _h(key):
+def _h(key: str) -> str:
     """Get help text in detected language."""
     return _HELP[key].get(_LANG, _HELP[key]['en'])
 
@@ -378,7 +396,7 @@ RULE_PACKS = {
 }
 
 
-def prompt_choice(question, options, default=None):
+def prompt_choice(question: str, options: list[tuple[str, str]], default: str | None = None) -> str:
     """Interactive single-choice prompt."""
     print(f"\n{question}")
     for i, (key, label) in enumerate(options, 1):
@@ -397,7 +415,7 @@ def prompt_choice(question, options, default=None):
         print("  無效選擇，請重試。")
 
 
-def prompt_multi(question, options):
+def prompt_multi(question: str, options: list[tuple[str, str]]) -> list[str]:
     """Interactive multi-choice prompt. Returns list of selected keys."""
     print(f"\n{question}")
     for i, (key, label) in enumerate(options, 1):
@@ -416,7 +434,7 @@ def prompt_multi(question, options):
         print("  無效選擇，請重試。")
 
 
-def prompt_value(metric, info, current=None):
+def prompt_value(metric: str, info: dict[str, object], current: str | None = None) -> str | None:
     """Prompt for a threshold value. Returns string or None to skip."""
     default_val = current if current else info["value"]
     raw = input(f"  {metric} [{info['desc']}] ({default_val} {info['unit']}): ").strip()
@@ -427,7 +445,7 @@ def prompt_value(metric, info, current=None):
     return raw
 
 
-def generate_profile(profile_name, selected_dbs, tier="prod"):
+def generate_profile(profile_name: str, selected_dbs: list[str], tier: str = "prod") -> dict:
     """Generate a _profiles.yaml skeleton with metric defaults for selected DBs.
 
     Args:
@@ -461,7 +479,7 @@ def generate_profile(profile_name, selected_dbs, tier="prod"):
     return {"profiles": {profile_name: profile}}
 
 
-def generate_defaults(selected_dbs):
+def generate_defaults(selected_dbs: list[str]) -> dict:
     """Generate _defaults.yaml content."""
     defaults = {}
     state_filters = {}
@@ -485,7 +503,7 @@ def generate_defaults(selected_dbs):
     return {"defaults": defaults, "state_filters": state_filters}
 
 
-def generate_tenant(tenant_name, selected_dbs, interactive=False):
+def generate_tenant(tenant_name: str, selected_dbs: list[str], interactive: bool = False) -> dict:
     """Generate tenant YAML content."""
     tenant_config = {}
 
@@ -608,7 +626,7 @@ def generate_tenant(tenant_name, selected_dbs, interactive=False):
     return {"tenants": {tenant_name: tenant_config}} if tenant_config else {"tenants": {tenant_name: {}}}
 
 
-def build_receiver_from_args(receiver_type, receiver_value, smarthost=None):
+def build_receiver_from_args(receiver_type: str, receiver_value: str, smarthost: str | None = None) -> dict:
     """從 CLI 參數建立 receiver dict。
 
     將 receiver_type + receiver_value 組合為結構化的 receiver 物件，
@@ -639,7 +657,7 @@ def build_receiver_from_args(receiver_type, receiver_value, smarthost=None):
     return receiver_obj
 
 
-def generate_report(tenant_name, selected_dbs, output_dir, namespaces=None):
+def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, namespaces: str | None = None) -> str:
     """Generate scaffold report with deployment instructions."""
     lines = [
         f"# Scaffold Report — {tenant_name}",
@@ -716,46 +734,60 @@ def generate_report(tenant_name, selected_dbs, output_dir, namespaces=None):
     return "\n".join(lines)
 
 
-def write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report, relabel_snippet=None):
+def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> None:
     """Write all output files."""
     os.makedirs(output_dir, exist_ok=True)
 
     # Write _defaults.yaml
     defaults_path = os.path.join(output_dir, "_defaults.yaml")
-    with open(defaults_path, "w", encoding="utf-8") as f:
-        f.write("# _defaults.yaml — Platform-managed global settings\n")
-        f.write("# Generated by scaffold_tenant.py\n")
-        yaml.safe_dump(defaults_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    os.chmod(defaults_path, 0o600)
+    defaults_content = (
+        "# _defaults.yaml — Platform-managed global settings\n"
+        "# Generated by scaffold_tenant.py\n"
+        + yaml.safe_dump(defaults_data, default_flow_style=False,
+                         allow_unicode=True, sort_keys=False)
+    )
+    write_text_secure(defaults_path, defaults_content)
     print(f"  📄 {defaults_path}")
 
     # Write tenant yaml
     tenant_path = os.path.join(output_dir, f"{tenant_name}.yaml")
-    with open(tenant_path, "w", encoding="utf-8") as f:
-        f.write(f"# {tenant_name}.yaml — Tenant-managed thresholds\n")
-        f.write("# Generated by scaffold_tenant.py\n")
-        f.write("# 三態: 數值=Custom, 省略=Default, \"disable\"=停用\n")
-        yaml.safe_dump(tenant_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    os.chmod(tenant_path, 0o600)
+    tenant_content = (
+        f"# {tenant_name}.yaml — Tenant-managed thresholds\n"
+        "# Generated by scaffold_tenant.py\n"
+        "# 三態: 數值=Custom, 省略=Default, \"disable\"=停用\n"
+        + yaml.safe_dump(tenant_data, default_flow_style=False,
+                         allow_unicode=True, sort_keys=False)
+    )
+    write_text_secure(tenant_path, tenant_content)
     print(f"  📄 {tenant_path}")
 
-    # Write relabel_configs if provided
+    # Write relabel_configs if provided (N:1 topology)
     if relabel_snippet:
         relabel_path = os.path.join(output_dir, f"relabel_configs-{tenant_name}.yaml")
-        with open(relabel_path, "w", encoding="utf-8") as f:
-            f.write(relabel_snippet)
-        os.chmod(relabel_path, 0o600)
+        write_text_secure(relabel_path, relabel_snippet)
         print(f"  📄 {relabel_path}")
+
+    # v2.1.0 ADR-006: Write _instance_mapping hint if provided (1:N topology)
+    if mapping_hint:
+        mapping_path = os.path.join(output_dir, "_instance_mapping.yaml")
+        mapping_content = (
+            "# _instance_mapping.yaml — 1:N Tenant Mapping (ADR-006)\n"
+            "# Generated by scaffold_tenant.py --topology=1:N\n"
+            "# Merge into your config-dir's _instance_mapping.yaml\n"
+            "# Then run: generate_tenant_mapping_rules.py --config-dir <dir>\n"
+            + yaml.safe_dump(mapping_hint, default_flow_style=False,
+                             allow_unicode=True, sort_keys=False)
+        )
+        write_text_secure(mapping_path, mapping_content)
+        print(f"  📄 {mapping_path}")
 
     # Write report
     report_path = os.path.join(output_dir, "scaffold-report.txt")
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(report)
-    os.chmod(report_path, 0o600)
+    write_text_secure(report_path, report)
     print(f"  📄 {report_path}")
 
 
-def print_catalog():
+def print_catalog() -> None:
     """Print the supported exporter catalog."""
     print("\n╔══════════════════════════════════════════════════════════════╗")
     print("║          Dynamic Alerting — Supported Exporters            ║")
@@ -770,7 +802,7 @@ def print_catalog():
     print("╚══════════════════════════════════════════════════════════════╝")
 
 
-def generate_relabel_snippet(tenant, namespaces, tenant_label="tenant"):
+def generate_relabel_snippet(tenant: str, namespaces: str | list[str], tenant_label: str = "tenant") -> str:
     """
     Generate Prometheus relabel_configs snippet for N:1 tenant mapping.
 
@@ -821,7 +853,7 @@ def generate_relabel_snippet(tenant, namespaces, tenant_label="tenant"):
     return "\n".join(yaml_lines)
 
 
-def run_interactive(output_dir):
+def run_interactive(output_dir: str) -> None:
     """Full interactive mode."""
     print("=" * 60)
     print("  scaffold_tenant.py — 互動式 Tenant Config 產生器")
@@ -889,7 +921,7 @@ def run_interactive(output_dir):
     print(f"\n詳見 {output_dir}/scaffold-report.txt")
 
 
-def run_non_interactive(args):
+def run_non_interactive(args: argparse.Namespace) -> None:
     """Non-interactive mode with CLI args."""
     tenant_name = args.tenant
     selected_dbs = ["kubernetes"] + [db.strip() for db in args.db.split(",")]
@@ -946,7 +978,12 @@ def run_non_interactive(args):
 
         tenant_data["tenants"][tenant_name]["_routing"] = routing
 
-    # Apply --namespaces if specified
+    # v2.1.0 ADR-007: Apply --routing-profile if specified
+    routing_profile = getattr(args, "routing_profile", None)
+    if routing_profile:
+        tenant_data["tenants"][tenant_name]["_routing_profile"] = routing_profile
+
+    # Apply --namespaces if specified (N:1 topology)
     namespaces = getattr(args, "namespaces", None)
     relabel_snippet = None
     if namespaces:
@@ -954,15 +991,34 @@ def run_non_interactive(args):
         tenant_data["tenants"][tenant_name]["_namespaces"] = ns_list
         relabel_snippet = generate_relabel_snippet(tenant_name, namespaces)
 
+    # v2.1.0 ADR-006: Generate 1:N mapping hint if --topology=1:N
+    topology = getattr(args, "topology", "1:1")
+    mapping_hint = None
+    if topology == "1:N":
+        inst = getattr(args, "mapping_instance", None)
+        filt = getattr(args, "mapping_filter", None)
+        if inst and filt:
+            mapping_hint = {
+                "instance_tenant_mapping": {
+                    inst: [{"tenant": tenant_name, "filter": filt}]
+                }
+            }
+        else:
+            print("  WARN: --topology=1:N requires --mapping-instance and "
+                  "--mapping-filter", file=sys.stderr)
+    elif topology == "N:1" and not namespaces:
+        print("  WARN: --topology=N:1 requires --namespaces", file=sys.stderr)
+
     report = generate_report(tenant_name, selected_dbs, output_dir, namespaces=namespaces)
 
     print(f"\n📁 輸出至 {output_dir}/")
-    write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report, relabel_snippet=relabel_snippet)
+    write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report,
+                  relabel_snippet=relabel_snippet, mapping_hint=mapping_hint)
 
     print("\n✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)")
 
 
-def run_from_onboard(args):
+def run_from_onboard(args: argparse.Namespace) -> None:
     """Auto-scaffold tenants from onboard-hints.json.
 
     Reads hints produced by onboard_platform.py and generates config
@@ -1011,7 +1067,7 @@ def run_from_onboard(args):
     print(f"\n  Scaffolded {len(tenants)} tenants to {output_dir}/")
 
 
-def main():
+def main() -> None:
     """CLI entry point: Interactive tenant config generator for Dynamic Alerting."""
     parser = argparse.ArgumentParser(
         description=_h('description'),
@@ -1024,6 +1080,11 @@ def main():
     parser.add_argument("--catalog", action="store_true", help=_h('catalog'))
     parser.add_argument("--non-interactive", action="store_true", help=_h('non_interactive'))
     parser.add_argument("--namespaces", help=_h('namespaces'))
+    parser.add_argument("--routing-profile", help=_h('routing_profile'))
+    parser.add_argument("--topology", choices=["1:1", "N:1", "1:N"], default="1:1",
+                        help=_h('topology'))
+    parser.add_argument("--mapping-instance", help=_h('mapping_instance'))
+    parser.add_argument("--mapping-filter", help=_h('mapping_filter'))
     parser.add_argument("--silent-mode", choices=["warning", "critical", "all", "disable"],
                         help=_h('silent_mode'))
     parser.add_argument("--severity-dedup", choices=["enable", "disable"], default="enable",
@@ -1063,13 +1124,14 @@ def main():
         output_dir = args.output_dir
         os.makedirs(output_dir, exist_ok=True)
         profiles_path = os.path.join(output_dir, "_profiles.yaml")
-        with open(profiles_path, "w", encoding="utf-8") as f:
-            f.write("# _profiles.yaml — Tenant Profile definitions\n")
-            f.write("# Generated by scaffold_tenant.py --generate-profile\n")
-            f.write("# Four-layer inheritance: Defaults → Rule Pack → Profile → Tenant\n")
-            yaml.safe_dump(profile_data, f, default_flow_style=False,
-                           allow_unicode=True, sort_keys=False)
-        os.chmod(profiles_path, 0o600)
+        profiles_content = (
+            "# _profiles.yaml — Tenant Profile definitions\n"
+            "# Generated by scaffold_tenant.py --generate-profile\n"
+            "# Four-layer inheritance: Defaults → Rule Pack → Profile → Tenant\n"
+            + yaml.safe_dump(profile_data, default_flow_style=False,
+                             allow_unicode=True, sort_keys=False)
+        )
+        write_text_secure(profiles_path, profiles_content)
         print(f"✅ Profile skeleton generated: {profiles_path}")
         print(f"   Profile: {args.generate_profile} (tier={args.tier})")
         print(f"   DBs: {', '.join(selected_dbs)}")

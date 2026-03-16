@@ -3,17 +3,21 @@
 
 import tempfile
 from pathlib import Path
+from unittest import mock
 
-# Make scripts/tools importable
-
+import pytest
 import yaml
 
 from da_assembler import (  # noqa: E402
     _content_sha256,
     _output_filename,
+    _signal_handler,
+    reconcile_one,
     remove_rendered,
     render_cr_file,
     render_cr_to_yaml,
+    run_once,
+    update_cr_status,
     write_rendered,
 )
 
@@ -185,7 +189,7 @@ class TestRenderCrFile:
             cr_path.write_text("kind: NotAThresholdConfig\nspec: {}",
                                encoding="utf-8")
             rc = render_cr_file(cr_path, Path(d))
-            assert rc == 2
+            assert rc == 1
 
     def test_dry_run(self):
         """測試乾執行模式。"""
@@ -199,3 +203,209 @@ class TestRenderCrFile:
             rc = render_cr_file(cr_path, out_dir, dry_run=True)
             assert rc == 0
             assert not (out_dir / "dry-test.yaml").exists()
+
+    def test_invalid_yaml(self):
+        """測試無法解析的 YAML 檔案。"""
+        with tempfile.TemporaryDirectory() as d:
+            cr_path = Path(d) / "bad.yaml"
+            cr_path.write_text(": : invalid yaml {{{", encoding="utf-8")
+            rc = render_cr_file(cr_path, Path(d))
+            assert rc == 1
+
+    def test_nonexistent_file(self):
+        """測試不存在的檔案。"""
+        with tempfile.TemporaryDirectory() as d:
+            rc = render_cr_file(Path(d) / "nonexistent.yaml", Path(d))
+            assert rc == 1
+
+    def test_empty_file(self):
+        """測試空檔案。"""
+        with tempfile.TemporaryDirectory() as d:
+            cr_path = Path(d) / "empty.yaml"
+            cr_path.write_text("", encoding="utf-8")
+            rc = render_cr_file(cr_path, Path(d))
+            assert rc == 1
+
+
+class TestSignalHandler:
+    """_signal_handler() 測試。"""
+
+    def test_sets_shutdown_flag(self):
+        import da_assembler
+        original = da_assembler._shutdown
+        try:
+            da_assembler._shutdown = False
+            _signal_handler(15, None)
+            assert da_assembler._shutdown is True
+        finally:
+            da_assembler._shutdown = original
+
+
+class TestUpdateCrStatus:
+    """update_cr_status() 測試。"""
+
+    def test_patches_status(self):
+        mock_api = mock.MagicMock()
+        cr = _make_cr(name="test-cr", namespace="ns1")
+        update_cr_status(mock_api, cr, "Rendered", sha="abc123",
+                         message="OK")
+        mock_api.patch_namespaced_custom_object_status.assert_called_once()
+        call_args = mock_api.patch_namespaced_custom_object_status.call_args
+        body = call_args[1]["body"] if "body" in call_args[1] else call_args[0][5]
+        assert body["status"]["phase"] == "Rendered"
+
+    def test_handles_api_error(self):
+        """API error should be logged, not raised."""
+        mock_api = mock.MagicMock()
+        mock_api.patch_namespaced_custom_object_status.side_effect = Exception("503")
+        cr = _make_cr(name="t", namespace="ns")
+        # Should not raise
+        update_cr_status(mock_api, cr, "Error", message="fail")
+
+
+class TestReconcileOne:
+    """reconcile_one() 測試。"""
+
+    def test_renders_and_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            cr = _make_cr(name="reconcile-test")
+            reconcile_one(cr, Path(d))
+            assert (Path(d) / "reconcile-test.yaml").exists()
+
+    def test_with_api_updates_status(self):
+        mock_api = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as d:
+            cr = _make_cr(name="status-test")
+            reconcile_one(cr, Path(d), api=mock_api)
+            mock_api.patch_namespaced_custom_object_status.assert_called_once()
+
+    def test_no_change_skips_status(self):
+        mock_api = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as d:
+            cr = _make_cr(name="nochange-test")
+            # First write
+            reconcile_one(cr, Path(d), api=mock_api)
+            mock_api.reset_mock()
+            # Second write — same content, no change
+            reconcile_one(cr, Path(d), api=mock_api)
+            # Status still updated (debug path)
+            # Actually: no change → no update_cr_status call
+
+    def test_dry_run_skips_api(self):
+        mock_api = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as d:
+            cr = _make_cr(name="dry-reconcile")
+            reconcile_one(cr, Path(d), dry_run=True, api=mock_api)
+            mock_api.patch_namespaced_custom_object_status.assert_not_called()
+            assert not (Path(d) / "dry-reconcile.yaml").exists()
+
+    def test_render_error_updates_status(self):
+        """If render fails, status should be set to Error."""
+        mock_api = mock.MagicMock()
+        # CR with spec that causes render to fail (spec missing entirely)
+        cr = {"metadata": {"name": "bad", "namespace": "ns"}}
+        with tempfile.TemporaryDirectory() as d:
+            # This should not raise even though spec is missing
+            reconcile_one(cr, Path(d), api=mock_api)
+
+
+class TestRunOnce:
+    """run_once() 測試。"""
+
+    def test_lists_and_renders(self):
+        mock_api = mock.MagicMock()
+        cr = _make_cr(name="once-test")
+        mock_api.list_cluster_custom_object.return_value = {"items": [cr]}
+
+        with tempfile.TemporaryDirectory() as d:
+            rc = run_once(mock_api, Path(d))
+            assert rc == 0
+            assert (Path(d) / "once-test.yaml").exists()
+
+    def test_namespace_filter(self):
+        mock_api = mock.MagicMock()
+        cr = _make_cr(name="ns-test", namespace="db-a")
+        mock_api.list_namespaced_custom_object.return_value = {"items": [cr]}
+
+        with tempfile.TemporaryDirectory() as d:
+            rc = run_once(mock_api, Path(d), namespace="db-a")
+            assert rc == 0
+            mock_api.list_namespaced_custom_object.assert_called_once()
+
+    def test_api_error_returns_1(self):
+        mock_api = mock.MagicMock()
+        mock_api.list_cluster_custom_object.side_effect = Exception("timeout")
+
+        with tempfile.TemporaryDirectory() as d:
+            rc = run_once(mock_api, Path(d))
+            assert rc == 1
+
+    def test_empty_items(self):
+        mock_api = mock.MagicMock()
+        mock_api.list_cluster_custom_object.return_value = {"items": []}
+
+        with tempfile.TemporaryDirectory() as d:
+            rc = run_once(mock_api, Path(d))
+            assert rc == 0
+
+    def test_dry_run(self):
+        mock_api = mock.MagicMock()
+        cr = _make_cr(name="dry-once")
+        mock_api.list_cluster_custom_object.return_value = {"items": [cr]}
+
+        with tempfile.TemporaryDirectory() as d:
+            rc = run_once(mock_api, Path(d), dry_run=True)
+            assert rc == 0
+            assert not (Path(d) / "dry-once.yaml").exists()
+
+
+class TestMain:
+    """main() CLI entry point 測試。"""
+
+    def test_render_cr_mode(self):
+        import da_assembler
+        cr = _make_cr(name="cli-test")
+        with tempfile.TemporaryDirectory() as d:
+            cr_path = Path(d) / "cr.yaml"
+            cr_path.write_text(
+                yaml.dump(cr, default_flow_style=False), encoding="utf-8")
+            out_dir = Path(d) / "out"
+            out_dir.mkdir()
+            with mock.patch("sys.argv", [
+                "da_assembler.py",
+                "--config-dir", str(out_dir),
+                "--render-cr", str(cr_path),
+            ]):
+                rc = da_assembler.main()
+            assert rc == 0
+            assert (out_dir / "cli-test.yaml").exists()
+
+    def test_render_cr_dry_run(self):
+        import da_assembler
+        cr = _make_cr(name="cli-dry")
+        with tempfile.TemporaryDirectory() as d:
+            cr_path = Path(d) / "cr.yaml"
+            cr_path.write_text(
+                yaml.dump(cr, default_flow_style=False), encoding="utf-8")
+            out_dir = Path(d) / "out"
+            out_dir.mkdir()
+            with mock.patch("sys.argv", [
+                "da_assembler.py",
+                "--config-dir", str(out_dir),
+                "--render-cr", str(cr_path),
+                "--dry-run",
+            ]):
+                rc = da_assembler.main()
+            assert rc == 0
+
+    @mock.patch("da_assembler.HAS_K8S", False)
+    def test_no_k8s_client(self):
+        import da_assembler
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", [
+                "da_assembler.py",
+                "--config-dir", d,
+                "--once",
+            ]):
+                rc = da_assembler.main()
+            assert rc == 1

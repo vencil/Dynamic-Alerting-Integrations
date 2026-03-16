@@ -1,0 +1,45 @@
+# _routing_profiles.yaml — Named Routing Configurations (ADR-007)
+#
+# Define reusable routing profiles that multiple tenants can reference
+# via _routing_profile: "<name>" in their tenant YAML.
+#
+# Merge order: _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced
+#
+# Naming convention: team-{team}-{region} or domain-{domain}-{tier}
+
+routing_profiles:
+  # SRE team in APAC region
+  team-sre-apac:
+    receiver:
+      type: slack
+      api_url: "https://hooks.slack.com/services/T00/B00/sre-apac"
+    group_by: [tenant, alertname, severity]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - match: { severity: critical }
+        receiver:
+          type: pagerduty
+          service_key: "sre-apac-critical-key"
+        repeat_interval: 15m
+
+  # Global DBA team
+  team-dba-global:
+    receiver:
+      type: webhook
+      url: "https://alerting.internal/dba-global"
+    group_by: [tenant, alertname, db_type]
+    group_wait: 1m
+    group_interval: 10m
+    repeat_interval: 8h
+
+  # Finance domain — strict compliance
+  domain-finance-tier1:
+    receiver:
+      type: pagerduty
+      service_key: "finance-tier1-key"
+    group_by: [tenant, alertname, severity]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 1h

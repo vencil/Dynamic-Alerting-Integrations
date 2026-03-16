@@ -34,7 +34,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file  # noqa: E402
+from _lib_python import load_yaml_file, write_json_secure  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default paths (relative to script location for da-tools container)
@@ -327,9 +327,7 @@ def main():
         print_report(results)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        os.chmod(args.output, 0o600)
+        write_json_secure(args.output, results)
         if not args.json:
             print(f"  JSON report: {args.output}")
 

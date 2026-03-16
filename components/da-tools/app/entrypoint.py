@@ -30,6 +30,7 @@ def _build_help_text(lang):
     blind-spot        掃描叢集目標並查找未監控實例
     maintenance-scheduler  評估週期性維護並建立 AM 靜默規則
     alert-quality     警報品質評估 (震盪/閒置/延遲/壓制分析)
+    alert-correlate   告警關聯分析 (時間窗口聚類 + 根因推斷)
 
 命令 (配置生成 — 讀取租戶 YAML):
     generate-routes   租戶 YAML → Alertmanager route/receiver/inhibit 片段
@@ -43,9 +44,19 @@ def _build_help_text(lang):
     deprecate         跨配置標記指標為已禁用
     lint              針對治理禁止列表驗證自訂規則
     onboard           分析現有 Alertmanager/Prometheus 配置以供遷移
+    validate-config   一站式配置驗證 (YAML + schema + routing + policy)
     config-diff       GitOps PR 審查的目錄級配置差異
+    drift-detect      跨叢集配置漂移偵測 (目錄級 SHA-256 比對)
     evaluate-policy   Policy-as-Code 策略評估 (宣告式 DSL)
     cardinality-forecast  基數預測 (線性回歸趨勢分析)
+    test-notification 多通道通知連通性測試 (驗證 receiver 可達性)
+    threshold-recommend 閾值推薦引擎 (基於歷史 P50/P95/P99)
+    explain-route     路由合併管線除錯器 (四層展開 + 設定檔擴展)
+    byo-check         BYO Alertmanager 整合前檢 (端點 + 配置驗證)
+    federation-check  Prometheus Federation 健康檢查
+    grafana-import    Grafana Dashboard JSON 匯入
+    shadow-verify     Shadow Monitoring 雙軌比對驗證
+    discover-mappings 自動發現 1:N 實例-租戶映射 (掃描 exporter /metrics)
 
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
@@ -71,6 +82,7 @@ Commands (Prometheus API — portable):
     blind-spot        Scan cluster targets and find unmonitored instances
     maintenance-scheduler  Evaluate recurring maintenance and create AM silences
     alert-quality     Alert quality scoring (noise/stale/latency/suppression)
+    alert-correlate   Alert correlation analysis (time-window clustering + root cause)
 
 Commands (Config Generation — reads tenant YAML):
     generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
@@ -84,9 +96,19 @@ Commands (File System — offline):
     deprecate         Mark metrics as disabled across configs
     lint              Validate custom rules against governance deny-list
     onboard           Analyze existing Alertmanager/Prometheus configs for migration
+    validate-config   One-stop config validation (YAML + schema + routing + policy)
     config-diff       Directory-level config diff for GitOps PR review
+    drift-detect      Cross-cluster config drift detection (directory-level SHA-256)
     evaluate-policy   Policy-as-Code evaluation (declarative DSL)
     cardinality-forecast  Cardinality forecasting (linear regression trend)
+    test-notification Multi-channel notification connectivity testing
+    threshold-recommend Threshold recommendation engine (historical P50/P95/P99)
+    explain-route     Routing merge pipeline debugger (four-layer expansion + profile)
+    byo-check         BYO Alertmanager pre-integration check (endpoint + config)
+    federation-check  Prometheus Federation health check
+    grafana-import    Grafana Dashboard JSON import
+    shadow-verify     Shadow Monitoring dual-rail comparison
+    discover-mappings Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics)
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -127,8 +149,10 @@ COMMAND_MAP = {
     "blind-spot": "blind_spot_discovery.py",
     "maintenance-scheduler": "maintenance_scheduler.py",
     "alert-quality": "alert_quality.py",
+    "alert-correlate": "alert_correlate.py",
     # Group B: Prometheus + file system (config generation)
     "generate-routes": "generate_alertmanager_routes.py",
+    "drift-detect": "drift_detect.py",
     # Group C: File system only (offline)
     "migrate": "migrate_rule.py",
     "scaffold": "scaffold_tenant.py",
@@ -142,12 +166,22 @@ COMMAND_MAP = {
     "config-diff": "config_diff.py",
     "evaluate-policy": "policy_engine.py",
     "cardinality-forecast": "cardinality_forecasting.py",
+    "test-notification": "notification_tester.py",
+    "threshold-recommend": "threshold_recommend.py",
+    "explain-route": "explain_route.py",
+    "byo-check": "byo_check.py",
+    "federation-check": "federation_check.py",
+    "grafana-import": "grafana_import.py",
+    "shadow-verify": "shadow_verify.py",
+    "discover-mappings": "discover_instance_mappings.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
 PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
                        "batch-diagnose", "backtest", "cutover", "blind-spot",
-                       "alert-quality", "cardinality-forecast"}
+                       "alert-quality", "alert-correlate",
+                       "cardinality-forecast", "threshold-recommend",
+                       "discover-mappings"}
 
 
 def print_usage():

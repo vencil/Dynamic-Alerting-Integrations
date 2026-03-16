@@ -2,7 +2,7 @@
 title: "測試注意事項 — 排錯手冊 (Testing Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
@@ -275,6 +275,79 @@ for keyword, db_type in JOB_DB_MAP.items():
 所有面向使用者的文件（byo-*、migration-guide、shadow-monitoring-sop）中的工具用法，以 `docker run ghcr.io/vencil/da-tools:<ver>` 為主要範例。raw `python3 scripts/tools/...` 寫法僅在「本地開發」或「CI pipeline」上下文使用。
 
 **檢查方式：** `grep -rn "python3 scripts/tools/" docs/` — 面向使用者的文件中不應出現（`docs/internal/` 例外）。
+
+## v2.1.0 Lessons Learned（2026-03-15）
+
+### Go Incremental Reload 設計模式
+
+1. **per-file hash + parsed config cache 是增量 reload 的核心**：`fileHashes map[string]string` 追蹤每個檔案的 SHA-256，`fileConfigs map[string]ThresholdConfig` 快取已解析的部分配置。變更偵測只需比對 hash，未變更檔案直接從 cache 取用
+2. **4 phase 增量載入保證正確性**：(1) scan hashes → (2) diff changed/added/removed → (3) selective re-parse only changed → (4) mergePartialConfigs from cache。Phase 4 的 deterministic merge（sorted filenames）確保結果與 fullDirLoad 一致
+3. **boundary rules 需要在 merge 後重新套用**：cardinality guard (500 per-tenant) 和 schema validation 必須在最終合併後執行，不能在 partial config 階段做
+
+### Backstage Plugin 整合模式
+
+4. **Entity annotation 是 Backstage ↔ 外部系統的慣例橋樑**：`dynamic-alerting.io/tenant` annotation 標註在 Backstage entity 上，plugin 讀取此 annotation 自動映射到對應 tenant 的 Prometheus 查詢
+5. **Backstage proxy 避免 CORS 問題**：PrometheusClient 透過 `/api/proxy/prometheus/` 路徑查詢，不直接從前端連 Prometheus。proxy 配置在 `app-config.yaml`
+
+### 覆蓋率攻略技巧
+
+6. **time.sleep mock 用 module-level patch**：`monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)` 而非 `@patch("time.sleep")`，確保只 mock 目標模組的 sleep 不影響其他模組
+7. **觀測迴圈測試需要同時 mock query + sleep + file I/O**：`query_prometheus` 回傳固定數據、`time.sleep` no-op、`tmp_path` 接收 CSV 輸出，三者缺一不可
+8. **CSV 輸出驗證用 csv.reader 而非字串比對**：`csv.reader()` 自動處理 quoting 和 escaping，比 `split(",")` 更健壯
+
+### DX 工具測試模式
+
+9. **frontmatter 解析需處理 `---` delimiter edge cases**：檔案開頭非 `---`、frontmatter 未閉合、多個 `---` 區段都需要測試。用 `re.compile(r"^---\s*$")` 比固定字串比對更寬鬆
+10. **coverage text output 格式依 pytest-cov 版本不同**：regex pattern 需足夠寬鬆以匹配不同版本的空白和對齊，`r"^(\S+\.py)\s+(\d+)\s+(\d+)\s+(\d+)%\s*(.*)?$"` 涵蓋主流格式
+11. **monkeypatch triple globals 隔離檔案系統**：`check_frontmatter_versions` 同時依賴 `DOCS_DIR`、`REPO_ROOT`、`CLAUDE_MD` 三個 module-level 常數，全部需要 monkeypatch 到 tmp_path
+
+---
+
+## v2.1.0 Lessons Learned（2026-03-15）
+
+### 關聯分析演算法測試
+
+1. **時間相關測試需 freeze 或相對值**：`_time_overlap()` 內部用 `datetime.now()` 處理 "still firing" 告警。測試中 `end==start` 不等於 "零長度" 而是 "still firing"，需理解業務語義再寫斷言
+2. **4 因子關聯分數好測試**：每個因子獨立 0-1 且權重固定，可分別測試 identical、diff namespace、diff everything 三種極端情況快速驗證正確性
+3. **根因推斷用 severity rank + earliest 雙排序**：比單一排序穩定且可預測，測試只需驗證返回的 alertname 和 tenant
+
+### 漂移偵測測試模式
+
+4. **tmp_path fixture + write_text 是最佳 config-dir mock**：不需要真實 YAML 結構，只需要可 hash 的內容。SHA-256 確定性保證測試穩定
+5. **pairwise 組合數 = n*(n-1)/2**：三目錄產生 3 個 report，四目錄產生 6 個——測試時注意斷言 report 數量而非內容
+6. **expected vs unexpected 用 prefix tuple**：`EXPECTED_PREFIXES = ("_cluster_", "_local_")` 可自定義，測試時用自定義 prefix 驗證分類邏輯
+
+### 覆蓋率提升技巧
+
+7. **main() 的 sys.exit() 要 catch**：validate_all.py main() 結尾固定 `sys.exit(0/1)`，pytest 需要 `pytest.raises(SystemExit)` 包裹
+8. **mock _run_one 跳過子進程**：validate_all 內部用 subprocess 跑其他 Python 腳本，mock `_run_one` 回傳 `(name, "pass", 0.1, "ok", "output")` tuple 即可覆蓋 main() 邏輯
+9. **_init_changelog_entry 需 monkeypatch REPO_ROOT**：bump_docs 的 CHANGELOG 操作依賴 REPO_ROOT，tmp_path mock 後可安全測試插入邏輯
+
+### DX lint 測試模式
+
+10. **CJK ratio 測試用純中文/純英文/混合三極端**：count_cjk_ratio("你好世界")=1.0, ("Hello")=0.0, 混合在 0-1 之間，避免浮點精確比較用 range 斷言
+11. **monkeypatch 雙 global**：check_bilingual_content 同時用 DOCS_DIR 和 PROJECT_ROOT，兩者都需要 monkeypatch 到 tmp_path 才能隔離真實文件系統
+
+---
+
+## v2.1.0 Lessons Learned（2026-03-15）
+
+### Ops 工具測試模式
+
+1. **main() 覆蓋是低垂果實**：大多數 ops 工具的 `main()` CLI entry point 佔 30-40% 程式碼但常被忽略。使用 `monkeypatch.setattr(sys, "argv", [...])` + mock 外部依賴即可快速提升覆蓋率（batch_diagnose 71%→99%，blind_spot 74%→99%）
+2. **mock 外部 API 的安全模式**：`query_prometheus_targets()` 等函式用 `@patch("module.http_get_json")` 而非 `@patch("urllib.request.urlopen")`，mock 粒度在自己的 wrapper 層
+3. **Help text 與 COMMAND_MAP 不同步是常見漏洞**：`validate-config` 在 COMMAND_MAP 中但 help text 沒列。`check_cli_coverage.py` lint 工具可捕獲此類不同步
+4. **Triple-quoted string parsing**：解析 Python help text 時，用 `re.findall(r'"""(.*?)"""', content, re.DOTALL)` 限制在三引號字串內，避免匹配到 Python 程式碼中的變數名
+
+### Lint 工具模式
+
+5. **反向驗證 > 正向驗證**：以 COMMAND_MAP 為 single source of truth，反向檢查 4 份文件是否涵蓋，比在每份文件中各自維護清單更可靠
+6. **Warning vs Error 分級**：docs 裡多出的命令（已規劃但未整合）是 warning 非 error，避免 CI 假陽性
+
+### DX 增強模式
+
+7. **`--diff-report` 實作要注意 git restore**：fix → diff → `git checkout .` 三步驟，timeout 時仍須執行 restore
+8. **`--format summary` badge 風格**：一行輸出適合嵌入 CI badge 或 Makefile target echo
 
 ## 相關資源
 

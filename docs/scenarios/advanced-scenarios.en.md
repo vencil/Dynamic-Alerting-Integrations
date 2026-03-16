@@ -2,7 +2,7 @@
 title: "Advanced Scenarios & Test Coverage"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Advanced Scenarios & Test Coverage
@@ -35,7 +35,7 @@ Composite alerts (AND logic) and multi-tier severity (Critical auto-suppresses W
 
 ## Enterprise Test Coverage Matrix
 
-The following matrix maps automated test scenarios to enterprise protection requirements. Each scenario's assertions can be verified via `make test-scenario-*` with a single command.
+The test system is organized into two layers: **E2E Scenario Tests** (end-to-end verification within the K8s cluster) and **Unit/Integration Tests** (pytest + go test, 2,002+ test cases).
 
 | Scenario | Enterprise Protection | Test Method | Core Assertions | Command |
 |----------|----------------------|-------------|-----------------|---------|
@@ -46,6 +46,36 @@ The following matrix maps automated test scenarios to enterprise protection requ
 | **E — Multi-Tenant Isolation** | Modifying Tenant A never affects Tenant B | Lower A threshold/disable A metric → verify B unchanged | A alert fires, B alert inactive; A metric absent, B metric present | `make test-scenario-e` |
 | **F — HA Failover** | Service continues after Pod deletion, thresholds don't double | Kill 1 Pod → verify alert continues → new Pod starts → verify `max by` | Surviving Pods ≥1 (PDB); alert uninterrupted; recording rule value = original (not 2×) | `make test-scenario-f` |
 | **demo-full** | End-to-end lifecycle demonstration | Composite load → alert fires → cleanup → alert resolves | All 6 steps succeed; complete firing → inactive cycle | `make demo-full` |
+
+### Unit/Integration Tests (`make test` / `pytest`)
+
+v1.7.0–v2.0.0 introduced numerous enterprise features; their test coverage is concentrated at the unit/integration layer:
+
+| Feature Domain | Enterprise Protection | Coverage Scope | Test Count |
+|---------------|----------------------|----------------|------------|
+| **Silent Mode** | Mute notifications while preserving TSDB records | Sentinel metric emit, inhibit rule generation, three-state interaction | ~20 |
+| **Severity Dedup** | Warning/critical deduplication | Per-tenant inhibit rules, metric_group pairing, sentinel metric | ~15 |
+| **Config-driven Routing** | 6 receiver types + guardrails | Receiver structure validation, timing clamp, domain allowlist | ~40 |
+| **Per-rule Overrides** | Specific alerts routed to different receivers | expand_routing_overrides, sub-route generation, mutual exclusion verification | ~15 |
+| **Platform Enforced Routing** | NOC always receives + tenant also receives | `_routing_enforced` merge, `continue: true` insertion | ~10 |
+| **Expires Auto-expiry** | Prevent forgotten silent/maintenance states | `time.Now().After(expires)` logic, `da_config_event` emit | ~15 |
+| **Cardinality Guard** | Prevent tenant config explosion | `max_metrics_per_tenant` truncate, ERROR log | ~10 |
+| **Schema Validation** | Detect typos/unknown keys | Go + Python dual-end consistency, warning reporting | ~20 |
+| **Onboard/Migration** | Seamless enterprise migration | AST engine, triage CSV, shadow mapping, prefix injection | ~50 |
+| **N:1 Namespace Mapping** | Multiple NS → single tenant | Relabel snippet generation, `_namespaces` metadata | ~10 |
+| **Shadow Monitoring Cutover** | One-click automated cutover | Readiness consumption, 5-step execution, dry-run, timeout handling | ~25 |
+| **Blind Spot Discovery** | Cluster blind spot detection | Targets parsing, segment matching, wrapped YAML format | ~25 |
+| **Config Diff** | Configuration change blast radius | Wrapped/flat format loading, change classification, Markdown output | ~20 |
+| **AM GitOps ConfigMap** | Complete ConfigMap generation | Base-config loading, mutual exclusion verification, YAML structure | ~30 |
+| **Recurring Maintenance** | Scheduled maintenance window automation | parse_duration (incl. `d`), is_in_window cron evaluation, silence CRUD + extend, Pushgateway metric push | ~55 |
+| **Alert Quality Scoring** | Four-dimension alert quality assessment | Noise/stale/latency/suppression scoring, three-tier grading, tenant reports, Markdown output | 57 |
+| **Policy-as-Code** | Configuration policy engine | 10 operator validations, when condition filtering, tenant exclusion, severity grading, violation reports | 106 |
+| **Cardinality Forecasting** | Cardinality trend prediction | Linear regression, risk grading, days-to-limit calculation, Markdown/JSON reports | 61 |
+| **SAST Compliance** | Static security analysis compliance | Go G112, Python CWE-276, B602, encoding standards, full-repo scan | 189 |
+| **Migration Engine v3** | AST migration engine | PromQL parsing, prefix injection, triage classification, shadow mapping | 67 |
+| **Offboard & Deprecate** | Tenant offboarding and rule deprecation | Cleanup process, audit logs, deprecation markers | 34 |
+
+> Full test suite: `make test` (Go) + `pytest tests/` (Python, 2,002+ passed). CI pipeline `.github/workflows/validate.yaml` runs automatically on every PR. Full test architecture guide: [Test Map](../internal/test-map.md).
 
 ### Assertion Details
 
@@ -184,6 +214,14 @@ flowchart TD
 ---
 
 > This document was extracted from [`architecture-and-design.en.md`](../architecture-and-design.en.md).
+
+## Interactive Tools
+
+> Interactive tools — the following can be tested directly at the [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/):
+>
+> - [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx) — Test alert rule PromQL expressions
+> - [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx) — View existing Rule Pack coverage
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-lint.jsx) — Validate advanced scenario configurations
 
 ## Related Resources
 

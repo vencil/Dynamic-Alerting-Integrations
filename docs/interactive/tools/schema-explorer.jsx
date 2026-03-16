@@ -2,7 +2,7 @@
 title: "YAML Schema Explorer"
 tags: [schema, reference, yaml]
 audience: ["platform-engineer", "domain-expert"]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [playground, glossary, config-lint]
 ---
@@ -111,9 +111,56 @@ const SCHEMA = [
       { key: 'tier', type: 'string', desc: t('服務等級', 'Service tier'), rulePack: 'all', example: '"gold"' },
     ],
   },
+  {
+    key: '_routing_defaults',
+    type: 'object',
+    desc: t('全域路由預設值（四層合併第一層，ADR-007）', 'Global routing defaults (four-layer merge layer 1, ADR-007)'),
+    rulePack: 'all',
+    children: [
+      { key: 'receiver_type', type: 'string', desc: t('預設接收器類型', 'Default receiver type'), rulePack: 'all', example: '"webhook"' },
+      { key: 'group_wait', type: 'string', desc: t('預設分組等待', 'Default group wait'), rulePack: 'all', example: '"30s"' },
+      { key: 'group_interval', type: 'string', desc: t('預設分組間隔', 'Default group interval'), rulePack: 'all', example: '"5m"' },
+      { key: 'repeat_interval', type: 'string', desc: t('預設重複間隔', 'Default repeat interval'), rulePack: 'all', example: '"4h"' },
+    ],
+  },
+  {
+    key: 'routing_profiles',
+    type: 'map',
+    desc: t('具名路由設定檔（四層合併第二層，ADR-007）', 'Named routing profiles (four-layer merge layer 2, ADR-007)'),
+    rulePack: 'all',
+    children: [
+      { key: '<profile_name>', type: 'object', desc: t('設定檔名稱（如 standard-webhook）', 'Profile name (e.g., standard-webhook)'), rulePack: 'all' },
+      { key: '<profile_name>.receiver_type', type: 'string', desc: t('接收器類型', 'Receiver type'), rulePack: 'all', example: '"webhook"' },
+      { key: '<profile_name>.group_wait', type: 'string', desc: t('分組等待時間', 'Group wait time'), rulePack: 'all', example: '"30s"' },
+      { key: '<profile_name>.repeat_interval', type: 'string', desc: t('重複通知間隔', 'Repeat notification interval'), rulePack: 'all', example: '"4h"' },
+    ],
+  },
+  {
+    key: '_domain_policy',
+    type: 'object',
+    desc: t('Webhook 域名策略（允許/禁止清單，ADR-007）', 'Webhook domain policy (allow/deny lists, ADR-007)'),
+    rulePack: 'all',
+    children: [
+      { key: 'allowed_domains', type: 'array', desc: t('允許的 webhook 域名清單', 'Allowed webhook domain list'), rulePack: 'all', example: '["*.example.com"]' },
+      { key: 'denied_domains', type: 'array', desc: t('禁止的 webhook 域名清單', 'Denied webhook domain list'), rulePack: 'all', example: '["*.internal.corp"]' },
+      { key: 'allowed_receiver_types', type: 'array', desc: t('允許的接收器類型', 'Allowed receiver types'), rulePack: 'all', example: '["webhook", "slack"]' },
+    ],
+  },
+  {
+    key: '_instance_mapping',
+    type: 'array',
+    desc: t('1:N 實例-租戶映射（ADR-006）', '1:N instance-tenant mappings (ADR-006)'),
+    rulePack: 'all',
+    children: [
+      { key: '[].instance', type: 'string', desc: t('Exporter 實例名稱', 'Exporter instance name'), rulePack: 'all', example: '"mariadb-exporter:9104"' },
+      { key: '[].db_type', type: 'string', desc: t('資料庫類型', 'Database type'), rulePack: 'all', example: '"mariadb"' },
+      { key: '[].partition_label', type: 'string', desc: t('分區標籤（如 schema）', 'Partition label (e.g., schema)'), rulePack: 'all', example: '"schema"' },
+      { key: '[].partitions', type: 'array', desc: t('分區值到租戶的映射', 'Partition value to tenant mappings'), rulePack: 'all' },
+    ],
+  },
 ];
 
-const RULE_PACKS = ['all', 'mariadb', 'postgresql', 'redis', 'kafka', 'elasticsearch', 'kubernetes', 'jvm', 'node'];
+const RULE_PACKS = ['all', 'mariadb', 'postgresql', 'redis', 'mongodb', 'elasticsearch', 'oracle', 'db2', 'clickhouse', 'kafka', 'rabbitmq', 'jvm', 'nginx', 'kubernetes', 'operational', 'platform'];
 
 function SchemaNode({ node, depth, search, expandedKeys, toggleExpand, onInsert }) {
   const matchesSearch = search && (

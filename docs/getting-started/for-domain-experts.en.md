@@ -2,12 +2,12 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
 
-> **v2.0.0** | Audience: DBAs, Database Administrators, Domain Experts
+> **v2.1.0** | Audience: DBAs, Database Administrators, Domain Experts
 >
 > Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 
@@ -253,7 +253,7 @@ Checked items:
 
 Custom rules must pass lint_custom_rules.py and include test data in PR.
 
-### Policy-as-Code (v2.0.0)
+### Policy-as-Code (v2.1.0)
 
 Declare `_policies` DSL in `_defaults.yaml` to automatically validate all tenant configs:
 
@@ -273,7 +273,44 @@ _policies:
 
 Run: `da-tools evaluate-policy --config-dir conf.d/ --ci`. Supports 10 operators, `when` conditionals, and wildcard targets.
 
-### Cardinality Forecasting (v2.0.0)
+### Cross-Domain Routing Profiles & Domain Policies (v2.1.0 ADR-007)
+
+When multiple tenants share the same alert routing configuration, use **Routing Profiles** to avoid duplication. Define named configurations in `_routing_profiles.yaml`; tenants reference them via `_routing_profile`:
+
+```yaml
+# _routing_profiles.yaml
+routing_profiles:
+  team-dba-global:
+    receiver:
+      type: pagerduty
+      service_key: "dba-key-123"
+    group_by: [alertname, tenant, severity]
+    repeat_interval: 1h
+
+# db-finance.yaml
+tenants:
+  db-finance:
+    _routing_profile: "team-dba-global"
+    mysql_connections: "60"
+```
+
+Four-layer merge order: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`. Tenant `_routing` fields always override profile values.
+
+**Domain Policies** validate routing compliance after merge. Define constraints in `_domain_policy.yaml`:
+
+```yaml
+# _domain_policy.yaml
+domain_policies:
+  finance:
+    tenants: [db-finance, db-audit]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+Validate: `da-tools check-routing-profiles --config-dir conf.d/`. Debug: `da-tools explain-route --config-dir conf.d/ --tenant db-finance`.
+
+### Cardinality Forecasting (v2.1.0)
 
 Proactively monitor per-tenant cardinality growth trends to prevent Cardinality Guard truncation:
 

@@ -180,6 +180,16 @@ def generate_markdown_table(stats: dict, lang: str = "zh") -> str:
     return "\n".join(lines)
 
 
+def format_summary(stats: dict) -> str:
+    """Format a badge-like one-line summary of Rule Pack statistics.
+
+    Output: "15 packs | 139R 99A | 238 rules"
+    """
+    return (f"{stats['pack_count']} packs | "
+            f"{stats['recording']}R {stats['alert']}A | "
+            f"{stats['total']} rules")
+
+
 def main():
     """CLI entry point: Rule Pack 統計單一來源產生器."""
     parser = argparse.ArgumentParser(
@@ -195,6 +205,9 @@ def main():
                         help="Generate docs/includes/rule-pack-stats[.en].md")
     parser.add_argument("--lang", choices=["zh", "en", "all"], default="zh",
                         help="Language: zh (default), en, or all")
+    parser.add_argument("--format", choices=["table", "summary"],
+                        default="table", dest="output_format",
+                        help="Output format: table (default) or summary (one-line badge)")
 
     args = parser.parse_args()
     stats = gather_stats()
@@ -202,6 +215,10 @@ def main():
 
     if args.json:
         print(json.dumps(stats, indent=2, ensure_ascii=False))
+        return
+
+    if args.output_format == "summary":
+        print(format_summary(stats))
         return
 
     if not args.json and not args.check and not args.generate:

@@ -758,7 +758,7 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
                       f"({today})")
                 continue
             else:
-                print(f"ERROR: {changelog} not found")
+                print(f"ERROR: {changelog} not found", file=sys.stderr)
                 sys.exit(1)
 
         content = changelog.read_text(encoding="utf-8")
@@ -836,7 +836,7 @@ def main():
     if args.what_if:
         versions = read_current_versions()
         if not versions:
-            print("ERROR: Cannot read current versions from source files")
+            print("ERROR: Cannot read current versions from source files", file=sys.stderr)
             sys.exit(1)
 
         all_rules = _build_rules()
@@ -913,7 +913,7 @@ def main():
     if args.check and not (args.platform or args.exporter or args.tools):
         versions = read_current_versions()
         if not versions:
-            print("ERROR: Cannot read current versions from source files")
+            print("ERROR: Cannot read current versions from source files", file=sys.stderr)
             sys.exit(1)
 
         all_rules = _build_rules()

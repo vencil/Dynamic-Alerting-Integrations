@@ -1,10 +1,14 @@
-FROM python:3.13-alpine AS base
+FROM python:3.13.2-alpine3.21 AS base
 
 # ── Metadata ────────────────────────────────────────────────────────
 LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.description="Dynamic Alerting CLI Toolkit — portable verification and migration tools" \
       org.opencontainers.image.source="https://github.com/vencil/Dynamic-Alerting-Integrations" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
+
+# ── Security: upgrade all packages for CVE fixes ───────────────────
+# CVE-2025-15467 (openssl 3.x RCE), CVE-2025-48174 (libavif overflow)
+RUN apk --no-cache upgrade
 
 # ── Dependencies ──────────────────────────────────────────────────────
 RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.7.0 croniter==6.0.0

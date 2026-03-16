@@ -39,34 +39,6 @@ from factories import populate_routing_dir  # noqa: E402
 # ── Session-scoped constant fixtures ──────────────────────────────────
 
 @pytest.fixture(scope="session")
-def rule_packs():
-    """RULE_PACKS 常數（session scope，僅載入一次）。"""
-    from scaffold_tenant import RULE_PACKS
-    return RULE_PACKS
-
-
-@pytest.fixture(scope="session")
-def command_map():
-    """COMMAND_MAP 常數（session scope，僅載入一次）。"""
-    import entrypoint
-    return entrypoint.COMMAND_MAP
-
-
-@pytest.fixture(scope="session")
-def guardrails():
-    """GUARDRAILS timing 常數（session scope，僅載入一次）。"""
-    from _lib_python import GUARDRAILS
-    return GUARDRAILS
-
-
-@pytest.fixture(scope="session")
-def receiver_types():
-    """RECEIVER_TYPES 常數（session scope，僅載入一次）。"""
-    from _lib_python import RECEIVER_TYPES
-    return RECEIVER_TYPES
-
-
-@pytest.fixture(scope="session")
 def metric_dictionary():
     """metric-dictionary.yaml 完整內容（session scope，僅載入一次）。"""
     import yaml

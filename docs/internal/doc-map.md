@@ -23,6 +23,7 @@
 | `docs/governance-security.md` (.en.md) | Platform Engineers, 安全合規 | 治理、稽核與安全合規 |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard 導覽 |
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
+| `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
 | `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
 | `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
 | `docs/interactive/tools/architecture-quiz.jsx` | Platform Engineers | Architecture Decision Quiz |
@@ -34,10 +35,12 @@
 | `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
 | `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
 | `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
+| `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |
 | `docs/interactive/tools/onboarding-checklist.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Onboarding Checklist Generator |
 | `docs/interactive/tools/platform-demo.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Platform Demo |
 | `docs/interactive/tools/playground.jsx` | Platform Engineers, Tenants | YAML Playground |
 | `docs/interactive/tools/promql-tester.jsx` | Platform Engineers, Domain Experts (DBA) | Prometheus Query Tester |
+| `docs/interactive/tools/roi-calculator.jsx` | Platform Engineers | ROI Calculator |
 | `docs/interactive/tools/rule-pack-detail.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Detail Viewer |
 | `docs/interactive/tools/rule-pack-matrix.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Comparison Matrix |
 | `docs/interactive/tools/rule-pack-selector.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Selector |
@@ -51,7 +54,7 @@
 | `docs/internal/commit-convention.md` | All | Conventional Commits Guide |
 | `docs/internal/dx-tooling-backlog.md` | All | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
-| `docs/internal/test-map.md` | All | 測試架構導覽 (Test Map) |
+| `docs/internal/test-map.md` (.en.md) | All | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
@@ -68,7 +71,6 @@
 | `docs/internal/doc-map.md` | AI Agent | 本文件（文件導覽總表） |
 | `docs/internal/tool-map.md` | AI Agent | 工具導覽（自動生成） |
 | `docs/schemas/tenant-config.schema.json` | All | Tenant YAML JSON Schema（VS Code 自動補全） |
-| `components/da-portal/README.md` | Platform Engineers, Tenants | da-portal Self-Hosted Interactive Tools Portal |
 | `rule-packs/README.md` | All | 15 Rule Packs + optional 卸載 |
 | `rule-packs/ALERT-REFERENCE.md (.en.md)` | Tenants, SREs | 96 個 Alert 含義 + 建議動作速查 |
 | `k8s/03-monitoring/dynamic-alerting-overview.json` | SRE | Grafana Dashboard |

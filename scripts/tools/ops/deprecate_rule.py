@@ -30,12 +30,26 @@ import glob
 import argparse
 import yaml
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
+from _lib_python import write_text_secure  # noqa: E402
+
 
 def load_yaml_file(path):
-    """安全載入 YAML 檔案。"""
+    """安全載入 YAML 檔案，with warning on parse error.
+
+    Delegates to ``_lib_python.load_yaml_file`` for the common path.
+    Catches ``yaml.YAMLError`` on corrupt files (which the lib version
+    intentionally does not swallow) so the deprecation workflow can
+    continue with a warning instead of aborting.
+    """
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
+        result = _lib_load_yaml(path, default={})
+        if result is None:
+            return {}
+        return result
     except (OSError, yaml.YAMLError) as e:
         print(f"  ⚠️  無法讀取 {path}: {e}")
         return None
@@ -43,11 +57,12 @@ def load_yaml_file(path):
 
 def save_yaml_file(path, data, header_comment=""):
     """安全寫入 YAML 檔案。"""
-    with open(path, 'w', encoding='utf-8') as f:
-        if header_comment:
-            f.write(header_comment)
-        yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    os.chmod(path, 0o600)
+    content = ""
+    if header_comment:
+        content += header_comment
+    content += yaml.safe_dump(data, default_flow_style=False,
+                              allow_unicode=True, sort_keys=False)
+    write_text_secure(path, content)
 
 
 def scan_for_metric(metric_key, config_dir):
@@ -203,6 +218,11 @@ def main():
                         help="實際執行下架 (預設只預覽)")
 
     args = parser.parse_args()
+
+    if not os.path.isdir(args.config_dir):
+        print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
+        sys.exit(1)
+
     mode = "執行" if args.execute else "預覽"
 
     print(f"{'='*60}")

@@ -44,10 +44,10 @@
 import sys
 import os
 import csv
+import io
 import json
 import time
 import argparse
-import urllib.parse
 from datetime import datetime, timezone
 
 import yaml
@@ -55,24 +55,10 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json  # noqa: E402
+from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant  # noqa: E402
 
-
-def query_prometheus(prom_url, promql):
-    """執行 Prometheus instant query，回傳結果向量。"""
-    url = f"{prom_url}/api/v1/query"
-    params = urllib.parse.urlencode({"query": promql})
-    full_url = f"{url}?{params}"
-
-    data, err = http_get_json(full_url)
-    if err:
-        return None, err
-
-    if data.get("status") != "success":
-        return None, data.get("error", "Unknown error")
-
-    results = data.get("data", {}).get("result", [])
-    return results, None
+# Alias for backward-compat within this module
+query_prometheus = query_prometheus_instant
 
 
 def extract_value_map(results, group_by="tenant"):
@@ -217,30 +203,30 @@ def write_csv_report(all_results, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     csv_path = os.path.join(output_dir, "validation-report.csv")
 
-    with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "Label", "Tenant", "Old Query", "New Query",
-            "Old Value", "New Value", "Delta", "Status",
-            "Timestamp",
-        ])
-        ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        for result in all_results:
-            if result is None:
-                continue
-            for d in result["diffs"]:
-                writer.writerow([
-                    result["label"],
-                    d["tenant"],
-                    result["old_query"],
-                    result["new_query"],
-                    d["old_value"],
-                    d["new_value"],
-                    d["delta"],
-                    d["status"],
-                    ts,
-                ])
-    os.chmod(csv_path, 0o600)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Label", "Tenant", "Old Query", "New Query",
+        "Old Value", "New Value", "Delta", "Status",
+        "Timestamp",
+    ])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    for result in all_results:
+        if result is None:
+            continue
+        for d in result["diffs"]:
+            writer.writerow([
+                result["label"],
+                d["tenant"],
+                result["old_query"],
+                result["new_query"],
+                d["old_value"],
+                d["new_value"],
+                d["delta"],
+                d["status"],
+                ts,
+            ])
+    write_text_secure(csv_path, "\ufeff" + buf.getvalue())
     return csv_path
 
 
@@ -321,6 +307,10 @@ class ConvergenceTracker:
     def print_status(self):
         """Print convergence status to stdout."""
         report = self.compute_report()
+        if "convergence_percentage" not in report:
+            # Early rounds or no pairs — minimal output
+            print(f"\n  Convergence: {report.get('reason', 'pending')}")
+            return report
         pct = report["convergence_percentage"]
         conv = report["converged_count"]
         total = report["total_pairs"]
@@ -424,9 +414,7 @@ def main():
                         args.output_dir, "cutover-readiness.json"
                     )
                     os.makedirs(os.path.dirname(conv_path) if os.path.dirname(conv_path) else ".", exist_ok=True)
-                    with open(conv_path, "w", encoding="utf-8") as f:
-                        json.dump(report, f, indent=2, ensure_ascii=False)
-                    os.chmod(conv_path, 0o600)
+                    write_json_secure(conv_path, report)
                     print(f"\n  Cutover readiness report: {conv_path}")
                     break
 
@@ -440,9 +428,7 @@ def main():
                 args.output_dir, "cutover-readiness.json"
             )
             os.makedirs(os.path.dirname(conv_path) if os.path.dirname(conv_path) else ".", exist_ok=True)
-            with open(conv_path, "w", encoding="utf-8") as f:
-                json.dump(final, f, indent=2, ensure_ascii=False)
-            os.chmod(conv_path, 0o600)
+            write_json_secure(conv_path, final)
             print(f"  Partial convergence report: {conv_path}")
 
         if csv_path:

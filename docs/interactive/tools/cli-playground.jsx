@@ -2,7 +2,7 @@
 title: "da-tools CLI Playground"
 tags: [cli, da-tools, docker]
 audience: ["platform-engineer"]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [wizard, onboarding-checklist, glossary]
 ---
@@ -163,7 +163,7 @@ Running validation suite...
 [✓] Threshold format     18 thresholds, all numeric strings
 [✓] Routing validation   2 receivers configured
 [✓] Duration guardrails  group_wait, repeat_interval in range
-[✓] Version consistency  v2.0.0
+[✓] Version consistency  v2.1.0
 
 All checks passed (6/6). Exit code: 0`,
     args: [],
@@ -193,6 +193,123 @@ All checks passed (6/6). Exit code: 0`,
       { name: '--namespace', label: t('Kubernetes 命名空間', 'Kubernetes Namespace'), required: true, placeholder: 'monitoring' },
       { name: '--configmap', label: t('ConfigMap 名稱', 'ConfigMap Name'), required: true, placeholder: 'alertmanager-config' },
       { name: '--dry-run', label: t('試運行 / 差異預覽', 'Dry Run / Diff Preview'), required: false, type: 'checkbox' }
+    ]
+  },
+  'explain-route': {
+    label: 'explain-route',
+    description: t('路由合併管線除錯器：四層展開 + 設定檔擴展 (ADR-007)', 'Routing merge pipeline debugger: four-layer expansion + profile (ADR-007)'),
+    category: t('文件系統工具', 'Filesystem Tools'),
+    popular: true,
+    preview: `$ da-tools explain-route --config-dir conf.d/ --tenant db-a
+
+Tenant: db-a
+  Layer 1 (_routing_defaults): group_wait=30s, repeat_interval=4h
+  Layer 2 (routing_profiles → "standard-webhook"): receiver_type=webhook
+  Layer 3 (tenant _routing): webhook_url=https://hooks.example.com/db-a
+  Layer 4 (_routing_enforced): noc_webhook_url=https://noc.example.com
+
+  Final: webhook → https://hooks.example.com/db-a (+ NOC copy)`,
+    args: [],
+    flags: [
+      { name: '--config-dir', label: t('配置目錄', 'Config Directory'), required: true, placeholder: 'conf.d/' },
+      { name: '--tenant', label: t('租戶 ID（可多次指定）', 'Tenant ID (repeatable)'), required: false, placeholder: 'e.g., db-a' },
+      { name: '--show-profile-expansion', label: t('顯示設定檔展開', 'Show Profile Expansion'), required: false, type: 'checkbox' },
+      { name: '--trace', label: t('五步路由追蹤模擬', 'Five-step route tracing simulation'), required: false, type: 'checkbox' },
+      { name: '--alertname', label: t('追蹤用告警名稱', 'Alert name for trace'), required: false, placeholder: 'HighMemoryUsage' },
+      { name: '--severity', label: t('追蹤用嚴重度', 'Severity for trace'), required: false, placeholder: 'warning' },
+      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
+    ]
+  },
+  'discover-mappings': {
+    label: 'discover-mappings',
+    description: t('自動發現 1:N 實例-租戶映射 (ADR-006)', 'Auto-discover 1:N instance-tenant mappings (ADR-006)'),
+    category: t('Prometheus API 工具', 'Prometheus API Tools'),
+    preview: `$ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics
+
+Scraping http://mariadb-exporter:9104/metrics ...
+
+Detected DB type: mariadb
+Partition labels found:
+  schema       12 values  (score: 0.85)  ★ recommended
+  tablespace    4 values  (score: 0.62)
+
+Mapping draft (YAML):
+  instance: mariadb-exporter:9104
+  db_type: mariadb
+  partition_label: schema
+  partitions:
+    - app_db
+    - user_db
+    - analytics_db
+    ...`,
+    args: [],
+    flags: [
+      { name: '--endpoint', label: t('Exporter /metrics URL', 'Exporter /metrics URL'), required: false, placeholder: 'http://exporter:9104/metrics' },
+      { name: '--prometheus', label: t('Prometheus API URL', 'Prometheus API URL'), required: false, placeholder: 'http://localhost:9090' },
+      { name: '--instance', label: t('Instance 標籤', 'Instance Label'), required: false, placeholder: 'exporter:9104' },
+      { name: '--job', label: t('Job 標籤', 'Job Label'), required: false, placeholder: 'mariadb' },
+      { name: '-o', label: t('輸出檔案', 'Output File'), required: false, placeholder: 'mapping-draft.yaml' },
+      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
+    ]
+  },
+  'drift-detect': {
+    label: 'drift-detect',
+    description: t('跨叢集配置漂移偵測：目錄級 SHA-256 比對', 'Cross-cluster config drift detection: directory-level SHA-256 comparison'),
+    category: t('文件系統工具', 'Filesystem Tools'),
+    args: [],
+    flags: [
+      { name: '--dirs', label: t('比對目錄列表', 'Directory List'), required: true, placeholder: 'cluster-a/conf.d,cluster-b/conf.d' },
+      { name: '--labels', label: t('叢集標籤', 'Cluster Labels'), required: false, placeholder: 'edge-1,edge-2' },
+      { name: '--ci', label: t('CI 模式', 'CI Mode'), required: false, type: 'checkbox' }
+    ]
+  },
+  'shadow-verify': {
+    label: 'shadow-verify',
+    description: t('Shadow Monitoring 就緒度與收斂性三階段驗證', 'Shadow Monitoring readiness & convergence 3-phase verification'),
+    category: t('Prometheus API 工具', 'Prometheus API Tools'),
+    args: [],
+    flags: [
+      { name: '--mapping', label: t('指標映射檔', 'Metric Mapping File'), required: true, placeholder: 'mapping.yaml' },
+      { name: '--prometheus', label: t('Prometheus URL', 'Prometheus URL'), required: false, placeholder: 'http://localhost:9090' },
+      { name: '--report-csv', label: t('CSV 報告輸出', 'CSV Report Output'), required: false, placeholder: 'report.csv' },
+      { name: '--readiness-json', label: t('就緒 JSON 輸出', 'Readiness JSON Output'), required: false, placeholder: 'readiness.json' }
+    ]
+  },
+  'alert-quality': {
+    label: 'alert-quality',
+    description: t('告警品質評估：計算 MTTA/MTTR/SNR 等指標', 'Alert quality scoring: calculate MTTA/MTTR/SNR metrics'),
+    category: t('Prometheus API 工具', 'Prometheus API Tools'),
+    args: [],
+    flags: [
+      { name: '--prometheus', label: t('Prometheus URL', 'Prometheus URL'), required: true, placeholder: 'http://localhost:9090' },
+      { name: '--tenant', label: t('租戶 ID', 'Tenant ID'), required: false, placeholder: 'db-a' },
+      { name: '--lookback', label: t('回溯時間', 'Lookback Duration'), required: false, placeholder: '7d' },
+      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
+    ]
+  },
+  'evaluate-policy': {
+    label: 'evaluate-policy',
+    description: t('Policy-as-Code 評估：宣告式 DSL 驗證 routing + threshold', 'Policy-as-Code evaluation: declarative DSL for routing + threshold validation'),
+    category: t('文件系統工具', 'Filesystem Tools'),
+    args: [],
+    flags: [
+      { name: '--config-dir', label: t('配置目錄', 'Config Directory'), required: true, placeholder: 'conf.d/' },
+      { name: '--policy', label: t('策略檔案', 'Policy File'), required: true, placeholder: 'policy.yaml' },
+      { name: '--ci', label: t('CI 模式', 'CI Mode'), required: false, type: 'checkbox' },
+      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
+    ]
+  },
+  'byo-check': {
+    label: 'byo-check',
+    description: t('BYO Prometheus/Alertmanager 整合前檢驗證', 'BYO Prometheus/Alertmanager integration pre-check'),
+    category: t('Prometheus API 工具', 'Prometheus API Tools'),
+    args: [
+      { name: 'target', label: t('檢查目標', 'Check Target'), required: true, placeholder: 'prometheus | alertmanager | all' }
+    ],
+    flags: [
+      { name: '--prometheus', label: t('Prometheus URL', 'Prometheus URL'), required: false, placeholder: 'http://localhost:9090' },
+      { name: '--alertmanager', label: t('Alertmanager URL', 'Alertmanager URL'), required: false, placeholder: 'http://localhost:9093' },
+      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]
   }
 };
@@ -273,7 +390,7 @@ export default function CLIPlayground() {
       cmd = 'docker run --rm ';
       if (network.network) cmd += network.network + ' ';
       cmd += `-e PROMETHEUS_URL=${network.prometheus} `;
-      cmd += 'ghcr.io/vencil/da-tools:v2.0.0 ';
+      cmd += 'ghcr.io/vencil/da-tools:v2.1.0 ';
     } else {
       cmd = 'da-tools ';
     }
@@ -555,7 +672,7 @@ export default function CLIPlayground() {
                   {isDocker && (
                     <>
                       <div>
-                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.0.0
+                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.1.0
                       </div>
                       <div>
                         <span className="font-medium text-slate-900">{t('網路:', 'Network:')}</span> {network.label}

@@ -2,12 +2,12 @@
 title: "場景：租戶完整生命週期管理"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 場景：租戶完整生命週期管理
 
-> **v2.0.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.1.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## 概述
 

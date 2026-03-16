@@ -296,7 +296,7 @@ def main():
     docs_dir = repo_root / args.docs_dir
 
     if not docs_dir.exists():
-        print(f"Error: docs directory not found: {docs_dir}")
+        print(f"Error: docs directory not found: {docs_dir}", file=sys.stderr)
         sys.exit(1)
 
     # Load ignore patterns

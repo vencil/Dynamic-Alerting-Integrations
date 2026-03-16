@@ -2,12 +2,12 @@
 title: "場景：Shadow Audit — 不遷移也能評估告警健康度"
 tags: [scenario, evaluation, shadow-audit, alert-quality]
 audience: [platform-engineer, tenant]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 場景：Shadow Audit — 不遷移也能評估告警健康度
 
-> **v2.0.0** | 相關文件：[Migration Guide](../migration-guide.md)、[Shadow Monitoring Cutover](shadow-monitoring-cutover.md)、[CLI Reference](../cli-reference.md)
+> **v2.1.0** | 相關文件：[Migration Guide](../migration-guide.md)、[Shadow Monitoring Cutover](shadow-monitoring-cutover.md)、[CLI Reference](../cli-reference.md)
 
 ## 問題
 
@@ -54,13 +54,13 @@ graph LR
 ```bash
 # 掃描全部 tenant，分析過去 30 天
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.0.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 
 # 單一 tenant + JSON 輸出（供程式處理）
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.0.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d \
   --tenant db-a \
@@ -113,7 +113,7 @@ jobs:
       - name: Run alert quality audit
         run: |
           docker run --rm --network host \
-            ghcr.io/vencil/da-tools:v2.0.0 alert-quality \
+            ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
             --prometheus ${{ secrets.PROMETHEUS_URL }} \
             --period 7d --json > report.json
       - name: Upload report

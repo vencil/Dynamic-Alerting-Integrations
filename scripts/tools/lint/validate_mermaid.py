@@ -408,7 +408,7 @@ def main():
     # Find all Markdown files
     scan_path = Path(args.path)
     if not scan_path.exists():
-        print(f"Error: Path does not exist: {args.path}")
+        print(f"Error: Path does not exist: {args.path}", file=sys.stderr)
         sys.exit(1)
 
     if scan_path.is_file():

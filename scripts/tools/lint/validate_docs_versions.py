@@ -135,7 +135,7 @@ def count_bilingual_pairs() -> int:
     """Count .en.md files across the repo (each is one bilingual pair)."""
     count = 0
     # docs/ tree
-    for f in DOCS_DIR.rglob("*.en.md"):
+    for f in _cached_rglob(DOCS_DIR,"*.en.md"):
         if f.is_file():
             count += 1
     # rule-packs/ tree
@@ -185,13 +185,36 @@ def _scan_file(filepath: Path, pattern: str, flags: int = 0) -> List[Tuple[int, 
     return matches
 
 
+# ---------------------------------------------------------------------------
+# File collection cache — avoids repeated rglob + read_text across checks
+# ---------------------------------------------------------------------------
+_FILE_CACHE: Dict[str, List[Path]] = {}
+_CONTENT_CACHE: Dict[Path, str] = {}
+_RGLOB_CACHE: Dict[str, List[Path]] = {}
+
+
+def _cached_rglob(base_dir: Path, pattern: str) -> List[Path]:
+    """Cached rglob to avoid repeated filesystem walks."""
+    cache_key = f"{base_dir}|{pattern}"
+    if cache_key not in _RGLOB_CACHE:
+        _RGLOB_CACHE[cache_key] = list(base_dir.rglob(pattern))
+    return _RGLOB_CACHE[cache_key]
+
+
 def _collect_scannable_files(extensions: Tuple[str, ...] = (".md", ".jsx"),
                              include_ci: bool = True) -> List[Path]:
-    """Collect files to scan across docs, CI workflows, and K8s manifests."""
+    """Collect files to scan across docs, CI workflows, and K8s manifests.
+
+    Results are cached to avoid repeated rglob calls across check functions.
+    """
+    cache_key = f"{extensions}|{include_ci}"
+    if cache_key in _FILE_CACHE:
+        return _FILE_CACHE[cache_key]
+
     files: List[Path] = []
     # Docs
     for ext in extensions:
-        files.extend(DOCS_DIR.rglob(f"*{ext}"))
+        files.extend(_cached_rglob(DOCS_DIR,f"*{ext}"))
     # Root READMEs
     for name in ("README.md", "README.en.md"):
         p = REPO_ROOT / name
@@ -203,9 +226,18 @@ def _collect_scannable_files(extensions: Tuple[str, ...] = (".md", ".jsx"),
                          REPO_ROOT / ".gitlab",
                          REPO_ROOT / "k8s"):
             if scan_dir.is_dir():
-                files.extend(scan_dir.rglob("*.yaml"))
-                files.extend(scan_dir.rglob("*.yml"))
+                files.extend(_cached_rglob(scan_dir, "*.yaml"))
+                files.extend(_cached_rglob(scan_dir, "*.yml"))
+
+    _FILE_CACHE[cache_key] = files
     return files
+
+
+def _read_cached(filepath: Path) -> str:
+    """Read file content with caching to avoid duplicate reads."""
+    if filepath not in _CONTENT_CACHE:
+        _CONTENT_CACHE[filepath] = filepath.read_text(encoding="utf-8")
+    return _CONTENT_CACHE[filepath]
 
 
 def check_da_tools_version(expected: str) -> List[Issue]:
@@ -214,7 +246,7 @@ def check_da_tools_version(expected: str) -> List[Issue]:
     tag_pattern = r"da-tools:v?([0-9]+\.[0-9]+\.[0-9]+)"
 
     for f in _collect_scannable_files():
-        content = f.read_text(encoding="utf-8")
+        content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
             for m in re.finditer(tag_pattern, line):
                 found_ver = m.group(1)
@@ -246,7 +278,7 @@ def check_exporter_version(expected: str) -> List[Issue]:
             continue
         if f.name in skip_names:
             continue
-        content = f.read_text(encoding="utf-8")
+        content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
             for pat, desc in patterns:
                 for m in re.finditer(pat, line):
@@ -266,8 +298,8 @@ def check_platform_version(expected: str) -> List[Issue]:
     fm_pattern = r"^version:\s*v?([0-9]+\.[0-9]+[^\s]*)"
 
     # Scan all docs/**/*.md frontmatter
-    for f in sorted(DOCS_DIR.rglob("*.md")):
-        content = f.read_text(encoding="utf-8")
+    for f in sorted(_cached_rglob(DOCS_DIR,"*.md")):
+        content = _read_cached(f)
         lines = content.splitlines()
 
         # Check if file has frontmatter
@@ -286,8 +318,8 @@ def check_platform_version(expected: str) -> List[Issue]:
                         ))
 
     # Also scan .jsx files
-    for f in sorted(DOCS_DIR.rglob("*.jsx")):
-        content = f.read_text(encoding="utf-8")
+    for f in sorted(_cached_rglob(DOCS_DIR,"*.jsx")):
+        content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
             m = re.match(fm_pattern, line)
             if m:
@@ -326,7 +358,7 @@ def check_rule_pack_counts(actual: Dict) -> List[Issue]:
     skip_basenames = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
                       "benchmarks.en.md"}
 
-    files_to_scan = list(DOCS_DIR.rglob("*.md"))
+    files_to_scan = list(_cached_rglob(DOCS_DIR,"*.md"))
     files_to_scan.extend([
         REPO_ROOT / "README.md",
         REPO_ROOT / "README.en.md",
@@ -337,7 +369,7 @@ def check_rule_pack_counts(actual: Dict) -> List[Issue]:
             continue
         if f.name in skip_basenames:
             continue
-        content = f.read_text(encoding="utf-8")
+        content = _read_cached(f)
         rel = str(f.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
@@ -364,7 +396,7 @@ def check_bilingual_badge(actual_pairs: int) -> List[Issue]:
     for f in [REPO_ROOT / "README.md", REPO_ROOT / "README.en.md"]:
         if not f.exists():
             continue
-        content = f.read_text(encoding="utf-8")
+        content = _read_cached(f)
         rel = str(f.relative_to(REPO_ROOT))
         for i, line in enumerate(content.splitlines(), 1):
             m = re.search(r"bilingual-(\d+)%20pairs", line)
@@ -520,7 +552,7 @@ def check_bilingual_number_consistency() -> List[Issue]:
 
     # Find zh/en pairs
     pairs = []
-    for zh_file in sorted(DOCS_DIR.rglob("*.md")):
+    for zh_file in sorted(_cached_rglob(DOCS_DIR,"*.md")):
         if ".en." in zh_file.name:
             continue
         if zh_file.name in skip_basenames:
@@ -574,7 +606,7 @@ def check_doc_map_coverage() -> List[Issue]:
     skip_names = {"tags.md", "CHANGELOG.md", "README-root.md", "doc-map.md",
                    "tool-map.md"}
 
-    for f in sorted(DOCS_DIR.rglob("*.md")):
+    for f in sorted(_cached_rglob(DOCS_DIR,"*.md")):
         if ".en." in f.name:
             continue
         rel = f.relative_to(REPO_ROOT)
@@ -671,7 +703,7 @@ def check_tool_count_in_docs() -> List[Issue]:
     for fpath in files_to_check:
         if not fpath.exists():
             continue
-        content = fpath.read_text(encoding="utf-8")
+        content = _read_cached(fpath)
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
@@ -719,7 +751,7 @@ def check_adr_count_in_docs() -> List[Issue]:
     for fpath in files_to_check:
         if not fpath.exists():
             continue
-        content = fpath.read_text(encoding="utf-8")
+        content = _read_cached(fpath)
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
@@ -762,7 +794,7 @@ def check_doc_file_count_in_docs() -> List[Issue]:
     for fpath in files_to_check:
         if not fpath.exists():
             continue
-        content = fpath.read_text(encoding="utf-8")
+        content = _read_cached(fpath)
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
@@ -800,7 +832,7 @@ def check_scenario_count_in_docs() -> List[Issue]:
     for fpath in files_to_check:
         if not fpath.exists():
             continue
-        content = fpath.read_text(encoding="utf-8")
+        content = _read_cached(fpath)
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
@@ -827,7 +859,7 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
         if not fpath.exists():
             continue
 
-        content = fpath.read_text(encoding="utf-8")
+        content = _read_cached(fpath)
         new_content = content
 
         if issue.check == "bilingual-count":
@@ -913,7 +945,7 @@ def check_image_tag_v_prefix() -> List[Issue]:
     for f in _collect_scannable_files():
         if not f.exists() or f.name in skip_names:
             continue
-        content = f.read_text(encoding="utf-8")
+        content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
             for m in re.finditer(bare_tag_pattern, line):
                 rel = f.relative_to(REPO_ROOT)

@@ -2,7 +2,7 @@
 title: "進階場景與測試覆蓋"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 進階場景與測試覆蓋
@@ -35,7 +35,7 @@ tenants:
 
 ## 企業級測試覆蓋矩陣 (Enterprise Test Coverage Matrix)
 
-測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，1,759 測試案例）。
+測試體系分為兩層：**E2E Scenario Tests**（K8s 叢集內端到端驗證）和 **Unit/Integration Tests**（pytest + go test，2,002+ 測試案例）。
 
 ### E2E Scenario Tests（`make test-scenario-*`）
 
@@ -77,7 +77,7 @@ v1.7.0–v2.0.0 新增大量企業功能，其測試覆蓋集中在 unit/integra
 | **Migration Engine v3** | AST 遷移引擎 | PromQL 解析、prefix injection、triage 分類、shadow mapping | 67 |
 | **Offboard & Deprecate** | 租戶下架與規則下架 | 清理流程、審計日誌、deprecation 標記 | 34 |
 
-> 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 1,759 passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。完整測試架構導覽見 [Test Map](../internal/test-map.md)。
+> 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 2,002+ passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。完整測試架構導覽見 [Test Map](../internal/test-map.md)。
 
 ### 斷言細節補充
 

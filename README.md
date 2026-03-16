@@ -2,16 +2,18 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** | **中文（當前）**
 
-![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
+![Version](https://img.shields.io/badge/version-v2.1.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
 
-多租戶動態警報平台。租戶寫 YAML，平台管規則——閾值、路由、通知、維護窗口全配置驅動，規則數不隨租戶增長。
+多租戶環境下，規則膨脹與變更瓶頸是 Prometheus 告警運維的核心痛點。本平台以 config-driven 架構解決：租戶寫 YAML，平台管規則——閾值、路由、通知、維護窗口全配置驅動，規則數不隨租戶增長。
+
+**適用場景：** 管理 10+ 租戶、多技術棧（DB / Cache / MQ / JVM）的平台團隊，需要在 Prometheus 生態中實現租戶自助、統一治理、零 PromQL 門檻的告警管理。
 
 > **不知道從哪裡開始？** 試試 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — 回答幾個問題，取得為你量身打造的閱讀路徑。
 >
@@ -126,6 +128,8 @@ make port-forward
 # Prometheus: localhost:9090 | Grafana: localhost:3000 (admin/admin) | Alertmanager: localhost:9093
 ```
 
+> **生產部署？** 上述為本地開發環境。生產環境請參考：[Helm + OCI Registry 安裝](components/threshold-exporter/README.md#部署-helm) · [GitOps 部署指南](docs/gitops-deployment.md) · [BYO Prometheus 整合](docs/byo-prometheus-integration.md)
+
 ---
 
 ## 規則包
@@ -161,7 +165,9 @@ make port-forward
 
 **租戶生命週期：** `scaffold_tenant` 配置產生 → `onboard_platform` 既有環境分析 → `migrate_rule` AST 遷移引擎 → `validate_migration` Shadow 雙軌驗證 → `cutover_tenant` 一鍵切換 → `offboard_tenant` 安全下架
 
-**日常運維：** `diagnose` / `batch_diagnose` 健康檢查 · `patch_config` 安全更新（含 `--diff`）· `check_alert` 警報狀態 · `maintenance_scheduler` 排程維護 · `generate_alertmanager_routes` 路由產生
+**日常運維：** `diagnose` / `batch_diagnose` 健康檢查 · `patch_config` 安全更新（含 `--diff`）· `check_alert` 警報狀態 · `maintenance_scheduler` 排程維護 · `generate_alertmanager_routes` 路由產生 · `explain_route` 路由偵錯（ADR-007）
+
+**路由設定檔與域策略（v2.1.0 ADR-007）：** `_routing_profiles.yaml` 定義跨租戶共用路由配置，`_domain_policy.yaml` 定義業務域合規約束。四層合併：`_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`。工具：`check_routing_profiles`（lint hook）· `explain_route`（偵錯）· JSON Schema 驗證
 
 **品質與治理：** `validate_config` 一站式驗證 · `alert_quality` 告警品質評分 · Policy-as-Code 引擎 · `cardinality_forecast` 趨勢預測 · `backtest_threshold` 歷史回測 · `baseline_discovery` 閾值建議 · `config_diff` 配置差異
 
@@ -171,13 +177,15 @@ make port-forward
 
 ## 關鍵設計決策
 
-| 決策 | 說明 |
-|------|------|
-| O(M) 規則複雜度 | `group_left` 向量匹配，規則數只與 metric 種類相關，與租戶數無關 |
-| TSDB 完整性優先 | Severity Dedup 在 Alertmanager inhibit 層實現，TSDB 保有完整 warning + critical 紀錄 |
-| Projected Volume 隔離 | 15 個 Rule Pack ConfigMap 各自獨立（`optional: true`），零 PR 衝突 |
-| Config-Driven 全鏈路 | 閾值 → 路由 → 通知 → 行為控制，全部 YAML 驅動 |
-| 安全護欄內建 | Webhook Domain Allowlist · Schema Validation · Cardinality Guard（per-tenant 500 上限） |
+| 決策 | 說明 | ADR |
+|------|------|-----|
+| O(M) 規則複雜度 | `group_left` 向量匹配，規則數只與 metric 種類相關，與租戶數無關 | — |
+| TSDB 完整性優先 | Severity Dedup 在 Alertmanager inhibit 層實現，TSDB 保有完整 warning + critical 紀錄 | [ADR-001](docs/adr/001-severity-dedup-via-inhibit.md) |
+| Sentinel Alert 三態控制 | exporter flag → sentinel alert → inhibit，可組合的 Normal / Silent / Maintenance 模式 | [ADR-003](docs/adr/003-sentinel-alert-pattern.md) |
+| Projected Volume 隔離 | 15 個 Rule Pack ConfigMap 各自獨立（`optional: true`），零 PR 衝突 | [ADR-005](docs/adr/005-projected-volume-for-rule-packs.md) |
+| Config-Driven 全鏈路 | 閾值 → 路由 → 通知 → 行為控制，全部 YAML 驅動 | — |
+| 四層路由合併 | `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`，跨租戶共用 + 域策略約束 | [ADR-007](docs/adr/007-cross-domain-routing-profiles.md) |
+| 安全護欄內建 | Webhook Domain Allowlist · Schema Validation · Cardinality Guard（per-tenant 500 上限） | — |
 
 ---
 
@@ -196,6 +204,7 @@ make port-forward
 | [Shadow Monitoring SOP](shadow-monitoring-sop.md) | 雙軌並行完整 SOP |
 | [性能基準](benchmarks.md) | 完整 benchmark 數據與方法論 |
 | [場景指南](scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
+| Day-2 運維 | `diagnose` → `alert-quality` → `patch-config` → `maintenance-scheduler`（[CLI 參考](docs/cli-reference.md)） |
 
 完整文件對照表：[doc-map.md](internal/doc-map.md) · 工具表：[tool-map.md](internal/tool-map.md) · 互動工具：[Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 

@@ -290,3 +290,130 @@ class TestDiscoverTenantsEdge:
             returncode=0, stdout=json.dumps(cm_data))
         result = bd.discover_tenants()
         assert result == ["db-a"]
+
+
+# ── main() CLI 測試 ─────────────────────────────────────────────
+
+
+class TestMainCLI:
+    """main() CLI 整合測試。"""
+
+    def test_tenants_flag(self, monkeypatch, capsys):
+        """--tenants 直接指定 tenant 清單。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "db-a,db-b",
+            "--prometheus", "http://prom:9090", "--dry-run",
+        ])
+        bd.main()
+        out = capsys.readouterr().out
+        assert "db-a" in out
+        assert "db-b" in out
+        assert "2 tenants" in out
+
+    def test_dry_run_single(self, monkeypatch, capsys):
+        """--dry-run 列出 tenant 但不執行檢查。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "db-a", "--dry-run",
+        ])
+        bd.main()
+        out = capsys.readouterr().out
+        assert "db-a" in out
+        assert "dry-run" in out.lower() or "without --dry-run" in out
+
+    def test_no_tenants_exits(self, monkeypatch):
+        """沒有 tenant 時 exit 1。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "",
+        ])
+        # Empty tenants string → discover from ConfigMap → mock empty
+        with patch.object(bd, "discover_tenants", return_value=[]):
+            with pytest.raises(SystemExit) as exc_info:
+                bd.main()
+            assert exc_info.value.code == 1
+
+    def test_json_output(self, monkeypatch, capsys):
+        """--json 輸出 JSON 格式。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "db-a",
+            "--prometheus", "http://prom:9090", "--json",
+        ])
+
+        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+            return {"tenant": tenant, "status": "healthy",
+                    "elapsed_seconds": 0.1}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant",
+                            mock_run_for_tenant)
+        bd.main()
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["health_score"] == 1.0
+        assert data["total_tenants"] == 1
+
+    def test_text_output(self, monkeypatch, capsys):
+        """預設文字輸出。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "db-a",
+            "--prometheus", "http://prom:9090",
+        ])
+
+        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+            return {"tenant": tenant, "status": "healthy",
+                    "operational_mode": "normal", "elapsed_seconds": 0.5}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant",
+                            mock_run_for_tenant)
+        bd.main()
+        out = capsys.readouterr().out
+        assert "Health Score" in out
+        assert "db-a" in out
+
+    def test_output_file(self, monkeypatch, tmp_path, capsys):
+        """--output 寫入 JSON 檔案。"""
+        out_file = tmp_path / "report.json"
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "db-a",
+            "--prometheus", "http://prom:9090",
+            "--output", str(out_file),
+        ])
+
+        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+            return {"tenant": tenant, "status": "healthy",
+                    "operational_mode": "normal", "elapsed_seconds": 0.5}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant",
+                            mock_run_for_tenant)
+        bd.main()
+        assert out_file.exists()
+        data = json.loads(out_file.read_text(encoding="utf-8"))
+        assert data["total_tenants"] == 1
+
+    def test_executor_exception(self, monkeypatch, capsys):
+        """ThreadPoolExecutor 例外被捕獲。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--tenants", "db-a",
+            "--prometheus", "http://prom:9090", "--json",
+        ])
+
+        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant",
+                            mock_run_for_tenant)
+        bd.main()
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["issue_count"] == 1
+
+    def test_auto_discover(self, monkeypatch, capsys):
+        """不指定 --tenants 時自動探索。"""
+        monkeypatch.setattr(sys, "argv", [
+            "batch_diagnose", "--prometheus", "http://prom:9090",
+            "--dry-run",
+        ])
+        monkeypatch.setattr(bd, "discover_tenants",
+                            lambda **kw: ["db-a", "db-b"])
+        bd.main()
+        out = capsys.readouterr().out
+        assert "db-a" in out
+        assert "db-b" in out

@@ -1,0 +1,34 @@
+{
+  "drift_free": false,
+  "expected_drift": 0,
+  "pair_count": 1,
+  "pairs": [
+    {
+      "expected": 0,
+      "items": [
+        {
+          "expected": false,
+          "filename": "db-new.yaml",
+          "suggestion": "Copy db-new.yaml from B to A, or remove from B if unintended: cp B/db-new.yaml A/db-new.yaml",
+          "target_sha": "SHA_PLACEHOLDER",
+          "type": "added"
+        },
+        {
+          "expected": false,
+          "filename": "db-prod.yaml",
+          "source_sha": "SHA_PLACEHOLDER",
+          "suggestion": "Review diff for db-prod.yaml between A and B: diff A/db-prod.yaml B/db-prod.yaml",
+          "target_sha": "SHA_PLACEHOLDER",
+          "type": "modified"
+        }
+      ],
+      "source": "A",
+      "target": "B",
+      "total_drift": 2,
+      "unexpected": 2
+    }
+  ],
+  "timestamp": "2025-01-15T10:00:00+00:00",
+  "total_drift": 2,
+  "unexpected_drift": 2
+}

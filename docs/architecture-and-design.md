@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -17,6 +17,9 @@ lang: zh
 - 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
 - Config-driven 配置驅動的工作流程
 - Projected Volume 與 15 個規則包 (Rule Packs) 的治理模型
+- 三態運營模式（Normal / Silent / Maintenance）與 Sentinel Alert 機制（§2.7）
+- 嚴重度 Dedup 與 Inhibit 規則設計（§2.8）
+- 動態路由生成、Routing Guardrails 與 Routing Profiles（§2.9–§2.12）
 - 高可用性 (HA) 設計
 - 未來擴展路線
 
@@ -230,6 +233,16 @@ ghi789... conf.d/db-b.yaml
 # threshold-exporter 偵測到變化，重新載入配置
 ```
 
+```mermaid
+flowchart LR
+    A["kubectl patch<br/>ConfigMap"] --> B["K8s 更新<br/>符號鏈接"]
+    B --> C{"SHA-256<br/>比對"}
+    C -->|hash 變更| D["重新載入<br/>受影響 tenant"]
+    C -->|hash 相同| E["跳過<br/>無需操作"]
+    D --> F["更新 Prometheus<br/>metrics"]
+    F --> G["da_config_reload_total<br/>+1"]
+```
+
 **為什麼 SHA-256 而不是 ModTime？**
 - Kubernetes ConfigMap 會建立符號鏈接層，ModTime 不可靠
 - 內容相同 = 雜湊相同，避免不必要的重新加載
@@ -277,7 +290,9 @@ relabel_configs:
 
 **自動化工具**：`scaffold_tenant.py --namespaces ns1,ns2` 可自動產出 N:1 relabel_configs snippet，並在 tenant YAML 中寫入 `_namespaces` 元資料欄位供工具參考（不影響 metric 邏輯）。
 
-**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](byo-prometheus-integration.md)。
+**自動化工具（ADR-006）**：`discover_instance_mappings.py` 可自動偵測 Prometheus 中的實例拓撲，`generate_tenant_mapping_rules.py` 從 `_instance_mapping.yaml` 產生 1:N 映射所需的 Recording Rules。詳見 [ADR-006](adr/006-tenant-mapping-topologies.md)。
+
+**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 和 Recording Rules 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](byo-prometheus-integration.md)。
 
 ### 2.4 多層嚴重度 (Multi-tier Severity)
 
@@ -390,6 +405,28 @@ v1.2.0 新增 **Silent Mode**，與既有的 Maintenance Mode 形成三態運營
 | Silent | 靜音 | ✅ | ✅ | ❌ | Alertmanager |
 | Maintenance | 真正維護 | ❌ | ❌ | ❌ | Prometheus (PromQL) |
 
+```mermaid
+stateDiagram-v2
+    [*] --> Normal
+    Normal --> Silent : _silent_mode: "warning" / "all"
+    Normal --> Maintenance : _state_maintenance: "enable"
+    Silent --> Normal : _silent_mode: "disable" / expires 到期
+    Maintenance --> Normal : _state_maintenance: "disable" / expires 到期
+
+    state Normal {
+        direction LR
+        note right of Normal : Alert ✅ TSDB ✅ 通知 ✅
+    }
+    state Silent {
+        direction LR
+        note right of Silent : Alert ✅ TSDB ✅ 通知 ❌\n控制層: Alertmanager inhibit
+    }
+    state Maintenance {
+        direction LR
+        note right of Maintenance : Alert ❌ TSDB ❌ 通知 ❌\n控制層: PromQL unless
+    }
+```
+
 **設計原則**：Prometheus 管「什麼該 alert」，Alertmanager 管「要不要通知」。
 
 - **Maintenance Mode**（既有）：在 PromQL 層透過 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 消滅 alert。Alert 不觸發，TSDB 無紀錄，無通知。
@@ -479,6 +516,17 @@ inhibit_rules:
 v1.2.0 新增 **Severity Dedup**，解決「critical 觸發時 warning 的 TSDB 紀錄被消滅」的問題。
 
 **設計變更**：Auto-Suppression 從 PromQL 層（`unless critical`）移至 Alertmanager 層（`inhibit_rules`）。TSDB 永遠同時記錄 warning 和 critical，dedup 只控制通知行為。
+
+```mermaid
+flowchart TD
+    A["Prometheus<br/>warning alert 觸發"] --> B["TSDB 記錄 ✅"]
+    C["Prometheus<br/>critical alert 觸發"] --> D["TSDB 記錄 ✅"]
+    B --> E{"Alertmanager<br/>inhibit_rules"}
+    D --> E
+    E -->|"critical 存在<br/>same metric_group + tenant"| F["warning 通知 ❌ 被抑制"]
+    E -->|"只有 warning"| G["warning 通知 ✅"]
+    E -->|"critical"| H["critical 通知 ✅"]
+```
 
 **Per-Tenant 控制機制**
 
@@ -629,6 +677,44 @@ _routing_enforced:
 
 `generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](byo-alertmanager-integration.md#8-platform-enforced-routing)。
 
+### 2.12 Routing Profiles 與 Domain Policies（ADR-007）
+
+當多個租戶共享相同的 on-call 團隊和通知策略時，`_routing` 區塊會大量重複。ADR-007 引入兩層機制解決此問題：
+
+**Routing Profiles**：在 `_routing_profiles.yaml` 中定義命名路由配置，租戶透過 `_routing_profile` 引用：
+
+```yaml
+# _routing_profiles.yaml
+routing_profiles:
+  team-sre-apac:
+    receiver: slack-sre-apac
+    group_by: [tenant, alertname, severity]
+    group_wait: 30s
+    repeat_interval: 4h
+
+# db-a.yaml — 租戶只需引用 profile
+tenants:
+  db-a:
+    _routing_profile: team-sre-apac
+```
+
+**Domain Policies**：在 `_domain_policy.yaml` 中定義業務域的合規約束（如金融域禁止 Slack 通知），在路由產生後驗證，不注入配置值。
+
+**四層合併流水線**：
+
+```
+_routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced
+     全域預設          團隊共享模板          租戶覆寫          NOC 不可變覆蓋
+                                                    ↓
+                                          domain_policies（驗證約束）
+```
+
+後者覆蓋前者，`_routing_enforced` 永遠最終覆蓋。Domain Policies 不修改值，僅驗證最終結果是否符合約束。
+
+**偵錯工具**：`explain_route.py --show-profile-expansion` 可顯示每一層合併的結果，定位配置來源。
+
+詳見 [ADR-007](adr/007-cross-domain-routing-profiles.md)。
+
 ---
 
 > 💡 **互動工具**
@@ -664,7 +750,7 @@ _routing_enforced:
 | Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
 | Platform | Platform | `prometheus-rules-platform` | 0 | 4 |
-| **總計** | | | **139** | **99** |
+| **總計** | | | **139** | **99** (= **238** rules) |
 
 ### 3.2 自包含三部分結構
 
@@ -724,20 +810,15 @@ groups:
           platform_summary_zh: "[Tier: {{ $labels.tier }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
 ```
 
-#### v2.0.0 Bilingual Annotations (i18n) for Alerts
+#### 雙語 Annotation (i18n)
 
-Starting with v2.0.0, Rule Packs support **bilingual annotations** to enable multi-language notifications:
+Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 
-- **`summary`** (English): Brief alert summary
-- **`summary_zh`** (Chinese): Brief alert summary in Chinese (optional)
-- **`description`** (English): Detailed explanation
-- **`description_zh`** (Chinese): Detailed explanation in Chinese (optional)
-- **`platform_summary`** (English): NOC/Platform perspective annotation (used in enforced routing §2.11)
-- **`platform_summary_zh`** (Chinese): NOC/Platform perspective annotation in Chinese (optional)
+- **`summary`** / **`summary_zh`**：告警摘要（英文 / 中文）
+- **`description`** / **`description_zh`**：詳細說明
+- **`platform_summary`** / **`platform_summary_zh`**：NOC/平台視角 annotation（用於 §2.11 enforced routing）
 
-**Alertmanager Fallback Logic:**
-
-Alertmanager templates use Go's `or` function to prefer Chinese annotations when available, with automatic fallback to English:
+**Alertmanager Fallback 邏輯**：模板使用 Go 的 `or` 函式，優先使用中文 annotation，自動 fallback 至英文：
 
 ```go
 {{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
@@ -745,21 +826,11 @@ Alertmanager templates use Go's `or` function to prefer Chinese annotations when
 {{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
 ```
 
-This pattern is applied in all receiver types (email, webhook, Slack, Teams, PagerDuty) via Alertmanager's global templates (see `k8s/03-monitoring/configmap-alertmanager.yaml`).
+此模式套用於所有 receiver type（email, webhook, Slack, Teams, PagerDuty），透過 Alertmanager 全域模板實現（見 `k8s/03-monitoring/configmap-alertmanager.yaml`）。
 
-**Backward Compatibility:**
+**向後相容**：未加 `*_zh` annotation 的 Rule Pack 自動 fallback 至英文，現有規則無需修改。新規則建議同時包含英文與中文以支援多區域部署。
 
-- Rule Packs without `*_zh` annotations continue to work — notifications automatically fall back to English
-- Existing Prometheus rules need no changes
-- New rules should include both English and Chinese for better UX in multi-region deployments
-
-**Three Pilot Rule Packs (v2.0.0):**
-
-- `rule-pack-mariadb.yaml` — 8 alerts with bilingual annotations
-- `rule-pack-postgresql.yaml` — 9 alerts with bilingual annotations
-- `rule-pack-kubernetes.yaml` — 4 alerts with bilingual annotations (Operational alerts)
-
-For full examples, see `rule-packs/` directory.
+三支先行 Rule Pack 已完成雙語：MariaDB（8 alerts）、PostgreSQL（9 alerts）、Kubernetes（4 alerts）。完整範例見 `rule-packs/` 目錄。
 
 ### 3.3 優點
 
@@ -774,13 +845,13 @@ For full examples, see `rule-packs/` directory.
 
 以下章節已獨立為專題文件，便於按角色與需求查閱：
 
-| 章節 | 專題文件 | 適用對象 |
-|------|---------|---------|
-| §4 性能分析與基準測試 | [benchmarks.md](benchmarks.md) | Platform Engineers, SREs |
-| §5–§6 治理、稽核與安全合規 | [governance-security.md](governance-security.md) | Platform Engineers, 安全與合規團隊 |
-| §7 故障排查與邊界情況 | [troubleshooting.md](troubleshooting.md) | Platform Engineers, SREs, Tenant 管理者 |
-| §8–§9 進階場景與測試覆蓋 | [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) | Platform Engineers, SREs |
-| §10 AST 遷移引擎架構 | [migration-engine.md](migration-engine.md) | Platform Engineers, DevOps |
+| 專題 | 文件 | 適用對象 |
+|------|------|---------|
+| 性能分析與基準測試 | [benchmarks.md](benchmarks.md) | Platform Engineers, SREs |
+| 治理、稽核與安全合規 | [governance-security.md](governance-security.md) | Platform Engineers, 安全與合規團隊 |
+| 故障排查與邊界情況 | [troubleshooting.md](troubleshooting.md) | Platform Engineers, SREs, Tenant 管理者 |
+| 進階場景與測試覆蓋 | [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) | Platform Engineers, SREs |
+| AST 遷移引擎架構 | [migration-engine.md](migration-engine.md) | Platform Engineers, DevOps |
 
 ---
 
@@ -880,29 +951,28 @@ spec:
 
 ## 5. 未來擴展路線 (Future Roadmap)
 
-以下為按優先序排列的技術方向。v2.0.0 已完成的項目（Alert Quality Scoring、Policy-as-Code Path A、Tenant Self-Service Portal、Cardinality Forecasting、Self-Hosted Portal Docker Image）已移至 [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md)。DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
+DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
+
+以下為尚未實作的核心功能技術方向，按成熟度分層。已完成的功能（ADR-006 1:N Mapping 工具鏈、ADR-007 四層路由 + 域策略、Policy Path A）見 CHANGELOG 和各 ADR 文件。
 
 ```mermaid
 graph LR
-    subgraph Near["近期 (已有設計基礎)"]
+    subgraph Near["近期 — 已有設計基礎"]
         FB["§5.1 Federation B<br/>Rule Pack 分層"]
-        NM["§5.2 1:N Mapping"]
-        PB["§5.3 Policy Path B<br/>(OPA)"]
-        TR["§5.4 Threshold<br/>Recommendation"]
+        PB["§5.2 Policy Path B<br/>(OPA)"]
+        CV["§5.3 Config<br/>Versioning"]
+        PR["§5.4 Portal ×<br/>Recommend 整合"]
     end
-    subgraph Mid["中期 (需客戶驗證)"]
-        CD["§5.5 Cross-Cluster<br/>Drift Detection"]
-        IR["§5.6 Incremental<br/>Reload"]
-        AC["§5.7 Alert Correlation<br/>Engine"]
-        NT["§5.8 Notification<br/>Testing"]
+    subgraph Mid["中期 — 需客戶驗證"]
+        AD["§5.5 Tenant<br/>Auto-Discovery"]
+        GD["§5.6 Dashboard<br/>as Code"]
+        TP["§5.7 Notification<br/>Template Preview"]
+        GT["§5.8 GitOps<br/>Native Mode"]
     end
-    subgraph Far["遠期 (探索方向)"]
+    subgraph Far["遠期 — 探索方向"]
         LM["§5.9 Log-to-Metric<br/>Bridge"]
-        CV["§5.10 Config<br/>Versioning"]
-        GD["§5.11 Dashboard<br/>as Code"]
-        AD["§5.12 Tenant<br/>Auto-Discovery"]
-        BS["§5.13 Backstage<br/>Plugin"]
-        RC["§5.14 ROI<br/>Calculator"]
+        AM["§5.10 Anomaly-Aware<br/>Threshold"]
+        MF["§5.11 Multi-Format<br/>Export"]
     end
 ```
 
@@ -910,145 +980,75 @@ graph LR
 
 場景 A（中央 threshold-exporter + 多邊緣 Prometheus）已有[架構文件](federation-integration.md)。場景 B 需要邊緣 Prometheus 透過 federation 或 remote-write 將 recording rule 結果送到中央。Rule Pack 需拆成兩層——邊緣用 Part 1（data normalization），中央用 Part 2 + Part 3（threshold normalization + alerts）。
 
-**技術切入點**：`generate_rule_pack_readme.py` 已有 Part 分類資訊，可延伸產出 `edge-rules.yaml` / `central-rules.yaml` 分割檔。需搭配 `federation_check.py` 驗證分層後的 recording rule 引用完整性。
+**技術切入點**：`generate_rule_pack_readme.py` 已有 Part 分類資訊，可延伸產出 `edge-rules.yaml` / `central-rules.yaml` 分割檔。需搭配 `federation_check.py` 驗證分層後的 recording rule 引用完整性。與 ADR-006 1:N mapping 結合，驗證邊緣/中央分層架構下的 recording rule 引用完整性。
 
-### 5.2 1:N Tenant Mapping 進階支援
+### 5.2 Policy-as-Code Path B：OPA/Rego 整合
 
-一個 Namespace 內多個邏輯 Tenant（透過 Service annotation/Pod label 區分）。需要 `scaffold_tenant.py --shared-namespace --tenant-source annotation` 模式及 `_tenant_mappings` 配置 section。目前 §2.3 已有 relabel 範例，工具化待需求確認。
+Path A（內建 DSL）已於 v2.1.0 實作（`policy_engine.py` + `check_routing_profiles.py` + `domain_policy.yaml`），適合輕量場景。對於已投資 OPA 生態系的企業用戶，需要將 tenant 配置驗證納入既有 OPA 治理流程。
 
-### 5.3 Policy-as-Code Path B：OPA/Rego 整合
+新增 `policy_opa_bridge.py` 工具，將 tenant YAML 轉為 OPA input JSON，呼叫 OPA REST API 或本地 `opa eval`，將 OPA 回應轉換回本平台的 `Violation` 格式。可與 `validate_config.py` Check 9 整合，讓 Path A/B 共存互補。`policy_engine.py` 的 `PolicyResult` / `Violation` 資料模型可直接復用。ADR-007 的域策略也可由安全團隊改用 Rego 定義，Profile 繼承鏈（profile extends another profile）亦可在此框架下實現。
 
-**動機**：Path A（內建 DSL）已於 v2.0.0 實作，適合輕量場景。對於已投資 OPA 生態系的企業用戶，需要將 tenant 配置驗證納入既有 OPA 治理流程。
+### 5.3 Tenant Config Versioning & Rollback（配置版本控制與回滾）
 
-**做法**：新增 `policy_opa_bridge.py` 工具，將 tenant YAML 轉為 OPA input JSON，呼叫 OPA REST API 或本地 `opa eval`，將 OPA 回應轉換回本平台的 `Violation` 格式。可與 `validate_config.py` Check 9 整合，讓 Path A/B 共存互補。
+config-dir 的變更透過 Git 管理，但 runtime 端缺乏細粒度的版本追蹤和快速回滾能力。threshold-exporter 在每次 reload 成功後，保留前 N 版的配置快照（in-memory ring buffer），新增 `/admin/rollback?version=N` API 觸發回滾。`da-tools config-history` 查詢歷史 reload 事件及對應的 config hash。v2.1.0 的 incremental reload、per-file hash cache 和 mtime guard 已為此奠定基礎——只需在 mtime guard 通過時額外 snapshot 當前 mergedConfig。
 
-**技術切入點**：`policy_engine.py` 的 `PolicyResult` / `Violation` 資料模型可直接復用。需定義 Rego 範本庫（`rego/` 目錄）對應平台常見檢查場景。
+### 5.4 Threshold Recommendation × Self-Service Portal 整合
 
-### 5.4 Threshold Recommendation Engine（閾值推薦引擎）
+Portal 的 Alert Preview tab 整合「推薦值」參考線。呼叫 `threshold-recommend --json` 輸出，在滑桿旁顯示推薦值標記，「Apply Recommendation」按鈕直接更新 YAML 中的閾值，信心等級低於 MEDIUM 時顯示警告。Portal 的 routing profile 驗證和範例切換 UI 已完成，推薦值整合可復用相同 tab 架構。
 
-**動機**：新 tenant onboarding 時，常見問題是「閾值該設多少？」。目前依賴經驗值或文件範例，缺乏數據驅動的建議機制。
+### 5.5 Tenant Auto-Discovery（租戶自動發現）
 
-**做法**：基於 Prometheus 歷史指標（如 `container_cpu_usage_seconds_total`），計算 P95/P99 百分位數，搭配當前閾值產生建議。利用已有的 `alert_quality.py` Noise Score 指標，辨識設定過低（頻繁觸發）或過高（從未觸發）的閾值。
+目前新租戶上線需要手動建立 tenant YAML（即使 `scaffold_tenant.py` 已大幅簡化流程）。對於 Kubernetes-native 環境，可根據 namespace label（如 `dynamic-alerting.io/tenant: "true"`）自動註冊。
 
-**技術切入點**：
-- `da-tools threshold-recommend --prometheus URL --tenant db-a`
-- 輸出：每個 metric 的建議閾值 + 信心區間 + 當前值比較
-- 與 Self-Service Portal 整合：在 Alert Preview tab 新增「推薦值」參考線
+推薦 sidecar 模式：獨立 sidecar 定期掃描 namespace label，產生 tenant YAML 寫入 config-dir，由既有 Directory Scanner 機制載入。此方案不改動 exporter 核心，且 config-dir 中的明確配置永遠優先於 auto-discovery 結果。需要 allowlist/denylist 機制避免系統 namespace 被誤註冊。`discover_instance_mappings.py` 可作為 sidecar 內的拓撲偵測元件。
 
-### 5.5 Cross-Cluster Drift Detection（跨叢集漂移偵測）
+### 5.6 Grafana Dashboard as Code（Dashboard 程式化管理）
 
-**動機**：Assembler Controller（§2.10 已實作）解決了單叢集的 CRD → YAML 翻譯。但在多叢集部署中，各叢集 config-dir 的實際內容可能因部署時序、人為操作而產生漂移。
+`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。每次 tenant onboarding 自動完成，消除手動遺漏。
 
-**做法**：
+### 5.7 Notification Template Previewer（通知模板預覽）
 
-```
-Cluster-A config-dir ──┐
-Cluster-B config-dir ──┤── drift_detect.py ──► diff report + reconcile action
-Cluster-C config-dir ──┘
-```
+新增 JSX 互動工具，輸入 alert name / severity / label → 即時渲染 Slack Card、Teams Adaptive Card、PagerDuty Event 的預覽。搭配 `test-notification --dry-run --json` 輸出，展示每個 receiver 的完整 payload。未來可擴展為 template editor，自定義通知內容格式。亦列在 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
-- **快照比對**：定期從各叢集擷取 config-dir 的 SHA-256 manifest（`assemble_config_dir.py --manifest` 已支援），跨叢集比對。
-- **漂移分類**：區分「預期差異」（per-cluster override）與「意外漂移」（部署失敗殘留）。
-- **自動修復**：dry-run 預覽後可選擇性 reconcile，搭配 `config_diff.py` 產出變更明細。
+### 5.8 GitOps Native Mode（GitOps 原生模式）
 
-### 5.6 Incremental Hot-Reload（增量熱載入）
+目前 config-dir 透過 ConfigMap projected volume 掛載，變更需經 `kubectl apply` 或 Helm upgrade。GitOps Native Mode 讓 threshold-exporter 直接 watch Git repository（透過 polling 或 webhook），省去 ConfigMap 中間層。
 
-**動機**：目前 threshold-exporter 的 SHA-256 reload 是全量重載——任一檔案變更觸發所有 tenant 重新解析。在千級租戶規模下，reload latency 會隨 tenant 數線性增長。
+設計要點：exporter 新增 `--config-source git --git-repo URL --git-branch main --git-path configs/` 啟動參數，內建 shallow clone + pull 機制，復用既有 Directory Scanner 的 hash 比對和 incremental reload 路徑。與 ArgoCD/Flux 的整合點是：Git 作為 single source of truth，但 exporter 不依賴 ArgoCD 的 sync 週期。mtime guard + incremental merge 可直接復用，git pull 後觸發與 ConfigMap watch 相同的 reload path。
 
-**做法**：維護 per-file SHA-256 index，reload 時只重新解析有變更的檔案。需要在 Go 端改造 `config.Load()` 為 incremental 模式，保留完整的 tenant registry 在記憶體中做 delta merge。
-
-**風險**：delta merge 的一致性保證比全量重載複雜。需要完善的 benchmark 對比（`make benchmark` 已有 reload-bench 基礎），確認增量模式在各規模下皆不退化。
-
-### 5.7 Alert Correlation Engine（告警關聯分析）
-
-**動機**：多 tenant 環境中，同一根因事件常觸發跨 tenant 的多個告警（例如底層儲存異常同時影響 db-a、db-b 的 IO 指標）。現有 inhibit 機制僅處理同一 tenant 內的嚴重度去重，缺乏跨 tenant / 跨指標的關聯分析。
-
-**做法**：
-- **時間窗口聚合**：在 Alertmanager webhook receiver 後端收集告警，以可配置的時間窗口（如 5min）聚合。
-- **關聯規則**：基於 tenant topology（同 namespace、同 node pool）和時間重疊度，計算告警之間的關聯分數。
-- **根因推斷**：當關聯分數超過閾值時，合併為單一事件，標註最可能的根因告警。
-- **輸出**：Correlation Report（`da-tools alert-correlate`），可嵌入 Grafana dashboard 或 webhook 通知。
-
-### 5.8 Multi-Channel Notification Testing（多通道通知測試）
-
-**動機**：tenant 配置 routing 後，常見的問題是「配完了但不知道 webhook URL 是否正確、Slack token 是否有效」。目前只能等真正的告警觸發才能驗證。
-
-**做法**：`da-tools test-notification --config-dir conf.d/ --tenant db-a` 對該 tenant 配置的所有 receiver 發送測試訊息，回報每個通道的連通性。需遵循 rate limit 和 dry-run 安全措施。
+**取捨**：引入 Git 客戶端依賴增加攻擊面和映像體積。可用 init container + shared volume 模式（git-sync sidecar）作為低侵入替代。
 
 ### 5.9 Log-to-Metric Bridge（日誌轉指標橋接）
 
-本平台的設計邊界是 **Prometheus metrics 層**，不直接處理日誌。對於需要基於日誌觸發警報的場景（如 Oracle ORA-600、MySQL slow query log），推薦的生態系解法：
+本平台的設計邊界是 Prometheus metrics 層，不直接處理日誌。推薦的生態系解法：`Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理`。此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力。若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
 
-```
-Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理
-```
+### 5.10 Anomaly-Aware Dynamic Threshold（異常感知動態閾值）
 
-此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力，而不需要在核心架構中引入日誌處理邏輯。未來若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
+目前 `threshold-recommend` 基於統計分位數推薦靜態閾值。進階方向是讓 threshold-exporter 支援 `_threshold_mode: adaptive` 配置，結合 Prometheus 的滑動窗口統計（如 `quantile_over_time`），動態調整閾值上下界。
 
-### 5.10 Tenant Config Versioning & Rollback（配置版本控制與回滾）
+核心概念：tenant YAML 定義基線策略（如 `p95 + 2σ`），exporter 週期性查詢 Prometheus 計算動態值，產出 `user_threshold_dynamic` metric。Recording rule 選擇 `max(user_threshold, user_threshold_dynamic)` 作為最終閾值。此設計讓靜態閾值作為安全下限（floor），動態閾值處理季節性波動。
 
-**動機**：config-dir 的變更透過 Git 管理，但在 runtime 端缺乏細粒度的版本追蹤和快速回滾能力。當 hot-reload 載入了有問題的配置時，需要能一鍵恢復到上一個已知正常的版本。
+**風險**：exporter 直接查詢 Prometheus 引入循環依賴和延遲。替代方案是將計算邏輯放在 recording rule 層（純 PromQL），exporter 僅輸出策略參數（窗口大小、分位數、σ 倍數）。`threshold_recommend.py` 已有分位數計算邏輯，可作為 adaptive mode 的離線參考實作。
 
-**做法**：
-- threshold-exporter 在每次 reload 成功後，保留前 N 版的配置快照（in-memory 或本地檔案）。
-- 新增 `/admin/rollback?version=N` API，觸發回滾。
-- `da-tools config-history --prometheus URL` 查詢歷史 reload 事件及對應的 config hash。
+### 5.11 Multi-Format Export（多格式匯出）
 
-### 5.11 Grafana Dashboard as Code（Dashboard 程式化管理）
+將平台配置和分析結果匯出為其他監控系統的原生格式，降低遷移門檻和鎖定風險。
 
-**動機**：平台已有完整的告警規則管理，但 Grafana dashboard 仍是手動維護。tenant onboarding 時需手動建立 dashboard，容易遺漏。
+方向包括：`da-tools export --format datadog` 將 tenant 閾值和 alert rule 轉換為 Datadog Monitor JSON；`--format terraform` 產出 Terraform HCL 用於 cloud-native 監控（如 AWS CloudWatch Alarms）。這讓平台成為「告警策略的抽象層」——用統一的 YAML schema 管理閾值，部署到不同監控後端。
 
-**做法**：`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。
-
-### 5.12 Tenant Auto-Discovery（租戶自動發現）
-
-**動機**：目前新租戶上線需要手動建立 tenant YAML（即使只用預設值，仍需 `tenants: { db-new: {} }`），否則 threshold-exporter 不會產生該租戶的 threshold metric，`group_left` 向量匹配無法生效。對於 Kubernetes-native 環境，若能根據 namespace label 自動註冊租戶，可進一步降低 onboarding 門檻。
-
-**做法**：
-
-- **Namespace Label Convention**：定義標準 label（如 `dynamic-alerting.io/tenant: "true"`），threshold-exporter 透過 K8s API watch 帶有該 label 的 namespace，自動以 `_defaults.yaml` 建立 in-memory tenant entry。
-- **Sidecar 模式（替代方案）**：獨立 sidecar 定期掃描 namespace label，產生 tenant YAML 寫入 config-dir，由既有 Directory Scanner 機制載入。此方案不改動 exporter 核心。
-- **Override 優先**：若 config-dir 中已存在該 tenant 的明確 YAML，以明確配置為準（auto-discovery 不覆蓋）。
-
-**風險**：auto-discovery 會模糊「哪些 namespace 是受管租戶」的邊界。需要 allowlist/denylist 機制（如 `_auto_discovery.excludeNamespaces: [kube-system, monitoring]`）避免系統 namespace 被誤註冊。
-
-### 5.13 Backstage Plugin（開發者入口整合）
-
-**動機**：已投資 [Backstage](https://backstage.io/) 作為內部開發者入口的企業，期望將告警管理納入既有的 service catalog 體驗，而非要求團隊切換到獨立的 UI 或 CLI。
-
-**做法**：
-
-- **Minimal Plugin**：Backstage frontend plugin，在 Service Entity 頁面新增 "Dynamic Alerting" tab，顯示該 tenant 的當前閾值、告警品質分數、最近告警歷史。
-- **資料來源**：透過 Prometheus API 讀取 threshold metric + `alert_quality.py` JSON 輸出，不需要額外後端服務。
-- **進階整合**：支援從 Backstage UI 發起 `scaffold` / `patch-config`（需 Backstage backend proxy 轉發至 `da-tools` container）。
-
-**前置條件**：需要穩定的 REST API 介面（目前 threshold-exporter 僅暴露 `/metrics`），或透過 Prometheus query 間接取得資料。建議先完成 §5.4 Threshold Recommendation，讓 plugin 有更豐富的資料可呈現。
-
-### 5.14 ROI Calculator（採用效益試算器）
-
-**動機**：平台評估階段，決策者需要量化「導入 Dynamic Alerting 能帶來多少效益」。目前只有定性描述（Problems Solved 章節），缺乏可互動的數字化試算。
-
-**做法**：
-
-- **互動工具**：新增 JSX 互動工具（納入 `tool-registry.yaml`），輸入當前租戶數、規則數、平均變更時間、on-call 人數等參數，計算：
-  - 規則維護時間節省（基於 O(N×M) → O(M) 模型）
-  - 告警風暴減少比例（基於 auto-suppression + maintenance mode 預期效果）
-  - 上線時間縮短（基於 scaffold + migration engine 自動化比例）
-- **資料驅動**：若已執行 Shadow Audit（`alert_quality.py`），可匯入實際品質分數，讓試算更貼近真實環境。
-
-**定位**：此為採用決策輔助工具，非核心平台功能。優先順序低於技術 roadmap 項目。
+**前提**：需先完成 metric-dictionary.yaml 與各監控系統的 metric 名稱對照表。`onboard_platform.py` 的 metric mapping 邏輯可復用。
 
 ---
 
 ## 相關資源
 
 - [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
-- [ADR 總覽](adr/README.md) — 5 個架構決策紀錄
+- [ADR 總覽](adr/README.md) — 7 個架構決策紀錄
 - [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
 - [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
 - [規則包目錄](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
 
 ---
 
-**文件版本：** v2.0.0 — 2026-03-14
+**文件版本：** v2.1.0 — 2026-03-17
 **維護者：** Platform Engineering Team

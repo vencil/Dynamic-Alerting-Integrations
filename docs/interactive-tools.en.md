@@ -2,7 +2,7 @@
 title: "Interactive Tools"
 tags: [interactive, tools, react]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 
@@ -41,6 +41,14 @@ Recommends applicable Rule Packs based on technology stack (MySQL / PostgreSQL /
 Select a da-tools subcommand, fill in parameters, and automatically generate a complete `docker run` command ready to copy.
 
 **Use case:** Quickly building correct Docker execution commands without memorizing the format.
+
+## ROI Calculator
+
+**File:** `docs/interactive/tools/roi-calculator.jsx`
+
+Adoption benefit estimator — input organization scale (tenant count, Rule Pack count, on-call staff) and current operational costs (config change time, alert storm frequency, manual onboarding time) to instantly calculate three benefit dimensions: Rule maintenance time reduction from O(N×M) to O(M), alert storm auto-suppression rate, and onboard automation speedup. Supports importing actual `alert_quality.py --json` data for more accurate projections.
+
+**Use case:** Platform evaluation phase — presenting quantifiable TCO savings to decision-makers.
 
 ---
 

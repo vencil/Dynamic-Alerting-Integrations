@@ -2,15 +2,15 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 
 # da-tools CLI Reference
 
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
-> **容器映像**：`ghcr.io/vencil/da-tools:v2.0.0`
-> **版本**：v2.0.0（與平台版本同步）
+> **容器映像**：`ghcr.io/vencil/da-tools:v2.1.0`
+> **版本**：v2.1.0（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
 
@@ -36,7 +36,7 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 
 ```bash
 # 從 OCI registry 拉取（需要 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:v2.0.0
+docker pull ghcr.io/vencil/da-tools:v2.1.0
 
 # 本地建構（開發用）
 cd components/da-tools/app && ./build.sh v1.11.0
@@ -45,8 +45,8 @@ cd components/da-tools/app && ./build.sh v1.11.0
 ### 查看說明
 
 ```bash
-docker run --rm ghcr.io/vencil/da-tools:v2.0.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.0.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v2.1.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.1.0 --version
 da-tools <command> --help
 ```
 
@@ -95,6 +95,8 @@ da-tools <command> --help
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |
 | `grafana-import` | Grafana Dashboard ConfigMap 匯入（sidecar 自動掛載） | `--dashboard <file>` 或 `--verify` |
 | `alert-quality` | 警報品質評估（4 指標、三級評分、CI gate） | `--prometheus <url>` |
+| `alert-correlate` | 告警關聯分析（時間窗口聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
+| `drift-detect` | 跨叢集配置漂移偵測（目錄級 SHA-256 比對） | `--dirs <list>` |
 | `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | `--prometheus <url>` |
 
 ### 配置生成工具
@@ -120,6 +122,10 @@ da-tools <command> --help
 | `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
+| `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
+| `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
+| `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
+| `discover-mappings` | 自動發現 1:N 實例-租戶映射（掃描 exporter /metrics，ADR-006） | `--endpoint <url>` 或 `--prometheus <url>` |
 
 ---
 
@@ -843,6 +849,95 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 
 ---
 
+#### alert-correlate
+
+分析 Alertmanager 告警並進行時間窗口聚類，計算關聯分數並推斷根因。支援線上（Prometheus API）和離線（JSON 檔案）兩種模式。
+
+**用法**
+
+```bash
+da-tools alert-correlate --prometheus <URL> [--window <MINUTES>] [--lookback <DURATION>] [--min-score <FLOAT>] [--json] [--markdown] [--ci]
+da-tools alert-correlate --input <FILE> [--window <MINUTES>] [--min-score <FLOAT>] [--json]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--prometheus <URL>` | Prometheus 端點（線上模式） | `$PROMETHEUS_URL` |
+| `--input <FILE>` | Alertmanager JSON 檔案（離線模式） | — |
+| `--window <MINUTES>` | 時間窗口大小（分鐘） | `10` |
+| `--lookback <DURATION>` | 回溯時間範圍 | `1h` |
+| `--min-score <FLOAT>` | 最低關聯分數閾值 | `0.3` |
+| `--json` | JSON 輸出 | — |
+| `--markdown` | Markdown 報告輸出 | — |
+| `--ci` | CI 模式（有 critical 群組時 exit 1） | — |
+
+**範例**
+
+```bash
+# 基本用法 — 查詢 Prometheus 當前告警
+da-tools alert-correlate --prometheus http://prometheus:9090
+
+# 離線分析 JSON 檔案
+da-tools alert-correlate --input alerts.json --window 15
+
+# CI gate — 有 critical 告警群組時失敗
+da-tools alert-correlate --prometheus http://prometheus:9090 --ci
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功（CI 模式：無 critical 告警群組） |
+| `1` | CI 模式：存在 critical 嚴重度的告警群組 |
+
+---
+
+#### drift-detect
+
+比對多個 config-dir 目錄（來自不同叢集或 GitOps 分支），偵測意外的配置漂移。使用 SHA-256 manifest 進行目錄級比對。
+
+**用法**
+
+```bash
+da-tools drift-detect --dirs <DIR1>,<DIR2>[,<DIR3>...] [--labels <L1>,<L2>,...] [--ignore-prefix <PREFIX>] [--json] [--markdown] [--ci]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--dirs <LIST>` | 以逗號分隔的配置目錄（至少 2 個） | — |
+| `--labels <LIST>` | 對應每個目錄的標籤 | `dir-1,dir-2,...` |
+| `--ignore-prefix <PREFIX>` | 視為預期漂移的檔案前綴 | `_cluster_,_local_` |
+| `--json` | JSON 輸出 | — |
+| `--markdown` | Markdown 報告輸出 | — |
+| `--ci` | CI 模式（有非預期漂移時 exit 1） | — |
+
+**範例**
+
+```bash
+# 比對兩個叢集的配置
+da-tools drift-detect --dirs cluster-a/conf.d,cluster-b/conf.d --labels prod-a,prod-b
+
+# 三叢集 pairwise 比對，JSON 輸出
+da-tools drift-detect --dirs a/conf.d,b/conf.d,c/conf.d --json
+
+# CI gate — 有非預期漂移時失敗
+da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 無非預期漂移 |
+| `1` | CI 模式：偵測到非預期漂移 |
+
+---
+
 #### cardinality-forecast
 
 分析 per-tenant 時序基數增長趨勢，預測何時觸及上限。使用純 Python 線性回歸（無 numpy 依賴）。
@@ -1253,7 +1348,7 @@ da-tools deprecate <metric_keys...> [options]
 # 標記多個指標為 disabled
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.0.0 \
+  ghcr.io/vencil/da-tools:v2.1.0 \
   deprecate old_metric_1 old_metric_2 \
     --reason "Replaced by new_metric; migration complete"
 ```
@@ -1506,6 +1601,184 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
 
+#### threshold-recommend
+
+閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值，整合 Noise Score 調整推薦方向。
+
+**用法**
+
+```bash
+da-tools threshold-recommend --config-dir <PATH> [--prometheus <URL>] [--tenant <NAME>] [--lookback <DURATION>] [--min-samples <N>] [--dry-run] [--json] [--markdown]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir` | conf.d/ 目錄路徑（必填） | - |
+| `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` 或 `http://localhost:9090` |
+| `--tenant` | 只分析指定租戶（省略則分析全部） | 全部 |
+| `--lookback` | 歷史資料回溯期間 | `7d` |
+| `--min-samples` | 最低樣本數門檻（不足時降低信心等級） | `100` |
+| `--dry-run` | 僅顯示 PromQL 查詢，不實際執行 | - |
+| `--json` | JSON 輸出 | - |
+| `--markdown` | Markdown 表格輸出 | - |
+
+**信心等級**
+
+| 等級 | 樣本數 |
+|------|--------|
+| HIGH | ≥ 1000 |
+| MEDIUM | ≥ 100（或 `--min-samples`） |
+| LOW | < 100 |
+
+**範例**
+
+```bash
+# 推薦所有租戶閾值
+da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus:9090
+
+# 指定租戶，14 天回溯
+da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus:9090 --tenant db-a --lookback 14d
+
+# 乾跑：只顯示 PromQL
+da-tools threshold-recommend --config-dir conf.d/ --dry-run
+
+# JSON 輸出
+da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus:9090 --json
+```
+
+#### test-notification
+
+多通道通知連通性測試 — 驗證所有已配置 receiver 的可達性，報告連通性狀態。
+
+**用法**
+
+```bash
+da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir` | conf.d/ 目錄路徑（必填） | - |
+| `--tenant` | 只測試指定租戶（省略則測試全部） | 全部 |
+| `--dry-run` | 僅驗證 URL 格式，不實際發送 | - |
+| `--json` | JSON 輸出 | - |
+| `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
+| `--timeout` | 每個 receiver 的連線逾時秒數 | `10` |
+| `--rate-limit` | 每次測試之間的等待秒數 | `0.5` |
+
+**支援的 Receiver 類型**
+
+`webhook`、`slack`、`teams`、`pagerduty`、`rocketchat`、`email`（SMTP 連通性檢查）
+
+**範例**
+
+```bash
+# 測試所有租戶的 receiver
+da-tools test-notification --config-dir conf.d/
+
+# 只測試特定租戶
+da-tools test-notification --config-dir conf.d/ --tenant db-a
+
+# 乾跑模式（僅驗證 URL 格式）
+da-tools test-notification --config-dir conf.d/ --dry-run
+
+# CI gate
+da-tools test-notification --config-dir conf.d/ --ci
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 所有 receiver 連通正常（或非 CI 模式） |
+| `1` | CI 模式：任一 receiver 連通失敗 |
+
+#### explain-route
+
+路由合併管線除錯器 — 顯示每個 tenant 的四層路由合併展開（ADR-007），包括 `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`。
+
+**用法**
+
+```bash
+da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir` | 設定目錄路徑 | (必填) |
+| `--tenant` | 只顯示指定 tenant（可多次指定） | (全部) |
+| `--show-profile-expansion` | 顯示所有路由設定檔的展開與引用關係 | `false` |
+| `--json` | 以 JSON 格式輸出 | `false` |
+
+**範例**
+
+```bash
+# 顯示所有 tenant 的路由合併展開
+da-tools explain-route --config-dir conf.d/
+
+# 只看特定 tenant
+da-tools explain-route --config-dir conf.d/ --tenant db-a
+
+# 顯示設定檔引用關係（哪些 profile 被誰引用）
+da-tools explain-route --config-dir conf.d/ --show-profile-expansion
+
+# JSON 輸出（適合管線整合）
+da-tools explain-route --config-dir conf.d/ --json
+```
+
+---
+
+#### discover-mappings
+
+自動發現 1:N 實例-租戶映射 — 掃描 exporter `/metrics` 端點或查詢 Prometheus API，解析 partition label 候選值（schema、tablespace、datname 等），依適用性排名後產生 `_instance_mapping.yaml` 草稿（ADR-006）。
+
+**用法**
+
+```bash
+da-tools discover-mappings --endpoint <URL> [-o <FILE>] [--json]
+da-tools discover-mappings --prometheus <URL> --instance <INST> [--job <JOB>] [-o <FILE>] [--json]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--endpoint` | 直接掃描的 exporter /metrics URL | (與 --prometheus 二擇一) |
+| `--prometheus` | Prometheus API URL | (與 --endpoint 二擇一) |
+| `--instance` | Prometheus 中的 instance 標籤 | (搭配 --prometheus 使用) |
+| `--job` | Prometheus 中的 job 標籤（縮小查詢範圍） | (選填) |
+| `-o`, `--output` | 輸出檔案路徑（預設 stdout） | stdout |
+| `--json` | 以 JSON 格式輸出 | `false` |
+
+**範例**
+
+```bash
+# 直接掃描 exporter
+da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics
+
+# 透過 Prometheus API 查詢
+da-tools discover-mappings --prometheus http://prometheus:9090 --instance mariadb-exporter:9104
+
+# 輸出到檔案
+da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics -o mapping-draft.yaml
+
+# JSON 輸出
+da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --json
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功發現 partition label 並產生映射草稿 |
+| `1` | 無法連線或未發現合適的 partition label |
+
 ---
 
 ## 環境變數
@@ -1533,7 +1806,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.0.0
+          image: ghcr.io/vencil/da-tools:v2.1.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

@@ -2,12 +2,12 @@
 title: "Platform Engineer Quick Start Guide"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Platform Engineer Quick Start Guide
 
-> **v2.0.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
+> **v2.1.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
 > Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md)
 
@@ -149,6 +149,42 @@ tenants:
     mysql_connections: "70"     # Overrides profile value
 ```
 
+### Configuring Routing Profiles & Domain Policies (v2.1.0 ADR-007)
+
+When multiple tenants share the same routing configuration, create `_routing_profiles.yaml` to define named routing profiles:
+
+```yaml
+# conf.d/_routing_profiles.yaml
+routing_profiles:
+  team-sre-apac:
+    receiver:
+      type: slack
+      api_url: "https://hooks.slack.com/sre-apac"
+    group_wait: 30s
+    repeat_interval: 4h
+  team-dba-global:
+    receiver:
+      type: pagerduty
+      service_key: "dba-key-123"
+    repeat_interval: 1h
+```
+
+Tenants reference profiles via `_routing_profile`. Four-layer merge order: `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`.
+
+**Domain Policies** define business-domain compliance constraints in `_domain_policy.yaml` (e.g., finance domain forbids Slack):
+
+```yaml
+# conf.d/_domain_policy.yaml
+domain_policies:
+  finance:
+    tenants: [db-finance, db-audit]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+Validate: `da-tools check-routing-profiles --config-dir conf.d/`. Debug: `da-tools explain-route --config-dir conf.d/ --tenant db-finance`. JSON Schema available in `docs/schemas/` for VS Code validation.
+
 ### Setting Up Webhook Domain Allowlist
 
 Restrict webhook receiver target domains:
@@ -180,7 +216,7 @@ Checked items:
 - Policy checks pass
 - Version consistency
 
-### Alert Quality Scoring (v2.0.0)
+### Alert Quality Scoring (v2.1.0)
 
 ```bash
 # Scan all tenants for alert quality (Noise / Stale / Latency / Suppression)
@@ -190,7 +226,7 @@ da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
 da-tools alert-quality --prometheus http://localhost:9090 --ci --min-score 60
 ```
 
-### Policy-as-Code Validation (v2.0.0)
+### Policy-as-Code Validation (v2.1.0)
 
 ```bash
 # Evaluate all tenants against _policies DSL in _defaults.yaml
@@ -200,7 +236,7 @@ da-tools evaluate-policy --config-dir conf.d/
 da-tools evaluate-policy --config-dir conf.d/ --ci
 ```
 
-### Cardinality Forecasting (v2.0.0)
+### Cardinality Forecasting (v2.1.0)
 
 ```bash
 # Predict per-tenant cardinality growth trend and days-to-limit

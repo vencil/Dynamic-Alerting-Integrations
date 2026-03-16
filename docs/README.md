@@ -2,7 +2,7 @@
 title: "文件導覽"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 文件導覽
@@ -94,31 +94,9 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 
 ## 工具速查
 
-`scripts/tools/` 中的 22 個工具，快速查找功能與用法。
+da-tools 容器封裝 23 個 CLI 命令，涵蓋租戶生命週期、日常運維、品質治理三大面向。`scripts/tools/` 下另有 73 個 Python 工具（含 DX 自動化與 lint）。
 
-| 工具 | 用途 |
-|------|------|
-| `patch_config.py` | ConfigMap 局部更新 + `--diff` preview |
-| `check_alert.py` | Alert 狀態查詢（目前活躍、歷史、詳情） |
-| `diagnose.py` | 單租戶健康檢查（Configuration、Metrics、Rules、Alerts） |
-| `batch_diagnose.py` | 多租戶並行健康檢查報告（Post-cutover） |
-| `onboard_platform.py` | 既有配置反向分析 + `onboard-hints.json` 產出 |
-| `migrate_rule.py` | 傳統規則遷移（AST + Triage + Prefix + Dictionary） |
-| `scaffold_tenant.py` | 互動式 Tenant 配置產生器（或 CLI / `--from-onboard`） |
-| `validate_migration.py` | Shadow Monitoring 數值 diff + Auto-Convergence 偵測 |
-| `analyze_rule_pack_gaps.py` | Custom Rule → Rule Pack 覆蓋率分析 |
-| `backtest_threshold.py` | 閾值變更歷史回測（Prometheus 7d replay） |
-| `offboard_tenant.py` | Tenant 下架（清理配置、警告） |
-| `deprecate_rule.py` | Rule/Metric 下架（自動 alert 禁用） |
-| `baseline_discovery.py` | 負載觀測 + 閾值建議（無規則情況下） |
-| `bump_docs.py` | 版號一致性管理（CLAUDE.md / README / Chart） |
-| `lint_custom_rules.py` | Custom Rule 治理 Linter（Schema + Best Practices） |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager route/receiver/inhibit |
-| `validate_config.py` | 一站式配置驗證（YAML + Schema + Routes + Policy） |
-| `cutover_tenant.py` | Shadow Monitoring 一鍵切換（§7.1 全自動化） |
-| `blind_spot_discovery.py` | Cluster targets 盲區掃描（Prometheus × Tenant 交叉比對） |
-| `config_diff.py` | 目錄級配置差異比對（GitOps PR review blast radius） |
-| `maintenance_scheduler.py` | 排程式維護窗口 → Alertmanager silence（CronJob） |
+完整參考：[da-tools CLI](cli-reference.md) · [工具總表](internal/tool-map.md) · [速查表](cheat-sheet.md)
 
 ---
 
@@ -134,45 +112,9 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 
 ---
 
-## 版本與維護
-
-- 當前版本：見 `CLAUDE.md` 或 `make version-check`
-- 版本控制：[docs/architecture-and-design.md](architecture-and-design.md) § Roadmap
-- 變更記錄：`CHANGELOG.md`（根目錄）
-
----
-
-## 快速命令
-
-常用的開發與操作命令：
-
-```bash
-# 快速展演與測試
-make demo                    # 快速展演（scaffold → migrate → diagnose）
-make demo-full              # 完整展演（含 composite load → alert → cleanup）
-make test-alert             # 硬體故障測試
-make benchmark              # 效能基準測試
-
-# 配置驗證
-make validate-config        # 一站式配置驗證
-
-# 版本管理
-make version-check          # 驗證版號一致性
-make bump-docs PLATFORM=X.Y.Z EXPORTER=X.Y.Z TOOLS=X.Y.Z
-
-# Helm 打包與推送
-make chart-package
-make chart-push
-
-# 查看所有目標
-make help
-```
-
----
-
 ## 反饋與貢獻
 
-文件問題或改進建議？請提交 Issue 或 PR。所有文件均遵循 [governance-security.md](governance-security.md) 中的治理與安全標準。
+文件問題或改進建議？請提交 Issue 或 PR。開發命令與版本管理見 [根目錄 README](../README.md#快速開始)。
 
 ## 相關資源
 

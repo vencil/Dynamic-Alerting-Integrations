@@ -3,7 +3,7 @@ title: "Dynamic Alerting Platform — Home"
 description: "Enterprise-grade Multi-Tenant Dynamic Alerting for Kubernetes"
 tags: [home, overview]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 
@@ -93,7 +93,7 @@ tenants:
 
 ```bash
 # No clone needed — direct usage
-docker run --rm -it ghcr.io/vencil/da-tools:v2.0.0 scaffold \
+docker run --rm -it ghcr.io/vencil/da-tools:v2.1.0 scaffold \
   --tenant my-app --db mariadb,redis
 ```
 
@@ -114,7 +114,7 @@ docker run --rm -it ghcr.io/vencil/da-tools:v2.0.0 scaffold \
 ```bash
 # One-line deployment — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter:2.0.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter:2.1.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -191,7 +191,7 @@ tenants:
 | **End-to-End Migration Automation** | Legacy rules → weeks of analysis, risky cutover | Onboard → Scaffold → Shadow → Auto-Convergence → Health Report | `da-tools validate --auto-detect-convergence` |
 | **Change Confidence Guarantee** | Unknown blast radius, PR review is manual | `--diff` preview + 7-day backtesting with risk scoring | `da-tools patch-config --diff db-a mysql_connections 50` |
 | **Alert Fatigue → Zero** | Maintenance alerts + duplicate notifications | Auto-Suppression + Maintenance Mode + Scheduled Silence + Scheduled Thresholds | `make demo-full` < 5 min verification |
-| **Low Adoption Cost** | Tenants learn PromQL (days), manual version sync | OCI Helm (one-line), `da-tools` container (20+ CLI tools) | `docker run ghcr.io/vencil/da-tools:v2.0.0 scaffold` |
+| **Low Adoption Cost** | Tenants learn PromQL (days), manual version sync | OCI Helm (one-line), `da-tools` container (20+ CLI tools) | `docker run ghcr.io/vencil/da-tools:v2.1.0 scaffold` |
 | **Governance & Compliance** | No audit trail, no RBAC | Per-tenant YAML in Git + CI linting + three-layer model | Git history = audit log |
 | **Performance at Scale** | 200+ tenants → Prometheus overload | Dynamic thresholding O(M), Projected Volume 15 packs | Benchmark: 56 rules, ~20ms/cycle vs. 5,600 rules @ 800ms+ |
 
@@ -272,7 +272,7 @@ graph TB
 ### da-tools
 
 - **20+ CLI Tools**: scaffold, migrate, diagnose, backtest, onboard, etc.
-- **Distribution**: OCI container (`ghcr.io/vencil/da-tools:v2.0.0`)
+- **Distribution**: OCI container (`ghcr.io/vencil/da-tools:v2.1.0`)
 - **No Local Setup**: `docker pull` → ready to use
 
 ---

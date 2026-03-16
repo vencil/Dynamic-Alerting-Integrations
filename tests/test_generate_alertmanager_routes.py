@@ -36,6 +36,8 @@ from generate_alertmanager_routes import (  # noqa: E402
     _build_tenant_routes,
     _parse_config_files,
     _merge_tenant_routing,
+    _validate_profile_refs,
+    check_domain_policies,
     expand_routing_overrides,
     load_tenant_configs,
     _extract_host,
@@ -1398,3 +1400,400 @@ tenants:
         routes, _, warnings = generate_routes(cfg)
         assert len(routes) == 0
         assert any("must be an object" in w for w in warnings)
+
+
+def _wy(tmpdir, filename, data):
+    """write_yaml wrapper that accepts dict and auto-dumps to YAML string."""
+    write_yaml(tmpdir, filename, yaml.dump(data, default_flow_style=False))
+
+
+# ============================================================
+# ADR-007: Routing Profiles (v2.1.0)
+# ============================================================
+class TestRoutingProfiles:
+    """Tests for _routing_profiles.yaml parsing and profile merge."""
+
+    def test_profile_parsed_from_correct_file(self):
+        """routing_profiles parsed only from _routing_profiles.yaml."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_routing_profiles.yaml", {
+                "routing_profiles": {
+                    "team-sre": {
+                        "receiver": make_receiver("webhook"),
+                        "group_wait": "30s",
+                    }
+                }
+            })
+            _wy(d,"_defaults.yaml", {
+                "defaults": {"cpu": 90}
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"_routing_profile": "team-sre", "cpu": "80"}}
+            })
+            parsed = _parse_config_files(d)
+            assert "team-sre" in parsed["routing_profiles"]
+            assert parsed["tenant_profile_refs"]["db-a"] == "team-sre"
+
+    def test_profile_ignored_in_non_reserved_file(self):
+        """routing_profiles in a tenant file should be warned and ignored."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"db-a.yaml", {
+                "routing_profiles": {"fake": {}},
+                "tenants": {"db-a": {"cpu": "80"}}
+            })
+            parsed = _parse_config_files(d)
+            assert len(parsed["routing_profiles"]) == 0
+
+    def test_profile_merge_into_routing(self):
+        """Profile config should be merged between defaults and tenant _routing."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_defaults.yaml", {
+                "defaults": {"cpu": 90},
+                "_routing_defaults": {
+                    "group_wait": "10s",
+                    "group_interval": "1m",
+                },
+            })
+            _wy(d,"_routing_profiles.yaml", {
+                "routing_profiles": {
+                    "team-dba": {
+                        "receiver": make_receiver("webhook"),
+                        "group_wait": "30s",
+                        "repeat_interval": "4h",
+                    }
+                }
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {
+                    "_routing_profile": "team-dba",
+                    "_routing": {"repeat_interval": "2h"},  # tenant override
+                }}
+            })
+            routing, _, _, _, _ = load_tenant_configs(d)
+            rc = routing["db-a"]
+            # group_wait: profile overrides defaults
+            assert rc["group_wait"] == "30s"
+            # group_interval: from defaults (profile didn't set it)
+            assert rc["group_interval"] == "1m"
+            # repeat_interval: tenant overrides profile
+            assert rc["repeat_interval"] == "2h"
+
+    def test_profile_without_tenant_override(self):
+        """Tenant with only profile ref and no explicit _routing."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_routing_profiles.yaml", {
+                "routing_profiles": {
+                    "team-sre": {
+                        "receiver": make_receiver("slack"),
+                        "group_wait": "45s",
+                    }
+                }
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"_routing_profile": "team-sre"}}
+            })
+            routing, _, _, _, _ = load_tenant_configs(d)
+            assert "db-a" in routing
+            assert routing["db-a"]["group_wait"] == "45s"
+
+    def test_unknown_profile_ref_warns(self):
+        """Reference to nonexistent profile should produce warning."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"_routing_profile": "nonexistent"}}
+            })
+            parsed = _parse_config_files(d)
+            warnings = _validate_profile_refs(parsed)
+            assert any("nonexistent" in w for w in warnings)
+
+    def test_multiple_tenants_share_profile(self):
+        """Multiple tenants referencing same profile get same base config."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_routing_profiles.yaml", {
+                "routing_profiles": {
+                    "team-shared": {
+                        "receiver": make_receiver("webhook"),
+                        "group_wait": "20s",
+                    }
+                }
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"_routing_profile": "team-shared"}}
+            })
+            _wy(d,"db-b.yaml", {
+                "tenants": {"db-b": {"_routing_profile": "team-shared"}}
+            })
+            routing, _, _, _, _ = load_tenant_configs(d)
+            assert routing["db-a"]["group_wait"] == "20s"
+            assert routing["db-b"]["group_wait"] == "20s"
+
+    def test_tenant_without_profile_unaffected(self):
+        """Tenants not using profiles should behave exactly as before."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_defaults.yaml", {
+                "_routing_defaults": {
+                    "receiver": make_receiver("webhook"),
+                    "group_wait": "15s",
+                }
+            })
+            _wy(d,"_routing_profiles.yaml", {
+                "routing_profiles": {
+                    "team-other": {"group_wait": "99s"}
+                }
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"cpu": "80"}}
+            })
+            routing, _, _, _, _ = load_tenant_configs(d)
+            # Should use defaults, not profile
+            assert routing["db-a"]["group_wait"] == "15s"
+
+
+# ============================================================
+# ADR-007: Domain Policies (v2.1.0)
+# ============================================================
+class TestDomainPolicies:
+    """Tests for _domain_policy.yaml parsing and validation."""
+
+    def test_policy_parsed_from_correct_file(self):
+        """domain_policies parsed only from _domain_policy.yaml."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_domain_policy.yaml", {
+                "domain_policies": {
+                    "finance": {
+                        "tenants": ["db-a"],
+                        "constraints": {
+                            "forbidden_receiver_types": ["slack"],
+                        }
+                    }
+                }
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"cpu": "80"}}
+            })
+            parsed = _parse_config_files(d)
+            assert "finance" in parsed["domain_policies"]
+
+    def test_policy_ignored_in_wrong_file(self):
+        """domain_policies in a tenant file should be warned and ignored."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"db-a.yaml", {
+                "domain_policies": {"fake": {}},
+                "tenants": {"db-a": {"cpu": "80"}}
+            })
+            parsed = _parse_config_files(d)
+            assert len(parsed["domain_policies"]) == 0
+
+    def test_forbidden_receiver_type(self):
+        """Domain policy should flag forbidden receiver types."""
+        routing_configs = {
+            "db-a": {
+                "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"},
+                "group_wait": "30s",
+            }
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {
+                    "forbidden_receiver_types": ["slack", "webhook"],
+                }
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert any("slack" in m and "forbidden" in m for m in msgs)
+
+    def test_allowed_receiver_type_violation(self):
+        """Receiver type not in allowed list should be flagged."""
+        routing_configs = {
+            "db-a": {
+                "receiver": {"type": "slack"},
+            }
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {
+                    "allowed_receiver_types": ["pagerduty", "email"],
+                }
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert any("not in allowed types" in m for m in msgs)
+
+    def test_allowed_receiver_type_passes(self):
+        """Compliant receiver type should not produce warnings."""
+        routing_configs = {
+            "db-a": {
+                "receiver": {"type": "pagerduty"},
+            }
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {
+                    "allowed_receiver_types": ["pagerduty", "email"],
+                }
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert len(msgs) == 0
+
+    def test_max_repeat_interval_exceeded(self):
+        """repeat_interval exceeding max should be flagged."""
+        routing_configs = {
+            "db-a": {"repeat_interval": "12h"},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {"max_repeat_interval": "1h"},
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert any("repeat_interval" in m and "exceeds" in m for m in msgs)
+
+    def test_max_repeat_interval_within_limit(self):
+        """repeat_interval within limit should not be flagged."""
+        routing_configs = {
+            "db-a": {"repeat_interval": "30m"},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {"max_repeat_interval": "1h"},
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert len(msgs) == 0
+
+    def test_min_group_wait_violation(self):
+        """group_wait below minimum should be flagged."""
+        routing_configs = {
+            "db-a": {"group_wait": "5s"},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {"min_group_wait": "30s"},
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert any("group_wait" in m and "below minimum" in m for m in msgs)
+
+    def test_enforce_group_by_missing_labels(self):
+        """Missing required group_by labels should be flagged."""
+        routing_configs = {
+            "db-a": {"group_by": ["alertname"]},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {
+                    "enforce_group_by": ["alertname", "tenant", "severity"],
+                },
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert any("group_by" in m and "missing" in m for m in msgs)
+
+    def test_enforce_group_by_all_present(self):
+        """All required group_by labels present should not be flagged."""
+        routing_configs = {
+            "db-a": {"group_by": ["alertname", "tenant", "severity", "extra"]},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {
+                    "enforce_group_by": ["alertname", "tenant", "severity"],
+                },
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert len(msgs) == 0
+
+    def test_strict_mode_produces_errors(self):
+        """Strict mode should produce ERROR instead of WARN."""
+        routing_configs = {
+            "db-a": {"receiver": {"type": "slack"}},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {"forbidden_receiver_types": ["slack"]},
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies, strict=True)
+        assert any(m.strip().startswith("ERROR") for m in msgs)
+
+    def test_tenant_not_in_policy_skipped(self):
+        """Tenants not listed in policy should not be checked."""
+        routing_configs = {
+            "db-a": {"receiver": {"type": "slack"}},
+            "db-b": {"receiver": {"type": "slack"}},
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],  # only db-a
+                "constraints": {"forbidden_receiver_types": ["slack"]},
+            }
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        # Only db-a should be flagged
+        assert sum(1 for m in msgs if "db-a" in m) >= 1
+        assert sum(1 for m in msgs if "db-b" in m) == 0
+
+    def test_multiple_policies_multiple_violations(self):
+        """Multiple policies can flag the same tenant independently."""
+        routing_configs = {
+            "db-a": {
+                "receiver": {"type": "slack"},
+                "repeat_interval": "24h",
+            },
+        }
+        policies = {
+            "finance": {
+                "tenants": ["db-a"],
+                "constraints": {"forbidden_receiver_types": ["slack"]},
+            },
+            "sla-gold": {
+                "tenants": ["db-a"],
+                "constraints": {"max_repeat_interval": "1h"},
+            },
+        }
+        msgs = check_domain_policies(routing_configs, policies)
+        assert len(msgs) >= 2
+
+    def test_end_to_end_profile_plus_policy(self):
+        """Integration: profile provides routing, policy validates it."""
+        with tempfile.TemporaryDirectory() as d:
+            _wy(d,"_routing_profiles.yaml", {
+                "routing_profiles": {
+                    "team-sre": {
+                        "receiver": make_receiver("slack"),
+                        "group_wait": "30s",
+                        "repeat_interval": "4h",
+                    }
+                }
+            })
+            _wy(d,"_domain_policy.yaml", {
+                "domain_policies": {
+                    "finance": {
+                        "tenants": ["db-a"],
+                        "constraints": {
+                            "forbidden_receiver_types": ["slack"],
+                            "max_repeat_interval": "1h",
+                        }
+                    }
+                }
+            })
+            _wy(d,"db-a.yaml", {
+                "tenants": {"db-a": {"_routing_profile": "team-sre"}}
+            })
+            _, _, warnings, _, _ = load_tenant_configs(d)
+            # Should have warnings about slack forbidden + repeat_interval
+            slack_warns = [w for w in warnings if "slack" in w and "forbidden" in w]
+            repeat_warns = [w for w in warnings if "repeat_interval" in w]
+            assert len(slack_warns) >= 1
+            assert len(repeat_warns) >= 1

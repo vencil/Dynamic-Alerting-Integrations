@@ -2,7 +2,7 @@
 title: "Tenant Self-Service Portal"
 tags: [self-service, validation, routing, alerts, tenant]
 audience: ["platform-engineer", "domain-expert", "tenant"]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [playground, config-lint, alert-simulator, schema-explorer]
 ---
@@ -13,10 +13,45 @@ const t = window.__t || ((zh, en) => en);
 
 /* ── Reserved keys and validation constants ── */
 const RESERVED_KEYS = new Set([
-  '_silent_mode', '_severity_dedup', '_namespaces', '_metadata', '_profile'
+  '_silent_mode', '_namespaces', '_metadata', '_profile',
+  '_routing_defaults', '_routing_profile', '_domain_policy', '_instance_mapping'
 ]);
 const RESERVED_PREFIXES = ['_state_', '_routing'];
 const RECEIVER_TYPES = ['webhook', 'email', 'slack', 'teams', 'rocketchat', 'pagerduty'];
+
+/* ── Routing Profiles (ADR-007) ── */
+const ROUTING_PROFILES = {
+  'team-sre-apac': {
+    receiver_type: 'slack', group_wait: '30s', group_interval: '5m', repeat_interval: '4h',
+  },
+  'team-dba-global': {
+    receiver_type: 'webhook', group_wait: '1m', group_interval: '10m', repeat_interval: '8h',
+  },
+  'domain-finance-tier1': {
+    receiver_type: 'pagerduty', group_wait: '30s', group_interval: '5m', repeat_interval: '1h',
+  },
+};
+
+/* ── Domain Policies (ADR-007) ── */
+const DOMAIN_POLICIES = {
+  finance: {
+    description: 'Finance domain compliance',
+    tenants: ['db-a', 'db-b'],
+    constraints: {
+      allowed_receiver_types: ['pagerduty', 'email', 'opsgenie'],
+      forbidden_receiver_types: ['slack', 'webhook'],
+      max_repeat_interval: '1h',
+    },
+  },
+  ecommerce: {
+    description: 'E-commerce domain standards',
+    tenants: ['db-c', 'db-d'],
+    constraints: {
+      allowed_receiver_types: ['slack', 'pagerduty', 'email', 'webhook'],
+      max_repeat_interval: '12h',
+    },
+  },
+};
 const RECEIVER_REQUIRED = {
   webhook: ['url'], email: ['to', 'smarthost'], slack: ['api_url'],
   teams: ['webhook_url'], rocketchat: ['url'], pagerduty: ['service_key'],
@@ -27,15 +62,14 @@ const TIMING_GUARDRAILS = {
   repeat_interval: { min: 60, max: 259200, unit: 's' },
 };
 
-const SAMPLE_YAML = `# Tenant YAML 範例
+const SAMPLE_YAML = `# Tenant YAML 範例 (直接 routing)
 mysql_connections: "80"
 mysql_cpu: "70"
 container_memory: "85"
 
 _routing:
-  receiver:
-    type: webhook
-    url: https://hooks.example.com/alerts
+  receiver_type: webhook
+  webhook_url: https://hooks.example.com/alerts
   group_by: [alertname, severity]
   group_wait: "30s"
   repeat_interval: "4h"
@@ -44,8 +78,20 @@ _metadata:
   runbook_url: https://runbooks.example.com/db-a
   owner: platform-team
   tier: production
+`;
 
-_severity_dedup: enable
+const SAMPLE_YAML_PROFILE = `# Tenant YAML 範例 (routing profile, ADR-007)
+mysql_connections: "80"
+mysql_cpu: "70"
+container_memory: "85"
+
+_routing_profile: team-sre-apac
+
+_metadata:
+  runbook_url: https://runbooks.example.com/db-b
+  owner: sre-apac
+  tier: production
+  domain: finance
 `;
 
 const DEFAULT_METRICS = {
@@ -174,36 +220,27 @@ function validateConfig(config) {
   // Check routing
   const routing = config._routing;
   if (routing && typeof routing === 'object') {
-    const receiver = routing.receiver;
-    if (receiver) {
-      const rtype = receiver.type;
-      if (rtype && !RECEIVER_TYPES.includes(rtype)) {
-        issues.push({ level: 'error', field: '_routing.receiver.type',
-          msg: t(`不支援的 receiver 類型: ${rtype}`, `Unsupported receiver type: ${rtype}`) });
-      }
-      if (rtype && RECEIVER_REQUIRED[rtype]) {
-        for (const req of RECEIVER_REQUIRED[rtype]) {
-          if (!receiver[req]) {
-            issues.push({ level: 'error', field: `_routing.receiver.${req}`,
-              msg: t(`${rtype} receiver 必須指定 ${req}`, `${rtype} receiver requires ${req}`) });
-          }
+    // v2.1.0 flat receiver format: receiver_type + webhook_url
+    const rtype = routing.receiver_type;
+    if (rtype && !RECEIVER_TYPES.includes(rtype)) {
+      issues.push({ level: 'error', field: '_routing.receiver_type',
+        msg: t(`不支援的 receiver 類型: ${rtype}`, `Unsupported receiver type: ${rtype}`) });
+    }
+    // URL scheme validation for webhook
+    const webhookUrl = routing.webhook_url;
+    if (rtype === 'webhook' && webhookUrl) {
+      try {
+        const parsed = new URL(webhookUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          issues.push({ level: 'error', field: '_routing.webhook_url',
+            msg: t('僅允許 http/https URL', 'Only http/https URLs allowed') });
+        } else if (parsed.protocol !== 'https:') {
+          issues.push({ level: 'error', field: '_routing.webhook_url',
+            msg: t('生產環境必須使用 HTTPS — HTTP 會導致告警通知明文傳輸', 'Production requires HTTPS — HTTP transmits alert notifications in plaintext') });
         }
-      }
-      // URL scheme validation
-      if (rtype === 'webhook' && receiver.url) {
-        try {
-          const parsed = new URL(receiver.url);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            issues.push({ level: 'error', field: '_routing.receiver.url',
-              msg: t('僅允許 http/https URL', 'Only http/https URLs allowed') });
-          } else if (parsed.protocol !== 'https:') {
-            issues.push({ level: 'error', field: '_routing.receiver.url',
-              msg: t('生產環境必須使用 HTTPS — HTTP 會導致告警通知明文傳輸', 'Production requires HTTPS — HTTP transmits alert notifications in plaintext') });
-          }
-        } catch (e) {
-          issues.push({ level: 'error', field: '_routing.receiver.url',
-            msg: t('無效的 URL 格式', 'Invalid URL format') });
-        }
+      } catch (e) {
+        issues.push({ level: 'error', field: '_routing.webhook_url',
+          msg: t('無效的 URL 格式', 'Invalid URL format') });
       }
     }
 
@@ -222,6 +259,39 @@ function validateConfig(config) {
               msg: t(`${val} 超過上限 ${guard.max}s`, `${val} exceeds maximum ${guard.max}s`) });
           }
         }
+      }
+    }
+  }
+
+  // Check routing profile reference (ADR-007)
+  const profileRef = config._routing_profile;
+  if (profileRef) {
+    if (!ROUTING_PROFILES[profileRef]) {
+      issues.push({ level: 'error', field: '_routing_profile',
+        msg: t(`路由 profile "${profileRef}" 不存在`, `Routing profile "${profileRef}" not found`) });
+    } else {
+      info.push({ level: 'info', field: '_routing_profile',
+        msg: t(`使用路由 profile: ${profileRef}`, `Using routing profile: ${profileRef}`) });
+    }
+  }
+
+  // Check domain policy constraints (ADR-007)
+  const resolvedReceiverType = routing
+    ? (routing.receiver_type || (profileRef && ROUTING_PROFILES[profileRef]?.receiver_type))
+    : (profileRef && ROUTING_PROFILES[profileRef]?.receiver_type);
+  if (resolvedReceiverType) {
+    for (const [domain, policy] of Object.entries(DOMAIN_POLICIES)) {
+      const constraints = policy.constraints || {};
+      if (constraints.forbidden_receiver_types?.includes(resolvedReceiverType)) {
+        issues.push({ level: 'warning', field: '_domain_policy',
+          msg: t(`domain "${domain}" 禁止使用 ${resolvedReceiverType}`,
+                 `Domain "${domain}" forbids receiver type: ${resolvedReceiverType}`) });
+      }
+      if (constraints.allowed_receiver_types &&
+          !constraints.allowed_receiver_types.includes(resolvedReceiverType)) {
+        issues.push({ level: 'warning', field: '_domain_policy',
+          msg: t(`domain "${domain}" 不允許 ${resolvedReceiverType}`,
+                 `Domain "${domain}" does not allow receiver type: ${resolvedReceiverType}`) });
       }
     }
   }
@@ -290,7 +360,10 @@ function buildRoutingTree(config) {
   };
 
   const routing = config._routing;
-  if (!routing) {
+  const profileRef = config._routing_profile;
+  const profile = profileRef ? ROUTING_PROFILES[profileRef] : null;
+
+  if (!routing && !profile) {
     tree.children.push({
       name: t('平台預設路由', 'Platform default route'),
       match: t('繼承 _routing_defaults', 'Inherits _routing_defaults'),
@@ -299,25 +372,35 @@ function buildRoutingTree(config) {
     return tree;
   }
 
-  const receiver = routing.receiver || {};
+  // Show profile layer if referenced (ADR-007)
+  if (profile) {
+    tree.children.push({
+      name: `Profile: ${profileRef}`,
+      match: t(`routing_profiles[${profileRef}]`, `routing_profiles[${profileRef}]`),
+      type: 'profile',
+      details: { ...profile },
+    });
+  }
+
+  const rtype = routing?.receiver_type || profile?.receiver_type || 'unknown';
   const mainRoute = {
-    name: `${receiver.type || 'unknown'} receiver`,
+    name: `${rtype} receiver`,
     match: t('所有告警', 'All alerts'),
-    type: receiver.type || 'unknown',
+    type: rtype,
     details: {
-      group_by: routing.group_by || ['alertname', 'tenant'],
-      group_wait: routing.group_wait || '30s',
-      repeat_interval: routing.repeat_interval || '4h',
+      group_by: routing?.group_by || profile?.group_by || ['alertname', 'tenant'],
+      group_wait: routing?.group_wait || profile?.group_wait || '30s',
+      repeat_interval: routing?.repeat_interval || profile?.repeat_interval || '4h',
     },
   };
 
-  if (receiver.url) mainRoute.details.url = receiver.url;
-  if (receiver.to) mainRoute.details.to = receiver.to;
+  if (routing?.webhook_url || profile?.webhook_url) mainRoute.details.url = routing?.webhook_url || profile?.webhook_url;
+  if (routing?.email_to || profile?.email_to) mainRoute.details.to = routing?.email_to || profile?.email_to;
 
   tree.children.push(mainRoute);
 
-  // Overrides
-  const overrides = routing.overrides;
+  // Overrides (from tenant _routing or profile)
+  const overrides = routing?.overrides || profile?.overrides;
   if (Array.isArray(overrides)) {
     for (const ovr of overrides) {
       tree.children.push({
@@ -328,14 +411,12 @@ function buildRoutingTree(config) {
     }
   }
 
-  // Dedup
-  if (config._severity_dedup === 'enable') {
-    tree.children.push({
-      name: t('嚴重度去重 (inhibit)', 'Severity dedup (inhibit)'),
-      match: 'severity=critical → inhibit warning',
-      type: 'inhibit',
-    });
-  }
+  // Severity dedup is always handled by Alertmanager inhibit rules (not a tenant config key)
+  tree.children.push({
+    name: t('嚴重度去重 (inhibit)', 'Severity dedup (inhibit)'),
+    match: 'severity=critical → inhibit warning',
+    type: 'inhibit',
+  });
 
   return tree;
 }
@@ -366,6 +447,17 @@ function YamlValidatorTab() {
         {t('貼入 tenant YAML，即時檢查 schema、routing、policy 問題。',
            'Paste tenant YAML to check schema, routing, and policy issues.')}
       </p>
+
+      <div className="flex gap-2 mb-2">
+        <button
+          onClick={() => setYaml(SAMPLE_YAML)}
+          className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
+        >{t('範例：直接 routing', 'Example: Direct routing')}</button>
+        <button
+          onClick={() => setYaml(SAMPLE_YAML_PROFILE)}
+          className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
+        >{t('範例：Routing Profile (ADR-007)', 'Example: Routing Profile (ADR-007)')}</button>
+      </div>
 
       <textarea
         value={yaml}

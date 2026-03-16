@@ -151,6 +151,10 @@ def main():
     parser.add_argument('--verbose', '-v', action='store_true', help='Show details')
     args = parser.parse_args()
 
+    if not os.path.isdir(DOCS_DIR):
+        print(f'ERROR: docs directory not found: {DOCS_DIR}', file=sys.stderr)
+        sys.exit(1)
+
     total_fixes = 0
     total_files = 0
 

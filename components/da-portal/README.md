@@ -1,7 +1,7 @@
 # da-portal — Self-Hosted Interactive Tools Portal
 
 Lightweight Docker image that bundles the Dynamic Alerting Interactive Tools Hub
-(24 JSX tools + Guided Flows) behind an nginx static server. Designed for
+(26 JSX tools + Guided Flows) behind an nginx static server. Designed for
 **air-gapped** and **enterprise intranet** deployment where accessing the public
 GitHub Pages site is not feasible.
 
@@ -13,7 +13,7 @@ make vendor-download            # optional: bundle CDN deps for air-gapped use
 make portal-image               # builds ghcr.io/vencil/da-portal:latest
 
 # Run
-docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.0.0
+docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.1.0
 # Open http://localhost:8080
 ```
 
@@ -25,7 +25,7 @@ Override data files via volume mounts — no rebuild needed:
 docker run -p 8080:80 \
   -v ./my-platform-data.json:/usr/share/nginx/html/assets/platform-data.json \
   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json \
-  ghcr.io/vencil/da-portal:v2.0.0
+  ghcr.io/vencil/da-portal:v2.1.0
 ```
 
 ### Prometheus Reverse Proxy (CORS-free)
@@ -36,7 +36,7 @@ then mount the custom config:
 ```bash
 docker run -p 8080:80 \
   -v ./custom-nginx.conf:/etc/nginx/conf.d/default.conf \
-  ghcr.io/vencil/da-portal:v2.0.0
+  ghcr.io/vencil/da-portal:v2.1.0
 ```
 
 This allows the Self-Service Portal's alert preview to query Prometheus

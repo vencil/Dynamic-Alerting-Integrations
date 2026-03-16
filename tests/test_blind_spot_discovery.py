@@ -3,8 +3,10 @@
 
 import json
 import os
+import sys
 import tempfile
 from unittest import mock
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -251,3 +253,180 @@ class TestCLI:
         parser = bsd.build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args([])
+
+
+# ── 7. query_prometheus_targets ───────────────────────────────────
+
+class TestQueryPrometheusTargets:
+    """query_prometheus_targets() 測試。"""
+
+    @patch("blind_spot_discovery.http_get_json")
+    def test_success(self, mock_http):
+        """正常回傳 targets。"""
+        mock_http.return_value = (
+            {
+                "status": "success",
+                "data": {
+                    "activeTargets": [
+                        {"labels": {"job": "mysqld", "instance": "10.0.0.1:9104",
+                                    "namespace": "db-a"}},
+                        {"labels": {"job": "redis", "instance": "10.0.0.2:9121",
+                                    "namespace": "db-b"}},
+                    ]
+                }
+            },
+            None,
+        )
+        result = bsd.query_prometheus_targets("http://prom:9090")
+        assert len(result) == 2
+        assert result[0]["job"] == "mysqld"
+        assert result[1]["namespace"] == "db-b"
+
+    @patch("blind_spot_discovery.http_get_json")
+    def test_http_error(self, mock_http):
+        """HTTP 錯誤回傳空列表。"""
+        mock_http.return_value = (None, "connection refused")
+        result = bsd.query_prometheus_targets("http://prom:9090")
+        assert result == []
+
+    @patch("blind_spot_discovery.http_get_json")
+    def test_non_success_status(self, mock_http):
+        """非 success 狀態回傳空列表。"""
+        mock_http.return_value = (
+            {"status": "error", "error": "bad query"},
+            None,
+        )
+        result = bsd.query_prometheus_targets("http://prom:9090")
+        assert result == []
+
+    @patch("blind_spot_discovery.http_get_json")
+    def test_empty_targets(self, mock_http):
+        """空 targets 回傳空列表。"""
+        mock_http.return_value = (
+            {"status": "success", "data": {"activeTargets": []}},
+            None,
+        )
+        result = bsd.query_prometheus_targets("http://prom:9090")
+        assert result == []
+
+
+# ── 8. render_report 進階分支 ─────────────────────────────────────
+
+class TestRenderReportAdvanced:
+    """render_report() 進階分支覆蓋。"""
+
+    def test_blind_spot_more_than_5(self):
+        """Blind spot 超過 5 個 instance 顯示 '... and N more'。"""
+        instances = [f"inst-{i}" for i in range(8)]
+        results = [{"db_type": "redis", "live_count": 8,
+                     "live_instances": instances,
+                     "monitored_tenants": [], "monitored_count": 0,
+                     "status": "blind_spot"}]
+        report = bsd.render_report(results)
+        assert "and 3 more" in report
+
+    def test_unknown_status(self):
+        """Unrecognized 狀態正確渲染。"""
+        results = [{"db_type": "unknown", "live_count": 2,
+                     "live_instances": ["u1", "u2"],
+                     "monitored_tenants": [], "monitored_count": 0,
+                     "status": "unrecognized"}]
+        report = bsd.render_report(results)
+        assert "UNRECOGNIZED" in report
+
+    def test_unknown_more_than_5(self):
+        """Unrecognized 超過 5 個 instance 顯示 '... and N more'。"""
+        instances = [f"unknown-{i}" for i in range(7)]
+        results = [{"db_type": "unknown", "live_count": 7,
+                     "live_instances": instances,
+                     "monitored_tenants": [], "monitored_count": 0,
+                     "status": "unrecognized"}]
+        report = bsd.render_report(results)
+        assert "and 2 more" in report
+
+
+# ── 9. main() 整合測試 ───────────────────────────────────────────
+
+class TestMainIntegration:
+    """main() CLI 整合測試。"""
+
+    def test_text_output(self, monkeypatch, capsys, tmp_path):
+        """main() 預設文字輸出。"""
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "db-a.yaml").write_text(
+            "mariadb:\n  connection_count:\n    warning: 100\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", [
+            "blind_spot_discovery",
+            "--config-dir", str(conf_dir),
+            "--prometheus", "http://prom:9090",
+        ])
+        monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [
+            {"job": "mysqld_exporter", "instance": "10.0.0.1:9104",
+             "namespace": "db-a", "labels": {}},
+        ])
+        bsd.main()
+        out = capsys.readouterr().out
+        assert "Summary" in out
+
+    def test_json_output(self, monkeypatch, capsys, tmp_path):
+        """--json-output 輸出 JSON。"""
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "db-a.yaml").write_text(
+            "mariadb:\n  connection_count:\n    warning: 100\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", [
+            "blind_spot_discovery",
+            "--config-dir", str(conf_dir),
+            "--prometheus", "http://prom:9090",
+            "--json-output",
+        ])
+        monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [])
+        bsd.main()
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert isinstance(data, list)
+
+    def test_exclude_jobs(self, monkeypatch, capsys, tmp_path):
+        """--exclude-jobs 正確排除 job。"""
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "db-a.yaml").write_text(
+            "mariadb:\n  connection_count:\n    warning: 100\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", [
+            "blind_spot_discovery",
+            "--config-dir", str(conf_dir),
+            "--prometheus", "http://prom:9090",
+            "--exclude-jobs", "prometheus,node-exporter",
+        ])
+        monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [
+            {"job": "prometheus", "instance": "localhost:9090",
+             "namespace": "monitoring", "labels": {}},
+        ])
+        bsd.main()
+        out = capsys.readouterr().out
+        assert "Summary" in out
+
+    def test_prom_env_fallback(self, monkeypatch, capsys, tmp_path):
+        """PROMETHEUS_URL env var 作為 fallback。"""
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "t1.yaml").write_text("redis:\n  x: {}\n",
+                                          encoding="utf-8")
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
+        monkeypatch.setattr(sys, "argv", [
+            "blind_spot_discovery", "--config-dir", str(conf_dir),
+        ])
+        captured_url = []
+        def mock_targets(url):
+            captured_url.append(url)
+            return []
+        monkeypatch.setattr(bsd, "query_prometheus_targets", mock_targets)
+        bsd.main()
+        assert captured_url[0] == "http://env-prom:9090"

@@ -27,25 +27,14 @@ import argparse
 import json
 import os
 import sys
-import urllib.parse
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json  # noqa: E402
+from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
 
-
-def query_prometheus(prom_url, promql):
-    """Execute Prometheus instant query, return (results, error)."""
-    url = f"{prom_url}/api/v1/query"
-    params = urllib.parse.urlencode({"query": promql})
-    full_url = f"{url}?{params}"
-    data, err = http_get_json(full_url)
-    if err:
-        return None, err
-    if data.get("status") != "success":
-        return None, data.get("error", "Unknown error")
-    return data.get("data", {}).get("result", []), None
+# Alias for backward-compat within this module
+query_prometheus = query_prometheus_instant
 
 
 def check_prometheus(args):

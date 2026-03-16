@@ -2,7 +2,7 @@
 title: "Config Version Diff"
 tags: [diff, compare, yaml]
 audience: ["platform-engineer"]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [config-lint, playground, migration-simulator]
 ---
@@ -16,9 +16,8 @@ const EXAMPLE_OLD = `tenants:
     mysql_connections: "80"
     mysql_cpu: "75"
     _routing:
-      receiver:
-        type: "slack"
-        channel: "#alerts"
+      receiver_type: "slack"
+      webhook_url: "https://hooks.slack.com/services/xxx/old"
       group_wait: "30s"
   db-b:
     pg_connections: "100"
@@ -30,9 +29,8 @@ const EXAMPLE_NEW = `tenants:
     mysql_connections_critical: "200"
     mysql_cpu: "75"
     _routing:
-      receiver:
-        type: "webhook"
-        url: "https://hooks.example.com/alerts"
+      receiver_type: "webhook"
+      webhook_url: "https://hooks.example.com/alerts"
       group_wait: "30s"
   db-b:
     pg_connections: "150"

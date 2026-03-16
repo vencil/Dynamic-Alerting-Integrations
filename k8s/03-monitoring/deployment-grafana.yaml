@@ -27,18 +27,23 @@ spec:
           image: grafana/grafana:12.4.1
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
             - containerPort: 3000
               name: http
           env:
-            # ⚠️ 開發環境預設密碼 — 生產環境必須改用 K8s Secret 設定強密碼！
-            # 建議: secretKeyRef 引用 Secret，搭配 auth proxy 或 SSO 整合。
             - name: GF_SECURITY_ADMIN_USER
-              value: "admin"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: admin-user
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: "admin"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: admin-password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
           volumeMounts:
@@ -53,6 +58,8 @@ spec:
               subPath: mariadb-overview.json
             - name: data
               mountPath: /var/lib/grafana
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 100m
@@ -81,3 +88,6 @@ spec:
             name: grafana-provisioning
         - name: data
           emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

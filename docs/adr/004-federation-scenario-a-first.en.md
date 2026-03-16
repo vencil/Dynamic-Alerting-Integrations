@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 
@@ -95,7 +95,7 @@ Scenario B requires additional development:
 
 ### Migration Path
 
-Expected smooth upgrade when implementing Scenario B in v2.0:
+Smooth upgrade path when Scenario B is implemented in the future:
 - API Compatibility guarantee: No modification needed for existing Scenario A deployments
 - Tool Support: `scaffold_tenant.py` extended to support edge exporter configuration
 - Documentation Guide: Clear steps for switching to Scenario B
@@ -112,13 +112,14 @@ Expected smooth upgrade when implementing Scenario B in v2.0:
 
 ## Related Decisions
 
-No direct architectural dependencies. This decision is purely a prioritization choice.
+- [ADR-006: 1:N Tenant Mapping Topologies](./006-tenant-mapping-topologies.en.md) — Builds on Scenario A's data-plane Recording Rules for 1:N mapping
+- [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — Rule Pack mounting mechanism used in Federation scenarios
 
-## Roadmap Plan
+## Current Status & Next Steps
 
-- **v1.13.0**: Scenario A documentation refinement, real customer validation
-- **v1.14.0** (P2): Early prototype and technical evaluation for Scenario B
-- **v2.0**: Complete Scenario B implementation, dual-stack compatibility mode
+- **v1.12.0** (completed): Scenario A core implementation, `remote_read` integration tests, documentation
+- **v2.1.0** (completed): `federation_check.py` migrated to shared `query_prometheus_instant`, edge/central dual-mode validation
+- **Future**: Scenario B (Rule Pack layering) remains a future direction, see [`architecture-and-design.md` §5.1](../architecture-and-design.md)
 
 ## References
 

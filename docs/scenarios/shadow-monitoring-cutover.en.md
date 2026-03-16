@@ -2,12 +2,12 @@
 title: "Scenario: Automated Shadow Monitoring Cutover Workflow"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Scenario: Automated Shadow Monitoring Cutover Workflow
 
-> **v2.0.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
+> **v2.1.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
 
 ## Problem
 

@@ -39,47 +39,22 @@ _WARN_RE = re.compile(r"^\s{2}(WARN|INFO): .+: .+$")
 class TestGenerateRoutesWarningFormat:
     """generate_routes 產出的 warnings 格式一致性。"""
 
-    def test_unknown_receiver_type_warning_format(self):
-        """未知 receiver type 產生格式正確的 warning。"""
-        routing_configs = {
-            "db-a": {
-                "receiver": {"type": "unknown_type", "url": "https://x.com"},
-            }
-        }
+    @pytest.mark.parametrize("routing_configs,desc", [
+        ({"db-a": {"receiver": {"type": "unknown_type", "url": "https://x.com"}}},
+         "unknown_receiver_type"),
+        ({"db-a": {"group_wait": "30s"}},
+         "missing_receiver"),
+        ({"db-a": {"receiver": "not-a-dict"}},
+         "invalid_receiver_object"),
+        ({"db-a": {"receiver": {"url": "https://x.com"}}},
+         "missing_receiver_type"),
+    ], ids=["unknown_type", "missing_receiver", "invalid_object", "missing_type"])
+    def test_warning_format(self, routing_configs, desc):
+        """各種 malformed routing config 產生格式正確的 warning。"""
         _, _, warnings = generate_routes(routing_configs)
-        assert len(warnings) >= 1
+        assert len(warnings) >= 1, f"{desc}: expected warnings"
         for w in warnings:
-            assert _WARN_RE.match(w), f"格式不符: {w!r}"
-
-    def test_missing_receiver_warning_format(self):
-        """缺少 receiver 產生格式正確的 warning。"""
-        routing_configs = {
-            "db-a": {"group_wait": "30s"},  # 缺 receiver
-        }
-        _, _, warnings = generate_routes(routing_configs)
-        assert len(warnings) >= 1
-        for w in warnings:
-            assert _WARN_RE.match(w), f"格式不符: {w!r}"
-
-    def test_invalid_receiver_object_warning_format(self):
-        """receiver 非 dict 產生格式正確的 warning。"""
-        routing_configs = {
-            "db-a": {"receiver": "not-a-dict"},
-        }
-        _, _, warnings = generate_routes(routing_configs)
-        assert len(warnings) >= 1
-        for w in warnings:
-            assert _WARN_RE.match(w), f"格式不符: {w!r}"
-
-    def test_missing_receiver_type_warning_format(self):
-        """receiver 缺 type 產生格式正確的 warning。"""
-        routing_configs = {
-            "db-a": {"receiver": {"url": "https://x.com"}},
-        }
-        _, _, warnings = generate_routes(routing_configs)
-        assert len(warnings) >= 1
-        for w in warnings:
-            assert _WARN_RE.match(w), f"格式不符: {w!r}"
+            assert _WARN_RE.match(w), f"{desc} 格式不符: {w!r}"
 
     def test_invalid_overrides_list_warning_format(self):
         """overrides 非 list 產生格式正確的 warning。"""

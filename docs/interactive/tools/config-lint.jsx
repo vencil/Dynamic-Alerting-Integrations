@@ -2,7 +2,7 @@
 title: "Config Lint Report"
 tags: [lint, validation, best practices]
 audience: ["platform-engineer", tenant]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [config-diff, playground, schema-explorer]
 ---
@@ -179,6 +179,68 @@ const LINT_RULES = [
         const disabled = Object.entries(keys).filter(([k, v]) => v === 'disable');
         if (disabled.length > 3) {
           findings.push({ tenant, key: '-', message: t(`${disabled.length} 個 key 被 disable，考慮是否需要該 Rule Pack`, `${disabled.length} keys disabled — consider whether this Rule Pack is needed`) });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'routing-profile-undefined',
+    severity: 'error',
+    category: t('路由設定檔', 'Routing Profiles'),
+    check: (tenants) => {
+      const findings = [];
+      const profiles = tenants['routing_profiles'] || {};
+      for (const [tenant, keys] of Object.entries(tenants)) {
+        if (tenant.startsWith('_') || tenant === 'routing_profiles') continue;
+        const routing = keys['_routing'];
+        if (routing && typeof routing === 'object' && routing.profile) {
+          if (!profiles[routing.profile]) {
+            findings.push({ tenant, key: '_routing.profile', message: t(`引用的 profile "${routing.profile}" 未在 routing_profiles 中定義`, `Referenced profile "${routing.profile}" is not defined in routing_profiles`) });
+          }
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'domain-policy-violation',
+    severity: 'error',
+    category: t('域名策略', 'Domain Policy'),
+    check: (tenants) => {
+      const findings = [];
+      const policy = tenants['_domain_policy'];
+      if (!policy) return findings;
+      const denied = policy.denied_domains || [];
+      for (const [tenant, keys] of Object.entries(tenants)) {
+        if (tenant.startsWith('_') || tenant === 'routing_profiles') continue;
+        const routing = keys['_routing'];
+        if (routing && typeof routing === 'object' && routing.webhook_url) {
+          for (const d of denied) {
+            const pattern = d.replace('*.', '');
+            if (routing.webhook_url.includes(pattern)) {
+              findings.push({ tenant, key: '_routing.webhook_url', message: t(`Webhook URL 匹配禁止域名 "${d}"`, `Webhook URL matches denied domain "${d}"`) });
+            }
+          }
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'instance-mapping-missing-partition',
+    severity: 'warning',
+    category: t('實例映射', 'Instance Mapping'),
+    check: (tenants) => {
+      const findings = [];
+      const mappings = tenants['_instance_mapping'];
+      if (!Array.isArray(mappings)) return findings;
+      for (const m of mappings) {
+        if (!m.partition_label) {
+          findings.push({ tenant: '_instance_mapping', key: m.instance || '?', message: t(`映射缺少 partition_label`, `Mapping missing partition_label`) });
+        }
+        if (!m.partitions || m.partitions.length === 0) {
+          findings.push({ tenant: '_instance_mapping', key: m.instance || '?', message: t(`映射缺少 partitions 列表`, `Mapping missing partitions list`) });
         }
       }
       return findings;

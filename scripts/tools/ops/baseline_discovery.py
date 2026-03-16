@@ -34,16 +34,19 @@
 import sys
 import os
 import csv
+import io
 import json
 import time
 import math
 import argparse
-import urllib.parse
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import http_get_json  # noqa: E402
+from _lib_python import http_get_json, write_text_secure, query_prometheus_instant  # noqa: E402
+
+# Alias for backward-compat within this module
+query_prometheus = query_prometheus_instant
 
 # 預設觀測指標：PromQL 模板 (tenant 會被替換)
 DEFAULT_METRICS = {
@@ -73,23 +76,6 @@ DEFAULT_METRICS = {
         "description": "Disk read throughput",
     },
 }
-
-
-def query_prometheus(prom_url, promql):
-    """Execute Prometheus instant query."""
-    url = f"{prom_url}/api/v1/query"
-    params = urllib.parse.urlencode({"query": promql})
-    full_url = f"{url}?{params}"
-
-    data, err = http_get_json(full_url)
-    if err:
-        return None, err
-
-    if data.get("status") != "success":
-        return None, data.get("error", "Unknown error")
-
-    results = data.get("data", {}).get("result", [])
-    return results, None
 
 
 def extract_scalar(results):
@@ -292,34 +278,34 @@ def main():
 
     # 原始時間序列
     ts_path = os.path.join(args.output_dir, f"baseline-{args.tenant}-timeseries.csv")
-    with open(ts_path, 'w', newline='', encoding='utf-8-sig') as f:
-        writer = csv.writer(f)
-        header = ["timestamp"] + list(metrics.keys())
-        writer.writerow(header)
-        for i, ts in enumerate(timestamps):
-            row = [ts] + [samples[key][i] for key in metrics]
-            writer.writerow(row)
-    os.chmod(ts_path, 0o600)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    header = ["timestamp"] + list(metrics.keys())
+    writer.writerow(header)
+    for i, ts in enumerate(timestamps):
+        row = [ts] + [samples[key][i] for key in metrics]
+        writer.writerow(row)
+    write_text_secure(ts_path, "\ufeff" + buf.getvalue())
 
     # 統計摘要 + 建議
     summary_path = os.path.join(args.output_dir, f"baseline-{args.tenant}-summary.csv")
-    with open(summary_path, 'w', newline='', encoding='utf-8-sig') as f:
-        writer = csv.writer(f)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "metric", "unit", "samples", "min", "max", "avg",
+        "p50", "p90", "p95", "p99",
+        "suggested_warning", "suggested_critical", "note",
+    ])
+    for key, info in metrics.items():
+        stats = all_stats[key]
+        suggestion = suggest_threshold(stats, key)
         writer.writerow([
-            "metric", "unit", "samples", "min", "max", "avg",
-            "p50", "p90", "p95", "p99",
-            "suggested_warning", "suggested_critical", "note",
+            key, info["unit"], stats["count"],
+            stats["min"], stats["max"], stats["avg"],
+            stats["p50"], stats["p90"], stats["p95"], stats["p99"],
+            suggestion["warning"], suggestion["critical"], suggestion["note"],
         ])
-        for key, info in metrics.items():
-            stats = all_stats[key]
-            suggestion = suggest_threshold(stats, key)
-            writer.writerow([
-                key, info["unit"], stats["count"],
-                stats["min"], stats["max"], stats["avg"],
-                stats["p50"], stats["p90"], stats["p95"], stats["p99"],
-                suggestion["warning"], suggestion["critical"], suggestion["note"],
-            ])
-    os.chmod(summary_path, 0o600)
+    write_text_secure(summary_path, "\ufeff" + buf.getvalue())
 
     print(f"📁 輸出:")
     print(f"  時間序列: {ts_path}")

@@ -2,16 +2,18 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
+![Version](https://img.shields.io/badge/version-v2.1.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
 
-Multi-tenant dynamic alerting platform. Tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
+Rule explosion and change bottlenecks are the core pain points of Prometheus alerting in multi-tenant environments. This platform solves them with a config-driven architecture: tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
+
+**Designed for:** Platform teams managing 10+ tenants across multiple technology stacks (DB / Cache / MQ / JVM) who need tenant self-service, unified governance, and zero-PromQL alert management within the Prometheus ecosystem.
 
 > **Not sure where to start?** Try the [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — answer a few questions and get a personalized reading path.
 >
@@ -126,6 +128,8 @@ make port-forward
 # Prometheus: localhost:9090 | Grafana: localhost:3000 (admin/admin) | Alertmanager: localhost:9093
 ```
 
+> **Production deployment?** The above is for local development. For production, see: [Helm + OCI Registry install](components/threshold-exporter/README.md#部署-helm) · [GitOps Deployment Guide](docs/gitops-deployment.en.md) · [BYO Prometheus Integration](docs/byo-prometheus-integration.en.md)
+
 ---
 
 ## Rule Packs
@@ -161,7 +165,9 @@ All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/ven
 
 **Tenant Lifecycle:** `scaffold_tenant` config generation → `onboard_platform` existing environment analysis → `migrate_rule` AST migration engine → `validate_migration` Shadow dual-track verification → `cutover_tenant` one-click cutover → `offboard_tenant` safe removal
 
-**Day-to-Day Operations:** `diagnose` / `batch_diagnose` health checks · `patch_config` safe updates (with `--diff`) · `check_alert` alert status · `maintenance_scheduler` scheduled silence · `generate_alertmanager_routes` routing generation
+**Day-to-Day Operations:** `diagnose` / `batch_diagnose` health checks · `patch_config` safe updates (with `--diff`) · `check_alert` alert status · `maintenance_scheduler` scheduled silence · `generate_alertmanager_routes` routing generation · `explain_route` routing debugger (ADR-007)
+
+**Routing Profiles & Domain Policies (v2.1.0 ADR-007):** `_routing_profiles.yaml` defines cross-tenant shared routing configs, `_domain_policy.yaml` defines business-domain compliance constraints. Four-layer merge: `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`. Tools: `check_routing_profiles` (lint hook) · `explain_route` (debugger) · JSON Schema validation
 
 **Quality & Governance:** `validate_config` all-in-one validation · `alert_quality` alert quality scoring · Policy-as-Code engine · `cardinality_forecast` trend prediction · `backtest_threshold` historical replay · `baseline_discovery` threshold recommendations · `config_diff` diff report
 
@@ -171,13 +177,15 @@ Full CLI reference: [da-tools CLI](cli-reference.en.md) · [Cheat Sheet](cheat-s
 
 ## Key Design Decisions
 
-| Decision | Rationale |
-|----------|-----------|
-| O(M) Rule Complexity | `group_left` vector matching — rule count depends only on metric types, not tenant count |
-| TSDB Completeness First | Severity Dedup at Alertmanager inhibit layer — TSDB always retains full warning + critical records |
-| Projected Volume Isolation | 15 independent Rule Pack ConfigMaps (`optional: true`), zero PR conflicts |
-| Config-Driven Full Chain | Thresholds → routing → notifications → behavior control, all YAML-driven |
-| Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard (per-tenant 500 limit) |
+| Decision | Rationale | ADR |
+|----------|-----------|-----|
+| O(M) Rule Complexity | `group_left` vector matching — rule count depends only on metric types, not tenant count | — |
+| TSDB Completeness First | Severity Dedup at Alertmanager inhibit layer — TSDB always retains full warning + critical records | [ADR-001](docs/adr/001-severity-dedup-via-inhibit.en.md) |
+| Sentinel Alert Tri-State | exporter flag → sentinel alert → inhibit, composable Normal / Silent / Maintenance modes | [ADR-003](docs/adr/003-sentinel-alert-pattern.en.md) |
+| Projected Volume Isolation | 15 independent Rule Pack ConfigMaps (`optional: true`), zero PR conflicts | [ADR-005](docs/adr/005-projected-volume-for-rule-packs.en.md) |
+| Config-Driven Full Chain | Thresholds → routing → notifications → behavior control, all YAML-driven | — |
+| Four-Layer Routing Merge | `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`, cross-tenant sharing + domain policy constraints | [ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md) |
+| Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard (per-tenant 500 limit) | — |
 
 ---
 
@@ -196,6 +204,7 @@ Full CLI reference: [da-tools CLI](cli-reference.en.md) · [Cheat Sheet](cheat-s
 | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) | Dual-track SOP |
 | [Benchmarks](benchmarks.md) | Full benchmark data and methodology |
 | [Scenarios](scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
+| Day-2 Operations | `diagnose` → `alert-quality` → `patch-config` → `maintenance-scheduler` ([CLI Reference](docs/cli-reference.en.md)) |
 
 Full doc map: [doc-map.md](internal/doc-map.md) · Tool map: [tool-map.md](internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 

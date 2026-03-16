@@ -7,6 +7,10 @@ Canonical implementations of:
   - is_disabled(): three-state disable check
   - load_yaml_file(): YAML loading with encoding + error handling
   - validate_and_clamp(): Timing parameter guardrail enforcement
+  - write_text_secure() / write_json_secure(): SAST-compliant file writes
+  - query_prometheus_instant(): Prometheus instant query helper
+  - format_json_report(): Pretty-printed JSON output (dedup across 20+ tools)
+  - i18n_text(): Bilingual text selector (Python equivalent of JSX window.__t)
 
 Domain constants (single source of truth for Python tools):
   - VALID_RESERVED_KEYS / VALID_RESERVED_PREFIXES: tenant config reserved keys
@@ -18,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -124,6 +129,22 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
 # ---------------------------------------------------------------------------
 # HTTP helpers (shared across ops tools that query Prometheus / Alertmanager)
 # ---------------------------------------------------------------------------
+_ALLOWED_SCHEMES = frozenset(("http", "https"))
+
+
+def _validate_url_scheme(url: str) -> Optional[str]:
+    """Validate URL scheme for SSRF prevention.
+
+    Returns:
+        ``None`` if the scheme is allowed, or an error message string
+        if the scheme is disallowed.
+    """
+    scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in _ALLOWED_SCHEMES:
+        return f"Unsupported URL scheme: {scheme}"
+    return None
+
+
 def http_get_json(
     url: str,
     *,
@@ -146,10 +167,9 @@ def http_get_json(
         failure (network error, JSON decode error, etc.).
     """
     try:
-        # SSRF 防護：僅允許 http/https scheme
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return None, f"Unsupported URL scheme: {parsed.scheme}"
+        scheme_err = _validate_url_scheme(url)
+        if scheme_err:
+            return None, scheme_err
 
         req = urllib.request.Request(url)  # nosec B310
         if headers:
@@ -187,10 +207,9 @@ def http_post_json(
         on failure.
     """
     try:
-        # SSRF 防護：僅允許 http/https scheme
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return None, f"Unsupported URL scheme: {parsed.scheme}"
+        scheme_err = _validate_url_scheme(url)
+        if scheme_err:
+            return None, scheme_err
 
         req = urllib.request.Request(url, method=method)  # nosec B310
         req.add_header("Content-Type", "application/json")
@@ -240,13 +259,11 @@ def http_request_with_retry(
         urllib.error.HTTPError: 4xx 錯誤或重試耗盡後的 5xx 錯誤。
         urllib.error.URLError: 連線錯誤且重試耗盡。
     """
-    import time
     last_error: Optional[Exception] = None
 
-    # SSRF 防護：僅允許 http/https scheme
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+    scheme_err = _validate_url_scheme(url)
+    if scheme_err:
+        raise ValueError(scheme_err)
 
     for attempt in range(max_retries):
         try:
@@ -339,6 +356,7 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
 #   validReservedKeys + validReservedPrefixes — keep in sync.
 VALID_RESERVED_KEYS: set[str] = {
     "_silent_mode", "_severity_dedup", "_namespaces", "_metadata", "_profile",
+    "_routing_profile",  # v2.1.0 ADR-007: cross-domain routing profile reference
 }
 VALID_RESERVED_PREFIXES: tuple[str, ...] = ("_state_", "_routing")
 
@@ -470,6 +488,44 @@ METRIC_PREFIX_DB_MAP: dict[str, str] = {
 ONBOARD_HINTS_FILENAME: str = "onboard-hints.json"
 
 
+def write_text_secure(path: str, content: str) -> None:
+    """Write text to *path* with UTF-8 encoding and ``0o600`` permissions.
+
+    Centralises the SAST-mandated pattern::
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(path, 0o600)
+
+    Args:
+        path: Filesystem path to write.
+        content: Text content.
+    """
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    os.chmod(path, 0o600)
+
+
+def write_json_secure(
+    path: str,
+    data: Any,
+    *,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+) -> None:
+    """Write *data* as JSON to *path* with ``0o600`` permissions.
+
+    Args:
+        path: Filesystem path to write.
+        data: JSON-serializable object.
+        indent: JSON indentation (default 2).
+        ensure_ascii: If ``False`` (default), allow non-ASCII characters.
+    """
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
+    os.chmod(path, 0o600)
+
+
 def write_onboard_hints(output_dir: str, hints: dict[str, Any]) -> str:
     """Write onboard hints JSON for scaffold consumption.
 
@@ -480,11 +536,8 @@ def write_onboard_hints(output_dir: str, hints: dict[str, Any]) -> str:
     Returns:
         Absolute path to the written file.
     """
-    import json
     path = os.path.join(output_dir, ONBOARD_HINTS_FILENAME)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(hints, f, indent=2, ensure_ascii=False)
-    os.chmod(path, 0o600)
+    write_json_secure(path, hints)
     return path
 
 
@@ -494,7 +547,6 @@ def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
     Returns:
         Parsed dict, or ``None`` if file is missing / unreadable.
     """
-    import json
     if not path or not os.path.isfile(path):
         return None
     with open(path, encoding="utf-8") as f:
@@ -541,3 +593,58 @@ def validate_and_clamp(
         return clamped, warnings
 
     return value, warnings
+
+
+# ---------------------------------------------------------------------------
+# Prometheus query helper
+# ---------------------------------------------------------------------------
+def query_prometheus_instant(prom_url: str, promql: str):
+    """Execute a Prometheus instant query and return (results, error).
+
+    Returns:
+        (list[dict], None) on success — each dict has 'metric' and 'value' keys.
+        (None, str) on error — error message string.
+
+    Example:
+        results, err = query_prometheus_instant("http://localhost:9090", "up")
+        if err:
+            print(f"Query failed: {err}")
+        else:
+            for r in results:
+                print(r["metric"], r["value"][1])
+    """
+    url = f"{prom_url}/api/v1/query"
+    params = urllib.parse.urlencode({"query": promql})
+    full_url = f"{url}?{params}"
+    data, err = http_get_json(full_url)
+    if err:
+        return None, err
+    if data.get("status") != "success":
+        return None, data.get("error", "Unknown Prometheus error")
+    return data.get("data", {}).get("result", []), None
+
+
+# ---------------------------------------------------------------------------
+# JSON report formatting
+# ---------------------------------------------------------------------------
+def format_json_report(data, **kwargs) -> str:
+    """Serialize data as pretty-printed JSON (ensure_ascii=False).
+
+    Thin wrapper to eliminate ``json.dumps(data, indent=2, ensure_ascii=False)``
+    duplication across 20+ tools.  Extra kwargs are forwarded to ``json.dumps``.
+    """
+    kwargs.setdefault("indent", 2)
+    kwargs.setdefault("ensure_ascii", False)
+    return json.dumps(data, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Bilingual text helper (JSX-style inline fallback)
+# ---------------------------------------------------------------------------
+def i18n_text(zh: str, en: str) -> str:
+    """Return *zh* or *en* based on ``detect_cli_lang()`` result.
+
+    Intended as a lightweight ``window.__t`` equivalent for Python CLI tools,
+    replacing ad-hoc ``msg = zh if _LANG == 'zh' else en`` patterns.
+    """
+    return zh if detect_cli_lang() == "zh" else en

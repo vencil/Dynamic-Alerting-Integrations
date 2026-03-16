@@ -2,12 +2,12 @@
 title: "BYO Alertmanager 整合指南"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # BYO Alertmanager 整合指南
 
-> **版本**：v2.0.0
+> **版本**：v2.1.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 

@@ -41,6 +41,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
+from _lib_python import write_json_secure  # noqa: E402
 
 
 def discover_tenants(namespace="monitoring", configmap="threshold-config"):
@@ -286,9 +287,7 @@ def main():
         print_text_report(report)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
-        os.chmod(args.output, 0o600)
+        write_json_secure(args.output, report)
         if not args.json:
             print(f"\nJSON report written to: {args.output}")
 

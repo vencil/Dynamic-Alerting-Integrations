@@ -262,6 +262,8 @@ def main():
 
     # 3. Load monitored DB types from tenant configs
     monitored = load_monitored_db_types(args.config_dir)
+    if monitored is None:
+        sys.exit(1)
 
     # 4. Find blind spots
     results = find_blind_spots(live_instances, monitored)

@@ -14,6 +14,16 @@ import pytest
 import maintenance_scheduler as ms  # noqa: E402
 from factories import mock_http_response, write_yaml  # noqa: E402
 
+try:
+    import croniter as _croniter_mod  # noqa: F401
+    _has_croniter = True
+except ImportError:
+    _has_croniter = False
+
+requires_croniter = pytest.mark.skipif(
+    not _has_croniter, reason="croniter not installed"
+)
+
 
 # ── 1. parse_duration ─────────────────────────────────────────────
 
@@ -45,6 +55,7 @@ class TestParseDuration:
 
 # ── 2. is_in_window ──────────────────────────────────────────────
 
+@requires_croniter
 class TestIsInWindow:
     """Test cron-based maintenance window detection."""
 
@@ -373,6 +384,7 @@ class TestPushMetrics:
 
 # ── 6. evaluate_and_apply (integration) ──────────────────────────
 
+@requires_croniter
 class TestEvaluateAndApply:
     """Test the main orchestration logic."""
 

@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 
@@ -30,6 +30,8 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `federation-check` | Multi-cluster Federation integration verification | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |
 | `grafana-import` | Grafana Dashboard import via ConfigMap sidecar auto-mount | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
 | `alert-quality` | Alert quality scoring: 4 metrics, 3 grades, CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
+| `alert-correlate` | Alert correlation analysis: time-window clustering + root cause inference | --prometheus <URL>, --input <FILE>, --window <MIN>, --min-score <N> | `da-tools alert-correlate --help` |
+| `drift-detect` | Cross-cluster config drift detection: directory-level SHA-256 comparison | --dirs <LIST>, --labels <LIST>, --ci | `da-tools drift-detect --help` |
 | `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |
 | `evaluate-policy` | Policy-as-Code evaluation: declarative DSL policy checks | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools evaluate-policy --help` |
 | `generate-routes` | Generate Alertmanager route + receiver + inhibit from tenant YAML | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
@@ -43,6 +45,10 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration hints | --alertmanager-config <FILE>, --output <FILE> | `da-tools onboard --help` |
 | `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --config <PATH>, --output <FILE>, --json-output | `da-tools analyze-gaps --help` |
 | `config-diff` | Compare two config directories (GitOps PR review) | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
+| `test-notification` | Multi-channel notification connectivity testing | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
+| `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
+| `explain-route` | Routing merge pipeline debugger: four-layer expansion + profile (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --json | `da-tools explain-route --help` |
+| `discover-mappings` | Auto-discover 1:N instance-tenant mappings (ADR-006) | --endpoint <URL> or --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
 
 ## Quick Tips
 
@@ -54,7 +60,9 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `cutover` — One-click switchover (final migration step)
   - Others: `blind-spot`, `maintenance-scheduler`, `backtest`
   - `alert-quality` — Alert quality scoring (noise, stale, latency, suppression)
+  - `alert-correlate` — Alert correlation analysis (time-window clustering + root cause)
   - `cardinality-forecast` — Per-tenant cardinality trend prediction
+  - `threshold-recommend` — Threshold recommendation (P50/P95/P99)
 
 - **Config Generation Tools**
   - `generate-routes` — Tenant YAML → Alertmanager fragment
@@ -67,6 +75,9 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `offboard` / `deprecate` — Tenant offboarding / metric deprecation
   - `lint` / `onboard` / `analyze-gaps` / `config-diff` — Governance tools
   - `evaluate-policy` — Policy-as-Code evaluation (declarative DSL)
+  - `test-notification` — Multi-channel notification connectivity testing
+  - `explain-route` — Routing merge pipeline debugger (four-layer expansion)
+  - `discover-mappings` — Auto-discover 1:N instance-tenant mappings
 
 ## Network Configuration
 
@@ -87,14 +98,14 @@ export PROMETHEUS_URL=http://localhost:9090
 # Basic command
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.0.0 \
+  ghcr.io/vencil/da-tools:v2.1.0 \
   <command> [arguments]
 
 # With local files
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.0.0 \
+  ghcr.io/vencil/da-tools:v2.1.0 \
   <command> --config-dir /etc/config
 ```
 

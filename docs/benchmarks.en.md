@@ -2,7 +2,7 @@
 title: "Performance Analysis & Benchmarks"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Performance Analysis & Benchmarks
@@ -329,6 +329,49 @@ Tenant YAML change
 > **configmap-reload sidecar note:** The sidecar watches Projected Volume **file content changes**, not ConfigMap annotations. `--apply` mode directly updates ConfigMap `data` section + triggers `/-/reload`, so it does not depend on the sidecar's polling interval. If only annotations are modified without changing data, the sidecar will not detect the change.
 
 **Conclusion:** The full "tenant changes routing → Alertmanager active" path completes in ~760ms (sub-second) on Kind. The bottleneck is kubectl API server interaction (~600ms), not route generation (~94ms) or Alertmanager reload (<1ms). In production environments with dedicated etcd, expect E2E < 500ms.
+
+## Incremental Hot-Reload Performance (v2.1.0)
+
+v2.1.0 introduced a per-file SHA-256 index + parsed config cache for incremental reload. The following Go micro-benchmarks measure incremental vs full reload performance (`config_bench_test.go`, `-count=3` median).
+
+**Environment:** Dev Container (Intel Core 7 240H), each tenant with 8 metric thresholds (including scheduled overrides).
+
+> **v2.1.0 optimizations:** (1) Removed `Resolve()` calls from reload path (replaced with `logConfigStats` direct counting); (2) **mtime guard** — `scanDirFileHashes` uses `DirEntry.Info()` mtime+size as first-level cache (eliminates per-file `os.Stat` calls), skipping `os.ReadFile` + SHA-256 when unchanged; (3) **incremental merge** — when only tenant files change, patches merged config directly instead of O(N) `mergePartialConfigs`; (4) **byte cache** — scan phase caches read `[]byte` data, reused by `fullDirLoad`/`IncrementalLoad` Phase 3 to eliminate double disk reads.
+
+**100 Tenants (cold mtime†):**
+
+| Benchmark | ns/op (median) | B/op | allocs/op | Description |
+|-----------|---------------:|-----:|----------:|-------------|
+| `FullDirLoad_100` | 3,244,752 | 1,888,152 | 21,527 | Baseline: full YAML parsing of 100 files |
+| `IncrementalLoad_100_NoChange` | 546,230 | 175,565 | 1,443 | All hashes hit, zero parsing (cold mtime†) |
+| `IncrementalLoad_100_OneFileChanged` | 628,194 | 199,572 | 1,565 | Typical case: re-parse only 1 changed file |
+| `ScanDirFileHashes_100` | 530,564 | 175,543 | 1,443 | Hash scan (cold mtime†) |
+| `ScanDirFileHashes_100_MtimeGuard` | 128,801 | 71,009 | 635 | **Mtime guard hit: stat-only (4.1×)** |
+| `MergePartialConfigs_100` | 52,907 | 58,488 | 209 | Cache merge into global config |
+
+**1000 Tenants:**
+
+| Benchmark | ns/op (median) | B/op | allocs/op | Description |
+|-----------|---------------:|-----:|----------:|-------------|
+| `FullDirLoad_1000` | 34,857,623 | 18,791,153 | 213,258 | Baseline: full YAML parsing of 1000 files |
+| `IncrementalLoad_1000_NoChange` | 6,913,622 | 1,786,217 | 14,059 | All hashes hit (cold mtime†) |
+| `IncrementalLoad_1000_NoChange_MtimeGuard` | 1,470,214 | 782,112 | 6,047 | **Mtime guard hit (4.7×)** |
+| `IncrementalLoad_1000_OneFileChanged` | 6,862,339 | 2,017,520 | 14,187 | Re-parse 1 file + incremental merge |
+| `ScanDirFileHashes_1000` | 6,199,982 | 1,785,278 | 14,058 | Hash scan (cold mtime†) |
+| `ScanDirFileHashes_1000_MtimeGuard` | 1,440,053 | 749,421 | 6,047 | **Mtime guard hit (4.3×)** |
+| `MergePartialConfigs_1000` | 702,822 | 599,403 | 2,011 | Cache merge (1000 partial configs) |
+
+† "Cold mtime" = files just created within 2 seconds; mtime guard does not activate (safety window). **In production where polling interval ≥ 10s, the mtime guard always hits.**
+
+**Key Observations:**
+
+- **Mtime guard effect (production scenario)**: `NoChange_1000` drops from 6.9ms to **1.5ms** (**4.7×**); scan cost reduced from O(N×ReadFile+SHA256) to O(N×Stat)
+- **Incremental merge effect**: `OneFileChanged_1000` drops from 7.4ms to **6.9ms**, saving ~700µs `mergePartialConfigs` by patching tenant entries directly
+- **100 tenants**: `NoChange` (546µs) is **5.9× faster** than `FullDirLoad` (3,245µs); `OneFileChanged` (628µs) is **5.2× faster**
+- **1000 tenants**: `NoChange` (1.5ms mtime) is **23.7× faster** than `FullDirLoad` (34.9ms); `OneFileChanged` (6.9ms) is **5.1× faster**
+- **Scaling**: 100→1000 (×10), `FullDirLoad` from 3.2ms→34.9ms (×10.9); mtime NoChange from ~129µs→1.5ms (×11.6)
+- **Cost breakdown (1000T OneFileChanged = 6.9ms)**: scan 6.2ms (1 changed + 999 stat) + 1 file re-parse ~0.2ms + incremental merge ~0.5ms
+- **v2.1.0 → v2.1.0 total speedup**: `OneFileChanged_1000` 10.5ms→6.9ms (**-34%**), `NoChange_1000` 5.4ms→1.5ms (**-72%**, mtime guard)
 
 ---
 

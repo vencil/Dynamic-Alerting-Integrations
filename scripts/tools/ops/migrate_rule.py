@@ -29,8 +29,14 @@ import sys
 import re
 import os
 import csv
+import io
 import argparse
 import yaml
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import write_text_secure  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # AST Engine: promql-parser (optional — graceful degradation)
@@ -738,50 +744,51 @@ def apply_auto_suppression(results):
 def write_triage_csv(results, output_dir, dictionary):
     """產出 CSV 分桶報告，供大規模遷移時在 Excel 中批次決策。"""
     csv_path = os.path.join(output_dir, "triage-report.csv")
-    with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "Alert Name",
-            "Triage Action",
-            "Status",
-            "Severity",
-            "Metric Key",
-            "Threshold",
-            "Aggregation",
-            "Aggregation Reason",
-            "Golden Standard Match",
-            "Golden Rule",
-            "Rule Pack",
-            "Dictionary Note",
-            "Dimensions",
-            "Original Expression",
-        ])
-        for r in results:
-            golden_match = r.dict_match.get("maps_to", "") if r.dict_match else ""
-            golden_rule = r.dict_match.get("golden_rule", "") if r.dict_match else ""
-            rule_pack = r.dict_match.get("rule_pack", "") if r.dict_match else ""
-            dict_note = r.dict_match.get("note", "") if r.dict_match else ""
-            metric_keys = ", ".join(r.tenant_config.keys()) if r.tenant_config else ""
-            thresholds = ", ".join(r.tenant_config.values()) if r.tenant_config else ""
-            dims = "; ".join(str(d) for d in r.dim_hints) if r.dim_hints else ""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Alert Name",
+        "Triage Action",
+        "Status",
+        "Severity",
+        "Metric Key",
+        "Threshold",
+        "Aggregation",
+        "Aggregation Reason",
+        "Golden Standard Match",
+        "Golden Rule",
+        "Rule Pack",
+        "Dictionary Note",
+        "Dimensions",
+        "Original Expression",
+    ])
+    for r in results:
+        golden_match = r.dict_match.get("maps_to", "") if r.dict_match else ""
+        golden_rule = r.dict_match.get("golden_rule", "") if r.dict_match else ""
+        rule_pack = r.dict_match.get("rule_pack", "") if r.dict_match else ""
+        dict_note = r.dict_match.get("note", "") if r.dict_match else ""
+        metric_keys = ", ".join(r.tenant_config.keys()) if r.tenant_config else ""
+        thresholds = ", ".join(r.tenant_config.values()) if r.tenant_config else ""
+        dims = "; ".join(str(d) for d in r.dim_hints) if r.dim_hints else ""
 
-            writer.writerow([
-                r.alert_name,
-                r.triage_action or "unknown",
-                r.status,
-                r.severity,
-                metric_keys,
-                thresholds,
-                r.agg_mode or "",
-                r.agg_reason or "",
-                golden_match,
-                golden_rule,
-                rule_pack,
-                dict_note,
-                dims,
-                r.original_expr[:200],  # Truncate long exprs
-            ])
-    os.chmod(csv_path, 0o600)
+        writer.writerow([
+            r.alert_name,
+            r.triage_action or "unknown",
+            r.status,
+            r.severity,
+            metric_keys,
+            thresholds,
+            r.agg_mode or "",
+            r.agg_reason or "",
+            golden_match,
+            golden_rule,
+            rule_pack,
+            dict_note,
+            dims,
+            r.original_expr[:200],  # Truncate long exprs
+        ])
+    # CSV with BOM for Excel compatibility
+    write_text_secure(csv_path, "\ufeff" + buf.getvalue())
     return csv_path
 
 
@@ -807,15 +814,17 @@ def write_prefix_mapping(results, output_dir, prefix):
         return None
 
     mapping_path = os.path.join(output_dir, "prefix-mapping.yaml")
-    with open(mapping_path, 'w', encoding='utf-8') as f:
-        f.write("# ============================================================\n")
-        f.write("# Prefix Mapping Table — custom_ 前綴對應關係\n")
-        f.write("# ============================================================\n")
-        f.write("# 用途: 未來收斂至黃金標準時的對照表\n")
-        f.write(f"# Prefix: {prefix}\n")
-        f.write("# ============================================================\n\n")
-        yaml.safe_dump(mapping, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    os.chmod(mapping_path, 0o600)
+    mapping_content = (
+        "# ============================================================\n"
+        "# Prefix Mapping Table — custom_ 前綴對應關係\n"
+        "# ============================================================\n"
+        "# 用途: 未來收斂至黃金標準時的對照表\n"
+        f"# Prefix: {prefix}\n"
+        "# ============================================================\n\n"
+        + yaml.safe_dump(mapping, default_flow_style=False,
+                         allow_unicode=True, sort_keys=False)
+    )
+    write_text_secure(mapping_path, mapping_content)
     return mapping_path
 
 
@@ -838,33 +847,33 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
             tenant_configs[k] = v
 
     tenant_config_path = os.path.join(output_dir, "tenant-config.yaml")
-    with open(tenant_config_path, 'w', encoding='utf-8') as f:
-        f.write("# ============================================================\n")
-        f.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
-        f.write("# ============================================================\n")
-        f.write("# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n")
-        f.write("# tenants:\n")
-        f.write("#   my-tenant-name:\n")
-        for k, v in tenant_configs.items():
-            f.write(f'#     {k}: "{v}"\n')
-        f.write("\n")
-        for r in results:
-            if r.status == "unparseable" or r.triage_action == "use_golden":
-                continue
-            f.write(f"# --- From: {r.alert_name} (severity: {r.severity}) ---\n")
-            if r.notes:
-                for note in r.notes:
-                    f.write(f"# 📖 {note}\n")
-            for k, v in r.tenant_config.items():
-                f.write(f'{k}: "{v}"\n')
-            if r.dim_hints:
-                f.write("# 維度標籤替代語法:\n")
-                for hint in r.dim_hints:
-                    label_pairs = ', '.join(f'{lk}="{lv}"' for lk, lv in hint["labels"].items())
-                    dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
-                    f.write(f'# "{dim_key}": "{list(r.tenant_config.values())[0]}"\n')
-            f.write("\n")
-    os.chmod(tenant_config_path, 0o600)
+    buf = io.StringIO()
+    buf.write("# ============================================================\n")
+    buf.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
+    buf.write("# ============================================================\n")
+    buf.write("# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n")
+    buf.write("# tenants:\n")
+    buf.write("#   my-tenant-name:\n")
+    for k, v in tenant_configs.items():
+        buf.write(f'#     {k}: "{v}"\n')
+    buf.write("\n")
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        buf.write(f"# --- From: {r.alert_name} (severity: {r.severity}) ---\n")
+        if r.notes:
+            for note in r.notes:
+                buf.write(f"# 📖 {note}\n")
+        for k, v in r.tenant_config.items():
+            buf.write(f'{k}: "{v}"\n')
+        if r.dim_hints:
+            buf.write("# 維度標籤替代語法:\n")
+            for hint in r.dim_hints:
+                label_pairs = ', '.join(f'{lk}="{lv}"' for lk, lv in hint["labels"].items())
+                dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
+                buf.write(f'# "{dim_key}": "{list(r.tenant_config.values())[0]}"\n')
+        buf.write("\n")
+    write_text_secure(tenant_config_path, buf.getvalue())
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     # Deduplication: 追蹤已產出的 recording rule record 名稱
@@ -886,72 +895,72 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
 
     group_name = f"{prefix}migrated-recording-rules" if prefix else "migrated-recording-rules"
     recording_rules_path = os.path.join(output_dir, "platform-recording-rules.yaml")
-    with open(recording_rules_path, 'w', encoding='utf-8') as f:
-        f.write("# ============================================================\n")
-        f.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
-        f.write("# ============================================================\n")
-        if total_input > 0:
-            compression = round((1 - total_output / max(total_input * 2, 1)) * 100, 1)
-            f.write(f"# 收斂率: {total_input} 條規則 → {total_output} 條 Recording Rules")
-            f.write(f" (壓縮 {compression}%)\n")
-        f.write("# ============================================================\n\n")
-        f.write("groups:\n")
-        f.write(f"  - name: {group_name}\n")
-        f.write("    rules:\n")
-        for r, rr in deduplicated_rules:
-            # 當聚合模式為 AI 猜測 (非使用者手動選擇) 時，插入醒目警告方塊
-            if r.status == "complex" and r.agg_reason != "使用者手動選擇":
-                f.write("      # ============================================================\n")
-                f.write("      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨\n")
-                f.write("      # ============================================================\n")
-                f.write(f"      # 以下 recording rule 的聚合模式為 AI 自動猜測: {r.agg_mode}\n")
-                f.write(f"      # 猜測原因: {r.agg_reason}\n")
-                f.write(f"      # 原始 Alert: {r.alert_name}\n")
-                f.write("      #\n")
-                f.write("      # ⚠️  請在複製貼上前確認:\n")
-                f.write(f"      #   - 聚合模式 {r.agg_mode} 是否正確? (sum=叢集總量, max=單點瓶頸)\n")
-                f.write("      #   - 如不確定，請用 --interactive 模式重新執行\n")
-                f.write("      # ============================================================\n")
-            else:
-                f.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
-            f.write(f"      - record: {rr['record']}\n")
-            f.write(f"        expr: {rr['expr']}\n")
-            f.write("\n")
-    os.chmod(recording_rules_path, 0o600)
+    buf = io.StringIO()
+    buf.write("# ============================================================\n")
+    buf.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
+    buf.write("# ============================================================\n")
+    if total_input > 0:
+        compression = round((1 - total_output / max(total_input * 2, 1)) * 100, 1)
+        buf.write(f"# 收斂率: {total_input} 條規則 → {total_output} 條 Recording Rules")
+        buf.write(f" (壓縮 {compression}%)\n")
+    buf.write("# ============================================================\n\n")
+    buf.write("groups:\n")
+    buf.write(f"  - name: {group_name}\n")
+    buf.write("    rules:\n")
+    for r, rr in deduplicated_rules:
+        # 當聚合模式為 AI 猜測 (非使用者手動選擇) 時，插入醒目警告方塊
+        if r.status == "complex" and r.agg_reason != "使用者手動選擇":
+            buf.write("      # ============================================================\n")
+            buf.write("      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨\n")
+            buf.write("      # ============================================================\n")
+            buf.write(f"      # 以下 recording rule 的聚合模式為 AI 自動猜測: {r.agg_mode}\n")
+            buf.write(f"      # 猜測原因: {r.agg_reason}\n")
+            buf.write(f"      # 原始 Alert: {r.alert_name}\n")
+            buf.write("      #\n")
+            buf.write("      # ⚠️  請在複製貼上前確認:\n")
+            buf.write(f"      #   - 聚合模式 {r.agg_mode} 是否正確? (sum=叢集總量, max=單點瓶頸)\n")
+            buf.write("      #   - 如不確定，請用 --interactive 模式重新執行\n")
+            buf.write("      # ============================================================\n")
+        else:
+            buf.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
+        buf.write(f"      - record: {rr['record']}\n")
+        buf.write(f"        expr: {rr['expr']}\n")
+        buf.write("\n")
+    write_text_secure(recording_rules_path, buf.getvalue())
 
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     alert_group_name = f"{prefix}migrated-alert-rules" if prefix else "migrated-alert-rules"
     alert_rules_path = os.path.join(output_dir, "platform-alert-rules.yaml")
-    with open(alert_rules_path, 'w', encoding='utf-8') as f:
-        f.write("# ============================================================\n")
-        f.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
-        f.write("# ============================================================\n")
-        f.write("groups:\n")
-        f.write(f"  - name: {alert_group_name}\n")
-        f.write("    rules:\n")
-        for r in results:
-            if r.status == "unparseable" or r.triage_action == "use_golden":
-                continue
-            f.write(f"      # --- {r.alert_name} ---\n")
-            # Write alert rule with proper indentation
-            for ar in r.alert_rules:
-                f.write(f"      - alert: {ar['alert']}\n")
-                # Multiline expr — use YAML literal block
-                f.write(f"        expr: |\n")
-                for line in ar['expr'].strip().split('\n'):
-                    f.write(f"          {line}\n")
-                if 'for' in ar:
-                    f.write(f"        for: {ar['for']}\n")
-                if 'labels' in ar:
-                    f.write(f"        labels:\n")
-                    for lk, lv in ar['labels'].items():
-                        f.write(f"          {lk}: {lv}\n")
-                if 'annotations' in ar:
-                    f.write(f"        annotations:\n")
-                    for ak, av in ar['annotations'].items():
-                        f.write(f"          {ak}: \"{av}\"\n")
-            f.write("\n")
-    os.chmod(alert_rules_path, 0o600)
+    buf = io.StringIO()
+    buf.write("# ============================================================\n")
+    buf.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
+    buf.write("# ============================================================\n")
+    buf.write("groups:\n")
+    buf.write(f"  - name: {alert_group_name}\n")
+    buf.write("    rules:\n")
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        buf.write(f"      # --- {r.alert_name} ---\n")
+        # Write alert rule with proper indentation
+        for ar in r.alert_rules:
+            buf.write(f"      - alert: {ar['alert']}\n")
+            # Multiline expr — use YAML literal block
+            buf.write("        expr: |\n")
+            for line in ar['expr'].strip().split('\n'):
+                buf.write(f"          {line}\n")
+            if 'for' in ar:
+                buf.write(f"        for: {ar['for']}\n")
+            if 'labels' in ar:
+                buf.write("        labels:\n")
+                for lk, lv in ar['labels'].items():
+                    buf.write(f"          {lk}: {lv}\n")
+            if 'annotations' in ar:
+                buf.write("        annotations:\n")
+                for ak, av in ar['annotations'].items():
+                    buf.write(f"          {ak}: \"{av}\"\n")
+        buf.write("\n")
+    write_text_secure(alert_rules_path, buf.getvalue())
 
     # --- migration-report.txt ---
     perfect = [r for r in results if r.status == "perfect"]
@@ -960,78 +969,78 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     golden_matches = [r for r in results if r.triage_action == "use_golden"]
 
     report_path = os.path.join(output_dir, "migration-report.txt")
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write("=" * 60 + "\n")
-        engine = "AST" if HAS_AST else "regex"
-        f.write(f"遷移報告 (Migration Report) — v4 ({engine} engine)\n")
-        f.write("=" * 60 + "\n\n")
-        f.write(f"總規則數: {len(results)}\n")
-        f.write(f"  ✅ 完美解析: {len(perfect)}\n")
-        f.write(f"  ⚠️  複雜表達式 (已自動猜測): {len(complex_rules)}\n")
-        f.write(f"  🚨 無法解析 (需 LLM 協助): {len(unparseable)}\n")
-        f.write(f"  📖 建議使用黃金標準: {len(golden_matches)}\n\n")
+    buf = io.StringIO()
+    buf.write("=" * 60 + "\n")
+    engine = "AST" if HAS_AST else "regex"
+    buf.write(f"遷移報告 (Migration Report) — v4 ({engine} engine)\n")
+    buf.write("=" * 60 + "\n\n")
+    buf.write(f"總規則數: {len(results)}\n")
+    buf.write(f"  ✅ 完美解析: {len(perfect)}\n")
+    buf.write(f"  ⚠️  複雜表達式 (已自動猜測): {len(complex_rules)}\n")
+    buf.write(f"  🚨 無法解析 (需 LLM 協助): {len(unparseable)}\n")
+    buf.write(f"  📖 建議使用黃金標準: {len(golden_matches)}\n\n")
 
-        # 收斂率統計 — 排除 unparseable 的 golden matches 避免多扣
-        golden_parseable = len([r for r in results
-                                if r.triage_action == "use_golden"
-                                and r.status != "unparseable"])
-        convertible = len(perfect) + len(complex_rules) - golden_parseable
-        if convertible > 0:
-            f.write(f"📊 收斂率統計:\n")
-            f.write(f"  輸入: {len(results)} 條傳統規則\n")
-            f.write(f"  輸出: {total_output} 條 Recording Rules "
-                    f"+ {convertible} 條 Alert Rules\n")
-            if total_input > 0:
-                compression = round((1 - total_output / max(total_input * 2, 1)) * 100, 1)
-                f.write(f"  壓縮率: {compression}%\n")
-            f.write("\n")
+    # 收斂率統計 — 排除 unparseable 的 golden matches 避免多扣
+    golden_parseable = len([r for r in results
+                            if r.triage_action == "use_golden"
+                            and r.status != "unparseable"])
+    convertible = len(perfect) + len(complex_rules) - golden_parseable
+    if convertible > 0:
+        buf.write("📊 收斂率統計:\n")
+        buf.write(f"  輸入: {len(results)} 條傳統規則\n")
+        buf.write(f"  輸出: {total_output} 條 Recording Rules "
+                  f"+ {convertible} 條 Alert Rules\n")
+        if total_input > 0:
+            compression = round((1 - total_output / max(total_input * 2, 1)) * 100, 1)
+            buf.write(f"  壓縮率: {compression}%\n")
+        buf.write("\n")
 
-        if golden_matches:
-            f.write("-" * 40 + "\n")
-            f.write("📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值\n")
-            f.write("-" * 40 + "\n")
-            for r in golden_matches:
-                golden = r.dict_match
-                f.write(f"  • {r.alert_name}\n")
-                f.write(f"    → 黃金標準: {golden.get('golden_rule', '?')}\n")
-                f.write(f"    → Metric Key: {golden.get('maps_to', '?')}\n")
-                f.write(f"    → Rule Pack: {golden.get('rule_pack', '?')}\n")
-                f.write(f"    → {golden.get('note', '')}\n")
-            f.write("\n")
+    if golden_matches:
+        buf.write("-" * 40 + "\n")
+        buf.write("📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值\n")
+        buf.write("-" * 40 + "\n")
+        for r in golden_matches:
+            golden = r.dict_match
+            buf.write(f"  • {r.alert_name}\n")
+            buf.write(f"    → 黃金標準: {golden.get('golden_rule', '?')}\n")
+            buf.write(f"    → Metric Key: {golden.get('maps_to', '?')}\n")
+            buf.write(f"    → Rule Pack: {golden.get('rule_pack', '?')}\n")
+            buf.write(f"    → {golden.get('note', '')}\n")
+        buf.write("\n")
 
-        if perfect:
-            f.write("-" * 40 + "\n")
-            f.write("✅ 完美解析的規則\n")
-            f.write("-" * 40 + "\n")
-            for r in perfect:
-                if r.triage_action == "use_golden":
-                    continue
-                f.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
-            f.write("\n")
+    if perfect:
+        buf.write("-" * 40 + "\n")
+        buf.write("✅ 完美解析的規則\n")
+        buf.write("-" * 40 + "\n")
+        for r in perfect:
+            if r.triage_action == "use_golden":
+                continue
+            buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
+        buf.write("\n")
 
-        if complex_rules:
-            f.write("-" * 40 + "\n")
-            f.write("⚠️  複雜表達式 — 已自動猜測聚合模式，建議人工確認\n")
-            f.write("-" * 40 + "\n")
-            for r in complex_rules:
-                if r.triage_action == "use_golden":
-                    continue
-                f.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
-                if r.dim_hints:
-                    f.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
-            f.write("\n")
+    if complex_rules:
+        buf.write("-" * 40 + "\n")
+        buf.write("⚠️  複雜表達式 — 已自動猜測聚合模式，建議人工確認\n")
+        buf.write("-" * 40 + "\n")
+        for r in complex_rules:
+            if r.triage_action == "use_golden":
+                continue
+            buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
+            if r.dim_hints:
+                buf.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
+        buf.write("\n")
 
-        if unparseable:
-            f.write("-" * 40 + "\n")
-            f.write("🚨 無法自動解析 — 請將以下 LLM Prompt 交給 Claude 處理\n")
-            f.write("-" * 40 + "\n")
-            for r in unparseable:
-                if r.triage_action == "use_golden":
-                    continue
-                f.write(f"\n### {r.alert_name} ###\n")
-                f.write(r.llm_prompt)
-                f.write("\n")
-    os.chmod(report_path, 0o600)
+    if unparseable:
+        buf.write("-" * 40 + "\n")
+        buf.write("🚨 無法自動解析 — 請將以下 LLM Prompt 交給 Claude 處理\n")
+        buf.write("-" * 40 + "\n")
+        for r in unparseable:
+            if r.triage_action == "use_golden":
+                continue
+            buf.write(f"\n### {r.alert_name} ###\n")
+            buf.write(r.llm_prompt)
+            buf.write("\n")
+    write_text_secure(report_path, buf.getvalue())
 
     # --- v3: Triage CSV ---
     csv_path = write_triage_csv(results, output_dir, dictionary)

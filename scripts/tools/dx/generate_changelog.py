@@ -26,6 +26,11 @@ import sys
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
+# Add script dir to path for lib imports
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
+from _lib_python import write_text_secure  # noqa: E402
+
 # ── Constants ────────────────────────────────────────────────────────
 
 # Conventional commit type → display section
@@ -355,9 +360,7 @@ def main() -> int:
     output += f"<!-- Stats: {len(commits)} commits ({stats}) -->\n"
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(output)
-        os.chmod(args.output, 0o600)
+        write_text_secure(args.output, output)
         print(f"Written to {args.output}", file=sys.stderr)
     else:
         print(output)

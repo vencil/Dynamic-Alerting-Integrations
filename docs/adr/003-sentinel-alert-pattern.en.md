@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 
@@ -12,6 +12,8 @@ lang: en
 ## Status
 
 ✅ **Accepted** (v1.0.0)
+
+> **v2.1.0 Status:** The Sentinel pattern has been extended into a full tri-state operational framework (Normal / Silent / Maintenance), supporting `expires` auto-expiry and `_state_maintenance` dimensional labels. All new flag metrics follow this pattern.
 
 ## Background
 

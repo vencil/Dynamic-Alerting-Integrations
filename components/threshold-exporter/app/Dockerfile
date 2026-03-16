@@ -8,9 +8,13 @@ COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /threshold-exporter .
 
 FROM alpine:3.21
-RUN apk --no-cache add ca-certificates && \
+
+# Security: upgrade all packages to pick up CVE fixes (CVE-2025-15467 openssl, CVE-2025-48174 libavif)
+RUN apk --no-cache upgrade && \
+    apk --no-cache add ca-certificates && \
     addgroup -g 10001 -S nonroot && \
     adduser -S -D -H -u 10001 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
+
 COPY --from=builder /threshold-exporter /usr/local/bin/threshold-exporter
 
 USER nonroot:nonroot

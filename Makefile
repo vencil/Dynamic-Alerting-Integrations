@@ -40,6 +40,10 @@ verify: ## 驗證 Prometheus 指標抓取
 benchmark: ## 效能基準測試 (使用: make benchmark ARGS="--routing-bench --alertmanager-bench --reload-bench --json")
 	@bash scripts/benchmark.sh $(ARGS)
 
+.PHONY: go-bench
+go-bench: ## Go micro-benchmark (-count=5, 含 1000T incremental reload，需 ~3min)
+	cd components/threshold-exporter/app && go test -bench=. -benchmem -count=5 -run="^$$" -timeout=15m ./...
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
@@ -115,7 +119,7 @@ logs: ## 查看 DB 日誌 (使用: make logs TENANT=db-b)
 
 .PHONY: shell
 shell: ## 進入 DB CLI (使用: make shell TENANT=db-a)
-	@kubectl exec -it -n $(TENANT) deploy/mariadb -c mariadb -- mariadb -u root -pchangeme_root_pw
+	@kubectl exec -it -n $(TENANT) deploy/mariadb -c mariadb -- mariadb --defaults-file=/etc/mysql/credentials/.my.cnf
 
 .PHONY: inspect-tenant
 inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant TENANT=db-a)

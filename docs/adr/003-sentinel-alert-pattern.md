@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 
@@ -10,6 +10,8 @@ lang: zh
 ## 狀態
 
 ✅ **Accepted** (v1.0.0)
+
+> **v2.1.0 現況：** Sentinel 模式已擴展為完整的三態運營框架（Normal / Silent / Maintenance），支援 `expires` 自動失效與 `_state_maintenance` 維度標籤。所有新增 flag metric 一律採用此模式。
 
 ## 背景
 

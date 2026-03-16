@@ -2,7 +2,7 @@
 title: "Rule Pack Detail Viewer"
 tags: [rules, PromQL, reference]
 audience: [platform-engineer, domain-expert]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [rule-pack-matrix, rule-pack-selector, runbook-viewer]
 ---
@@ -85,6 +85,135 @@ const RULE_PACKS = {
       { name: 'KafkaBrokerDown', severity: 'critical', expr: 'tenant:kafka_broker_active:count < tenant:kafka_broker_active_threshold:value', desc: 'Fewer active brokers than expected', action: 'Check broker health, disk space, ZooKeeper' },
       { name: 'KafkaISRShrunk', severity: 'warning', expr: 'kafka_server_replicamanager_isrshrinkspersec > tenant:kafka_isr_shrank_threshold:value', desc: 'ISR shrink rate above threshold', action: 'Check replica broker health, network issues' },
       { name: 'KafkaUnderReplicatedPartitions', severity: 'critical', expr: 'kafka_server_replicamanager_underreplicatedpartitions > 0', desc: 'Under-replicated partitions detected', action: 'Investigate broker logs, disk I/O' },
+    ]
+  },
+  mongodb: {
+    label: 'MongoDB',
+    category: 'Database',
+    description: 'MongoDB monitoring: connections, replication lag, opcounters, memory and WiredTiger cache.',
+    exporter: 'mongodb_exporter',
+    recording: [
+      { name: 'tenant:mongodb_connections:ratio', expr: 'mongodb_connections_current / tenant:mongodb_connections_threshold:value', desc: 'Current connections as ratio of threshold' },
+      { name: 'tenant:mongodb_replication_lag:seconds', expr: 'mongodb_mongod_replset_member_replication_lag', desc: 'Replication lag in seconds' },
+    ],
+    alerts: [
+      { name: 'MongoDBHighConnections', severity: 'warning', expr: 'tenant:mongodb_connections:ratio > 1', desc: 'Connections exceed threshold', action: 'Check connection pooling and client configuration' },
+      { name: 'MongoDBReplicationLag', severity: 'warning', expr: 'tenant:mongodb_replication_lag:seconds > tenant:mongodb_replication_lag_threshold:value', desc: 'Replication lag above threshold', action: 'Check secondary node health and network' },
+      { name: 'MongoDBHighMemory', severity: 'warning', expr: 'tenant:mongodb_memory:ratio > 1', desc: 'WiredTiger cache usage above threshold', action: 'Tune WiredTiger cache size, check working set' },
+    ]
+  },
+  elasticsearch: {
+    label: 'Elasticsearch',
+    category: 'Database',
+    description: 'Elasticsearch monitoring: cluster health, JVM heap, indexing throughput, search latency.',
+    exporter: 'elasticsearch_exporter',
+    recording: [
+      { name: 'tenant:es_heap_usage:ratio', expr: 'elasticsearch_jvm_memory_used_bytes / elasticsearch_jvm_memory_max_bytes * 100 / tenant:es_heap_threshold:value', desc: 'JVM heap usage ratio' },
+      { name: 'tenant:es_indexing_rate:rate5m', expr: 'rate(elasticsearch_indices_indexing_index_total[5m])', desc: 'Indexing rate (5m)' },
+    ],
+    alerts: [
+      { name: 'ElasticsearchHighHeap', severity: 'warning', expr: 'tenant:es_heap_usage:ratio > 1', desc: 'JVM heap above threshold', action: 'Review heap size settings, check for memory leaks' },
+      { name: 'ElasticsearchClusterRed', severity: 'critical', expr: 'elasticsearch_cluster_health_status{color="red"} == 1', desc: 'Cluster status is red', action: 'Check unassigned shards, node availability' },
+      { name: 'ElasticsearchHighDisk', severity: 'warning', expr: 'tenant:es_disk_usage:ratio > 1', desc: 'Disk usage above threshold', action: 'Delete old indices, add nodes, adjust ILM policy' },
+    ]
+  },
+  oracle: {
+    label: 'Oracle',
+    category: 'Database',
+    description: 'Oracle DB monitoring: tablespace usage, session count, wait events, ASM disk groups.',
+    exporter: 'oracledb_exporter',
+    recording: [
+      { name: 'tenant:oracle_sessions:ratio', expr: 'oracle_sessions_current / tenant:oracle_sessions_threshold:value', desc: 'Active sessions ratio' },
+      { name: 'tenant:oracle_tablespace_usage:pct', expr: 'oracle_tablespace_bytes / oracle_tablespace_max_bytes * 100', desc: 'Tablespace usage percentage' },
+    ],
+    alerts: [
+      { name: 'OracleHighSessions', severity: 'warning', expr: 'tenant:oracle_sessions:ratio > 1', desc: 'Sessions exceed threshold', action: 'Check for session leaks, review connection pooling' },
+      { name: 'OracleTablespaceFull', severity: 'critical', expr: 'tenant:oracle_tablespace_usage:pct > tenant:oracle_tablespace_critical:value', desc: 'Tablespace nearing capacity', action: 'Extend tablespace, purge old data' },
+    ]
+  },
+  db2: {
+    label: 'DB2',
+    category: 'Database',
+    description: 'IBM DB2 monitoring: bufferpool hit ratio, connections, tablespace status, log usage.',
+    exporter: 'db2_exporter',
+    recording: [
+      { name: 'tenant:db2_connections:ratio', expr: 'db2_connections_current / tenant:db2_connections_threshold:value', desc: 'Connections ratio' },
+      { name: 'tenant:db2_bufferpool_hit:pct', expr: 'db2_bufferpool_data_hit_ratio', desc: 'Bufferpool hit ratio' },
+    ],
+    alerts: [
+      { name: 'DB2HighConnections', severity: 'warning', expr: 'tenant:db2_connections:ratio > 1', desc: 'Connections above threshold', action: 'Review max_connections, check for connection leaks' },
+      { name: 'DB2LowBufferpoolHit', severity: 'warning', expr: 'tenant:db2_bufferpool_hit:pct < tenant:db2_bufferpool_hit_threshold:value', desc: 'Bufferpool hit ratio below threshold', action: 'Increase bufferpool size, analyze access patterns' },
+    ]
+  },
+  clickhouse: {
+    label: 'ClickHouse',
+    category: 'Database',
+    description: 'ClickHouse monitoring: query performance, merge operations, memory usage, replication queue.',
+    exporter: 'clickhouse_exporter',
+    recording: [
+      { name: 'tenant:clickhouse_queries:rate5m', expr: 'rate(clickhouse_queries_total[5m])', desc: 'Query rate (5m)' },
+      { name: 'tenant:clickhouse_memory:ratio', expr: 'clickhouse_memory_usage / tenant:clickhouse_memory_threshold:value', desc: 'Memory usage ratio' },
+    ],
+    alerts: [
+      { name: 'ClickHouseHighMemory', severity: 'warning', expr: 'tenant:clickhouse_memory:ratio > 1', desc: 'Memory usage above threshold', action: 'Review max_memory_usage, optimize queries' },
+      { name: 'ClickHouseReplicationQueue', severity: 'warning', expr: 'clickhouse_replication_queue_size > tenant:clickhouse_replication_queue_threshold:value', desc: 'Replication queue growing', action: 'Check network between replicas, disk I/O' },
+    ]
+  },
+  rabbitmq: {
+    label: 'RabbitMQ',
+    category: 'Messaging',
+    description: 'RabbitMQ monitoring: queue depth, consumer count, message rates, node health.',
+    exporter: 'rabbitmq_exporter',
+    recording: [
+      { name: 'tenant:rabbitmq_queue_depth:max', expr: 'max by(queue) (rabbitmq_queue_messages)', desc: 'Max queue depth across queues' },
+      { name: 'tenant:rabbitmq_consumers:count', expr: 'sum(rabbitmq_queue_consumers)', desc: 'Total consumer count' },
+    ],
+    alerts: [
+      { name: 'RabbitMQHighQueueDepth', severity: 'warning', expr: 'tenant:rabbitmq_queue_depth:max > tenant:rabbitmq_queue_depth_threshold:value', desc: 'Queue depth above threshold', action: 'Scale consumers, check for processing bottlenecks' },
+      { name: 'RabbitMQNoConsumers', severity: 'critical', expr: 'tenant:rabbitmq_consumers:count == 0', desc: 'No active consumers', action: 'Check consumer processes, restart if needed' },
+    ]
+  },
+  kubernetes: {
+    label: 'Kubernetes',
+    category: 'Infrastructure',
+    description: 'Kubernetes monitoring: pod restarts, CPU throttling, OOMKill detection, node resource pressure.',
+    exporter: 'kube-state-metrics + node_exporter',
+    recording: [
+      { name: 'tenant:k8s_pod_restarts:rate1h', expr: 'increase(kube_pod_container_status_restarts_total[1h])', desc: 'Pod restart count (1h)' },
+      { name: 'tenant:k8s_cpu_throttle:ratio', expr: 'rate(container_cpu_cfs_throttled_periods_total[5m]) / rate(container_cpu_cfs_periods_total[5m]) * 100', desc: 'CPU throttle ratio (%)' },
+    ],
+    alerts: [
+      { name: 'KubernetesPodCrashLoop', severity: 'warning', expr: 'tenant:k8s_pod_restarts:rate1h > tenant:k8s_pod_restart_threshold:value', desc: 'Pod restart rate above threshold', action: 'Check pod logs, review resource limits' },
+      { name: 'KubernetesCPUThrottle', severity: 'warning', expr: 'tenant:k8s_cpu_throttle:ratio > tenant:k8s_cpu_throttle_threshold:value', desc: 'CPU throttle ratio above threshold', action: 'Increase CPU limits or optimize workload' },
+      { name: 'KubernetesOOMKill', severity: 'critical', expr: 'increase(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[1h]) > 0', desc: 'OOMKill detected', action: 'Increase memory limits, investigate memory leaks' },
+    ]
+  },
+  operational: {
+    label: 'Operational',
+    category: 'Platform',
+    description: 'Cross-cutting operational rules: config drift detection, exporter health, cardinality monitoring.',
+    exporter: 'threshold-exporter',
+    recording: [
+      { name: 'tenant:config_reload:status', expr: 'threshold_exporter_config_reload_success', desc: 'Config reload success status' },
+      { name: 'tenant:cardinality:count', expr: 'count by(tenant) ({__name__=~"user_threshold_.*"})', desc: 'Per-tenant series cardinality' },
+    ],
+    alerts: [
+      { name: 'ConfigReloadFailed', severity: 'warning', expr: 'tenant:config_reload:status == 0', desc: 'Config reload failed', action: 'Check config syntax, review YAML validation errors' },
+      { name: 'HighCardinality', severity: 'warning', expr: 'tenant:cardinality:count > 500', desc: 'Per-tenant series count above 500', action: 'Review tenant config, reduce metric dimensions' },
+    ]
+  },
+  platform: {
+    label: 'Platform Health',
+    category: 'Platform',
+    description: 'Platform self-monitoring: threshold-exporter health, Prometheus/Alertmanager status, rule evaluation errors.',
+    exporter: 'threshold-exporter + prometheus',
+    recording: [
+      { name: 'platform:exporter_up:count', expr: 'sum(up{job=~".*threshold.*"})', desc: 'Healthy exporter instance count' },
+      { name: 'platform:rule_evaluation_failures:rate5m', expr: 'rate(prometheus_rule_evaluation_failures_total[5m])', desc: 'Rule evaluation failure rate' },
+    ],
+    alerts: [
+      { name: 'ThresholdExporterDown', severity: 'critical', expr: 'platform:exporter_up:count < 1', desc: 'No healthy threshold-exporter instances', action: 'Check deployment, pod status, readiness probes' },
+      { name: 'RuleEvaluationErrors', severity: 'warning', expr: 'platform:rule_evaluation_failures:rate5m > 0', desc: 'Rule evaluation failures detected', action: 'Check Prometheus logs, fix PromQL syntax errors' },
     ]
   },
 };

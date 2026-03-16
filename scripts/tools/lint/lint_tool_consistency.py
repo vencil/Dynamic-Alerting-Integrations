@@ -95,8 +95,9 @@ def parse_registry(path: str) -> list:
                 current[key] = d
                 continue
 
-            # Scalar
-            current[key] = val.strip("'\"")
+            # Scalar (skip empty values — they precede a block list)
+            if val:
+                current[key] = val.strip("'\"")
             continue
 
         # Sub-list item: `      - docs/xxx.md`

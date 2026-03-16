@@ -75,8 +75,10 @@ TOOL_FILES=(
     ops/blind_spot_discovery.py
     ops/maintenance_scheduler.py
     ops/alert_quality.py
+    ops/alert_correlate.py
     # Config generation tools
     ops/generate_alertmanager_routes.py
+    ops/explain_route.py
     ops/validate_config.py
     ops/analyze_rule_pack_gaps.py
     ops/patch_config.py
@@ -91,6 +93,14 @@ TOOL_FILES=(
     # v2.0.0 quality & governance tools
     ops/policy_engine.py
     ops/cardinality_forecasting.py
+    ops/notification_tester.py
+    ops/threshold_recommend.py
+    ops/byo_check.py
+    ops/federation_check.py
+    ops/grafana_import.py
+    ops/shadow_verify.py
+    ops/discover_instance_mappings.py
+    ops/generate_tenant_mapping_rules.py
     # Data files
     metric-dictionary.yaml
 )

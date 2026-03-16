@@ -4,13 +4,17 @@
 
 | File | Audience | Description |
 |------|----------|-------------|
+| `docs/adr/001-severity-dedup-via-inhibit.md` (.en.md) | Platform Engineers | ADR-001: Severity Dedup via Inhibit Rules |
+| `docs/adr/002-oci-registry-over-chartmuseum.md` (.en.md) | Platform Engineers | ADR-002: OCI Registry over ChartMuseum |
+| `docs/adr/003-sentinel-alert-pattern.md` (.en.md) | Platform Engineers | ADR-003: Sentinel Alert Pattern |
+| `docs/adr/004-federation-scenario-a-first.md` (.en.md) | Platform Engineers | ADR-004: Federation Scenario A First |
+| `docs/adr/005-projected-volume-for-rule-packs.md` (.en.md) | Platform Engineers | ADR-005: Projected Volume for Rule Packs |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | Performance Analysis & Benchmarks |
 | `docs/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager Integration Guide |
 | `docs/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
-| `docs/interactive/tools/cli-playground.jsx` | All | da-tools CLI Playground |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/context-diagram.md` (.en.md) | All | Project Context Diagram: Roles, Tools, and Product Interactions |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
@@ -18,25 +22,52 @@
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) Quick Start Guide |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer Quick Start Guide |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant Quick Start Guide |
-| `docs/getting-started/wizard.jsx` | All | Wizard |
+| `docs/getting-started/wizard.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Getting Started Wizard |
 | `docs/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps Deployment Guide |
 | `docs/glossary.md` (.en.md) | All | Glossary |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, Security & Compliance | Governance, Audit & Security Compliance |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard Guide |
-| `docs/index.md` | All | Dynamic Alerting Platform — Home |
+| `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
+| `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
+| `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
+| `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
+| `docs/interactive/tools/architecture-quiz.jsx` | Platform Engineers | Architecture Decision Quiz |
+| `docs/interactive/tools/capacity-planner.jsx` | Platform Engineers | Capacity Planner |
+| `docs/interactive/tools/cli-playground.jsx` | Platform Engineers | da-tools CLI Playground |
+| `docs/interactive/tools/config-diff.jsx` | Platform Engineers | Config Version Diff |
+| `docs/interactive/tools/config-lint.jsx` | Platform Engineers, Tenants | Config Lint Report |
+| `docs/interactive/tools/dependency-graph.jsx` | Platform Engineers, Domain Experts (DBA) | Dependency Graph |
+| `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
+| `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
+| `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
+| `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |
+| `docs/interactive/tools/onboarding-checklist.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Onboarding Checklist Generator |
+| `docs/interactive/tools/platform-demo.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Platform Demo |
+| `docs/interactive/tools/playground.jsx` | Platform Engineers, Tenants | YAML Playground |
+| `docs/interactive/tools/promql-tester.jsx` | Platform Engineers, Domain Experts (DBA) | Prometheus Query Tester |
+| `docs/interactive/tools/roi-calculator.jsx` | Platform Engineers | ROI Calculator |
+| `docs/interactive/tools/rule-pack-detail.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Detail Viewer |
+| `docs/interactive/tools/rule-pack-matrix.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Comparison Matrix |
+| `docs/interactive/tools/rule-pack-selector.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Selector |
+| `docs/interactive/tools/runbook-viewer.jsx` | Platform Engineers, Domain Experts (DBA) | Runbook Viewer |
+| `docs/interactive/tools/schema-explorer.jsx` | Platform Engineers, Domain Experts (DBA) | YAML Schema Explorer |
+| `docs/interactive/tools/self-service-portal.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Tenant Self-Service Portal |
+| `docs/interactive/tools/template-gallery.jsx` | Tenants, Platform Engineers | Config Template Gallery |
+| `docs/interactive/tools/threshold-calculator.jsx` | Domain Experts (DBA), Tenants | Threshold Calculator |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
+| `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | All | Conventional Commits Guide |
 | `docs/internal/dx-tooling-backlog.md` | All | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
+| `docs/internal/test-map.md` | All | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
-| `docs/interactive/tools/playground.jsx` | All | Playground |
-| `docs/interactive/tools/rule-pack-selector.jsx` | Platform Engineers, SREs | Rule Pack Selector |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics |
+| `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | Scenario: Shadow Audit — Evaluate Alert Health Without Migration |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | SREs, DevOps | Scenario: Automated Shadow Monitoring Cutover Workflow |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | Scenario: Complete Tenant Lifecycle Management |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |

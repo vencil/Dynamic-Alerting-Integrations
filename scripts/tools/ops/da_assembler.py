@@ -35,7 +35,7 @@ try:
     import yaml
 except ImportError:
     print("ERROR: PyYAML is required.  pip install pyyaml", file=sys.stderr)
-    sys.exit(2)
+    sys.exit(1)
 
 try:
     from kubernetes import client, config, watch
@@ -333,11 +333,11 @@ def render_cr_file(
             cr = yaml.safe_load(fh)
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
-        return 2
+        return 1
 
     if not cr or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
-        return 2
+        return 1
 
     reconcile_one(cr, config_dir, dry_run=dry_run)
     return 0
@@ -396,7 +396,7 @@ def main() -> int:
     if not HAS_K8S:
         log.error("kubernetes Python client is required.  "
                    "pip install kubernetes")
-        return 2
+        return 1
 
     # Load kubeconfig
     try:
@@ -411,7 +411,7 @@ def main() -> int:
                 log.info("Using kubeconfig")
     except Exception as e:
         log.error("Failed to load Kubernetes config: %s", e)
-        return 2
+        return 1
 
     api = client.CustomObjectsApi()
 

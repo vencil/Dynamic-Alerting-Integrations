@@ -2,7 +2,7 @@
 title: "Config Template Gallery"
 tags: [templates, examples, stacks]
 audience: [tenant, "platform-engineer"]
-version: v2.0.0
+version: v2.1.0
 lang: en
 related: [playground, rule-pack-selector, threshold-calculator]
 ---
@@ -33,12 +33,9 @@ const TEMPLATES = [
     redis_connected_clients: "3000"
     # Nginx — frontend reverse proxy
     # (uses Nginx Rule Pack recording rules)
-    _severity_dedup:
-      enabled: true
     _routing:
-      receiver:
-        type: "slack"
-        channel: "#ecommerce-alerts"
+      receiver_type: "slack"
+      webhook_url: "https://hooks.slack.com/services/xxx/yyy/zzz"
       group_by: ["alertname", "severity"]
       group_wait: "30s"
       repeat_interval: "4h"`,
@@ -61,11 +58,8 @@ const TEMPLATES = [
     mongo_connections: "200"
     mongo_connections_critical: "300"
     mongo_memory: "85"
-    _severity_dedup:
-      enabled: true
     _routing:
-      receiver:
-        type: "pagerduty"
+      receiver_type: "pagerduty"
       group_by: ["alertname", "topic"]
       group_wait: "1m"
       group_interval: "5m"
@@ -93,12 +87,9 @@ const TEMPLATES = [
     elasticsearch_heap: "80"
     elasticsearch_heap_critical: "92"
     elasticsearch_unassigned_shards: "0"
-    _severity_dedup:
-      enabled: true
     _routing:
-      receiver:
-        type: "webhook"
-        url: "https://hooks.slack.com/services/xxx/yyy/zzz"
+      receiver_type: "webhook"
+      webhook_url: "https://hooks.slack.com/services/xxx/yyy/zzz"
       group_wait: "30s"
       repeat_interval: "6h"`,
   },
@@ -115,12 +106,9 @@ const TEMPLATES = [
     kafka_lag_critical: "500000"
     kafka_broker_active: "5"
     # ClickHouse thresholds use custom keys
-    _severity_dedup:
-      enabled: true
     _routing:
-      receiver:
-        type: "email"
-        to: "analytics-team@company.com"
+      receiver_type: "email"
+      email_to: "analytics-team@company.com"
       group_wait: "2m"
       group_interval: "5m"
       repeat_interval: "24h"`,
@@ -150,9 +138,8 @@ const TEMPLATES = [
     _silent_mode:
       expires: "2026-03-15T12:00:00Z"
     _routing:
-      receiver:
-        type: "teams"
-        webhook_url: "https://teams.example.com/webhook"
+      receiver_type: "teams"
+      webhook_url: "https://teams.example.com/webhook"
       group_wait: "1m"
       repeat_interval: "12h"`,
   },

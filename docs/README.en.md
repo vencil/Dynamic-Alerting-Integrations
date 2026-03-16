@@ -2,7 +2,7 @@
 title: "Documentation Guide"
 tags: [overview, introduction]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Documentation Guide
@@ -94,31 +94,9 @@ In-depth discussions on specific technical domains.
 
 ## Tool Quick Reference
 
-22 tools in `scripts/tools/`, organized by function.
+The da-tools container packages 23 CLI commands covering tenant lifecycle, day-to-day operations, and quality governance. `scripts/tools/` contains 73 Python tools in total (including DX automation and linting).
 
-| Tool | Purpose |
-|------|---------|
-| `patch_config.py` | Partial ConfigMap update + `--diff` preview |
-| `check_alert.py` | Alert status queries (current, historical, details) |
-| `diagnose.py` | Single-tenant health check (configuration, metrics, rules, alerts) |
-| `batch_diagnose.py` | Multi-tenant parallel health check report (post-cutover) |
-| `onboard_platform.py` | Reverse-analyze existing configuration + produce `onboard-hints.json` |
-| `migrate_rule.py` | Migrate traditional rules (AST + triage + prefix + dictionary) |
-| `scaffold_tenant.py` | Interactive tenant configuration generator (or CLI / `--from-onboard`) |
-| `validate_migration.py` | Shadow Monitoring value diff + auto-convergence detection |
-| `analyze_rule_pack_gaps.py` | Analyze custom rule to Rule Pack coverage |
-| `backtest_threshold.py` | Backtest threshold changes (Prometheus 7-day replay) |
-| `offboard_tenant.py` | Tenant offboarding (cleanup, warnings) |
-| `deprecate_rule.py` | Rule/metric deprecation (auto-disable alerts) |
-| `baseline_discovery.py` | Workload observation + threshold suggestions (rule-free scenarios) |
-| `bump_docs.py` | Version consistency management (CLAUDE.md / README / Chart) |
-| `lint_custom_rules.py` | Custom rule governance linter (schema + best practices) |
-| `generate_alertmanager_routes.py` | Tenant YAML → Alertmanager route/receiver/inhibit |
-| `validate_config.py` | All-in-one configuration validation (YAML + schema + routes + policy) |
-| `cutover_tenant.py` | Shadow Monitoring one-click cutover (§7.1 fully automated) |
-| `blind_spot_discovery.py` | Cluster targets blind spot scan (Prometheus × tenant cross-analysis) |
-| `config_diff.py` | Directory-level configuration diff (GitOps PR review blast radius) |
-| `maintenance_scheduler.py` | Scheduled maintenance windows → Alertmanager silence (CronJob) |
+Full reference: [da-tools CLI](cli-reference.en.md) · [Tool Map](internal/tool-map.md) · [Cheat Sheet](cheat-sheet.en.md)
 
 ---
 
@@ -134,45 +112,9 @@ Playbooks and development plans for AI agents and internal development.
 
 ---
 
-## Versioning & Maintenance
-
-- Current version: see `CLAUDE.md` or `make version-check`
-- Version control: [docs/architecture-and-design.en.md](architecture-and-design.en.md) § Roadmap
-- Changelog: `CHANGELOG.md` (root directory)
-
----
-
-## Quick Commands
-
-Common development and operations commands:
-
-```bash
-# Demo & testing
-make demo                    # Quick demo (scaffold → migrate → diagnose)
-make demo-full              # Full demo (with composite load → alert → cleanup)
-make test-alert             # Hardware failure test
-make benchmark              # Performance benchmark
-
-# Configuration validation
-make validate-config        # All-in-one configuration validation
-
-# Version management
-make version-check          # Verify version consistency
-make bump-docs PLATFORM=X.Y.Z EXPORTER=X.Y.Z TOOLS=X.Y.Z
-
-# Helm packaging & push
-make chart-package
-make chart-push
-
-# See all targets
-make help
-```
-
----
-
 ## Feedback & Contribution
 
-Found documentation issues or improvements? Please submit an issue or PR. All documentation follows the governance and security standards outlined in [governance-security.en.md](governance-security.en.md).
+Found documentation issues or improvements? Please submit an issue or PR. For development commands and version management, see the [root README](../README.en.md#quick-start).
 
 ## Related Resources
 

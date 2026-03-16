@@ -189,7 +189,7 @@ def _extract_key_flags(section: str) -> str:
 def _read_versions():
     """Read platform and da-tools versions from source-of-truth files."""
     # Platform version from CLAUDE.md
-    version = 'v2.0.0'  # fallback
+    version = 'v2.1.0'  # fallback
     claude_md = REPO_ROOT / 'CLAUDE.md'
     if claude_md.exists():
         content = claude_md.read_text(encoding='utf-8')

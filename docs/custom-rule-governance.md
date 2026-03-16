@@ -2,7 +2,7 @@
 title: "多租戶客製化規則治理規範 (Custom Rule Governance Model)"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
@@ -236,7 +236,7 @@ python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --policy .gith
 # 透過 da-tools 容器執行（不需 clone 專案）
 docker run --rm \
   -v $(pwd)/my-custom-rules:/data/rules \
-  ghcr.io/vencil/da-tools:v2.0.0 \
+  ghcr.io/vencil/da-tools:v2.1.0 \
   lint /data/rules --ci
 
 # 輸出範例

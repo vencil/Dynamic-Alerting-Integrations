@@ -45,6 +45,9 @@ class DocLinkChecker:
         
         self.ignored_count = 0
 
+        # Cross-language counterpart check results
+        self.missing_counterparts = []
+
         # 已知的 section 參考格式：§X.Y (主章節.副章節)
         self.section_pattern = re.compile(r'§(\d+)\.(\d+)')
         
@@ -400,16 +403,65 @@ class DocLinkChecker:
                         "source_line": line.strip()
                     })
 
+    def check_cross_language_counterparts(self):
+        """Check that zh docs have en counterparts and vice versa.
+
+        For each .en.md file, verify the zh counterpart exists (without .en).
+        For each zh .md file (not .en.md), check if an .en.md counterpart exists.
+        Only checks docs/ directory (not root files like CHANGELOG.md).
+        """
+        docs_path = self.repo_root / "docs"
+        if not docs_path.is_dir():
+            return
+
+        # Collect all .en.md files
+        en_files = set()
+        zh_files = set()
+        for f in docs_path.rglob("*.md"):
+            rel = f.relative_to(docs_path)
+            if f.name.endswith(".en.md"):
+                en_files.add(str(rel))
+            else:
+                zh_files.add(str(rel))
+
+        # Check each .en.md has a zh counterpart
+        for en_rel in sorted(en_files):
+            zh_rel = en_rel.replace(".en.md", ".md")
+            if zh_rel not in zh_files:
+                self.missing_counterparts.append({
+                    "file": f"docs/{en_rel}",
+                    "missing": f"docs/{zh_rel}",
+                    "direction": "en→zh",
+                })
+
+        # Check each zh .md has an .en.md counterpart (only for files
+        # where at least one .en.md exists in the same directory)
+        en_dirs = {str(Path(e).parent) for e in en_files}
+        for zh_rel in sorted(zh_files):
+            zh_dir = str(Path(zh_rel).parent)
+            if zh_dir not in en_dirs:
+                continue  # Skip dirs without any .en.md files
+            en_rel = zh_rel.replace(".md", ".en.md")
+            if en_rel not in en_files:
+                self.missing_counterparts.append({
+                    "file": f"docs/{zh_rel}",
+                    "missing": f"docs/{en_rel}",
+                    "direction": "zh→en",
+                })
+
     def run(self) -> int:
         """執行掃描並返回 exit code。"""
         print("Scanning documentation files for broken links...\n")
-        
+
         md_files = self._get_all_md_files()
         print(f"Found {len(md_files)} Markdown files to scan.\n")
         
         for md_file in md_files:
             self.scan_file(md_file)
-        
+
+        # Cross-language counterpart check
+        self.check_cross_language_counterparts()
+
         # 列印詳細連結（如果 --verbose）
         if self.verbose and self.verbose_links:
             print("=" * 70)
@@ -430,6 +482,8 @@ class DocLinkChecker:
             print(f"Ignored (via .doclinkignore): {self.ignored_count}")
         print(f"Section references checked: {self.section_refs_checked}")
         print(f"Broken section references: {len(self.broken_section_refs)}")
+        if self.missing_counterparts:
+            print(f"Missing language counterparts: {len(self.missing_counterparts)}")
         print()
         
         # 列印破損的連結
@@ -472,8 +526,18 @@ class DocLinkChecker:
                     print(f"              ... and {len(self.known_sections) - 10} more")
                 print(f"  Source: {broken['source_line'][:80]}")
         
+        # 列印缺失的語言對應檔案
+        if self.missing_counterparts:
+            print("\n" + "=" * 70)
+            print("MISSING LANGUAGE COUNTERPARTS:")
+            print("=" * 70)
+            for entry in self.missing_counterparts:
+                print(f"\n  File: {entry['file']}")
+                print(f"  Missing: {entry['missing']}")
+                print(f"  Direction: {entry['direction']}")
+
         print("\n" + "=" * 70)
-        
+
         # 返回 exit code
         if self.broken_links or self.broken_anchors or self.broken_section_refs:
             return 1

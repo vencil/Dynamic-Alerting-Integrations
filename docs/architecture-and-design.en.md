@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.0.0
+version: v2.1.0
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -231,6 +231,16 @@ ghi789... conf.d/db-b.yaml
 # threshold-exporter detects change, reloads configuration
 ```
 
+```mermaid
+flowchart LR
+    A["kubectl patch<br/>ConfigMap"] --> B["K8s updates<br/>symlink"]
+    B --> C{"SHA-256<br/>compare"}
+    C -->|"hash changed"| D["Reload<br/>affected tenant"]
+    C -->|"hash same"| E["Skip<br/>no action"]
+    D --> F["Update Prometheus<br/>metrics"]
+    F --> G["da_config_reload_total<br/>+1"]
+```
+
 **Why SHA-256 instead of ModTime?**
 - Kubernetes ConfigMap creates a symlink layer, ModTime is unreliable
 - Same content = same hash, avoid unnecessary reloads
@@ -413,6 +423,28 @@ v1.2.0 introduced **Silent Mode**, which together with the existing Maintenance 
 | Silent | Muted | ✅ | ✅ | ❌ | Alertmanager |
 | Maintenance | True maintenance | ❌ | ❌ | ❌ | Prometheus (PromQL) |
 
+```mermaid
+stateDiagram-v2
+    [*] --> Normal
+    Normal --> Silent : _silent_mode: "warning" / "all"
+    Normal --> Maintenance : _state_maintenance: "enable"
+    Silent --> Normal : _silent_mode: "disable" / expires expired
+    Maintenance --> Normal : _state_maintenance: "disable" / expires expired
+
+    state Normal {
+        direction LR
+        note right of Normal : Alert ✅ TSDB ✅ Notification ✅
+    }
+    state Silent {
+        direction LR
+        note right of Silent : Alert ✅ TSDB ✅ Notification ❌\nControl: Alertmanager inhibit
+    }
+    state Maintenance {
+        direction LR
+        note right of Maintenance : Alert ❌ TSDB ❌ Notification ❌\nControl: PromQL unless
+    }
+```
+
 **Design principle:** Prometheus controls "what should trigger an alert," Alertmanager controls "whether to send notification."
 
 - **Maintenance Mode** (existing): Eliminates alerts at the PromQL layer via `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`. Alert does not fire, TSDB has no record, no notification.
@@ -502,6 +534,17 @@ inhibit_rules:
 v1.2.0 introduced **Severity Dedup** to resolve the issue of "TSDB records for warning being eliminated when critical fires."
 
 **Design change:** Auto-suppression moved from the PromQL layer (`unless critical`) to the Alertmanager layer (`inhibit_rules`). TSDB always records both warning and critical simultaneously; dedup only controls notification behavior.
+
+```mermaid
+flowchart TD
+    A["Prometheus<br/>warning alert fires"] --> B["TSDB record ✅"]
+    C["Prometheus<br/>critical alert fires"] --> D["TSDB record ✅"]
+    B --> E{"Alertmanager<br/>inhibit_rules"}
+    D --> E
+    E -->|"critical exists<br/>same metric_group + tenant"| F["warning notification ❌ suppressed"]
+    E -->|"warning only"| G["warning notification ✅"]
+    E -->|"critical"| H["critical notification ✅"]
+```
 
 **Per-Tenant Control Mechanism**
 
@@ -874,7 +917,9 @@ spec:
 
 ## 5. Future Roadmap
 
-The following items are listed by priority. Items completed in v2.0.0 (Alert Quality Scoring, Policy-as-Code Path A, Tenant Self-Service Portal, Cardinality Forecasting, Self-Hosted Portal Docker Image) have been moved to [CHANGELOG.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md). DX tooling improvements are tracked in [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
+DX tooling improvements are tracked in [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
+
+The following are technical directions still awaiting implementation, organized by maturity level.
 
 ```mermaid
 graph LR
@@ -882,21 +927,19 @@ graph LR
         FB["§5.1 Federation B<br/>Rule Pack Layering"]
         NM["§5.2 1:N Mapping"]
         PB["§5.3 Policy Path B<br/>(OPA)"]
-        TR["§5.4 Threshold<br/>Recommendation"]
+        CV["§5.4 Config<br/>Versioning"]
     end
     subgraph Mid["Mid-term (customer-validated)"]
-        CD["§5.5 Cross-Cluster<br/>Drift Detection"]
-        IR["§5.6 Incremental<br/>Reload"]
-        AC["§5.7 Alert Correlation<br/>Engine"]
-        NT["§5.8 Notification<br/>Testing"]
+        AD["§5.5 Tenant<br/>Auto-Discovery"]
+        GD["§5.6 Dashboard<br/>as Code"]
+        TP["§5.7 Notification<br/>Template Preview"]
+        PR["§5.8 Portal ×<br/>Recommend Integration"]
     end
     subgraph Far["Long-term (exploratory)"]
         LM["§5.9 Log-to-Metric<br/>Bridge"]
-        CV["§5.10 Config<br/>Versioning"]
-        GD["§5.11 Dashboard<br/>as Code"]
-        AD["§5.12 Tenant<br/>Auto-Discovery"]
-        BS["§5.13 Backstage<br/>Plugin"]
-        RC["§5.14 ROI<br/>Calculator"]
+        AM["§5.10 Anomaly-Aware<br/>Threshold"]
+        GT["§5.11 GitOps<br/>Native Mode"]
+        MF["§5.12 Multi-Format<br/>Export"]
     end
 ```
 
@@ -912,62 +955,41 @@ Multiple logical tenants within a single namespace (differentiated by Service an
 
 ### 5.3 Policy-as-Code Path B: OPA/Rego Integration
 
-**Motivation**: Path A (built-in DSL) was implemented in v2.0.0 and suits lightweight scenarios. For enterprise users already invested in the OPA ecosystem, tenant configuration validation needs to integrate into existing OPA governance workflows.
+Path A (built-in DSL) was implemented in v2.0.0 and suits lightweight scenarios. For enterprise users already invested in the OPA ecosystem, tenant configuration validation needs to integrate into existing OPA governance workflows.
 
-**Approach**: Add a `policy_opa_bridge.py` tool to convert tenant YAML to OPA input JSON, call OPA REST API or local `opa eval`, and convert OPA responses back to the platform's `Violation` format. Can integrate with `validate_config.py` Check 9, allowing Path A/B to coexist complementarily.
+Add a `policy_opa_bridge.py` tool to convert tenant YAML to OPA input JSON, call OPA REST API or local `opa eval`, and convert OPA responses back to the platform's `Violation` format. Can integrate with `validate_config.py` Check 9, allowing Path A/B to coexist complementarily. `policy_engine.py`'s `PolicyResult` / `Violation` data models can be directly reused.
 
-**Technical entry point**: `policy_engine.py`'s `PolicyResult` / `Violation` data models can be directly reused. Requires defining a Rego template library (`rego/` directory) for common platform check scenarios.
+### 5.3b Cross-Domain Routing Profiles & Domain Policies
 
-### 5.4 Threshold Recommendation Engine
+> **📋 ADR-007 Partially Implemented (v2.1.0)**: See [`docs/adr/007-cross-domain-routing-profiles.md`](adr/007-cross-domain-routing-profiles.md)
 
-**Motivation**: When onboarding new tenants, the common question is "what threshold should I set?". Currently this relies on experience or documentation examples, lacking a data-driven recommendation mechanism.
+A two-layer architecture addresses routing config duplication and cross-domain compliance. Routing Profiles (`_routing_profiles.yaml`) define named routing configurations shared by multiple tenants. Four-layer merge order: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`. Domain Policies (`_domain_policy.yaml`) define business-domain constraints (e.g., finance domain forbids Slack), validated after routing resolution (validate-only, no injection).
 
-**Approach**: Based on Prometheus historical metrics (e.g., `container_cpu_usage_seconds_total`), compute P95/P99 percentiles and generate recommendations alongside current thresholds. Leverage the existing `alert_quality.py` Noise Score metrics to identify thresholds set too low (frequent firing) or too high (never firing).
+**Implemented components (v2.1.0)**: `generate_alertmanager_routes.py` (four-layer merge + `check_domain_policies()`), `check_routing_profiles.py` (lint hook), `explain_route.py` (debug tool), `scaffold_tenant.py` (`--routing-profile` arg), JSON Schema (`routing-profiles.schema.json` / `domain-policy.schema.json`). Go/Python dual-sync for `_routing_profile` reserved key.
 
-**Technical entry point**:
-- `da-tools threshold-recommend --prometheus URL --tenant db-a`
-- Output: recommended threshold + confidence interval + current value comparison per metric
-- Self-Service Portal integration: add "recommended value" reference line in Alert Preview tab
+**Example configs**: `conf.d/examples/_routing_profiles.yaml`, `conf.d/examples/_domain_policy.yaml`.
 
-### 5.5 Cross-Cluster Drift Detection
+### 5.4 Tenant Config Versioning & Rollback
 
-**Motivation**: The Assembler Controller (implemented in §2.10) solves CRD → YAML translation for a single cluster. In multi-cluster deployments, actual config-dir contents across clusters may diverge due to deployment timing or manual operations.
+Config-dir changes are managed through Git, but the runtime side lacks fine-grained version tracking and fast rollback capabilities. threshold-exporter retains the previous N config snapshots after each successful reload (in-memory ring buffer), with a new `/admin/rollback?version=N` API to trigger rollback. `da-tools config-history` queries historical reload events and corresponding config hashes. The v2.1.0 incremental reload and per-file hash cache already lay the groundwork for this feature.
 
-**Approach**:
+### 5.5 Tenant Auto-Discovery
 
-```
-Cluster-A config-dir ──┐
-Cluster-B config-dir ──┤── drift_detect.py ──► diff report + reconcile action
-Cluster-C config-dir ──┘
-```
+Currently, onboarding a new tenant requires manually creating a tenant YAML file. In Kubernetes-native environments, tenants can be automatically registered based on namespace labels (e.g., `dynamic-alerting.io/tenant: "true"`).
 
-- **Snapshot comparison**: Periodically capture config-dir SHA-256 manifests from each cluster (`assemble_config_dir.py --manifest` already supports this), compare cross-cluster.
-- **Drift classification**: Distinguish "expected differences" (per-cluster overrides) from "unexpected drift" (deployment failure residue).
-- **Auto-remediation**: Preview with dry-run, then optionally reconcile, leveraging `config_diff.py` for change details.
+Recommended sidecar pattern: a standalone sidecar periodically scans namespace labels and generates tenant YAML files into config-dir, picked up by the existing Directory Scanner mechanism. This approach avoids modifying the exporter core. Explicit config-dir entries always take precedence over auto-discovery results. An allowlist/denylist mechanism is needed to prevent system namespaces from being mistakenly registered.
 
-### 5.6 Incremental Hot-Reload
+### 5.6 Grafana Dashboard as Code
 
-**Motivation**: The current threshold-exporter SHA-256 reload is a full reload — any single file change triggers reparsing of all tenants. At 1000+ tenant scale, reload latency grows linearly with tenant count.
+`scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json`'s existing Rule Pack / metric information to generate corresponding panels. Paired with Grafana provisioning or API for automatic deployment, eliminating manual omissions during tenant onboarding.
 
-**Approach**: Maintain a per-file SHA-256 index and only reparse changed files during reload. Requires refactoring the Go `config.Load()` function to support incremental mode, maintaining a full tenant registry in memory for delta merging.
+### 5.7 Notification Template Previewer
 
-**Risk**: Delta merge consistency guarantees are more complex than full reload. Requires thorough benchmark comparison (`make benchmark` already has reload-bench as a foundation) to confirm the incremental mode does not regress at any scale.
+A new JSX interactive tool: input alert name / severity / labels to instantly render previews of Slack Card, Teams Adaptive Card, and PagerDuty Event payloads. Works with `test-notification --dry-run --json` output, displaying the complete payload for each receiver. Can be extended to a template editor for customizing notification content formats.
 
-### 5.7 Alert Correlation Engine
+### 5.8 Threshold Recommendation × Self-Service Portal Integration
 
-**Motivation**: In multi-tenant environments, a single root cause often triggers alerts across multiple tenants (e.g., underlying storage failure simultaneously affecting db-a and db-b IO metrics). The existing inhibit mechanism only handles severity dedup within a single tenant, lacking cross-tenant / cross-metric correlation analysis.
-
-**Approach**:
-- **Time-window aggregation**: Collect alerts at the Alertmanager webhook receiver backend, aggregate within a configurable time window (e.g., 5min).
-- **Correlation rules**: Compute correlation scores between alerts based on tenant topology (same namespace, same node pool) and temporal overlap.
-- **Root cause inference**: When correlation scores exceed a threshold, merge into a single event, annotating the most likely root cause alert.
-- **Output**: Correlation Report (`da-tools alert-correlate`), embeddable in Grafana dashboards or webhook notifications.
-
-### 5.8 Multi-Channel Notification Testing
-
-**Motivation**: After configuring routing, the common question is "I've configured it, but how do I know if the webhook URL is correct or if the Slack token works?". Currently the only way to verify is waiting for a real alert to fire.
-
-**Approach**: `da-tools test-notification --config-dir conf.d/ --tenant db-a` sends test messages to all configured receivers for the tenant, reporting connectivity for each channel. Must comply with rate limits and dry-run safety measures.
+Integrate "recommended value" reference lines into the Portal's Alert Preview tab. Calls `threshold-recommend --json` output, displaying recommended value markers alongside the slider, with an "Apply Recommendation" button to directly update YAML thresholds. Shows warnings when confidence level is below MEDIUM.
 
 ### 5.9 Log-to-Metric Bridge
 
@@ -979,58 +1001,29 @@ Application Log → grok_exporter / mtail → Prometheus metric → Platform thr
 
 This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture. If demand materializes, a `log_bridge_check.py` tool can validate grok_exporter configuration alignment with Rule Packs.
 
-### 5.10 Tenant Config Versioning & Rollback
+### 5.10 Anomaly-Aware Dynamic Threshold
 
-**Motivation**: Config-dir changes are managed through Git, but the runtime side lacks fine-grained version tracking and fast rollback capabilities. When hot-reload loads a problematic configuration, one-click restoration to the last known-good version is needed.
+Currently `threshold-recommend` recommends static thresholds based on statistical percentiles. The advanced direction is to support `_threshold_mode: adaptive` configuration in threshold-exporter, combining Prometheus sliding window statistics (e.g., `quantile_over_time`) to dynamically adjust threshold bounds.
 
-**Approach**:
-- threshold-exporter retains the previous N config snapshots after each successful reload (in-memory or local files).
-- New `/admin/rollback?version=N` API to trigger rollback.
-- `da-tools config-history --prometheus URL` to query historical reload events and corresponding config hashes.
+Core concept: tenant YAML defines a baseline strategy (e.g., `p95 + 2σ`), exporter periodically queries Prometheus to compute dynamic values, producing a `user_threshold_dynamic` metric. A recording rule selects `max(user_threshold, user_threshold_dynamic)` as the final threshold. This design uses static thresholds as a safety floor while dynamic thresholds handle seasonal fluctuations.
 
-### 5.11 Grafana Dashboard as Code
+**Risk**: Exporter directly querying Prometheus introduces circular dependency and latency. An alternative is to place the computation logic in the recording rule layer (pure PromQL), with the exporter only outputting strategy parameters (window size, percentile, σ multiplier).
 
-**Motivation**: The platform has comprehensive alert rule management, but Grafana dashboards are still manually maintained. During tenant onboarding, dashboards must be created manually, which is error-prone.
+### 5.11 GitOps Native Mode
 
-**Approach**: `scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json`'s existing Rule Pack / metric information to generate corresponding panels. Paired with Grafana provisioning or API for automatic deployment.
+Currently config-dir is mounted via ConfigMap projected volume, requiring `kubectl apply` or Helm upgrade for changes. GitOps Native Mode allows threshold-exporter to directly watch a Git repository (via polling or webhook), eliminating the ConfigMap intermediary.
 
-### 5.12 Tenant Auto-Discovery
+Design: exporter adds `--config-source git --git-repo URL --git-branch main --git-path configs/` startup parameters, with built-in shallow clone + pull mechanism, reusing the existing Directory Scanner's hash comparison and incremental reload path. The integration point with ArgoCD/Flux: Git serves as the single source of truth, but the exporter does not depend on ArgoCD's sync cycle.
 
-**Motivation**: Currently, onboarding a new tenant requires manually creating a tenant YAML file — even if the tenant uses all defaults, a minimal `tenants: { db-new: {} }` entry is still needed. Without it, threshold-exporter won't generate threshold metrics for that tenant, and `group_left` vector matching won't take effect. In Kubernetes-native environments, automatically registering tenants based on namespace labels would further lower the onboarding barrier.
+**Trade-off**: Introducing a Git client dependency increases attack surface and image size. An init container + shared volume pattern (git-sync sidecar) serves as a lower-impact alternative.
 
-**Approach**:
+### 5.12 Multi-Format Export
 
-- **Namespace Label Convention**: Define a standard label (e.g., `dynamic-alerting.io/tenant: "true"`). threshold-exporter watches namespaces with this label via the K8s API and automatically creates in-memory tenant entries using `_defaults.yaml` values.
-- **Sidecar Pattern (alternative)**: A standalone sidecar periodically scans namespace labels and generates tenant YAML files into config-dir, which are then picked up by the existing Directory Scanner mechanism. This approach avoids modifying the exporter core.
-- **Explicit Override Priority**: If an explicit tenant YAML already exists in config-dir, it takes precedence — auto-discovery does not override manual configuration.
+Export platform configuration and analysis results in other monitoring systems' native formats, reducing migration barriers and lock-in risk.
 
-**Risk**: Auto-discovery blurs the boundary of "which namespaces are managed tenants." An allowlist/denylist mechanism (e.g., `_auto_discovery.excludeNamespaces: [kube-system, monitoring]`) is needed to prevent system namespaces from being mistakenly registered.
+Directions include: `da-tools export --format datadog` to convert tenant thresholds and alert rules into Datadog Monitor JSON; `--format terraform` to produce Terraform HCL for cloud-native monitoring (e.g., AWS CloudWatch Alarms). This positions the platform as an "alert policy abstraction layer" — managing thresholds with a unified YAML schema while deploying to different monitoring backends.
 
-### 5.13 Backstage Plugin (Developer Portal Integration)
-
-**Motivation**: Enterprises that have invested in [Backstage](https://backstage.io/) as their internal developer portal expect alert management to be integrated into the existing service catalog experience, rather than requiring teams to switch to a separate UI or CLI.
-
-**Approach**:
-
-- **Minimal Plugin**: A Backstage frontend plugin that adds a "Dynamic Alerting" tab to the Service Entity page, displaying the tenant's current thresholds, alert quality scores, and recent alert history.
-- **Data Source**: Reads threshold metrics via Prometheus API + `alert_quality.py` JSON output — no additional backend service required.
-- **Advanced Integration**: Support triggering `scaffold` / `patch-config` from the Backstage UI (requires Backstage backend proxy forwarding to `da-tools` container).
-
-**Prerequisites**: Requires a stable REST API interface (currently threshold-exporter only exposes `/metrics`), or data retrieval via Prometheus queries. Recommended to complete §5.4 Threshold Recommendation first so the plugin has richer data to display.
-
-### 5.14 ROI Calculator (Adoption Benefit Estimator)
-
-**Motivation**: During platform evaluation, decision-makers need to quantify "how much benefit would adopting Dynamic Alerting bring." Currently only qualitative descriptions exist (Problems Solved section) without an interactive numerical estimate.
-
-**Approach**:
-
-- **Interactive Tool**: A new JSX interactive tool (registered in `tool-registry.yaml`). Users input current tenant count, rule count, average change time, on-call headcount, etc., and the tool calculates:
-  - Rule maintenance time savings (based on O(N×M) → O(M) model)
-  - Alert storm reduction ratio (based on auto-suppression + maintenance mode expected effect)
-  - Onboarding time reduction (based on scaffold + migration engine automation ratio)
-- **Data-Driven**: If Shadow Audit (`alert_quality.py`) has been run, actual quality scores can be imported for more realistic estimates.
-
-**Positioning**: This is an adoption decision-support tool, not a core platform feature. Priority is lower than technical roadmap items.
+**Prerequisite**: Requires completing a metric name mapping table between `metric-dictionary.yaml` and each monitoring system. The metric mapping logic in `onboard_platform.py` can be reused.
 
 ---
 
@@ -1044,7 +1037,7 @@ This pattern enables log-based alerts to benefit from dynamic thresholds, multi-
 
 ---
 
-**Document version:** v2.0.0 — 2026-03-14
+**Document version:** v2.1.0 — 2026-03-14
 **Maintainer:** Platform Engineering Team
 
 ## Related Resources

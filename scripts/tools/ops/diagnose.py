@@ -22,12 +22,13 @@ Returns JSON: {"status": "healthy"|"error", "tenant", ...}
     * 叢集外: port-forward 或 Ingress
     * 多叢集: Thanos Query / VictoriaMetrics 等統一查詢端點亦可
 """
+from __future__ import annotations
+
+import argparse
+import json
 import os
 import subprocess
 import sys
-import json
-import argparse
-import urllib.parse
 
 import yaml
 
@@ -35,7 +36,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
+from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -64,12 +65,12 @@ _HELP = {
     }
 }
 
-def _h(key):
+def _h(key: str) -> str:
     """Get help text in detected language."""
     return _HELP[key].get(_LANG, _HELP[key]['en'])
 
 
-def run_cmd(cmd):
+def run_cmd(cmd: list[str]) -> str | None:
     """Execute a command safely using list arguments only (no shell=True).
 
     Args:
@@ -84,18 +85,11 @@ def run_cmd(cmd):
         return None
 
 
-def query_prometheus(prom_url, promql):
-    """執行 Prometheus instant query，回傳原始 JSON 字串。"""
-    url = f"{prom_url}/api/v1/query"
-    params = urllib.parse.urlencode({"query": promql})
-    full_url = f"{url}?{params}"
-    data, err = http_get_json(full_url)
-    if err:
-        return None
-    return json.dumps(data)
+# Alias for backward-compat within this module
+query_prometheus = query_prometheus_instant
 
 
-def lookup_tenant_profile(tenant, config_dir):
+def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     """Look up the _profile assignment for a tenant from config-dir YAML files.
 
     Returns profile name string or None.
@@ -130,7 +124,7 @@ def lookup_tenant_profile(tenant, config_dir):
     return None
 
 
-def resolve_inheritance_chain(tenant, config_dir):
+def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]:
     """Resolve the four-layer inheritance chain for a tenant.
 
     Returns a dict with:
@@ -261,7 +255,7 @@ def _format_chain_summary(inheritance):
     }
 
 
-def check(tenant, prom_url, config_dir=None):
+def check(tenant: str, prom_url: str, config_dir: str | None = None) -> str:
     errors = []
 
     # 1. 檢查 Pod 狀態
@@ -274,35 +268,34 @@ def check(tenant, prom_url, config_dir=None):
 
     # 2. 檢查 Exporter (透過 Prometheus API)
     try:
-        up_res = query_prometheus(prom_url, f'mysql_up{{instance="{tenant}"}}')
-        if up_res and '"value":[1' not in up_res and '"value":["1"' not in up_res:
-            errors.append("Exporter reports DOWN (mysql_up!=1)")
-        elif not up_res:
+        up_results, up_err = query_prometheus(prom_url, f'mysql_up{{instance="{tenant}"}}')
+        if up_err:
             errors.append(f"Prometheus query failed ({prom_url})")
+        elif up_results:
+            val = up_results[0].get("value", [None, None])[1]
+            if val != "1":
+                errors.append("Exporter reports DOWN (mysql_up!=1)")
+        else:
+            errors.append("Exporter reports DOWN (mysql_up!=1)")
     except Exception:
         errors.append("Metrics check failed")
 
     # 3. 查詢運營模式 (Silent Mode / Maintenance)
     operational_mode = "normal"
     try:
-        maint_res = query_prometheus(prom_url, f'user_state_filter{{tenant="{tenant}",filter="maintenance"}}')
-        if maint_res and '"value"' in maint_res:
-            data = json.loads(maint_res)
-            if data.get("data", {}).get("result"):
-                operational_mode = "maintenance"
+        maint_results, maint_err = query_prometheus(prom_url, f'user_state_filter{{tenant="{tenant}",filter="maintenance"}}')
+        if not maint_err and maint_results:
+            operational_mode = "maintenance"
 
         if operational_mode == "normal":
-            silent_res = query_prometheus(prom_url, f'user_silent_mode{{tenant="{tenant}"}}')
-            if silent_res and '"value"' in silent_res:
-                data = json.loads(silent_res)
-                results = data.get("data", {}).get("result", [])
-                if results:
-                    severities = [r.get("metric", {}).get("target_severity", "") for r in results]
-                    if "warning" in severities and "critical" in severities:
-                        operational_mode = "silent:all"
-                    elif severities:
-                        operational_mode = f"silent:{severities[0]}"
-    except (OSError, json.JSONDecodeError, ValueError):
+            silent_results, silent_err = query_prometheus(prom_url, f'user_silent_mode{{tenant="{tenant}"}}')
+            if not silent_err and silent_results:
+                severities = [r.get("metric", {}).get("target_severity", "") for r in silent_results]
+                if "warning" in severities and "critical" in severities:
+                    operational_mode = "silent:all"
+                elif severities:
+                    operational_mode = f"silent:{severities[0]}"
+    except (OSError, ValueError):
         pass  # Non-fatal: mode query failure doesn't affect health status
 
     # 4. Profile lookup + inheritance chain (v1.12.0, optional — requires --config-dir)

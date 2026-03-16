@@ -7,10 +7,12 @@ Covers:
 - compute_stats(): statistical summary
 - suggest_threshold(): threshold recommendation logic
 - query_prometheus(): error handling (mocked)
-- main(): CLI dry-run mode
+- main(): CLI dry-run mode + observation loop + CSV output
 """
 
+import csv
 import math
+import os
 import sys
 
 import pytest
@@ -239,16 +241,12 @@ class TestDefaultMetrics:
 
 
 class TestQueryPrometheus:
-    """query_prometheus() Prometheus API 查詢（mock）。"""
+    """query_prometheus() — now an alias to _lib_python.query_prometheus_instant."""
 
     def test_success(self, monkeypatch):
         """成功查詢回傳 results。"""
-        def mock_get(url):
-            return {
-                "status": "success",
-                "data": {"result": [{"metric": {}, "value": [0, "42"]}]},
-            }, None
-        monkeypatch.setattr(baseline_discovery, "http_get_json", mock_get)
+        fake = lambda prom_url, promql: ([{"metric": {}, "value": [0, "42"]}], None)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
         results, err = baseline_discovery.query_prometheus(
             "http://localhost:9090", "up")
         assert err is None
@@ -256,9 +254,8 @@ class TestQueryPrometheus:
 
     def test_http_error(self, monkeypatch):
         """HTTP 錯誤回傳 error。"""
-        def mock_get(url):
-            return None, "connection refused"
-        monkeypatch.setattr(baseline_discovery, "http_get_json", mock_get)
+        fake = lambda prom_url, promql: (None, "connection refused")
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
         results, err = baseline_discovery.query_prometheus(
             "http://localhost:9090", "up")
         assert results is None
@@ -266,9 +263,8 @@ class TestQueryPrometheus:
 
     def test_api_error_status(self, monkeypatch):
         """Prometheus API 回傳非 success 狀態。"""
-        def mock_get(url):
-            return {"status": "error", "error": "bad query"}, None
-        monkeypatch.setattr(baseline_discovery, "http_get_json", mock_get)
+        fake = lambda prom_url, promql: (None, "bad query")
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
         results, err = baseline_discovery.query_prometheus(
             "http://localhost:9090", "bad{")
         assert results is None
@@ -276,25 +272,12 @@ class TestQueryPrometheus:
 
     def test_empty_result(self, monkeypatch):
         """查詢成功但無資料回傳空 list。"""
-        def mock_get(url):
-            return {"status": "success", "data": {"result": []}}, None
-        monkeypatch.setattr(baseline_discovery, "http_get_json", mock_get)
+        fake = lambda prom_url, promql: ([], None)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
         results, err = baseline_discovery.query_prometheus(
             "http://localhost:9090", "nonexistent_metric")
         assert err is None
         assert results == []
-
-    def test_url_encoding(self, monkeypatch):
-        """PromQL 查詢正確 URL 編碼。"""
-        captured_urls = []
-        def mock_get(url):
-            captured_urls.append(url)
-            return {"status": "success", "data": {"result": []}}, None
-        monkeypatch.setattr(baseline_discovery, "http_get_json", mock_get)
-        baseline_discovery.query_prometheus(
-            "http://localhost:9090", 'rate(metric{label="val"}[5m])')
-        assert len(captured_urls) == 1
-        assert "api/v1/query" in captured_urls[0]
 
 
 # ── main() CLI ────────────────────────────────────────────────────
@@ -341,3 +324,258 @@ class TestMainCLI:
         with pytest.raises(SystemExit) as exc_info:
             baseline_discovery.main()
         assert exc_info.value.code == 1
+
+
+# ── main() Observation Loop (v2.1.0 coverage boost) ──────────────
+
+
+class TestMainObservationLoop:
+    """main() 觀測迴圈（需 mock time.sleep + query_prometheus）。"""
+
+    def _mock_query(self, value=42.0):
+        """建立一個回傳固定值的 mock query 函式。"""
+        def _query(prometheus_url, expr):
+            results = [{"metric": {}, "value": [0, str(value)]}]
+            return results, None
+        return _query
+
+    def _mock_query_with_errors(self):
+        """每隔一次回傳 error 的 mock。"""
+        self._call_count = 0
+        def _query(prometheus_url, expr):
+            self._call_count += 1
+            if self._call_count % 2 == 0:
+                return None, "connection refused"
+            return [{"metric": {}, "value": [0, "50.0"]}], None
+        return _query
+
+    def test_observation_basic(self, capsys, monkeypatch, tmp_path):
+        """基本觀測迴圈：3 個採樣、1 個指標、產出 CSV。"""
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "6", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(tmp_path / "out"),
+        ])
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            self._mock_query(75.0))
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+
+        out = capsys.readouterr().out
+        assert "觀測完成" in out
+        assert "cpu" in out
+
+        # Check CSV files were created
+        ts_csv = tmp_path / "out" / "baseline-db-a-timeseries.csv"
+        summary_csv = tmp_path / "out" / "baseline-db-a-summary.csv"
+        assert ts_csv.exists()
+        assert summary_csv.exists()
+
+    def test_observation_creates_output_dir(self, monkeypatch, tmp_path):
+        """觀測自動建立輸出目錄。"""
+        out_dir = tmp_path / "new" / "nested" / "dir"
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "2", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(out_dir),
+        ])
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            self._mock_query(50.0))
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        assert out_dir.exists()
+
+    def test_observation_with_query_errors(self, capsys, monkeypatch, tmp_path):
+        """查詢失敗時記錄 None，不中斷迴圈。"""
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "6", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(tmp_path / "out"),
+        ])
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            self._mock_query_with_errors())
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+
+        out = capsys.readouterr().out
+        assert "觀測完成" in out
+
+    def test_observation_sleep_called(self, monkeypatch, tmp_path):
+        """sleep 應被呼叫 (total_samples - 1) 次。"""
+        sleep_calls = []
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "6", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(tmp_path / "out"),
+        ])
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            self._mock_query(50.0))
+        monkeypatch.setattr(baseline_discovery.time, "sleep",
+                            lambda s: sleep_calls.append(s))
+
+        baseline_discovery.main()
+        # 3 samples total, sleep called N-1 = 2 times
+        assert len(sleep_calls) == 2
+        assert all(s == 2 for s in sleep_calls)
+
+
+# ── CSV Output Tests (v2.1.0) ────────────────────────────────────
+
+
+class TestCSVOutput:
+    """CSV 檔案輸出測試。"""
+
+    def _run_observation(self, monkeypatch, tmp_path, value=42.0, samples=4):
+        """共用的觀測執行 helper。"""
+        out_dir = tmp_path / "csv_out"
+        interval = 2
+        duration = samples * interval
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "test-t",
+            "--prometheus", "http://mock:9090",
+            "--duration", str(duration), "--interval", str(interval),
+            "--metrics", "cpu,memory",
+            "-o", str(out_dir),
+        ])
+
+        def mock_query(prometheus_url, expr):
+            return [{"metric": {}, "value": [0, str(value)]}], None
+
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        return out_dir
+
+    def test_timeseries_csv_structure(self, monkeypatch, tmp_path):
+        """時間序列 CSV 結構正確：header + N rows。"""
+        out_dir = self._run_observation(monkeypatch, tmp_path,
+                                         value=60.0, samples=4)
+        ts_csv = out_dir / "baseline-test-t-timeseries.csv"
+        with open(ts_csv, encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        # Header + 4 data rows
+        assert len(rows) == 5
+        assert rows[0][0] == "timestamp"
+        assert "cpu" in rows[0]
+        assert "memory" in rows[0]
+
+    def test_summary_csv_structure(self, monkeypatch, tmp_path):
+        """統計摘要 CSV 結構正確。"""
+        out_dir = self._run_observation(monkeypatch, tmp_path,
+                                         value=60.0, samples=12)
+        summary_csv = out_dir / "baseline-test-t-summary.csv"
+        with open(summary_csv, encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        # Header + 2 metrics
+        assert len(rows) == 3
+        assert rows[0][0] == "metric"
+        assert "suggested_warning" in rows[0]
+        assert "suggested_critical" in rows[0]
+
+    def test_csv_file_permissions(self, monkeypatch, tmp_path):
+        """CSV 檔案權限為 0o600。"""
+        out_dir = self._run_observation(monkeypatch, tmp_path, value=50.0)
+        for name in os.listdir(out_dir):
+            if name.endswith(".csv"):
+                path = out_dir / name
+                mode = oct(os.stat(path).st_mode)[-3:]
+                assert mode == "600", f"{name} has mode {mode}, expected 600"
+
+    def test_csv_data_values(self, monkeypatch, tmp_path):
+        """CSV 數據值正確反映查詢結果。"""
+        out_dir = self._run_observation(monkeypatch, tmp_path,
+                                         value=42.5, samples=3)
+        ts_csv = out_dir / "baseline-test-t-timeseries.csv"
+        with open(ts_csv, encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        # Data rows should have value 42.5 for each metric
+        for row in rows[1:]:
+            assert row[1] == "42.5"  # cpu column
+            assert row[2] == "42.5"  # memory column
+
+
+# ── Report Output Tests (v2.1.0) ────────────────────────────────
+
+
+class TestReportOutput:
+    """觀測報告輸出測試。"""
+
+    def test_report_contains_stats(self, capsys, monkeypatch, tmp_path):
+        """觀測報告包含統計數據。"""
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "24", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(tmp_path / "out"),
+        ])
+
+        def mock_query(prometheus_url, expr):
+            return [{"metric": {}, "value": [0, "65.0"]}], None
+
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        out = capsys.readouterr().out
+
+        assert "Baseline Discovery Report" in out
+        assert "Range:" in out
+        assert "Average:" in out
+        assert "Percentiles:" in out
+        assert "建議" in out
+
+    def test_report_no_valid_data(self, capsys, monkeypatch, tmp_path):
+        """所有查詢都返回 error 時的報告。"""
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "4", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(tmp_path / "out"),
+        ])
+
+        def mock_query(prometheus_url, expr):
+            return None, "connection refused"
+
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        out = capsys.readouterr().out
+        assert "無有效資料" in out
+
+    def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path):
+        """報告包含 patch 建議指令。"""
+        monkeypatch.setattr(sys, "argv", [
+            "baseline_discovery", "--tenant", "db-a",
+            "--prometheus", "http://mock:9090",
+            "--duration", "24", "--interval", "2",
+            "--metrics", "cpu",
+            "-o", str(tmp_path / "out"),
+        ])
+
+        def mock_query(prometheus_url, expr):
+            return [{"metric": {}, "value": [0, "70.0"]}], None
+
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        out = capsys.readouterr().out
+        assert "patch_config.py" in out

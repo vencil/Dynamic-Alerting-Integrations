@@ -11,6 +11,11 @@ import os
 import re
 import sys
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)  # Docker flat layout
+sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_python import write_text_secure  # noqa: E402
+
 RULE_PACKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "rule-packs")
 
@@ -68,9 +73,7 @@ def process_file(filepath):
         i += 1
 
     if modified:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(new_lines))
-        os.chmod(filepath, 0o600)
+        write_text_secure(filepath, "\n".join(new_lines))
         print(f"  MODIFIED {os.path.basename(filepath)}")
         return True
 
@@ -193,6 +196,10 @@ def inject_metadata(block, alert_name):
 
 def main():
     """CLI entry point: One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules."""
+    if not os.path.isdir(RULE_PACKS_DIR):
+        print(f"ERROR: Rule packs directory not found: {RULE_PACKS_DIR}", file=sys.stderr)
+        sys.exit(1)
+
     count = 0
     for fname in sorted(os.listdir(RULE_PACKS_DIR)):
         if not fname.endswith(".yaml"):

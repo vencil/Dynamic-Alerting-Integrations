@@ -368,10 +368,10 @@ def main():
 
     if not os.path.isdir(args.old_dir):
         print(f"ERROR: old-dir not found: {args.old_dir}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(1)
     if not os.path.isdir(args.new_dir):
         print(f"ERROR: new-dir not found: {args.new_dir}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(1)
 
     old_configs = load_configs_from_dir(args.old_dir)
     new_configs = load_configs_from_dir(args.new_dir)

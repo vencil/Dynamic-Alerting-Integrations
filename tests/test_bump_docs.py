@@ -197,3 +197,146 @@ class TestReadCurrentVersions:
             assert "exporter" in versions
         if bump_docs.DA_TOOLS_VERSION.exists():
             assert "tools" in versions
+
+
+class TestFilterByScope:
+    """_filter_by_scope() 範圍過濾。"""
+
+    def test_no_scope_returns_all(self):
+        """空 scope 回傳全部 rules。"""
+        rules = [{"file": "docs/x.md"}, {"file": "README.md"}]
+        result = bump_docs._filter_by_scope(rules, None)
+        assert len(result) == 2
+
+    def test_scope_filters_files(self):
+        """scope 正確過濾檔案。"""
+        rules = [
+            {"file": "docs/a.md"},
+            {"file": "docs/b.md"},
+            {"file": "components/x.py"},
+        ]
+        result = bump_docs._filter_by_scope(rules, "docs")
+        assert len(result) == 2
+
+    def test_root_files_included_with_dot(self):
+        """scope='.' 包含根目錄檔案。"""
+        rules = [{"file": "README.md"}, {"file": "CLAUDE.md"}]
+        result = bump_docs._filter_by_scope(rules, ".")
+        assert len(result) == 2
+
+    def test_glob_rule_scope(self):
+        """__glob__ rule 根據 glob_dir 過濾。"""
+        rules = [{"file": "__glob__", "glob_dir": "docs/scenarios"}]
+        result = bump_docs._filter_by_scope(rules, "docs")
+        assert len(result) == 1
+
+
+class TestInitChangelog:
+    """_init_changelog_entry() 測試。"""
+
+    def test_zh_changelog_stub(self, tmp_path, monkeypatch):
+        """中文 CHANGELOG stub 插入。"""
+        cl = tmp_path / "CHANGELOG.md"
+        cl.write_text("# Changelog\n\n## [v1.0.0] — Initial\n",
+                      encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        bump_docs._init_changelog_entry("2.0.0", lang="zh")
+        content = cl.read_text(encoding="utf-8")
+        assert "v2.0.0" in content
+        assert "版號" in content
+
+    def test_en_changelog_stub(self, tmp_path, monkeypatch):
+        """英文 CHANGELOG.en.md stub 插入。"""
+        cl = tmp_path / "CHANGELOG.en.md"
+        cl.write_text("# Changelog\n\n## [v1.0.0] — Initial\n",
+                      encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        bump_docs._init_changelog_entry("2.0.0", lang="en")
+        content = cl.read_text(encoding="utf-8")
+        assert "v2.0.0" in content
+        assert "Versions" in content
+
+    def test_all_changelog_stubs(self, tmp_path, monkeypatch):
+        """lang='all' 同時插入 zh + en。"""
+        (tmp_path / "CHANGELOG.md").write_text(
+            "# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+        (tmp_path / "CHANGELOG.en.md").write_text(
+            "# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        bump_docs._init_changelog_entry("2.0.0", lang="all")
+        assert "v2.0.0" in (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+        assert "v2.0.0" in (tmp_path / "CHANGELOG.en.md").read_text(encoding="utf-8")
+
+
+import sys
+
+
+class TestMainCLI:
+    """main() CLI 路徑覆蓋。"""
+
+    def test_show_current(self, monkeypatch, capsys):
+        """--show-current 顯示版號。"""
+        monkeypatch.setattr(sys, "argv", ["bump_docs", "--show-current"])
+        bump_docs.main()
+        out = capsys.readouterr().out
+        assert "Current versions" in out
+
+    def test_check_only(self, monkeypatch, capsys):
+        """--check 模式不修改檔案。"""
+        monkeypatch.setattr(sys, "argv", [
+            "bump_docs", "--platform", "99.99.99", "--check",
+        ])
+        # Should not raise (just reports mismatches)
+        try:
+            bump_docs.main()
+        except SystemExit:
+            pass  # exit 1 if outdated — expected
+        out = capsys.readouterr().out
+        assert "platform" in out.lower() or "PLATFORM" in out or len(out) > 0
+
+    def test_dry_run(self, monkeypatch, capsys):
+        """--dry-run 顯示差異但不修改。"""
+        monkeypatch.setattr(sys, "argv", [
+            "bump_docs", "--platform", "99.99.99", "--dry-run",
+        ])
+        bump_docs.main()
+        out = capsys.readouterr().out
+        # Should show diffs or "no changes"
+        assert len(out) > 0
+
+    def test_init_changelog(self, tmp_path, monkeypatch, capsys):
+        """--init-changelog 插入 stub。"""
+        cl = tmp_path / "CHANGELOG.md"
+        cl.write_text("# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "bump_docs", "--init-changelog", "3.0.0",
+        ])
+        bump_docs.main()
+        assert "v3.0.0" in cl.read_text(encoding="utf-8")
+
+    def test_what_if(self, monkeypatch, capsys):
+        """--what-if 顯示規則審計。"""
+        monkeypatch.setattr(sys, "argv", [
+            "bump_docs", "--what-if",
+        ])
+        try:
+            bump_docs.main()
+        except SystemExit:
+            pass  # might exit 1 if versions not found
+        out = capsys.readouterr().out
+        # Should show some rule audit output
+        assert len(out) > 0
+
+    def test_scope_flag(self, monkeypatch, capsys):
+        """--scope 限制範圍。"""
+        monkeypatch.setattr(sys, "argv", [
+            "bump_docs", "--platform", "99.99.99",
+            "--check", "--scope", "docs",
+        ])
+        try:
+            bump_docs.main()
+        except SystemExit:
+            pass
+        out = capsys.readouterr().out
+        assert len(out) > 0

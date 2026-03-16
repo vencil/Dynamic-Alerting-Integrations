@@ -1,0 +1,18 @@
+{
+  "drift_free": true,
+  "expected_drift": 0,
+  "pair_count": 1,
+  "pairs": [
+    {
+      "expected": 0,
+      "items": [],
+      "source": "dir-1",
+      "target": "dir-2",
+      "total_drift": 0,
+      "unexpected": 0
+    }
+  ],
+  "timestamp": "2025-01-15T10:00:00+00:00",
+  "total_drift": 0,
+  "unexpected_drift": 0
+}

@@ -155,6 +155,10 @@ def main():
     parser.add_argument("--apply", action="store_true", help="Write suggestions to registry")
     args = parser.parse_args()
 
+    if not REGISTRY_PATH.exists():
+        print(f"ERROR: Registry not found: {REGISTRY_PATH}", file=sys.stderr)
+        sys.exit(1)
+
     tools = parse_registry(str(REGISTRY_PATH))
     print(f"Loaded {len(tools)} tools\n")
 

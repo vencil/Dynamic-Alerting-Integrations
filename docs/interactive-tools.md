@@ -2,7 +2,7 @@
 title: "互動式工具"
 tags: [interactive, tools, react]
 audience: [all]
-version: v2.0.0
+version: v2.1.0
 lang: zh
 ---
 
@@ -41,6 +41,14 @@ lang: zh
 選擇 da-tools 子命令 → 填入參數 → 自動產生完整 `docker run` 指令，一鍵複製。
 
 **適用場景：** 不熟悉 Docker 指令格式時快速產生正確的執行命令。
+
+## ROI Calculator
+
+**檔案：** `docs/interactive/tools/roi-calculator.jsx`
+
+採用效益試算器 — 輸入組織規模（租戶數、Rule Pack 數、On-call 人員數）和現有運維成本（配置變更耗時、告警風暴頻率、手動 Onboard 時間），即時計算三項效益：Rule 維護時間 O(N×M) → O(M) 降幅、告警風暴自動壓制率、Onboard 自動化加速。支援匯入 `alert_quality.py --json` 實際數據修正預估。
+
+**適用場景：** 平台評估階段，向決策者展示量化的 TCO 節省。
 
 ---
 

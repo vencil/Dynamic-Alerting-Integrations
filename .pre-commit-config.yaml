@@ -18,7 +18,7 @@ repos:
 
       - id: doc-map-check
         name: Doc map coverage
-        entry: python3 scripts/tools/dx/generate_doc_map.py --check
+        entry: python3 scripts/tools/dx/generate_doc_map.py --check --include-adr
         language: python
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
@@ -37,6 +37,7 @@ repos:
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
+        additional_dependencies: ['pyyaml']
 
       - id: changelog-lint
         name: Changelog format
@@ -44,6 +45,7 @@ repos:
         language: python
         pass_filenames: false
         files: ^CHANGELOG.*\.md$
+        additional_dependencies: ['pyyaml']
 
       - id: version-consistency
         name: Version/count consistency
@@ -95,6 +97,14 @@ repos:
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
+
+      - id: routing-profiles-check
+        name: Routing profiles & domain policies lint
+        entry: python3 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
+        language: python
+        pass_filenames: false
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles)
+        additional_dependencies: ['pyyaml']
 
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check

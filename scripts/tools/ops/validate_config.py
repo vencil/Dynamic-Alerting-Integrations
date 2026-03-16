@@ -32,6 +32,8 @@ Usage:
     --json
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -96,7 +98,9 @@ WARN = "warn"
 FAIL = "fail"
 
 
-def _make_result(name, status, details=None):
+def _make_result(
+    name: str, status: str, details: list[str] | None = None
+) -> dict[str, object]:
     """Create a check result dict."""
     return {"check": name, "status": status, "details": details or []}
 
@@ -104,7 +108,7 @@ def _make_result(name, status, details=None):
 # ============================================================
 # Check 1: YAML Syntax
 # ============================================================
-def check_yaml_syntax(config_dir):
+def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     """Validate that all YAML files in config_dir parse successfully."""
     errors = []
     file_count = 0
@@ -130,7 +134,7 @@ def check_yaml_syntax(config_dir):
 # ============================================================
 # Check 2: Schema validation
 # ============================================================
-def check_schema(config_dir):
+def check_schema(config_dir: str) -> dict[str, object]:
     """Validate tenant config keys against known defaults and reserved keys."""
     # Import generate_alertmanager_routes in-process
     tools_dir = os.path.dirname(os.path.abspath(__file__))
@@ -148,7 +152,9 @@ def check_schema(config_dir):
 # ============================================================
 # Check 3: Route validation
 # ============================================================
-def check_routes(config_dir, policy_file=None):
+def check_routes(
+    config_dir: str, policy_file: str | None = None
+) -> dict[str, object]:
     """Validate Alertmanager route generation (--validate semantics)."""
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     if tools_dir not in sys.path:
@@ -195,7 +201,7 @@ def check_routes(config_dir, policy_file=None):
 # ============================================================
 # Check 4: Policy (webhook domain allowlist)
 # ============================================================
-def check_policy(config_dir, policy_file):
+def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     """Check webhook URLs against domain allowlist."""
     if not policy_file or not os.path.isfile(policy_file):
         return _make_result("policy", PASS, ["No policy file — skipped"])
@@ -237,7 +243,9 @@ def check_policy(config_dir, policy_file):
 # ============================================================
 # Check 5: Custom rule linting
 # ============================================================
-def check_custom_rules(rule_packs_dir, policy_file=None):
+def check_custom_rules(
+    rule_packs_dir: str | None, policy_file: str | None = None
+) -> dict[str, object]:
     """Run lint_custom_rules.py on rule packs directory."""
     if not rule_packs_dir or not os.path.isdir(rule_packs_dir):
         return _make_result("custom_rules", PASS,
@@ -271,7 +279,7 @@ def check_custom_rules(rule_packs_dir, policy_file=None):
 # ============================================================
 # Check 6: Profile references (v1.12.0)
 # ============================================================
-def _is_reserved_key(key):
+def _is_reserved_key(key: str) -> bool:
     """Check if a key is a reserved tenant config key (starts with _)."""
     if key in VALID_RESERVED_KEYS:
         return True
@@ -281,7 +289,7 @@ def _is_reserved_key(key):
     return False
 
 
-def check_profiles(config_dir):
+def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
     Checks:
@@ -368,7 +376,7 @@ def check_profiles(config_dir):
 # ============================================================
 # Check 8: Policy-as-Code (DSL evaluation)
 # ============================================================
-def check_policy_dsl(config_dir, policy_dsl_file=None):
+def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dict[str, object]:
     """Evaluate declarative policies from _defaults.yaml _policies or standalone file.
 
     Loads policy rules from _defaults.yaml ``_policies`` section and/or
@@ -423,7 +431,7 @@ def check_policy_dsl(config_dir, policy_dsl_file=None):
 # ============================================================
 # Check 7: Version consistency
 # ============================================================
-def check_versions():
+def check_versions() -> dict[str, object]:
     """Run bump_docs.py --check for version consistency."""
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     cmd = [sys.executable, os.path.join(tools_dir, "bump_docs.py"), "--check"]
@@ -447,7 +455,7 @@ def check_versions():
 # ============================================================
 # Report
 # ============================================================
-def print_report(results, as_json=False):
+def print_report(results: list[dict[str, object]], as_json: bool = False) -> None:
     """Print the validation report."""
     if as_json:
         print(json.dumps(results, indent=2))
@@ -488,7 +496,7 @@ def print_report(results, as_json=False):
 # ============================================================
 # Main
 # ============================================================
-def main():
+def main() -> None:
     """CLI entry point: One-stop configuration validation."""
     parser = argparse.ArgumentParser(
         description=_h('description'))

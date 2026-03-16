@@ -1,0 +1,37 @@
+# _domain_policy.yaml — Domain Compliance Constraints (ADR-007)
+#
+# Define business domain constraints that validate (not inject) the final
+# resolved routing configuration. Violations are reported as WARN by default,
+# or ERROR with --strict mode.
+#
+# Domain policies are checked AFTER the four-layer merge:
+#   _routing_defaults → routing_profiles[ref] → tenant _routing → domain_policies(validate)
+
+domain_policies:
+  # Finance domain: strict compliance — no Slack, must use PagerDuty/email
+  finance:
+    description: "Finance domain compliance requirements"
+    tenants: [db-a, db-b]
+    constraints:
+      allowed_receiver_types: [pagerduty, email, opsgenie]
+      forbidden_receiver_types: [slack, webhook]
+      enforce_group_by: [tenant, alertname, severity]
+      max_repeat_interval: 1h
+      min_group_wait: 30s
+      # require_critical_escalation: true  # future: ensure critical → PagerDuty
+
+  # E-commerce domain: standard SLA
+  ecommerce:
+    description: "E-commerce domain standards"
+    tenants: [db-c, db-d]
+    constraints:
+      allowed_receiver_types: [slack, pagerduty, email, webhook]
+      max_repeat_interval: 12h
+
+  # SLA Gold tier: fast response
+  # sla-gold:
+  #   description: "SLA Gold tier — 15min response"
+  #   tenants: [db-a, db-e]
+  #   constraints:
+  #     max_repeat_interval: 15m
+  #     min_group_wait: 10s
