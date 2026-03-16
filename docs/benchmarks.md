@@ -333,7 +333,7 @@ v2.1.0 引入 per-file SHA-256 index + parsed config cache 的增量重載路徑
 - **1000 tenants**：`NoChange`（1.5ms mtime）比 `FullDirLoad`（34.9ms）快 **23.7×**，`OneFileChanged`（6.9ms）快 **5.1×**
 - **Scaling**：100→1000（×10）時，`FullDirLoad` 從 3.2ms→34.9ms（×10.9），mtime NoChange 從 ~129µs→1.5ms（×11.6）
 - **成本分解（1000T OneFileChanged = 6.9ms）**：scan 6.2ms（1 changed + 999 stat）+ 1 檔 re-parse ~0.2ms + incremental merge ~0.5ms
-- **v2.1.0 → v2.1.0 總提速**：`OneFileChanged_1000` 10.5ms→6.9ms（**-34%**），`NoChange_1000` 5.4ms→1.5ms（**-72%**，mtime guard）
+- **v2.1.0 迭代優化成果**：經 mtime guard + byte cache 等優化，`OneFileChanged_1000` 從初版 10.5ms 降至 6.9ms（**-34%**），`NoChange_1000` 從 5.4ms 降至 1.5ms（**-72%**）
 
 ## 12. pytest-benchmark 微觀基線
 
