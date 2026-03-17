@@ -11,15 +11,16 @@
 #   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json
 #   -v ./my-nginx.conf:/etc/nginx/conf.d/default.conf
 
-FROM nginx:1.27.4-alpine
+FROM nginx:1.28-alpine
 
 LABEL org.opencontainers.image.title="da-portal" \
       org.opencontainers.image.description="Dynamic Alerting Interactive Tools Portal" \
       org.opencontainers.image.source="https://github.com/vencil/Dynamic-Alerting-Integrations" \
       org.opencontainers.image.vendor="Platform Engineering Team"
 
-# Security: upgrade all packages for CVE fixes
-# CVE-2025-15467 (openssl 3.x RCE — nginx depends on libssl), CVE-2025-48174 (libavif overflow)
+# Security: upgrade all packages for CVE fixes at build time
+# nginx 1.28 stable fixes CVE-2026-1642 (SSL upstream injection)
+# Alpine 3.22+ ships libavif >= 1.3.0, fixing CVE-2025-48174
 RUN apk --no-cache upgrade
 
 # Remove default nginx page

@@ -134,16 +134,17 @@ da-tools validate-config --config-dir conf.d/ --json
 
 | Image | Base | Pin 策略 | 關鍵 CVE 緩解 |
 |-------|------|---------|-------------|
-| threshold-exporter | `alpine:3.21` | 版本 pin | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
-| da-tools | `python:3.13.2-alpine3.21` | 完整版本+Alpine pin | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
-| da-portal | `nginx:1.27.4-alpine` | 版本 pin | CVE-2025-15467 (openssl/nginx), CVE-2025-48174 (libavif) |
+| threshold-exporter | `alpine:3.22` | minor pin | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
+| da-tools | `python:3.13-alpine` | minor floating | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
+| da-portal | `nginx:1.28-alpine` | stable floating | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif), CVE-2026-1642 (nginx SSL injection) |
 
 **CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時阻斷 release。見 `.github/workflows/release.yaml`。
 
 **CVE 追蹤紀錄：**
 
 - **CVE-2025-15467 (openssl, CVSS 9.8)**：CMS AuthEnvelopedData stack buffer overflow → pre-auth RCE。影響 OpenSSL 3.0–3.6。修復：`apk upgrade` 拉取 Alpine 已修補的 `libssl3`。
-- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：`apk upgrade` 拉取 Alpine 已修補版本。本平台不直接使用 libavif，但 Alpine base 可能含此套件。
+- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：升級 Alpine 至 3.22+（ships libavif >= 1.3.0）。本平台不直接使用 libavif，但 Alpine base 含此套件。
+- **CVE-2026-1642 (nginx, CVSS 5.9)**：SSL upstream injection — MITM 可在 TLS handshake 前注入明文回應。影響 nginx < 1.28.2。修復：da-portal 升級至 `nginx:1.28-alpine`（1.28 stable 已修復）。
 
 ### NetworkPolicy（Ingress + Egress）
 

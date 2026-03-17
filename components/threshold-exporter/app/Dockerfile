@@ -1,4 +1,4 @@
-FROM golang:1.26.1-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -7,9 +7,10 @@ RUN go mod download
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /threshold-exporter .
 
-FROM alpine:3.21
+FROM alpine:3.22
 
-# Security: upgrade all packages to pick up CVE fixes (CVE-2025-15467 openssl, CVE-2025-48174 libavif)
+# Security: upgrade all packages to pick up CVE fixes
+# Alpine 3.22 ships libavif >= 1.3.0 (CVE-2025-48174), openssl 3.x fixes (CVE-2025-15467)
 RUN apk --no-cache upgrade && \
     apk --no-cache add ca-certificates && \
     addgroup -g 10001 -S nonroot && \

@@ -1,4 +1,4 @@
-FROM python:3.13.2-alpine3.21 AS base
+FROM python:3.13-alpine AS base
 
 # ── Metadata ────────────────────────────────────────────────────────
 LABEL org.opencontainers.image.title="da-tools" \
@@ -7,7 +7,8 @@ LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
 # ── Security: upgrade all packages for CVE fixes ───────────────────
-# CVE-2025-15467 (openssl 3.x RCE), CVE-2025-48174 (libavif overflow)
+# python:3.13-alpine tracks latest 3.13.x + Alpine (>= 3.22), fixing:
+#   CVE-2025-48174 (libavif overflow), CVE-2025-15467 (openssl RCE)
 RUN apk --no-cache upgrade
 
 # ── Dependencies ──────────────────────────────────────────────────────
