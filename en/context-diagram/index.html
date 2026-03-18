@@ -1,0 +1,3287 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/context-diagram/">
+      
+      
+        <link rel="prev" href="../architecture-and-design/">
+      
+      
+        <link rel="next" href="../benchmarks/">
+      
+      
+        
+          <link rel="alternate" href="../../context-diagram/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.5">
+    
+    
+      
+        <title>Project Context Diagram: Roles, Tools, and Product Interactions - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#project-context-diagram-roles-tools-and-product-interactions" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Project Context Diagram: Roles, Tools, and Product Interactions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../context-diagram/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context Diagram
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context Diagram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#introduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Introduction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overall-context-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overall Context Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-onboarding-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Onboarding Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-daily-ops-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Daily Ops Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-migration-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Migration Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-governance-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Governance Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-role-and-tool-mapping-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Role and Tool Mapping Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-tools-by-workflow-classification-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Tools by Workflow Classification Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-configuration-and-infrastructure-interaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Configuration and Infrastructure Interaction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-newcomer-quick-navigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Newcomer Quick Navigation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-related-documents-and-topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Related Documents and Topics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_4" id="__nav_3_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/004-federation-scenario-a-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Scenario A First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/advanced-scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Scenarios
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#introduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Introduction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overall-context-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overall Context Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-onboarding-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Onboarding Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-daily-ops-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Daily Ops Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-migration-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Migration Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-governance-workflow-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Governance Workflow Detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-role-and-tool-mapping-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Role and Tool Mapping Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-tools-by-workflow-classification-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Tools by Workflow Classification Table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-configuration-and-infrastructure-interaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Configuration and Infrastructure Interaction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-newcomer-quick-navigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Newcomer Quick Navigation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-related-documents-and-topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Related Documents and Topics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">architecture</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">context-diagram</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/context-diagram.en.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/context-diagram.en.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="project-context-diagram-roles-tools-and-product-interactions">Project Context Diagram: Roles, Tools, and Product Interactions<a class="headerlink" href="#project-context-diagram-roles-tools-and-product-interactions" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Language / 語言：</strong> <strong>English (Current)</strong> | <a href="./">中文</a></p>
+<p><strong>v2.1.0</strong> | Audience: All Participants (Platform Engineers, Domain Experts, Tenant Teams)</p>
+</blockquote>
+<h2 id="introduction">Introduction<a class="headerlink" href="#introduction" title="Permanent link">&para;</a></h2>
+<p>This document presents the Multi-Tenant Dynamic Alerting Platform's <strong>role distribution, tool workflow, and infrastructure interactions</strong> using the C4 Context model.</p>
+<p><strong>Core Concepts:</strong>
+- <strong>Three-Tier Role Model</strong>: Platform Engineer (platform layer), Domain Expert (domain expertise), Tenant Team (tenant layer)
+- <strong>21 Supporting Tools</strong>: Spanning Onboarding, Daily Ops, Migration, and Governance workflows
+- <strong>Five Infrastructure Categories</strong>: Config, Compute, Evaluation, Routing, Notification</p>
+<p>This diagram helps newcomers quickly understand:
+1. What is my role in this system?
+2. Which tools should I use?
+3. How does my work impact downstream systems?</p>
+<hr />
+<h2 id="1-overall-context-diagram">1. Overall Context Diagram<a class="headerlink" href="#1-overall-context-diagram" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>graph TB
+    subgraph Roles["🏢 Three-Tier Role Distribution"]
+        PE["Platform Engineer&lt;br/&gt;Platform Engineer"]
+        DX["Domain Expert&lt;br/&gt;Domain Expert (DBA/SRE)"]
+        TT["Tenant Team&lt;br/&gt;Tenant Team (SRE/DBA)"]
+    end
+
+    subgraph Config["📋 Configuration Layer"]
+        Defaults["_defaults.yaml&lt;br/&gt;Platform Defaults"]
+        Profiles["_profiles.yaml&lt;br/&gt;Four-Layer Inheritance"]
+        RulePacks["Rule Packs&lt;br/&gt;(15 YAML files)"]
+        TenantYAML["tenant YAML&lt;br/&gt;(conf.d/)"]
+    end
+
+    subgraph Tools["🛠 Tool Ecosystem (21 Tools)"]
+        subgraph OnboardTools["Onboarding"]
+            ScaffoldTool["scaffold_tenant.py"]
+            OnboardAnalyze["onboard_platform.py"]
+        end
+
+        subgraph OpsTools["Daily Ops"]
+            DiagnoseTool["diagnose.py"]
+            BatchDiag["batch_diagnose.py"]
+            CheckAlert["check_alert.py"]
+            PatchConfig["patch_config.py"]
+        end
+
+        subgraph MigTools["Migration"]
+            MigrateRule["migrate_rule.py"]
+            ValidateMig["validate_migration.py"]
+            CutoverTool["cutover_tenant.py"]
+        end
+
+        subgraph GovTools["Governance"]
+            ValidateConfig["validate_config.py"]
+            ConfigDiff["config_diff.py"]
+            LintRules["lint_custom_rules.py"]
+            DeprecateRule["deprecate_rule.py"]
+            OffboardTool["offboard_tenant.py"]
+        end
+
+        subgraph AdvTools["Advanced"]
+            BlindSpot["blind_spot_discovery.py"]
+            BaselineDisc["baseline_discovery.py"]
+            BacktestThresh["backtest_threshold.py"]
+            MaintScheduler["maintenance_scheduler.py"]
+            BumpDocs["bump_docs.py"]
+            GenerateRoutes["generate_alertmanager_routes.py"]
+        end
+    end
+
+    subgraph Infra["🏗 Infrastructure Products"]
+        subgraph ConfigInfra["Config (ConfigMap)"]
+            ThreshConfig["threshold-config"]
+        end
+
+        subgraph ComputeInfra["Compute"]
+            Exporter["threshold-exporter ×2&lt;br/&gt;(HA, port 8080)"]
+        end
+
+        subgraph EvalInfra["Evaluation"]
+            Prom["Prometheus&lt;br/&gt;+ 15 Rule Packs"]
+        end
+
+        subgraph RoutingInfra["Routing &amp; Alert"]
+            AlertMgr["Alertmanager&lt;br/&gt;(Dynamic routing)"]
+        end
+
+        subgraph NotifInfra["Notification"]
+            Channels["Slack | PagerDuty&lt;br/&gt;Email | Teams&lt;br/&gt;RocketChat | Webhook"]
+        end
+    end
+
+    subgraph GitOps["📂 GitOps Layer"]
+        GitRepo["Git Repository&lt;br/&gt;(conf.d/ + rule-packs/)"]
+    end
+
+    %% Role -&gt; Config Management
+    PE --&gt;|manages| Defaults
+    PE --&gt;|manages| Profiles
+    PE --&gt;|maintains| RulePacks
+    DX --&gt;|contributes| RulePacks
+    DX --&gt;|maintains| TenantYAML
+    TT --&gt;|manages| TenantYAML
+
+    %% Config -&gt; GitOps
+    Defaults --&gt;|PR| GitRepo
+    Profiles --&gt;|PR| GitRepo
+    RulePacks --&gt;|PR| GitRepo
+    TenantYAML --&gt;|PR| GitRepo
+
+    %% Role -&gt; Tools (Examples)
+    PE --&gt;|uses| ValidateConfig
+    PE --&gt;|uses| ConfigDiff
+    PE --&gt;|uses| GenerateRoutes
+    DX --&gt;|uses| LintRules
+    DX --&gt;|uses| MigrateRule
+    TT --&gt;|uses| ScaffoldTool
+    TT --&gt;|uses| DiagnoseTool
+    TT --&gt;|uses| CheckAlert
+
+    %% Tools -&gt; Config
+    ScaffoldTool --&gt;|generates| TenantYAML
+    OnboardAnalyze --&gt;|analyzes| Defaults
+    MigrateRule --&gt;|converts| TenantYAML
+    GenerateRoutes --&gt;|consumes| TenantYAML
+
+    %% Tools -&gt; Infra
+    ValidateConfig --&gt;|validates| ThreshConfig
+    PatchConfig --&gt;|updates| ThreshConfig
+    DiagnoseTool --&gt;|queries| Prom
+    CheckAlert --&gt;|queries| AlertMgr
+    ConfigDiff --&gt;|compares| GitRepo
+
+    %% GitOps -&gt; Infra
+    GitRepo --&gt;|GitOps Sync&lt;br/&gt;ArgoCD / Flux| ThreshConfig
+
+    %% Infrastructure Flow
+    ThreshConfig --&gt;|SHA-256&lt;br/&gt;hot-reload| Exporter
+    Exporter --&gt;|"Metrics :8080"| Prom
+    Prom --&gt;|Alert Rules&lt;br/&gt;Evaluation| AlertMgr
+    AlertMgr --&gt;|Routes &amp; Groups| Channels
+
+    %% Advanced tools
+    BlindSpot --&gt;|scans| Prom
+    BaselineDisc --&gt;|observes| Prom
+    BacktestThresh --&gt;|backtests| Prom
+    MaintScheduler --&gt;|creates| AlertMgr
+    BumpDocs --&gt;|version mgmt| GitRepo
+
+    %% Styling
+    classDef roleStyle fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000
+    classDef configStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef toolStyle fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#000
+    classDef infraStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+    classDef gitStyle fill:#f0f0f0,stroke:#616161,stroke-width:2px,color:#000
+
+    class PE,DX,TT roleStyle
+    class Defaults,Profiles,RulePacks,TenantYAML configStyle
+    class ScaffoldTool,OnboardAnalyze,DiagnoseTool,BatchDiag,CheckAlert,PatchConfig,MigrateRule,ValidateMig,CutoverTool,ValidateConfig,ConfigDiff,LintRules,DeprecateRule,OffboardTool,BlindSpot,BaselineDisc,BacktestThresh,MaintScheduler,BumpDocs,GenerateRoutes toolStyle
+    class ThreshConfig,Exporter,Prom,AlertMgr,Channels infraStyle
+    class GitRepo gitStyle</code></pre>
+<hr />
+<h2 id="2-onboarding-workflow-detail">2. Onboarding Workflow Detail<a class="headerlink" href="#2-onboarding-workflow-detail" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>graph LR
+    subgraph Input["Input"]
+        Existing["Existing Config&lt;br/&gt;(Prometheus rules)"]
+    end
+
+    subgraph Process["Onboarding Tool Suite"]
+        Analyze["onboard_platform.py&lt;br/&gt;Reverse Analysis"]
+        Scaffold["scaffold_tenant.py&lt;br/&gt;Interactive Generation"]
+    end
+
+    subgraph Output["Output"]
+        Hints["onboard-hints.json&lt;br/&gt;Analysis Results"]
+        Config["tenant YAML&lt;br/&gt;Initial Config"]
+    end
+
+    subgraph Validation["Validation"]
+        Validate["validate_config.py&lt;br/&gt;One-Stop Check"]
+    end
+
+    subgraph Deployment["Deployment"]
+        GitPush["Git PR&lt;br/&gt;conf.d/"]
+        GitOps["GitOps Sync&lt;br/&gt;threshold-config"]
+    end
+
+    Existing --&gt;|scan| Analyze
+    Analyze --&gt;|output| Hints
+    Hints --&gt;|import| Scaffold
+    Scaffold --&gt;|generate| Config
+    Config --&gt;|validate| Validate
+    Validate --&gt;|pass| GitPush
+    GitPush --&gt;|merge| GitOps
+
+    classDef processStyle fill:#c8e6c9,stroke:#388e3c,color:#000
+    classDef outputStyle fill:#bbdefb,stroke:#1976d2,color:#000
+    classDef validationStyle fill:#ffe0b2,stroke:#e65100,color:#000
+
+    class Analyze,Scaffold processStyle
+    class Hints,Config outputStyle
+    class Validate validationStyle</code></pre>
+<hr />
+<h2 id="3-daily-ops-workflow-detail">3. Daily Ops Workflow Detail<a class="headerlink" href="#3-daily-ops-workflow-detail" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>graph TD
+    subgraph Config["Configuration"]
+        TenantYAML["tenant YAML&lt;br/&gt;(thresholds, routing, tri-state)"]
+    end
+
+    subgraph Ops["Daily Operations Tools"]
+        Diagnose["diagnose.py&lt;br/&gt;Single-Tenant Health Check"]
+        BatchDiag["batch_diagnose.py&lt;br/&gt;Multi-Tenant Parallel Report"]
+        CheckAlert["check_alert.py&lt;br/&gt;Alert Status Query"]
+        PatchConfig["patch_config.py&lt;br/&gt;Partial Update + Diff"]
+    end
+
+    subgraph Query["Query Targets"]
+        Prom["Prometheus&lt;br/&gt;(metrics/targets)"]
+        AlertMgr["Alertmanager&lt;br/&gt;(active alerts)"]
+        ConfigMap["threshold-config&lt;br/&gt;(current state)"]
+    end
+
+    subgraph Output["Diagnostic Output"]
+        Report["Health Report&lt;br/&gt;Structured JSON"]
+        Status["Alert Status&lt;br/&gt;Group Statistics"]
+        Preview["ConfigMap Diff&lt;br/&gt;Preview"]
+    end
+
+    TenantYAML --&gt;|modify| PatchConfig
+    PatchConfig --&gt;|update| ConfigMap
+    ConfigMap --&gt;|query| Prom
+
+    Diagnose --&gt;|query| Prom
+    Diagnose --&gt;|query| AlertMgr
+    Diagnose --&gt;|output| Report
+
+    BatchDiag --&gt;|parallel exec| Diagnose
+
+    CheckAlert --&gt;|query| AlertMgr
+    CheckAlert --&gt;|output| Status
+
+    PatchConfig --&gt;|preview| Preview
+
+    classDef opsToolStyle fill:#a5d6a7,stroke:#388e3c,color:#000
+    classDef queryStyle fill:#ffcc80,stroke:#f57c00,color:#000
+
+    class Diagnose,BatchDiag,CheckAlert,PatchConfig opsToolStyle
+    class Prom,AlertMgr,ConfigMap queryStyle</code></pre>
+<hr />
+<h2 id="4-migration-workflow-detail">4. Migration Workflow Detail<a class="headerlink" href="#4-migration-workflow-detail" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>graph LR
+    subgraph Legacy["Legacy System"]
+        OldRules["Traditional PromQL&lt;br/&gt;Alert Rules"]
+    end
+
+    subgraph Analysis["AST Analysis"]
+        MigrateTool["migrate_rule.py&lt;br/&gt;(Triage + Prefix)"]
+    end
+
+    subgraph Conversion["Conversion Output"]
+        NewConfig["New Rule Pack&lt;br/&gt;YAML"]
+        CustomRules["Custom Rules&lt;br/&gt;(uncovered rules)"]
+    end
+
+    subgraph Validation["Validation &amp; Backtest"]
+        ValidateMig["validate_migration.py&lt;br/&gt;(Shadow Monitoring)"]
+        BacktestThresh["backtest_threshold.py&lt;br/&gt;(Prometheus 7d replay)"]
+    end
+
+    subgraph Cutover["Cutover"]
+        CutoverTool["cutover_tenant.py&lt;br/&gt;(One-Click Automation)"]
+    end
+
+    OldRules --&gt;|input| MigrateTool
+    MigrateTool --&gt;|output| NewConfig
+    MigrateTool --&gt;|output| CustomRules
+    NewConfig --&gt;|validate| ValidateMig
+    CustomRules --&gt;|backtest| BacktestThresh
+    ValidateMig --&gt;|confirm| CutoverTool
+    BacktestThresh --&gt;|confirm| CutoverTool
+
+    classDef migToolStyle fill:#ce93d8,stroke:#7b1fa2,color:#000
+    classDef validStyle fill:#ffcc80,stroke:#f57c00,color:#000
+
+    class MigrateTool migToolStyle
+    class ValidateMig,BacktestThresh validStyle</code></pre>
+<hr />
+<h2 id="5-governance-workflow-detail">5. Governance Workflow Detail<a class="headerlink" href="#5-governance-workflow-detail" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>graph TD
+    subgraph Input["Input (Pending Review)"]
+        RulePR["Rule Pack PR&lt;br/&gt;(new rules)"]
+        ConfigPR["Config PR&lt;br/&gt;(threshold changes)"]
+    end
+
+    subgraph CheckTools["Check Tools"]
+        ValidateAll["validate_config.py&lt;br/&gt;→ YAML/schema/routes"]
+        ConfigDiffTool["config_diff.py&lt;br/&gt;→ Blast Radius"]
+        LintTool["lint_custom_rules.py&lt;br/&gt;→ Custom Rule Governance"]
+    end
+
+    subgraph Review["Review &amp; Decision"]
+        CODEOWNERS["CODEOWNERS&lt;br/&gt;Role-Based"]
+        Decision["Pass/Reject&lt;br/&gt;merge"]
+    end
+
+    subgraph Lifecycle["Lifecycle"]
+        Deprecate["deprecate_rule.py&lt;br/&gt;Mark Deprecation"]
+        Offboard["offboard_tenant.py&lt;br/&gt;Clean Up Offboarded Tenant"]
+    end
+
+    RulePR --&gt;|CI Check| ValidateAll
+    ConfigPR --&gt;|Blast Radius| ConfigDiffTool
+    ConfigPR --&gt;|Custom Rule Check| LintTool
+
+    ValidateAll --&gt;|result| CODEOWNERS
+    ConfigDiffTool --&gt;|result| CODEOWNERS
+    LintTool --&gt;|result| CODEOWNERS
+
+    CODEOWNERS --&gt;|approve| Decision
+
+    Decision --&gt;|rule deprecation| Deprecate
+    Decision --&gt;|tenant offboarding| Offboard
+
+    classDef checkStyle fill:#90caf9,stroke:#1976d2,color:#000
+    classDef reviewStyle fill:#f8bbd0,stroke:#c2185b,color:#000
+
+    class ValidateAll,ConfigDiffTool,LintTool checkStyle
+    class CODEOWNERS,Decision reviewStyle</code></pre>
+<hr />
+<h2 id="6-role-and-tool-mapping-table">6. Role and Tool Mapping Table<a class="headerlink" href="#6-role-and-tool-mapping-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Primary Responsibility</th>
+<th>Core Tools</th>
+<th>Occasional Tools</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Platform Engineer</strong></td>
+<td>Platform-level config, Rule Pack maintenance, infrastructure</td>
+<td><code>validate_config.py</code><br/><code>generate_alertmanager_routes.py</code><br/><code>config_diff.py</code></td>
+<td><code>bump_docs.py</code><br/><code>maintenance_scheduler.py</code></td>
+</tr>
+<tr>
+<td><strong>Domain Expert (DBA/SRE)</strong></td>
+<td>Domain-specific Rule Packs, metric dictionaries, governance</td>
+<td><code>lint_custom_rules.py</code><br/><code>migrate_rule.py</code><br/><code>deprecate_rule.py</code></td>
+<td><code>validate_config.py</code><br/><code>backtest_threshold.py</code></td>
+</tr>
+<tr>
+<td><strong>Tenant Team (SRE/DBA)</strong></td>
+<td>Tenant config, thresholds, routing, tri-state, metadata</td>
+<td><code>scaffold_tenant.py</code><br/><code>diagnose.py</code><br/><code>check_alert.py</code></td>
+<td><code>validate_migration.py</code><br/><code>offboard_tenant.py</code><br/><code>patch_config.py</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-tools-by-workflow-classification-table">7. Tools by Workflow Classification Table<a class="headerlink" href="#7-tools-by-workflow-classification-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Workflow</th>
+<th>Stage</th>
+<th>Tool</th>
+<th>Input</th>
+<th>Output</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Onboarding</strong></td>
+<td>Analysis</td>
+<td><code>onboard_platform.py</code></td>
+<td>Prometheus rules</td>
+<td><code>onboard-hints.json</code></td>
+<td>1–2 min</td>
+</tr>
+<tr>
+<td></td>
+<td>Generation</td>
+<td><code>scaffold_tenant.py</code></td>
+<td><code>--from-onboard</code> / interactive</td>
+<td><code>tenant.yaml</code></td>
+<td>2–5 min</td>
+</tr>
+<tr>
+<td></td>
+<td>Validation</td>
+<td><code>validate_config.py</code></td>
+<td><code>tenant.yaml</code></td>
+<td>validation report</td>
+<td>10–30 sec</td>
+</tr>
+<tr>
+<td><strong>Daily Ops</strong></td>
+<td>Health Check</td>
+<td><code>diagnose.py</code></td>
+<td>Tenant ID</td>
+<td>structured report</td>
+<td>5–10 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Batch Report</td>
+<td><code>batch_diagnose.py</code></td>
+<td>Namespace</td>
+<td>multi-tenant CSV</td>
+<td>30–60 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Alert Query</td>
+<td><code>check_alert.py</code></td>
+<td>Filter (alertname/labels)</td>
+<td>JSON result</td>
+<td>2–5 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Config Update</td>
+<td><code>patch_config.py</code></td>
+<td>ConfigMap name, key, value</td>
+<td>update + diff preview</td>
+<td>5 sec</td>
+</tr>
+<tr>
+<td><strong>Migration</strong></td>
+<td>Rule Conversion</td>
+<td><code>migrate_rule.py</code></td>
+<td>old PromQL</td>
+<td>new YAML + custom rules</td>
+<td>10–30 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Shadow Validation</td>
+<td><code>validate_migration.py</code></td>
+<td>old rule + new rule</td>
+<td>diff report + convergence</td>
+<td>2–5 min</td>
+</tr>
+<tr>
+<td></td>
+<td>Threshold Backtest</td>
+<td><code>backtest_threshold.py</code></td>
+<td>metric + threshold + days</td>
+<td>historical hit stats</td>
+<td>30–120 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Cutover</td>
+<td><code>cutover_tenant.py</code></td>
+<td>tenant config</td>
+<td>fully automated cutover (§7.1)</td>
+<td>5–10 min</td>
+</tr>
+<tr>
+<td><strong>Governance</strong></td>
+<td>Config Validation</td>
+<td><code>validate_config.py</code></td>
+<td>YAML files</td>
+<td>multi-check report</td>
+<td>10–30 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Blast Radius</td>
+<td><code>config_diff.py</code></td>
+<td>old dir + new dir</td>
+<td>diff + impact report</td>
+<td>5–10 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Rule Linting</td>
+<td><code>lint_custom_rules.py</code></td>
+<td>custom rule YAML</td>
+<td>compliance report</td>
+<td>5 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Rule Deprecation</td>
+<td><code>deprecate_rule.py</code></td>
+<td>rule name + end date</td>
+<td>migration hints + silence config</td>
+<td>1–2 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Tenant Offboarding</td>
+<td><code>offboard_tenant.py</code></td>
+<td>tenant ID + reason</td>
+<td>cleanup + audit log</td>
+<td>30–60 sec</td>
+</tr>
+<tr>
+<td><strong>Advanced</strong></td>
+<td>Blind Spot Scan</td>
+<td><code>blind_spot_discovery.py</code></td>
+<td>cluster targets</td>
+<td>unmonitored list</td>
+<td>10–30 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Baseline Discovery</td>
+<td><code>baseline_discovery.py</code></td>
+<td>metric pattern + period</td>
+<td>threshold suggestion table</td>
+<td>1–3 min</td>
+</tr>
+<tr>
+<td></td>
+<td>Version Management</td>
+<td><code>bump_docs.py</code></td>
+<td>Platform/Exporter/Tools versions</td>
+<td>update CHANGELOG + docs</td>
+<td>5 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>AM Route Generation</td>
+<td><code>generate_alertmanager_routes.py</code></td>
+<td>tenant YAML</td>
+<td>Alertmanager fragment</td>
+<td>1–2 sec</td>
+</tr>
+<tr>
+<td></td>
+<td>Maintenance Scheduling</td>
+<td><code>maintenance_scheduler.py</code></td>
+<td>cron + duration</td>
+<td>AlertManager silence CronJob</td>
+<td>10 sec</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-configuration-and-infrastructure-interaction">8. Configuration and Infrastructure Interaction<a class="headerlink" href="#8-configuration-and-infrastructure-interaction" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>graph LR
+    subgraph ConfigLayer["📋 Configuration Layer"]
+        Defaults["_defaults.yaml"]
+        Profiles["_profiles.yaml&lt;br/&gt;(Four-Layer Chain)"]
+        RulePacks["rule-pack-*.yaml&lt;br/&gt;(15 packs)"]
+        TenantYAML["&lt;tenant&gt;.yaml&lt;br/&gt;(conf.d/)"]
+    end
+
+    subgraph GitOpsLayer["📂 GitOps Layer"]
+        GitRepo["Git Repository&lt;br/&gt;conf.d/ + rule-packs/"]
+    end
+
+    subgraph PlatformLayer["🏗 Platform Layer"]
+        CM["ConfigMap&lt;br/&gt;threshold-config"]
+    end
+
+    subgraph ComputeLayer["💻 Compute Layer"]
+        Exp1["threshold-exporter #1&lt;br/&gt;(port 8080)"]
+        Exp2["threshold-exporter #2&lt;br/&gt;(port 8080)"]
+    end
+
+    subgraph EvalLayer["📊 Evaluation Layer"]
+        PV["Projected Volume&lt;br/&gt;(15 Rule Packs)"]
+        Prom["Prometheus&lt;br/&gt;(3h + SHA-256)"]
+    end
+
+    subgraph RoutingLayer["🔀 Routing Layer"]
+        RuleGen["generate_alertmanager_routes.py"]
+        AM["Alertmanager&lt;br/&gt;(Dynamic routing)"]
+    end
+
+    subgraph NotifLayer["📢 Notification Layer"]
+        Slack["Slack"]
+        PD["PagerDuty"]
+        Email["Email"]
+        Teams["Teams"]
+        RChat["RocketChat"]
+        Webhook["Webhook"]
+    end
+
+    Defaults --&gt;|1. Merge in| GitRepo
+    Profiles --&gt;|2. Merge in| GitRepo
+    RulePacks --&gt;|3. Mount via| PV
+    TenantYAML --&gt;|4. Merge in| GitRepo
+
+    GitRepo --&gt;|GitOps Sync&lt;br/&gt;ArgoCD / Flux| CM
+
+    CM --&gt;|SHA-256 hot-reload| Exp1
+    CM --&gt;|SHA-256 hot-reload| Exp2
+
+    Exp1 --&gt;|"/metrics&lt;br/&gt;(metrics + flags)"| Prom
+    Exp2 --&gt;|"/metrics&lt;br/&gt;(metrics + flags)"| Prom
+
+    PV --&gt;|Mounted Rules| Prom
+
+    Prom --&gt;|Alert Evaluation| RuleGen
+
+    TenantYAML --&gt;|Route/Receiver| RuleGen
+
+    RuleGen --&gt;|Fragment| AM
+
+    AM --&gt;|Alert Routes| Slack
+    AM --&gt;|Alert Routes| PD
+    AM --&gt;|Alert Routes| Email
+    AM --&gt;|Alert Routes| Teams
+    AM --&gt;|Alert Routes| RChat
+    AM --&gt;|Alert Routes| Webhook
+
+    classDef cfgLayerStyle fill:#f3e5f5,stroke:#7b1fa2,color:#000
+    classDef gitLayerStyle fill:#f0f0f0,stroke:#616161,color:#000
+    classDef platformLayerStyle fill:#fce4ec,stroke:#c2185b,color:#000
+    classDef computeLayerStyle fill:#e3f2fd,stroke:#1976d2,color:#000
+    classDef evalLayerStyle fill:#e8f5e9,stroke:#388e3c,color:#000
+    classDef routingLayerStyle fill:#fff3e0,stroke:#e65100,color:#000
+    classDef notifLayerStyle fill:#f1f8e9,stroke:#558b2f,color:#000
+
+    class Defaults,Profiles,RulePacks,TenantYAML cfgLayerStyle
+    class GitRepo gitLayerStyle
+    class CM platformLayerStyle
+    class Exp1,Exp2 computeLayerStyle
+    class PV,Prom evalLayerStyle
+    class RuleGen,AM routingLayerStyle
+    class Slack,PD,Email,Teams,RChat,Webhook notifLayerStyle</code></pre>
+<hr />
+<h2 id="9-newcomer-quick-navigation">9. Newcomer Quick Navigation<a class="headerlink" href="#9-newcomer-quick-navigation" title="Permanent link">&para;</a></h2>
+<p><strong>I am a Platform Engineer, I should:</strong>
+1. Read <a href="../architecture-and-design/">architecture-and-design.en.md</a> to understand overall architecture
+2. Learn <code>validate_config.py</code> and <code>generate_alertmanager_routes.py</code>
+3. Use <code>config_diff.py</code> for PR review blast radius analysis
+4. Run <code>bump_docs.py</code> regularly to maintain version consistency</p>
+<p><strong>I am a Domain Expert (DBA), I should:</strong>
+1. Read <a href="../custom-rule-governance/">custom-rule-governance.en.md</a> to understand governance model
+2. Use <code>migrate_rule.py</code> to assist new rule migration
+3. Use <code>lint_custom_rules.py</code> to check custom rule compliance
+4. Use <code>backtest_threshold.py</code> to validate new threshold historical accuracy</p>
+<p><strong>I am a Tenant Team (SRE/DBA), I should:</strong>
+1. Read <a href="../getting-started/for-tenants/">getting-started/for-tenants.en.md</a> to get started quickly
+2. Use <a href="https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx">Self-Service Portal</a> for self-service operations (config, validation, preview). For enterprise intranet, use the <code>da-portal</code> Docker image (<a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md">deployment guide</a>)
+3. Use <code>scaffold_tenant.py</code> to generate initial configuration
+4. Use <code>diagnose.py</code> to regularly check health status
+5. Use <code>check_alert.py</code> to query alert status
+6. Use <code>patch_config.py</code> for partial updates (no need for full redeployment)</p>
+<hr />
+<h2 id="10-related-documents-and-topics">10. Related Documents and Topics<a class="headerlink" href="#10-related-documents-and-topics" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>In-Depth Architecture</strong> → <a href="../architecture-and-design/">architecture-and-design.en.md</a></li>
+<li><strong>Migration Guide</strong> → <a href="../migration-guide/">migration-guide.md</a> and <a href="../migration-engine/">migration-engine.en.md</a></li>
+<li><strong>Tenant Quick Start</strong> → <a href="../getting-started/for-tenants/">getting-started/for-tenants.en.md</a></li>
+<li><strong>Governance &amp; Security</strong> → <a href="../governance-security/">governance-security.en.md</a> and <a href="../custom-rule-governance/">custom-rule-governance.en.md</a></li>
+<li><strong>GitOps Deployment</strong> → <a href="../gitops-deployment/">gitops-deployment.md</a></li>
+<li><strong>Troubleshooting</strong> → <a href="../troubleshooting/">troubleshooting.en.md</a></li>
+<li><strong>Interactive Tools</strong> → <a href="https://vencil.github.io/Dynamic-Alerting-Integrations/">Interactive Tools Hub</a> and <a href="https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/self-service-portal.jsx">Self-Service Portal</a>. Enterprise intranet deployment: <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md">da-portal</a></li>
+<li><strong>Playbooks</strong> (AI Agent exclusive)</li>
+<li><a href="../internal/testing-playbook/">docs/internal/testing-playbook.md</a></li>
+<li><a href="../internal/windows-mcp-playbook/">docs/internal/windows-mcp-playbook.md</a></li>
+<li><a href="../internal/github-release-playbook/">docs/internal/github-release-playbook.md</a></li>
+</ul>
+<hr />
+<p><strong>Last Updated</strong>: | <strong>Maintainers</strong>: Platform Team</p>
+<h2 id="related-resources">Related Resources<a class="headerlink" href="#related-resources" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Relevance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="./">"專案 Context 圖：角色、工具與產品互動關係"</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../adr/001-severity-dedup-via-inhibit/">001-severity-dedup-via-inhibit.en</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../adr/002-oci-registry-over-chartmuseum/">002-oci-registry-over-chartmuseum.en</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../adr/003-sentinel-alert-pattern/">003-sentinel-alert-pattern.en</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../adr/004-federation-scenario-a-first/">004-federation-scenario-a-first.en</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../adr/005-projected-volume-for-rule-packs/">005-projected-volume-for-rule-packs.en</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../adr/">README.en</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>["Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"]</td>
+<td>⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "version": "v2.1.0",
+  "rulePacks": 15,
+  "totalRules": 238,
+  "recordingRules": 139,
+  "alertRules": 99,
+  "cliTools": 50,
+  "docPages": 44,
+  "bilingualPairs": 44,
+  "goTests": 110,
+  "updatedAt": "2026-03-14"
+}
