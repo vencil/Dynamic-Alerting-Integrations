@@ -101,6 +101,8 @@ TOOL_FILES=(
     ops/shadow_verify.py
     ops/discover_instance_mappings.py
     ops/generate_tenant_mapping_rules.py
+    ops/init_project.py
+    ops/config_history.py
     # Data files
     metric-dictionary.yaml
 )

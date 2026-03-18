@@ -2,7 +2,7 @@
 title: "測試注意事項 — 排錯手冊 (Testing Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
@@ -348,6 +348,13 @@ for keyword, db_type in JOB_DB_MAP.items():
 
 7. **`--diff-report` 實作要注意 git restore**：fix → diff → `git checkout .` 三步驟，timeout 時仍須執行 restore
 8. **`--format summary` badge 風格**：一行輸出適合嵌入 CI badge 或 Makefile target echo
+
+## v2.2.0 Lessons Learned（2026-03-18）
+
+1. **`apk del` 後必須驗證移除成功**：`|| true` 吃掉錯誤導致 CVE 殘留。Dockerfile 加 `if apk info -e <pkg>; then exit 1; fi` 做 build-time 斷言
+2. **git-sync `--link=current` 建立 symlink**：下游 `--config-dir` 路徑必須含 `/current/`。加 initContainer `--one-time` 防 exporter 啟動時讀到空目錄
+3. **不寫虛構 benchmark**：沒有實測數據就用 O() 定性分析 + 引導客戶用工具自行驗證。虛構數字被質疑會失去信任
+4. **Dockerfile 註解必須與 base image 版本同步**：改 pin 版本時連註解一起改，否則 review 時製造混淆
 
 ## 相關資源
 

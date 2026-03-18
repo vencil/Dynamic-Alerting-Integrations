@@ -2,7 +2,7 @@
 title: "Tenant 快速入門指南"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # Tenant 快速入門指南

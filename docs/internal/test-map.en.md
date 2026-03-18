@@ -10,7 +10,7 @@
 |------|---------------|
 | `tests/conftest.py` | sys.path setup + pytest fixtures (session + function scope) |
 | `tests/factories.py` | All factory helpers + PipelineBuilder + mock_http_response (with docstrings) |
-| `setup.cfg` | pytest markers + coverage config (fail_under=64) |
+| `setup.cfg` | pytest markers + coverage config (fail_under=80) |
 
 ## Factory List
 

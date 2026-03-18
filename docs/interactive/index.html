@@ -206,11 +206,15 @@
   .card-icon.cli { background: #fffbeb; color: var(--icon-cli); }
   .card-icon.rules { background: #f5f3ff; color: var(--icon-rules); }
   .card-icon.wizard { background: #fdf2f8; color: var(--icon-wizard); }
+  .card-icon.dashboard { background: #e0e7ff; color: #6366f1; }
+  .card-icon.chart { background: #fce7f3; color: #db2777; }
   @media (prefers-color-scheme: dark) {
     .card-icon.validation { background: #064e3b; }
     .card-icon.cli { background: #451a03; }
     .card-icon.rules { background: #2e1065; }
     .card-icon.wizard { background: #500724; }
+    .card-icon.dashboard { background: #312e81; }
+    .card-icon.chart { background: #500724; }
   }
   .card-title {
     font-size: 1rem;
@@ -650,6 +654,54 @@
         <span class="tag">docker</span>
       </div>
     </a>
+
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx">
+      <div class="card-icon wizard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      </div>
+      <div class="card-title">CI/CD Setup Wizard</div>
+      <div class="card-desc">
+        Interactive 4-step wizard to generate da-tools init command and CI/CD
+        pipeline configs for your GitOps workflow.
+      </div>
+      <div class="tags">
+        <span class="tag">cicd</span>
+        <span class="tag">gitops</span>
+        <span class="tag">setup</span>
+      </div>
+    </a>
+
+    <a class="card" data-audience="platform,tenant" href="../assets/jsx-loader.html?component=../interactive/tools/notification-previewer.jsx">
+      <div class="card-icon wizard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      </div>
+      <div class="card-title">Notification Template Previewer</div>
+      <div class="card-desc">
+        Preview alert notifications for Slack, Email, PagerDuty, Teams, and
+        Webhook before they're sent. Test routing and receiver configs live.
+      </div>
+      <div class="tags">
+        <span class="tag">notification</span>
+        <span class="tag">preview</span>
+        <span class="tag">template</span>
+      </div>
+    </a>
+
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../interactive/tools/platform-health.jsx">
+      <div class="card-icon dashboard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </div>
+      <div class="card-title">Platform Health Dashboard</div>
+      <div class="card-desc">
+        Component status, tenant overview, Rule Pack distribution, and event
+        timeline — comprehensive platform health at a glance.
+      </div>
+      <div class="tags">
+        <span class="tag">health</span>
+        <span class="tag">dashboard</span>
+        <span class="tag">monitoring</span>
+      </div>
+    </a>
   </div>
 
   <div class="section-title">Advanced Tools</div>
@@ -832,6 +884,33 @@
       <div class="card-title">Self-Service Portal</div>
       <div class="card-desc">Validate tenant YAML, preview which alerts would fire, and visualize routing structure — all in one place, no CLI needed.</div>
       <div class="tags"><span class="tag">self-service</span><span class="tag">validation</span><span class="tag">routing</span><span class="tag">alerts</span></div>
+    </a>
+
+    <a class="card" data-audience="platform,domain-expert" href="../assets/jsx-loader.html?component=../interactive/tools/alert-noise-analyzer.jsx">
+      <div class="card-icon chart">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      </div>
+      <div class="card-title">Alert Noise Analyzer</div>
+      <div class="card-desc">Analyze alert noise and find optimization opportunities. Measure MTTA, MTTR, and alert fatigue metrics across your platform.</div>
+      <div class="tags"><span class="tag">alerts</span><span class="tag">noise</span><span class="tag">analysis</span></div>
+    </a>
+
+    <a class="card" data-audience="platform" href="../assets/jsx-loader.html?component=../interactive/tools/roi-calculator.jsx">
+      <div class="card-icon wizard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      </div>
+      <div class="card-title">ROI Calculator</div>
+      <div class="card-desc">Calculate adoption benefits and return on investment. Model cost savings from reduced alert fatigue and improved incident response.</div>
+      <div class="tags"><span class="tag">roi</span><span class="tag">cost</span><span class="tag">adoption</span></div>
+    </a>
+
+    <a class="card" data-audience="platform,domain-expert" href="../assets/jsx-loader.html?component=../interactive/tools/multi-tenant-comparison.jsx">
+      <div class="card-icon chart">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      </div>
+      <div class="card-title">Multi-Tenant Comparison</div>
+      <div class="card-desc">Compare thresholds across tenants and detect outliers. Identify unusual threshold patterns and opportunities for consolidation.</div>
+      <div class="tags"><span class="tag">tenant</span><span class="tag">comparison</span><span class="tag">threshold</span></div>
     </a>
   </div>
 

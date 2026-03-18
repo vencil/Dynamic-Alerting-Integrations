@@ -2,7 +2,7 @@
 title: "Platform Engineer 快速入門指南"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # Platform Engineer 快速入門指南

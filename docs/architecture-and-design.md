@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -766,6 +766,59 @@ _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enf
 >
 > 更多工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)
 
+### 2.13 效能架構：Pre-computed Recording Rule vs Runtime Aggregation
+
+客戶最常見的問題：「隨著 tenant 增加，Prometheus CPU/Memory 是否會暴增？」答案是不會，因為本平台的三層 Rule Pack 設計將運算成本從「告警評估時」移到「背景預算時」。
+
+**傳統做法（Runtime Aggregation）— 每次評估都掃全量原始資料：**
+
+```yaml
+# 每次 Alert 評估：Prometheus 必須載入所有 Pod 的 raw time series，執行 rate + sum
+- alert: TenantCPUHigh
+  expr: |
+    sum by (namespace) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+    > on(namespace) group_left()
+    tenant_cpu_threshold
+```
+
+當有 N 個 tenant、底下有 10,000 個 Pod 時，每 15 秒評估一次，Prometheus 必須：從 TSDB 載入 10,000 條序列過去 5 分鐘的 chunks → 執行 `rate()` → 執行 `sum by (namespace)` → 最後才做 `>` 比對。運算量 O(pods × tenants)，隨規模線性增長。
+
+**本平台做法（Pre-computed Vector Join）— 告警評估只做記憶體內數字比對：**
+
+```yaml
+# Part 2 Recording Rule（背景穩定執行，產出低基數指標）
+- record: tenant:cpu_usage:rate5m
+  expr: sum by (tenant) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+
+# Part 3 Alert Rule（只比較兩組已預算好的數字向量）
+- alert: TenantCPUHigh
+  expr: |
+    tenant:cpu_usage:rate5m
+    > on(tenant) group_left()
+    tenant:alert_threshold:cpu_usage
+```
+
+Recording Rule 在背景將 10,000 條 raw series 聚合成 N 個 tenant 級數字。Alert 評估時，Prometheus 只做 N 個數字 vs N 個數字的 Vector Join。運算量 O(tenants)，與 Pod 數量無關。
+
+**防護機制：**
+
+- **Cardinality Guard**：threshold-exporter 的 per-tenant 500 指標上限。即使配置異常，Go 引擎也會主動截斷輸出並記錄 ERROR，防止 TSDB 被撐爆
+- **500 是告警情境數，不是 raw metric 數**：一個 `cpu_warning_threshold: 80` 經由 Recording Rule 的 Vector Join 會自動套用到該 tenant 下所有 Pod。500 代表的是「500 種不同的告警閾值定義」，以 SRE 最佳實踐而言（核心告警 10-20 條），這個上限足以容納大量歷史包袱和特殊場景
+
+**在你的環境中驗證：**
+
+效能與你的 TSDB 大小、scrape interval、硬體規格高度相關。我們不提供合成 benchmark 數據，而是提供工具讓你在自己的環境中評估：
+
+```bash
+# 評估當前基數增長趨勢，預測何時觸頂
+da-tools cardinality-forecast --prometheus http://prometheus:9090 --warn-days 30
+
+# 查看每個 tenant 的指標數量是否健康
+da-tools diagnose <tenant> --config-dir conf.d/
+```
+
+> threshold-exporter 層面的 micro-benchmark（config reload 延遲）見 [benchmarks.md](benchmarks.md)。漸進式遷移指南見 [incremental-migration-playbook](scenarios/incremental-migration-playbook.md)。
+
 ---
 
 ## 3. Projected Volume 架構 (Rule Packs)
@@ -992,26 +1045,23 @@ spec:
 
 DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
-以下為尚未實作的核心功能技術方向，按成熟度分層。已完成的功能（ADR-006 1:N Mapping 工具鏈、ADR-007 四層路由 + 域策略、Policy Path A）見 CHANGELOG 和各 ADR 文件。
+以下為尚未實作的核心功能技術方向，按成熟度分層。已完成的功能見 CHANGELOG：v2.1.0 完成 ADR-006/007、Policy Path A；v2.2.0 完成 Config Versioning、Notification Template Previewer、Container Image Audit、GitOps Native Mode（git-sync sidecar）。
 
 ```mermaid
 graph LR
     subgraph Near["近期 — 已有設計基礎"]
         FB["§5.1 Federation B<br/>Rule Pack 分層"]
         PB["§5.2 Policy Path B<br/>(OPA)"]
-        CV["§5.3 Config<br/>Versioning"]
-        PR["§5.4 Portal ×<br/>Recommend 整合"]
+        PR["§5.3 Portal ×<br/>Recommend 整合"]
     end
     subgraph Mid["中期 — 需客戶驗證"]
-        AD["§5.5 Tenant<br/>Auto-Discovery"]
-        GD["§5.6 Dashboard<br/>as Code"]
-        TP["§5.7 Notification<br/>Template Preview"]
-        GT["§5.8 GitOps<br/>Native Mode"]
+        AD["§5.4 Tenant<br/>Auto-Discovery"]
+        GD["§5.5 Dashboard<br/>as Code"]
     end
     subgraph Far["遠期 — 探索方向"]
-        LM["§5.9 Log-to-Metric<br/>Bridge"]
-        AM["§5.10 Anomaly-Aware<br/>Threshold"]
-        MF["§5.11 Multi-Format<br/>Export"]
+        LM["§5.6 Log-to-Metric<br/>Bridge"]
+        AM["§5.7 Anomaly-Aware<br/>Threshold"]
+        MF["§5.8 Multi-Format<br/>Export"]
     end
 ```
 
@@ -1027,41 +1077,25 @@ Path A（內建 DSL）已於 v2.1.0 實作（`policy_engine.py` + `check_routing
 
 新增 `policy_opa_bridge.py` 工具，將 tenant YAML 轉為 OPA input JSON，呼叫 OPA REST API 或本地 `opa eval`，將 OPA 回應轉換回本平台的 `Violation` 格式。可與 `validate_config.py` Check 9 整合，讓 Path A/B 共存互補。`policy_engine.py` 的 `PolicyResult` / `Violation` 資料模型可直接復用。ADR-007 的域策略也可由安全團隊改用 Rego 定義，Profile 繼承鏈（profile extends another profile）亦可在此框架下實現。
 
-### 5.3 Tenant Config Versioning & Rollback（配置版本控制與回滾）
-
-config-dir 的變更透過 Git 管理，但 runtime 端缺乏細粒度的版本追蹤和快速回滾能力。threshold-exporter 在每次 reload 成功後，保留前 N 版的配置快照（in-memory ring buffer），新增 `/admin/rollback?version=N` API 觸發回滾。`da-tools config-history` 查詢歷史 reload 事件及對應的 config hash。v2.1.0 的 incremental reload、per-file hash cache 和 mtime guard 已為此奠定基礎——只需在 mtime guard 通過時額外 snapshot 當前 mergedConfig。
-
-### 5.4 Threshold Recommendation × Self-Service Portal 整合
+### 5.3 Threshold Recommendation × Self-Service Portal 整合
 
 Portal 的 Alert Preview tab 整合「推薦值」參考線。呼叫 `threshold-recommend --json` 輸出，在滑桿旁顯示推薦值標記，「Apply Recommendation」按鈕直接更新 YAML 中的閾值，信心等級低於 MEDIUM 時顯示警告。Portal 的 routing profile 驗證和範例切換 UI 已完成，推薦值整合可復用相同 tab 架構。
 
-### 5.5 Tenant Auto-Discovery（租戶自動發現）
+### 5.4 Tenant Auto-Discovery（租戶自動發現）
 
 目前新租戶上線需要手動建立 tenant YAML（即使 `scaffold_tenant.py` 已大幅簡化流程）。對於 Kubernetes-native 環境，可根據 namespace label（如 `dynamic-alerting.io/tenant: "true"`）自動註冊。
 
 推薦 sidecar 模式：獨立 sidecar 定期掃描 namespace label，產生 tenant YAML 寫入 config-dir，由既有 Directory Scanner 機制載入。此方案不改動 exporter 核心，且 config-dir 中的明確配置永遠優先於 auto-discovery 結果。需要 allowlist/denylist 機制避免系統 namespace 被誤註冊。`discover_instance_mappings.py` 可作為 sidecar 內的拓撲偵測元件。
 
-### 5.6 Grafana Dashboard as Code（Dashboard 程式化管理）
+### 5.5 Grafana Dashboard as Code（Dashboard 程式化管理）
 
 `scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。每次 tenant onboarding 自動完成，消除手動遺漏。
 
-### 5.7 Notification Template Previewer（通知模板預覽）
-
-新增 JSX 互動工具，輸入 alert name / severity / label → 即時渲染 Slack Card、Teams Adaptive Card、PagerDuty Event 的預覽。搭配 `test-notification --dry-run --json` 輸出，展示每個 receiver 的完整 payload。未來可擴展為 template editor，自定義通知內容格式。亦列在 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
-
-### 5.8 GitOps Native Mode（GitOps 原生模式）
-
-目前 config-dir 透過 ConfigMap projected volume 掛載，變更需經 `kubectl apply` 或 Helm upgrade。GitOps Native Mode 讓 threshold-exporter 直接 watch Git repository（透過 polling 或 webhook），省去 ConfigMap 中間層。
-
-設計要點：exporter 新增 `--config-source git --git-repo URL --git-branch main --git-path configs/` 啟動參數，內建 shallow clone + pull 機制，復用既有 Directory Scanner 的 hash 比對和 incremental reload 路徑。與 ArgoCD/Flux 的整合點是：Git 作為 single source of truth，但 exporter 不依賴 ArgoCD 的 sync 週期。mtime guard + incremental merge 可直接復用，git pull 後觸發與 ConfigMap watch 相同的 reload path。
-
-**取捨**：引入 Git 客戶端依賴增加攻擊面和映像體積。可用 init container + shared volume 模式（git-sync sidecar）作為低侵入替代。
-
-### 5.9 Log-to-Metric Bridge（日誌轉指標橋接）
+### 5.6 Log-to-Metric Bridge（日誌轉指標橋接）
 
 本平台的設計邊界是 Prometheus metrics 層，不直接處理日誌。推薦的生態系解法：`Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理`。此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力。若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
 
-### 5.10 Anomaly-Aware Dynamic Threshold（異常感知動態閾值）
+### 5.7 Anomaly-Aware Dynamic Threshold（異常感知動態閾值）
 
 目前 `threshold-recommend` 基於統計分位數推薦靜態閾值。進階方向是讓 threshold-exporter 支援 `_threshold_mode: adaptive` 配置，結合 Prometheus 的滑動窗口統計（如 `quantile_over_time`），動態調整閾值上下界。
 
@@ -1069,7 +1103,7 @@ Portal 的 Alert Preview tab 整合「推薦值」參考線。呼叫 `threshold-
 
 **風險**：exporter 直接查詢 Prometheus 引入循環依賴和延遲。替代方案是將計算邏輯放在 recording rule 層（純 PromQL），exporter 僅輸出策略參數（窗口大小、分位數、σ 倍數）。`threshold_recommend.py` 已有分位數計算邏輯，可作為 adaptive mode 的離線參考實作。
 
-### 5.11 Multi-Format Export（多格式匯出）
+### 5.8 Multi-Format Export（多格式匯出）
 
 將平台配置和分析結果匯出為其他監控系統的原生格式，降低遷移門檻和鎖定風險。
 
@@ -1089,5 +1123,5 @@ Portal 的 Alert Preview tab 整合「推薦值」參考線。呼叫 `threshold-
 
 ---
 
-**文件版本：** v2.1.0 — 2026-03-17
+**文件版本：** v2.2.0 — 2026-03-17
 **維護者：** Platform Engineering Team

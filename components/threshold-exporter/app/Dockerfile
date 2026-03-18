@@ -7,18 +7,24 @@ RUN go mod download
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /threshold-exporter .
 
-FROM alpine:3.22
+FROM gcr.io/distroless/static-debian12:nonroot
 
-# Security: upgrade all packages to pick up CVE fixes
-# Alpine 3.22 ships libavif >= 1.3.0 (CVE-2025-48174), openssl 3.x fixes (CVE-2025-15467)
-RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates && \
-    addgroup -g 10001 -S nonroot && \
-    adduser -S -D -H -u 10001 -h /nonexistent -s /sbin/nologin -G nonroot nonroot
+# Distroless advantages:
+# - Runs as nonroot (UID 65532) by default
+# - No shell/apk/package manager → minimal attack surface
+# - Static binary (CGO_ENABLED=0) requires no libc
+# - CA certificates included in base image
+# - No libavif/openssl/glibc → immune to CVE-2025-48174, CVE-2025-15467
+# - Go's built-in crypto/tls replaces openssl dependency
+#
+# CVE posture: Trivy typically reports 0 vulnerabilities on this image.
+# Rebuild monthly to pick up CA certificate updates.
+#
+# For debugging in development, temporarily use: FROM alpine:3.22
+# and add: apk add ca-certificates && addgroup -g 10001 -S nonroot && adduser -S -D -H -u 10001 ...
 
 COPY --from=builder /threshold-exporter /usr/local/bin/threshold-exporter
 
-USER nonroot:nonroot
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
-ENTRYPOINT ["threshold-exporter"]
+# HEALTHCHECK removed: distroless has no wget/curl; K8s probes handle health checks
+ENTRYPOINT ["/usr/local/bin/threshold-exporter"]

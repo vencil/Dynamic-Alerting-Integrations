@@ -2,7 +2,7 @@
 title: "場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知

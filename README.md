@@ -2,14 +2,14 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** | **中文（當前）**
 
-![Version](https://img.shields.io/badge/version-v2.1.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
+![Version](https://img.shields.io/badge/version-v2.2.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-53%20pairs-blue)
 
 多租戶環境下，規則膨脹與變更瓶頸是 Prometheus 告警運維的核心痛點。本平台以 config-driven 架構解決：租戶寫 YAML，平台管規則——閾值、路由、通知、維護窗口全配置驅動，規則數不隨租戶增長。
 
@@ -167,6 +167,8 @@ make port-forward
 
 **日常運維：** `diagnose` / `batch_diagnose` 健康檢查 · `patch_config` 安全更新（含 `--diff`）· `check_alert` 警報狀態 · `maintenance_scheduler` 排程維護 · `generate_alertmanager_routes` 路由產生 · `explain_route` 路由偵錯（ADR-007）
 
+**採用管線（v2.2.0）：** `init` 專案骨架產生（CI/CD + conf.d + Kustomize）· `config_history` 配置快照與歷史追蹤 · `gitops-check` GitOps Native Mode 驗證 · `demo-showcase` 5-tenant 展演腳本 · [Hands-on Lab](docs/scenarios/hands-on-lab.md) 實戰教程 · [漸進式遷移 Playbook](docs/scenarios/incremental-migration-playbook.md) 四階段零停機遷移
+
 **路由設定檔與域策略（v2.1.0 ADR-007）：** `_routing_profiles.yaml` 定義跨租戶共用路由配置，`_domain_policy.yaml` 定義業務域合規約束。四層合併：`_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`。工具：`check_routing_profiles`（lint hook）· `explain_route`（偵錯）· JSON Schema 驗證
 
 **品質與治理：** `validate_config` 一站式驗證 · `alert_quality` 告警品質評分 · Policy-as-Code 引擎 · `cardinality_forecast` 趨勢預測 · `backtest_threshold` 歷史回測 · `baseline_discovery` 閾值建議 · `config_diff` 配置差異
@@ -203,7 +205,7 @@ make port-forward
 | [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、CI Linting |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.md) | 雙軌並行完整 SOP |
 | [性能基準](docs/benchmarks.md) | 完整 benchmark 數據與方法論 |
-| [場景指南](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
+| [場景指南](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle · GitOps CI/CD · Hands-on Lab |
 | Day-2 運維 | `diagnose` → `alert-quality` → `patch-config` → `maintenance-scheduler`（[CLI 參考](docs/cli-reference.md)） |
 
 完整文件對照表：[doc-map.md](docs/internal/doc-map.md) · 工具表：[tool-map.md](docs/internal/tool-map.md) · 互動工具：[Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
