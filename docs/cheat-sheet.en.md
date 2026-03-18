@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 
@@ -49,6 +49,9 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
 | `explain-route` | Routing merge pipeline debugger: four-layer expansion + profile (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --json | `da-tools explain-route --help` |
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (ADR-006) | --endpoint <URL> or --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
+| `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |
+| `config-history` | Config snapshot & history tracking (snapshot / log / show / diff) | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |
+| `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
 
 ## Quick Tips
 
@@ -78,6 +81,11 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `test-notification` — Multi-channel notification connectivity testing
   - `explain-route` — Routing merge pipeline debugger (four-layer expansion)
   - `discover-mappings` — Auto-discover 1:N instance-tenant mappings
+
+- **Adoption & Initialization**
+  - `init` — Project skeleton generation (CI/CD + conf.d + Kustomize)
+  - `config-history` — Config snapshot & history tracking
+  - `gitops-check` — GitOps Native Mode readiness validation
 
 ## Network Configuration
 

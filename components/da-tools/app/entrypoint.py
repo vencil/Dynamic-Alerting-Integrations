@@ -57,6 +57,9 @@ def _build_help_text(lang):
     grafana-import    Grafana Dashboard JSON 匯入
     shadow-verify     Shadow Monitoring 雙軌比對驗證
     discover-mappings 自動發現 1:N 實例-租戶映射 (掃描 exporter /metrics)
+    init              在客戶 repo 初始化 Dynamic Alerting 整合骨架 (CI/CD + conf.d + Kustomize)
+    config-history    配置快照與歷史追蹤 (snapshot / log / diff / show)
+    gitops-check      GitOps Native Mode 就緒度驗證 (repo / local / sidecar)
 
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
@@ -109,6 +112,9 @@ Commands (File System — offline):
     grafana-import    Grafana Dashboard JSON import
     shadow-verify     Shadow Monitoring dual-rail comparison
     discover-mappings Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics)
+    init              Bootstrap Dynamic Alerting integration in your repo (CI/CD + conf.d + Kustomize)
+    config-history    Config snapshot & history tracker (snapshot / log / diff / show)
+    gitops-check      GitOps Native Mode readiness validation (repo / local / sidecar)
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -174,6 +180,9 @@ COMMAND_MAP = {
     "grafana-import": "grafana_import.py",
     "shadow-verify": "shadow_verify.py",
     "discover-mappings": "discover_instance_mappings.py",
+    "init": "init_project.py",
+    "config-history": "config_history.py",
+    "gitops-check": "gitops_check.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
@@ -198,6 +207,7 @@ def print_usage():
         print("  da-tools lint /path/to/custom-rules/ --ci")
         print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
         print("  da-tools validate-config --config-dir conf.d/")
+        print("  da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis")
         print()
         print("環境變數:")
         print("  PROMETHEUS_URL   Prometheus 預設端點 (未指定 --prometheus 時使用)")
@@ -212,6 +222,7 @@ def print_usage():
         print("  da-tools lint /path/to/custom-rules/ --ci")
         print("  da-tools onboard --alertmanager-config alertmanager.yaml --tenant-label organization")
         print("  da-tools validate-config --config-dir conf.d/")
+        print("  da-tools init --ci both --tenants db-a,db-b --rule-packs mariadb,redis")
         print()
         print("Environment:")
         print("  PROMETHEUS_URL   Default Prometheus endpoint (used when --prometheus is omitted)")

@@ -2,14 +2,14 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-![Version](https://img.shields.io/badge/version-v2.1.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-46%20pairs-blue)
+![Version](https://img.shields.io/badge/version-v2.2.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-53%20pairs-blue)
 
 Rule explosion and change bottlenecks are the core pain points of Prometheus alerting in multi-tenant environments. This platform solves them with a config-driven architecture: tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
 
@@ -167,6 +167,8 @@ All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/ven
 
 **Day-to-Day Operations:** `diagnose` / `batch_diagnose` health checks · `patch_config` safe updates (with `--diff`) · `check_alert` alert status · `maintenance_scheduler` scheduled silence · `generate_alertmanager_routes` routing generation · `explain_route` routing debugger (ADR-007)
 
+**Adoption Pipeline (v2.2.0):** `init` project scaffold generation (CI/CD + conf.d + Kustomize) · `config_history` config snapshot & history tracking · `gitops-check` GitOps Native Mode validation · `demo-showcase` 5-tenant demo script · [Hands-on Lab](docs/scenarios/hands-on-lab.en.md) hands-on tutorial · [Incremental Migration Playbook](docs/scenarios/incremental-migration-playbook.en.md) zero-downtime 4-phase migration
+
 **Routing Profiles & Domain Policies (v2.1.0 ADR-007):** `_routing_profiles.yaml` defines cross-tenant shared routing configs, `_domain_policy.yaml` defines business-domain compliance constraints. Four-layer merge: `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`. Tools: `check_routing_profiles` (lint hook) · `explain_route` (debugger) · JSON Schema validation
 
 **Quality & Governance:** `validate_config` all-in-one validation · `alert_quality` alert quality scoring · Policy-as-Code engine · `cardinality_forecast` trend prediction · `backtest_threshold` historical replay · `baseline_discovery` threshold recommendations · `config_diff` diff report
@@ -203,7 +205,7 @@ Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](do
 | [Custom Rule Governance](docs/custom-rule-governance.en.md) | Three-tier governance, CI linting |
 | [Shadow Monitoring SOP](docs/shadow-monitoring-sop.en.md) | Dual-track SOP |
 | [Benchmarks](docs/benchmarks.md) | Full benchmark data and methodology |
-| [Scenarios](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle |
+| [Scenarios](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle · GitOps CI/CD · Hands-on Lab |
 | Day-2 Operations | `diagnose` → `alert-quality` → `patch-config` → `maintenance-scheduler` ([CLI Reference](docs/cli-reference.en.md)) |
 
 Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)

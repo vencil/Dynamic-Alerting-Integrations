@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide

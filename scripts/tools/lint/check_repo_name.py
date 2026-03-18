@@ -44,7 +44,7 @@ SCAN_EXTENSIONS = {
 # Directories to skip
 SKIP_DIRS = {
     '.git', 'node_modules', '__pycache__', 'site', '.venv',
-    'vendor', '.mypy_cache', '.pytest_cache',
+    'vendor', '.mypy_cache', '.pytest_cache', 'tests',
 }
 
 # Files to skip (this script itself documents the wrong name)

@@ -10,7 +10,7 @@
 |------|------|
 | `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope） |
 | `tests/factories.py` | 所有 factory helpers + PipelineBuilder + mock_http_response（含完整 docstring） |
-| `setup.cfg` | pytest markers + coverage config（fail_under=64） |
+| `setup.cfg` | pytest markers + coverage config（fail_under=80） |
 
 ## Factory 清單
 

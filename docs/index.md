@@ -3,7 +3,7 @@ title: "Dynamic Alerting Platform — Home"
 description: "Enterprise-grade Multi-Tenant Dynamic Alerting for Kubernetes"
 tags: [home, overview]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 

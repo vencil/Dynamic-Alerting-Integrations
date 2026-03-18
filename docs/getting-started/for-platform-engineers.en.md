@@ -2,7 +2,7 @@
 title: "Platform Engineer Quick Start Guide"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Platform Engineer Quick Start Guide

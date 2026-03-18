@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -693,6 +693,59 @@ _routing_enforced:
 ```
 
 `generate_alertmanager_routes.py` inserts platform route before tenant routes. Mode A generates a single shared route; Mode B generates N per-tenant routes (each with `tenant="<name>"` matcher + `continue: true`). Disabled by default; Platform Team enables as needed. See [BYO Alertmanager Integration Guide §8](byo-alertmanager-integration.md#8-platform-enforced-routing).
+
+### 2.13 Performance Architecture: Pre-computed Recording Rule vs Runtime Aggregation
+
+The most common customer question: "Will Prometheus CPU/Memory spike as tenants grow?" The answer is no, because the platform's three-layer Rule Pack design shifts computation cost from "alert evaluation time" to "background pre-computation."
+
+**Traditional approach (Runtime Aggregation) — scans all raw data on every evaluation:**
+
+```yaml
+# Every Alert evaluation: Prometheus loads all Pod raw series, runs rate + sum
+- alert: TenantCPUHigh
+  expr: |
+    sum by (namespace) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+    > on(namespace) group_left()
+    tenant_cpu_threshold
+```
+
+With N tenants and 10,000 Pods, every 15-second evaluation cycle requires Prometheus to: load 10,000 time series chunks from TSDB → execute `rate()` → execute `sum by (namespace)` → finally perform `>` comparison. Computation is O(pods × tenants), growing linearly with scale.
+
+**This platform's approach (Pre-computed Vector Join) — alert evaluation is pure in-memory comparison:**
+
+```yaml
+# Part 2 Recording Rule (runs in background, produces low-cardinality metrics)
+- record: tenant:cpu_usage:rate5m
+  expr: sum by (tenant) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+
+# Part 3 Alert Rule (compares two pre-computed number vectors)
+- alert: TenantCPUHigh
+  expr: |
+    tenant:cpu_usage:rate5m
+    > on(tenant) group_left()
+    tenant:alert_threshold:cpu_usage
+```
+
+Recording Rules aggregate 10,000 raw series into N tenant-level numbers in the background. Alert evaluation only performs an N-vs-N Vector Join in memory. Computation is O(tenants), independent of Pod count.
+
+**Guardrails:**
+
+- **Cardinality Guard**: threshold-exporter enforces a per-tenant 500 metric limit. If misconfiguration occurs, the Go engine truncates output and logs ERROR, preventing TSDB OOM
+- **500 is alerting scenarios, not raw metrics**: A single `cpu_warning_threshold: 80` is applied to all Pods under that tenant via Recording Rule Vector Join. 500 represents "500 distinct threshold definitions" — well beyond the SRE best practice of 10-20 core alerts per service
+
+**Verify in your environment:**
+
+Performance depends on your TSDB size, scrape interval, and hardware. Use the built-in tools to assess in your own environment:
+
+```bash
+# Forecast cardinality growth trends, predict when limits will be reached
+da-tools cardinality-forecast --prometheus http://prometheus:9090 --warn-days 30
+
+# Check per-tenant metric count health
+da-tools diagnose <tenant> --config-dir conf.d/
+```
+
+> threshold-exporter micro-benchmarks (config reload latency) at [benchmarks.md](benchmarks.md). Incremental migration guide at [incremental-migration-playbook](scenarios/incremental-migration-playbook.en.md).
 
 ---
 

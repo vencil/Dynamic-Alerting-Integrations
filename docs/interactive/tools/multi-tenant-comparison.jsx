@@ -2,7 +2,7 @@
 title: "Multi-Tenant Comparison"
 tags: [tenant, comparison, threshold, outlier, analysis]
 audience: ["platform", "domain-expert"]
-version: v2.1.0
+version: v2.2.0
 lang: en
 related: [capacity-planner, roi-calculator, alert-noise-analyzer]
 ---
@@ -121,33 +121,44 @@ function findDivergent(tenants) {
 // ── Components ────────────────────────────────────────────────────
 
 function MetricCard({ label, value, sub }) {
+  const containerStyle = { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 16px', textAlign: 'center', minWidth: 100 };
+  const labelStyle = { fontSize: 12, color: '#64748b', marginBottom: 4 };
+  const valueStyle = { fontSize: 24, fontWeight: 700, color: '#1e293b' };
+  const subStyle = { fontSize: 11, color: '#94a3b8', marginTop: 2 };
   return (
-    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 16px', textAlign: 'center', minWidth: 100 }}>
-      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: '#1e293b' }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{sub}</div>}
+    <div style={containerStyle}>
+      <div style={labelStyle}>{label}</div>
+      <div style={valueStyle}>{value}</div>
+      {sub && <div style={subStyle}>{sub}</div>}
     </div>
   );
 }
 
 function BarChart({ data, maxVal, label }) {
+  const containerStyle = { marginBottom: 8 };
+  const labelStyle = { fontSize: 12, color: '#64748b', marginBottom: 4 };
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{label}</div>
+    <div style={containerStyle}>
+      <div style={labelStyle}>{label}</div>
       {data.map((item, i) => {
         const pct = maxVal > 0 ? (item.value / maxVal) * 100 : 0;
         const isOutlier = item.outlier;
+        const rowStyle = { display: 'flex', alignItems: 'center', marginBottom: 3 };
+        const labelSpanStyle = { width: 50, fontSize: 11, color: '#475569', textAlign: 'right', marginRight: 8 };
+        const barContainerStyle = { flex: 1, background: '#f1f5f9', borderRadius: 4, height: 20, position: 'relative' };
+        const barStyle = {
+          width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 4,
+          background: isOutlier ? '#ef4444' : '#3b82f6',
+          transition: 'width 0.3s',
+        };
+        const valueSpanStyle = { width: 45, fontSize: 11, color: isOutlier ? '#ef4444' : '#475569', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 };
         return (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
-            <span style={{ width: 50, fontSize: 11, color: '#475569', textAlign: 'right', marginRight: 8 }}>{item.label}</span>
-            <div style={{ flex: 1, background: '#f1f5f9', borderRadius: 4, height: 20, position: 'relative' }}>
-              <div style={{
-                width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 4,
-                background: isOutlier ? '#ef4444' : '#3b82f6',
-                transition: 'width 0.3s',
-              }} />
+          <div key={i} style={rowStyle}>
+            <span style={labelSpanStyle}>{item.label}</span>
+            <div style={barContainerStyle}>
+              <div style={barStyle} />
             </div>
-            <span style={{ width: 45, fontSize: 11, color: isOutlier ? '#ef4444' : '#475569', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 }}>{item.value}</span>
+            <span style={valueSpanStyle}>{item.value}</span>
           </div>
         );
       })}
@@ -157,27 +168,31 @@ function BarChart({ data, maxVal, label }) {
 
 function HeatmapRow({ metric, tenants, stats }) {
   const range = stats.max - stats.min || 1;
+  const metricCellStyle = { padding: '6px 12px', fontSize: 13, fontWeight: 500, borderBottom: '1px solid #e2e8f0' };
+  const statsCellStyle = { padding: '6px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '1px solid #e2e8f0' };
   return (
     <tr>
-      <td style={{ padding: '6px 12px', fontSize: 13, fontWeight: 500, borderBottom: '1px solid #e2e8f0' }}>{metric}</td>
+      <td style={metricCellStyle}>{metric}</td>
       {tenants.map((tenant, i) => {
         const val = tenant.thresholds[metric];
         const norm = (val - stats.min) / range;
         const hue = 120 - norm * 120; // green(low) → red(high)
         const bg = `hsl(${hue}, 60%, 90%)`;
         const isDefault = val === DEFAULTS[metric];
+        const cellStyle = {
+          padding: '6px 12px', textAlign: 'center', fontSize: 13,
+          background: bg, borderBottom: '1px solid #e2e8f0',
+          fontWeight: isDefault ? 400 : 700,
+          color: isDefault ? '#64748b' : '#1e293b',
+        };
+        const defaultBadgeStyle = { fontSize: 10, color: '#94a3b8' };
         return (
-          <td key={i} style={{
-            padding: '6px 12px', textAlign: 'center', fontSize: 13,
-            background: bg, borderBottom: '1px solid #e2e8f0',
-            fontWeight: isDefault ? 400 : 700,
-            color: isDefault ? '#64748b' : '#1e293b',
-          }}>
-            {val}{isDefault && <span style={{ fontSize: 10, color: '#94a3b8' }}> (d)</span>}
+          <td key={i} style={cellStyle}>
+            {val}{isDefault && <span style={defaultBadgeStyle}> (d)</span>}
           </td>
         );
       })}
-      <td style={{ padding: '6px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
+      <td style={statsCellStyle}>
         {stats.mean} ± {stats.stddev}
       </td>
     </tr>
@@ -224,12 +239,41 @@ function MultiTenantComparison() {
   const maintenanceCount = tenants.filter(t => t.maintenance).length;
   const silentCount = tenants.filter(t => t.silentMode !== 'none').length;
 
+  const mainContainerStyle = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', maxWidth: 960, margin: '0 auto', padding: 24 };
+  const titleStyle = { fontSize: 22, fontWeight: 700, color: '#1e293b', marginBottom: 4 };
+  const descriptionStyle = { fontSize: 14, color: '#64748b', marginBottom: 24 };
+  const summaryCardsStyle = { display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' };
+  const heatmapContainerStyle = { border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'auto', marginBottom: 24 };
+  const tableStyle = { width: '100%', borderCollapse: 'collapse' };
+  const tableHeaderRowStyle = { background: '#f8fafc' };
+  const metricHeaderStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' };
+  const tenantHeaderStyle = { padding: '8px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' };
+  const statsHeaderStyle = { padding: '8px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' };
+  const drilldownContainerStyle = { display: 'flex', gap: 24, marginBottom: 24, flexWrap: 'wrap' };
+  const drilldownLeftStyle = { flex: 1, minWidth: 300 };
+  const drilldownRightStyle = { flex: 1, minWidth: 300 };
+  const drilldownTitleStyle = { fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 12 };
+  const controlsStyle = { display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center' };
+  const selectStyle = { padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13 };
+  const labelStyle = { fontSize: 12, color: '#64748b' };
+  const inputRangeStyle = { width: 80, marginLeft: 6 };
+  const sigmaTextStyle = { marginLeft: 4 };
+  const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: '#fef2f2', borderRadius: 6, border: '1px solid #fecaca' };
+  const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: '#dc2626' };
+  const outlierValueStyle = { fontSize: 12, color: '#dc2626', marginLeft: 8 };
+  const divergenceBoxStyle = { border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' };
+  const commonSettingsBoxStyle = { padding: '8px 12px', background: '#f0fdf4', borderTop: '1px solid #e2e8f0' };
+  const commonSettingsTextStyle = { fontSize: 12, color: '#16a34a' };
+  const recommendationsStyle = { border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, background: '#f8fafc' };
+  const recommendationsHeadingStyle = { fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 8 };
+  const recommendationsListStyle = { margin: 0, paddingLeft: 20, fontSize: 13, color: '#475569', lineHeight: 1.8 };
+
   return (
-    <div style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', maxWidth: 960, margin: '0 auto', padding: 24 }}>
-      <h2 style={{ fontSize: 22, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>
+    <div style={mainContainerStyle}>
+      <h2 style={titleStyle}>
         {t('多租戶閾值比較', 'Multi-Tenant Threshold Comparison')}
       </h2>
-      <p style={{ fontSize: 14, color: '#64748b', marginBottom: 24 }}>
+      <p style={descriptionStyle}>
         {t(
           '橫向比較所有租戶的閾值設定，識別異常值和共同配置。',
           'Compare threshold settings across all tenants, identify outliers and common configurations.'
@@ -237,7 +281,7 @@ function MultiTenantComparison() {
       </p>
 
       {/* Summary Cards */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+      <div style={summaryCardsStyle}>
         <MetricCard label={t('租戶數', 'Tenants')} value={totalTenants} />
         <MetricCard label={t('自定義', 'Custom')} value={customCount} sub={`/ ${totalTenants}`} />
         <MetricCard label={t('維護中', 'Maintenance')} value={maintenanceCount} />
@@ -247,21 +291,25 @@ function MultiTenantComparison() {
       </div>
 
       {/* Heatmap Table */}
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'auto', marginBottom: 24 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <div style={heatmapContainerStyle}>
+        <table style={tableStyle}>
           <thead>
-            <tr style={{ background: '#f8fafc' }}>
-              <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' }}>
+            <tr style={tableHeaderRowStyle}>
+              <th style={metricHeaderStyle}>
                 {t('指標', 'Metric')}
               </th>
-              {tenants.map((tenant, i) => (
-                <th key={i} style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' }}>
+              {tenants.map((tenant, i) => {
+                const maintenanceIconStyle = { color: '#f59e0b' };
+                const silentIconStyle = { color: '#8b5cf6' };
+                return (
+                <th key={i} style={tenantHeaderStyle}>
                   {tenant.name}
-                  {tenant.maintenance && <span title="Maintenance" style={{ color: '#f59e0b' }}> ⚠</span>}
-                  {tenant.silentMode !== 'none' && <span title={`Silent: ${tenant.silentMode}`} style={{ color: '#8b5cf6' }}> 🔇</span>}
+                  {tenant.maintenance && <span title="Maintenance" style={maintenanceIconStyle}> ⚠</span>}
+                  {tenant.silentMode !== 'none' && <span title={`Silent: ${tenant.silentMode}`} style={silentIconStyle}> 🔇</span>}
                 </th>
-              ))}
-              <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' }}>
+                );
+              })}
+              <th style={statsHeaderStyle}>
                 {t('平均 ± 標準差', 'Mean ± StdDev')}
               </th>
             </tr>
@@ -275,28 +323,28 @@ function MultiTenantComparison() {
       </div>
 
       {/* Metric Drill-down */}
-      <div style={{ display: 'flex', gap: 24, marginBottom: 24, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 300 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 12 }}>
+      <div style={drilldownContainerStyle}>
+        <div style={drilldownLeftStyle}>
+          <h3 style={drilldownTitleStyle}>
             {t('指標鑽探', 'Metric Drill-down')}
           </h3>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center' }}>
+          <div style={controlsStyle}>
             <select
               value={selectedMetric}
               onChange={e => setSelectedMetric(e.target.value)}
-              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13 }}
+              style={selectStyle}
             >
               {metrics.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
-            <label style={{ fontSize: 12, color: '#64748b' }}>
+            <label style={labelStyle}>
               {t('離群閾值', 'Outlier σ')}:
               <input
                 type="range" min="1" max="3" step="0.1"
                 value={outlierThreshold}
                 onChange={e => setOutlierThreshold(parseFloat(e.target.value))}
-                style={{ width: 80, marginLeft: 6 }}
+                style={inputRangeStyle}
               />
-              <span style={{ marginLeft: 4 }}>{outlierThreshold}σ</span>
+              <span style={sigmaTextStyle}>{outlierThreshold}σ</span>
             </label>
           </div>
           <BarChart
@@ -305,12 +353,12 @@ function MultiTenantComparison() {
             label={`${selectedMetric} (${t('預設', 'default')}: ${DEFAULTS[selectedMetric]})`}
           />
           {outliers.length > 0 && (
-            <div style={{ marginTop: 8, padding: '8px 12px', background: '#fef2f2', borderRadius: 6, border: '1px solid #fecaca' }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
+            <div style={outlierBoxStyle}>
+              <span style={outlierLabelStyle}>
                 {t('離群值', 'Outliers')}:
               </span>
               {outliers.map((o, i) => (
-                <span key={i} style={{ fontSize: 12, color: '#dc2626', marginLeft: 8 }}>
+                <span key={i} style={outlierValueStyle}>
                   {o.tenant} = {o.value} (z={o.zscore})
                 </span>
               ))}
@@ -319,22 +367,27 @@ function MultiTenantComparison() {
         </div>
 
         {/* Divergence Ranking */}
-        <div style={{ flex: 1, minWidth: 300 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 12 }}>
+        <div style={drilldownRightStyle}>
+          <h3 style={drilldownTitleStyle}>
             {t('差異排行', 'Divergence Ranking')}
           </h3>
-          <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
-            {divergent.map((item, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < divergent.length - 1 ? '1px solid #f1f5f9' : 'none', background: i === 0 ? '#fef2f2' : 'white' }}>
-                <span style={{ fontSize: 13, fontWeight: i === 0 ? 600 : 400 }}>{item.metric}</span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>
+          <div style={divergenceBoxStyle}>
+            {divergent.map((item, i) => {
+              const rowStyle = { display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < divergent.length - 1 ? '1px solid #f1f5f9' : 'none', background: i === 0 ? '#fef2f2' : 'white' };
+              const itemLabelStyle = { fontSize: 13, fontWeight: i === 0 ? 600 : 400 };
+              const itemStatsStyle = { fontSize: 12, color: '#64748b' };
+              return (
+              <div key={i} style={rowStyle}>
+                <span style={itemLabelStyle}>{item.metric}</span>
+                <span style={itemStatsStyle}>
                   σ={item.stats.stddev} | {item.stats.min}–{item.stats.max}
                 </span>
               </div>
-            ))}
+              );
+            })}
             {commonSettings.length > 0 && (
-              <div style={{ padding: '8px 12px', background: '#f0fdf4', borderTop: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: 12, color: '#16a34a' }}>
+              <div style={commonSettingsBoxStyle}>
+                <span style={commonSettingsTextStyle}>
                   {t('一致', 'Common')}: {commonSettings.join(', ')}
                 </span>
               </div>
@@ -344,11 +397,11 @@ function MultiTenantComparison() {
       </div>
 
       {/* Recommendations */}
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, background: '#f8fafc' }}>
-        <h3 style={{ fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 8 }}>
+      <div style={recommendationsStyle}>
+        <h3 style={recommendationsHeadingStyle}>
           {t('建議', 'Recommendations')}
         </h3>
-        <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: '#475569', lineHeight: 1.8 }}>
+        <ul style={recommendationsListStyle}>
           {divergent.length > 0 && divergent[0].stats.stddev > 10 && (
             <li>{t(
               `${divergent[0].metric} 差異最大（σ=${divergent[0].stats.stddev}），建議統一或確認是否為預期設定。`,

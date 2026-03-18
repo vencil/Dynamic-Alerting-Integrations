@@ -11,7 +11,8 @@ config_diff compares entire directory snapshots for PR review.
 
 Usage:
   python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/
-  python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --json-output
+  python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format json
+  python3 scripts/tools/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format markdown
 """
 import argparse
 import json
@@ -352,6 +353,10 @@ def build_parser():
                         help="New/staged config directory")
     parser.add_argument("--json-output", action="store_true",
                         help="Output JSON instead of Markdown")
+    parser.add_argument("--format", choices=["markdown", "json"],
+                        default="markdown",
+                        help="Output format (default: markdown). "
+                             "Alias: --json-output is equivalent to --format json")
     return parser
 
 
@@ -379,7 +384,8 @@ def main():
     diffs = compute_diff(old_configs, new_configs)
     profile_diffs = compute_profile_diff(args.old_dir, args.new_dir)
 
-    if args.json_output:
+    use_json = args.json_output or args.format == "json"
+    if use_json:
         output = {"metric_diffs": diffs, "profile_diffs": profile_diffs}
         print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
     else:

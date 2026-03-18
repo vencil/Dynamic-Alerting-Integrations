@@ -31,6 +31,8 @@ docs/README-root.md:docs/adr/001-severity-dedup-via-inhibit.md
 docs/README-root.md:docs/adr/003-sentinel-alert-pattern.md
 docs/README-root.md:docs/adr/005-projected-volume-for-rule-packs.md
 docs/README-root.md:docs/adr/007-cross-domain-routing-profiles.md
+docs/README-root.md:docs/scenarios/hands-on-lab.md
+docs/README-root.md:docs/scenarios/incremental-migration-playbook.md
 
 # en README symlink (docs/README-root.en.md → ../README.en.md)
 docs/README-root.en.md:docs/getting-started/for-platform-engineers.en.md
@@ -58,10 +60,16 @@ docs/README-root.en.md:docs/adr/001-severity-dedup-via-inhibit.en.md
 docs/README-root.en.md:docs/adr/003-sentinel-alert-pattern.en.md
 docs/README-root.en.md:docs/adr/005-projected-volume-for-rule-packs.en.md
 docs/README-root.en.md:docs/adr/007-cross-domain-routing-profiles.en.md
+docs/README-root.en.md:docs/scenarios/hands-on-lab.en.md
+docs/README-root.en.md:docs/scenarios/incremental-migration-playbook.en.md
 
 # components/ path — works from GitHub repo root, not from docs/
 docs/README-root.md:components/threshold-exporter/README.md#部署-helm
 docs/README-root.en.md:components/threshold-exporter/README.md#部署-helm
+
+# JSX loader links with query parameters (checker doesn't handle ?component=)
+docs/scenarios/gitops-ci-integration.md:../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx
+docs/scenarios/gitops-ci-integration.en.md:../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx
 
 # CHANGELOG archive (placeholder for future split)
 CHANGELOG-archive.md

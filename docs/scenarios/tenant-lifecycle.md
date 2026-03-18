@@ -2,7 +2,7 @@
 title: "場景：租戶完整生命週期管理"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # 場景：租戶完整生命週期管理

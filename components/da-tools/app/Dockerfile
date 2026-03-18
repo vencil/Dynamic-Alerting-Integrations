@@ -1,20 +1,36 @@
-FROM python:3.13-alpine AS base
+FROM python:3.13.3-alpine3.22 AS builder
 
-# ── Metadata ────────────────────────────────────────────────────────
+# ── Security: Alpine 3.22 includes fixes for: ─────────────────────
+#   CVE-2025-48174 (libavif >= 1.3.0, integer overflow → buffer overflow)
+#   CVE-2025-48175 (libavif >= 1.3.0, integer overflow in row bytes)
+#   CVE-2025-15467 (openssl 3.x, CVSS 9.8 pre-auth RCE via CMS parsing)
+# apk upgrade picks up any additional point-release patches.
+RUN apk --no-cache upgrade
+
+# ── Build-time dependencies ────────────────────────────────────────
+# Install packages into a virtual environment to keep layers separate
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.7.0 croniter==6.0.0
+
+# ── Runtime Stage ──────────────────────────────────────────────────
+FROM python:3.13.3-alpine3.22
+
 LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.description="Dynamic Alerting CLI Toolkit — portable verification and migration tools" \
       org.opencontainers.image.source="https://github.com/vencil/Dynamic-Alerting-Integrations" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
 # ── Security: upgrade all packages for CVE fixes ───────────────────
-# python:3.13-alpine tracks latest 3.13.x + Alpine (>= 3.22), fixing:
-#   CVE-2025-48174 (libavif overflow), CVE-2025-15467 (openssl RCE)
 RUN apk --no-cache upgrade
 
-# ── Dependencies ──────────────────────────────────────────────────────
-RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.7.0 croniter==6.0.0
+# ── Copy venv from builder ─────────────────────────────────────────
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# ── Copy tools ──────────────────────────────────────────────────────
+# ── Copy tools ─────────────────────────────────────────────────────
 WORKDIR /opt/da-tools
 
 # Entrypoint dispatcher
@@ -24,7 +40,7 @@ COPY VERSION .
 # Tool scripts + metric-dictionary.yaml (assembled by build.sh from scripts/tools/)
 COPY tools/ ./
 
-# ── Entrypoint ──────────────────────────────────────────────────────
+# ── Entrypoint ────────────────────────────────────────────────────
 # Create a symlink so 'da-tools' works as a command
 RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \
     chmod +x /opt/da-tools/entrypoint.py

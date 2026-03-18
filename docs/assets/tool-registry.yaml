@@ -93,9 +93,43 @@ tools:
     audience: [tenant, platform]
     icon: wizard
     tags: [templates, examples, stacks]
-    desc: { en: "Ready-made YAML configs", zh: "現成的 YAML 配置" }
+    desc: { en: "24 templates covering all 13 Rule Packs with scenario + quick-start modes", zh: "24 個模板覆蓋全部 13 個 Rule Pack，含場景模板與快速入門" }
     related: [playground, rule-pack-selector, threshold-calculator]
     hub_section: advanced
+    appears_in: []
+
+  - key: cicd-setup-wizard
+    title: { en: "CI/CD Setup Wizard", zh: "CI/CD 導入精靈" }
+    file: interactive/tools/cicd-setup-wizard.jsx
+    audience: [platform]
+    icon: wizard
+    tags: [cicd, gitops, setup, wizard, adoption]
+    desc: { en: "Interactive 4-step wizard to generate da-tools init command and CI/CD pipeline configs", zh: "互動式四步精靈，產生 da-tools init 命令和 CI/CD 管線配置" }
+    related: [self-service-portal, template-gallery, onboarding-checklist]
+    hub_section: interactive
+    appears_in:
+      - docs/scenarios/gitops-ci-integration.md
+
+  - key: notification-previewer
+    title: { en: "Notification Template Previewer", zh: "通知模板預覽器" }
+    file: interactive/tools/notification-previewer.jsx
+    audience: [platform, tenant]
+    icon: wizard
+    tags: [notification, preview, routing, receiver, template]
+    desc: { en: "Preview alert notifications for Slack, Email, PagerDuty, Teams, Webhook", zh: "預覽 Slack、Email、PagerDuty、Teams、Webhook 的告警通知" }
+    related: [self-service-portal, alert-simulator, template-gallery]
+    hub_section: interactive
+    appears_in: []
+
+  - key: platform-health
+    title: { en: "Platform Health Dashboard", zh: "平台健康儀表板" }
+    file: interactive/tools/platform-health.jsx
+    audience: [platform]
+    icon: dashboard
+    tags: [health, dashboard, monitoring, overview, operations]
+    desc: { en: "Component status, tenant overview, Rule Pack distribution, event timeline", zh: "元件狀態、Tenant 概覽、Rule Pack 分佈、事件時間軸" }
+    related: [health-dashboard, self-service-portal, alert-simulator]
+    hub_section: interactive
     appears_in: []
 
   - key: migration-simulator
@@ -329,8 +363,7 @@ tools:
     desc: { en: "Calculate adoption benefits", zh: "計算平台採用效益" }
     related: [capacity-planner, health-dashboard, self-service-portal]
     hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
+    appears_in: []
 
   - key: self-service-portal
     title: { en: "Tenant Self-Service Portal", zh: "租戶自助入口" }
@@ -338,11 +371,10 @@ tools:
     audience: [platform, domain, tenant]
     icon: wizard
     tags: [self-service, validation, routing, alerts, tenant]
-    desc: { en: "Validate, preview alerts, visualize routing", zh: "驗證配置、預覽告警、視覺化路由" }
+    desc: { en: "Validate configs, multi-metric alert preview, routing trace with inhibit rules", zh: "驗證配置、多指標告警預覽、路由追蹤含 inhibit 規則" }
     related: [playground, config-lint, alert-simulator, schema-explorer]
     hub_section: interactive
-    appears_in:
-      - docs/architecture-and-design.md
+    appears_in: []
 
   - key: multi-tenant-comparison
     title: { en: "Multi-Tenant Comparison", zh: "多租戶閾值比較" }

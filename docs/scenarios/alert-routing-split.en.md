@@ -2,7 +2,7 @@
 title: "Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications

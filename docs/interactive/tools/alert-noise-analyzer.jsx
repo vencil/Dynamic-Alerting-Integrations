@@ -2,7 +2,7 @@
 title: "Alert Noise Analyzer"
 tags: [alerts, noise, MTTA, MTTR, analysis]
 audience: ["platform", "domain-expert"]
-version: v2.1.0
+version: v2.2.0
 lang: en
 related: [alert-simulator, alert-timeline, health-dashboard]
 ---
@@ -140,20 +140,23 @@ function StatCard({ label, value, sub, color = 'blue' }) {
 function HorizontalBar({ items, maxVal }) {
   return (
     <div className="space-y-2">
-      {items.map(({ label, value, pct }) => (
+      {items.map(({ label, value, pct }) => {
+        const barStyle = { width: `${Math.max(2, (value / maxVal) * 100)}%` };
+        return (
         <div key={label} className="flex items-center gap-2">
           <div className="w-40 text-sm text-gray-700 truncate" title={label}>{label}</div>
           <div className="flex-1 bg-gray-100 rounded-full h-5 relative">
             <div
               className="bg-blue-500 h-5 rounded-full transition-all"
-              style={{ width: `${Math.max(2, (value / maxVal) * 100)}%` }}
+              style={barStyle}
             />
             <span className="absolute right-2 top-0 text-xs text-gray-600 leading-5">
               {value} ({pct}%)
             </span>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

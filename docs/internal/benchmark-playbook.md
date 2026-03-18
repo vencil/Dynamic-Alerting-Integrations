@@ -2,7 +2,7 @@
 title: "Benchmark 操作手冊 (Benchmark Playbook)"
 tags: [documentation, performance]
 audience: [platform-engineer, sre]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # Benchmark 操作手冊 (Benchmark Playbook)
