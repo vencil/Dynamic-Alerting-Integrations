@@ -212,6 +212,9 @@ def check_jsx_frontmatter(tools: list, errors: list, warnings: list):
 
 def check_appears_in(tools: list, errors: list, warnings: list):
     """Verify that appears_in markdown files actually contain a link to the tool."""
+    # Cache file contents to avoid repeated reads
+    _file_cache: dict = {}
+
     for tool in tools:
         key = tool["key"]
         appears_in = tool.get("appears_in", [])
@@ -234,7 +237,9 @@ def check_appears_in(tools: list, errors: list, warnings: list):
                 )
                 continue
 
-            md_content = load_text(md_path)
+            if md_rel not in _file_cache:
+                _file_cache[md_rel] = load_text(md_path)
+            md_content = _file_cache[md_rel]
             found = any(pat in md_content for pat in link_patterns)
             if not found:
                 errors.append(
@@ -339,7 +344,8 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
     for f in (PROJECT_ROOT / "docs").rglob("*.jsx"):
         valid_jsx.add(str(f.relative_to(PROJECT_ROOT / "docs")))
 
-    # Scan markdown files in docs/
+    # Pre-filter: only scan files that contain jsx-loader (fast grep)
+    needle = b"jsx-loader.html?component="
     link_pattern = re.compile(
         r'\[([^\]]+)\]\((https?://[^)]*jsx-loader\.html\?component=([^)]+))\)'
     )
@@ -355,7 +361,12 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
     stale_urls = set()
 
     for md_path in md_files:
-        content = md_path.read_text(encoding="utf-8")
+        # Fast binary read to check if file contains jsx-loader link
+        raw = md_path.read_bytes()
+        if needle not in raw:
+            continue
+
+        content = raw.decode("utf-8")
         rel_path = str(md_path.relative_to(PROJECT_ROOT))
 
         for match in link_pattern.finditer(content):

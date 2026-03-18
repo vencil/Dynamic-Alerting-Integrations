@@ -2,7 +2,7 @@
 title: "Interactive Tools"
 tags: [interactive, tools, react]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 

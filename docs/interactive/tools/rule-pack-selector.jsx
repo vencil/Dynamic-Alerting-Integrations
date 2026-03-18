@@ -2,7 +2,7 @@
 title: "Rule Pack Selector"
 tags: [prometheus, rule packs, config gen]
 audience: ["platform-engineer", "domain-expert"]
-version: v2.1.0
+version: v2.2.0
 lang: en
 related: [rule-pack-detail, dependency-graph, threshold-calculator]
 ---

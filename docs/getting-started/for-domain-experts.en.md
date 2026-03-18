@@ -2,7 +2,7 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
@@ -33,7 +33,7 @@ data_mappings:
     source_metric: "mysql_global_status_threads_connected"
     # Optional relabel_configs for transformation
   mysql_cpu:
-    source_metric: "mysql_global_variables_innodb_buffer_pool_size"
+    source_metric: "mysql_global_status_threads_running"
 ```
 
 ### Part 2: Threshold Normalization

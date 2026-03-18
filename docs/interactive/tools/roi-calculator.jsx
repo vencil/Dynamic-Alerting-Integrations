@@ -2,7 +2,7 @@
 title: "ROI Calculator"
 tags: [roi, cost, adoption, evaluation]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: en
 related: [capacity-planner, health-dashboard, alert-simulator]
 ---
@@ -129,7 +129,9 @@ function BarChart({ data }) {
   const maxVal = Math.max(...data.map(d => d.value), 1);
   return (
     <div className="space-y-3">
-      {data.map((d, i) => (
+      {data.map((d, i) => {
+        const barStyle = { width: `${Math.max((d.value / maxVal) * 100, 2)}%` };
+        return (
         <div key={i}>
           <div className="flex justify-between text-xs text-slate-600 mb-1">
             <span>{d.label}</span>
@@ -138,11 +140,12 @@ function BarChart({ data }) {
           <div className="h-4 bg-slate-100 rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${d.color || 'bg-blue-500'}`}
-              style={{ width: `${Math.max((d.value / maxVal) * 100, 2)}%` }}
+              style={barStyle}
             />
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

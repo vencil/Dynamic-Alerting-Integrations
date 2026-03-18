@@ -2,7 +2,7 @@
 title: "Scenario: Automated Shadow Monitoring Cutover Workflow"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Scenario: Automated Shadow Monitoring Cutover Workflow

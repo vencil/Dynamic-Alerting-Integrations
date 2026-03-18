@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 
@@ -98,6 +98,14 @@ da-tools <command> --help
 | `alert-correlate` | 告警關聯分析（時間窗口聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
 | `drift-detect` | 跨叢集配置漂移偵測（目錄級 SHA-256 比對） | `--dirs <list>` |
 | `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | `--prometheus <url>` |
+| `config-history` | 配置快照與歷史追蹤（snapshot / log / show / diff） | `--config-dir <dir> <action>` |
+
+### 採用與初始化
+
+| 命令 | 用途 | 最小參數 |
+|------|------|----------|
+| `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | `--ci <platform>` 或互動模式 |
+| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
 
 ### 配置生成工具
 
@@ -981,6 +989,102 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `critical` | 預測在 `--warn-days` 天內觸頂 |
 | `warning` | 趨勢為 growing 但尚未觸及預警 |
 | `safe` | 趨勢穩定或下降 |
+
+#### config-history
+
+配置快照與歷史追蹤——在 `.da-history/` 中記錄 conf.d/ 的每次變更，提供 git-independent 的輕量級版本控制。
+
+```bash
+da-tools config-history --config-dir <PATH> <action>
+```
+
+**子命令**
+
+| 子命令 | 用途 | 參數 |
+|--------|------|------|
+| `snapshot` | 建立配置快照 | `-m <message>`（選填） |
+| `log` | 顯示快照歷史 | `--limit N`（選填） |
+| `show` | 顯示快照詳情 | `<id>` |
+| `diff` | 比較兩個快照 | `<id_a> <id_b>` |
+
+**範例**
+
+```bash
+# 建立快照
+da-tools config-history --config-dir conf.d/ snapshot -m "調整 MariaDB 閾值"
+
+# 查看歷史
+da-tools config-history --config-dir conf.d/ log --limit 5
+
+# 比較快照 1 和 2
+da-tools config-history --config-dir conf.d/ diff 1 2
+```
+
+---
+
+### 採用與初始化
+
+#### init
+
+在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
+
+```bash
+da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設 |
+|------|------|------|
+| `--ci` | CI/CD 平台 | `both` |
+| `--tenants` | 逗號分隔的租戶名稱 | `db-a,db-b`（互動模式） |
+| `--rule-packs` | 逗號分隔的 Rule Pack | `mariadb,kubernetes`（互動模式） |
+| `--deploy` | 部署方式 | `kustomize` |
+| `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
+| `--dry-run` | 顯示會產生的檔案但不寫入 | — |
+| `--force` | 覆寫既有的 `.da-init.yaml` | — |
+
+**範例**
+
+```bash
+# 互動模式
+da-tools init
+
+# 非互動模式
+da-tools init --ci github --tenants prod-db,staging-db --rule-packs mariadb,redis,kubernetes --non-interactive
+
+# Dry-run
+da-tools init --ci both --tenants db-a --dry-run
+```
+
+#### gitops-check
+
+GitOps Native Mode 就緒度驗證——檢查 Git 倉庫可達性、本地配置結構、git-sync sidecar 部署狀態。
+
+```bash
+da-tools gitops-check <subcommand> [options]
+```
+
+**子命令**
+
+| 子命令 | 用途 | 參數 |
+|--------|------|------|
+| `repo` | 驗證 Git 倉庫可達性與分支存在 | `--url <git-url> [--branch main]` |
+| `local` | 驗證本地 clone 的 conf.d/ 結構 | `--dir <path>` |
+| `sidecar` | 檢查 K8s git-sync sidecar 部署就緒度 | `[--namespace monitoring]` |
+
+**範例**
+
+```bash
+# 驗證 Git 倉庫
+da-tools gitops-check repo --url git@github.com:example/configs.git
+
+# 驗證本地配置結構
+da-tools gitops-check local --dir /data/config/conf.d
+
+# 檢查 sidecar 部署
+da-tools gitops-check sidecar --namespace monitoring --json
+```
 
 ---
 

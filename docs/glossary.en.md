@@ -2,7 +2,7 @@
 title: "Glossary"
 tags: [reference, glossary]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Glossary

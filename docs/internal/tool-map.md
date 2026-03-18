@@ -19,6 +19,7 @@
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |
 | `check_alert.py` | Check Prometheus alert state for a specific tenant. |
 | `config_diff.py` | Directory-level Config Diff for GitOps PR review. |
+| `config_history.py` | Config Snapshot & History tracker. |
 | `cutover_tenant.py` | Shadow Monitoring 一鍵切換工具。 |
 | `da_assembler.py` | da-assembler-controller — Lightweight ThresholdConfig CRD → YAML renderer. |
 | `deprecate_rule.py` | 規則/指標下架工具。 |
@@ -29,7 +30,9 @@
 | `federation_check.py` | Multi-cluster federation integration verification. |
 | `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
+| `gitops_check.py` | GitOps Native Mode readiness validator. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
+| `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
 | `inject_metadata_join.py` | One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |

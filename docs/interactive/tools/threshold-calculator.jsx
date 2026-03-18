@@ -2,7 +2,7 @@
 title: "Threshold Calculator"
 tags: [calculator, thresholds, yaml]
 audience: [domain-expert, tenant]
-version: v2.1.0
+version: v2.2.0
 lang: en
 related: [playground, alert-simulator, schema-explorer]
 ---

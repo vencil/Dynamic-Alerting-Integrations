@@ -2,13 +2,15 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # Migration Guide — 遷移指南
 
 > 從傳統 Prometheus 警報遷移至動態多租戶閾值架構。
 > **其他文件：** [README](index.md) (概覽) · [Architecture & Design](architecture-and-design.md) (技術深度) · [Rule Packs](rule-packs/README.md) (規則包目錄)
+>
+> **第一次遷移？** 先讀 [漸進式遷移 Playbook](scenarios/incremental-migration-playbook.md) — 四階段零停機行動手冊，每步有 CLI 指令和回退方式。本文件是工具級參考，供遷移過程中查閱單一命令的詳細用法。
 
 > **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
 >

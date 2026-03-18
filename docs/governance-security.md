@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # 治理、稽核與安全合規
@@ -128,23 +128,30 @@ da-tools validate-config --config-dir conf.d/ --json
 
 所有 Pod 設定 `seccompProfile: RuntimeDefault`。Docker image 全部 pin 到具體 patch 版本。
 
-### Container Image Security（v2.1.0）
+### Container Image Security（v2.2.0 updated）
 
-**CVE 緩解策略：** 所有 Dockerfile 在建置時執行 `apk --no-cache upgrade` 拉取最新安全修補。
+**三層防護策略：**
 
-| Image | Base | Pin 策略 | 關鍵 CVE 緩解 |
-|-------|------|---------|-------------|
-| threshold-exporter | `alpine:3.22` | minor pin | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
-| da-tools | `python:3.13-alpine` | minor floating | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif) |
-| da-portal | `nginx:1.28-alpine` | stable floating | CVE-2025-15467 (openssl), CVE-2025-48174 (libavif), CVE-2026-1642 (nginx SSL injection) |
+1. **Base image pin** — 所有 Dockerfile pin 到包含安全修補的特定 Alpine 版本，避免 floating tag 導致 CI cache 凍結在舊版
+2. **Build-time upgrade** — `apk --no-cache upgrade` 在建置時拉取最新 point-release 修補
+3. **Attack surface reduction** — da-portal 移除不需要的 library（libavif, gd, libxml2 等），threshold-exporter 使用 distroless（零 package manager）
+
+| Image | Base | Pin 策略 | CVE 防護 |
+|-------|------|---------|---------|
+| threshold-exporter | `distroless/static-debian12:nonroot` | digest pin | 零 CVE：無 shell/apk/libc/openssl，Go 內建 crypto |
+| da-tools | `python:3.13.3-alpine3.22` | patch+alpine pin | Alpine 3.22 修復 libavif + openssl；`apk upgrade` 補漏 |
+| da-portal | `nginx:1.28.2-alpine3.23` | patch+alpine pin | Alpine 3.23 + `apk del` 移除 libavif/gd/libxml2 未使用 library |
 
 **CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時阻斷 release。見 `.github/workflows/release.yaml`。
 
+**企業 Registry 建議：** 定期 rebuild（建議每月或 CVE 公告後 48h 內）。設定 Trivy/Grype 排程掃描已上架 image。
+
 **CVE 追蹤紀錄：**
 
-- **CVE-2025-15467 (openssl, CVSS 9.8)**：CMS AuthEnvelopedData stack buffer overflow → pre-auth RCE。影響 OpenSSL 3.0–3.6。修復：`apk upgrade` 拉取 Alpine 已修補的 `libssl3`。
-- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：升級 Alpine 至 3.22+（ships libavif >= 1.3.0）。本平台不直接使用 libavif，但 Alpine base 含此套件。
-- **CVE-2026-1642 (nginx, CVSS 5.9)**：SSL upstream injection — MITM 可在 TLS handshake 前注入明文回應。影響 nginx < 1.28.2。修復：da-portal 升級至 `nginx:1.28-alpine`（1.28 stable 已修復）。
+- **CVE-2025-15467 (openssl, CVSS 9.8)**：CMS AuthEnvelopedData stack buffer overflow → pre-auth RCE。影響 OpenSSL 3.0–3.6。修復：Alpine 3.22 含修補版 `libssl3`。threshold-exporter 不受影響（distroless + Go 內建 crypto）。
+- **CVE-2025-48174 (libavif, CVSS 4.5–9.1)**：`makeRoom()` integer overflow → buffer overflow。影響 libavif < 1.3.0。修復：Alpine 3.22 ships libavif >= 1.3.0。da-portal 額外執行 `apk del libavif` 徹底移除（static file server 不需要圖片處理 library）。threshold-exporter 不受影響（distroless 無 libavif）。
+- **CVE-2025-48175 (libavif, CVSS 4.5–9.1)**：`rgbRowBytes` 等乘法 integer overflow。與 CVE-2025-48174 同批修復（libavif >= 1.3.0）。
+- **CVE-2026-1642 (nginx, CVSS 5.9)**：SSL upstream injection — MITM 可在 TLS handshake 前注入明文回應。影響 nginx < 1.28.2。修復：da-portal pin `nginx:1.28.0`（1.28 stable 已修復）。
 
 ### NetworkPolicy（Ingress + Egress）
 

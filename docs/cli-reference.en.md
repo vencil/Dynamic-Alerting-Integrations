@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 
@@ -97,6 +97,14 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `alert-correlate` | Alert correlation analysis (time-window clustering + root cause inference) | `--prometheus <url>` or `--input <file>` |
 | `drift-detect` | Cross-cluster config drift detection (directory-level SHA-256) | `--dirs <list>` |
 | `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | `--prometheus <url>` |
+| `config-history` | Config snapshot & history tracking (snapshot / log / show / diff) | `--config-dir <dir> <action>` |
+
+### Adoption & Initialization
+
+| Command | Purpose | Minimum Parameters |
+|---------|---------|-------------------|
+| `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--ci <platform>` or interactive mode |
+| `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
 
 ### Configuration Generation Tools
 
@@ -1084,6 +1092,102 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `critical` | Predicted to hit limit within `--warn-days` |
 | `warning` | Growing trend but not yet reaching warning threshold |
 | `safe` | Stable or declining trend |
+
+#### config-history
+
+Config snapshot & history tracking — records each change to conf.d/ in `.da-history/`, providing git-independent lightweight version control.
+
+```bash
+da-tools config-history --config-dir <PATH> <action>
+```
+
+**Subcommands**
+
+| Subcommand | Purpose | Parameters |
+|------------|---------|------------|
+| `snapshot` | Create config snapshot | `-m <message>` (optional) |
+| `log` | Show snapshot history | `--limit N` (optional) |
+| `show` | Show snapshot details | `<id>` |
+| `diff` | Compare two snapshots | `<id_a> <id_b>` |
+
+**Examples**
+
+```bash
+# Create snapshot
+da-tools config-history --config-dir conf.d/ snapshot -m "Adjust MariaDB thresholds"
+
+# View history
+da-tools config-history --config-dir conf.d/ log --limit 5
+
+# Compare snapshots 1 and 2
+da-tools config-history --config-dir conf.d/ diff 1 2
+```
+
+---
+
+### Adoption & Initialization
+
+#### init
+
+Initialize Dynamic Alerting integration skeleton in a customer repo. Generates CI/CD pipelines, conf.d/ directory, Kustomize overlays, and pre-commit configuration.
+
+```bash
+da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list>] [--deploy <kustomize|helm|argocd>] [-o <dir>] [--non-interactive] [--dry-run]
+```
+
+**Parameters**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--ci` | CI/CD platform | `both` |
+| `--tenants` | Comma-separated tenant names | `db-a,db-b` (interactive mode) |
+| `--rule-packs` | Comma-separated Rule Packs | `mariadb,kubernetes` (interactive mode) |
+| `--deploy` | Deployment method | `kustomize` |
+| `--non-interactive` | Skip interactive prompts (requires `--tenants`) | — |
+| `--dry-run` | Show files that would be generated without writing | — |
+| `--force` | Overwrite existing `.da-init.yaml` | — |
+
+**Examples**
+
+```bash
+# Interactive mode
+da-tools init
+
+# Non-interactive mode
+da-tools init --ci github --tenants prod-db,staging-db --rule-packs mariadb,redis,kubernetes --non-interactive
+
+# Dry-run
+da-tools init --ci both --tenants db-a --dry-run
+```
+
+#### gitops-check
+
+GitOps Native Mode readiness validation — checks Git repo accessibility, local config structure, and git-sync sidecar deployment status.
+
+```bash
+da-tools gitops-check <subcommand> [options]
+```
+
+**Subcommands**
+
+| Subcommand | Purpose | Parameters |
+|------------|---------|------------|
+| `repo` | Validate Git repo accessibility and branch existence | `--url <git-url> [--branch main]` |
+| `local` | Validate local clone's conf.d/ structure | `--dir <path>` |
+| `sidecar` | Check K8s git-sync sidecar deployment readiness | `[--namespace monitoring]` |
+
+**Examples**
+
+```bash
+# Validate Git repo
+da-tools gitops-check repo --url git@github.com:example/configs.git
+
+# Validate local config structure
+da-tools gitops-check local --dir /data/config/conf.d
+
+# Check sidecar deployment
+da-tools gitops-check sidecar --namespace monitoring --json
+```
 
 ---
 

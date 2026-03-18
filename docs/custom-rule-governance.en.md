@@ -2,7 +2,7 @@
 title: "Multi-Tenant Custom Rule Governance Model"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Multi-Tenant Custom Rule Governance Model

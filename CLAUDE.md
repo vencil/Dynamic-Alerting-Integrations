@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v2.1.0)
+## 專案概覽 (v2.2.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -40,7 +40,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
 9. **i18n 三層架構**: JSX 用 `window.__t(zh, en)` + Rule Pack 用 `*_zh` 後綴 annotation + Python CLI 用 `detect_cli_lang()` 切換 argparse help
 
-## 互動工具生態（26 JSX tools）
+## 互動工具生態（29 JSX tools）
 
 **Source of Truth 檔案**：`docs/assets/tool-registry.yaml`（工具 metadata）、`docs/assets/platform-data.json`（Rule Pack 數據）、`docs/assets/flows.json`（Guided Flow）、`docs/assets/jsx-loader.html`（載入器）、`docs/interactive/index.html`（Hub）。
 
@@ -60,17 +60,17 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（70 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（83 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
-快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (6 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (7 ADRs)
+快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (7 ADRs)
 
 ## 工具 (scripts/tools/)
 
-73 個 Python 工具（不含共用函式庫），依職責分三子目錄：
+77 個 Python 工具（不含共用函式庫），依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
-| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings...） | 37 |
+| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check...） | 40 |
 | `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis...） | 19 |
 | `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles...） | 17 |
 | root | 共用（`validate_all.py`）+ 函式庫（`_lib_python.py`）+ 資料（`metric-dictionary.yaml`） | 1 + 1 lib |
@@ -82,6 +82,7 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 | 目標 | 用途 |
 |------|------|
 | `make demo-full` | 端對端展演（scaffold → load → alert → cleanup） |
+| `make demo-showcase` | 5-tenant 展演腳本（scaffold → validate → routes → diff → 三態） |
 | `make lint-docs` | 一站式文件 lint，支援 `ARGS="--parallel"` |
 | `make platform-data` | 重新產生 `platform-data.json`（Rule Pack 數據） |
 | `make version-check` / `bump-docs` | 版號治理 |

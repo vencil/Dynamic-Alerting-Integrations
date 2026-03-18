@@ -2,7 +2,7 @@
 title: "Getting Started Wizard"
 tags: [onboarding, guided, 3 min]
 audience: [tenant, platform-engineer, domain-expert]
-version: v2.1.0
+version: v2.2.0
 lang: en
 related: [onboarding-checklist, architecture-quiz, rule-pack-selector]
 ---

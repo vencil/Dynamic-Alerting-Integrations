@@ -2,7 +2,7 @@
 title: "GitHub Release — 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.1.0
+version: v2.2.0
 lang: zh
 ---
 # GitHub Release — 操作手冊 (Playbook)
@@ -194,6 +194,90 @@ git push origin "tools/v<VERSION>"
 | 21 | Re-tag 完整 SOP（同版號新 commit） | ① push main → ② 逐一刪遠端 tag（`git push origin --delete <tag>`，v2.1.0 可能已被刪，逐一操作避免 `--delete` 批次錯誤中斷）→ ③ 刪本地 tag（`git tag -d`）→ ④ 建新 tag on HEAD → ⑤ **逐一** push tag（避免同時推送不觸發 CI）→ ⑥ 重建 Release（因 #17 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
 | 22 | `Invoke-RestMethod` 在 Windows MCP 下頻繁 timeout | 原因：PowerShell 模組初始化 + TLS 協商累計超過 MCP 60s timeout。改用 `curl.exe`：JSON body 用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫無 BOM 暫存 → `curl.exe --data-binary @file`。注意 `Set-Content` 預設加 BOM 會導致 `Problems parsing JSON` |
 | 23 | `mkdocs gh-deploy` 連續失敗（site/ 權限 + ghp_import bytes bug） | `site/` 一旦建出 Cowork VM 無法清除（`Operation not permitted`），須 Windows MCP `Remove-Item` 清理。`ghp_import` 在 Python 3.10 下有 `TypeError: write() argument must be str, not bytes`；Workaround：手動建 temp git repo → 複製 `site/*` → commit → push `gh-pages --force` |
+
+## 上版前品質驗證清單（Pre-release Checklist）
+
+每次大版號 release 前，依序執行以下檢查。此清單同時作為 AI Agent 的標準操作程序。
+
+### Phase 1: 資產完整性
+
+1. **doc-map / tool-map / test-map 同步**
+   ```bash
+   python3 scripts/tools/dx/generate_doc_map.py --check --include-adr
+   python3 scripts/tools/dx/generate_tool_map.py --check
+   # test-map: 確認 tests/ 下每個 test_*.py 都有對應的 source module
+   ```
+   目標：無孤兒文件（doc-map 有但實際不存在）、無遺漏文件（存在但 map 未收錄）
+
+2. **advanced-scenarios.md 現況更新**
+   確認「進階場景與測試覆蓋」中的場景列表、測試數量、工具引用是否反映最新版本。
+
+3. **dx-tooling-backlog.md + architecture §5 Roadmap**
+   已完成項目只能在 CHANGELOG 和功能文件中出現，不能殘留在 backlog / roadmap。可新增 Agent 發想的未來方向。
+
+### Phase 2: 經驗回寫
+
+4. **Playbook 經驗回寫**
+   回顧踩坑經驗，只記錄**跨版本可復用**的教訓。判斷標準：「下次開發時如果沒看到這條會再踩一次嗎？」是才寫。不為寫而寫。
+
+### Phase 3: 架構文件一致性
+
+5. **architecture-and-design.md + ADR 審核**
+   - 確認 arch doc 與 ADR 不過度重疊（arch doc 放設計概覽，ADR 放決策紀錄與取捨）
+   - 確認 arch doc 所有 §N 編號連續且 Mermaid 圖同步
+   - 若 arch doc 超過 1,200 行，評估拆分或精煉
+
+6. **README 連結 + 價值傳達**
+   - `check_doc_links.py` 零 broken links
+   - README 對客戶的「為什麼要用」和「怎麼開始」路徑清晰
+   - 場景數、工具數、Rule Pack 數等數字與實際一致
+
+7. **CLAUDE.md 準確性**
+   - 工具數量、場景數、CLI 命令數與 CHANGELOG 一致
+   - Playbook 引用路徑正確
+   - 新增概念（如 GitOps Native Mode）有被收錄
+
+### Phase 4: 版號 + 品質閘門
+
+8. **版號治理**
+   ```bash
+   make version-check              # 全 repo 版號一致性
+   make bump-docs                  # 若需更新
+   check_frontmatter_versions.py --fix   # frontmatter 批次更新
+   ```
+
+9. **品質閘門**
+   ```bash
+   pre-commit run --all-files                           # 13 auto hooks
+   pre-commit run --hook-stage manual --all-files        # 18 manual hooks
+   python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -q
+   ```
+
+### Phase 5: 收尾
+
+10. **Rebase 為單一 commit**
+    將本版所有 WIP commit 合併為一個語義完整的 release commit。CHANGELOG 以全局角度更新，不囉嗦不遺漏。
+
+11. **CHANGELOG 真實性檢查**
+    逐條確認 CHANGELOG 提到的功能確實存在、數字準確、檔案路徑可訪問。
+
+12. **等待 Owner 確認**
+    停下來等主人 review + 提供臨時 GitHub token。Token 不記錄到任何 repo 檔案。
+
+13. **推送前：驗證 base image + Chart.yaml**
+    ```bash
+    # Dockerfile base image 必須在 Docker Hub 存在（CI build 階段才會 fail，太遲了）
+    docker manifest inspect <每個 Dockerfile 的 FROM tag> > /dev/null
+    # Chart.yaml version 必須與即將推的 exporter/v* tag 一致
+    grep "^version:" components/threshold-exporter/Chart.yaml
+    ```
+
+14. **推送 + 等 CI 全綠 + Release**
+    - `git push origin main` + 推對應 tag
+    - **等所有 Release workflow 完成並 success 後**才建 GitHub Release
+    - 若 CI 失敗：修正 → amend → force-push → 刪遠端 tag → 重推 tag
+    - GitHub Pages 部署確認
+    - 建立 GitHub Release（英文敘述）
 
 ## 版號合併流程
 

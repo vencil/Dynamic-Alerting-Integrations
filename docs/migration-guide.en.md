@@ -2,7 +2,7 @@
 title: "Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 # Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform
@@ -11,6 +11,8 @@ lang: en
 
 > Migrate from traditional Prometheus alerting to the dynamic multi-tenant threshold architecture.
 > **Other Documents:** [README](index.md) (Overview) · [Architecture & Design](architecture-and-design.md) (Technical Depth) · [Rule Packs](rule-packs/README.md) (Rule Pack Directory)
+>
+> **First time migrating?** Start with the [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md) — a 4-phase zero-downtime action guide with CLI commands and rollback steps at every stage. This document is a tool-level reference for looking up individual command details during migration.
 
 > **⚠️ Migration Safety Guarantee:** The migration process on this platform is designed to be **progressive and reversible**. Your legacy rules don't need to be switched all at once—new rules via the `custom_` prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's `optional: true` mechanism ensures that deleting any rule pack will not affect Prometheus operation.
 >

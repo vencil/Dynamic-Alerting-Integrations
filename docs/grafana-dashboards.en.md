@@ -2,7 +2,7 @@
 title: "Grafana Dashboard Guide"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.1.0
+version: v2.2.0
 lang: en
 ---
 
