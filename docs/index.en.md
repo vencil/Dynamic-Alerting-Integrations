@@ -114,7 +114,7 @@ docker run --rm -it ghcr.io/vencil/da-tools:v2.3.0 scaffold \
 ```bash
 # One-line deployment — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter:2.1.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter:2.3.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
