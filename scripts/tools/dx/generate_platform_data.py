@@ -356,9 +356,16 @@ def main():
     args = parser.parse_args()
 
     data = build_platform_data()
-    # For --check comparison, use a stable timestamp
-    if args.check:
-        data.pop("generated", None)
+
+    def strip_volatile(d):
+        """Remove fields that change between runs (timestamp, git commit)."""
+        import copy
+        d = copy.deepcopy(d)
+        d.pop("generated", None)
+        # tenant_metadata.*.last_config_commit changes with every commit
+        for tenant in d.get("tenant_metadata", {}).values():
+            tenant.pop("last_config_commit", None)
+        return d
 
     content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
@@ -372,9 +379,9 @@ def main():
                   f"Run without --check first.")
             sys.exit(1)
         existing = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
-        existing.pop("generated", None)
-        existing_str = json.dumps(existing, indent=2, ensure_ascii=False) + "\n"
-        if existing_str != content:
+        new_stable = json.dumps(strip_volatile(data), indent=2, ensure_ascii=False) + "\n"
+        existing_stable = json.dumps(strip_volatile(existing), indent=2, ensure_ascii=False) + "\n"
+        if existing_stable != new_stable:
             print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} is outdated. "
                   f"Run `make platform-data` to update.")
             sys.exit(1)
