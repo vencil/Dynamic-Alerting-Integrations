@@ -3,15 +3,15 @@
 # Zero build step: all JSX files are transpiled in the browser via Babel standalone.
 # Vendor JS files are bundled for air-gapped / offline deployment.
 #
-# Build:  docker build -t da-portal:v2.2.0 -f components/da-portal/Dockerfile .
-# Run:    docker run -p 8080:80 da-portal:v2.2.0
+# Build:  docker build -t da-portal:v2.3.0 -f components/da-portal/Dockerfile .
+# Run:    docker run -p 8080:80 da-portal:v2.3.0
 #
 # Customisation via volume mounts:
 #   -v ./my-platform-data.json:/usr/share/nginx/html/assets/platform-data.json
 #   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json
 #   -v ./my-nginx.conf:/etc/nginx/conf.d/default.conf
 
-FROM nginx:1.28.2-alpine3.23
+FROM nginx:1.28-alpine3.23
 
 LABEL org.opencontainers.image.title="da-portal" \
       org.opencontainers.image.description="Dynamic Alerting Interactive Tools Portal" \
