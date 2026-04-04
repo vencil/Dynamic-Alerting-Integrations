@@ -505,9 +505,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     else:
         if lang == "zh":
-            print("錯誤：必須指定 --opa-url 或 --policy-path")
+            print("錯誤：必須指定 --opa-url 或 --policy-path", file=sys.stderr)
         else:
-            print("ERROR: Must specify --opa-url or --policy-path")
+            print("ERROR: Must specify --opa-url or --policy-path", file=sys.stderr)
         return 1
 
     # Convert to PolicyResult

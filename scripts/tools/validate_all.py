@@ -36,7 +36,7 @@ PROFILE_CSV = REPO_ROOT / ".validation-profile.csv"
 # Only checks that have a regenerate/fix mode are listed here.
 FIX_COMMANDS: Dict[str, List[str]] = {
     "tool_map": ["dx/generate_tool_map.py", "--generate", "--lang", "all"],
-    "doc_map": ["dx/generate_doc_map.py", "--generate", "--lang", "all"],
+    "doc_map": ["dx/generate_doc_map.py", "--generate", "--include-adr", "--lang", "all"],
     "rule_pack_stats": ["dx/generate_rule_pack_stats.py", "--generate", "--lang", "all"],
     "versions": ["lint/validate_docs_versions.py", "--fix"],
     "alerts": ["dx/generate_alert_reference.py"],
@@ -64,7 +64,7 @@ TOOLS = [
     ("versions", "lint/validate_docs_versions.py", ["--ci"], "Version/count consistency"),
     ("rule_pack_stats", "dx/generate_rule_pack_stats.py", ["--check", "--lang", "all"], "Rule Pack stats include drift"),
     ("tool_map", "dx/generate_tool_map.py", ["--check"], "Tool map coverage drift"),
-    ("doc_map", "dx/generate_doc_map.py", ["--check"], "Doc map coverage drift"),
+    ("doc_map", "dx/generate_doc_map.py", ["--check", "--include-adr"], "Doc map coverage drift"),
     ("platform_data", "dx/generate_platform_data.py", ["--check"], "Platform data drift (JSON vs YAML)"),
     ("tool_consistency", "lint/lint_tool_consistency.py", [], "Tool registry ↔ Hub ↔ JSX ↔ MD links"),
     ("repo_name", "lint/check_repo_name.py", ["--ci"], "Repo name guard (no vibe-k8s-lab in URLs)"),
