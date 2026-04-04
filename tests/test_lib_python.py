@@ -378,7 +378,7 @@ class TestValidateUrlScheme:
 class TestHttpGetJson:
     """http_get_json() 測試。"""
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_success(self, mock_urlopen):
         """成功回傳 JSON dict。"""
         mock_urlopen.return_value = mock_http_response({"status": "ok"})
@@ -386,7 +386,7 @@ class TestHttpGetJson:
         assert data == {"status": "ok"}
         assert err is None
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_empty_body(self, mock_urlopen):
         """空 body 回傳空 dict。"""
         mock_urlopen.return_value = mock_http_response(body=b"")
@@ -394,7 +394,7 @@ class TestHttpGetJson:
         assert data == {}
         assert err is None
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_network_error(self, mock_urlopen):
         """連線錯誤回傳 (None, error_msg)。"""
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
@@ -402,7 +402,7 @@ class TestHttpGetJson:
         assert data is None
         assert "Connection refused" in err
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_http_error(self, mock_urlopen):
         """HTTP 錯誤回傳 (None, error_msg)。"""
         mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -411,7 +411,7 @@ class TestHttpGetJson:
         assert data is None
         assert "500" in err
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_custom_headers(self, mock_urlopen):
         """自訂 headers 正確傳遞。"""
         mock_urlopen.return_value = mock_http_response({"ok": True})
@@ -430,7 +430,7 @@ class TestHttpGetJson:
 class TestHttpPostJson:
     """http_post_json() 測試。"""
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_success_with_payload(self, mock_urlopen):
         """成功 POST JSON payload。"""
         mock_urlopen.return_value = mock_http_response({"id": "123"})
@@ -444,7 +444,7 @@ class TestHttpPostJson:
         parsed = json.loads(sent_data.decode("utf-8"))
         assert parsed["comment"] == "test"
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_none_payload(self, mock_urlopen):
         """payload=None 時不送 body。"""
         mock_urlopen.return_value = mock_http_response({})
@@ -453,7 +453,7 @@ class TestHttpPostJson:
         sent_data = call_args[1].get("data") or call_args[0][1] if len(call_args[0]) > 1 else None
         assert sent_data is None
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_http_error_formatted(self, mock_urlopen):
         """HTTP 錯誤格式化為 'HTTP {code}: {reason}'。"""
         mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -463,7 +463,7 @@ class TestHttpPostJson:
         assert "400" in err
         assert "Bad Request" in err
 
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_custom_method(self, mock_urlopen):
         """支援自訂 HTTP method。"""
         mock_urlopen.return_value = mock_http_response({})
@@ -482,8 +482,8 @@ class TestHttpPostJson:
 class TestHttpRequestWithRetry:
     """http_request_with_retry() 重試邏輯測試。"""
 
-    @patch("_lib_python.time.sleep")
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.time.sleep")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_success_first_attempt(self, mock_urlopen, mock_sleep):
         """第一次就成功，不重試。"""
         mock_urlopen.return_value = mock_http_response({"status": "ok"})
@@ -491,8 +491,8 @@ class TestHttpRequestWithRetry:
         assert result == {"status": "ok"}
         mock_sleep.assert_not_called()
 
-    @patch("_lib_python.time.sleep")
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.time.sleep")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_retry_on_5xx(self, mock_urlopen, mock_sleep):
         """5xx 錯誤觸發重試，第二次成功。"""
         mock_urlopen.side_effect = [
@@ -503,8 +503,8 @@ class TestHttpRequestWithRetry:
         assert result == {"status": "recovered"}
         mock_sleep.assert_called_once_with(1)
 
-    @patch("_lib_python.time.sleep")
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.time.sleep")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_no_retry_on_4xx(self, mock_urlopen, mock_sleep):
         """4xx 錯誤不重試，立即 raise。"""
         mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -514,8 +514,8 @@ class TestHttpRequestWithRetry:
         assert exc_info.value.code == 404
         mock_sleep.assert_not_called()
 
-    @patch("_lib_python.time.sleep")
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.time.sleep")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_retry_exhausted_raises(self, mock_urlopen, mock_sleep):
         """重試耗盡後 raise 最後一個錯誤。"""
         mock_urlopen.side_effect = urllib.error.HTTPError(
@@ -525,8 +525,8 @@ class TestHttpRequestWithRetry:
         assert exc_info.value.code == 500
         assert mock_sleep.call_count == 1
 
-    @patch("_lib_python.time.sleep")
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.time.sleep")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_retry_on_connection_error(self, mock_urlopen, mock_sleep):
         """連線錯誤觸發重試。"""
         mock_urlopen.side_effect = [
@@ -536,8 +536,8 @@ class TestHttpRequestWithRetry:
         result = lib.http_request_with_retry("http://test/", max_retries=3)
         assert result == {"ok": True}
 
-    @patch("_lib_python.time.sleep")
-    @patch("_lib_python.urllib.request.urlopen")
+    @patch("_lib_prometheus.time.sleep")
+    @patch("_lib_prometheus.urllib.request.urlopen")
     def test_exponential_backoff(self, mock_urlopen, mock_sleep):
         """重試間隔遵循指數退避 (2^0, 2^1)。"""
         mock_urlopen.side_effect = [
