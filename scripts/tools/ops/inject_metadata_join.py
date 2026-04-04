@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_secure  # noqa: E402
 
 RULE_PACKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "rule-packs")
+    os.path.dirname(os.path.abspath(__file__))))), "rule-packs")
 
 METADATA_JOIN = """
     * on(tenant) group_left(runbook_url, owner, tier)
@@ -196,6 +196,11 @@ def inject_metadata(block, alert_name):
 
 def main():
     """CLI entry point: One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules."""
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Inject tenant_metadata_info group_left join into Rule Pack alert rules")
+    parser.parse_args()
+
     if not os.path.isdir(RULE_PACKS_DIR):
         print(f"ERROR: Rule packs directory not found: {RULE_PACKS_DIR}", file=sys.stderr)
         sys.exit(1)

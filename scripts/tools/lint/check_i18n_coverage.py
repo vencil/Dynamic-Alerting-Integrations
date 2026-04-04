@@ -452,7 +452,7 @@ def main():
     parser.add_argument(
         "--ci",
         action="store_true",
-        help="CI mode: exit code 1 if any layer below threshold (L1=50%, L2=10%, L3=5%)",
+        help="CI mode: exit code 1 if any layer below threshold (L1=50%%, L2=10%%, L3=5%%)",
     )
     parser.add_argument(
         "--json",
