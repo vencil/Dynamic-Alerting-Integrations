@@ -78,7 +78,7 @@ export default function TemplateGallery() {
 
   /* ── Load template data from external JSON ── */
   useEffect(() => {
-    fetch('../../assets/template-data.json')
+    fetch('template-data.json')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => setTemplateData(data))
       .catch(err => {

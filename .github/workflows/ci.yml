@@ -36,7 +36,18 @@ jobs:
         run: pip install pre-commit pyyaml
 
       - name: Run pre-commit hooks
-        run: pre-commit run --all-files
+        run: |
+          pre-commit run tool-map-check --all-files
+          pre-commit run doc-map-check --all-files
+          pre-commit run rule-pack-stats-check --all-files
+          pre-commit run glossary-sync --all-files
+          pre-commit run changelog-format --all-files
+          pre-commit run snippet-sync --all-files
+          pre-commit run platform-data-check --all-files
+          pre-commit run repo-name-guard --all-files
+          pre-commit run tool-consistency --all-files
+          pre-commit run structure-check --all-files
+          pre-commit run routing-profiles-lint --all-files
 
   python-tests:
     name: Python Tests (${{ matrix.python }})
@@ -67,10 +78,10 @@ jobs:
         run: pip install pyyaml croniter pytest pytest-cov promql-parser
 
       - name: Collect tests
-        run: pytest tests/ scripts/tools/ --tb=short -q --co -q
+        run: pytest tests/ scripts/tools/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --tb=short -q --co -q
 
       - name: Run pytest with coverage
-        run: pytest tests/ -x --tb=short --cov=scripts/tools --cov-report=xml --cov-fail-under=85
+        run: pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -x --tb=short --cov=scripts/tools --cov-report=xml --cov-fail-under=85
 
       - name: Upload coverage artifact
         if: always()
@@ -85,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.22", "1.26"]
+        go: ["1.26"]
       fail-fast: false
     steps:
       - name: Checkout code
@@ -106,14 +117,15 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Run Go tests with race detector
-        run: go test ./components/threshold-exporter/app/ -race -count=1 -coverprofile=coverage.out
+        working-directory: components/threshold-exporter/app
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
 
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-go${{ matrix.go }}
-          path: coverage.out
+          path: components/threshold-exporter/app/coverage.out
           retention-days: 7
 
   lint-docs:

@@ -368,7 +368,7 @@ export default function TenantManager() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const response = await fetch('../../assets/platform-data.json');
+        const response = await fetch('platform-data.json');
         const data = await response.json();
         if (data.tenant_metadata && Object.keys(data.tenant_metadata).length > 0) {
           setTenants(data.tenant_metadata);

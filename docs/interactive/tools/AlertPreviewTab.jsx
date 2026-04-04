@@ -57,7 +57,7 @@ function AlertPreviewTab() {
 
   // Load recommendation data on mount
   useEffect(() => {
-    fetch('../../assets/recommendation-data.json')
+    fetch('recommendation-data.json')
       .then(res => res.json())
       .then(data => setRecData(data))
       .catch(err => console.error('Failed to load recommendation data:', err));

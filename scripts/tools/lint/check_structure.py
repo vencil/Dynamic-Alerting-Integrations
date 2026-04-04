@@ -31,6 +31,10 @@ from pathlib import Path
 # Files allowed directly in scripts/tools/ (not in a subdirectory)
 ALLOWED_TOOLS_ROOT = {
     "_lib_python.py",
+    "_lib_constants.py",
+    "_lib_io.py",
+    "_lib_validation.py",
+    "_lib_prometheus.py",
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",
