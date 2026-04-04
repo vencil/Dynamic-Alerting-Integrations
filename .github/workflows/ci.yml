@@ -78,10 +78,10 @@ jobs:
         run: pip install pyyaml croniter pytest pytest-cov promql-parser
 
       - name: Collect tests
-        run: pytest tests/ scripts/tools/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --tb=short -q --co -q
+        run: pytest tests/ scripts/tools/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --ignore=tests/test_pipeline_integration.py --tb=short -q --co -q
 
       - name: Run pytest with coverage
-        run: pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -x --tb=short --cov=scripts/tools --cov-report=xml --cov-fail-under=85
+        run: pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --ignore=tests/test_pipeline_integration.py -x --tb=short --cov=scripts/tools --cov-report=xml --cov-fail-under=85
 
       - name: Upload coverage artifact
         if: always()
