@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide
@@ -359,97 +359,9 @@ The platform's rule packs are based purely on standard PromQL, making them fully
 
 ---
 
-## Appendix: Prometheus Operator (kube-prometheus-stack) Integration
+## Prometheus Operator Integration
 
-If your cluster uses Prometheus Operator, here are the equivalent CRD configurations for the three steps above:
-
-### A1. Inject tenant label — ServiceMonitor
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: tenant-db-exporters
-  namespace: monitoring
-  labels:
-    release: kube-prometheus-stack       # ← Adjust based on your Operator configuration
-spec:
-  namespaceSelector:
-    matchNames:
-      - db-a
-      - db-b
-      # Add more tenant namespaces...
-  selector:
-    matchLabels:
-      prometheus.io/scrape: "true"
-  endpoints:
-    - port: metrics                       # ← Adjust based on your exporter Service definition
-      interval: 10s
-      relabelings:
-        # ⭐ Inject namespace as tenant label
-        - sourceLabels: [__meta_kubernetes_namespace]
-          targetLabel: tenant
-```
-
-### A2. Scrape threshold-exporter — ServiceMonitor
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: dynamic-thresholds
-  namespace: monitoring
-  labels:
-    release: kube-prometheus-stack
-spec:
-  namespaceSelector:
-    matchNames: ["monitoring"]
-  selector:
-    matchLabels:
-      app: threshold-exporter
-  endpoints:
-    - port: http                            # ← Port name of threshold-exporter Service
-      interval: 15s
-```
-
-### A3. Mount Rule Packs — PrometheusRule
-
-Each Rule Pack corresponds to a PrometheusRule CRD. Using MariaDB as an example:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: dynamic-alerts-mariadb
-  namespace: monitoring
-  labels:
-    release: kube-prometheus-stack       # ← Operator's ruleSelector must match this label
-spec:
-  groups:
-    # Paste the groups content from configmap-rules-mariadb.yaml here
-    - name: mariadb-normalization
-      rules: [...]                        # ← Obtain from rule-packs/ directory
-    - name: mariadb-threshold-normalization
-      rules: [...]
-    - name: mariadb-alerts
-      rules: [...]
-```
-
-> **Tip**: You can use `kubectl get configmap prometheus-rules-mariadb -n monitoring -o jsonpath='{.data}'` to retrieve rules content, then convert to PrometheusRule format.
-
-### Operator Verification
-
-```bash
-# Confirm ServiceMonitor is discovered by Operator
-kubectl get servicemonitor -n monitoring
-
-# Confirm PrometheusRule is loaded
-kubectl get prometheusrule -n monitoring
-
-# Confirm Prometheus config includes the new scrape job
-kubectl exec -n monitoring prometheus-kube-prometheus-stack-prometheus-0 -- \
-  cat /etc/prometheus/config_out/prometheus.env.yaml | grep "dynamic-thresholds"
-```
+> Using Prometheus Operator (kube-prometheus-stack)? See the [Prometheus Operator Integration Guide](prometheus-operator-integration.en.md) for complete CRD generation tools, validation procedures, and GitOps integration guidance.
 
 ---
 

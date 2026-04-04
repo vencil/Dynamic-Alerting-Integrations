@@ -2,7 +2,7 @@
 title: "Domain Expert (DBA) Quick Start Guide"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide

@@ -2,7 +2,7 @@
 title: "Scenario: Incremental Migration Playbook"
 tags: [scenario, migration, adoption, playbook]
 audience: [platform-engineer, sre]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 

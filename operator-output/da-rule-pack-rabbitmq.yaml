@@ -1,0 +1,212 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: da-rule-pack-rabbitmq
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: rabbitmq-normalization
+    interval: 15s
+    rules:
+    - record: tenant:rabbitmq_queue_messages:max
+      expr: max by(tenant) (rabbitmq_queue_messages_ready)
+    - record: tenant:rabbitmq_consumers:max
+      expr: max by(tenant) (rabbitmq_queue_consumers)
+    - record: tenant:rabbitmq_connections:max
+      expr: max by(tenant) (rabbitmq_connections)
+    - record: tenant:rabbitmq_node_mem_percent:ratio
+      expr: '100 * max by(tenant) (rabbitmq_node_mem_used)
+
+        / on(tenant)
+
+        clamp_min(max by(tenant) (rabbitmq_node_mem_limit), 1)
+
+        '
+    - record: tenant:rabbitmq_unacked_messages:max
+      expr: max by(tenant) (rabbitmq_queue_messages_unacked)
+  - name: rabbitmq-threshold-normalization
+    interval: 15s
+    rules:
+    - record: tenant:alert_threshold:rabbitmq_queue_messages
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_queue_messages", severity="warning"})
+    - record: tenant:alert_threshold:rabbitmq_queue_messages_critical
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_queue_messages", severity="critical"})
+    - record: tenant:alert_threshold:rabbitmq_node_mem_percent
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_node_mem_percent", severity="warning"})
+    - record: tenant:alert_threshold:rabbitmq_node_mem_percent_critical
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_node_mem_percent", severity="critical"})
+    - record: tenant:alert_threshold:rabbitmq_connections
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_connections", severity="warning"})
+    - record: tenant:alert_threshold:rabbitmq_consumers
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_consumers", severity="warning"})
+    - record: tenant:alert_threshold:rabbitmq_unacked_messages
+      expr: max by(tenant) (user_threshold{metric="rabbitmq_unacked_messages", severity="warning"})
+  - name: rabbitmq-alerts
+    rules:
+    - alert: RabbitMQExporterAbsent
+      expr: absent(rabbitmq_identity_info{job="tenant-exporters"})
+      for: 30s
+      labels:
+        severity: critical
+      annotations:
+        summary: RabbitMQ exporter target missing
+        summary_zh: RabbitMQ exporter 目標缺失
+        description: No rabbitmq_identity_info metric found for 30s
+        description_zh: 30 秒內未找到 rabbitmq_identity_info metric
+    - alert: RabbitMQHighQueueDepth
+      expr: "(\n  (\n    tenant:rabbitmq_queue_messages:max\n    > on(tenant) group_left\n\
+        \    tenant:alert_threshold:rabbitmq_queue_messages\n  )\n  unless on(tenant)\n\
+        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
+        \ owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: warning
+        metric_group: rabbitmq_queue_messages
+      annotations:
+        summary: High RabbitMQ queue depth on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 佇列深度過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: queue depth
+          threshold exceeded — consumer capacity review'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 佇列深度超過閾值
+          — 請檢查消費者容量'
+        description: 'Messages ready: {{ $value | printf "%.0f" }} (warning threshold
+          exceeded)'
+        description_zh: '待發送訊息: {{ $value | printf "%.0f" }} (超過警告閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: RabbitMQHighQueueDepthCritical
+      expr: "(\n  (\n    tenant:rabbitmq_queue_messages:max\n    > on(tenant) group_left\n\
+        \    tenant:alert_threshold:rabbitmq_queue_messages_critical\n  )\n  unless\
+        \ on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: critical
+        metric_group: rabbitmq_queue_messages
+      annotations:
+        summary: Critical RabbitMQ queue depth on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 佇列深度嚴重過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical queue
+          depth — immediate consumer scaling needed'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 佇列深度嚴重 —
+          需要立即擴展消費者'
+        description: 'Messages ready: {{ $value | printf "%.0f" }} (critical threshold
+          exceeded)'
+        description_zh: '待發送訊息: {{ $value | printf "%.0f" }} (超過嚴重閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: RabbitMQHighMemory
+      expr: "(\n  (\n    tenant:rabbitmq_node_mem_percent:ratio\n    > on(tenant)\
+        \ group_left\n    tenant:alert_threshold:rabbitmq_node_mem_percent\n  )\n\
+        \  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        )\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: warning
+        metric_group: rabbitmq_node_mem_percent
+      annotations:
+        summary: High RabbitMQ memory usage on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 記憶體使用率過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ memory
+          usage high — broker sizing review'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ
+          記憶體使用率過高 — 請檢查 broker 大小'
+        description: 'Memory used: {{ $value | printf "%.1f" }}% of limit (warning
+          threshold exceeded)'
+        description_zh: '已使用記憶體: 限制的 {{ $value | printf "%.1f" }}% (超過警告閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: RabbitMQHighMemoryCritical
+      expr: "(\n  (\n    tenant:rabbitmq_node_mem_percent:ratio\n    > on(tenant)\
+        \ group_left\n    tenant:alert_threshold:rabbitmq_node_mem_percent_critical\n\
+        \  )\n  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: critical
+        metric_group: rabbitmq_node_mem_percent
+      annotations:
+        summary: Critical RabbitMQ memory usage on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 記憶體使用率嚴重過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical RabbitMQ
+          memory — broker at risk, escalate'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ
+          記憶體嚴重 — broker 有風險，請上報'
+        description: 'Memory used: {{ $value | printf "%.1f" }}% of limit (critical
+          threshold exceeded)'
+        description_zh: '已使用記憶體: 限制的 {{ $value | printf "%.1f" }}% (超過嚴重閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: RabbitMQHighConnections
+      expr: "(\n  (\n    tenant:rabbitmq_connections:max\n    > on(tenant) group_left\n\
+        \    tenant:alert_threshold:rabbitmq_connections\n  )\n  unless on(tenant)\n\
+        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
+        \ owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: warning
+        metric_group: rabbitmq_connections
+      annotations:
+        summary: High RabbitMQ connection count on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 連線數過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ connection
+          count high — client pool review'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ
+          連線數過高 — 請檢查客戶端連線池'
+        description: 'Active connections: {{ $value | printf "%.0f" }} (warning threshold
+          exceeded)'
+        description_zh: '活躍連線: {{ $value | printf "%.0f" }} (超過警告閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: RabbitMQLowConsumers
+      expr: "(\n  (\n    tenant:rabbitmq_consumers:max\n    < on(tenant) group_left\n\
+        \    tenant:alert_threshold:rabbitmq_consumers\n  )\n  unless on(tenant)\n\
+        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
+        \ owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: warning
+        metric_group: rabbitmq_consumers
+      annotations:
+        summary: Low RabbitMQ consumer count on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 消費者數量過少'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ consumer
+          count low — consumer health check'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: RabbitMQ
+          消費者數量過少 — 請檢查消費者狀態'
+        description: 'Active consumers: {{ $value | printf "%.0f" }} (below minimum
+          threshold)'
+        description_zh: '活躍的消費者: {{ $value | printf "%.0f" }} (低於最小閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: RabbitMQHighUnackedMessages
+      expr: "(\n  (\n    tenant:rabbitmq_unacked_messages:max\n    > on(tenant) group_left\n\
+        \    tenant:alert_threshold:rabbitmq_unacked_messages\n  )\n  unless on(tenant)\n\
+        \  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url,\
+        \ owner, tier)\n  tenant_metadata_info\n"
+      for: 5m
+      labels:
+        severity: warning
+        metric_group: rabbitmq_unacked_messages
+      annotations:
+        summary: High unacknowledged messages on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 RabbitMQ 未確認訊息過多'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: unacked messages
+          piling up — consumer health check'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 未確認訊息堆積 —
+          請檢查消費者狀態'
+        description: '{{ $value | printf "%.0f" }} messages awaiting acknowledgment
+          (consumer lag indicator)'
+        description_zh: '{{ $value | printf "%.0f" }} 個訊息等待確認 (消費者延遲指標)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'

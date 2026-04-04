@@ -259,7 +259,7 @@ class MermaidValidator:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
         except OSError as e:
-            print(f"Error reading {filepath}: {e}")
+            print(f"Error reading {filepath}: {e}", file=sys.stderr)
             return False
 
         # Extract and render each Mermaid block
@@ -363,11 +363,11 @@ class MermaidValidator:
         print("=" * 70)
         print(f"Total diagrams found: {self.total_diagrams}")
         print(f"Valid diagrams: {self.valid_diagrams}")
-        print(f"Errors found: {len(self.errors)}")
+        print(f"Errors found: {len(self.errors)}", file=sys.stderr)
 
         if self.errors:
             print("\n" + "-" * 70)
-            print("Errors:")
+            print("Errors:", file=sys.stderr)
             print("-" * 70)
             for error in self.errors:
                 print(f"\n{error['file']}:{error['line']}")

@@ -2,7 +2,7 @@
 title: "JSON Schema Reference"
 tags: [schema, validation, yaml, tooling]
 audience: [platform-engineers, tenants]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 

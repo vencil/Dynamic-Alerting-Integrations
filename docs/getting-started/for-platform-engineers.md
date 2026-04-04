@@ -2,14 +2,14 @@
 title: "Platform Engineer 快速入門指南"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # Platform Engineer 快速入門指南
 
 > **v2.1.0** | 適用對象：Platform Engineers、SRE、基礎設施管理員
 >
-> 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md)
+> 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator 整合](../prometheus-operator-integration.md)
 
 ## 你需要知道的三件事
 

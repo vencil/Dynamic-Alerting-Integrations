@@ -2,7 +2,7 @@
 title: "Platform Demo"
 tags: [demo, walkthrough, interactive]
 audience: [platform-engineer, domain-expert, tenant]
-version: v2.2.0
+version: v2.3.0
 lang: en
 related: [wizard, cli-playground, onboarding-checklist]
 ---

@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 

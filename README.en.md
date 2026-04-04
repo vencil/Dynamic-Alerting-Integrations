@@ -2,14 +2,14 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-![Version](https://img.shields.io/badge/version-v2.2.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-53%20pairs-blue)
+![Version](https://img.shields.io/badge/version-v2.3.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-54%20pairs-blue)
 
 Rule explosion and change bottlenecks are the core pain points of Prometheus alerting in multi-tenant environments. This platform solves them with a config-driven architecture: tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
 

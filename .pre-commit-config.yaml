@@ -148,3 +148,19 @@ repos:
         files: ^(docs/(interactive/tools|getting-started)/.*\.jsx|rule-packs/.*\.yaml|scripts/tools/.*\.py|components/da-tools/app/entrypoint\.py)$
         stages: [manual]
         additional_dependencies: ['pyyaml']
+
+      - id: check-doc-template
+        name: Check document template compliance
+        entry: python3 scripts/tools/lint/check_doc_template.py
+        language: system
+        pass_filenames: false
+        files: ^docs/.*\.md$
+        stages: [manual]
+
+      - id: check-portal-i18n
+        name: Check Portal JSX i18n coverage
+        entry: python3 scripts/tools/lint/check_portal_i18n.py --ci
+        language: system
+        pass_filenames: false
+        files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
+        stages: [manual]

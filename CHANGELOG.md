@@ -2,12 +2,169 @@
 title: "Changelog"
 tags: [changelog, releases]
 audience: [all]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # Changelog
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
+
+## [v2.3.0] — Operator-Native × Management UI × Platform Maturity (2026-04-04)
+
+v2.3.0 聚焦四大主題：Operator-Native 整合、Multi-Instance Management UI、Portal & Doc 成熟度、品質閘門升級。
+
+### Phase .a — Portal & DX Foundation
+
+**Self-Service Portal 模組化**
+- `self-service-portal.jsx`（1,376 行）→ 5 個模組：`portal-shared.jsx`（共用常數/函式/元件）+ `YamlValidatorTab.jsx` + `AlertPreviewTab.jsx` + `RoutingTraceTab.jsx` + coordinator
+- 新增 `dependencies` frontmatter 機制：jsx-loader.html 支援 YAML frontmatter 中宣告依賴，依序載入 → `loadDependency()` / `loadDependencies()` / `transformImports()`
+- `window.__portalShared` 模式：共用模組透過全域變數註冊，tab 模組解構取用
+
+**Template Gallery 外部化**
+- 24 個模板 → `docs/assets/template-data.json`（雙語 `{zh, en}` 物件格式 + `category` 欄位）
+- `template-gallery.jsx` 改為 `useEffect` fetch 載入，新增 loading/error 狀態
+- 檔案大小：806 → 293 行（-64%）
+
+**Portal Hub 五層重組**
+- 29 個工具卡片從 2 區（Interactive / Advanced）→ 5 層級：Start Here、Day-to-Day、Explore & Learn、Simulate & Analyze、Platform Operations
+- 新增 Quick Access 面板（5 個常用工具快捷連結）
+- 每層級附色彩標籤（Onboarding / Core Workflow / Reference / What-If / Engineer）
+- Role filter 同時作用於 Quick Access chips
+- Tour 步驟更新、Footer 版號同步
+
+**文件模板系統**
+- 新增 `docs/internal/doc-template.md`：定義文件標準結構（frontmatter + 必要 section + Related Resources）
+- 新增 `scripts/tools/lint/check_doc_template.py`：frontmatter 完整性 + Related Resources 存在性 + 版號一致性
+
+**`_lib_python.py` 模組拆分**
+- `_lib_python.py` → 4 個子模組：`_lib_constants.py`（守護值/常數）+ `_lib_io.py`（檔案 I/O）+ `_lib_validation.py`（驗證邏輯）+ `_lib_prometheus.py`（HTTP/Prometheus 查詢）
+- 原檔保留為 re-export facade（向後相容，53 行）
+
+**SAST Rule 7**
+- 新增 `TestStderrRouting`：AST 掃描 `print("ERROR..."` / `print("Error..."` 確保附帶 `file=sys.stderr`
+- 支援 literal string 和 f-string 兩種格式偵測
+
+---
+
+### Phase .b — Operator-Native + Federation
+
+**ADR-008: Operator-Native Integration Path**
+- 雙路整合架構決策：既有 ConfigMap 路徑保留，新增 Operator-Native 模式作為 BYO 方案
+- 工具鏈適配而非平台重寫原則——threshold-exporter Go 核心語意不變
+- 新增 `detectConfigSource()` 函式：逐級檢測 operator env var → git-sync `.git-revision` 文件 → configmap（預設）
+
+**Prometheus Operator 整合指南**
+- 新增 `docs/prometheus-operator-integration.md`（雙語 zh + en）：架構圖、CRD 對應、3 個部署場景（all-in-one / mixed / operator-only）
+- BYO 文件清理：移除 Prometheus Operator appendices，改為重定向至新指南
+- ServiceMonitor / PrometheusRule / AlertmanagerConfig CRD 映射表
+
+**da-tools Operator 工具**
+- **`da-tools operator-generate`** — 從 Rule Packs + Tenant 配置產生 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+  - 支援 `--namespace` / `--labels` / `--annotations` 自訂，`--output-format yaml | json`
+  - 整合於 da-tools entrypoint + build.sh 打包
+- **`da-tools operator-check`** — CRD 驗證工具：PrometheusRule 語法 + AlertmanagerConfig 路由合法性 + ServiceMonitor label 一致性
+  - 支援 `--kubeconfig` / `--context` 直連 K8s 驗證，亦支援離線 YAML 驗證
+  - Registered in CI lint pre-commit hooks
+
+**Config Info Metric（四層感知）**
+- 新增 `threshold_exporter_config_info{config_source, git_commit}` info metric
+- 三種模式 + 自動偵測：
+  - `configmap`（預設）：從 ConfigMap mount path 讀取 config version
+  - `git-sync`：讀取 `.git-revision` 共享 volume 文件，提供 git commit SHA
+  - `operator`：讀取 env var `CONFIG_SOURCE=operator` + `GIT_COMMIT=<sha>`
+- `detectConfigSource()` 呼叫於 reload 時，確保 metric 實時反映部署形態
+
+**Federation Scenario B（邊緣-中央分裂）**
+- **`da-tools rule-pack-split`** — Rule Pack 聯邦分裂工具：
+  - Part 1（正規化層）：邊緣側 metric value 驗證、單位轉換、異常值濾除 → 產生 Prometheus RecordingRules
+  - Parts 2+3（閾值 + 警報層）：中央側聚合、cross-edge 關聯、全域告警決策 → 產生 Alerting Rules
+  - 支援 `--operator` CRD 輸出 + `--gitops` 模式（目錄結構）
+  - 關鍵特性：無狀態 split（idempotent）、邊緣 auto-healing（快照回滾）
+- **`federation-integration.md` §8** — Scenario B 完整文件：三階段部署（邊緣佈建 → 中央策略 → 端對端驗證）、MTTR 優化、成本模型
+
+**Go 單元測試（+12 tests，覆蓋率 87% → 94%）**
+- WatchLoop 整合測試：無檔案變動 / 新增檔案 / 更新現有檔案
+- `resolveConfigPath()` 三情案例：configmap flag / git-sync flag / 未設定（預設 configmap）
+- `detectConfigSource()` 四情案例：configmap（預設）/ git-sync / operator / precedence（operator > git-sync > configmap）
+- Config Info metric 收集器三情案例：各模式 value 驗證 + label 正確性
+- Fail-Safe Reload E2E：config 不可讀時 fallback 邏輯
+
+---
+
+### Phase .c — Management UI + Intelligence
+
+**Tenant Manager Data Foundation**
+- 新增 `scripts/tools/dx/generate_tenant_metadata.py`：從 `conf.d/` 目錄結構推斷租戶 metadata
+  - Rule Pack 推斷：根據 YAML 中 metric prefix 比對 Rule Pack 定義
+  - 運營模式推斷：`_silent_mode` / `_state_maintenance` 標誌偵測
+  - 路由通道推斷：`_routing` 配置解析
+- 擴展 `scripts/tools/dx/generate_platform_data.py`：產出的 `platform-data.json` 新增 `tenant_groups` + `tenant_metadata` 結構
+- Tenant metadata 版本化：支援 `--output-dir` 自訂輸出路徑，方便 GitOps 集成
+
+**Tenant Manager UI 元件**
+- 新增 `docs/interactive/tools/tenant-manager.jsx`（~650 行）：
+  - 響應式卡片牆佈局，環境/層級徽章（dev/staging/prod + app/infra/platform）
+  - 運營模式指示器：Normal / Silent / Maintenance 視覺標記 + expires 倒數
+  - 批量操作：批次維護/靜默模式 YAML 產生器，支援日期範圍選擇
+  - 篩選+搜尋：按環境/層級/模式多維度過濾，模糊搜尋租戶名
+- 加入 `tool-registry.yaml` + Portal Hub Tier 1 (Day-to-Day 層級)
+
+**閾值推薦 × Portal 智慧**
+- 新增 `docs/assets/recommendation-data.json`：15 個核心指標的 P50/P95/P99 預計算資料
+  - 資料來源：歷史基線 + 業界最佳實踐
+  - 格式：`{metric_name: {p50, p95, p99, source, last_updated}}`
+- 擴展 `docs/interactive/tools/AlertPreviewTab.jsx`：
+  - Progress bar 上疊加 recommended value marker 視覺指示
+  - Confidence badge（high/medium/low）顯示推薦可信度
+  - 新增 "Apply Recommended Values" 按鈕，一鍵生成更新 YAML
+
+**OPA/Rego 策略整合**
+- 新增 `scripts/tools/ops/policy_opa_bridge.py`（~450 行）：tenant YAML → OPA input JSON 轉換 + 雙模式評估
+  - 轉換函式：YAML 欄位 → OPA JSON 輸入格式映射（支援 nested policies）
+  - 評估模式：REST API 模式（連接遠端 OPA 伺服器）+ 本地 opa binary 模式
+  - 違規輸出格式轉換：OPA violations → da-tools 標準格式（location + description）
+- `scripts/policies/examples/` 新增三個 Rego 範例策略：
+  - `routing-compliance.rego`：路由規則命名 / receiver type / group_wait 範圍 validation
+  - `threshold-bounds.rego`：閾值範圍檢查 / 關鍵指標預留冗餘
+  - `naming-convention.rego`：租戶/告警 ID 命名規範 + Prefix 合法性
+- 登記為 `da-tools opa-evaluate` 子命令 + CI lint 整合
+
+**Portal i18n Lint 工具**
+- 新增 `scripts/tools/lint/check_portal_i18n.py`（~250 行）：掃描 JSX 檔案尋找硬編碼字串
+  - AST 解析：偵測 string literal 未用 `window.__t()` 包裝的情況
+  - 支援 `--fix-mode`：自動生成修復建議（帶位置資訊）
+  - 排除清單：URL / 特殊字元序列 / i18n 函式呼叫內部字串
+- 加入 pre-commit manual-stage hooks 為 `check-portal-i18n`
+
+---
+
+### Phase .d — Quality Gate + CI Maturity
+
+**GitHub Actions CI Matrix**
+- 新增 `.github/workflows/ci.yml`：Python 3.10/3.13 × Go 1.22/1.26 矩陣（4 × 2 = 8 組合）
+- 4 個主 jobs：lint（文件+工具格式）、python-tests（pytest + coverage）、go-tests（threshold-exporter）、lint-docs（SAST + doc 品質）
+- pip/Go module 緩存策略、coverage artifacts 產生、失敗時自動 debug log 產出
+
+**Coverage Gate 強制**
+- `pyproject.toml` 新增 `fail_under = 85`，CI 強制 `--cov-fail-under=85` 執行
+- README.md 新增 CI badge 與 coverage badge（green ≥85%、yellow 80–85%、red <80%）
+- Python 工具預期整體覆蓋率 ≥85%
+
+**Python 型別系統加強**
+- `_lib_constants.py`、`_lib_io.py`、`_lib_validation.py`、`_lib_prometheus.py` 加入完整型別提示
+- 新增 `mypy.ini`：strict mode for all `_lib_*` modules、relaxed mode for test files
+- CI lint job 新增 `mypy scripts/tools/_lib_*.py --config-file=scripts/tools/mypy.ini` 步驟
+
+**Integration + Snapshot 測試**
+- `tests/test_tool_exit_codes.py`（parametrized）：全部 84+ 工具的 `--help` + invalid args exit code 合約測試
+- `tests/test_pipeline_integration.py`：scaffold → validate → routes 完整 pipeline 端對端測試
+- `tests/test_snapshot.py`：help output stability snapshot tests，支援 `--snapshot-update` CI 模式
+
+**Pre-commit Hook 驗證確認**
+- 確認 13 個 auto-run hooks + 7 個 manual-stage hooks 全部運作，Phase .a–.c 新增項目完全涵蓋
+- `make pre-commit-audit` 新增 make 目標印出 hook 清單與觸發規則
+
+---
 
 ## [v2.2.0] — 採用管線 + UX 升級 + 運維工具 (2026-03-17)
 

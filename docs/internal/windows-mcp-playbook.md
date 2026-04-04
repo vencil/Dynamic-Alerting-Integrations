@@ -2,7 +2,7 @@
 title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)

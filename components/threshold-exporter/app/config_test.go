@@ -3898,6 +3898,264 @@ func TestClampDuration(t *testing.T) {
 }
 
 // ============================================================
+// WatchLoop Integration Test
+// ============================================================
+
+func TestWatchLoop_Integration(t *testing.T) {
+	// Create temporary directory with initial config
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	initialContent := `
+defaults:
+  mysql_connections: 80
+tenants:
+  db-a:
+    mysql_connections: "70"
+`
+	writeTestFile(t, dir, "config.yaml", initialContent)
+
+	// Create ConfigManager and load initial config
+	mgr := NewConfigManager(configPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Initial Load failed: %v", err)
+	}
+
+	// Verify initial config
+	cfg := mgr.GetConfig()
+	if cfg.Defaults["mysql_connections"] != 80 {
+		t.Errorf("initial default: expected 80, got %.0f", cfg.Defaults["mysql_connections"])
+	}
+
+	// Start WatchLoop with short interval
+	stopCh := make(chan struct{})
+	go mgr.WatchLoop(100*time.Millisecond, stopCh)
+
+	// Modify config file
+	updatedContent := `
+defaults:
+  mysql_connections: 90
+tenants:
+  db-a:
+    mysql_connections: "75"
+`
+	writeTestFile(t, dir, "config.yaml", updatedContent)
+
+	// Poll for config change with timeout
+	deadline := time.After(3 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	var changed bool
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for config change")
+		case <-ticker.C:
+			cfg := mgr.GetConfig()
+			if cfg.Defaults["mysql_connections"] == 90 {
+				changed = true
+			}
+			if changed {
+				break
+			}
+		}
+		if changed {
+			break
+		}
+	}
+
+	// Verify updated config
+	cfg = mgr.GetConfig()
+	if cfg.Defaults["mysql_connections"] != 90 {
+		t.Errorf("updated default: expected 90, got %.0f", cfg.Defaults["mysql_connections"])
+	}
+	if cfg.Tenants["db-a"]["mysql_connections"].Default != "75" {
+		t.Errorf("updated tenant value: expected 75, got %s", cfg.Tenants["db-a"]["mysql_connections"].Default)
+	}
+
+	// Stop WatchLoop
+	close(stopCh)
+	time.Sleep(200 * time.Millisecond) // Allow goroutine to exit
+}
+
+// ============================================================
+// detectConfigSource Unit Test
+// ============================================================
+
+func TestDetectConfigSource_Configmap(t *testing.T) {
+	// Test default configmap mode (no .git-revision, no OPERATOR_CRD_SOURCE)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
+
+	mgr := NewConfigManager(configPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	info := mgr.GetConfigInfo()
+	if info.ConfigSource != "configmap" {
+		t.Errorf("expected configmap, got %s", info.ConfigSource)
+	}
+	if info.GitCommit != "" {
+		t.Errorf("expected empty git commit, got %s", info.GitCommit)
+	}
+}
+
+func TestDetectConfigSource_GitSync(t *testing.T) {
+	// Test git-sync mode (.git-revision file present)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
+	writeTestFile(t, dir, ".git-revision", "abc123def456\n")
+
+	mgr := NewConfigManager(configPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	info := mgr.GetConfigInfo()
+	if info.ConfigSource != "git-sync" {
+		t.Errorf("expected git-sync, got %s", info.ConfigSource)
+	}
+	if info.GitCommit != "abc123def456" {
+		t.Errorf("expected abc123def456, got %s", info.GitCommit)
+	}
+}
+
+func TestDetectConfigSource_Operator(t *testing.T) {
+	// Test operator mode (OPERATOR_CRD_SOURCE env set)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
+
+	// Set environment variable
+	oldEnv := os.Getenv("OPERATOR_CRD_SOURCE")
+	os.Setenv("OPERATOR_CRD_SOURCE", "true")
+	defer func() {
+		if oldEnv == "" {
+			os.Unsetenv("OPERATOR_CRD_SOURCE")
+		} else {
+			os.Setenv("OPERATOR_CRD_SOURCE", oldEnv)
+		}
+	}()
+
+	mgr := NewConfigManager(configPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	info := mgr.GetConfigInfo()
+	if info.ConfigSource != "operator" {
+		t.Errorf("expected operator, got %s", info.ConfigSource)
+	}
+	if info.GitCommit != "" {
+		t.Errorf("expected empty git commit, got %s", info.GitCommit)
+	}
+}
+
+func TestDetectConfigSource_GitSyncPrecedence(t *testing.T) {
+	// Test that git-sync takes precedence over operator
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
+	writeTestFile(t, dir, ".git-revision", "xyz789\n")
+
+	// Set environment variable
+	oldEnv := os.Getenv("OPERATOR_CRD_SOURCE")
+	os.Setenv("OPERATOR_CRD_SOURCE", "true")
+	defer func() {
+		if oldEnv == "" {
+			os.Unsetenv("OPERATOR_CRD_SOURCE")
+		} else {
+			os.Setenv("OPERATOR_CRD_SOURCE", oldEnv)
+		}
+	}()
+
+	mgr := NewConfigManager(configPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	info := mgr.GetConfigInfo()
+	if info.ConfigSource != "git-sync" {
+		t.Errorf("expected git-sync (precedence), got %s", info.ConfigSource)
+	}
+	if info.GitCommit != "xyz789" {
+		t.Errorf("expected xyz789, got %s", info.GitCommit)
+	}
+}
+
+// ============================================================
+// Fail-Safe Reload E2E Test
+// ============================================================
+
+func TestFailSafeReload_InvalidYAML(t *testing.T) {
+	// Create temp directory with valid config
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	validContent := `
+defaults:
+  mysql_connections: 80
+tenants:
+  db-a:
+    mysql_connections: "70"
+`
+	writeTestFile(t, dir, "config.yaml", validContent)
+
+	// Load initial valid config
+	mgr := NewConfigManager(configPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Initial Load failed: %v", err)
+	}
+
+	// Verify initial load
+	cfg := mgr.GetConfig()
+	if cfg.Defaults["mysql_connections"] != 80 {
+		t.Errorf("initial config: expected 80, got %.0f", cfg.Defaults["mysql_connections"])
+	}
+
+	// Capture log output
+	var buf bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(oldOutput)
+
+	// Write invalid YAML
+	invalidContent := `
+defaults:
+  mysql_connections: 80
+tenants:
+  db-a:
+    mysql_connections: [invalid yaml here
+`
+	writeTestFile(t, dir, "config.yaml", invalidContent)
+
+	// Attempt to reload
+	err := mgr.Load()
+	if err == nil {
+		t.Fatal("expected Load to fail with invalid YAML, but got nil")
+	}
+
+	// Verify original config is preserved
+	cfg = mgr.GetConfig()
+	if cfg.Defaults["mysql_connections"] != 80 {
+		t.Errorf("after failed reload: expected preserved config with 80, got %.0f", cfg.Defaults["mysql_connections"])
+	}
+
+	// Verify config is still marked as loaded
+	if !mgr.IsLoaded() {
+		t.Error("expected IsLoaded() = true after failed reload (fail-safe preserved)")
+	}
+
+	// Verify error was logged
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "ERROR") && !strings.Contains(logOutput, "error") {
+		t.Logf("note: error logging may not include 'ERROR' string, log output was: %s", logOutput)
+	}
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 

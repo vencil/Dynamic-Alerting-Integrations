@@ -2,7 +2,7 @@
 title: "場景：GitOps CI/CD 整合指南"
 tags: [scenario, gitops, ci-cd, adoption]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 場景：GitOps CI/CD 整合指南

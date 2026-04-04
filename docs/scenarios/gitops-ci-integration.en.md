@@ -2,7 +2,7 @@
 title: "Scenario: GitOps CI/CD Integration Guide"
 tags: [scenario, gitops, ci-cd, adoption]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Scenario: GitOps CI/CD Integration Guide

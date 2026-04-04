@@ -1295,6 +1295,16 @@ type ConfigManager struct {
 	fileHashes  map[string]string          // filename → SHA-256
 	fileConfigs map[string]ThresholdConfig // filename → parsed partial config
 	fileMtimes  map[string]fileStat        // filename → mtime+size for quick skip (v2.1.0)
+
+	// Config info metric state (v2.3.0)
+	configSource string // "configmap", "operator", or "git-sync"
+	gitCommit    string // git commit hash from .git-revision file, or ""
+}
+
+// ConfigInfo holds config source metadata for the threshold_exporter_config_info metric.
+type ConfigInfo struct {
+	ConfigSource string
+	GitCommit    string
 }
 
 // fileStat stores lightweight file metadata for the mtime guard.
@@ -1361,6 +1371,9 @@ func (m *ConfigManager) Load() error {
 	m.lastReload = time.Now()
 	m.lastHash = hash
 	m.mu.Unlock()
+
+	// Detect config source mode and git commit (v2.3.0)
+	m.detectConfigSource()
 
 	logConfigStats(&cfg, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 
@@ -1759,6 +1772,9 @@ func (m *ConfigManager) IncrementalLoad() error {
 	m.fileMtimes = newMtimes
 	m.mu.Unlock()
 
+	// Refresh config source detection (v2.3.0) — git-sync may rotate .git-revision
+	m.detectConfigSource()
+
 	logConfigStats(&merged, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 
 	return nil
@@ -1819,6 +1835,9 @@ func (m *ConfigManager) fullDirLoad() error {
 	m.fileConfigs = fileConfigs
 	m.fileMtimes = perFileMtimes
 	m.mu.Unlock()
+
+	// Detect config source mode and git commit (v2.3.0)
+	m.detectConfigSource()
 
 	logConfigStats(&merged, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 
@@ -2022,4 +2041,53 @@ func (m *ConfigManager) LastReload() time.Time {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.lastReload
+}
+
+// GetConfigInfo returns config source metadata for the threshold_exporter_config_info metric (v2.3.0).
+func (m *ConfigManager) GetConfigInfo() ConfigInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return ConfigInfo{
+		ConfigSource: m.configSource,
+		GitCommit:    m.gitCommit,
+	}
+}
+
+// detectConfigSource determines the config source mode and git commit.
+//
+// Detection logic:
+//  1. If .git-revision file exists adjacent to config path → "git-sync" + read commit hash
+//  2. If OPERATOR_CRD_SOURCE env is set → "operator"
+//  3. Default → "configmap"
+//
+// Called on initial load and each reload to pick up git-sync rotations.
+func (m *ConfigManager) detectConfigSource() {
+	gitCommit := ""
+	configSource := "configmap"
+
+	// Check for .git-revision file (written by git-sync sidecar)
+	var searchDir string
+	if m.isDir {
+		searchDir = m.path
+	} else {
+		searchDir = filepath.Dir(m.path)
+	}
+	revFile := filepath.Join(searchDir, ".git-revision")
+	if data, err := os.ReadFile(revFile); err == nil {
+		commit := strings.TrimSpace(string(data))
+		if commit != "" {
+			gitCommit = commit
+			configSource = "git-sync"
+		}
+	}
+
+	// Operator CRD source override (set by operator-generate sidecar or init container)
+	if configSource != "git-sync" {
+		if v := os.Getenv("OPERATOR_CRD_SOURCE"); v != "" {
+			configSource = "operator"
+		}
+	}
+
+	m.configSource = configSource
+	m.gitCommit = gitCommit
 }

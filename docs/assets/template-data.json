@@ -1,0 +1,236 @@
+{
+  "version": "v2.3.0",
+  "packs": [
+    { "id": "mariadb", "label": "MariaDB" },
+    { "id": "postgresql", "label": "PostgreSQL" },
+    { "id": "redis", "label": "Redis" },
+    { "id": "mongodb", "label": "MongoDB" },
+    { "id": "elasticsearch", "label": "Elasticsearch" },
+    { "id": "oracle", "label": "Oracle" },
+    { "id": "db2", "label": "DB2" },
+    { "id": "clickhouse", "label": "ClickHouse" },
+    { "id": "kafka", "label": "Kafka" },
+    { "id": "rabbitmq", "label": "RabbitMQ" },
+    { "id": "jvm", "label": "JVM" },
+    { "id": "nginx", "label": "Nginx" },
+    { "id": "kubernetes", "label": "Kubernetes" }
+  ],
+  "templates": [
+    {
+      "id": "ecommerce",
+      "name": { "zh": "電商平台", "en": "E-Commerce Platform" },
+      "icon": "🛒",
+      "category": "scenario",
+      "packs": ["mariadb", "redis", "nginx", "kubernetes"],
+      "desc": { "zh": "經典網店：MariaDB 用於訂單/庫存，Redis 用於會話/快取，Nginx 作反向代理，Kubernetes 容器監控", "en": "Classic web store: MariaDB for orders/inventory, Redis for sessions/cache, Nginx as reverse proxy, Kubernetes container monitoring." },
+      "yaml": "# E-Commerce Platform — MariaDB + Redis + Nginx + Kubernetes\nmysql_connections: \"150\"\nmysql_connections_critical: \"200\"\nmysql_cpu: \"75\"\n\nredis_memory_used_bytes: \"3221225472\"\nredis_memory_used_bytes_critical: \"4294967296\"\nredis_connected_clients: \"3000\"\n\nnginx_connections: \"2000\"\nnginx_request_rate: \"8000\"\nnginx_waiting: \"300\"\n\ncontainer_cpu: \"75\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: slack\n  webhook_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_by: [alertname, severity]\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: ecommerce-team\n  tier: production"
+    },
+    {
+      "id": "iot-pipeline",
+      "name": { "zh": "IoT 數據管道", "en": "IoT Data Pipeline" },
+      "icon": "📡",
+      "category": "scenario",
+      "packs": ["kafka", "mongodb", "jvm", "kubernetes"],
+      "desc": { "zh": "高吞吐 IoT：Kafka 資料引入、MongoDB 時序儲存、JVM 處理服務", "en": "High-throughput IoT: Kafka ingestion, MongoDB time-series storage, JVM-based processing services." },
+      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_active_controllers: \"1\"\nkafka_under_replicated_partitions: \"0\"\nkafka_request_rate: \"15000\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_repl_lag_seconds: \"5\"\n\njvm_gc_pause: \"0.8\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver_type: pagerduty\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
+    },
+    {
+      "id": "saas-backend",
+      "name": { "zh": "SaaS 多服務後端", "en": "SaaS Multi-Service Backend" },
+      "icon": "☁️",
+      "category": "scenario",
+      "packs": ["postgresql", "redis", "elasticsearch", "jvm", "kubernetes"],
+      "desc": { "zh": "SaaS 後端：PostgreSQL 核心資料、Redis 快取、Elasticsearch 全文搜尋、JVM 服務", "en": "SaaS backend: PostgreSQL for core data, Redis for caching, Elasticsearch for full-text search, JVM services." },
+      "yaml": "# SaaS Multi-Service — PostgreSQL + Redis + ES + JVM + K8s\npg_connections: \"100\"\npg_connections_critical: \"150\"\npg_replication_lag: \"10\"\n\nredis_memory_used_bytes: \"2147483648\"\nredis_connected_clients: \"2000\"\n\nes_jvm_memory_used_percent: \"80\"\nes_jvm_memory_used_percent_critical: \"92\"\nes_filesystem_free_percent: \"20\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\njvm_threads: \"500\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"6h\"\n\n_metadata:\n  owner: backend-team\n  tier: production"
+    },
+    {
+      "id": "analytics",
+      "name": { "zh": "即時分析堆棧", "en": "Real-time Analytics Stack" },
+      "icon": "📊",
+      "category": "scenario",
+      "packs": ["clickhouse", "kafka", "jvm", "kubernetes"],
+      "desc": { "zh": "實時分析：Kafka 事件串流、ClickHouse OLAP 儲存、JVM 分析工作程式", "en": "Real-time analytics: Kafka event streaming, ClickHouse OLAP storage, JVM analytics workers." },
+      "yaml": "# Real-time Analytics — ClickHouse + Kafka + JVM + K8s\nclickhouse_queries_rate: \"800\"\nclickhouse_queries_rate_critical: \"1200\"\nclickhouse_active_connections: \"150\"\n\nkafka_consumer_lag: \"100000\"\nkafka_consumer_lag_critical: \"500000\"\nkafka_broker_count: \"5\"\nkafka_request_rate: \"20000\"\n\njvm_memory: \"85\"\njvm_gc_pause: \"1.0\"\n\ncontainer_cpu: \"85\"\ncontainer_memory: \"90\"\n\n_routing:\n  receiver_type: email\n  group_wait: \"2m\"\n  group_interval: \"5m\"\n  repeat_interval: \"24h\"\n\n_metadata:\n  owner: analytics-team\n  tier: production"
+    },
+    {
+      "id": "enterprise-db",
+      "name": { "zh": "企業資料庫叢集", "en": "Enterprise Database Cluster" },
+      "icon": "🏢",
+      "category": "scenario",
+      "packs": ["oracle", "db2", "kubernetes"],
+      "desc": { "zh": "企業級 DB：Oracle 用於核心交易、DB2 用於資料倉儲，搭配 K8s 容器化部署監控", "en": "Enterprise DBs: Oracle for core transactions, DB2 for data warehouse, with K8s containerized deployment monitoring." },
+      "yaml": "# Enterprise Database — Oracle + DB2 + Kubernetes\noracle_sessions_active: \"150\"\noracle_sessions_active_critical: \"250\"\noracle_tablespace_used_percent: \"80\"\noracle_tablespace_used_percent_critical: \"90\"\n\ndb2_connections_active: \"180\"\ndb2_connections_active_critical: \"250\"\ndb2_bufferpool_hit_ratio: \"0.95\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-dba-global\n\n_metadata:\n  owner: dba-team\n  tier: production\n  domain: finance"
+    },
+    {
+      "id": "event-driven",
+      "name": { "zh": "事件驅動微服務", "en": "Event-Driven Microservices" },
+      "icon": "⚡",
+      "category": "scenario",
+      "packs": ["rabbitmq", "postgresql", "jvm", "kubernetes"],
+      "desc": { "zh": "事件驅動架構：RabbitMQ 訊息佇列、PostgreSQL 事件溯源、JVM 微服務", "en": "Event-driven architecture: RabbitMQ message queue, PostgreSQL event sourcing, JVM microservices." },
+      "yaml": "# Event-Driven Microservices — RabbitMQ + PostgreSQL + JVM + K8s\nrabbitmq_queue_messages: \"50000\"\nrabbitmq_queue_messages_critical: \"100000\"\nrabbitmq_node_mem_percent: \"75\"\nrabbitmq_connections: \"800\"\nrabbitmq_consumers: \"10\"\nrabbitmq_unacked_messages: \"5000\"\n\npg_connections: \"120\"\npg_replication_lag: \"5\"\n\njvm_memory: \"75\"\njvm_gc_pause: \"0.3\"\njvm_threads: \"300\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: slack\n  webhook_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: microservices-team\n  tier: production"
+    },
+    {
+      "id": "search-platform",
+      "name": { "zh": "搜尋平台", "en": "Search Platform" },
+      "icon": "🔍",
+      "category": "scenario",
+      "packs": ["elasticsearch", "nginx", "jvm", "kubernetes"],
+      "desc": { "zh": "搜尋平台：Elasticsearch 叢集搜尋引擎、Nginx 負載均衡、JVM 索引服務", "en": "Search platform: Elasticsearch cluster search engine, Nginx load balancer, JVM indexing services." },
+      "yaml": "# Search Platform — Elasticsearch + Nginx + JVM + K8s\nes_jvm_memory_used_percent: \"75\"\nes_jvm_memory_used_percent_critical: \"88\"\nes_filesystem_free_percent: \"20\"\nes_filesystem_free_percent_critical: \"10\"\n\nnginx_connections: \"5000\"\nnginx_request_rate: \"10000\"\nnginx_waiting: \"500\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  owner: search-team\n  tier: production"
+    },
+    {
+      "id": "quick-mariadb",
+      "name": { "zh": "快速入門：MariaDB", "en": "Quick Start: MariaDB" },
+      "icon": "🐬",
+      "category": "quickstart",
+      "packs": ["mariadb"],
+      "desc": { "zh": "最小 MariaDB 監控配置", "en": "Minimal MariaDB monitoring config." },
+      "yaml": "# MariaDB Quick Start\nmysql_connections: \"80\"\nmysql_cpu: \"80\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-postgresql",
+      "name": { "zh": "快速入門：PostgreSQL", "en": "Quick Start: PostgreSQL" },
+      "icon": "🐘",
+      "category": "quickstart",
+      "packs": ["postgresql"],
+      "desc": { "zh": "最小 PostgreSQL 監控配置", "en": "Minimal PostgreSQL monitoring config." },
+      "yaml": "# PostgreSQL Quick Start\npg_connections: \"80\"\npg_replication_lag: \"30\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-redis",
+      "name": { "zh": "快速入門：Redis", "en": "Quick Start: Redis" },
+      "icon": "🔴",
+      "category": "quickstart",
+      "packs": ["redis"],
+      "desc": { "zh": "最小 Redis 監控配置", "en": "Minimal Redis monitoring config." },
+      "yaml": "# Redis Quick Start\nredis_memory_used_bytes: \"4294967296\"\nredis_connected_clients: \"200\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-mongodb",
+      "name": { "zh": "快速入門：MongoDB", "en": "Quick Start: MongoDB" },
+      "icon": "🍃",
+      "category": "quickstart",
+      "packs": ["mongodb"],
+      "desc": { "zh": "最小 MongoDB 監控配置", "en": "Minimal MongoDB monitoring config." },
+      "yaml": "# MongoDB Quick Start\nmongodb_connections_current: \"300\"\nmongodb_repl_lag_seconds: \"10\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-oracle",
+      "name": { "zh": "快速入門：Oracle", "en": "Quick Start: Oracle" },
+      "icon": "🏛️",
+      "category": "quickstart",
+      "packs": ["oracle"],
+      "desc": { "zh": "最小 Oracle 監控配置", "en": "Minimal Oracle monitoring config." },
+      "yaml": "# Oracle Quick Start\noracle_sessions_active: \"200\"\noracle_tablespace_used_percent: \"85\"\n\n_routing_profile: team-dba-global\n\n_metadata:\n  owner: dba-team\n  tier: production"
+    },
+    {
+      "id": "quick-db2",
+      "name": { "zh": "快速入門：DB2", "en": "Quick Start: DB2" },
+      "icon": "🔷",
+      "category": "quickstart",
+      "packs": ["db2"],
+      "desc": { "zh": "最小 DB2 監控配置", "en": "Minimal DB2 monitoring config." },
+      "yaml": "# DB2 Quick Start\ndb2_connections_active: \"200\"\ndb2_bufferpool_hit_ratio: \"0.95\"\n\n_routing_profile: team-dba-global\n\n_metadata:\n  owner: dba-team\n  tier: production"
+    },
+    {
+      "id": "quick-kafka",
+      "name": { "zh": "快速入門：Kafka", "en": "Quick Start: Kafka" },
+      "icon": "📨",
+      "category": "quickstart",
+      "packs": ["kafka"],
+      "desc": { "zh": "最小 Kafka 監控配置", "en": "Minimal Kafka monitoring config." },
+      "yaml": "# Kafka Quick Start\nkafka_consumer_lag: \"1000\"\nkafka_under_replicated_partitions: \"0\"\nkafka_broker_count: \"3\"\nkafka_active_controllers: \"1\"\nkafka_request_rate: \"10000\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"1m\"\n  repeat_interval: \"8h\""
+    },
+    {
+      "id": "quick-rabbitmq",
+      "name": { "zh": "快速入門：RabbitMQ", "en": "Quick Start: RabbitMQ" },
+      "icon": "🐰",
+      "category": "quickstart",
+      "packs": ["rabbitmq"],
+      "desc": { "zh": "最小 RabbitMQ 監控配置", "en": "Minimal RabbitMQ monitoring config." },
+      "yaml": "# RabbitMQ Quick Start\nrabbitmq_queue_messages: \"100000\"\nrabbitmq_node_mem_percent: \"80\"\nrabbitmq_connections: \"1000\"\nrabbitmq_consumers: \"5\"\nrabbitmq_unacked_messages: \"10000\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-clickhouse",
+      "name": { "zh": "快速入門：ClickHouse", "en": "Quick Start: ClickHouse" },
+      "icon": "🖱️",
+      "category": "quickstart",
+      "packs": ["clickhouse"],
+      "desc": { "zh": "最小 ClickHouse 監控配置", "en": "Minimal ClickHouse monitoring config." },
+      "yaml": "# ClickHouse Quick Start\nclickhouse_queries_rate: \"500\"\nclickhouse_active_connections: \"200\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-nginx",
+      "name": { "zh": "快速入門：Nginx", "en": "Quick Start: Nginx" },
+      "icon": "🌐",
+      "category": "quickstart",
+      "packs": ["nginx"],
+      "desc": { "zh": "最小 Nginx 監控配置", "en": "Minimal Nginx monitoring config." },
+      "yaml": "# Nginx Quick Start\nnginx_connections: \"1000\"\nnginx_request_rate: \"5000\"\nnginx_waiting: \"200\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-elasticsearch",
+      "name": { "zh": "快速入門：Elasticsearch", "en": "Quick Start: Elasticsearch" },
+      "icon": "🔎",
+      "category": "quickstart",
+      "packs": ["elasticsearch"],
+      "desc": { "zh": "最小 Elasticsearch 監控配置", "en": "Minimal Elasticsearch monitoring config." },
+      "yaml": "# Elasticsearch Quick Start\nes_jvm_memory_used_percent: \"85\"\nes_filesystem_free_percent: \"15\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-jvm",
+      "name": { "zh": "快速入門：JVM", "en": "Quick Start: JVM" },
+      "icon": "☕",
+      "category": "quickstart",
+      "packs": ["jvm"],
+      "desc": { "zh": "最小 JVM 監控配置", "en": "Minimal JVM monitoring config." },
+      "yaml": "# JVM Quick Start\njvm_gc_pause: \"0.5\"\njvm_memory: \"80\"\njvm_threads: \"500\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "quick-kubernetes",
+      "name": { "zh": "快速入門：Kubernetes", "en": "Quick Start: Kubernetes" },
+      "icon": "⎈",
+      "category": "quickstart",
+      "packs": ["kubernetes"],
+      "desc": { "zh": "最小 Kubernetes 容器監控配置", "en": "Minimal Kubernetes container monitoring config." },
+      "yaml": "# Kubernetes Quick Start\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+    },
+    {
+      "id": "maintenance",
+      "name": { "zh": "維護窗口示例", "en": "Maintenance Window Demo" },
+      "icon": "🔧",
+      "category": "advanced",
+      "packs": ["mariadb"],
+      "desc": { "zh": "展示如何設定臨時維護窗口、自動過期和靜默模式", "en": "Shows how to set up a temporary maintenance window with auto-expiry and silent mode." },
+      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\nmysql_cpu: \"90\"\n\n_state_maintenance:\n  expires: \"2026-03-20T06:00:00Z\"\n\n_silent_mode:\n  expires: \"2026-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
+    },
+    {
+      "id": "routing-profile",
+      "name": { "zh": "路由 Profile 示例 (ADR-007)", "en": "Routing Profile Demo (ADR-007)" },
+      "icon": "🗂️",
+      "category": "advanced",
+      "packs": ["mariadb", "kubernetes"],
+      "desc": { "zh": "使用 _routing_profile 取代 inline _routing — 團隊共用路由設定、減少配置重複", "en": "Use _routing_profile instead of inline _routing — share routing settings across tenants, reduce config duplication." },
+      "yaml": "# Routing Profile Demo (ADR-007)\nmysql_connections: \"80\"\nmysql_cpu: \"70\"\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  runbook_url: https://runbooks.example.com/db-b\n  owner: sre-apac\n  tier: production\n  domain: finance"
+    },
+    {
+      "id": "finance-compliance",
+      "name": { "zh": "金融合規模板", "en": "Finance Compliance Template" },
+      "icon": "🏦",
+      "category": "advanced",
+      "packs": ["oracle", "postgresql", "kubernetes"],
+      "desc": { "zh": "金融 domain：使用 PagerDuty（禁止 Slack/webhook）、嚴格閾值、合規 metadata", "en": "Finance domain: PagerDuty required (Slack/webhook forbidden), strict thresholds, compliance metadata." },
+      "yaml": "# Finance Compliance — Oracle + PostgreSQL + K8s\noracle_sessions_active: \"100\"\noracle_sessions_active_critical: \"150\"\noracle_tablespace_used_percent: \"75\"\noracle_tablespace_used_percent_critical: \"85\"\n\npg_connections: \"80\"\npg_connections_critical: \"120\"\npg_replication_lag: \"5\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing_profile: domain-finance-tier1\n\n_domain_policy: finance\n\n_metadata:\n  owner: finance-dba-team\n  tier: production\n  domain: finance\n  compliance: SOX"
+    },
+    {
+      "id": "minimal",
+      "name": { "zh": "最小配置（2 行）", "en": "Minimal Config (2 Lines)" },
+      "icon": "✨",
+      "category": "advanced",
+      "packs": ["mariadb"],
+      "desc": { "zh": "絕對最小配置 — 完美入門選擇。省略的 key 套用平台預設值。", "en": "The absolute minimum config — perfect for getting started. Omitted keys use platform defaults." },
+      "yaml": "# Minimal — just thresholds, platform defaults handle the rest\nmysql_connections: \"100\"\nmysql_cpu: \"80\""
+    }
+  ]
+}

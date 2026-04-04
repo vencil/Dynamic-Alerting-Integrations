@@ -384,8 +384,16 @@ window.addEventListener('pageshow', function(e) {
             return r.text();
           })
           .then(function(jsx) {
-            document.getElementById('loading').style.display = 'none';
-            renderJSX(jsx);
+            // Load dependencies before rendering step component
+            var basePath = step.component.substring(0, step.component.lastIndexOf('/'));
+            var deps = parseDependencies(jsx, basePath);
+            if (deps.length > 0) {
+              console.log('[DA] Loading ' + deps.length + ' dependencies for ' + step.component);
+            }
+            return loadDependencies(deps).then(function() {
+              document.getElementById('loading').style.display = 'none';
+              renderJSX(jsx);
+            });
           });
       })
       .catch(function(err) {
@@ -407,8 +415,16 @@ window.addEventListener('pageshow', function(e) {
         return r.text();
       })
       .then(function(jsx) {
-        document.getElementById('loading').style.display = 'none';
-        renderJSX(jsx);
+        // Load dependencies before rendering main component
+        var basePath = componentPath.substring(0, componentPath.lastIndexOf('/'));
+        var deps = parseDependencies(jsx, basePath);
+        if (deps.length > 0) {
+          console.log('[DA] Loading ' + deps.length + ' dependencies for ' + componentPath);
+        }
+        return loadDependencies(deps).then(function() {
+          document.getElementById('loading').style.display = 'none';
+          renderJSX(jsx);
+        });
       })
       .catch(function(err) {
         showError('Failed to load component: ' + err.message);
@@ -549,6 +565,104 @@ window.addEventListener('pageshow', function(e) {
   }
 
   /**
+   * Transform ES import statements to global references.
+   * Shared between renderJSX and dependency loading.
+   */
+  function transformImports(source) {
+    // React named imports: import React, { useState } from 'react'
+    source = source.replace(
+      /^import\s+React\s*,?\s*\{([^}]*)\}\s*from\s*['"]react['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        return 'const { ' + items.join(', ') + ' } = React;';
+      }
+    );
+    // React destructured imports: import { useState } from 'react'
+    source = source.replace(
+      /^import\s+\{([^}]*)\}\s*from\s*['"]react['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        return 'const { ' + items.join(', ') + ' } = React;';
+      }
+    );
+    // React default import: import React from 'react'
+    source = source.replace(
+      /^import\s+React\s+from\s*['"]react['"];?\s*$/gm, ''
+    );
+    // lucide-react: use global lucideReact or provide SVG fallbacks
+    source = source.replace(
+      /^import\s+\{([^}]*)\}\s*from\s*['"]lucide-react['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        var lines = items.map(function(icon) {
+          return 'const ' + icon + ' = (window.lucideReact && window.lucideReact.' + icon +
+                 ') || window.__iconFallback("' + icon + '");';
+        });
+        return lines.join('\n');
+      }
+    );
+    return source;
+  }
+
+  /**
+   * Parse dependencies from YAML front matter.
+   * Format: dependencies: [file1.jsx, file2.js, ...]
+   * Returns array of resolved URLs relative to basePath.
+   */
+  function parseDependencies(source, basePath) {
+    var fmMatch = source.match(/^---\n([\s\S]*?)\n---/);
+    if (!fmMatch) return [];
+    var depMatch = fmMatch[1].match(/dependencies:\s*\[([^\]]*)\]/);
+    if (!depMatch) return [];
+    return depMatch[1].split(',').map(function(d) {
+      var trimmed = d.trim().replace(/['"]/g, '');
+      if (!trimmed) return null;
+      // Resolve relative to component's directory
+      return basePath + '/' + trimmed;
+    }).filter(Boolean);
+  }
+
+  /**
+   * Load a single dependency file (.js or .jsx).
+   * - Strips front matter
+   * - Transforms ES imports to globals
+   * - Removes export default (deps register on window instead)
+   * - For .jsx: Babel-transforms JSX syntax
+   * - Evaluates in global scope
+   */
+  function loadDependency(url) {
+    return fetch(url).then(function(r) {
+      if (!r.ok) throw new Error('Dependency HTTP ' + r.status + ': ' + url);
+      return r.text();
+    }).then(function(code) {
+      // Strip YAML front matter
+      code = code.replace(/^---[\s\S]*?---\s*\n?/, '');
+      // Transform ES imports
+      code = transformImports(code);
+      // Remove export default (deps register on window globals)
+      code = code.replace(/^export\s+default\s+function\s+(\w+)/m, 'function $1');
+      code = code.replace(/^export\s+default\s+(\w+)\s*;?\s*$/m, '');
+      // Babel transform for JSX files
+      if (url.match(/\.jsx(\?.*)?$/)) {
+        var result = Babel.transform(code, { presets: ['react'] });
+        code = result.code;
+      }
+      // Execute in global scope
+      (0, eval)(code);
+      console.log('[DA] Loaded dependency: ' + url);
+    });
+  }
+
+  /**
+   * Load dependencies sequentially (order matters: shared modules first).
+   */
+  function loadDependencies(deps) {
+    return deps.reduce(function(chain, dep) {
+      return chain.then(function() { return loadDependency(dep); });
+    }, Promise.resolve());
+  }
+
+  /**
    * Transform raw JSX source (with front matter + ES imports + export default)
    * into something Babel standalone can execute in a <script type="text/babel">.
    */
@@ -572,38 +686,8 @@ window.addEventListener('pageshow', function(e) {
     // 1) Strip YAML front matter (--- ... ---)
     source = source.replace(/^---[\s\S]*?---\s*\n?/, '');
 
-    // 2) Replace ES imports with global references
-    //    React is already global via UMD script tags
-    source = source.replace(
-      /^import\s+React\s*,?\s*\{([^}]*)\}\s*from\s*['"]react['"];?\s*$/gm,
-      function(_, names) {
-        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
-        return 'const { ' + items.join(', ') + ' } = React;';
-      }
-    );
-    source = source.replace(
-      /^import\s+\{([^}]*)\}\s*from\s*['"]react['"];?\s*$/gm,
-      function(_, names) {
-        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
-        return 'const { ' + items.join(', ') + ' } = React;';
-      }
-    );
-    source = source.replace(
-      /^import\s+React\s+from\s*['"]react['"];?\s*$/gm, ''
-    );
-
-    // lucide-react: use global lucideReact or provide SVG fallbacks
-    source = source.replace(
-      /^import\s+\{([^}]*)\}\s*from\s*['"]lucide-react['"];?\s*$/gm,
-      function(_, names) {
-        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
-        var lines = items.map(function(icon) {
-          return 'const ' + icon + ' = (window.lucideReact && window.lucideReact.' + icon +
-                 ') || window.__iconFallback("' + icon + '");';
-        });
-        return lines.join('\n');
-      }
-    );
+    // 2) Replace ES imports with global references (using shared transform)
+    source = transformImports(source);
 
     // 3) Replace `export default function Name(` with `function Name(`
     //    and capture the name for rendering
@@ -677,7 +761,8 @@ window.addEventListener('pageshow', function(e) {
         'platform-health': { title: 'Platform Health Dashboard', desc: 'Component status, tenant overview, Rule Pack distribution, event timeline', path: '../interactive/tools/platform-health.jsx' },
         'alert-noise-analyzer': { title: 'Alert Noise Analyzer', desc: 'Analyze alert noise and find optimization opportunities', path: '../interactive/tools/alert-noise-analyzer.jsx' },
         'roi-calculator': { title: 'ROI Calculator', desc: 'Calculate adoption benefits', path: '../interactive/tools/roi-calculator.jsx' },
-        'multi-tenant-comparison': { title: 'Multi-Tenant Comparison', desc: 'Compare thresholds across tenants, detect outliers', path: '../interactive/tools/multi-tenant-comparison.jsx' }
+        'multi-tenant-comparison': { title: 'Multi-Tenant Comparison', desc: 'Compare thresholds across tenants, detect outliers', path: '../interactive/tools/multi-tenant-comparison.jsx' },
+        'tenant-manager': { title: 'Tenant Manager', desc: 'Multi-instance management with filtering and batch operations', path: '../interactive/tools/tenant-manager.jsx' }
       };
       var footer = document.createElement('div');
       footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';

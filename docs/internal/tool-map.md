@@ -29,6 +29,7 @@
 | `explain_route.py` | Routing merge pipeline debugger (ADR-007). |
 | `federation_check.py` | Multi-cluster federation integration verification. |
 | `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
+| `generate_rule_pack_split.py` | Split Rule Packs into edge (Part 1) and central (Parts 2+3) YAML files. |
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
 | `gitops_check.py` | GitOps Native Mode readiness validator. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
@@ -40,8 +41,11 @@
 | `notification_tester.py` | Multi-channel notification connectivity testing. |
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
+| `operator_check.py` | Verify Prometheus Operator CRD deployment status. |
+| `operator_generate.py` | operator-generate — Generate Kubernetes CRD YAML for Prometheus + Alertmanager. |
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
+| `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |
 | `scaffold_tenant.py` | Interactive tenant config generator for Dynamic Alerting. |
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
@@ -66,6 +70,7 @@
 | `generate_platform_data.py` | 共用平台資料產生器 |
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
@@ -82,9 +87,11 @@
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_doc_freshness.py` | check_doc_freshness.py |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
+| `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
+| `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_structure.py` | Project structure enforcement. |

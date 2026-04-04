@@ -421,3 +421,80 @@ class TestNoDangerousFunctions:
             f"{_short_path(py_file)} 有 {len(violations)} 個危險函式呼叫:\n"
             + "\n".join(f"  {v}" for v in violations)
         )
+
+
+# ============================================================
+# 7. 錯誤訊息必須路由到 stderr
+# ============================================================
+
+class TestStderrRouting:
+    """Rule 7: Error messages must route to stderr.
+
+    print() calls with ERROR/Error prefix must include file=sys.stderr
+    to ensure proper log routing in production.
+    """
+
+    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
+    def test_error_prints_use_stderr(self, py_file):
+        """確認所有 ERROR/Error 開頭的 print 使用 file=sys.stderr。"""
+        source = _read_source(py_file)
+        try:
+            tree = ast.parse(source, filename=py_file)
+        except SyntaxError:
+            pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
+            return
+
+        violations = []
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+
+            # 偵測 print(...) 呼叫
+            if not (isinstance(func, ast.Name) and func.id == "print"):
+                continue
+
+            # 檢查第一個位置參數是否為 ERROR/Error 開頭的字串
+            if not node.args:
+                continue
+
+            first_arg = node.args[0]
+            starts_with_error = False
+
+            # 檢查字面常數字串
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                if first_arg.value.startswith("ERROR") or first_arg.value.startswith("Error"):
+                    starts_with_error = True
+
+            # 檢查 f-string（JoinedStr）
+            elif isinstance(first_arg, ast.JoinedStr):
+                if first_arg.values and len(first_arg.values) > 0:
+                    first_value = first_arg.values[0]
+                    if isinstance(first_value, ast.Constant) and isinstance(first_value.value, str):
+                        if first_value.value.startswith("ERROR") or first_value.value.startswith("Error"):
+                            starts_with_error = True
+
+            if not starts_with_error:
+                continue
+
+            # 檢查是否有 file=sys.stderr 參數
+            has_stderr = False
+            for kw in node.keywords:
+                if kw.arg == "file":
+                    # 檢查是否為 sys.stderr
+                    if isinstance(kw.value, ast.Attribute):
+                        if (isinstance(kw.value.value, ast.Name) and
+                            kw.value.value.id == "sys" and
+                            kw.value.attr == "stderr"):
+                            has_stderr = True
+
+            if not has_stderr:
+                violations.append(
+                    f"L{node.lineno}: print() with ERROR/Error prefix missing file=sys.stderr"
+                )
+
+        assert not violations, (
+            f"{_short_path(py_file)} 有 {len(violations)} 個 print() 呼叫未路由到 stderr:\n"
+            + "\n".join(f"  {v}" for v in violations)
+        )

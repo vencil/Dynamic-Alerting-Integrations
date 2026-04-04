@@ -2,7 +2,7 @@
 title: "場景：Shadow Audit — 不遷移也能評估告警健康度"
 tags: [scenario, evaluation, shadow-audit, alert-quality]
 audience: [platform-engineer, tenant]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 場景：Shadow Audit — 不遷移也能評估告警健康度

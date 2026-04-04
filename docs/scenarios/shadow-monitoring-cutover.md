@@ -2,7 +2,7 @@
 title: "場景：Shadow Monitoring 全自動切換工作流"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 場景：Shadow Monitoring 全自動切換工作流

@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
@@ -357,97 +357,9 @@ da-tools validate-config --config-dir /data/conf.d
 
 ---
 
-## Appendix：Prometheus Operator (kube-prometheus-stack) 整合
+## Prometheus Operator 整合
 
-如果你的叢集使用 Prometheus Operator，以下是上述三個步驟的等價 CRD 設定：
-
-### A1. 注入 tenant 標籤 — ServiceMonitor
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: tenant-db-exporters
-  namespace: monitoring
-  labels:
-    release: kube-prometheus-stack       # ← 依你的 Operator 設定調整
-spec:
-  namespaceSelector:
-    matchNames:
-      - db-a
-      - db-b
-      # 新增 tenant namespace...
-  selector:
-    matchLabels:
-      prometheus.io/scrape: "true"
-  endpoints:
-    - port: metrics                       # ← 依你的 exporter Service 定義
-      interval: 10s
-      relabelings:
-        # ★ 將 namespace 注入為 tenant 標籤
-        - sourceLabels: [__meta_kubernetes_namespace]
-          targetLabel: tenant
-```
-
-### A2. 抓取 threshold-exporter — ServiceMonitor
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: dynamic-thresholds
-  namespace: monitoring
-  labels:
-    release: kube-prometheus-stack
-spec:
-  namespaceSelector:
-    matchNames: ["monitoring"]
-  selector:
-    matchLabels:
-      app: threshold-exporter
-  endpoints:
-    - port: http                            # ← threshold-exporter Service 的 port 名稱
-      interval: 15s
-```
-
-### A3. 掛載規則包 — PrometheusRule
-
-每個 Rule Pack 對應一個 PrometheusRule CRD。以 MariaDB 為例：
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: dynamic-alerts-mariadb
-  namespace: monitoring
-  labels:
-    release: kube-prometheus-stack       # ← Operator 的 ruleSelector 必須匹配此 label
-spec:
-  groups:
-    # 將 configmap-rules-mariadb.yaml 中的 groups 內容貼入此處
-    - name: mariadb-normalization
-      rules: [...]                        # ← 從 rule-packs/ 目錄取得
-    - name: mariadb-threshold-normalization
-      rules: [...]
-    - name: mariadb-alerts
-      rules: [...]
-```
-
-> **提示**：你可以使用 `kubectl get configmap prometheus-rules-mariadb -n monitoring -o jsonpath='{.data}'` 取得規則內容，再轉換為 PrometheusRule 格式。
-
-### Operator 驗證
-
-```bash
-# 確認 ServiceMonitor 被 Operator 發現
-kubectl get servicemonitor -n monitoring
-
-# 確認 PrometheusRule 被載入
-kubectl get prometheusrule -n monitoring
-
-# 確認 Prometheus 的 config 已包含新的 scrape job
-kubectl exec -n monitoring prometheus-kube-prometheus-stack-prometheus-0 -- \
-  cat /etc/prometheus/config_out/prometheus.env.yaml | grep "dynamic-thresholds"
-```
+> 使用 Prometheus Operator (kube-prometheus-stack)？請參閱 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)，包含完整的 CRD 產出工具、驗證流程與 GitOps 整合指引。
 
 ---
 

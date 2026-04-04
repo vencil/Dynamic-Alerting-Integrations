@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -971,125 +971,79 @@ spec:
 
 DX tooling improvements are tracked in [dx-tooling-backlog.md](internal/dx-tooling-backlog.md).
 
-The following are technical directions still awaiting implementation, organized by maturity level.
+The following are core feature directions not yet implemented, organized by maturity level. Completed features are documented in CHANGELOG: v2.1.0 completed ADR-006/007, Policy Path A; v2.2.0 completed Config Versioning, Notification Template Previewer, Container Image Audit, GitOps Native Mode (git-sync sidecar); v2.3.0 completed Operator-Native Integration (ADR-008 + CRD tools), Federation Scenario B (Rule Pack stratification), OPA/Rego Policy Path B, Tenant Manager UI, Config Info Metric, CI Matrix.
 
 ```mermaid
 graph LR
-    subgraph Near["Near-term (design foundations exist)"]
-        FB["§5.1 Federation B<br/>Rule Pack Layering"]
-        NM["§5.2 1:N Mapping"]
-        PB["§5.3 Policy Path B<br/>(OPA)"]
-        CV["§5.4 Config<br/>Versioning"]
+    subgraph Near["Near-term — design foundations exist"]
+        API["§5.1 Tenant Manager<br/>CRUD API Server"]
+        OP["§5.2 Exporter →<br/>K8s Operator"]
+        PW["§5.3 Playwright<br/>E2E Testing"]
     end
-    subgraph Mid["Mid-term (customer-validated)"]
-        AD["§5.5 Tenant<br/>Auto-Discovery"]
-        GD["§5.6 Dashboard<br/>as Code"]
-        TP["§5.7 Notification<br/>Template Preview"]
-        PR["§5.8 Portal ×<br/>Recommend Integration"]
+    subgraph Mid["Mid-term — needs customer validation"]
+        AD["§5.4 Tenant<br/>Auto-Discovery"]
+        GD["§5.5 Dashboard<br/>as Code"]
+        RA["§5.6 Release<br/>Automation"]
     end
-    subgraph Far["Long-term (exploratory)"]
-        LM["§5.9 Log-to-Metric<br/>Bridge"]
-        AM["§5.10 Anomaly-Aware<br/>Threshold"]
-        GT["§5.11 GitOps<br/>Native Mode"]
-        MF["§5.12 Multi-Format<br/>Export"]
+    subgraph Far["Long-term — exploratory"]
+        LM["§5.7 Log-to-Metric<br/>Bridge"]
+        AM["§5.8 Anomaly-Aware<br/>Threshold"]
+        MF["§5.9 Multi-Format<br/>Export"]
     end
 ```
 
-### 5.1 Federation Scenario B: Rule Pack Layering
+### 5.1 Tenant Manager CRUD API Server
 
-Scenario A (central threshold-exporter + edge Prometheus instances) already has an [architecture document](federation-integration.en.md). Scenario B requires edge Prometheus to send recording rule results to the central cluster via federation or remote-write. Rule Packs need splitting into two layers — edge uses Part 1 (data normalization), central uses Part 2 + Part 3 (threshold normalization + alerts).
+v2.3.0's Tenant Manager is a pure frontend (reads `platform-data.json` + generates YAML downloads). The next step is a lightweight REST API (Go or Python FastAPI) enabling CRUD tenant configuration, real-time schema validation, and WebSocket-pushed config change events. The API server can interface with `conf.d/` directory or a Git repo via commit-on-write for GitOps integration. This is a significant architectural change (introducing a stateful component) requiring a dedicated ADR.
 
-**Technical entry point**: `generate_rule_pack_readme.py` already has Part classification data, which can be extended to produce `edge-rules.yaml` / `central-rules.yaml` split files. Requires pairing with `federation_check.py` to validate recording rule reference integrity after the split.
+### 5.2 threshold-exporter Evolution to K8s Operator
 
-### 5.2 1:N Tenant Mapping Advanced Support
+v2.3.0's `detectConfigSource()` three-mode detection and Operator-Native toolchain laid the groundwork. The ultimate goal is having threshold-exporter watch a custom `DynamicAlertTenant` CRD, replacing the ConfigMap + Directory Scanner pattern. Requires Operator SDK, RBAC design, CRD versioning, and reconciliation loop. The existing config-dir mode remains as a permanent fallback. Suggested phasing: CRD → ConfigMap bridge first (v2.4.0), then native CRD controller (v2.5.0+).
 
-Multiple logical tenants within a single namespace (differentiated by Service annotation / Pod label). Requires `scaffold_tenant.py --shared-namespace --tenant-source annotation` mode and `_tenant_mappings` config section. §2.3 already has relabel examples; tooling awaits requirement confirmation.
+### 5.3 Playwright E2E for Interactive Tools
 
-### 5.3 Policy-as-Code Path B: OPA/Rego Integration
+v2.3.0 has 30 JSX interactive tools and a CI matrix in place. Use Playwright for browser smoke tests: confirm each tool loads, basic interaction works, no console errors, and i18n switching doesn't break layout. Requires CI environment browser support (headless Chrome); can run as an optional CI job.
 
-Path A (built-in DSL) was implemented in v2.0.0 and suits lightweight scenarios. For enterprise users already invested in the OPA ecosystem, tenant configuration validation needs to integrate into existing OPA governance workflows.
+### 5.4 Tenant Auto-Discovery
 
-Add a `policy_opa_bridge.py` tool to convert tenant YAML to OPA input JSON, call OPA REST API or local `opa eval`, and convert OPA responses back to the platform's `Violation` format. Can integrate with `validate_config.py` Check 9, allowing Path A/B to coexist complementarily. `policy_engine.py`'s `PolicyResult` / `Violation` data models can be directly reused.
+For Kubernetes-native environments, auto-register tenants based on namespace labels (e.g., `dynamic-alerting.io/tenant: "true"`). Recommended sidecar pattern: an independent sidecar periodically scans namespace labels, generates tenant YAML into config-dir, loaded by the existing Directory Scanner. Explicit configurations in config-dir always take precedence over auto-discovered results. `discover_instance_mappings.py` can serve as the topology detection component inside the sidecar.
 
-### 5.3b Cross-Domain Routing Profiles & Domain Policies
+### 5.5 Grafana Dashboard as Code
 
-> **📋 ADR-007 Partially Implemented (v2.1.0)**: See [`docs/adr/007-cross-domain-routing-profiles.md`](adr/007-cross-domain-routing-profiles.md)
+`scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json`'s existing Rule Pack / metric / tenant metadata to generate corresponding panels. Combined with Grafana provisioning or API for automated deployment.
 
-A two-layer architecture addresses routing config duplication and cross-domain compliance. Routing Profiles (`_routing_profiles.yaml`) define named routing configurations shared by multiple tenants. Four-layer merge order: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`. Domain Policies (`_domain_policy.yaml`) define business-domain constraints (e.g., finance domain forbids Slack), validated after routing resolution (validate-only, no injection).
+### 5.6 Release Automation
 
-**Implemented components (v2.1.0)**: `generate_alertmanager_routes.py` (four-layer merge + `check_domain_policies()`), `check_routing_profiles.py` (lint hook), `explain_route.py` (debug tool), `scaffold_tenant.py` (`--routing-profile` arg), JSON Schema (`routing-profiles.schema.json` / `domain-policy.schema.json`). Go/Python dual-sync for `_routing_profile` reserved key.
+Automate the four-line version tags (platform/exporter/tools/portal) and GitHub Release creation. Watch tag pushes to auto-trigger Release Notes generation (from CHANGELOG sections) and OCI image build/push. v2.3.0's stable CI matrix provides the foundation.
 
-**Example configs**: `conf.d/examples/_routing_profiles.yaml`, `conf.d/examples/_domain_policy.yaml`.
+### 5.7 Log-to-Metric Bridge
 
-### 5.4 Tenant Config Versioning & Rollback
+This platform's design boundary is the Prometheus metrics layer — it does not directly process logs. The recommended ecosystem approach: `Application Log → grok_exporter / mtail → Prometheus metric → Platform threshold management`. If demand materializes, a `log_bridge_check.py` tool can validate grok_exporter configuration alignment with Rule Packs.
 
-Config-dir changes are managed through Git, but the runtime side lacks fine-grained version tracking and fast rollback capabilities. threshold-exporter retains the previous N config snapshots after each successful reload (in-memory ring buffer), with a new `/admin/rollback?version=N` API to trigger rollback. `da-tools config-history` queries historical reload events and corresponding config hashes. The v2.1.0 incremental reload and per-file hash cache already lay the groundwork for this feature.
+### 5.8 Anomaly-Aware Dynamic Threshold
 
-### 5.5 Tenant Auto-Discovery
+Support `_threshold_mode: adaptive` in threshold-exporter, combining Prometheus sliding window statistics (e.g., `quantile_over_time`) to dynamically adjust threshold bounds. Tenant YAML defines a baseline strategy (e.g., `p95 + 2σ`), exporter produces `user_threshold_dynamic` metric. A recording rule selects `max(user_threshold, user_threshold_dynamic)` as the final threshold — static thresholds as a safety floor, dynamic thresholds for seasonal fluctuations. `threshold_recommend.py` has reusable percentile computation logic.
 
-Currently, onboarding a new tenant requires manually creating a tenant YAML file. In Kubernetes-native environments, tenants can be automatically registered based on namespace labels (e.g., `dynamic-alerting.io/tenant: "true"`).
+**Risk**: Exporter directly querying Prometheus introduces circular dependency. Alternative: place computation in recording rules (pure PromQL), exporter only outputs strategy parameters.
 
-Recommended sidecar pattern: a standalone sidecar periodically scans namespace labels and generates tenant YAML files into config-dir, picked up by the existing Directory Scanner mechanism. This approach avoids modifying the exporter core. Explicit config-dir entries always take precedence over auto-discovery results. An allowlist/denylist mechanism is needed to prevent system namespaces from being mistakenly registered.
+### 5.9 Multi-Format Export
 
-### 5.6 Grafana Dashboard as Code
-
-`scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json`'s existing Rule Pack / metric information to generate corresponding panels. Paired with Grafana provisioning or API for automatic deployment, eliminating manual omissions during tenant onboarding.
-
-### 5.7 Notification Template Previewer
-
-A new JSX interactive tool: input alert name / severity / labels to instantly render previews of Slack Card, Teams Adaptive Card, and PagerDuty Event payloads. Works with `test-notification --dry-run --json` output, displaying the complete payload for each receiver. Can be extended to a template editor for customizing notification content formats.
-
-### 5.8 Threshold Recommendation × Self-Service Portal Integration
-
-Integrate "recommended value" reference lines into the Portal's Alert Preview tab. Calls `threshold-recommend --json` output, displaying recommended value markers alongside the slider, with an "Apply Recommendation" button to directly update YAML thresholds. Shows warnings when confidence level is below MEDIUM.
-
-### 5.9 Log-to-Metric Bridge
-
-This platform's design boundary is the **Prometheus metrics layer** — it does not directly process logs. For scenarios requiring log-based alerting (e.g., Oracle ORA-600 fatal errors, MySQL slow query log analysis), the recommended ecosystem approach is:
-
-```
-Application Log → grok_exporter / mtail → Prometheus metric → Platform threshold management
-```
-
-This pattern enables log-based alerts to benefit from dynamic thresholds, multi-tenant isolation, Shadow Monitoring, and other platform capabilities without introducing log processing logic into the core architecture. If demand materializes, a `log_bridge_check.py` tool can validate grok_exporter configuration alignment with Rule Packs.
-
-### 5.10 Anomaly-Aware Dynamic Threshold
-
-Currently `threshold-recommend` recommends static thresholds based on statistical percentiles. The advanced direction is to support `_threshold_mode: adaptive` configuration in threshold-exporter, combining Prometheus sliding window statistics (e.g., `quantile_over_time`) to dynamically adjust threshold bounds.
-
-Core concept: tenant YAML defines a baseline strategy (e.g., `p95 + 2σ`), exporter periodically queries Prometheus to compute dynamic values, producing a `user_threshold_dynamic` metric. A recording rule selects `max(user_threshold, user_threshold_dynamic)` as the final threshold. This design uses static thresholds as a safety floor while dynamic thresholds handle seasonal fluctuations.
-
-**Risk**: Exporter directly querying Prometheus introduces circular dependency and latency. An alternative is to place the computation logic in the recording rule layer (pure PromQL), with the exporter only outputting strategy parameters (window size, percentile, σ multiplier).
-
-### 5.11 GitOps Native Mode
-
-Currently config-dir is mounted via ConfigMap projected volume, requiring `kubectl apply` or Helm upgrade for changes. GitOps Native Mode allows threshold-exporter to directly watch a Git repository (via polling or webhook), eliminating the ConfigMap intermediary.
-
-Design: exporter adds `--config-source git --git-repo URL --git-branch main --git-path configs/` startup parameters, with built-in shallow clone + pull mechanism, reusing the existing Directory Scanner's hash comparison and incremental reload path. The integration point with ArgoCD/Flux: Git serves as the single source of truth, but the exporter does not depend on ArgoCD's sync cycle.
-
-**Trade-off**: Introducing a Git client dependency increases attack surface and image size. An init container + shared volume pattern (git-sync sidecar) serves as a lower-impact alternative.
-
-### 5.12 Multi-Format Export
-
-Export platform configuration and analysis results in other monitoring systems' native formats, reducing migration barriers and lock-in risk.
-
-Directions include: `da-tools export --format datadog` to convert tenant thresholds and alert rules into Datadog Monitor JSON; `--format terraform` to produce Terraform HCL for cloud-native monitoring (e.g., AWS CloudWatch Alarms). This positions the platform as an "alert policy abstraction layer" — managing thresholds with a unified YAML schema while deploying to different monitoring backends.
-
-**Prerequisite**: Requires completing a metric name mapping table between `metric-dictionary.yaml` and each monitoring system. The metric mapping logic in `onboard_platform.py` can be reused.
+Export platform configuration in other monitoring systems' native formats: `da-tools export --format datadog` (Datadog Monitor JSON), `--format terraform` (Terraform HCL for AWS CloudWatch Alarms). Positions the platform as an "alert policy abstraction layer". Prerequisite: metric name mapping table between `metric-dictionary.yaml` and each system.
 
 ---
 
 ## References
 
 - [Context Diagram](./context-diagram.en.md) — Roles, tools, and product interactions
-- [ADR Overview](adr/README.en.md) — 5 architecture decision records
+- [ADR Overview](adr/README.en.md) — 8 architecture decision records
 - [Benchmarks](benchmarks.en.md) · [Governance & Security](governance-security.en.md) · [Troubleshooting](troubleshooting.en.md)
 - [Migration Guide](migration-guide.en.md) · [Migration Engine](migration-engine.en.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.en.md)
 - [Rule Packs](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+- [Prometheus Operator Integration](prometheus-operator-integration.en.md) · [Federation](federation-integration.en.md)
 
 ---
 
-**Document version:** v2.1.0 — 2026-03-14
+**Document version:** v2.3.0 — 2026-04-04
 **Maintainer:** Platform Engineering Team
 
 ## Related Resources
@@ -1097,10 +1051,10 @@ Directions include: `da-tools export --format datadog` to convert tenant thresho
 | Resource | Relevance |
 |----------|-----------|
 | ["架構與設計 — 動態多租戶警報平台技術白皮書"](./architecture-and-design.md) | ⭐⭐⭐ |
+| [ADR-008: Operator-Native Integration Path](adr/008-operator-native-integration-path.en.md) | ⭐⭐⭐ |
 | [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
 | [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ⭐⭐ |
 | [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ⭐⭐ |
 | [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ⭐⭐ |
 | [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ⭐⭐ |
 | [README.en](adr/README.en.md) | ⭐⭐ |
-| ["Project Context Diagram: Roles, Tools, and Product Interactions"] | ⭐⭐ |

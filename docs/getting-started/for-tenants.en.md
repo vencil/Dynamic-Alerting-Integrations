@@ -2,7 +2,7 @@
 title: "Tenant Quick Start Guide"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Tenant Quick Start Guide

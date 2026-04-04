@@ -1,0 +1,55 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: da-rule-pack-operational
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: operational-mode-sentinel
+    rules:
+    - alert: TenantSilentWarning
+      expr: user_silent_mode{target_severity="warning"} == 1
+      labels:
+        severity: none
+      annotations:
+        summary: Silent mode (warning) active for {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的靜默模式（警告級別）已啟用'
+        description: Warning alerts for tenant {{ $labels.tenant }} will be recorded
+          in TSDB but notifications suppressed.
+        description_zh: '{{ $labels.tenant }} 的警告等級告警將被記錄到 TSDB 但通知會被抑制。'
+    - alert: TenantSilentCritical
+      expr: user_silent_mode{target_severity="critical"} == 1
+      labels:
+        severity: none
+      annotations:
+        summary: Silent mode (critical) active for {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的靜默模式（嚴重級別）已啟用'
+        description: Critical alerts for tenant {{ $labels.tenant }} will be recorded
+          in TSDB but notifications suppressed.
+        description_zh: '{{ $labels.tenant }} 的嚴重等級告警將被記錄到 TSDB 但通知會被抑制。'
+    - alert: TenantSeverityDedupEnabled
+      expr: user_severity_dedup{mode="enable"} == 1
+      labels:
+        severity: none
+      annotations:
+        summary: Severity dedup enabled for {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 已啟用嚴重等級去重'
+        description: Warning notifications for {{ $labels.tenant }} will be suppressed
+          when critical fires for the same metric_group.
+        description_zh: 當相同指標群組的嚴重等級告警觸發時，{{ $labels.tenant }} 的警告通知會被抑制。
+    - alert: TenantConfigEvent
+      expr: da_config_event == 1
+      for: 0s
+      labels:
+        severity: warning
+      annotations:
+        summary: 'Config expired for {{ $labels.tenant }}: {{ $labels.event }}'
+        summary_zh: '{{ $labels.tenant }} 的組態已過期：{{ $labels.event }}'
+        description: 'Timed config for tenant {{ $labels.tenant }} has expired and
+          auto-deactivated. Event: {{ $labels.event }}. Reason: {{ $labels.reason
+          }}. Please update or remove the expired config entry.'
+        description_zh: '{{ $labels.tenant }} 的定時組態已過期並自動停用。事件：{{ $labels.event }}。原因：{{
+          $labels.reason }}。請更新或移除過期的組態項目。'

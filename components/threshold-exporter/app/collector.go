@@ -193,6 +193,21 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- m
 	}
 
+	// Config info metric (v2.3.0): exposes config source metadata for GitOps observability.
+	// Labels: config_source ("configmap"|"operator"|"git-sync"), git_commit (hash or "").
+	// Portal's Config Drift detection compares this against platform-data.json last_config_commit.
+	configInfoDesc := prometheus.NewDesc(
+		"threshold_exporter_config_info",
+		"Config source metadata (info metric, always 1). Labels identify deployment mode and git revision. v2.3.0+",
+		[]string{"config_source", "git_commit"},
+		nil,
+	)
+	info := c.manager.GetConfigInfo()
+	if m, err := prometheus.NewConstMetric(configInfoDesc, prometheus.GaugeValue, 1.0,
+		info.ConfigSource, info.GitCommit); err == nil {
+		ch <- m
+	}
+
 	// Tenant metadata info metric (v1.11.0): unconditionally emitted for ALL tenants.
 	// Carries runbook_url, owner, tier as labels. Unset fields default to empty string.
 	// Rule Pack Part 3 alert rules use group_left(runbook_url, owner, tier) to inherit

@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v2.2.0)
+## 專案概覽 (v2.3.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -34,13 +34,13 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 2. **Tenant-agnostic**: Go/PromQL 禁止 Hardcode Tenant ID
 3. **三態**: Custom / Default (省略) / Disable (`"disable"`)
 4. **Doc-as-Code**: 同步更新 `CHANGELOG.md`, `CLAUDE.md`, `README.md`。變更連動規則見 `docs/internal/doc-map.md` § Change Impact Matrix
-5. **SAST**: 6 rules 自動掃描（encoding + shell + chmod + yaml.safe_load + credentials + dangerous functions）。詳見 `docs/governance-security.md`
+5. **SAST**: 7 rules 自動掃描（encoding + shell + chmod + yaml.safe_load + credentials + dangerous functions + stderr routing）。詳見 `docs/governance-security.md`
 6. **推銷語言不進 repo**: README 保持客觀工程語言
 7. **版號治理**: `make version-check` → `make bump-docs` → 四線 tag（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*`）
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
 9. **i18n 三層架構**: JSX 用 `window.__t(zh, en)` + Rule Pack 用 `*_zh` 後綴 annotation + Python CLI 用 `detect_cli_lang()` 切換 argparse help
 
-## 互動工具生態（29 JSX tools）
+## 互動工具生態（30 JSX tools）
 
 **Source of Truth 檔案**：`docs/assets/tool-registry.yaml`（工具 metadata）、`docs/assets/platform-data.json`（Rule Pack 數據）、`docs/assets/flows.json`（Guided Flow）、`docs/assets/jsx-loader.html`（載入器）、`docs/interactive/index.html`（Hub）。
 
@@ -51,7 +51,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## Pre-commit 品質閘門
 
-13 個 auto-run hooks（每次 commit）+ 5 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
+13 個 auto-run hooks（每次 commit）+ 7 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
 
 ```bash
 pre-commit run --all-files                              # 全跑 auto hooks
@@ -60,20 +60,20 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（83 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（91 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
-快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (7 ADRs)
+快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (8 ADRs)
 
 ## 工具 (scripts/tools/)
 
-77 個 Python 工具（不含共用函式庫），依職責分三子目錄：
+84 個 Python 工具（不含共用函式庫），依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
-| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check...） | 40 |
-| `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis...） | 19 |
-| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles...） | 17 |
-| root | 共用（`validate_all.py`）+ 函式庫（`_lib_python.py`）+ 資料（`metric-dictionary.yaml`） | 1 + 1 lib |
+| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check, operator-generate, operator-check, rule-pack-split, policy-opa-bridge...） | 44 |
+| `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis, generate_tenant_metadata...） | 20 |
+| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | 19 |
+| root | 共用（`validate_all.py`）+ 函式庫（`_lib_python.py` facade + 4 子模組）+ 資料（`metric-dictionary.yaml`） | 1 + 5 lib |
 
 完整工具表見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。常用工具速查：`da-tools <cmd> --help` | CLI 完整參考見 [`docs/cli-reference.md`](docs/cli-reference.md)
 
@@ -133,7 +133,7 @@ Playbook 是 **living documents**，跟隨專案演進持續更新：
 2. **開發**：程式碼修改 → Go test / Python test → 場景驗證
 3. **Benchmark**：完整 benchmark（idle + routing + Go micro-bench）→ 記錄到 CHANGELOG + architecture docs
 4. **文件同步**：`bump_docs.py --check` → 更新 CLAUDE.md / README / CHANGELOG 的計數
-5. **Commit**：`git commit` → pre-commit hooks 自動執行 13 個品質檢查（platform-data drift, tool consistency, versions...）
+5. **Commit**：`git commit` → pre-commit hooks 自動執行 13 個品質檢查（platform-data drift, tool consistency, versions...）+ 6 個 manual-stage hooks
 6. **Lesson Learned**：回寫 Playbook + CLAUDE.md
 
 ## 長期展望

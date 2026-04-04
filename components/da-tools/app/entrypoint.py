@@ -61,6 +61,13 @@ def _build_help_text(lang):
     config-history    配置快照與歷史追蹤 (snapshot / log / diff / show)
     gitops-check      GitOps Native Mode 就緒度驗證 (repo / local / sidecar)
 
+命令 (Operator-Native — CRD 產生與驗證):
+    operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+    operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
+
+命令 (Federation — 多叢集):
+    rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
+
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
     DA_LANG           設定 CLI 語言 (zh/en，優先於 LC_ALL/LANG)"""
@@ -115,6 +122,13 @@ Commands (File System — offline):
     init              Bootstrap Dynamic Alerting integration in your repo (CI/CD + conf.d + Kustomize)
     config-history    Config snapshot & history tracker (snapshot / log / diff / show)
     gitops-check      GitOps Native Mode readiness validation (repo / local / sidecar)
+
+Commands (Operator-Native — CRD generation & validation):
+    operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+    operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
+
+Commands (Federation — multi-cluster):
+    rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -183,6 +197,13 @@ COMMAND_MAP = {
     "init": "init_project.py",
     "config-history": "config_history.py",
     "gitops-check": "gitops_check.py",
+    # Group D: Operator-native (CRD generation + validation)
+    "operator-generate": "operator_generate.py",
+    "operator-check": "operator_check.py",
+    # Group E: Federation (multi-cluster)
+    "rule-pack-split": "generate_rule_pack_split.py",
+    # Group F: Policy (OPA/Rego)
+    "opa-evaluate": "policy_opa_bridge.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)

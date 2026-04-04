@@ -103,6 +103,17 @@ TOOL_FILES=(
     ops/generate_tenant_mapping_rules.py
     ops/init_project.py
     ops/config_history.py
+    ops/gitops_check.py
+    # v2.3.0 Operator-native tools
+    ops/operator_generate.py
+    ops/operator_check.py
+    # v2.3.0 Federation tools
+    ops/generate_rule_pack_split.py
+    # Shared library sub-modules
+    _lib_constants.py
+    _lib_validation.py
+    _lib_prometheus.py
+    _lib_io.py
     # Data files
     metric-dictionary.yaml
 )

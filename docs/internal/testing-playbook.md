@@ -2,7 +2,7 @@
 title: "測試注意事項 — 排錯手冊 (Testing Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
@@ -130,6 +130,33 @@ threshold-exporter 多 replica 時，每個 Pod 匯出相同 `user_threshold`。
 Kill Pod → 驗證：1) PDB 保護 1 Pod Running；2) Alert 持續不中斷；3) 閾值不翻倍。
 
 `helm upgrade` 後 replicas 可能被覆蓋 → `kubectl scale deploy threshold-exporter -n monitoring --replicas=2`。
+
+## JSX Dependency Loading & Portal Modularization
+
+Portal 中的三個核心模組（portal-shared、tabs 三層）由 `jsx-loader.html` 透過 **`dependencies` frontmatter** 控制載入順序：
+
+- **Sequential Order**: `portal-shared.jsx` (共享元件) → `{tab1,tab2,tab3}.jsx` (三個頁籤)
+- **Frontmatter 格式**: 各檔案開頭宣告 `dependencies: [portal-shared]`；portal-shared 無依賴
+- **測試陷阱**: 修改 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低
+
+修改任何 portal 檔案後，在 `docs/interactive/tools/` 驗證載入順序無誤，並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具。
+
+## CI Matrix × Snapshot Testing（Phase .d）
+
+### GitHub Actions CI 運行
+
+CI matrix 配置：Python 3.10/3.13 × Go 1.22/1.26，8 種組合平行執行。新工具應在本地通過 `pytest -v --cov-fail-under=85` 且 `mypy scripts/tools/_lib_*.py` 無誤後才提交。
+
+### Snapshot 測試工作流
+
+`test_snapshot.py` 驗證 help text 穩定性。首次執行用 `pytest --snapshot-update`，將 help 輸出存至 `.snapshot/`；後續執行自動比對。修改工具 help text 時：
+
+```bash
+python3 -m pytest tests/test_snapshot.py::test_tool_help_mariadb --snapshot-update
+# 驗證 .snapshot/ 變更後再 commit
+```
+
+Exit code 合約測試（`test_tool_exit_codes.py`）覆蓋全部 84+ 工具的 `--help` / invalid args，預期 exit code 0 (成功) 或 2 (CLI 誤用)。
 
 ## Performance Benchmark
 

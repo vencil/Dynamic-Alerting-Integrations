@@ -69,3 +69,15 @@ def routing_dir():
     with tempfile.TemporaryDirectory() as tmpdir:
         populate_routing_dir(tmpdir)
         yield tmpdir
+
+
+# ── pytest configuration ──────────────────────────────────────────────
+
+def pytest_addoption(parser):
+    """Register custom command-line options."""
+    parser.addoption(
+        "--snapshot-update",
+        action="store_true",
+        default=False,
+        help="Update snapshot baselines"
+    )

@@ -2,7 +2,7 @@
 title: "Runbook Viewer"
 tags: [runbook, operations, alerts]
 audience: ["platform-engineer", "domain-expert"]
-version: v2.2.0
+version: v2.3.0
 lang: en
 related: [alert-simulator, alert-timeline, health-dashboard]
 ---

@@ -1,0 +1,131 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: da-rule-pack-kubernetes
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: kubernetes-container-normalization
+    interval: 15s
+    rules:
+    - record: tenant:container_cpu_percent:by_container
+      expr: "label_replace(\n  sum by(namespace, pod, container) (\n    rate(container_cpu_usage_seconds_total{namespace=~\"\
+        db-.+\", container!=\"\", container!=\"POD\"}[5m])\n  )\n  /\n  sum by(namespace,\
+        \ pod, container) (\n    kube_pod_container_resource_limits{resource=\"cpu\"\
+        , namespace=~\"db-.+\"}\n  )\n  * 100,\n  \"tenant\", \"$1\", \"namespace\"\
+        , \"(.*)\"\n)\n"
+    - record: tenant:container_memory_percent:by_container
+      expr: "label_replace(\n  sum by(namespace, pod, container) (\n    container_memory_working_set_bytes{namespace=~\"\
+        db-.+\", container!=\"\", container!=\"POD\"}\n  )\n  /\n  sum by(namespace,\
+        \ pod, container) (\n    kube_pod_container_resource_limits{resource=\"memory\"\
+        , namespace=~\"db-.+\"}\n  )\n  * 100,\n  \"tenant\", \"$1\", \"namespace\"\
+        , \"(.*)\"\n)\n"
+    - record: tenant:pod_weakest_cpu_percent:max
+      expr: max by(tenant, pod) (tenant:container_cpu_percent:by_container)
+    - record: tenant:pod_weakest_memory_percent:max
+      expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
+  - name: kubernetes-state-matching
+    interval: 15s
+    rules:
+    - record: tenant:container_waiting_reason:count
+      expr: "label_replace(\n  count by(namespace, reason) (\n    kube_pod_container_status_waiting_reason{namespace=~\"\
+        db-.+\"} > 0\n  ),\n  \"tenant\", \"$1\", \"namespace\", \"(.*)\"\n)\n"
+  - name: kubernetes-threshold-normalization
+    interval: 15s
+    rules:
+    - record: tenant:alert_threshold:container_cpu
+      expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
+    - record: tenant:alert_threshold:container_memory
+      expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
+  - name: kubernetes-container-alerts
+    rules:
+    - alert: PodContainerHighCPU
+      expr: "(\n  (\n    max by(tenant) (tenant:pod_weakest_cpu_percent:max)\n   \
+        \ > on(tenant) group_left\n    tenant:alert_threshold:container_cpu\n  )\n\
+        \  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        )\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      for: 60s
+      labels:
+        severity: warning
+      annotations:
+        summary: High container CPU in {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的容器 CPU 使用率過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU
+          pressure — evaluate resource limits'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 壓力過高
+          — 請評估資源限制'
+        description: 'Max container CPU usage: {{ $value | printf "%.1f" }}% (threshold
+          exceeded)'
+        description_zh: '最大容器 CPU 使用率: {{ $value | printf "%.1f" }}% (超過閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: PodContainerHighMemory
+      expr: "(\n  (\n    max by(tenant) (tenant:pod_weakest_memory_percent:max)\n\
+        \    > on(tenant) group_left\n    tenant:alert_threshold:container_memory\n\
+        \  )\n  unless on(tenant)\n  (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      for: 60s
+      labels:
+        severity: warning
+      annotations:
+        summary: High container memory in {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的容器記憶體使用率過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: container memory
+          pressure — evaluate resource limits'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體壓力過高
+          — 請評估資源限制'
+        description: 'Max container memory usage: {{ $value | printf "%.1f" }}% (threshold
+          exceeded)'
+        description_zh: '最大容器記憶體使用率: {{ $value | printf "%.1f" }}% (超過閾值)'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+  - name: kubernetes-pod-state-alerts
+    rules:
+    - alert: ContainerCrashLoop
+      expr: "(\n  (\n    (\n      tenant:container_waiting_reason:count{reason=\"\
+        CrashLoopBackOff\"}\n      * on(tenant) group_left\n      user_state_filter{filter=\"\
+        container_crashloop\"}\n    ) > 0\n  )\n  unless on(tenant)\n  (user_state_filter{filter=\"\
+        maintenance\"} == 1)\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n\
+        \  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: critical
+      annotations:
+        summary: Container crash loop detected in {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 偵測到容器崩潰迴圈'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected
+          — check deployment and image health'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 —
+          請檢查部署和映像檔案狀態'
+        description: '{{ $value }} container(s) in CrashLoopBackOff state'
+        description_zh: '{{ $value }} 個容器處於 CrashLoopBackOff 狀態'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: ContainerImagePullFailure
+      expr: "(\n  (\n    (\n      tenant:container_waiting_reason:count{reason=~\"\
+        ImagePullBackOff|InvalidImageName\"}\n      * on(tenant) group_left\n    \
+        \  user_state_filter{filter=\"container_imagepull\"}\n    ) > 0\n  )\n  unless\
+        \ on(tenant)\n  (user_state_filter{filter=\"maintenance\"} == 1)\n)\n* on(tenant)\
+        \ group_left(runbook_url, owner, tier)\n  tenant_metadata_info\n"
+      for: 30s
+      labels:
+        severity: warning
+      annotations:
+        summary: Image pull failure detected in {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 偵測到映像檔案拉取失敗'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing
+          — verify registry and image availability'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 映像檔案拉取失敗
+          — 請檢查 registry 和映像檔案可用性'
+        description: '{{ $value }} container(s) in ImagePullBackOff/InvalidImageName
+          state'
+        description_zh: '{{ $value }} 個容器處於 ImagePullBackOff/InvalidImageName 狀態'
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'

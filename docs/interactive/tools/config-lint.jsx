@@ -2,7 +2,7 @@
 title: "Config Lint Report"
 tags: [lint, validation, best practices]
 audience: ["platform-engineer", tenant]
-version: v2.2.0
+version: v2.3.0
 lang: en
 related: [config-diff, playground, schema-explorer]
 ---

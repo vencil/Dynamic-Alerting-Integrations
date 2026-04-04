@@ -386,3 +386,14 @@ tools:
     related: [capacity-planner, roi-calculator, alert-noise-analyzer]
     hub_section: advanced
     appears_in: []
+
+  - key: tenant-manager
+    title: { en: "Tenant Manager", zh: "租戶管理器" }
+    file: interactive/tools/tenant-manager.jsx
+    audience: [platform, sre]
+    icon: dashboard
+    tags: [tenants, management, operations, batch, comparison]
+    desc: { en: "Multi-tenant overview, batch operations, config drift detection", zh: "多租戶概覽、批次操作、配置漂移偵測" }
+    related: [multi-tenant-comparison, config-diff, playground, threshold-calculator]
+    hub_section: interactive
+    appears_in: []

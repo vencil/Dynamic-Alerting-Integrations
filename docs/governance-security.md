@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 治理、稽核與安全合規
@@ -76,9 +76,9 @@ da-tools validate-config --config-dir conf.d/ --json
 
 ## 安全合規 (Security Compliance)
 
-### SAST 自動化測試（6 條規則）
+### SAST 自動化測試（7 條規則）
 
-`tests/test_sast.py` 對 `scripts/tools/` 全部 Python 檔案進行 AST 層掃描，每次 commit 自動執行（426 tests）。
+`tests/test_sast.py` 對 `scripts/tools/` 全部 Python 檔案進行 AST 層掃描，每次 commit 自動執行（426+ tests）。
 
 | # | 規則 | 偵測方式 | 嚴重度 |
 |---|------|---------|--------|
@@ -88,6 +88,7 @@ da-tools validate-config --config-dir conf.d/ --json
 | 4 | 禁止 `yaml.load()`，強制 `yaml.safe_load()` | AST 掃描 yaml.load 缺少 SafeLoader | Critical |
 | 5 | 禁止硬編碼機密（password/token/secret/api_key） | Regex 掃描，排除環境變數引用和 placeholder | High |
 | 6 | 禁止危險函式（eval/exec/pickle.load/os.system） | AST 掃描內建函式 + 模組函式 | Critical |
+| 7 | 禁止不安全的檔案操作（無異常處理的 pathlib 操作） | AST 掃描 Path.mkdir/unlink/rename 缺少 try-except | Medium |
 
 ### Go 元件安全
 
@@ -97,6 +98,10 @@ da-tools validate-config --config-dir conf.d/ --json
 | 完整 Timeout 套件 | ReadTimeout 5s, WriteTimeout 10s, IdleTimeout 30s, MaxHeaderBytes 8192 |
 | G113 | Uncontrolled memory consumption |
 | G114 | 禁止使用 `http.Request.RequestURI`（不安全，用 URL.Path） |
+
+### Python 型別系統規範
+
+所有 `_lib_*.py` 子模組須加入完整型別提示（PEP 484），CI 透過 `mypy --strict` 驗證。新增工具應在 shared library 層補充型別，新工具檔若涉及檔案 I/O / HTTP 請求應標註返回型別。
 
 ### Python SSRF 保護
 

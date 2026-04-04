@@ -2,7 +2,7 @@
 title: "專案 Context 圖：角色、工具與產品互動關係"
 tags: [architecture, context-diagram]
 audience: [all]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 專案 Context 圖：角色、工具與產品互動關係

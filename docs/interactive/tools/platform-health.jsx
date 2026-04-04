@@ -2,7 +2,7 @@
 title: "Platform Health Dashboard"
 tags: [health, dashboard, monitoring, overview, operations]
 audience: ["platform-engineer"]
-version: v2.2.0
+version: v2.3.0
 lang: en
 related: [health-dashboard, self-service-portal, alert-simulator]
 ---
@@ -22,7 +22,7 @@ const PLATFORM_DATA = {
     configHash: 'a3f2c1d8e9b7',
     metricsPerTenant: { 'prod-mariadb': 8, 'prod-redis': 5, 'prod-kafka': 12, 'staging-pg': 4, 'prod-oracle': 6 },
     totalMetrics: 35,
-    version: 'v2.2.0',
+    version: 'v2.3.0',
   },
   prometheus: {
     status: 'healthy',

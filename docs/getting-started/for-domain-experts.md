@@ -2,7 +2,7 @@
 title: "Domain Expert (DBA) 快速入門指南"
 tags: [getting-started, domain-config]
 audience: [domain-expert]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # Domain Expert (DBA) 快速入門指南

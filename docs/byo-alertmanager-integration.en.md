@@ -2,7 +2,7 @@
 title: "BYO Alertmanager Integration Guide"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # BYO Alertmanager Integration Guide
@@ -431,29 +431,9 @@ The tool has built-in idempotency checks (no duplicate silence creation) and aut
 
 ---
 
-## Appendix: Alertmanager Operator Path
+## Alertmanager Operator Path
 
-If using `kube-prometheus-stack` (Prometheus Operator), you can manage routing via `AlertmanagerConfig` CRD:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1alpha1
-kind: AlertmanagerConfig
-metadata:
-  name: tenant-db-a
-  namespace: monitoring
-spec:
-  route:
-    matchers:
-      - name: tenant
-        value: db-a
-    receiver: tenant-db-a
-  receivers:
-    - name: tenant-db-a
-      webhookConfigs:
-        - url: "https://webhook.db-a.example.com/alerts"
-```
-
-This path is mutually exclusive with the `generate_alertmanager_routes.py` ConfigMap approach. Users choosing the Operator path do not need to use the `generate-routes` tool.
+> Using Prometheus Operator's AlertmanagerConfig CRD? See the [Prometheus Operator Integration Guide](prometheus-operator-integration.en.md) for AlertmanagerConfig v1beta1 generation, validation, and migration guidance.
 
 ## Related Resources
 

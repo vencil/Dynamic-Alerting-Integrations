@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -1045,83 +1045,78 @@ spec:
 
 DX 工具改善追蹤見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)。
 
-以下為尚未實作的核心功能技術方向，按成熟度分層。已完成的功能見 CHANGELOG：v2.1.0 完成 ADR-006/007、Policy Path A；v2.2.0 完成 Config Versioning、Notification Template Previewer、Container Image Audit、GitOps Native Mode（git-sync sidecar）。
+以下為尚未實作的核心功能技術方向，按成熟度分層。
 
 ```mermaid
 graph LR
     subgraph Near["近期 — 已有設計基礎"]
-        FB["§5.1 Federation B<br/>Rule Pack 分層"]
-        PB["§5.2 Policy Path B<br/>(OPA)"]
-        PR["§5.3 Portal ×<br/>Recommend 整合"]
+        API["§5.1 Tenant Manager<br/>CRUD API Server"]
+        OP["§5.2 Exporter →<br/>K8s Operator"]
+        PW["§5.3 Playwright<br/>E2E Testing"]
     end
     subgraph Mid["中期 — 需客戶驗證"]
         AD["§5.4 Tenant<br/>Auto-Discovery"]
         GD["§5.5 Dashboard<br/>as Code"]
+        RA["§5.6 Release<br/>Automation"]
     end
     subgraph Far["遠期 — 探索方向"]
-        LM["§5.6 Log-to-Metric<br/>Bridge"]
-        AM["§5.7 Anomaly-Aware<br/>Threshold"]
-        MF["§5.8 Multi-Format<br/>Export"]
+        LM["§5.7 Log-to-Metric<br/>Bridge"]
+        AM["§5.8 Anomaly-Aware<br/>Threshold"]
+        MF["§5.9 Multi-Format<br/>Export"]
     end
 ```
 
-### 5.1 Federation 場景 B：Rule Pack 分層
+### 5.1 Tenant Manager CRUD API Server
 
-場景 A（中央 threshold-exporter + 多邊緣 Prometheus）已有[架構文件](federation-integration.md)。場景 B 需要邊緣 Prometheus 透過 federation 或 remote-write 將 recording rule 結果送到中央。Rule Pack 需拆成兩層——邊緣用 Part 1（data normalization），中央用 Part 2 + Part 3（threshold normalization + alerts）。
+v2.3.0 的 Tenant Manager 為純前端（讀 `platform-data.json` + 產出 YAML 下載）。下一步引入輕量 REST API（Go 或 Python FastAPI），實現 CRUD tenant 配置、即時 schema 驗證、WebSocket 推播配置變更事件。API server 可對接 `conf.d/` 目錄或 Git repo，透過 commit-on-write 模式整合既有 GitOps 流程。此為重大架構變更（引入有狀態元件），需獨立 ADR 評估。
 
-**技術切入點**：`generate_rule_pack_readme.py` 已有 Part 分類資訊，可延伸產出 `edge-rules.yaml` / `central-rules.yaml` 分割檔。需搭配 `federation_check.py` 驗證分層後的 recording rule 引用完整性。與 ADR-006 1:N mapping 結合，驗證邊緣/中央分層架構下的 recording rule 引用完整性。
+### 5.2 threshold-exporter 演化為 K8s Operator
 
-### 5.2 Policy-as-Code Path B：OPA/Rego 整合
+v2.3.0 的 `detectConfigSource()` 三態偵測和 Operator-Native 工具鏈已為此方向奠基。終極目標是讓 threshold-exporter 監聽自定義 `DynamicAlertTenant` CRD，取代 ConfigMap + Directory Scanner 模式。需 Operator SDK、RBAC 設計、CRD versioning、reconciliation loop。現有 config-dir 模式作為 fallback 永遠保留。建議分階段：先 CRD → ConfigMap bridge（v2.4.0），再 native CRD controller（v2.5.0+）。
 
-Path A（內建 DSL）已於 v2.1.0 實作（`policy_engine.py` + `check_routing_profiles.py` + `domain_policy.yaml`），適合輕量場景。對於已投資 OPA 生態系的企業用戶，需要將 tenant 配置驗證納入既有 OPA 治理流程。
+### 5.3 Playwright E2E for Interactive Tools
 
-新增 `policy_opa_bridge.py` 工具，將 tenant YAML 轉為 OPA input JSON，呼叫 OPA REST API 或本地 `opa eval`，將 OPA 回應轉換回本平台的 `Violation` 格式。可與 `validate_config.py` Check 9 整合，讓 Path A/B 共存互補。`policy_engine.py` 的 `PolicyResult` / `Violation` 資料模型可直接復用。ADR-007 的域策略也可由安全團隊改用 Rego 定義，Profile 繼承鏈（profile extends another profile）亦可在此框架下實現。
-
-### 5.3 Threshold Recommendation × Self-Service Portal 整合
-
-Portal 的 Alert Preview tab 整合「推薦值」參考線。呼叫 `threshold-recommend --json` 輸出，在滑桿旁顯示推薦值標記，「Apply Recommendation」按鈕直接更新 YAML 中的閾值，信心等級低於 MEDIUM 時顯示警告。Portal 的 routing profile 驗證和範例切換 UI 已完成，推薦值整合可復用相同 tab 架構。
+v2.3.0 已有 30 支 JSX 互動工具和 CI matrix。用 Playwright 建立瀏覽器 smoke test：確認每支工具可載入、基本互動正常、無 console error、i18n 切換不破版。需 CI 環境支持瀏覽器（headless Chrome），可作為 CI 的 optional job。
 
 ### 5.4 Tenant Auto-Discovery（租戶自動發現）
 
-目前新租戶上線需要手動建立 tenant YAML（即使 `scaffold_tenant.py` 已大幅簡化流程）。對於 Kubernetes-native 環境，可根據 namespace label（如 `dynamic-alerting.io/tenant: "true"`）自動註冊。
-
-推薦 sidecar 模式：獨立 sidecar 定期掃描 namespace label，產生 tenant YAML 寫入 config-dir，由既有 Directory Scanner 機制載入。此方案不改動 exporter 核心，且 config-dir 中的明確配置永遠優先於 auto-discovery 結果。需要 allowlist/denylist 機制避免系統 namespace 被誤註冊。`discover_instance_mappings.py` 可作為 sidecar 內的拓撲偵測元件。
+對 Kubernetes-native 環境，根據 namespace label（如 `dynamic-alerting.io/tenant: "true"`）自動註冊。推薦 sidecar 模式：獨立 sidecar 定期掃描 namespace label，產生 tenant YAML 寫入 config-dir，由既有 Directory Scanner 機制載入。config-dir 中的明確配置永遠優先於 auto-discovery 結果。`discover_instance_mappings.py` 可作為 sidecar 內的拓撲偵測元件。
 
 ### 5.5 Grafana Dashboard as Code（Dashboard 程式化管理）
 
-`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。每次 tenant onboarding 自動完成，消除手動遺漏。
+`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 Rule Pack / metric / tenant metadata 資訊，產生對應的 panel。搭配 Grafana provisioning 或 API 自動部署。
 
-### 5.6 Log-to-Metric Bridge（日誌轉指標橋接）
+### 5.6 Release Automation
 
-本平台的設計邊界是 Prometheus metrics 層，不直接處理日誌。推薦的生態系解法：`Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理`。此模式讓日誌類警報也能享受動態閾值、多租戶隔離、Shadow Monitoring 等平台能力。若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
+四線版號（platform/exporter/tools/portal）的 tag + GitHub Release 自動化。監聽 tag push 自動觸發 Release Notes 產生（基於 CHANGELOG section）和 OCI image build/push。v2.3.0 CI matrix 已穩定，為自動化提供基礎。
 
-### 5.7 Anomaly-Aware Dynamic Threshold（異常感知動態閾值）
+### 5.7 Log-to-Metric Bridge（日誌轉指標橋接）
 
-目前 `threshold-recommend` 基於統計分位數推薦靜態閾值。進階方向是讓 threshold-exporter 支援 `_threshold_mode: adaptive` 配置，結合 Prometheus 的滑動窗口統計（如 `quantile_over_time`），動態調整閾值上下界。
+本平台的設計邊界是 Prometheus metrics 層，不直接處理日誌。推薦的生態系解法：`Application Log → grok_exporter / mtail → Prometheus metric → 本平台閾值管理`。若需求明確，可提供 `log_bridge_check.py` 驗證 grok_exporter 配置與 Rule Pack 的對接完整性。
 
-核心概念：tenant YAML 定義基線策略（如 `p95 + 2σ`），exporter 週期性查詢 Prometheus 計算動態值，產出 `user_threshold_dynamic` metric。Recording rule 選擇 `max(user_threshold, user_threshold_dynamic)` 作為最終閾值。此設計讓靜態閾值作為安全下限（floor），動態閾值處理季節性波動。
+### 5.8 Anomaly-Aware Dynamic Threshold（異常感知動態閾值）
 
-**風險**：exporter 直接查詢 Prometheus 引入循環依賴和延遲。替代方案是將計算邏輯放在 recording rule 層（純 PromQL），exporter 僅輸出策略參數（窗口大小、分位數、σ 倍數）。`threshold_recommend.py` 已有分位數計算邏輯，可作為 adaptive mode 的離線參考實作。
+讓 threshold-exporter 支援 `_threshold_mode: adaptive` 配置，結合 Prometheus 的滑動窗口統計（如 `quantile_over_time`），動態調整閾值上下界。tenant YAML 定義基線策略（如 `p95 + 2σ`），exporter 產出 `user_threshold_dynamic` metric。Recording rule 選擇 `max(user_threshold, user_threshold_dynamic)` 作為最終閾值——靜態閾值作為安全下限（floor），動態閾值處理季節性波動。`threshold_recommend.py` 已有分位數計算邏輯可復用。
 
-### 5.8 Multi-Format Export（多格式匯出）
+**風險**：exporter 直接查詢 Prometheus 引入循環依賴。替代方案是將計算邏輯放在 recording rule 層（純 PromQL），exporter 僅輸出策略參數。
 
-將平台配置和分析結果匯出為其他監控系統的原生格式，降低遷移門檻和鎖定風險。
+### 5.9 Multi-Format Export（多格式匯出）
 
-方向包括：`da-tools export --format datadog` 將 tenant 閾值和 alert rule 轉換為 Datadog Monitor JSON；`--format terraform` 產出 Terraform HCL 用於 cloud-native 監控（如 AWS CloudWatch Alarms）。這讓平台成為「告警策略的抽象層」——用統一的 YAML schema 管理閾值，部署到不同監控後端。
-
-**前提**：需先完成 metric-dictionary.yaml 與各監控系統的 metric 名稱對照表。`onboard_platform.py` 的 metric mapping 邏輯可復用。
+將平台配置匯出為其他監控系統的原生格式：`da-tools export --format datadog`（Datadog Monitor JSON）、`--format terraform`（Terraform HCL for AWS CloudWatch Alarms）。讓平台成為「告警策略的抽象層」。前提：完成 metric-dictionary.yaml 與各系統的 metric 名稱對照表。
 
 ---
 
 ## 相關資源
 
 - [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
-- [ADR 總覽](adr/README.md) — 7 個架構決策紀錄
+- [ADR 總覽](adr/README.md) — 8 個架構決策紀錄
 - [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
 - [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
 - [規則包目錄](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
+- [Prometheus Operator 整合](prometheus-operator-integration.md) · [Federation](federation-integration.md)
 
 ---
 
-**文件版本：** v2.2.0 — 2026-03-17
+**文件版本：** v2.3.0 — 2026-04-04
 **維護者：** Platform Engineering Team
+                                                                                                                                                                                                                                                                                                                                                                                                                       

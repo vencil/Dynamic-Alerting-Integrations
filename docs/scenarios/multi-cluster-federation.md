@@ -2,7 +2,7 @@
 title: "場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標

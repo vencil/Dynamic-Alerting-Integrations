@@ -2,7 +2,7 @@
 title: "動手實驗：從零到生產告警"
 tags: [scenario, hands-on, lab, adoption, tutorial]
 audience: [platform-engineer, tenant]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 

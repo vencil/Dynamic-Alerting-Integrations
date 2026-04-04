@@ -2,7 +2,7 @@
 title: "故障排查與邊界情況"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # 故障排查與邊界情況

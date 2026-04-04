@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 
@@ -106,6 +106,14 @@ da-tools <command> --help
 |------|------|----------|
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | `--ci <platform>` 或互動模式 |
 | `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
+
+### Operator + Federation 工具
+
+| 命令 | 用途 | 最小參數 |
+|------|------|----------|
+| `operator-generate` | Rule Packs + Tenant 配置 → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
+| `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | （自動探索或 `--namespace <ns>`） |
+| `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
 
 ### 配置生成工具
 
@@ -1084,6 +1092,135 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 # 檢查 sidecar 部署
 da-tools gitops-check sidecar --namespace monitoring --json
+```
+
+---
+
+### Operator + Federation 工具
+
+#### operator-generate
+
+從 Rule Packs 與 Tenant 配置產出 Kubernetes Operator CRD（PrometheusRule、AlertmanagerConfig、ServiceMonitor）。
+
+**用途**：Prometheus Operator 叢集中的動態告警規則與路由部署；Federation 場景多叢集配置管理。
+
+**語法**
+
+```bash
+da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
+```
+
+**必需參數**
+
+| 參數 | 說明 |
+|------|------|
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 |
+| `--config-dir <DIR>` | 租戶配置目錄路徑 |
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
+| `--output <FILE>` | 輸出至檔案 | stdout |
+| `--split` | 產出個別 CRD 檔案（按 Rule Pack 分離） | false |
+| `--include-servicemonitor` | 並產出 ServiceMonitor CRD | false |
+| `--dry-run` | 僅輸出預覽 | false |
+| `--apply` | 直接套用至 Kubernetes | false |
+
+**範例**
+
+```bash
+# 輸出 CRD YAML 到檔案
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ -o crds.yaml
+
+# 分割產出個別檔案並直接應用
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --split --apply --namespace monitoring
+```
+
+---
+
+#### operator-check
+
+驗證 Prometheus Operator 叢集中 CRD 部署狀態，檢查 5 項指標並產生診斷報告。
+
+**用途**：Operator 整合健康檢查；部署完整性驗證；故障診斷。
+
+**語法**
+
+```bash
+da-tools operator-check [options]
+```
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--namespace <NS>` | K8s namespace 探索 | `monitoring`（自動探索） |
+| `--json` | JSON 格式輸出 | false |
+
+**檢查項目**
+
+1. PrometheusRule 是否部署
+2. AlertmanagerConfig 是否部署
+3. ServiceMonitor 是否綁定
+4. Prometheus 是否掃描
+5. 告警是否正常觸發
+
+**範例**
+
+```bash
+# 檢查 monitoring namespace
+da-tools operator-check --namespace monitoring
+
+# JSON 格式輸出（CI gate 用）
+da-tools operator-check --json
+```
+
+---
+
+#### rule-pack-split
+
+將 Rule Pack 分層拆分為 edge（Part 1）和 central（Parts 2+3），支援 Federation Scenario B。
+
+**用途**：多叢集 Federation 場景；邊端（edge）與中央（central）分離部署。
+
+**語法**
+
+```bash
+da-tools rule-pack-split --rule-packs-dir <dir> [options]
+```
+
+**必需參數**
+
+| 參數 | 說明 |
+|------|------|
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 |
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--output-dir <DIR>` | 輸出目錄 | `./split-output` |
+| `--scenario` | Federation 場景（A / B） | `B` |
+
+**輸出結構**
+
+```
+split-output/
+├── edge/           (Part 1 - 邊端)
+│   └── part-1-*.yaml
+├── central/        (Parts 2+3 - 中央)
+│   ├── part-2-*.yaml
+│   └── part-3-*.yaml
+└── mapping.json    (edge → central 映射表)
+```
+
+**範例**
+
+```bash
+# Scenario B 分層拆分
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --scenario B --output-dir federation-split/
 ```
 
 ---

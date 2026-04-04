@@ -2,7 +2,7 @@
 title: "BYO Alertmanager 整合指南"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # BYO Alertmanager 整合指南
@@ -429,29 +429,9 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 
 ---
 
-## Appendix: Alertmanager Operator 路徑
+## Alertmanager Operator 路徑
 
-如果使用 `kube-prometheus-stack`（Prometheus Operator），可透過 `AlertmanagerConfig` CRD 管理路由：
-
-```yaml
-apiVersion: monitoring.coreos.com/v1alpha1
-kind: AlertmanagerConfig
-metadata:
-  name: tenant-db-a
-  namespace: monitoring
-spec:
-  route:
-    matchers:
-      - name: tenant
-        value: db-a
-    receiver: tenant-db-a
-  receivers:
-    - name: tenant-db-a
-      webhookConfigs:
-        - url: "https://webhook.db-a.example.com/alerts"
-```
-
-此路徑與 `generate_alertmanager_routes.py` 的 ConfigMap 方式互斥。選擇 Operator 路徑的用戶不需要使用 `generate-routes` 工具。
+> 使用 Prometheus Operator 的 AlertmanagerConfig CRD？請參閱 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)，包含 AlertmanagerConfig v1beta1 產出、驗證與遷移指引。
 
 ## 相關資源
 

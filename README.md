@@ -2,14 +2,14 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.2.0
+version: v2.3.0
 lang: zh
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** | **中文（當前）**
 
-![Version](https://img.shields.io/badge/version-v2.2.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-53%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.3.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-54%20pairs-blue)
 
 多租戶環境下，規則膨脹與變更瓶頸是 Prometheus 告警運維的核心痛點。本平台以 config-driven 架構解決：租戶寫 YAML，平台管規則——閾值、路由、通知、維護窗口全配置驅動，規則數不隨租戶增長。
 

@@ -2,7 +2,7 @@
 title: "Hands-on Lab: From Zero to Production Alerting"
 tags: [scenario, hands-on, lab, adoption, tutorial]
 audience: [platform-engineer, tenant]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 

@@ -2,7 +2,7 @@
 title: "Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform

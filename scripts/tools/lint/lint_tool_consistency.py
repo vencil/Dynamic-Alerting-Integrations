@@ -449,7 +449,7 @@ def main():
         print(json.dumps({"errors": errors, "warnings": warnings}, indent=2))
     else:
         if errors:
-            print(f"ERRORS ({len(errors)}):")
+            print(f"ERRORS ({len(errors)}):", file=sys.stderr)
             for e in errors:
                 print(f"  ✗ {e}")
             print()

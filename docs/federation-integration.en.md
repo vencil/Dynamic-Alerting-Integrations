@@ -2,7 +2,7 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.2.0
+version: v2.3.0
 lang: en
 ---
 # Federation Integration Guide
@@ -386,18 +386,100 @@ Mitigation measures:
 - Central Prometheus recommended to use Thanos/Cortex/VictoriaMetrics for HA + long-term storage
 - Alertmanager dual instances + gossip clustering
 
-## 8. Scenario B Outlook
+## 8. Scenario B: Rule Pack Stratification (v2.3.0)
 
-Scenario B (edge evaluation) requires partitioning Rule Packs into two layers:
+Scenario B (edge evaluation) partitions Rule Packs into two layers, enabling edge clusters to perform data normalization locally while the central cluster handles threshold comparison and alerting. Recommended for 20+ edge clusters or high-latency cross-region environments.
 
-| Layer | Location | Content |
-|-------|----------|---------|
-| Part 1 | Edge Prometheus | Data Normalization (recording rules) |
-| Part 2 + 3 | Central Prometheus | Threshold Normalization + Alert Rules |
+### 8.1 Stratification Architecture
 
-After edge Prometheus runs Part 1, it pushes only recording rule results (such as `tenant:mysql_threads_connected:max`) through federation/remote-write, significantly reducing cross-cluster data volume. The central cluster, upon receiving normalized metrics, performs comparison against threshold-exporter thresholds and generates alerts.
+| Layer | Deployment | Content | Rule Pack Parts |
+|-------|-----------|---------|-----------------|
+| Edge | Edge Prometheus | Data Normalization (recording rules) | Part 1: `*-normalization` groups |
+| Central | Central Prometheus | Threshold Normalization + Alert Rules | Parts 2+3: `*-threshold-normalization` + `*-alerts` groups |
 
-This architecture requires Rule Pack YAML to support partitioning markers (such as `placement: edge | central`) and packaging tools. Development will proceed after Scenario A stabilizes and customer requirements become clear; see `architecture-and-design.md` §11.2 for details.
+After edge Prometheus runs Part 1, it pushes only recording rule results (e.g., `tenant:mysql_threads_connected:max`) through federation/remote-write, significantly reducing cross-cluster data volume. The central cluster, upon receiving normalized metrics, performs comparison against threshold-exporter thresholds and generates alerts.
+
+```mermaid
+graph TB
+    subgraph Edge["Edge Cluster (×N)"]
+        EP["Edge Prometheus<br/>Part 1: normalization rules"]
+        DB["DB Exporters"]
+        DB -->|scrape| EP
+    end
+    subgraph Central["Central Cluster"]
+        TE["threshold-exporter<br/>conf.d/*.yaml"]
+        CP["Central Prometheus<br/>Parts 2+3: threshold + alerts"]
+        AM["Alertmanager"]
+        CP -->|scrape| TE
+        CP -->|alert rules| AM
+    end
+    EP -->|"federation / remote-write<br/>recording rule results"| CP
+```
+
+### 8.2 Using da-tools rule-pack-split
+
+`da-tools rule-pack-split` automatically partitions Rule Pack directories into edge and central YAML groups:
+
+```bash
+# Basic split
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir split-output/
+
+# Output as Operator CRD format
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir split-output/ \
+    --operator --namespace monitoring
+
+# GitOps mode (sorted keys, deterministic output)
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --gitops
+
+# Dry run + JSON report
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --dry-run --json
+```
+
+Output structure:
+
+```
+split-output/
+├── edge-rules/
+│   ├── rule-pack-mariadb.yaml      # Part 1: mariadb-normalization group
+│   ├── rule-pack-redis.yaml        # Part 1: redis-normalization group
+│   └── ...
+├── central-rules/
+│   ├── rule-pack-mariadb.yaml      # Parts 2+3: threshold-normalization + alerts groups
+│   ├── rule-pack-redis.yaml
+│   └── ...
+└── validation-report.json          # Cross-validation report
+```
+
+### 8.3 Stratification Validation
+
+After splitting, verify that every metric referenced in central Part 2 recording rules has a corresponding recording output in edge Part 1 rules. The tool includes built-in validation; you can also use `da-tools federation-check` for end-to-end testing:
+
+```bash
+# Split with automatic validation (exit code 1 on failure)
+da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir split-output/
+
+# Post-deployment end-to-end verification
+da-tools federation-check e2e \
+    --prometheus http://central:9090 \
+    --edge-urls http://edge-1:9090,http://edge-2:9090
+```
+
+### 8.4 Deployment Steps
+
+1. **Split**: Run `da-tools rule-pack-split` to generate edge/central YAML
+2. **Edge deployment**: Deploy `edge-rules/*.yaml` to each edge cluster's Prometheus (ConfigMap or PrometheusRule CRD)
+3. **Federation/Remote-Write**: Ensure edge recording rule results are received by the central cluster
+4. **Central deployment**: Deploy `central-rules/*.yaml` to central Prometheus alongside threshold-exporter
+5. **Verify**: Run `da-tools federation-check e2e` to confirm end-to-end alerting pipeline
+
+### 8.5 Migrating from Scenario A to Scenario B
+
+Scenario A can be seamlessly upgraded to Scenario B:
+
+1. Replace full Rule Packs in central cluster with `central-rules/` content (Parts 2+3)
+2. Deploy `edge-rules/` content (Part 1) to edge clusters
+3. Switch federation/remote-write from raw metrics to recording rule results
+4. Roll out per-cluster — Scenario A and Scenario B can coexist (different edge clusters choose independently)
 
 ## Related Resources
 
