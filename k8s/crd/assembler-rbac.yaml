@@ -4,6 +4,11 @@
 #   - watch/list/get on ThresholdConfig CRs (all namespaces)
 #   - patch on ThresholdConfig/status (to update reconciliation state)
 #
+# NOTE (v2.3.0): If using the Operator-Native path (operator-generate --apply),
+# the applying identity (Job or CI runner) also needs permissions for:
+#   - monitoring.coreos.com: prometheusrules, alertmanagerconfigs, servicemonitors
+# See docs/adr/008-operator-native-integration-path.md for details.
+#
 # Apply:
 #   kubectl apply -f k8s/crd/assembler-rbac.yaml
 #

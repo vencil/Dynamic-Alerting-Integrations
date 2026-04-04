@@ -464,7 +464,8 @@ window.addEventListener('pageshow', function(e) {
     'platform-health': '../interactive/tools/platform-health.jsx',
     'alert-noise-analyzer': '../interactive/tools/alert-noise-analyzer.jsx',
     'roi-calculator': '../interactive/tools/roi-calculator.jsx',
-    'multi-tenant-comparison': '../interactive/tools/multi-tenant-comparison.jsx'
+    'multi-tenant-comparison': '../interactive/tools/multi-tenant-comparison.jsx',
+    'tenant-manager': '../interactive/tools/tenant-manager.jsx'
   };
 
   function buildCustomFlow(toolsParam) {
@@ -823,7 +824,7 @@ window.__checkFlowGate = function(el) {
   var currentJsx = null;
 
   function updateLbl() {
-    btn.textContent = window.__DA_LANG === 'zh' ? '中文 / EN' : '中文 / EN';
+    btn.textContent = window.__DA_LANG === 'zh' ? 'EN' : '中文';
     btn.title = window.__DA_LANG === 'zh' ? 'Switch to English' : '切換中文';
   }
 

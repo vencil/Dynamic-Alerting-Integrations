@@ -40,14 +40,14 @@ jobs:
           pre-commit run tool-map-check --all-files
           pre-commit run doc-map-check --all-files
           pre-commit run rule-pack-stats-check --all-files
-          pre-commit run glossary-sync --all-files
-          pre-commit run changelog-format --all-files
-          pre-commit run snippet-sync --all-files
+          pre-commit run glossary-check --all-files
+          pre-commit run changelog-lint --all-files
+          pre-commit run includes-sync --all-files
           pre-commit run platform-data-check --all-files
-          pre-commit run repo-name-guard --all-files
-          pre-commit run tool-consistency --all-files
+          pre-commit run repo-name-check --all-files
+          pre-commit run tool-consistency-check --all-files
           pre-commit run structure-check --all-files
-          pre-commit run routing-profiles-lint --all-files
+          pre-commit run routing-profiles-check --all-files
 
   python-tests:
     name: Python Tests (${{ matrix.python }})

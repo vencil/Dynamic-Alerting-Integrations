@@ -54,13 +54,13 @@ graph LR
 ```bash
 # 掃描全部 tenant，分析過去 30 天
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.3.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 
 # 單一 tenant + JSON 輸出（供程式處理）
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.3.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d \
   --tenant db-a \
@@ -113,7 +113,7 @@ jobs:
       - name: Run alert quality audit
         run: |
           docker run --rm --network host \
-            ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
+            ghcr.io/vencil/da-tools:v2.3.0 alert-quality \
             --prometheus ${{ secrets.PROMETHEUS_URL }} \
             --period 7d --json > report.json
       - name: Upload report

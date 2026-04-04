@@ -54,13 +54,13 @@ Each alertname × tenant combination receives a GOOD / WARN / BAD grade. Tenant-
 ```bash
 # Scan all tenants, analyze past 30 days
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.3.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 
 # Single tenant + JSON output (for programmatic processing)
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.3.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d \
   --tenant db-a \
@@ -113,7 +113,7 @@ jobs:
       - name: Run alert quality audit
         run: |
           docker run --rm --network host \
-            ghcr.io/vencil/da-tools:v2.1.0 alert-quality \
+            ghcr.io/vencil/da-tools:v2.3.0 alert-quality \
             --prometheus ${{ secrets.PROMETHEUS_URL }} \
             --period 7d --json > report.json
       - name: Upload report

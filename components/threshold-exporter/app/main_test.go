@@ -3,7 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -483,13 +482,8 @@ func TestResolveConfigPath_AutoDetectDir(t *testing.T) {
 		configPath = oldConfigPath
 	}()
 
-	// Create a real temporary directory and test auto-detection
-	tempDir := t.TempDir()
-	oldDefaultDir := "/etc/threshold-exporter/conf.d"
-
-	// Mock the stat check by creating a subdirectory that mimics the default
-	// For this test, we just verify the fallback behavior since we can't easily
-	// mock the os.Stat call. Instead, test with empty flags to see fallback.
+	// We just verify the fallback behavior since we can't easily
+	// mock the os.Stat call. Test with empty flags to see fallback.
 	configDir = ""
 	configPath = ""
 

@@ -390,7 +390,7 @@ export default function CLIPlayground() {
       cmd = 'docker run --rm ';
       if (network.network) cmd += network.network + ' ';
       cmd += `-e PROMETHEUS_URL=${network.prometheus} `;
-      cmd += 'ghcr.io/vencil/da-tools:v2.1.0 ';
+      cmd += 'ghcr.io/vencil/da-tools:v2.3.0 ';
     } else {
       cmd = 'da-tools ';
     }
@@ -672,7 +672,7 @@ export default function CLIPlayground() {
                   {isDocker && (
                     <>
                       <div>
-                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.1.0
+                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.3.0
                       </div>
                       <div>
                         <span className="font-medium text-slate-900">{t('網路:', 'Network:')}</span> {network.label}

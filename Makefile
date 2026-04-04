@@ -227,8 +227,10 @@ sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
 .PHONY: platform-data
-platform-data: ## 產生 docs/assets/platform-data.json（Rule Pack 共用資料源）
+platform-data: ## 產生 docs/assets/platform-data.json 與 Tenant Metadata
 	@python3 ./scripts/tools/dx/generate_platform_data.py
+	@GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
+	 python3 ./scripts/tools/dx/generate_tenant_metadata.py --commit $$GIT_COMMIT
 
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \

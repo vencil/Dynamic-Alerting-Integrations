@@ -52,6 +52,10 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |
 | `config-history` | Config snapshot & history tracking (snapshot / log / show / diff) | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
+| `operator-generate` | Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor) | --rule-packs-dir <DIR>, --config-dir <DIR>, --namespace, --split, --apply | `da-tools operator-generate --help` |
+| `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
+| `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --scenario | `da-tools rule-pack-split --help` |
+| `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 
 ## Quick Tips
 
@@ -87,6 +91,12 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `config-history` — Config snapshot & history tracking
   - `gitops-check` — GitOps Native Mode readiness validation
 
+- **Operator + Federation**
+  - `operator-generate` — Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor)
+  - `operator-check` — Operator CRD deployment status verification
+  - `rule-pack-split` — Rule Pack hierarchical split (Federation Scenario B)
+  - `opa-evaluate` — OPA Rego policy evaluation bridge
+
 ## Network Configuration
 
 ```bash
@@ -106,14 +116,14 @@ export PROMETHEUS_URL=http://localhost:9090
 # Basic command
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.1.0 \
+  ghcr.io/vencil/da-tools:v2.3.0 \
   <command> [arguments]
 
 # With local files
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.1.0 \
+  ghcr.io/vencil/da-tools:v2.3.0 \
   <command> --config-dir /etc/config
 ```
 

@@ -108,7 +108,7 @@ steps:
 
 ```bash
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.1.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.3.0 \
   -n monitoring \
   -f values-override.yaml
 ```

@@ -21,7 +21,7 @@ Each phase is **independently valuable**—you can stop at any phase without sys
 - Running Prometheus instance (`http://prometheus:9090`)
 - Running Alertmanager (`http://alertmanager:9093`)
 - Kubernetes cluster (Kind, EKS, GKE, etc.)
-- `da-tools` image pushed to private registry or publicly available (`ghcr.io/vencil/da-tools:v2.1.0`)
+- `da-tools` image pushed to private registry or publicly available (`ghcr.io/vencil/da-tools:v2.3.0`)
 - At least one namespace for monitoring (e.g., `monitoring`, `observability`)
 
 ## Migration Timeline (Typical Case)

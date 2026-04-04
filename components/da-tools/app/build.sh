@@ -92,6 +92,7 @@ TOOL_FILES=(
     ops/lint_custom_rules.py
     # v2.0.0 quality & governance tools
     ops/policy_engine.py
+    ops/policy_opa_bridge.py
     ops/cardinality_forecasting.py
     ops/notification_tester.py
     ops/threshold_recommend.py

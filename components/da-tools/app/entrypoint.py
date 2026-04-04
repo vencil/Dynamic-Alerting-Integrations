@@ -48,6 +48,7 @@ def _build_help_text(lang):
     config-diff       GitOps PR 審查的目錄級配置差異
     drift-detect      跨叢集配置漂移偵測 (目錄級 SHA-256 比對)
     evaluate-policy   Policy-as-Code 策略評估 (宣告式 DSL)
+    opa-evaluate      OPA Rego 策略評估橋接 (OPA 整合)
     cardinality-forecast  基數預測 (線性回歸趨勢分析)
     test-notification 多通道通知連通性測試 (驗證 receiver 可達性)
     threshold-recommend 閾值推薦引擎 (基於歷史 P50/P95/P99)
@@ -110,6 +111,7 @@ Commands (File System — offline):
     config-diff       Directory-level config diff for GitOps PR review
     drift-detect      Cross-cluster config drift detection (directory-level SHA-256)
     evaluate-policy   Policy-as-Code evaluation (declarative DSL)
+    opa-evaluate      OPA Rego policy evaluation bridge (OPA integration)
     cardinality-forecast  Cardinality forecasting (linear regression trend)
     test-notification Multi-channel notification connectivity testing
     threshold-recommend Threshold recommendation engine (historical P50/P95/P99)

@@ -21,7 +21,7 @@ lang: zh
 - 運行中的 Prometheus 實例（`http://prometheus:9090`）
 - 運行中的 Alertmanager（`http://alertmanager:9093`）
 - Kubernetes 叢集（Kind、EKS、GKE 均可）
-- `da-tools` 映像已推送至私有 registry 或可公開存取（`ghcr.io/vencil/da-tools:v2.1.0`）
+- `da-tools` 映像已推送至私有 registry 或可公開存取（`ghcr.io/vencil/da-tools:v2.3.0`）
 - 叢集中至少有一個命名空間用於監控（如 `monitoring`、`observability`）
 
 ## 遷移時間表（典型案例）

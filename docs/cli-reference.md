@@ -9,7 +9,7 @@ lang: zh
 # da-tools CLI Reference
 
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
-> **容器映像**：`ghcr.io/vencil/da-tools:v2.1.0`
+> **容器映像**：`ghcr.io/vencil/da-tools:v2.3.0`
 > **版本**：v2.1.0（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
@@ -36,7 +36,7 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 
 ```bash
 # 從 OCI registry 拉取（需要 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:v2.1.0
+docker pull ghcr.io/vencil/da-tools:v2.3.0
 
 # 本地建構（開發用）
 cd components/da-tools/app && ./build.sh v1.11.0
@@ -45,8 +45,8 @@ cd components/da-tools/app && ./build.sh v1.11.0
 ### 查看說明
 
 ```bash
-docker run --rm ghcr.io/vencil/da-tools:v2.1.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.1.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v2.3.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.3.0 --version
 da-tools <command> --help
 ```
 
@@ -138,6 +138,7 @@ da-tools <command> --help
 | `analyze-gaps` | Custom Rule 對應 Rule Pack 缺口分析 | `--config <path>` |
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
+| `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
@@ -1589,7 +1590,7 @@ da-tools deprecate <metric_keys...> [options]
 # 標記多個指標為 disabled
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.1.0 \
+  ghcr.io/vencil/da-tools:v2.3.0 \
   deprecate old_metric_1 old_metric_2 \
     --reason "Replaced by new_metric; migration complete"
 ```
@@ -1842,6 +1843,42 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
 
+#### opa-evaluate
+
+OPA (Open Policy Agent) 策略評估橋接 — 將 tenant 配置轉為 OPA input JSON，透過 OPA REST API 或本地二進位檔評估，回傳與 evaluate-policy 相容的結果格式。
+
+**用法**
+
+```bash
+da-tools opa-evaluate --config-dir <PATH> [options]
+```
+
+**參數**
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir` | conf.d/ 目錄路徑（必填） | - |
+| `--opa-url` | OPA REST API 端點 | - |
+| `--opa-binary` | 本地 OPA 二進位檔路徑 | `opa` |
+| `--policy-path` | .rego 策略檔路徑 | - |
+| `--dry-run` | 僅顯示 input JSON，不呼叫 OPA | - |
+| `--json` | JSON 格式輸出 | - |
+
+**範例**
+
+```bash
+# 透過 OPA REST API 評估
+da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
+
+# 使用本地 OPA 二進位檔
+da-tools opa-evaluate --config-dir conf.d/ --opa-binary /usr/local/bin/opa --policy-path policies/
+
+# Dry-run：僅顯示 OPA input JSON
+da-tools opa-evaluate --config-dir conf.d/ --dry-run
+```
+
+---
+
 #### threshold-recommend
 
 閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值，整合 Noise Score 調整推薦方向。
@@ -2047,7 +2084,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.1.0
+          image: ghcr.io/vencil/da-tools:v2.3.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

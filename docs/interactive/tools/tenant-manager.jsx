@@ -371,7 +371,34 @@ export default function TenantManager() {
         const response = await fetch('platform-data.json');
         const data = await response.json();
         if (data.tenant_metadata && Object.keys(data.tenant_metadata).length > 0) {
-          setTenants(data.tenant_metadata);
+          // Check if real data has meaningful metadata (non-empty environment/tier)
+          const hasRichMetadata = Object.values(data.tenant_metadata).some(
+            t => t.environment && t.tier
+          );
+          if (hasRichMetadata) {
+            setTenants(data.tenant_metadata);
+          } else {
+            // Real data lacks enriched fields — merge real tenants into demo set
+            // so filters work with demo data while real tenants are also visible
+            const merged = { ...DEMO_TENANTS };
+            for (const [name, meta] of Object.entries(data.tenant_metadata)) {
+              if (!merged[name]) {
+                merged[name] = {
+                  environment: meta.environment || 'production',
+                  region: meta.region || 'default',
+                  tier: meta.tier || 'tier-2',
+                  domain: meta.domain || 'general',
+                  rule_packs: meta.rule_packs || [],
+                  owner: meta.owner || '',
+                  routing_channel: meta.routing_channel || '',
+                  operational_mode: meta.operational_mode || 'normal',
+                  metric_count: meta.metric_count || 0,
+                  last_config_commit: meta.last_config_commit || '',
+                };
+              }
+            }
+            setTenants(merged);
+          }
         } else {
           setTenants(DEMO_TENANTS);
         }
