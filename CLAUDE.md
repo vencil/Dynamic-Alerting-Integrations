@@ -6,7 +6,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
-- **Prometheus**: Projected Volume 掛載 15 個 Rule Pack (`optional: true`)
+- **Prometheus**: Projected Volume 掛載 14 個 Rule Pack (`optional: true`)
 - **Alertmanager**: 動態 route/receiver/inhibit 產生 + `configmap-reload` sidecar 自動 reload
 - **三態運營模式**: Normal / Silent (`_silent_mode`) / Maintenance (`_state_maintenance`)，均支援 `expires` 自動失效
 - **Distribution**: OCI registry + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`, `ghcr.io/vencil/da-portal`)
@@ -40,7 +40,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
 9. **i18n 三層架構**: JSX 用 `window.__t(zh, en)` + Rule Pack 用 `*_zh` 後綴 annotation + Python CLI 用 `detect_cli_lang()` 切換 argparse help
 
-## 互動工具生態（30 JSX tools）
+## 互動工具生態（31 JSX tools）
 
 **Source of Truth 檔案**：`docs/assets/tool-registry.yaml`（工具 metadata）、`docs/assets/platform-data.json`（Rule Pack 數據）、`docs/assets/flows.json`（Guided Flow）、`docs/assets/jsx-loader.html`（載入器）、`docs/interactive/index.html`（Hub）。
 
@@ -51,7 +51,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## Pre-commit 品質閘門
 
-13 個 auto-run hooks（每次 commit）+ 7 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
+26 個 auto-run hooks（每次 commit）+ 7 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
 
 ```bash
 pre-commit run --all-files                              # 全跑 auto hooks
@@ -60,19 +60,19 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（91 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（115 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
 快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (8 ADRs)
 
 ## 工具 (scripts/tools/)
 
-84 個 Python 工具（不含共用函式庫），依職責分三子目錄：
+90 個 Python 工具（不含共用函式庫），依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
 | `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check, operator-generate, operator-check, rule-pack-split, policy-opa-bridge...） | 44 |
 | `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis, generate_tenant_metadata...） | 20 |
-| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | 19 |
+| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | 26 |
 | root | 共用（`validate_all.py`）+ 函式庫（`_lib_python.py` facade + 4 子模組）+ 資料（`metric-dictionary.yaml`） | 1 + 5 lib |
 
 完整工具表見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。常用工具速查：`da-tools <cmd> --help` | CLI 完整參考見 [`docs/cli-reference.md`](docs/cli-reference.md)

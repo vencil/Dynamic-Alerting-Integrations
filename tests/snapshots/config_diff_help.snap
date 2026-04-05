@@ -1,0 +1,17 @@
+usage: config_diff.py [-h] --old-dir OLD_DIR --new-dir NEW_DIR [--json-output]
+                      [--format {markdown,json}]
+
+Compare two conf.d/ directories — per-tenant blast radius report
+
+options:
+  -h, --help            show this help message and exit
+  --old-dir OLD_DIR     Baseline config directory
+  --new-dir NEW_DIR     New/staged config directory
+  --json-output         Output JSON instead of Markdown
+  --format {markdown,json}
+                        Output format (default: markdown). Alias: --json-
+                        output is equivalent to --format json
+
+Examples:
+  config_diff.py --old-dir conf.d.baseline --new-dir conf.d/
+  config_diff.py --old-dir conf.d.baseline --new-dir conf.d/ --json-output

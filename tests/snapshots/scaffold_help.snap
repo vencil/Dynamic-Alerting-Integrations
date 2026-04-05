@@ -1,0 +1,88 @@
+usage: scaffold_tenant.py [-h] [--tenant TENANT] [--db DB] [-o OUTPUT_DIR]
+                          [--catalog] [--non-interactive]
+                          [--namespaces NAMESPACES]
+                          [--routing-profile ROUTING_PROFILE]
+                          [--topology {1:1,N:1,1:N}]
+                          [--mapping-instance MAPPING_INSTANCE]
+                          [--mapping-filter MAPPING_FILTER]
+                          [--silent-mode {warning,critical,all,disable}]
+                          [--severity-dedup {enable,disable}]
+                          [--routing-receiver ROUTING_RECEIVER]
+                          [--routing-receiver-type {webhook,email,slack,teams,rocketchat,pagerduty}]
+                          [--routing-smarthost ROUTING_SMARTHOST]
+                          [--routing-group-by ROUTING_GROUP_BY]
+                          [--routing-group-wait ROUTING_GROUP_WAIT]
+                          [--routing-group-interval ROUTING_GROUP_INTERVAL]
+                          [--routing-repeat-interval ROUTING_REPEAT_INTERVAL]
+                          [--profile PROFILE] [--from-onboard FROM_ONBOARD]
+                          [--generate-profile GENERATE_PROFILE]
+                          [--tier {prod,staging}]
+
+Interactive tenant config generator for Dynamic Alerting
+
+options:
+  -h, --help            show this help message and exit
+  --tenant TENANT       Tenant namespace name (e.g., db-c)
+  --db DB               Comma-separated DB types
+                        (mariadb,redis,mongodb,elasticsearch)
+  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
+                        Output directory (default: scaffold_output)
+  --catalog             Display list of supported exporters
+  --non-interactive     Skip interactive prompts (requires --tenant and --db)
+  --namespaces NAMESPACES
+                        Comma-separated K8s namespace names for N:1 tenant
+                        mapping (e.g., ns1,ns2,ns3)
+  --routing-profile ROUTING_PROFILE
+                        Routing profile name (ADR-007), e.g., team-sre-apac.
+                        When set, tenant YAML will include _routing_profile
+                        reference
+  --topology {1:1,N:1,1:N}
+                        Tenant mapping topology (ADR-006): 1:1 (default), N:1
+                        (requires --namespaces), 1:N (generates mapping hint)
+  --mapping-instance MAPPING_INSTANCE
+                        Source instance name for 1:N topology (e.g., oracle-
+                        prod-01)
+  --mapping-filter MAPPING_FILTER
+                        PromQL filter for 1:N topology (e.g.,
+                        schema=~"app_a_.*")
+  --silent-mode {warning,critical,all,disable}
+                        Silent mode: alerts fire (TSDB records) but
+                        notifications suppressed
+  --severity-dedup {enable,disable}
+                        Severity dedup: suppress warning notification when
+                        critical fires (default: enable)
+  --routing-receiver ROUTING_RECEIVER
+                        Alert routing receiver address (URL or email list
+                        depending on type)
+  --routing-receiver-type {webhook,email,slack,teams,rocketchat,pagerduty}
+                        Receiver type (default: webhook)
+  --routing-smarthost ROUTING_SMARTHOST
+                        SMTP smarthost for email receiver (e.g.,
+                        smtp.example.com:587)
+  --routing-group-by ROUTING_GROUP_BY
+                        Comma-separated group_by labels (e.g.,
+                        alertname,severity)
+  --routing-group-wait ROUTING_GROUP_WAIT
+                        Group wait duration (e.g., 30s, range: 5s-5m)
+  --routing-group-interval ROUTING_GROUP_INTERVAL
+                        Group interval duration (e.g., 5m, range: 5s-5m)
+  --routing-repeat-interval ROUTING_REPEAT_INTERVAL
+                        Repeat interval duration (e.g., 4h, range: 1m-72h)
+  --profile PROFILE     Tenant profile name (e.g., standard-mariadb-prod).
+                        When set, tenant YAML will reference the named profile
+                        and only contain explicit overrides.
+  --from-onboard FROM_ONBOARD
+                        Path to onboard-hints.json (auto-scaffold from onboard
+                        results)
+  --generate-profile GENERATE_PROFILE
+                        Generate a _profiles.yaml skeleton. Value is profile
+                        name (e.g., standard-mariadb-prod). Requires --db.
+  --tier {prod,staging}
+                        Environment tier for profile thresholds
+
+Examples:
+  scaffold_tenant.py                                                      # Interactive mode
+  scaffold_tenant.py --catalog                                            # Display supported exporters
+  scaffold_tenant.py --tenant db-c --db mariadb,redis                     # Non-interactive mode
+  scaffold_tenant.py --tenant db-c --db mariadb -o out/                   # Specify output directory
+  scaffold_tenant.py --tenant db-c --db mariadb --namespaces ns1,ns2,ns3  # With N:1 tenant mapping

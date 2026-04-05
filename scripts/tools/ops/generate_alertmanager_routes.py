@@ -533,18 +533,31 @@ def check_domain_policies(
 
 
 def load_tenant_configs(config_dir: str) -> tuple[dict[str, dict], dict[str, str], list[str], dict | None, dict[str, dict]]:
-    """Load all tenant YAML files from a config directory.
+    """Load and parse all tenant YAML files from a config directory.
 
-    Returns tuple of:
-      - routing_configs: {tenant_name: routing_config} for tenants that have _routing
-      - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
-      - schema_warnings: list of validation warning strings
-      - enforced_routing: dict or None — platform enforced routing config (v1.7.0)
-      - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0)
+    Orchestrates the full configuration pipeline:
+      1. Parse all .yaml/.yml files in config_dir (delegated to _parse_config_files())
+      2. Merge _routing_defaults with tenant _routing overrides (delegated to _merge_tenant_routing())
+      3. Validate tenant keys against defaults (checks for typos)
+      4. Resolve routing profile references (ADR-007)
+      5. Validate domain policies against resolved routes (ADR-007)
 
-    v2.1.0 ADR-007: Also resolves routing profiles and validates domain policies.
-    Delegates to _parse_config_files() for YAML parsing and
-    _merge_tenant_routing() for defaults merging.
+    Configuration Hierarchy (4 layers):
+      - Layer 0: _routing_defaults from _ prefixed files
+      - Layer 1: routing_profile reference (_routing_profile key)
+      - Layer 2: profile config resolved from _routing_profiles.yaml
+      - Layer 3: explicit tenant _routing overrides
+
+    Returns:
+        (routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs):
+        - routing_configs: {tenant_name: routing_config_dict} for tenants with _routing
+        - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
+        - schema_warnings: list of validation warning strings
+        - enforced_routing: dict or None — platform enforced routing config (v1.7.0+)
+        - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0+)
+
+    Note:
+        All tenants appear in dedup_configs even if they have no _routing config.
     """
     parsed = _parse_config_files(config_dir)
 
@@ -730,19 +743,27 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
 
 
 def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, dict], allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
-    """產生 Platform Enforced Routing 的 routes 和 receivers。
+    """Generate platform-enforced Alertmanager routes and receivers.
 
-    v1.7.0: 單一平台 enforced route（``continue: true``）確保 NOC 永遠收到通知。
-    v1.10.0: 當 enforced_routing 含 ``{{tenant}}`` 佔位符時，為每個 tenant
-    展開獨立的 enforced route。
+    Implements platform-wide Enforced Routing with continue: true to ensure
+    NOC (Network Operations Center) always receives notifications. Supports
+    both single platform-wide routes and per-tenant routes via {{tenant}} expansion.
+
+    Routing Modes:
+      - v1.7.0: Single enforced route (continue: true) applies to all alerts
+      - v1.10.0: Per-tenant expansion when _routing_enforced contains {{tenant}}
+        placeholder — each tenant gets a separate enforced route with tenant=<name> matcher
 
     Args:
-        enforced_routing: ``_routing_enforced`` 設定 dict。
-        routing_configs: tenant routing configs（用於 ``{{tenant}}`` 展開）。
-        allowed_domains: Webhook domain allowlist（SSRF 防護）。
+        enforced_routing: _routing_enforced config dict or None
+        routing_configs: {tenant_name: routing_config} for {{tenant}} expansion
+        allowed_domains: optional fnmatch domain patterns for webhook URL validation (SSRF protection)
 
     Returns:
-        ``(routes, receivers, warnings)`` 三元組。
+        (routes_list, receivers_list, warnings_list) where:
+        - routes: enforced route dicts with continue: true
+        - receivers: platform-enforced receiver dicts
+        - warnings: domain validation, receiver config errors, etc.
     """
     routes = []
     receivers = []
@@ -846,14 +867,28 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 
 
 def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
-    """產生各 tenant 的 routes 和 receivers（含 per-rule overrides）。
+    """Generate tenant-specific Alertmanager routes and receivers.
+
+    Iterates over all tenants and produces their main routing configuration,
+    including any per-rule routing overrides (v1.8.0). Each tenant route is
+    matched by tenant=<name> label and routed to a tenant-specific receiver.
+
+    Processing Per Tenant:
+      1. Validate receiver config (required, must have type)
+      2. Build Alertmanager receiver config (webhook, email, slack, etc.)
+      3. Apply domain policy constraints if allowed_domains is provided
+      4. Expand per-rule routing overrides and insert before main tenant route
+      5. Build tenant route with matchers, receiver name, timing, and group_by
 
     Args:
-        routing_configs: tenant routing configs dict。
-        allowed_domains: Webhook domain allowlist（SSRF 防護）。
+        routing_configs: {tenant_name: routing_config_dict} resolved from defaults and overrides
+        allowed_domains: optional fnmatch domain patterns for webhook URL validation (SSRF protection)
 
     Returns:
-        ``(routes, receivers, warnings)`` 三元組。
+        (routes_list, receivers_list, warnings_list) where:
+        - routes: tenant route dicts with per-rule overrides injected first
+        - receivers: tenant receiver dicts built from routing_configs
+        - warnings: validation warnings (domain policy, missing receiver, etc.)
     """
     routes = []
     receivers = []
@@ -921,15 +956,27 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None, enforced_routing: dict | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 
-    委派至 :func:`_build_enforced_routes` 和 :func:`_build_tenant_routes`，
-    依序產生 enforced routes（NOC 通知）和 tenant routes。
+    Delegates to _build_enforced_routes() and _build_tenant_routes() to produce
+    enforced routes (NOC notifications with continue: true) and tenant-specific
+    routes. Enforced routes are inserted first in the route tree to ensure
+    platform-wide visibility.
 
-    v1.7.0: Platform Enforced Routing（``continue: true``）。
-    v1.8.0: Per-rule routing overrides。
-    v1.10.0: ``{{tenant}}`` 佔位符展開。
+    Features:
+      - v1.7.0: Platform Enforced Routing with continue: true
+      - v1.8.0: Per-rule routing overrides
+      - v1.10.0: {{tenant}} placeholder expansion
+      - Domain policy enforcement (webhook URL allowlist validation)
+
+    Args:
+        routing_configs: {tenant_name: routing_config_dict} resolved from defaults
+        allowed_domains: optional list of fnmatch domain patterns for webhook URL validation
+        enforced_routing: optional platform-wide routing rule (NOC fallback)
 
     Returns:
-        ``(routes_yaml_dict, receivers_list, all_warnings)`` 三元組。
+        (routes_list, receivers_list, warnings_list) where:
+        - routes_list: Alertmanager route dicts (enforced routes first, then tenant routes)
+        - receivers_list: Alertmanager receiver dicts with webhook/email/etc. configs
+        - warnings_list: validation warnings (domain check, schema, etc.)
     """
     routes = []
     receivers = []
@@ -952,18 +999,59 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     return routes, receivers, all_warnings
 
 
-def generate_inhibit_rules(dedup_configs: dict[str, str]) -> list[dict]:
+def _build_inhibit_rules(tenant: str) -> dict:
+    """Build a single per-tenant severity dedup inhibit rule.
+
+    Constructs an Alertmanager inhibit_rule that suppresses warning alerts
+    when a corresponding critical alert exists for the same metric_group.
+    This implements severity deduplication: when both critical and warning
+    fire together, only the critical notification is sent.
+
+    Args:
+        tenant: tenant name (used in tenant matcher and label equal).
+
+    Returns:
+        inhibit_rule dict with source_matchers, target_matchers, and equal fields.
+
+    Structure:
+      - source: critical alert with metric_group + tenant="<name>"
+      - target: warning alert with metric_group + tenant="<name>"
+      - equal: ["metric_group"] — suppress target if source matches same metric_group
+    """
+    return {
+        "source_matchers": [
+            'severity="critical"',
+            'metric_group=~".+"',
+            f'tenant="{tenant}"',
+        ],
+        "target_matchers": [
+            'severity="warning"',
+            'metric_group=~".+"',
+            f'tenant="{tenant}"',
+        ],
+        "equal": ["metric_group"],
+    }
+
+
+def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], list[str]]:
     """Generate per-tenant severity dedup inhibit rules.
 
-    For each tenant with dedup enabled (default), generates an inhibit_rule:
-      - source: critical + metric_group present + tenant="<name>"
-      - target: warning + metric_group present + tenant="<name>"
-      - equal: metric_group
+    Iterates over all tenants and builds inhibit rules for those with
+    severity deduplication enabled (default). Tenants with _severity_dedup: "disable"
+    are skipped — both warning and critical notifications are sent.
 
-    Tenants with _severity_dedup: "disable" are skipped — both warning
-    and critical notifications are sent.
+    Severity Dedup Mechanism:
+      When enabled (default), suppresses warning alerts when a critical alert
+      fires for the same metric_group. This reduces alert fatigue while
+      preserving critical visibility. Implemented via Alertmanager inhibit_rules.
 
-    Returns (inhibit_rules_list, all_warnings).
+    Args:
+        dedup_configs: {tenant_name: "enable"|"disable"} for all tenants.
+
+    Returns:
+        (inhibit_rules_list, warnings_list) where:
+        - inhibit_rules_list: list of dicts ready for alertmanager.yml
+        - warnings_list: INFO messages for each tenant (e.g., dedup disabled)
     """
     rules = []
     all_warnings = []
@@ -974,26 +1062,28 @@ def generate_inhibit_rules(dedup_configs: dict[str, str]) -> list[dict]:
             all_warnings.append(f"  INFO: {tenant}: severity_dedup disabled, skipping inhibit rule")
             continue
 
-        rule = {
-            "source_matchers": [
-                'severity="critical"',
-                'metric_group=~".+"',
-                f'tenant="{tenant}"',
-            ],
-            "target_matchers": [
-                'severity="warning"',
-                'metric_group=~".+"',
-                f'tenant="{tenant}"',
-            ],
-            "equal": ["metric_group"],
-        }
+        rule = _build_inhibit_rules(tenant)
         rules.append(rule)
 
     return rules, all_warnings
 
 
 def render_output(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict] | None = None) -> str:
-    """Render the final YAML fragment."""
+    """Render Alertmanager route + receiver + inhibit config as YAML fragment.
+
+    Constructs a clean YAML dictionary containing the tenant routing config
+    (route tree + receivers + inhibit rules) suitable for merging into an
+    existing alertmanager.yml or for --dry-run output.
+
+    Args:
+        routes: list of Alertmanager route dicts
+        receivers: list of Alertmanager receiver dicts
+        inhibit_rules: optional list of inhibit_rule dicts (severity dedup)
+
+    Returns:
+        YAML string fragment with keys: route (with nested routes), receivers, inhibit_rules.
+        Empty sections are omitted from the output.
+    """
     # Build the fragment as a clean dict
     fragment = {}
 
@@ -1047,9 +1137,28 @@ def load_base_config(path: str | None) -> dict:
 
 def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                        namespace: str = "monitoring", configmap_name: str = "alertmanager-config") -> str:
-    """Merge tenant fragments into base config and wrap as K8s ConfigMap YAML.
+    """Merge tenant routing fragments into base Alertmanager config and wrap as K8s ConfigMap.
 
-    Returns the complete ConfigMap YAML string.
+    Merges generated routes, receivers, and inhibit_rules into a base Alertmanager
+    configuration, then wraps the result as a Kubernetes ConfigMap YAML suitable
+    for kubectl apply or GitOps workflows.
+
+    Merge Strategy:
+      - Routes: replace base route.routes with generated tenant routes
+      - Receivers: append tenant receivers to base receivers (dedup by name)
+      - Inhibit Rules: append tenant rules to base rules
+      - Global/Other: preserve from base config
+
+    Args:
+        base: base Alertmanager config dict (from load_base_config or YAML file)
+        routes: generated tenant route dicts
+        receivers: generated tenant receiver dicts
+        inhibit_rules: generated inhibit_rules for severity dedup
+        namespace: K8s namespace for ConfigMap (default: monitoring)
+        configmap_name: ConfigMap name (default: alertmanager-config)
+
+    Returns:
+        Complete Kubernetes ConfigMap YAML string (apiVersion, kind, metadata, data.alertmanager.yml).
     """
     merged = dict(base)
 
@@ -1087,13 +1196,32 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
 
 
 def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str) -> bool:
-    """Merge generated fragment into existing Alertmanager ConfigMap and reload.
+    """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
-    Steps:
-    1. kubectl get cm → extract alertmanager.yml
-    2. Merge routes, receivers, inhibit_rules into existing config
-    3. kubectl apply updated ConfigMap
-    4. curl POST /-/reload
+    Applies tenant routing configuration directly to a running Alertmanager cluster.
+    This is the --apply mode for immediate deployment without GitOps workflow.
+
+    Process:
+      1. kubectl get configmap → extract alertmanager.yml
+      2. Merge generated routes, receivers, inhibit_rules into existing config
+      3. kubectl apply ConfigMap with merged config
+      4. curl POST /-/reload to trigger Alertmanager configuration reload
+
+    Notes:
+      - Keeps existing base routes/receivers, appends tenant-generated ones
+      - Preserves non-generated inhibit rules (e.g., Silent Mode sentinel rules)
+      - Requires Alertmanager --web.enable-lifecycle flag for /-/reload to work
+      - Confirms with user before applying (unless --yes flag)
+
+    Args:
+        routes: generated tenant route dicts
+        receivers: generated tenant receiver dicts
+        inhibit_rules: generated inhibit_rules for severity dedup
+        namespace: K8s namespace where ConfigMap is located
+        configmap_name: ConfigMap name (typically alertmanager-config)
+
+    Returns:
+        True if merge and reload succeeded, False otherwise.
     """
     # 1. Read existing ConfigMap
     result = subprocess.run(

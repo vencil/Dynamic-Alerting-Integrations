@@ -1,0 +1,27 @@
+usage: operator_generate.py [-h] [--rule-packs-dir RULE_PACKS_DIR]
+                            [--config-dir CONFIG_DIR]
+                            [--output-dir OUTPUT_DIR] [--namespace NAMESPACE]
+                            [--api-version {v1alpha1,v1beta1}] [--gitops]
+                            [--dry-run] [--json]
+                            [--components {all,rules,alertmanager,servicemonitor}]
+
+Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)
+
+options:
+  -h, --help            show this help message and exit
+  --rule-packs-dir RULE_PACKS_DIR
+                        Rule packs directory (default rule-packs/)
+  --config-dir CONFIG_DIR
+                        Tenant config directory (default conf.d/)
+  --output-dir OUTPUT_DIR
+                        Output CRD directory (default operator-output/)
+  --namespace NAMESPACE
+                        Target namespace (default monitoring)
+  --api-version {v1alpha1,v1beta1}
+                        AlertmanagerConfig API version (default v1beta1)
+  --gitops              Enable GitOps mode (sorted keys, no timestamps)
+  --dry-run             Print output instead of writing files
+  --json                Output results as JSON report
+  --components {all,rules,alertmanager,servicemonitor}
+                        Components to generate (all | rules | alertmanager |
+                        servicemonitor)

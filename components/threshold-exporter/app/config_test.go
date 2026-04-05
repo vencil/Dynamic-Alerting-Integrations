@@ -24,6 +24,8 @@ func SVScheduled(def string, overrides ...TimeWindowOverride) ScheduledValue {
 	return ScheduledValue{Default: def, Overrides: overrides}
 }
 
+// region ThresholdResolution — basic Resolve/ResolveAt tests
+
 func TestResolve_ThreeState(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
@@ -143,6 +145,10 @@ func TestResolve_TenantWithNoOverrides(t *testing.T) {
 	}
 }
 
+// endregion
+
+// region MetricKeyParsing — test helpers and key parsing
+
 func TestParseMetricKey(t *testing.T) {
 	tests := []struct {
 		input              string
@@ -162,6 +168,10 @@ func TestParseMetricKey(t *testing.T) {
 		}
 	}
 }
+
+// endregion
+
+// region ConfigManagerBasics — single-file and directory loading
 
 func TestConfigManager_LoadFile(t *testing.T) {
 	content := `
@@ -201,6 +211,10 @@ tenants:
 		t.Errorf("expected 2 tenants, got %d", len(cfg.Tenants))
 	}
 }
+
+// endregion
+
+// region StateFiltersResolution — state filter tests and validation
 
 // --- Scenario C: State Filter Tests ---
 
@@ -323,6 +337,10 @@ func TestResolve_IgnoresStateKeys(t *testing.T) {
 		t.Errorf("expected 0 state filters, got %d", len(sf))
 	}
 }
+
+// endregion
+
+// region DirectoryLoading — LoadDir tests and file hashing
 
 func TestConfigManager_LoadFileWithStateFilters(t *testing.T) {
 	content := `
@@ -604,6 +622,10 @@ tenants:
 	}
 }
 
+// endregion
+
+// region DimensionalMetrics — label parsing and dimensional resolution
+
 // ============================================================
 // Phase 2B: Dimensional Metrics Tests
 // ============================================================
@@ -831,6 +853,10 @@ tenants:
 		t.Error("expected at least one dimensional metric")
 	}
 }
+
+// endregion
+
+// region ScheduledValuesAndTimeWindows — YAML parsing, time-window resolution, and scheduled overrides
 
 // ============================================================
 // Phase 11 B4: Scheduled Value / Time-Window Override Tests
@@ -1237,6 +1263,10 @@ func TestParseHHMM(t *testing.T) {
 	}
 }
 
+// endregion
+
+// region RegexDimensionalMetrics — regex label parsing and regex-based threshold resolution
+
 // ============================================================
 // Phase 11 B1: Regex Dimensional Labels Tests
 // ============================================================
@@ -1473,6 +1503,10 @@ func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 	}
 }
 
+// endregion
+
+// region ScheduledValueStringAndMerge — backward compatibility and directory loading with scheduled values
+
 // ============================================================
 // Backward Compatibility: ScheduledValue.String()
 // ============================================================
@@ -1573,6 +1607,10 @@ tenants:
 		t.Errorf("expected directory mode, got %q", manager.Mode())
 	}
 }
+
+// endregion
+
+// region SilentModeResolution — silent mode states and expiry handling
 
 // ============================================================
 // Silent Mode Tests
@@ -2411,6 +2449,10 @@ func TestResolveSilentModes_ScalarBackwardCompat(t *testing.T) {
 	}
 }
 
+// endregion
+
+// region MaintenanceModeResolution — maintenance mode states, expiry handling, and validation
+
 // ============================================================
 // Structured Maintenance Mode Tests (v1.7.0)
 // ============================================================
@@ -2570,6 +2612,10 @@ func TestIsMaintenanceActive_NotExpiredYet(t *testing.T) {
 }
 
 // ============================================================
+// endregion
+
+// region MetadataAndValidation — metadata resolution and tenant key validation
+
 // ResolveMetadata (v1.11.0)
 // ============================================================
 
@@ -2683,6 +2729,10 @@ func TestResolveMetadata_UnconditionalOutput(t *testing.T) {
 		t.Errorf("db-b should have empty runbook_url, got %q", tenants["db-b"].RunbookURL)
 	}
 }
+
+// endregion
+
+// region ProfilesAndRouting — profile resolution, routing configuration, and profile merging
 
 func TestValidateTenantKeys_MetadataReservedKey(t *testing.T) {
 	cfg := &ThresholdConfig{
@@ -3097,6 +3147,10 @@ func TestValidateTenantKeys_ProfileRef(t *testing.T) {
 		t.Errorf("expected 1 warning for unknown profile ref, got %d: %v", len(warnings2), warnings2)
 	}
 }
+
+// endregion
+
+// region IncrementalReloading — hot-reload, file hash detection, and directory watching
 
 // ============================================================
 // Incremental Hot-Reload Tests (v2.1.0 §5.6)
@@ -3750,6 +3804,10 @@ tenants:
 	}
 }
 
+// endregion
+
+// region UtilityFunctionsAndHelpers — duration parsing, helper utilities, and logging
+
 // ============================================================
 // logConfigStats — unit test
 // ============================================================
@@ -3978,6 +4036,10 @@ tenants:
 	time.Sleep(200 * time.Millisecond) // Allow goroutine to exit
 }
 
+// endregion
+
+// region ConfigSourceDetectionAndReload — config source detection and fail-safe reloading
+
 // ============================================================
 // detectConfigSource Unit Test
 // ============================================================
@@ -4155,6 +4217,10 @@ tenants:
 	}
 }
 
+// endregion
+
+// region Helpers — test utility functions
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -4166,3 +4232,5 @@ func writeTestFile(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+// endregion

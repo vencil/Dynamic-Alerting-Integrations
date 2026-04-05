@@ -106,6 +106,50 @@ repos:
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles)
         additional_dependencies: ['pyyaml']
 
+      # --- v2.4.0 Phase A: 防守工具補強 ---
+      - id: build-completeness-check
+        name: build.sh ↔ COMMAND_MAP bidirectional sync
+        entry: python3 scripts/tools/lint/check_build_completeness.py --ci
+        language: python
+        pass_filenames: false
+        files: ^components/da-tools/app/(entrypoint\.py|build\.sh)$
+
+      - id: cli-coverage-check
+        name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ COMMAND_MAP)
+        entry: python3 scripts/tools/lint/check_cli_coverage.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(components/da-tools/app/entrypoint\.py|docs/(cheat-sheet|cli-reference)(\.en)?\.md)$
+
+      - id: bilingual-structure-check
+        name: ZH/EN document structure sync
+        entry: python3 scripts/tools/lint/check_bilingual_structure.py --ci
+        language: python
+        pass_filenames: false
+        files: \.en\.md$
+
+      - id: jsx-i18n-check
+        name: JSX TOOL_META ↔ CUSTOM_FLOW_MAP ↔ i18n sync
+        entry: python3 scripts/tools/lint/check_jsx_i18n.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/(assets/jsx-loader\.html|interactive/tools/.*\.jsx|getting-started/wizard\.jsx)$
+
+      - id: makefile-targets-check
+        name: DX tools ↔ Makefile/pre-commit reachability
+        entry: python3 scripts/tools/lint/check_makefile_targets.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(Makefile|scripts/tools/dx/.*\.py|\.pre-commit-config\.yaml)$
+
+      - id: metric-dictionary-check
+        name: Metric Dictionary ↔ Rule Pack cross-validation
+        entry: python3 scripts/tools/lint/check_metric_dictionary.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(scripts/tools/metric-dictionary\.yaml|rule-packs/.*\.yaml|k8s/03-monitoring/.*\.yaml)$
+        additional_dependencies: ['pyyaml']
+
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
         name: Go→JSON Schema drift

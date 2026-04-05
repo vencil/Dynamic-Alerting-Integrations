@@ -1,0 +1,21 @@
+usage: alert_quality.py [-h] --prometheus PROMETHEUS
+                        [--alertmanager ALERTMANAGER] [--period PERIOD]
+                        [--tenant TENANT] [--json] [--markdown] [--ci]
+                        [--min-score MIN_SCORE]
+
+Alert Quality Scoring — analyze Alertmanager history to identify problem
+alerts
+
+options:
+  -h, --help            show this help message and exit
+  --prometheus PROMETHEUS
+                        Prometheus URL
+  --alertmanager ALERTMANAGER
+                        Alertmanager URL (for suppression data)
+  --period PERIOD       Analysis period (default: 30d)
+  --tenant TENANT       Filter to specific tenant
+  --json                JSON output
+  --markdown            Markdown output
+  --ci                  CI mode: exit 1 if any BAD alert
+  --min-score MIN_SCORE
+                        CI minimum score threshold (default: 0)

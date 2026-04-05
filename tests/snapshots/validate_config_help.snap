@@ -1,0 +1,18 @@
+usage: validate_config.py [-h] --config-dir CONFIG_DIR [--policy POLICY]
+                          [--rule-packs RULE_PACKS] [--version-check] [--json]
+                          [--policy-dsl POLICY_DSL]
+
+One-stop configuration validation
+
+options:
+  -h, --help            show this help message and exit
+  --config-dir CONFIG_DIR
+                        Path to tenant config directory (conf.d/)
+  --policy POLICY       Path to policy YAML (allowed_domains etc.)
+  --rule-packs RULE_PACKS
+                        Path to rule-packs/ directory for custom rule lint
+  --version-check       Also run version consistency check
+  --json                Output results as JSON (for CI consumption)
+  --policy-dsl POLICY_DSL
+                        Path to standalone Policy-as-Code DSL file (top-level
+                        policies: key)

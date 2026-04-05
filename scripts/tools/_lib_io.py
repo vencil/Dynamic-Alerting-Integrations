@@ -5,6 +5,7 @@ Import via _lib_python.py facade for backward compatibility.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from typing import Any, Optional
@@ -164,3 +165,55 @@ def format_json_report(data: Any, **kwargs: Any) -> str:
     kwargs.setdefault("indent", 2)
     kwargs.setdefault("ensure_ascii", False)
     return json.dumps(data, **kwargs)
+
+
+# ── Common argparse helpers ─────────────────────────────────────────
+# Extracted in v2.4.0 Phase B to eliminate argparse boilerplate across 20+ tools.
+
+
+def add_config_dir_arg(
+    parser: argparse.ArgumentParser,
+    *,
+    required: bool = True,
+    default: str | None = None,
+    help_text: str = "Path to tenant config directory (conf.d/)",
+) -> None:
+    """Add ``--config-dir`` argument with standard defaults."""
+    parser.add_argument(
+        "--config-dir",
+        required=required and default is None,
+        default=default,
+        help=help_text,
+    )
+
+
+def add_json_arg(
+    parser: argparse.ArgumentParser,
+    *,
+    help_text: str = "Output as JSON (for CI integration)",
+) -> None:
+    """Add ``--json`` boolean flag for machine-readable output."""
+    parser.add_argument("--json", action="store_true", dest="json_output", help=help_text)
+
+
+def add_ci_arg(
+    parser: argparse.ArgumentParser,
+    *,
+    help_text: str = "CI mode: exit 1 on any issue",
+) -> None:
+    """Add ``--ci`` boolean flag for CI exit-code behaviour."""
+    parser.add_argument("--ci", action="store_true", help=help_text)
+
+
+def add_prometheus_arg(
+    parser: argparse.ArgumentParser,
+    *,
+    default: str | None = None,
+    help_text: str = "Prometheus URL (default: $PROMETHEUS_URL or http://localhost:9090)",
+) -> None:
+    """Add ``--prometheus`` argument with env-var fallback."""
+    parser.add_argument(
+        "--prometheus",
+        default=default or os.environ.get("PROMETHEUS_URL", "http://localhost:9090"),
+        help=help_text,
+    )

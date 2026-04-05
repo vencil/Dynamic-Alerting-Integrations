@@ -26,21 +26,47 @@ from typing import Dict, List, Tuple
 
 import yaml
 
-# ---------------------------------------------------------------------------
-# Repo root detection
-# ---------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent.parent
-
-# ---------------------------------------------------------------------------
-# Source-of-truth files
-# ---------------------------------------------------------------------------
-CHART_YAML = REPO_ROOT / "components" / "threshold-exporter" / "Chart.yaml"
-DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
-CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
-RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
-K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
-DOCS_DIR = REPO_ROOT / "docs"
+# Import version patterns from centralized registry
+from _version_patterns import (
+    REPO_ROOT,
+    CHART_YAML,
+    DA_TOOLS_VERSION,
+    CLAUDE_MD,
+    RULE_PACKS_DIR,
+    K8S_RULES_DIR,
+    DOCS_DIR,
+    SCANNABLE_EXTENSIONS,
+    SCAN_DIRECTORIES,
+    ROOT_FILES,
+    DA_TOOLS_TAG_PATTERN,
+    EXPORTER_VERSION_PATTERNS,
+    PLATFORM_VERSION_FRONTMATTER_PATTERN,
+    BARE_TAG_PATTERN,
+    RULE_PACK_COUNT_PATTERNS,
+    TOOL_COUNT_PATTERNS,
+    ADR_COUNT_PATTERNS,
+    DOC_FILE_COUNT_PATTERNS,
+    SCENARIO_COUNT_PATTERNS,
+    BILINGUAL_PAIR_PATTERN,
+    BILINGUAL_NUMBER_PATTERNS,
+    PLATFORM_VERSION_PATTERN,
+    DA_TOOLS_VERSION_PATTERN,
+    EXPORTER_VERSION_PATTERN,
+    MKDOCS_EXTRA_CHECKS,
+    SKIP_CI_INTERPOLATION_FILES,
+    SKIP_RULE_PACK_FILES,
+    SKIP_BILINGUAL_NUMBER_FILES,
+    DOC_MAP_SKIP_DIRS,
+    DOC_MAP_SKIP_NAMES,
+    TOOL_MAP_SKIP_PREFIXES,
+    ROADMAP_SECTIONS,
+    SKIP_FEATURE_HEADINGS,
+    TOOL_COUNT_CHECK_FILES,
+    ADR_COUNT_CHECK_FILES,
+    RULE_PACK_COUNT_CHECK_FILES,
+    BILINGUAL_BADGE_CHECK_FILES,
+    AUTO_FIX_PATTERNS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,21 +80,20 @@ def read_source_versions() -> Dict[str, str]:
     # da-tools version
     if DA_TOOLS_VERSION.exists():
         ver = DA_TOOLS_VERSION.read_text(encoding="utf-8").strip()
-        if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+", ver):
+        if re.match(DA_TOOLS_VERSION_PATTERN, ver):
             versions["tools"] = ver
 
     # Exporter version from Chart.yaml
     if CHART_YAML.exists():
         content = CHART_YAML.read_text(encoding="utf-8")
-        m = re.search(r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+[^"]*)"',
-                       content, re.MULTILINE)
+        m = re.search(EXPORTER_VERSION_PATTERN, content, re.MULTILINE)
         if m:
             versions["exporter"] = m.group(1)
 
     # Platform version from CLAUDE.md
     if CLAUDE_MD.exists():
         content = CLAUDE_MD.read_text(encoding="utf-8")
-        m = re.search(r"專案概覽 \(v([0-9]+\.[0-9]+[^)]+)\)", content)
+        m = re.search(PLATFORM_VERSION_PATTERN, content)
         if m:
             versions["platform"] = m.group(1)
 
@@ -201,7 +226,7 @@ def _cached_rglob(base_dir: Path, pattern: str) -> List[Path]:
     return _RGLOB_CACHE[cache_key]
 
 
-def _collect_scannable_files(extensions: Tuple[str, ...] = (".md", ".jsx"),
+def _collect_scannable_files(extensions: Tuple[str, ...] = SCANNABLE_EXTENSIONS,
                              include_ci: bool = True) -> List[Path]:
     """Collect files to scan across docs, CI workflows, and K8s manifests.
 
@@ -215,11 +240,15 @@ def _collect_scannable_files(extensions: Tuple[str, ...] = (".md", ".jsx"),
     # Docs
     for ext in extensions:
         files.extend(_cached_rglob(DOCS_DIR,f"*{ext}"))
-    # Root READMEs
-    for name in ("README.md", "README.en.md"):
+    # Root READMEs + CLAUDE.md + mkdocs.yml
+    for name in ROOT_FILES:
         p = REPO_ROOT / name
         if p.is_file():
             files.append(p)
+    # Component READMEs (v2.4.0: 補全 components/ 目錄掃描範圍)
+    components_dir = REPO_ROOT / "components"
+    if components_dir.is_dir():
+        files.extend(_cached_rglob(components_dir, "*.md"))
     if include_ci:
         # CI workflows + K8s manifests
         for scan_dir in (REPO_ROOT / ".github",
@@ -243,12 +272,11 @@ def _read_cached(filepath: Path) -> str:
 def check_da_tools_version(expected: str) -> List[Issue]:
     """Check all da-tools image tag references match VERSION file."""
     issues = []
-    tag_pattern = r"da-tools:v?([0-9]+\.[0-9]+\.[0-9]+)"
 
     for f in _collect_scannable_files():
         content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
-            for m in re.finditer(tag_pattern, line):
+            for m in re.finditer(DA_TOOLS_TAG_PATTERN, line):
                 found_ver = m.group(1)
                 if found_ver != expected:
                     rel = f.relative_to(REPO_ROOT)
@@ -262,25 +290,15 @@ def check_da_tools_version(expected: str) -> List[Issue]:
 def check_exporter_version(expected: str) -> List[Issue]:
     """Check exporter image tags and OCI chart version references."""
     issues = []
-    patterns = [
-        (r"threshold-exporter:v?([0-9]+\.[0-9]+\.[0-9]+)", "image tag"),
-        (r"charts/threshold-exporter --version ([0-9]+\.[0-9]+\.[0-9]+)",
-         "OCI chart version"),
-        (r"charts/threshold-exporter:([0-9]+\.[0-9]+\.[0-9]+)",
-         "OCI chart inline version"),
-    ]
-
-    # Skip release.yaml — it uses CI variable interpolation, not literal tags
-    skip_names = {"release.yaml"}
 
     for f in _collect_scannable_files():
         if not f.exists():
             continue
-        if f.name in skip_names:
+        if f.name in SKIP_CI_INTERPOLATION_FILES:
             continue
         content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in patterns:
+            for pat, desc in EXPORTER_VERSION_PATTERNS:
                 for m in re.finditer(pat, line):
                     found_ver = m.group(1)
                     if found_ver != expected:
@@ -295,7 +313,6 @@ def check_exporter_version(expected: str) -> List[Issue]:
 def check_platform_version(expected: str) -> List[Issue]:
     """Check frontmatter version: fields and inline version references."""
     issues = []
-    fm_pattern = r"^version:\s*v?([0-9]+\.[0-9]+[^\s]*)"
 
     # Scan all docs/**/*.md frontmatter
     for f in sorted(_cached_rglob(DOCS_DIR,"*.md")):
@@ -307,7 +324,7 @@ def check_platform_version(expected: str) -> List[Issue]:
             for i, line in enumerate(lines[1:], 2):
                 if line.strip() == "---":
                     break
-                m = re.match(fm_pattern, line)
+                m = re.match(PLATFORM_VERSION_FRONTMATTER_PATTERN, line)
                 if m:
                     found_ver = m.group(1)
                     if found_ver != expected and f"v{found_ver}" != f"v{expected}":
@@ -321,7 +338,7 @@ def check_platform_version(expected: str) -> List[Issue]:
     for f in sorted(_cached_rglob(DOCS_DIR,"*.jsx")):
         content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
-            m = re.match(fm_pattern, line)
+            m = re.match(PLATFORM_VERSION_FRONTMATTER_PATTERN, line)
             if m:
                 found_ver = m.group(1)
                 if found_ver != expected:
@@ -338,45 +355,30 @@ def check_rule_pack_counts(actual: Dict) -> List[Issue]:
     """Check Rule Pack counts in documentation match actual YAML counts."""
     issues = []
     pack_count = actual["pack_count"]
-    rec_count = actual["recording"]
     alert_count = actual["alert"]
-    total_count = actual["total"]
-
-    # Patterns to check in docs
-    checks = [
-        # (pattern, extract_group_index, expected_value, description)
-        (r"(\d+)\s*個\s*Rule\s*Pack", 1, str(pack_count), "Rule Pack count (zh)"),
-        (r"(\d+)\s*Rule\s*Pack\s*ConfigMap", 1, str(pack_count),
-         "Rule Pack ConfigMap count"),
-        (r"rule%20packs-(\d+)-", 1, str(pack_count), "Rule Pack badge"),
-        (r"alerts-(\d+)-", 1, str(alert_count), "Alert badge"),
-        (r"\*\*合計\*\*.*\*\*(\d+)\*\*.*\*\*(\d+)\*\*", None, None,
-         "Rule Pack total row"),
-    ]
-
-    # Files to skip (contain historical references that are correct at time of writing)
-    skip_basenames = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
-                      "benchmarks.en.md"}
 
     files_to_scan = list(_cached_rglob(DOCS_DIR,"*.md"))
-    files_to_scan.extend([
-        REPO_ROOT / "README.md",
-        REPO_ROOT / "README.en.md",
-    ])
+    files_to_scan.extend(RULE_PACK_COUNT_CHECK_FILES)
 
     for f in files_to_scan:
         if not f.exists():
             continue
-        if f.name in skip_basenames:
+        if f.name in SKIP_RULE_PACK_FILES:
             continue
         content = _read_cached(f)
         rel = str(f.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
             # Check pack count patterns
-            for pat, grp, expected, desc in checks[:4]:
+            for pat, grp, _, desc in RULE_PACK_COUNT_PATTERNS[:4]:
                 for m in re.finditer(pat, line, re.IGNORECASE):
                     found = m.group(grp)
+                    # Determine expected value based on pattern
+                    if "alert" in desc.lower():
+                        expected = str(alert_count)
+                    else:
+                        expected = str(pack_count)
+
                     if found != expected:
                         # Skip historical references (v1.x.y context)
                         if re.search(r"v1\.[0-9]+\.[0-9]+", line):
@@ -393,13 +395,13 @@ def check_bilingual_badge(actual_pairs: int) -> List[Issue]:
     """Check bilingual badge count matches actual .en.md pairs."""
     issues = []
 
-    for f in [REPO_ROOT / "README.md", REPO_ROOT / "README.en.md"]:
+    for f in BILINGUAL_BADGE_CHECK_FILES:
         if not f.exists():
             continue
         content = _read_cached(f)
         rel = str(f.relative_to(REPO_ROOT))
         for i, line in enumerate(content.splitlines(), 1):
-            m = re.search(r"bilingual-(\d+)%20pairs", line)
+            m = re.search(BILINGUAL_PAIR_PATTERN, line)
             if m:
                 found = int(m.group(1))
                 if found != actual_pairs:
@@ -442,19 +444,6 @@ def check_roadmap_changelog_overlap() -> List[Issue]:
     """
     issues = []
 
-    # Roadmap files and their section markers
-    roadmap_files = [
-        (DOCS_DIR / "architecture-and-design.md",
-         r"^## 5\.\s*未來擴展路線",
-         "architecture-and-design.md §5"),
-        (DOCS_DIR / "architecture-and-design.en.md",
-         r"^## 5\.\s*Future",
-         "architecture-and-design.en.md §5"),
-        (REPO_ROOT / "CLAUDE.md",
-         r"^## 長期展望",
-         "CLAUDE.md 長期展望"),
-    ]
-
     # Known completed features (from CHANGELOG section headers)
     changelog = REPO_ROOT / "CHANGELOG.md"
     if not changelog.exists():
@@ -468,12 +457,10 @@ def check_roadmap_changelog_overlap() -> List[Issue]:
     # contiguous substring (case-insensitive), which avoids false positives
     # from individual words appearing in unrelated contexts.
     completed_phrases: List[str] = []
-    skip_headings = {"版號", "Breaking Changes", "Key Changes",
-                     "Documentation Overhaul", "文件大重構"}
     for m in re.finditer(r"^### .+?([A-Z][A-Za-z][^\n]+)", content,
                          re.MULTILINE):
         feat = m.group(1).strip()
-        if feat in skip_headings:
+        if feat in SKIP_FEATURE_HEADINGS:
             continue
         # Skip short phrases (< 8 chars) — too generic to match reliably
         if len(feat) < 8:
@@ -491,7 +478,7 @@ def check_roadmap_changelog_overlap() -> List[Issue]:
         escaped = re.sub(r"\\ ", r"\\s+", escaped)
         phrase_patterns.append((re.compile(escaped, re.IGNORECASE), phrase))
 
-    for fpath, start_pattern, desc in roadmap_files:
+    for fpath, start_pattern, desc in ROADMAP_SECTIONS:
         if not fpath.exists():
             continue
         fcontent = fpath.read_text(encoding="utf-8")
@@ -537,25 +524,12 @@ def check_bilingual_number_consistency() -> List[Issue]:
     """
     issues = []
 
-    # Patterns for technical numbers that should match across languages
-    number_patterns = [
-        (r"(\d+)\s*個?\s*Rule\s*Pack", "Rule Pack count"),
-        (r"(\d+)\s*Recording", "Recording rule count"),
-        (r"(\d+)\s*Alert(?:\s+rule)?", "Alert rule count"),
-        (r"rule%20packs-(\d+)-", "Rule Pack badge"),
-        (r"alerts-(\d+)-", "Alert badge"),
-        (r"bilingual-(\d+)", "Bilingual badge"),
-    ]
-
-    # Files with legitimate historical number references
-    skip_basenames = {"benchmarks.md", "CHANGELOG.md"}
-
     # Find zh/en pairs
     pairs = []
     for zh_file in sorted(_cached_rglob(DOCS_DIR,"*.md")):
         if ".en." in zh_file.name:
             continue
-        if zh_file.name in skip_basenames:
+        if zh_file.name in SKIP_BILINGUAL_NUMBER_FILES:
             continue
         en_file = zh_file.with_name(
             zh_file.name.replace(".md", ".en.md"))
@@ -572,7 +546,7 @@ def check_bilingual_number_consistency() -> List[Issue]:
         zh_content = zh_file.read_text(encoding="utf-8")
         en_content = en_file.read_text(encoding="utf-8")
 
-        for pat, desc in number_patterns:
+        for pat, desc in BILINGUAL_NUMBER_PATTERNS:
             zh_nums = sorted(set(re.findall(pat, zh_content, re.IGNORECASE)))
             en_nums = sorted(set(re.findall(pat, en_content, re.IGNORECASE)))
             if zh_nums and en_nums and zh_nums != en_nums:
@@ -600,12 +574,6 @@ def check_doc_map_coverage() -> List[Issue]:
 
     map_content = doc_map.read_text(encoding="utf-8").lower()
 
-    # Collect all zh doc files (skip .en.md)
-    # Skip directories that are intentionally not in the doc-map table
-    skip_dirs = {"includes", "adr"}
-    skip_names = {"tags.md", "CHANGELOG.md", "README-root.md", "doc-map.md",
-                   "tool-map.md"}
-
     for f in sorted(_cached_rglob(DOCS_DIR,"*.md")):
         if ".en." in f.name:
             continue
@@ -614,9 +582,9 @@ def check_doc_map_coverage() -> List[Issue]:
 
         # Skip includes/, adr/ individual files, and known exclusions
         parts = rel.parts
-        if any(d in parts for d in skip_dirs):
+        if any(d in parts for d in DOC_MAP_SKIP_DIRS):
             continue
-        if f.name in skip_names:
+        if f.name in DOC_MAP_SKIP_NAMES:
             continue
 
         # doc-map uses backtick-quoted paths or plain filenames
@@ -647,9 +615,8 @@ def check_tool_map_coverage() -> List[Issue]:
 
     map_content = tool_map.read_text(encoding="utf-8").lower()
 
-    skip_prefixes = ("_lib", "__init__", "__pycache__")
     for f in sorted(tools_dir.glob("*.py")):
-        if any(f.name.startswith(p) for p in skip_prefixes):
+        if any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES):
             continue
 
         lookup = f.name.lower()
@@ -675,7 +642,6 @@ def check_tool_count_in_docs() -> List[Issue]:
     if not tools_dir.exists():
         return issues
 
-    skip_prefixes = ("_lib", "__init__", "__pycache__")
     # Scan all subdirectories (ops/, dx/, lint/) + root
     all_py_files = list(tools_dir.glob("*.py"))
     for subdir in ("ops", "dx", "lint"):
@@ -684,30 +650,17 @@ def check_tool_count_in_docs() -> List[Issue]:
             all_py_files.extend(sub_path.glob("*.py"))
     actual_count = sum(
         1 for f in all_py_files
-        if not any(f.name.startswith(p) for p in skip_prefixes)
+        if not any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES)
     )
 
-    # Patterns to detect tool count references
-    count_patterns = [
-        (r"(\d+)\s*個\s*Python\s*工具", "Python tool count (zh)"),
-        (r"(\d+)\s*Python\s*tools?(?:\s*[\(（])", "Python tool count (en)"),
-        (r"(\d+)\s*Python\s*tools?(?:\s*in)", "Python tool count (en-in)"),
-    ]
-
-    files_to_check = [
-        REPO_ROOT / "CLAUDE.md",
-        REPO_ROOT / "README.md",
-        REPO_ROOT / "README.en.md",
-    ]
-
-    for fpath in files_to_check:
+    for fpath in TOOL_COUNT_CHECK_FILES:
         if not fpath.exists():
             continue
         content = _read_cached(fpath)
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in count_patterns:
+            for pat, desc in TOOL_COUNT_PATTERNS:
                 for m in re.finditer(pat, line, re.IGNORECASE):
                     found = int(m.group(1))
                     if found != actual_count:
@@ -735,18 +688,11 @@ def check_adr_count_in_docs() -> List[Issue]:
         if f.name != "README.md" and not f.name.endswith(".en.md")
     )
 
-    # Pattern: "5 ADRs" or "(5 ADRs)"
-    count_patterns = [
-        (r"(\d+)\s*ADRs?\b", "ADR count"),
-    ]
-
-    files_to_check = [
-        REPO_ROOT / "CLAUDE.md",
-        REPO_ROOT / "README.md",
-        REPO_ROOT / "README.en.md",
+    files_to_check = ADR_COUNT_CHECK_FILES.copy()
+    files_to_check.extend([
         adr_dir / "README.md",
         adr_dir / "README.en.md",
-    ]
+    ])
 
     for fpath in files_to_check:
         if not fpath.exists():
@@ -755,7 +701,7 @@ def check_adr_count_in_docs() -> List[Issue]:
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in count_patterns:
+            for pat, desc in ADR_COUNT_PATTERNS:
                 for m in re.finditer(pat, line, re.IGNORECASE):
                     found = int(m.group(1))
                     if found != actual_count:
@@ -784,11 +730,6 @@ def check_doc_file_count_in_docs() -> List[Issue]:
                      if line.startswith("|"))
     actual_count = max(0, table_rows - 2)  # subtract header + separator
 
-    # Pattern: "XX 個文件" in CLAUDE.md
-    count_patterns = [
-        (r"(\d+)\s*個文件", "doc file count (zh)"),
-    ]
-
     files_to_check = [REPO_ROOT / "CLAUDE.md"]
 
     for fpath in files_to_check:
@@ -798,7 +739,7 @@ def check_doc_file_count_in_docs() -> List[Issue]:
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in count_patterns:
+            for pat, desc in DOC_FILE_COUNT_PATTERNS:
                 for m in re.finditer(pat, line):
                     found = int(m.group(1))
                     if found != actual_count:
@@ -823,10 +764,6 @@ def check_scenario_count_in_docs() -> List[Issue]:
         if not f.name.endswith(".en.md")
     )
 
-    count_patterns = [
-        (r"(\d+)\s*場景", "scenario count (zh)"),
-    ]
-
     files_to_check = [REPO_ROOT / "CLAUDE.md"]
 
     for fpath in files_to_check:
@@ -836,7 +773,7 @@ def check_scenario_count_in_docs() -> List[Issue]:
         rel = str(fpath.relative_to(REPO_ROOT))
 
         for i, line in enumerate(content.splitlines(), 1):
-            for pat, desc in count_patterns:
+            for pat, desc in SCENARIO_COUNT_PATTERNS:
                 for m in re.finditer(pat, line):
                     found = int(m.group(1))
                     if found != actual_count:
@@ -863,26 +800,21 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
         new_content = content
 
         if issue.check == "bilingual-count":
-            # Fix badge count: bilingual-XX%20pairs → bilingual-{actual}%20pairs
-            new_content = re.sub(
-                r"bilingual-\d+%20pairs",
-                f"bilingual-{bilingual_pairs}%20pairs",
-                new_content,
-            )
+            # Fix badge count using pattern from AUTO_FIX_PATTERNS
+            pattern = AUTO_FIX_PATTERNS["bilingual-count"]["pattern"]
+            replacement = AUTO_FIX_PATTERNS["bilingual-count"]["replacement_template"].format(value=bilingual_pairs)
+            new_content = re.sub(pattern, replacement, new_content)
 
         elif issue.check == "tool-count":
             # Fix "XX 個 Python 工具" count
             tools_dir = REPO_ROOT / "scripts" / "tools"
-            skip_prefixes = ("_lib", "__init__", "__pycache__")
             actual_count = sum(
                 1 for f in tools_dir.glob("*.py")
-                if not any(f.name.startswith(p) for p in skip_prefixes)
+                if not any(f.name.startswith(p) for p in TOOL_MAP_SKIP_PREFIXES)
             )
-            new_content = re.sub(
-                r"(\d+)(\s*個\s*Python\s*工具)",
-                f"{actual_count}\\2",
-                new_content,
-            )
+            pattern = AUTO_FIX_PATTERNS["tool-count"]["pattern"]
+            replacement = AUTO_FIX_PATTERNS["tool-count"]["replacement_template"].format(value=actual_count)
+            new_content = re.sub(pattern, replacement, new_content)
 
         elif issue.check == "doc-file-count":
             # Fix "XX 個文件" count from doc-map.md row count
@@ -892,28 +824,22 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                 rows = sum(1 for ln in map_text.splitlines()
                            if ln.startswith("|"))
                 doc_count = max(0, rows - 2)
-                new_content = re.sub(
-                    r"(\d+)(\s*個文件)",
-                    f"{doc_count}\\2",
-                    new_content,
-                )
+                pattern = AUTO_FIX_PATTERNS["doc-file-count"]["pattern"]
+                replacement = AUTO_FIX_PATTERNS["doc-file-count"]["replacement_template"].format(value=doc_count)
+                new_content = re.sub(pattern, replacement, new_content)
 
         elif issue.check == "rule-pack-count":
             # These are trickier — only fix clear badge patterns
             # (avoid modifying prose where context might differ)
             pack_count = rule_counts["pack_count"]
             alert_count = rule_counts["alert"]
-            # Fix badge patterns
-            new_content = re.sub(
-                r"rule%20packs-\d+-",
-                f"rule%20packs-{pack_count}-",
-                new_content,
-            )
-            new_content = re.sub(
-                r"alerts-\d+-",
-                f"alerts-{alert_count}-",
-                new_content,
-            )
+            # Fix badge patterns using AUTO_FIX_PATTERNS
+            for pat, repl_template in AUTO_FIX_PATTERNS["rule-pack-count"]["patterns"]:
+                if "pack_count" in repl_template:
+                    repl = repl_template.format(pack_count=pack_count)
+                else:
+                    repl = repl_template.format(alert_count=alert_count)
+                new_content = re.sub(pat, repl, new_content)
 
         if new_content != content:
             fpath.write_text(new_content, encoding="utf-8")
@@ -937,8 +863,6 @@ def check_image_tag_v_prefix() -> List[Issue]:
     Skips CI release.yaml (uses variable interpolation) and CHANGELOG (historical).
     """
     issues = []
-    # Match image:VERSION without v prefix (negative lookbehind for 'charts/')
-    bare_tag_pattern = r"(?<!charts/)(?:da-tools|threshold-exporter):(\d+\.\d+\.\d+)"
 
     skip_names = {"release.yaml", "CHANGELOG.md", "CHANGELOG.en.md"}
 
@@ -947,7 +871,7 @@ def check_image_tag_v_prefix() -> List[Issue]:
             continue
         content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
-            for m in re.finditer(bare_tag_pattern, line):
+            for m in re.finditer(BARE_TAG_PATTERN, line):
                 rel = f.relative_to(REPO_ROOT)
                 ver = m.group(1)
                 # Find which image it is
@@ -961,6 +885,35 @@ def check_image_tag_v_prefix() -> List[Issue]:
                     "image-tag-v-prefix", "error", str(rel), i,
                     f"{img}:{ver} missing v prefix, should be {img}:v{ver}",
                 ))
+    return issues
+
+
+def check_mkdocs_extra_versions(versions: Dict[str, str]) -> List[Issue]:
+    """Check mkdocs.yml extra vars match source-of-truth versions.
+
+    v2.4.0 新增：mkdocs.yml extra.platform_version / exporter_version / tools_version
+    是文件網站的版號來源，必須與 VERSION / Chart.yaml 一致。
+    """
+    issues = []
+    mkdocs_path = REPO_ROOT / "mkdocs.yml"
+    if not mkdocs_path.exists():
+        return issues
+
+    content = _read_cached(mkdocs_path)
+
+    for i, line in enumerate(content.splitlines(), 1):
+        for key, source_key in MKDOCS_EXTRA_CHECKS:
+            expected = versions.get(source_key)
+            if expected is None:
+                continue
+            m = re.match(rf'\s+{key}:\s*"([^"]+)"', line)
+            if m:
+                found = m.group(1)
+                if found != expected:
+                    issues.append(Issue(
+                        "mkdocs-extra-version", "error", "mkdocs.yml", i,
+                        f'{key}: "{found}" should be "{expected}"',
+                    ))
     return issues
 
 
@@ -1021,6 +974,7 @@ def main():
     all_issues.extend(check_doc_file_count_in_docs())
     all_issues.extend(check_scenario_count_in_docs())
     all_issues.extend(check_image_tag_v_prefix())
+    all_issues.extend(check_mkdocs_extra_versions(versions))
 
     # --fix mode: auto-fix fixable issues
     if args.fix and all_issues:

@@ -33,6 +33,10 @@ from _lib_io import (  # noqa: F401
     write_onboard_hints,
     read_onboard_hints,
     format_json_report,
+    add_config_dir_arg,
+    add_json_arg,
+    add_ci_arg,
+    add_prometheus_arg,
 )
 
 from _lib_validation import (  # noqa: F401

@@ -17,47 +17,21 @@ Exit codes:
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
-# Resolve project root (three levels up: scripts/tools/lint/ -> repo root)
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
+from _lint_helpers import parse_command_map_keys, REPO_ROOT, ENTRYPOINT_PATH
 
-ENTRYPOINT_PATH = PROJECT_ROOT / "components" / "da-tools" / "app" / "entrypoint.py"
-CHEAT_SHEET_ZH = PROJECT_ROOT / "docs" / "cheat-sheet.md"
-CHEAT_SHEET_EN = PROJECT_ROOT / "docs" / "cheat-sheet.en.md"
-CLI_REF_ZH = PROJECT_ROOT / "docs" / "cli-reference.md"
-CLI_REF_EN = PROJECT_ROOT / "docs" / "cli-reference.en.md"
+CHEAT_SHEET_ZH = REPO_ROOT / "docs" / "cheat-sheet.md"
+CHEAT_SHEET_EN = REPO_ROOT / "docs" / "cheat-sheet.en.md"
+CLI_REF_ZH = REPO_ROOT / "docs" / "cli-reference.md"
+CLI_REF_EN = REPO_ROOT / "docs" / "cli-reference.en.md"
 
 
 # ---------------------------------------------------------------------------
 # Parsers
 # ---------------------------------------------------------------------------
-
-def parse_command_map(path: Path) -> set:
-    """Parse COMMAND_MAP dict keys from entrypoint.py.
-
-    Extracts command names from lines matching:  "command-name": "script.py"
-    """
-    commands = set()
-    in_map = False
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith("COMMAND_MAP"):
-                in_map = True
-                continue
-            if in_map:
-                if stripped == "}":
-                    break
-                # Match: "command-name": "script.py",
-                m = re.match(r'"([a-z][a-z0-9-]+)":\s*"', stripped)
-                if m:
-                    commands.add(m.group(1))
-    return commands
 
 
 def parse_help_text_commands(path: Path) -> set:
@@ -169,7 +143,7 @@ def run_all_checks() -> list:
                            f"entrypoint.py not found: {ENTRYPOINT_PATH}"))
         return all_errors
 
-    command_map = parse_command_map(ENTRYPOINT_PATH)
+    command_map = parse_command_map_keys(ENTRYPOINT_PATH)
     if not command_map:
         all_errors.append(("error", "COMMAND_MAP is empty or unparseable"))
         return all_errors
@@ -264,7 +238,7 @@ def main():
 
     command_map = set()
     if ENTRYPOINT_PATH.exists():
-        command_map = parse_command_map(ENTRYPOINT_PATH)
+        command_map = parse_command_map_keys(ENTRYPOINT_PATH)
 
     errors = run_all_checks()
 
@@ -276,10 +250,7 @@ def main():
     has_errors = any(s == "error" for s, _ in errors)
     if args.ci and has_errors:
         sys.exit(1)
-    elif has_errors:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

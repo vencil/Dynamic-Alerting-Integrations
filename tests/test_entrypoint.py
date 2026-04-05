@@ -20,6 +20,7 @@ import sys
 import pytest
 
 import entrypoint  # noqa: E402  (path set by conftest.py)
+from _lint_helpers import parse_build_sh_tools, BUILD_EXEMPT
 
 DA_TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), os.pardir,
@@ -30,27 +31,31 @@ DA_TOOLS_DIR = os.path.join(
 # ── Command Map Consistency ────────────────────────────────────────
 
 
-# build.sh 中複製的 tools
-BUILD_SH_TOOLS = {
-    "check_alert.py",
-    "baseline_discovery.py",
-    "validate_migration.py",
-    "migrate_rule.py",
-    "scaffold_tenant.py",
-    "offboard_tenant.py",
-    "deprecate_rule.py",
-    "lint_custom_rules.py",
-}
-
-
 class TestCommandMapConsistency:
     """COMMAND_MAP 必須涵蓋 build.sh / CI 中列出的所有工具。"""
 
     def test_command_map_covers_build_tools(self):
-        """build.sh TOOL_FILES 中每個 .py 都有對應 COMMAND_MAP 項目。"""
+        """build.sh TOOL_FILES 中每個非豁免的 .py 都有對應 COMMAND_MAP 項目。"""
+        build_tools = parse_build_sh_tools()
+        assert build_tools, "無法解析 build.sh TOOL_FILES（檔案不存在或格式異常）"
         mapped_scripts = set(entrypoint.COMMAND_MAP.values())
-        missing = BUILD_SH_TOOLS - mapped_scripts
+        build_py = {f for f in build_tools if f.endswith(".py")} - BUILD_EXEMPT
+        missing = build_py - mapped_scripts
         assert missing == set(), f"build.sh 有但 COMMAND_MAP 沒有: {missing}"
+
+    def test_command_map_scripts_in_build_sh(self):
+        """COMMAND_MAP 每個 .py value 都必須在 build.sh TOOL_FILES 中。
+
+        防止新增 COMMAND_MAP 條目但忘記加入 build.sh 導致 Docker image crash。
+        """
+        build_tools = parse_build_sh_tools()
+        assert build_tools, "無法解析 build.sh TOOL_FILES"
+        cm_scripts = set(entrypoint.COMMAND_MAP.values())
+        missing = cm_scripts - build_tools
+        assert missing == set(), (
+            f"COMMAND_MAP 指向的腳本不在 build.sh TOOL_FILES 中: {missing}。"
+            f" Docker image 中對應命令會 crash。"
+        )
 
     def test_command_map_values_are_py_files(self):
         """COMMAND_MAP 所有 value 都以 .py 結尾。"""
@@ -206,8 +211,9 @@ class TestMainRouting:
 class TestHelpTextConsistency:
     """help text 與 COMMAND_MAP 的一致性。"""
 
-    # 允許少數 command 尚未列入 help text（如新增但 help 未同步）
-    _HELP_EXEMPT = {"validate-config"}
+    # v2.4.0: 清空豁免清單。所有 COMMAND_MAP 命令都必須出現在 help text 中。
+    # v2.3.0 曾豁免 validate-config，但該命令已在 help text 中。
+    _HELP_EXEMPT: set = set()
 
     def test_all_commands_in_english_help(self):
         """COMMAND_MAP 所有 command（排除豁免項）出現在英文 help text 中。"""
