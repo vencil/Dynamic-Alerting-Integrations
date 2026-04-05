@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rbac-config
+  namespace: tenant-api
+  labels:
+    app: tenant-api
+    app.kubernetes.io/part-of: dynamic-alerting
+data:
+  # _rbac.yaml — Group → Tenant permission mapping.
+  # Loaded atomically by tenant-api on startup and hot-reloaded every 30s.
+  #
+  # group.name   : IdP group name injected by oauth2-proxy via X-Forwarded-Groups header.
+  # tenants      : list of tenant IDs or patterns ("*" = all, "db-a-*" = prefix wildcard).
+  # permissions  : read | write | admin (admin ⊇ write ⊇ read).
+  _rbac.yaml: |
+    groups:
+      - name: platform-admins
+        tenants: ["*"]
+        permissions: [read, write, admin]
+
+      - name: db-operators
+        tenants: ["db-a-*", "db-b-*"]
+        permissions: [read, write]
+
+      - name: viewers
+        tenants: ["*"]
+        permissions: [read]

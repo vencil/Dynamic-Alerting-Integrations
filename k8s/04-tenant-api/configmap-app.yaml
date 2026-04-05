@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-api-config
+  namespace: tenant-api
+  labels:
+    app: tenant-api
+    app.kubernetes.io/part-of: dynamic-alerting
+data:
+  # Git repository URL for the conf.d/ tenant config directory.
+  # Leave empty to skip git clone in the init container (dev/hostPath mode).
+  GIT_REPO_URL: ""

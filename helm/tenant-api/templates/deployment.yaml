@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tenant-api.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "tenant-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tenant-api.labels" . | nindent 8 }}
+      annotations:
+        # Force rolling restart when RBAC config changes
+        checksum/rbac: {{ include (print $.Template.BasePath "/configmap-rbac.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "tenant-api.name" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      # ── Init: clone git repository (skipped if gitRepoUrl is empty) ──────────
+      {{- if .Values.gitRepoUrl }}
+      initContainers:
+        - name: git-clone
+          image: alpine/git:2.43.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - |
+              if [ -d /conf.d/.git ]; then
+                git -C /conf.d pull --ff-only
+              else
+                git clone "$GIT_REPO_URL" /conf.d
+              fi
+          env:
+            - name: GIT_REPO_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "tenant-api.name" . }}-config
+                  key: GIT_REPO_URL
+          volumeMounts:
+            - name: conf-dir
+              mountPath: /conf.d
+          resources:
+            {{- toYaml .Values.resources.gitClone | nindent 12 }}
+      {{- end }}
+
+      containers:
+        # ── Primary: tenant-api ────────────────────────────────────────────────
+        - name: tenant-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - --addr={{ .Values.tenantApi.listenAddr }}
+            - --config-dir=/conf.d
+            - --git-dir=/conf.d
+            - --rbac=/etc/rbac/_rbac.yaml
+            - --reload-interval={{ .Values.tenantApi.reloadInterval }}
+          env:
+            - name: GIT_COMMITTER_NAME
+              value: {{ .Values.tenantApi.gitCommitterName | quote }}
+            - name: GIT_COMMITTER_EMAIL
+              value: {{ .Values.tenantApi.gitCommitterEmail | quote }}
+          ports:
+            - name: api
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: conf-dir
+              mountPath: /conf.d
+            - name: rbac-config
+              mountPath: /etc/rbac
+              readOnly: true
+            - name: git-tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources.tenantApi | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+
+        # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
+        {{- if .Values.oauth2Proxy.enabled }}
+        - name: oauth2-proxy
+          image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.oauth2Proxy.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - --provider={{ .Values.oauth2Proxy.provider }}
+            - --upstream=http://localhost:8080
+            - --http-address=0.0.0.0:4180
+            - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
+            - --email-domain={{ .Values.oauth2Proxy.emailDomain }}
+            - --pass-user-headers=true
+            - --set-xauthrequest=true
+            - --skip-auth-route=^/health$
+            - --skip-auth-route=^/ready$
+            - --cookie-secure={{ .Values.oauth2Proxy.cookieSecure }}
+            - --cookie-httponly={{ .Values.oauth2Proxy.cookieHttpOnly }}
+            - --cookie-samesite={{ .Values.oauth2Proxy.cookieSameSite }}
+            - --cookie-name={{ .Values.oauth2Proxy.cookieName }}
+          env:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth2Proxy.secretName }}
+                  key: OAUTH2_PROXY_COOKIE_SECRET
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth2Proxy.secretName }}
+                  key: OAUTH2_PROXY_CLIENT_ID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth2Proxy.secretName }}
+                  key: OAUTH2_PROXY_CLIENT_SECRET
+          ports:
+            - name: http
+              containerPort: 4180
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources.oauth2Proxy | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        {{- end }}
+
+      volumes:
+        - name: conf-dir
+          {{- include "tenant-api.confDirVolume" . | nindent 10 }}
+
+        - name: rbac-config
+          configMap:
+            name: rbac-config
+
+        - name: git-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

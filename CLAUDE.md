@@ -27,6 +27,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 | 三態 + Bilingual | 三態（Normal/Silent/Maintenance）、`*_zh` 雙語 annotation、CLI i18n — 三層各自獨立 | §2.7, §3.2 |
 | Dual-Perspective | `platform_summary` + `summary` 雙視角 → `_routing_enforced` NOC 通知 | §2.11 |
 | 四層路由合併 | `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`，ADR-007 | §2.12 |
+| Tenant API 架構 | commit-on-write + `atomic.Value` RBAC 熱更新 + Portal 降級安全，ADR-009 | §2.14 |
 
 ## 開發規範
 
@@ -137,5 +138,3 @@ Playbook 是 **living documents**，跟隨專案演進持續更新：
 6. **Lesson Learned**：回寫 Playbook + CLAUDE.md
 
 ## 長期展望
-
-Roadmap 與已完成項目見 `docs/architecture-and-design.md` §5 + `docs/internal/dx-tooling-backlog.md`。

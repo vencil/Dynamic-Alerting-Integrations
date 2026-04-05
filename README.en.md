@@ -61,6 +61,8 @@ tenants:
 
 `da-tools scaffold` generates config interactively, `da-tools validate-config` validates locally, and changes take effect via hot-reload. Scheduled thresholds (auto-relax at night) and recurring maintenance windows (cron + duration auto-silence) let tenants manage their own operational rhythm.
 
+For teams that prefer not to touch YAML, the tenant-api provides a REST API management plane: browse configs, preview change diffs, and perform bulk operations through the Portal UI. Every write automatically generates a git commit attributed to the operator. If the API is unavailable, the Portal gracefully degrades to read-only mode without affecting existing YAML + GitOps workflows.
+
 ### Domain Experts: Alert Quality and Standardization
 
 DBAs and SREs need to ensure alert quality and consistency across the organization. In practice, rules are scattered across tenant configs, severity definitions vary, Warning and Critical fire simultaneously causing notification fatigue, and there's no systematic way to analyze coverage.
@@ -76,6 +78,7 @@ The platform provides: 15 pre-loaded Rule Packs encoding domain best practices (
 | New tenant onboarding | Days to weeks | Minutes (scaffold → validate) |
 | Threshold change flow | Ticket → PR → Deploy | Tenant self-service YAML + Hot-Reload |
 | Governance | Ad-hoc review | Schema Validation + Policy-as-Code + CI |
+| Change audit | Manual git blame | API auto-commit (operator attribution) + full audit trail |
 
 Measured: scaling from 2 to 102 tenants, rule evaluation time stayed at 59.1ms → 60.6ms ([Benchmark §1](docs/benchmarks.md#1-向量匹配複雜度分析)).
 
@@ -208,18 +211,4 @@ Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](do
 | [Scenarios](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle · GitOps CI/CD · Hands-on Lab |
 | Day-2 Operations | `diagnose` → `alert-quality` → `patch-config` → `maintenance-scheduler` ([CLI Reference](docs/cli-reference.en.md)) |
 
-Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md) · Interactive tools: [Interactive Tools](https://vencil.github.io/Dynamic-Alerting-Integrations/)
-
----
-
-## Prerequisites
-
-- [Docker Engine](https://docs.docker.com/engine/install/) or Docker Desktop
-- [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- (Recommended) VS Code + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-
----
-
-## License
-
-MIT
+Full doc map: [doc-map.md](docs/intern

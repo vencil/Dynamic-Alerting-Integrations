@@ -747,6 +747,30 @@ da-tools diagnose <tenant> --config-dir conf.d/
 
 > threshold-exporter micro-benchmarks (config reload latency) at [benchmarks.md](benchmarks.md). Incremental migration guide at [incremental-migration-playbook](scenarios/incremental-migration-playbook.en.md).
 
+### 2.14 Tenant Management API Architecture (ADR-009)
+
+v2.4.0 introduces tenant-api as the management plane backend for da-portal. The design follows four core principles: Git as source of truth, authentication delegation, shared validation logic, and graceful degradation.
+
+**Commit-on-Write Mechanism:**
+
+tenant-api uses no database. All write operations (PUT / PATCH / DELETE) directly modify YAML files under `conf.d/` and commit with the operator's email as the git commit author. This ensures: (1) the Git repo remains the single source of truth with no Git↔DB sync issues; (2) configuration state at any point in time can be fully reconstructed via `git log`; (3) change audit naturally integrates with GitOps workflows.
+
+Before writing, the API compares the current HEAD against its snapshot: if `conf.d/` was modified by another source (manual push, another operator) since the API read, it returns HTTP 409 requiring a refresh — preventing silent overwrites.
+
+**RBAC Hot-Reload:**
+
+`_rbac.yaml` maps IdP groups to tenant subsets. The API server stores parsed RBAC structures in `sync/atomic.Value` with periodic SHA-256 comparison for lock-free hot-reload — the same pattern used by threshold-exporter's config reload. Handler goroutines read via `atomic.Load()` with zero lock contention.
+
+**Shared Validation Logic:**
+
+tenant-api directly imports `"github.com/vencil/threshold-exporter/pkg/config"`, reusing `ValidateTenantKeys()`, `ResolveAt()`, `ParseConfig()` and other core validation functions. Configurations rejected by the API are identical to those rejected by `da-tools validate-config`, eliminating the historical Go↔Python dual-maintenance schema problem.
+
+**Portal Graceful Degradation:**
+
+da-portal's tenant-manager.jsx probes tenant-api availability on load. When the API is healthy, full CRUD operations are enabled; when unavailable (oauth2-proxy failure, API server restart), it automatically falls back to static JSON read-only mode. The degradation is transparent to users with no manual switching required.
+
+> Full decision context and alternative analysis at [ADR-009: Tenant Manager CRUD API](adr/009-tenant-manager-crud-api.en.md).
+
 ---
 
 ## 3. Projected Volume Architecture (Rule Packs)
@@ -1034,35 +1058,4 @@ Export platform configuration in other monitoring systems' native formats: `da-t
 
 ## Appendix A: Role & Tool Quick Reference
 
-> Consolidated from the former `context-diagram.en.md`. For detailed tool usage, see [CLI Reference](cli-reference.en.md).
-
-### Role-Tool Mapping
-
-| Role | Responsibility | Core Tools | Occasional Tools |
-|------|---------------|------------|-----------------|
-| **Platform Engineer** | Platform config, Rule Pack maintenance, infra | `validate-config`, `generate-routes`, `config-diff`, `policy-engine` | `bump-docs`, `maintenance-scheduler`, `alert-quality`, `cardinality-forecast` |
-| **Domain Expert (DBA/SRE)** | Specific Rule Packs, metric dictionary, governance | `lint-custom-rules`, `migrate-rule`, `deprecate-rule` | `validate-config`, `backtest-threshold`, `alert-quality` |
-| **Tenant Team (SRE/DBA)** | Tenant config, thresholds, routing, three-state, metadata | `scaffold`, `diagnose`, `check-alert`, Self-Service Portal | `validate-migration`, `offboard`, `patch-config` |
-
-### Quick Start by Role
-
-**Platform Engineer** → Read this document → Learn `validate-config` and `generate-routes` → Use `config-diff` for PR blast radius analysis
-
-**Domain Expert (DBA)** → Read [custom-rule-governance.en.md](custom-rule-governance.en.md) → Use `migrate-rule` for rule migration → Use `backtest-threshold` to validate thresholds
-
-**Tenant Team (SRE/DBA)** → Read [getting-started/for-tenants.en.md](getting-started/for-tenants.en.md) → Use [Self-Service Portal](interactive-tools.en.md) or `scaffold` → Use `diagnose` for health checks
-
----
-
-## References
-
-- [ADR Overview](adr/README.en.md) — 8 architecture decision records
-- [Benchmarks](benchmarks.en.md) · [Governance & Security](governance-security.en.md) · [Troubleshooting](troubleshooting.en.md)
-- [Migration Guide](migration-guide.en.md) · [Migration Engine](migration-engine.en.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.en.md)
-- [Rule Packs](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
-- [Prometheus Operator Integration](prometheus-operator-integration.en.md) · [Federation](federation-integration.en.md)
-
----
-
-**Document version:** v2.3.0 — 2026-04-05
-**Maintainer:** Platform Engineering Team
+> Consolidated from the former `co

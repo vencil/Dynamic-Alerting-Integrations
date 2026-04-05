@@ -1,0 +1,15 @@
+apiVersion: v2
+name: tenant-api
+description: Tenant Management API for the Dynamic Alerting Platform (ADR-009)
+type: application
+# version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
+version: 2.4.0
+# appVersion: Go binary 版本
+appVersion: "2.4.0"
+keywords:
+  - dynamic-alerting
+  - tenant-management
+  - gitops
+home: https://github.com/vencil/Dynamic-Alerting-Integrations
+maintainers:
+  - name: vencil

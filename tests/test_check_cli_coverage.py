@@ -16,6 +16,7 @@ REPO_ROOT = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "lint"))
 
 import check_cli_coverage as cc  # noqa: E402
+from _lint_helpers import parse_command_map_keys  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ def tmp_cli_reference(tmp_path):
 
 class TestParseCommandMap:
     def test_basic(self, tmp_entrypoint):
-        result = cc.parse_command_map(tmp_entrypoint)
+        result = parse_command_map_keys(tmp_entrypoint)
         assert result == {"check-alert", "diagnose", "scaffold"}
 
     def test_with_comments(self, tmp_path):
@@ -126,20 +127,20 @@ class TestParseCommandMap:
         """)
         p = tmp_path / "ep.py"
         p.write_text(content, encoding="utf-8")
-        result = cc.parse_command_map(p)
+        result = parse_command_map_keys(p)
         assert result == {"check-alert", "lint"}
 
     def test_empty_map(self, tmp_path):
         content = "COMMAND_MAP = {\n}\n"
         p = tmp_path / "ep.py"
         p.write_text(content, encoding="utf-8")
-        result = cc.parse_command_map(p)
+        result = parse_command_map_keys(p)
         assert result == set()
 
     def test_no_command_map(self, tmp_path):
         p = tmp_path / "ep.py"
         p.write_text("print('hello')\n", encoding="utf-8")
-        result = cc.parse_command_map(p)
+        result = parse_command_map_keys(p)
         assert result == set()
 
 
@@ -322,14 +323,22 @@ class TestOutputFormatting:
 # ---------------------------------------------------------------------------
 
 class TestCLI:
-    def test_main_success(self, monkeypatch, capsys):
-        """Test main() with all-pass scenario."""
+    def test_main_no_ci_always_zero(self, monkeypatch, capsys):
+        """Without --ci, main() exits 0 even with errors (display-only mode)."""
         monkeypatch.setattr(cc, "ENTRYPOINT_PATH",
                             cc.Path("/nonexistent"))
         monkeypatch.setattr(sys, "argv", ["check_cli_coverage.py"])
         with pytest.raises(SystemExit) as exc_info:
             cc.main()
-        # Should fail because entrypoint not found
+        assert exc_info.value.code == 0
+
+    def test_main_ci_with_errors(self, monkeypatch, capsys):
+        """With --ci and errors, main() exits 1."""
+        monkeypatch.setattr(cc, "ENTRYPOINT_PATH",
+                            cc.Path("/nonexistent"))
+        monkeypatch.setattr(sys, "argv", ["check_cli_coverage.py", "--ci"])
+        with pytest.raises(SystemExit) as exc_info:
+            cc.main()
         assert exc_info.value.code == 1
 
     def test_main_json_flag(self, monkeypatch, capsys):
@@ -358,7 +367,7 @@ class TestIntegration:
             pytest.skip("Not running inside project repo")
 
     def test_parse_real_command_map(self):
-        cmds = cc.parse_command_map(cc.ENTRYPOINT_PATH)
+        cmds = parse_command_map_keys(cc.ENTRYPOINT_PATH)
         assert len(cmds) >= 20, f"Expected >=20 commands, got {len(cmds)}"
         assert "check-alert" in cmds
         assert "scaffold" in cmds

@@ -24,6 +24,12 @@ __pycache__/
 htmlcov/
 .hypothesis/
 
+# --- Go Test Artifacts ---
+coverage.out
+cover.out
+.ruff_cache/
+.benchmarks/
+
 # --- Node (not a Node.js project — prevent accidental npm artifacts) ---
 node_modules/
 package.json

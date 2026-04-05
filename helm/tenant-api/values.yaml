@@ -1,0 +1,139 @@
+# tenant-api Helm values
+# Reference: ADR-009 — Tenant Manager CRUD API Architecture
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/vencil/tenant-api
+  tag: "2.4.0"
+  pullPolicy: IfNotPresent
+
+# oauth2-proxy sidecar configuration
+oauth2Proxy:
+  enabled: true
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: "v7.15.1"
+    pullPolicy: IfNotPresent
+  # Provider: github | google | oidc | gitlab
+  provider: github
+  # Redirect URL must match the registered OAuth2 app callback URL.
+  # Set to your actual Ingress host.
+  redirectUrl: "http://tenant-api.example.com/oauth2/callback"
+  # Accept all email domains — restrict further via rbac._rbacYaml groups.
+  emailDomain: "*"
+  # Cookie settings
+  cookieSecure: true  # Requires HTTPS; set false only for local dev
+  cookieHttpOnly: true
+  cookieSameSite: "Lax"
+  cookieName: "_tenant_api_session"
+  # Set to false to skip creating the placeholder Secret
+  # (use this in production with externally managed secrets)
+  createSecret: true
+  # Secret name (must be pre-created; see secret-oauth2proxy.yaml template)
+  secretName: oauth2-proxy-secrets
+
+# tenant-api application settings
+tenantApi:
+  listenAddr: ":8080"
+  reloadInterval: "30s"
+  # Git committer identity for commit-on-write audit trail.
+  # Author comes from X-Forwarded-Email (oauth2-proxy).
+  gitCommitterName: "da-portal"
+  gitCommitterEmail: "da-portal@dynamic-alerting.local"
+
+# conf.d volume: holds tenant YAML files and the git repository.
+# For production, set type=pvc and provide a storageClass.
+# For Kind dev, set type=hostPath and provide path.
+confDir:
+  # type: emptyDir | hostPath | pvc
+  type: emptyDir
+  hostPath: ""        # used when type=hostPath
+  pvc:
+    storageClass: ""
+    size: 1Gi
+    accessMode: ReadWriteOnce
+
+# Git repository to clone on startup (optional).
+# Leave empty to skip the init container (use hostPath or pre-populated PVC instead).
+gitRepoUrl: ""
+
+# RBAC configuration (_rbac.yaml content)
+rbac:
+  _rbacYaml: |
+    groups:
+      - name: platform-admins
+        tenants: ["*"]
+        permissions: [read, write, admin]
+
+      - name: db-operators
+        tenants: ["db-a-*", "db-b-*"]
+        permissions: [read, write]
+
+      - name: viewers
+        tenants: ["*"]
+        permissions: [read]
+
+service:
+  type: ClusterIP
+  # Port 80 → oauth2-proxy (4180) — external traffic
+  port: 80
+  # Port 8080 → tenant-api directly — cluster-internal (Prometheus scrape)
+  internalPort: 8080
+
+# Ingress (disabled by default — configure per-environment)
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: tenant-api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource requests and limits
+resources:
+  tenantApi:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  oauth2Proxy:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+  gitClone:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Pod security context (non-root)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# NetworkPolicy
+networkPolicy:
+  enabled: true
+  # Namespace that Prometheus is in (allowed to scrape internal port)
+  prometheusNamespace: monitoring
+
+# Prometheus scrape annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"

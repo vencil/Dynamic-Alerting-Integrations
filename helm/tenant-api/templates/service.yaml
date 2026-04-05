@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tenant-api.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "{{ .Values.service.internalPort }}"
+    prometheus.io/path: "/metrics"
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "tenant-api.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: 4180
+      protocol: TCP
+    - name: api-internal
+      port: {{ .Values.service.internalPort }}
+      targetPort: 8080
+      protocol: TCP

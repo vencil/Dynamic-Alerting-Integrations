@@ -1,0 +1,20 @@
+{{- if eq .Values.confDir.type "pvc" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tenant-api.name" . }}-conf
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.confDir.pvc.accessMode }}
+  {{- if .Values.confDir.pvc.storageClass }}
+  storageClassName: {{ .Values.confDir.pvc.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.confDir.pvc.size }}
+{{- end }}

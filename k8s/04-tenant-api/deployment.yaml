@@ -1,0 +1,231 @@
+# tenant-api Deployment — ADR-009: commit-on-write GitOps + oauth2-proxy sidecar auth.
+#
+# Pod layout:
+#   initContainer  git-clone   — clones conf.d/ repo into shared emptyDir volume
+#   container      tenant-api  — Go API server (localhost:8080, not exposed externally)
+#   sidecar        oauth2-proxy — authenticates requests, forwards to localhost:8080 (port 4180)
+#   (RBAC hot-reload handled by tenant-api's built-in 30s poll — no sidecar needed)
+#
+# For local dev on Kind, replace the emptyDir with a hostPath pointing to your workspace.
+# See the "Dev overlay" comment in the volumes section below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-api
+  namespace: tenant-api
+  labels:
+    app: tenant-api
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/version: "2.4.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tenant-api
+  template:
+    metadata:
+      labels:
+        app: tenant-api
+        app.kubernetes.io/version: "2.4.0"
+      annotations:
+        # Force rolling restart when RBAC config changes
+        checksum/rbac: "placeholder-updated-by-helm"
+    spec:
+      serviceAccountName: tenant-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+
+      # ── Init: clone the tenant config git repository ──────────────────────────
+      # Replace GIT_REPO_URL with your actual repo. For Kind dev, skip this init
+      # container and use a hostPath volume instead (see volumes section).
+      initContainers:
+        - name: git-clone
+          image: alpine/git:2.43.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # git needs to write .git/
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - |
+              if [ -z "${GIT_REPO_URL:-}" ]; then
+                echo "GIT_REPO_URL not set — skipping git clone (dev mode)"
+                exit 0
+              fi
+              if [ -d /conf.d/.git ]; then
+                echo "Repo exists, pulling latest..."
+                git -C /conf.d pull --ff-only
+              else
+                echo "Cloning $GIT_REPO_URL..."
+                git clone "$GIT_REPO_URL" /conf.d
+              fi
+          env:
+            - name: GIT_REPO_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: tenant-api-config
+                  key: GIT_REPO_URL
+                  optional: true
+          volumeMounts:
+            - name: conf-dir
+              mountPath: /conf.d
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+      containers:
+        # ── Primary: tenant-api ────────────────────────────────────────────────
+        - name: tenant-api
+          image: ghcr.io/vencil/tenant-api:2.4.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem: false — must write YAML files and run git
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - --addr=:8080
+            - --config-dir=/conf.d
+            - --git-dir=/conf.d
+            - --rbac=/etc/rbac/_rbac.yaml
+            - --reload-interval=30s
+          env:
+            # Committer identity for git commits (author comes from X-Forwarded-Email)
+            - name: GIT_COMMITTER_NAME
+              value: "da-portal"
+            - name: GIT_COMMITTER_EMAIL
+              value: "da-portal@dynamic-alerting.local"
+          ports:
+            - name: api
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: conf-dir
+              mountPath: /conf.d
+            - name: rbac-config
+              mountPath: /etc/rbac
+              readOnly: true
+            # git needs a writable HOME for config; tmpfs is enough
+            - name: git-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+
+        # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
+        # Listens on :4180, authenticates via GitHub/OIDC, forwards to localhost:8080.
+        # Injects X-Forwarded-Email and X-Forwarded-Groups headers consumed by tenant-api RBAC.
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            # Provider — change to "oidc" for Google/Keycloak/generic OIDC
+            - --provider=github
+            # Forward to tenant-api (only accessible within the pod)
+            - --upstream=http://localhost:8080
+            - --http-address=0.0.0.0:4180
+            # Redirect URL must match your Ingress host
+            - --redirect-url=http://tenant-api.example.com/oauth2/callback
+            # Accept any email domain; restrict further via _rbac.yaml groups
+            - --email-domain=*
+            # Inject user identity headers into upstream requests
+            - --pass-user-headers=true
+            - --set-xauthrequest=true
+            # Skip auth for health/readiness probes
+            - --skip-auth-route=^/health$
+            - --skip-auth-route=^/ready$
+            # Cookie settings
+            - --cookie-secure=false   # set to true when using HTTPS
+            - --cookie-name=_tenant_api_session
+          env:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-secrets
+                  key: OAUTH2_PROXY_COOKIE_SECRET
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-secrets
+                  key: OAUTH2_PROXY_CLIENT_ID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-secrets
+                  key: OAUTH2_PROXY_CLIENT_SECRET
+          ports:
+            - name: http
+              containerPort: 4180
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+      volumes:
+        # conf-dir: holds tenant YAML files and the git repository.
+        # For production: replace emptyDir with a PersistentVolumeClaim.
+        # For Kind dev: replace emptyDir with hostPath pointing to your workspace conf.d/
+        #
+        # Dev overlay example (add to your kind-dev-values.yaml):
+        #   volumes:
+        #     - name: conf-dir
+        #       hostPath:
+        #         path: /workspaces/vibe-k8s-lab/k8s/conf.d
+        #         type: DirectoryOrCreate
+        - name: conf-dir
+          emptyDir: {}
+
+        - name: rbac-config
+          configMap:
+            name: rbac-config
+
+        # tmpfs for git temporary files (HOME/.gitconfig etc.)
+        - name: git-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

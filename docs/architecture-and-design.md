@@ -819,6 +819,30 @@ da-tools diagnose <tenant> --config-dir conf.d/
 
 > threshold-exporter 層面的 micro-benchmark（config reload 延遲）見 [benchmarks.md](benchmarks.md)。漸進式遷移指南見 [incremental-migration-playbook](scenarios/incremental-migration-playbook.md)。
 
+### 2.14 Tenant Management API 架構（ADR-009）
+
+v2.4.0 引入 tenant-api，為 da-portal 提供管理平面後端。設計遵循四個核心原則：Git 為 source of truth、認證外包、驗證邏輯共用、降級安全。
+
+**Commit-on-Write 寫回機制：**
+
+tenant-api 不使用資料庫。所有寫入操作（PUT / PATCH / DELETE）直接修改 `conf.d/` 目錄下的 YAML 檔案，並以操作者 email 為 git commit author 提交。這確保了：(1) Git repo 始終是 single source of truth，無 Git↔DB 雙向同步問題；(2) 任何時間點的配置狀態可透過 `git log` 完整重建；(3) 操作審計自然融入 GitOps 工作流。
+
+寫入前執行 HEAD 快照比對：若 conf.d/ 在 API 讀取後被其他來源修改（手動 push、另一操作者），返回 HTTP 409 要求重新整理，避免靜默覆蓋。
+
+**RBAC 熱更新：**
+
+`_rbac.yaml` 定義 IdP group → tenant 子集的映射。API server 使用 `sync/atomic.Value` 存放解析後的 RBAC 結構，搭配 SHA-256 定期比對實現 lock-free 熱更新——與 threshold-exporter 的 config hot-reload 採相同模式。Handler goroutine 透過 `atomic.Load()` 讀取，零鎖競爭。
+
+**驗證邏輯共用：**
+
+tenant-api 直接 `import "github.com/vencil/threshold-exporter/pkg/config"`，複用 `ValidateTenantKeys()`、`ResolveAt()`、`ParseConfig()` 等核心驗證函式。API 拒絕的配置與 `da-tools validate-config` 拒絕的完全一致，消除 Go↔Python 雙端維護 schema 的歷史問題。
+
+**Portal 降級安全：**
+
+da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。API 正常時啟用完整 CRUD 操作；API 不可用（oauth2-proxy 故障、API server 重啟）時自動退回靜態 JSON 唯讀模式。降級過程對使用者透明，不需手動切換。
+
+> 完整決策脈絡與替代方案分析見 [ADR-009: Tenant Manager CRUD API](adr/009-tenant-manager-crud-api.md)。
+
 ---
 
 ## 3. Projected Volume 架構 (Rule Packs)
@@ -1112,31 +1136,4 @@ v2.3.0 已有 30 支 JSX 互動工具和 CI matrix。用 Playwright 建立瀏覽
 
 ### 角色與工具對應表
 
-| 角色 | 主責 | 核心工具 | 偶用工具 |
-|------|------|---------|---------|
-| **Platform Engineer** | 平台級配置、Rule Pack 維護、基礎設施 | `validate-config`, `generate-routes`, `config-diff`, `policy-engine` | `bump-docs`, `maintenance-scheduler`, `alert-quality`, `cardinality-forecast` |
-| **Domain Expert (DBA/SRE)** | 特定 Rule Pack、metric dictionary、governance | `lint-custom-rules`, `migrate-rule`, `deprecate-rule` | `validate-config`, `backtest-threshold`, `alert-quality` |
-| **Tenant Team (SRE/DBA)** | 租戶配置、閾值、路由、三態、metadata | `scaffold`, `diagnose`, `check-alert`, Self-Service Portal | `validate-migration`, `offboard`, `patch-config` |
-
-### 新手快速導航
-
-**Platform Engineer** → 讀本文件理解架構 → 學習 `validate-config` 和 `generate-routes` → 用 `config-diff` 做 PR blast radius 分析
-
-**Domain Expert (DBA)** → 讀 [custom-rule-governance.md](custom-rule-governance.md) → 用 `migrate-rule` 遷移規則 → 用 `backtest-threshold` 驗證閾值
-
-**Tenant Team (SRE/DBA)** → 讀 [getting-started/for-tenants.md](getting-started/for-tenants.md) → 用 [Self-Service Portal](interactive-tools.md) 或 `scaffold` 建立配置 → 用 `diagnose` 定期檢查
-
----
-
-## 相關資源
-
-- [ADR 總覽](adr/README.md) — 8 個架構決策紀錄
-- [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
-- [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
-- [規則包目錄](rule-packs/README.md) · [threshold-exporter](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
-- [Prometheus Operator 整合](prometheus-operator-integration.md) · [Federation](federation-integration.md)
-
----
-
-**文件版本：** v2.3.0 — 2026-04-05
-**維護者：** Platform Engineering Team
+| 角色 | 主責 | 核心
