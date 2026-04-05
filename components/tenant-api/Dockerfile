@@ -37,9 +37,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # ── Final stage ──────────────────────────────────────────────────────────────
 # alpine + git: required because gitops/writer.go shells out to `git`.
-FROM alpine:3.21
+FROM alpine:3.22
 
 # Install git and ca-certs (needed for git over HTTPS)
+# Note: alpine:3.22 already has nobody(65534); create nonroot with system-assigned IDs
 RUN apk add --no-cache git ca-certificates tzdata \
     && addgroup -S nonroot \
     && adduser  -S -G nonroot nonroot
