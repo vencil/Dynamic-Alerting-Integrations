@@ -6,7 +6,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 - **Cluster**: Kind (`dynamic-alerting-cluster`) | **NS**: `db-a`, `db-b` (Tenants), `monitoring` (Infra)
 - **threshold-exporter** ×2 HA (port 8080): YAML → Prometheus Metrics。三態 + `_critical` 多層嚴重度 + 維度標籤
-- **Prometheus**: Projected Volume 掛載 14 個 Rule Pack (`optional: true`)
+- **Prometheus**: 15 個 Rule Pack（14 個 optional Projected Volume + 1 個 platform ConfigMap）。**⚠️ 總數以 `platform-data.json` 為準（15），不是 `rule-packs/` yaml 檔案數（14）**
 - **Alertmanager**: 動態 route/receiver/inhibit 產生 + `configmap-reload` sidecar 自動 reload
 - **三態運營模式**: Normal / Silent (`_silent_mode`) / Maintenance (`_state_maintenance`)，均支援 `expires` 自動失效
 - **Distribution**: OCI registry + Docker images (`ghcr.io/vencil/threshold-exporter`, `ghcr.io/vencil/da-tools`, `ghcr.io/vencil/da-portal`)
@@ -61,13 +61,13 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（113 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（116 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
-快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (8 ADRs)
+快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (9 ADRs)
 
 ## 工具 (scripts/tools/)
 
-90 個 Python 工具（不含共用函式庫），依職責分三子目錄：
+91 個 Python 工具（不含共用函式庫），依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
