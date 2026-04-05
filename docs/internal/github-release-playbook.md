@@ -75,6 +75,19 @@ git commit -m "..."
 git push origin main
 ```
 
+### Step 2.5: ⛔ Pre-tag 品質閘門（硬性要求）
+
+**所有檢查必須通過才能打 tag。** 跳過此步驟是 v2.4.0 re-tag 三輪的根本原因。
+
+```bash
+make version-check              # 版號一致性 — 必須 ✅
+make lint-docs                  # 文件 lint — 必須 0 failed
+pre-commit run --all-files      # auto hooks — 必須全過
+make pre-tag                    # 一鍵整合（包含以上全部）
+```
+
+任何一項失敗 → 修正 → 重新驗證 → 才能進入 Step 3。
+
 ### Step 3: 建立 Tag
 
 五條版號線各有對應 tag：
@@ -88,6 +101,8 @@ git push origin main
 | tenant-api (Go) | `tenant-api/v2.4.0` | `git tag tenant-api/v2.4.0` | `release-tenant-api` job → Docker image + Helm chart |
 
 **Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
+
+**五線版號策略：** 五條獨立版號線（`v*` platform、`exporter/v*`、`tools/v*`、`portal/v*`、`tenant-api/v*`）各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。
 
 ```bash
 # 情況 A：五線全升（所有 component 有變更）
@@ -169,6 +184,23 @@ git push origin "tools/v<VERSION>"
 # 3. 驗證 CI（tools/v* 觸發 release.yaml 的 release-da-tools job）
 ```
 
+## tenant-api 獨立 Release
+
+tenant-api 有獨立版號線（`tenant-api/v*`），與 platform 脫鉤。
+
+**檢查清單（每次 platform release 後）：**
+
+```bash
+# 1. 檢查 tenant-api 自上次 tag 以來是否有 code change
+git diff $(git tag -l 'tenant-api/v*' --sort=-v:refname | head -1)..HEAD -- components/tenant-api/ helm/tenant-api/
+
+# 2. 若有變更 → 推 tag
+git tag "tenant-api/v<VERSION>"
+git push origin "tenant-api/v<VERSION>"
+
+# 3. 驗證 CI（tenant-api/v* 觸發 release.yaml 的 release-tenant-api job）
+```
+
 ## 已知陷阱
 
 | # | 陷阱 | 解法 |
@@ -196,6 +228,10 @@ git push origin "tools/v<VERSION>"
 | 21 | Re-tag 完整 SOP（同版號新 commit） | ① push main → ② 逐一刪遠端 tag（`git push origin --delete <tag>`，v2.1.0 可能已被刪，逐一操作避免 `--delete` 批次錯誤中斷）→ ③ 刪本地 tag（`git tag -d`）→ ④ 建新 tag on HEAD → ⑤ **逐一** push tag（避免同時推送不觸發 CI）→ ⑥ 重建 Release（因 #17 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
 | 22 | `Invoke-RestMethod` 在 Windows MCP 下頻繁 timeout | 原因：PowerShell 模組初始化 + TLS 協商累計超過 MCP 60s timeout。改用 `curl.exe`：JSON body 用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫無 BOM 暫存 → `curl.exe --data-binary @file`。注意 `Set-Content` 預設加 BOM 會導致 `Problems parsing JSON` |
 | 23 | `mkdocs gh-deploy` 連續失敗（site/ 權限 + ghp_import bytes bug） | `site/` 一旦建出 Cowork VM 無法清除（`Operation not permitted`），須 Windows MCP `Remove-Item` 清理。`ghp_import` 在 Python 3.10 下有 `TypeError: write() argument must be str, not bytes`；Workaround：手動建 temp git repo → 複製 `site/*` → commit → push `gh-pages --force` |
+| 24 | `bump_docs.py` 漏網規則 | 每次 release 前先跑 `bump_docs.py --what-if` 審計所有規則。新增 component 時須同步加入版號線（`--tenant-api` 等） |
+| 25 | Rule Pack 計數 14 vs 15 混淆 | `rule-packs/` yaml 檔案 = 14（optional Projected Volume），`platform-data.json` = 15（含 platform ConfigMap）。**總數以 `platform-data.json` 為準（15）**。`sync-counts` 應從 `platform-data.json` 讀取 |
+| 26 | Cowork VM mount 製造 phantom lock | VM mount daemon 會產生 `.git/*.lock` 但兩端都無法刪除。解法：用 fresh `git clone --depth 1` 到暫存目錄做 tag 操作，結束後刪除 |
+| 27 | 新 component 上線遺漏版號工具 | 新增 component（如 tenant-api）時，除了 `release.yaml` 加 job，還須：① `bump_docs.py` 加版號線 ② `validate_docs_versions.py` 加規則 ③ Dockerfile base image 驗證 |
 
 ## 上版前品質驗證清單（Pre-release Checklist）
 
@@ -241,12 +277,13 @@ git push origin "tools/v<VERSION>"
 
 ### Phase 4: 版號 + 品質閘門
 
-8. **版號治理**
+8. **版號治理**（⛔ 硬性要求）
    ```bash
-   make version-check              # 全 repo 版號一致性
-   make bump-docs                  # 若需更新
-   check_frontmatter_versions.py --fix   # frontmatter 批次更新
+   make version-check              # 全 repo 版號一致性 — 必須 ✅
+   make bump-docs                  # 若需更新 — 必須完全覆蓋
+   check_frontmatter_versions.py --fix   # frontmatter 批次更新 — 必須 0 failed
    ```
+   **任何版號不一致進入下一步都是致命風險。必須全數修正才能推送。**
 
 9. **品質閘門**
    ```bash

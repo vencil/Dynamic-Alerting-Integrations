@@ -2,7 +2,7 @@
 """bump_docs.py — 版號一致性管理工具
 
 掃描 repo 中的文件、Chart.yaml、VERSION 檔案，批次更新版號引用。
-三條版號線獨立管理：--platform / --exporter / --tools。
+四條版號線獨立管理：--platform / --exporter / --tools / --tenant-api。
 
 Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 --exporter 同時更新：Chart.yaml version + appVersion + image tag + OCI chart references。
@@ -13,6 +13,9 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 
   # 更新 da-tools 版號 (所有 image tag + VERSION)
   python3 scripts/tools/bump_docs.py --tools 1.1.0
+
+  # 更新 tenant-api 版號 (Chart.yaml + Dockerfile LABEL + image tag)
+  python3 scripts/tools/bump_docs.py --tenant-api 2.4.0
 
   # 更新平台文件版號
   python3 scripts/tools/bump_docs.py --platform 1.1.0
@@ -42,7 +45,7 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
   python3 scripts/tools/bump_docs.py --sync-counts --check
 
   # 組合使用
-  python3 scripts/tools/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0
+  python3 scripts/tools/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0 --tenant-api 2.4.0
 """
 import argparse
 import os
@@ -62,6 +65,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 # ---------------------------------------------------------------------------
 CHART_YAML = REPO_ROOT / "components" / "threshold-exporter" / "Chart.yaml"
 DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
+TENANT_API_CHART_YAML = REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
 
 # ---------------------------------------------------------------------------
 # Replacement rules per version line
@@ -157,6 +161,64 @@ def _build_tools_rules():
             "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
         })
+
+    # mkdocs.yml tools_version
+    rules.append({
+        "file": "mkdocs.yml",
+        "desc": "mkdocs.yml tools_version",
+        "pattern": r'tools_version:\s+"' + _SEMVER_STRICT + '"',
+        "replacement": lambda v: f'tools_version: "{v}"',
+    })
+
+    return rules
+
+
+def _build_tenant_api_rules():
+    """Build version replacement rules for tenant-api.
+
+    Returns list of rule dicts for the 'tenant-api' version line.
+    """
+    rules = []
+
+    # helm/tenant-api/Chart.yaml version
+    rules.append({
+        "file": "helm/tenant-api/Chart.yaml",
+        "desc": "tenant-api Chart.yaml version",
+        "pattern": r"^version:\s+" + _SEMVER_STRICT,
+        "replacement": lambda v: f"version: {v}",
+    })
+    rules.append({
+        "file": "helm/tenant-api/Chart.yaml",
+        "desc": "tenant-api Chart.yaml appVersion",
+        "pattern": r"^appVersion:\s+" + _SEMVER_STRICT,
+        "replacement": lambda v: f"appVersion: {v}",
+    })
+
+    # Dockerfile LABEL version
+    rules.append({
+        "file": "components/tenant-api/Dockerfile",
+        "desc": "tenant-api Dockerfile LABEL version",
+        "pattern": r'org\.opencontainers\.image\.version="' + _SEMVER_STRICT + '"',
+        "replacement": lambda v: f'org.opencontainers.image.version="{v}"',
+    })
+
+    # README OCI chart --version
+    rules.append({
+        "file": "components/tenant-api/README.md",
+        "desc": "tenant-api OCI chart --version in README",
+        "pattern": r"oci://ghcr\.io/vencil/charts/tenant-api\s+--version\s+" + _SEMVER_STRICT,
+        "replacement": lambda v: f"oci://ghcr.io/vencil/charts/tenant-api --version {v}",
+    })
+
+    # tenant-api image tag in docs
+    rules.append({
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "tenant-api image tag in docs",
+        "pattern": r"ghcr\.io/vencil/tenant-api:v?" + _SEMVER_STRICT,
+        "replacement": lambda v: f"ghcr.io/vencil/tenant-api:v{v}",
+    })
 
     return rules
 
@@ -266,6 +328,12 @@ def _build_exporter_rules():
             "desc": "OCI chart --version in migration guide (en)",
             "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "mkdocs.yml",
+            "desc": "mkdocs.yml exporter_version",
+            "pattern": r'exporter_version:\s+"' + _SEMVER_STRICT + '"',
+            "replacement": lambda v: f'exporter_version: "{v}"',
         },
     ]
 
@@ -559,12 +627,13 @@ def _build_platform_rules():
 def _build_rules():
     """Build all version replacement rules, grouped by version line.
 
-    Returns {"platform": [...], "exporter": [...], "tools": [...]}.
+    Returns {"platform": [...], "exporter": [...], "tools": [...], "tenant-api": [...]}.
     """
     return {
         "platform": _build_platform_rules(),
         "exporter": _build_exporter_rules(),
         "tools": _build_tools_rules(),
+        "tenant-api": _build_tenant_api_rules(),
     }
 
 
@@ -590,14 +659,27 @@ def _count_python_tools():
 
 
 def _count_rule_packs():
-    """Count Rule Pack ConfigMaps in k8s/03-monitoring/.
+    """Count Rule Packs from platform-data.json (source of truth).
 
-    Returns count of configmap-rules-*.yaml files (excluding platform rule file).
+    Falls back to counting configmap-rules-*.yaml in k8s/03-monitoring/.
+    platform-data.json includes all packs (14 optional yaml + 1 platform ConfigMap = 15).
     """
+    # Primary: platform-data.json is the source of truth
+    platform_data = REPO_ROOT / "docs" / "assets" / "platform-data.json"
+    if platform_data.exists():
+        import json
+        try:
+            data = json.loads(platform_data.read_text(encoding="utf-8"))
+            packs = data.get("rulePacks", {})
+            if isinstance(packs, (dict, list)) and len(packs) > 0:
+                return len(packs)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Fallback: count yaml files
     monitoring_dir = REPO_ROOT / "k8s" / "03-monitoring"
     if not monitoring_dir.exists():
         return 0
-
     rule_packs = [f for f in monitoring_dir.glob("configmap-rules-*.yaml")
                   if not f.name.endswith("-platform.yaml")]
     return len(rule_packs)
@@ -702,8 +784,8 @@ def _build_count_rules():
         rules.append({
             "file": "CLAUDE.md",
             "desc": f"CLAUDE.md: Rule Pack count ({rule_packs} packs)",
-            "pattern": r"掛載\s+(\d+)\s+個\s+Rule\s+Pack",
-            "replacement": lambda _: f"掛載 {rule_packs} 個 Rule Pack",
+            "pattern": r"(\d+)\s+個\s+Rule\s+Pack（(\d+)\s+個\s+optional",
+            "replacement": lambda _: f"{rule_packs} 個 Rule Pack（{rule_packs - 1} 個 optional",
             "is_count": True,
         })
 
@@ -1033,6 +1115,8 @@ def main():
                         help="New exporter version (e.g. 0.6.0)")
     parser.add_argument("--tools", metavar="VER",
                         help="New da-tools version (e.g. 0.2.0)")
+    parser.add_argument("--tenant-api", metavar="VER",
+                        help="New tenant-api version (e.g. 2.4.0)")
     parser.add_argument("--check", action="store_true",
                         help="Check only, don't modify files (exit 1 if outdated)")
     parser.add_argument("--dry-run", action="store_true",
@@ -1122,7 +1206,7 @@ def main():
         unmatched = 0
         missing = 0
 
-        for line in ("platform", "exporter", "tools"):
+        for line in ("platform", "exporter", "tools", "tenant-api"):
             ver = versions.get(line)
             if not ver:
                 print(f"\n⚠️  {line}: version not found in source-of-truth")
@@ -1214,7 +1298,7 @@ def main():
             sys.exit(0)
 
     # Explicit bump mode
-    if not (args.platform or args.exporter or args.tools):
+    if not (args.platform or args.exporter or args.tools or args.tenant_api):
         parser.print_help()
         sys.exit(1)
 
@@ -1223,7 +1307,8 @@ def main():
 
     for line, new_ver in [("platform", args.platform),
                           ("exporter", args.exporter),
-                          ("tools", args.tools)]:
+                          ("tools", args.tools),
+                          ("tenant-api", args.tenant_api)]:
         if not new_ver:
             continue
 

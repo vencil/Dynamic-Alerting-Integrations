@@ -223,6 +223,14 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 
+.PHONY: pre-tag
+pre-tag: version-check lint-docs ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag）
+	@echo ""
+	@echo "============================================================"
+	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅"
+	@echo "  Safe to create tags."
+	@echo "============================================================"
+
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 

@@ -67,7 +67,7 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 工具 (scripts/tools/)
 
-91 個 Python 工具（不含共用函式庫），依職責分三子目錄：
+90 個 Python 工具（不含共用函式庫），依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
@@ -87,6 +87,7 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 | `make lint-docs` | 一站式文件 lint，支援 `ARGS="--parallel"` |
 | `make platform-data` | 重新產生 `platform-data.json`（Rule Pack 數據） |
 | `make version-check` / `bump-docs` | 版號治理 |
+| `make pre-tag` | ⛔ Pre-tag 品質閘門（version-check + lint-docs，打 tag 前必跑） |
 | `make benchmark` | 效能基準（idle + routing + alertmanager + reload） |
 | `make validate-config` | 一站式配置驗證 |
 | `make portal-image` / `portal-run` | Self-Hosted Portal Docker image |
@@ -95,7 +96,7 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## Release 流程
 
-四線版號（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*`）。完整步驟與踩坑記錄見 `docs/internal/github-release-playbook.md`。
+五線版號（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*` / `tenant-api/v*`）。完整步驟與踩坑記錄見 `docs/internal/github-release-playbook.md`。
 
 ## AI Agent 環境
 
