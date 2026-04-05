@@ -116,16 +116,22 @@ jobs:
             ${{ runner.os }}-go-${{ matrix.go }}-
             ${{ runner.os }}-go-
 
-      - name: Run Go tests with race detector
+      - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app
         run: go test ./... -race -count=1 -coverprofile=coverage.out
 
-      - name: Upload coverage artifact
+      - name: Run tenant-api tests with race detector
+        working-directory: components/tenant-api
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
+
+      - name: Upload coverage artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-go${{ matrix.go }}
-          path: components/threshold-exporter/app/coverage.out
+          path: |
+            components/threshold-exporter/app/coverage.out
+            components/tenant-api/coverage.out
           retention-days: 7
 
   lint-docs:
