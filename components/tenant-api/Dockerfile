@@ -37,12 +37,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # ── Final stage ──────────────────────────────────────────────────────────────
 # alpine + git: required because gitops/writer.go shells out to `git`.
-FROM alpine:3.22
+FROM alpine:3.21
 
 # Install git and ca-certs (needed for git over HTTPS)
 RUN apk add --no-cache git ca-certificates tzdata \
-    && addgroup -S -g 65534 nonroot \
-    && adduser  -S -u 65534 -G nonroot nonroot
+    && addgroup -S nonroot \
+    && adduser  -S -G nonroot nonroot
 
 COPY --from=builder /tenant-api /usr/local/bin/tenant-api
 
