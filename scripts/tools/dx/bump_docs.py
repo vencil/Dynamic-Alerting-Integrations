@@ -35,6 +35,12 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
   # 完整規則審計（顯示所有規則的當前匹配狀態）
   python3 scripts/tools/bump_docs.py --what-if
 
+  # 自動更新散落在文件中的硬編碼計數（工具、Rule Pack、文件數、hooks 等）
+  python3 scripts/tools/bump_docs.py --sync-counts
+
+  # 檢查計數是否需要更新
+  python3 scripts/tools/bump_docs.py --sync-counts --check
+
   # 組合使用
   python3 scripts/tools/bump_docs.py --platform 1.1.0 --tools 1.1.0 --exporter 1.1.0
 """
@@ -563,6 +569,234 @@ def _build_rules():
 
 
 # ---------------------------------------------------------------------------
+# Count sync: automatic count updates for metrics scattered across docs
+# ---------------------------------------------------------------------------
+
+def _count_python_tools():
+    """Count Python tools in scripts/tools/{ops,dx,lint}/ directories.
+
+    Returns (total_count, ops_count, dx_count, lint_count).
+    """
+    ops_dir = REPO_ROOT / "scripts" / "tools" / "ops"
+    dx_dir = REPO_ROOT / "scripts" / "tools" / "dx"
+    lint_dir = REPO_ROOT / "scripts" / "tools" / "lint"
+
+    ops_count = len(list(ops_dir.glob("*.py"))) if ops_dir.exists() else 0
+    dx_count = len(list(dx_dir.glob("*.py"))) if dx_dir.exists() else 0
+    lint_count = len(list(lint_dir.glob("*.py"))) if lint_dir.exists() else 0
+
+    total = ops_count + dx_count + lint_count
+    return total, ops_count, dx_count, lint_count
+
+
+def _count_rule_packs():
+    """Count Rule Pack ConfigMaps in k8s/03-monitoring/.
+
+    Returns count of configmap-rules-*.yaml files (excluding platform rule file).
+    """
+    monitoring_dir = REPO_ROOT / "k8s" / "03-monitoring"
+    if not monitoring_dir.exists():
+        return 0
+
+    rule_packs = [f for f in monitoring_dir.glob("configmap-rules-*.yaml")
+                  if not f.name.endswith("-platform.yaml")]
+    return len(rule_packs)
+
+
+def _count_jsx_tools():
+    """Count interactive tools registered in docs/assets/tool-registry.yaml.
+
+    Returns count of tools (by counting '- key:' entries).
+    """
+    registry = REPO_ROOT / "docs" / "assets" / "tool-registry.yaml"
+    if not registry.exists():
+        return 0
+
+    content = registry.read_text(encoding="utf-8")
+    count = len(re.findall(r"^  - key:", content, re.MULTILINE))
+    return count
+
+
+def _count_docs():
+    """Count documentation files in docs/ directory.
+
+    Returns count of *.md files.
+    """
+    docs_dir = REPO_ROOT / "docs"
+    if not docs_dir.exists():
+        return 0
+
+    count = len(list(docs_dir.glob("**/*.md")))
+    return count
+
+
+def _count_precommit_hooks():
+    """Count pre-commit hooks in .pre-commit-config.yaml.
+
+    Returns count of hooks (by counting '- id:' entries).
+    """
+    config = REPO_ROOT / ".pre-commit-config.yaml"
+    if not config.exists():
+        return 0
+
+    content = config.read_text(encoding="utf-8")
+    count = len(re.findall(r"^\s+- id:", content, re.MULTILINE))
+    return count
+
+
+def _build_count_rules():
+    """Build count replacement rules for CLAUDE.md and README.md.
+
+    Returns list of rule dicts for count syncing.
+    """
+    total_tools, ops_tools, dx_tools, lint_tools = _count_python_tools()
+    rule_packs = _count_rule_packs()
+    jsx_tools = _count_jsx_tools()
+    docs = _count_docs()
+    hooks = _count_precommit_hooks()
+
+    rules = []
+
+    # CLAUDE.md: 84 個 Python 工具（不含共用函式庫）
+    if total_tools > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: Python tools total ({total_tools} tools)",
+            "pattern": r"(\d+)\s*個\s*Python\s*工具（不含共用函式庫）",
+            "replacement": lambda _: f"{total_tools} 個 Python 工具（不含共用函式庫）",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: ops/ count in table (currently 44)
+    if ops_tools > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: ops/ tools ({ops_tools} tools)",
+            "pattern": r"\| `ops/` \| 運維工具.*?\| \d+ \|",
+            "replacement": lambda _: f"| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check, operator-generate, operator-check, rule-pack-split, policy-opa-bridge...） | {ops_tools} |",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: dx/ count in table (currently 20)
+    if dx_tools > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: dx/ tools ({dx_tools} tools)",
+            "pattern": r"\| `dx/` \| DX.*?\| \d+ \|",
+            "replacement": lambda _: f"| `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis, generate_tenant_metadata...） | {dx_tools} |",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: lint/ count in table (currently 19)
+    if lint_tools > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: lint/ tools ({lint_tools} tools)",
+            "pattern": r"\| `lint/` \| 文件.*?\| \d+ \|",
+            "replacement": lambda _: f"| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | {lint_tools} |",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: 15 個 Rule Pack in architecture section
+    if rule_packs > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: Rule Pack count ({rule_packs} packs)",
+            "pattern": r"掛載\s+(\d+)\s+個\s+Rule\s+Pack",
+            "replacement": lambda _: f"掛載 {rule_packs} 個 Rule Pack",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: 30 JSX tools in section header
+    if jsx_tools > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: JSX tools ({jsx_tools} tools)",
+            "pattern": r"互動工具生態（(\d+)\s+JSX\s+tools）",
+            "replacement": lambda _: f"互動工具生態（{jsx_tools} JSX tools）",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: 91 個文件 in doc navigation section
+    if docs > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: docs count ({docs} files)",
+            "pattern": r"完整文件對照表（(\d+)\s+個文件，含受眾與內容摘要）",
+            "replacement": lambda _: f"完整文件對照表（{docs} 個文件，含受眾與內容摘要）",
+            "is_count": True,
+        })
+
+    # CLAUDE.md: 13 個 auto-run hooks
+    if hooks > 0:
+        rules.append({
+            "file": "CLAUDE.md",
+            "desc": f"CLAUDE.md: pre-commit hooks ({hooks} hooks)",
+            "pattern": r"(\d+)\s+個\s+auto-run\s+hooks（每次\s+commit）",
+            "replacement": lambda _: f"{hooks} 個 auto-run hooks（每次 commit）",
+            "is_count": True,
+        })
+
+    # README.md: 15 個 Rule Pack (in badge)
+    if rule_packs > 0:
+        rules.append({
+            "file": "README.md",
+            "desc": f"README.md: Rule Pack badge ({rule_packs} packs)",
+            "pattern": r"badge/rule%20packs-(\d+)-orange",
+            "replacement": lambda _: f"badge/rule%20packs-{rule_packs}-orange",
+            "is_count": True,
+        })
+
+    return rules
+
+
+def apply_count_updates(check_only=False, dry_run=False, verbose=False):
+    """Apply count replacement rules across docs.
+
+    Args:
+        check_only: If True, don't modify files (for --check mode).
+        dry_run: If True, don't modify files but show before→after diffs.
+        verbose: If True, show detailed output.
+
+    Returns list of (status, desc, detail) tuples.
+    """
+    rules = _build_count_rules()
+    changes = []
+
+    for rule in rules:
+        fpath = REPO_ROOT / rule["file"]
+        if not fpath.exists():
+            changes.append(("SKIP", rule["desc"], f"file not found: {rule['file']}"))
+            continue
+
+        content = fpath.read_text(encoding="utf-8")
+        pattern = rule["pattern"]
+        replacement = rule["replacement"](None)
+
+        matches = re.findall(pattern, content, re.MULTILINE)
+        if not matches:
+            changes.append(("OK", rule["desc"], "no match (pattern not found)"))
+            continue
+
+        # Check if update is needed
+        new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+        if new_content == content:
+            changes.append(("OK", rule["desc"], "already up to date"))
+        else:
+            unique_old = sorted(set(matches))
+            diff_detail = (f"replaced {len(matches)} occurrence(s): "
+                          f"{unique_old[0]} → {replacement}")
+            if dry_run:
+                diff_detail = f"[dry-run] {diff_detail}"
+            changes.append(("UPDATE", rule["desc"], diff_detail))
+            if not check_only and not dry_run:
+                fpath.write_text(new_content, encoding="utf-8")
+                os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+    return changes
+
+
+# ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
 
@@ -816,8 +1050,51 @@ def main():
     parser.add_argument("--what-if", action="store_true",
                         help="Show all rules with current match status "
                              "(comprehensive rule audit)")
+    parser.add_argument("--sync-counts", action="store_true",
+                        help="Auto-update hardcoded counts (tools, rule packs, "
+                             "JSX tools, docs, hooks) across CLAUDE.md and README.md")
 
     args = parser.parse_args()
+
+    # --sync-counts: auto-update all hardcoded counts
+    if args.sync_counts:
+        total_tools, ops_tools, dx_tools, lint_tools = _count_python_tools()
+        rule_packs = _count_rule_packs()
+        jsx_tools = _count_jsx_tools()
+        docs = _count_docs()
+        hooks = _count_precommit_hooks()
+
+        print("Current counts detected:")
+        print(f"  Python tools (total): {total_tools}")
+        print(f"    - ops/: {ops_tools}")
+        print(f"    - dx/: {dx_tools}")
+        print(f"    - lint/: {lint_tools}")
+        print(f"  Rule Packs: {rule_packs}")
+        print(f"  JSX tools: {jsx_tools}")
+        print(f"  Documentation files: {docs}")
+        print(f"  Pre-commit hooks: {hooks}")
+        print()
+
+        changes = apply_count_updates(check_only=args.check, dry_run=args.dry_run)
+        for status, desc, detail in changes:
+            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "⚠️ "}[status]
+            print(f"  {icon} {desc}: {detail}")
+
+        update_count = sum(1 for s, _, _ in changes if s == "UPDATE")
+        if args.check:
+            if update_count > 0:
+                print(f"\n❌ {update_count} count(s) are outdated. Run without --check to apply.")
+                sys.exit(1)
+            else:
+                print("\n✅ All counts are already up to date.")
+        elif args.dry_run:
+            if update_count > 0:
+                print(f"\n🔍 Dry run: {update_count} count(s) would be updated.")
+            else:
+                print("\n✅ Dry run: all counts are already up to date.")
+        else:
+            print(f"\n✅ Done. {update_count} count(s) updated.")
+        return
 
     # --init-changelog: insert a new version stub at the top of CHANGELOG.md
     if args.init_changelog:
