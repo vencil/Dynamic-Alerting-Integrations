@@ -77,7 +77,7 @@ git push origin main
 
 ### Step 3: 建立 Tag
 
-四條版號線各有對應 tag：
+五條版號線各有對應 tag：
 
 | 版號線 | Tag 格式 | 建立方式 | CI 觸發（release.yaml） |
 |--------|---------|---------|---------|
@@ -85,22 +85,24 @@ git push origin main
 | Exporter (Go) | `exporter/v1.8.0` | `make release-tag-exporter`（從 Chart.yaml 推導） | `release-exporter` job → Docker image + Helm chart |
 | da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image |
 | da-portal (Static) | `portal/v2.0.0` | `make release-tag-portal` | `release-portal` job → Docker image |
+| tenant-api (Go) | `tenant-api/v2.4.0` | `git tag tenant-api/v2.4.0` | `release-tenant-api` job → Docker image + Helm chart |
 
 **Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
 
 ```bash
-# 情況 A：四線全升（exporter + portal 有變更）
+# 情況 A：五線全升（所有 component 有變更）
 git tag v<PLATFORM>
 make release-tag-exporter   # 自動建 exporter/v<CHART_VER> tag
 git tag tools/v<TOOLS>
 git tag portal/v<PORTAL>
-git push origin v<PLATFORM> exporter/v<CHART_VER> tools/v<TOOLS> portal/v<PORTAL>
+git tag tenant-api/v<TENANT_API>
+git push origin v<PLATFORM> exporter/v<CHART_VER> tools/v<TOOLS> portal/v<PORTAL> tenant-api/v<TENANT_API>
 
-# 情況 B：僅 platform + da-tools（exporter / portal 未變）
+# 情況 B：僅 platform + da-tools（其他 component 未變）
 git tag v<PLATFORM>
 git tag tools/v<TOOLS>
 git push origin v<PLATFORM> tools/v<TOOLS>
-# ⚠️ 不推 exporter / portal tag — 版號不變時不推
+# ⚠️ 不推未變更 component 的 tag — 版號不變時不推
 ```
 
 ### Step 4: 建立 GitHub Release（透過 Windows MCP）

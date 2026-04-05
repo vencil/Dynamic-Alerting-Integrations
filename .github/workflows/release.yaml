@@ -1,16 +1,19 @@
 # release.yaml — Build & push container images + Helm chart on tag
 #
-# 觸發條件（四線版號策略）：
-#   - exporter/v* → threshold-exporter Docker image + Helm chart
-#   - tools/v*    → da-tools Docker image
-#   - portal/v*   → da-portal Docker image (Interactive Tools Portal)
-#   - v*          → platform tag，僅用於 GitHub Release 錨點，不觸發 build
+# 觸發條件（五線版號策略）：
+#   - exporter/v*    → threshold-exporter Docker image + Helm chart
+#   - tools/v*       → da-tools Docker image
+#   - portal/v*      → da-portal Docker image (Interactive Tools Portal)
+#   - tenant-api/v*  → tenant-api Docker image + Helm chart
+#   - v*             → platform tag，僅用於 GitHub Release 錨點，不觸發 build
 #
 # 產出：
 #   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-portal:v<version>             (Docker image, v-prefixed)
+#   - ghcr.io/vencil/tenant-api:v<version>             (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
+#   - oci://ghcr.io/vencil/charts/tenant-api         (Helm chart)
 #
 # 前置條件：
 #   - Repository Settings → Actions → Workflow permissions → Read and write
@@ -24,6 +27,7 @@ on:
       - "exporter/v*"
       - "tools/v*"
       - "portal/v*"
+      - "tenant-api/v*"
 
 env:
   REGISTRY: ghcr.io
@@ -186,6 +190,71 @@ jobs:
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:v${{ steps.version.outputs.VERSION }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+  # ----------------------------------------------------------------
+  # Job 4: Build & push tenant-api image + Helm chart
+  # ----------------------------------------------------------------
+  release-tenant-api:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/tenant-api/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#tenant-api/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Chart.yaml version matches tag
+        run: |
+          CHART_VER=$(grep '^version:' helm/tenant-api/Chart.yaml | awk '{print $2}')
+          if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Docker image ---
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push tenant-api image
+        uses: docker/build-push-action@v6
+        with:
+          context: components/tenant-api
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:latest
+
+      # --- Helm chart ---
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p .build
+          helm package helm/tenant-api -d .build/
+
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+
+      # --- Security scan ---
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:v${{ steps.version.outputs.VERSION }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
