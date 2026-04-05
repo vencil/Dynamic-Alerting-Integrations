@@ -2,6 +2,9 @@
 
 Compares current tool output against baseline snapshots.
 Run with --snapshot-update to regenerate baselines.
+
+Snapshots are Python-version-specific (argparse formatting varies).
+Files are named {name}_py{major}{minor}.snap (e.g., scaffold_help_py310.snap).
 """
 import subprocess
 import sys
@@ -11,6 +14,7 @@ import pytest
 
 TOOLS_DIR = Path(__file__).parent.parent / "scripts" / "tools"
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+_PY_TAG = f"py{sys.version_info.major}{sys.version_info.minor}"
 
 
 def ensure_snapshot_dir():
@@ -40,8 +44,9 @@ class TestSnapshots:
 
         If --snapshot-update is passed, regenerate the snapshot.
         If snapshot doesn't exist, create it and skip test (re-run to verify).
+        Snapshot files are Python-version-specific to handle argparse changes.
         """
-        snap_path = SNAPSHOT_DIR / f"{name}.snap"
+        snap_path = SNAPSHOT_DIR / f"{name}_{_PY_TAG}.snap"
         if request.config.getoption("--snapshot-update", default=False):
             snap_path.write_text(content, encoding="utf-8")
             return

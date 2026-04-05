@@ -82,8 +82,12 @@
 
 | 工具 | 用途 |
 |------|------|
+| `_lint_helpers.py` | Shared utilities for lint tools. |
+| `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
+| `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
+| `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_doc_freshness.py` | check_doc_freshness.py |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
@@ -91,6 +95,9 @@
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
+| `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
+| `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
+| `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
