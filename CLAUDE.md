@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v2.3.0)
+## 專案概覽 (v2.4.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 

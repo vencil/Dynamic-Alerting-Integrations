@@ -2,7 +2,7 @@
 title: "Prometheus Operator Integration Guide"
 tags: [operator, integration, kube-prometheus-stack]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 # Prometheus Operator Integration Guide
@@ -185,7 +185,7 @@ curl -s 'http://localhost:9090/api/v1/query?query=up{tenant!=""}' | jq '.data.re
 
 ```bash
 # Install/update da-tools
-docker pull ghcr.io/vencil/da-tools:v2.3.0
+docker pull ghcr.io/vencil/da-tools:v2.4.0
 
 # Specify config-dir, auto-scan and generate PrometheusRule
 da-tools operator-generate \

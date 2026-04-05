@@ -2,7 +2,7 @@
 title: "性能分析與基準測試 (Performance Analysis & Benchmarks)"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.3.0
+version: v2.4.0
 lang: zh
 ---
 # 性能分析與基準測試 (Performance Analysis & Benchmarks)
@@ -11,7 +11,7 @@ lang: zh
 
 > 相關文件：[Architecture](architecture-and-design.md) · [Benchmark Playbook](internal/benchmark-playbook.md)（方法論、踩坑） · [Test Map § Benchmark 基線](internal/test-map.md#benchmark-基線)
 
-**測試環境：** Kind 單節點叢集（Intel Core 7 240H），2 個租戶，237 個規則（15 Rule Packs），43 個規則群組。所有數據於 v2.3.0 統一採集。
+**測試環境：** Kind 單節點叢集（Intel Core 7 240H），2 個租戶，237 個規則（15 Rule Packs），43 個規則群組。所有數據於 v2.4.0 統一採集。
 
 ---
 

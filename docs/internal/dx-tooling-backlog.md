@@ -1,7 +1,7 @@
 ---
 title: DX Tooling Backlog
 lang: zh
-version: v2.3.0
+version: v2.4.0
 ---
 
 # DX Tooling Backlog

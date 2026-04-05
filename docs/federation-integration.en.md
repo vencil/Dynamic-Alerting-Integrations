@@ -2,14 +2,14 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 # Federation Integration Guide
 
 > **Language / 語言：** **English (Current)** | [中文](federation-integration.md)
 
-> **v2.3.0** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
+> **v2.4.0** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
 
 ## 1. Overview
 

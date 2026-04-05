@@ -2,12 +2,12 @@
 title: "Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 # Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics
 
-> **v2.3.0** | Related docs: [`federation-integration.md`](../federation-integration.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.4.0** | Related docs: [`federation-integration.md`](../federation-integration.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Problem
 
@@ -259,7 +259,7 @@ prometheus --web.enable-remote-write-receiver \
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.3.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.4.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml   # replicaCount: 2 for HA
 ```

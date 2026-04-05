@@ -2,12 +2,12 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: zh
 ---
 # Federation Integration Guide
 
-> **v2.3.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
+> **v2.4.0** — 場景 A 架構藍圖：中央 threshold-exporter + 多邊緣 Prometheus scrape
 
 ## 1. 概覽
 

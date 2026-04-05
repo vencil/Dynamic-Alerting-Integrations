@@ -2,12 +2,12 @@
 title: "場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標
 
-> **v2.3.0** | 相關文件：[`federation-integration.md`](../federation-integration.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.4.0** | 相關文件：[`federation-integration.md`](../federation-integration.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## 問題
 
@@ -255,7 +255,7 @@ prometheus --web.enable-remote-write-receiver \
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.3.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.4.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml   # replicaCount: 2 for HA
 ```

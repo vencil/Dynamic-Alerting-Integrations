@@ -2,7 +2,7 @@
 title: "GitOps Deployment Guide"
 tags: [gitops, deployment, ci-cd]
 audience: [platform-engineer, devops]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 # GitOps Deployment Guide
@@ -110,7 +110,7 @@ steps:
 
 ```bash
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.3.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.4.0 \
   -n monitoring \
   -f values-override.yaml
 ```

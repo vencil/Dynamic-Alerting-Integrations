@@ -2,7 +2,7 @@
 title: "Threshold Exporter API Reference"
 tags: [api, reference, threshold-exporter]
 audience: [platform-engineer, sre]
-version: v2.3.0
+version: v2.4.0
 lang: zh
 ---
 
@@ -283,7 +283,7 @@ metadata:
 spec:
   containers:
   - name: threshold-exporter
-    image: ghcr.io/vencil/threshold-exporter:v2.3.0
+    image: ghcr.io/vencil/threshold-exporter:v2.4.0
     ports:
     - containerPort: 8080
       name: metrics

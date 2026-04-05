@@ -2,7 +2,7 @@
 title: "YAML Validator Tab"
 tags: [self-service, validation, internal]
 audience: ["platform-engineer", "tenant"]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 

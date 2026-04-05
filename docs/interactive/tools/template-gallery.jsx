@@ -2,7 +2,7 @@
 title: "Config Template Gallery"
 tags: [templates, examples, stacks]
 audience: [tenant, "platform-engineer"]
-version: v2.3.0
+version: v2.4.0
 lang: en
 related: [playground, rule-pack-selector, threshold-calculator]
 ---

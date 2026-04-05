@@ -2,14 +2,14 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 
 # da-tools CLI Reference
 
 > **Audience**: Platform Engineers, SREs, DevOps, Tenants
-> **Container Image**: `ghcr.io/vencil/da-tools:v2.3.0`
+> **Container Image**: `ghcr.io/vencil/da-tools:v2.4.0`
 > **Version**: (synced with platform version)
 
 da-tools is a portable CLI container that bundles validation, migration, configuration, and operational tools for the Dynamic Alerting platform. This document is a complete reference for all subcommands.
@@ -36,7 +36,7 @@ da-tools is a portable CLI container that bundles validation, migration, configu
 
 ```bash
 # Pull from OCI registry (requires CI/CD push)
-docker pull ghcr.io/vencil/da-tools:v2.3.0
+docker pull ghcr.io/vencil/da-tools:v2.4.0
 
 # Local build (development)
 cd components/da-tools/app && ./build.sh v1.11.0
@@ -45,8 +45,8 @@ cd components/da-tools/app && ./build.sh v1.11.0
 ### View Help
 
 ```bash
-docker run --rm ghcr.io/vencil/da-tools:v2.3.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.3.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v2.4.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.4.0 --version
 da-tools <command> --help
 ```
 
@@ -254,14 +254,14 @@ JSON format health check report.
 # Basic check
 docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   diagnose db-a
 
 # With local config directory
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   diagnose db-a --config-dir /etc/config
 ```
 
@@ -360,7 +360,7 @@ CSV format with one line per metric containing statistical summary (p50, p90, p9
 # 30-minute observation with 30-second sampling
 docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   baseline --tenant db-a --duration 1800 --interval 30 --output /tmp/baseline.csv
 ```
 
@@ -424,14 +424,14 @@ If `--auto-detect-convergence` is used, additionally outputs `cutover-readiness.
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate --mapping /data/mapping.csv
 
 # Continuous monitoring (every 60 seconds for 24 hours)
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate --mapping /data/mapping.csv --watch --interval 60 --rounds 1440
 
 # Auto-detect convergence
@@ -439,7 +439,7 @@ docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv:ro \
   -v $(pwd)/output:/data/output \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate --mapping /data/mapping.csv \
     --auto-detect-convergence \
     --output /data/output/validation-report.csv
@@ -497,7 +497,7 @@ da-tools cutover --tenant <name> [options]
 docker run --rm --network=host \
   -v $(pwd)/output:/data \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a --dry-run
 
@@ -505,14 +505,14 @@ docker run --rm --network=host \
 docker run --rm --network=host \
   -v $(pwd)/output:/data \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a
 
 # Force cutover (after confirming safety)
 docker run --rm --network=host \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   cutover --tenant db-a --force
 ```
 
@@ -565,14 +565,14 @@ Presented in three sections:
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   blind-spot --config-dir /etc/config
 
 # Exclude infrastructure jobs
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   blind-spot --config-dir /etc/config \
     --exclude-jobs node-exporter,kube-state-metrics
 
@@ -580,7 +580,7 @@ docker run --rm --network=host \
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   blind-spot --config-dir /etc/config --json-output > /tmp/blind-spots.json
 ```
 
@@ -629,14 +629,14 @@ Alertmanager silence YAML (can be piped directly to Alertmanager API or kubectl 
 # Preview silences to generate
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   maintenance-scheduler --config-dir /etc/config --dry-run
 
 # Generate YAML for CronJob use
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   maintenance-scheduler --config-dir /etc/config \
     --timezone Asia/Taipei \
     -o /data/output/alertmanager-silences.yaml
@@ -664,7 +664,7 @@ docker run --rm --network=host \
   [-v <config_dir>:/etc/config:ro] \
   [-v <baseline_dir>:/data/baseline:ro] \
   -e PROMETHEUS_URL=<url> \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 ```
 
@@ -696,7 +696,7 @@ Comparison report showing impact of threshold changes on historical data (potent
 cd <repo> && docker run --rm --network=host \
   -v $(pwd):/workspace:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   backtest --git-diff --lookback 7
 
 # Directory comparison mode
@@ -704,7 +704,7 @@ docker run --rm --network=host \
   -v $(pwd)/conf.d-old:/data/old:ro \
   -v $(pwd)/conf.d-new:/data/new:ro \
   -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   backtest --config-dir /data/new --baseline /data/old --lookback 7
 ```
 
@@ -1344,7 +1344,7 @@ docker run --rm \
   -v <config_dir>:/etc/config:ro \
   [-v <output>:/data/output] \
   [-v <base_config>:/data/base.yaml:ro] \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   generate-routes --config-dir <path> [options]
 ```
 
@@ -1381,14 +1381,14 @@ Complete Kubernetes ConfigMap YAML with global, route, receivers, inhibit_rules,
 # Generate fragment (preview)
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   generate-routes --config-dir /etc/config --dry-run
 
 # Generate fragment to file
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   generate-routes --config-dir /etc/config \
     -o /data/output/alertmanager-routes.yaml
 
@@ -1396,7 +1396,7 @@ docker run --rm \
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   generate-routes --config-dir /etc/config --output-configmap \
     -o /data/output/alertmanager-configmap.yaml
 
@@ -1405,7 +1405,7 @@ docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
   -v $(pwd)/base-alertmanager.yaml:/data/base.yaml:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   generate-routes --config-dir /etc/config --output-configmap \
     --base-config /data/base.yaml \
     -o /data/output/alertmanager-configmap.yaml
@@ -1413,7 +1413,7 @@ docker run --rm \
 # Direct kubectl apply
 docker run --rm --kubeconfig=$HOME/.kube/config \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   generate-routes --config-dir /etc/config --apply --yes
 ```
 
@@ -1438,7 +1438,7 @@ ConfigMap partial update tool with preview (--diff) and direct application suppo
 ```bash
 docker run --rm \
   [-v <config_dir>:/etc/config:ro] \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   patch-config [<tenant> <metric> <value> | --diff] [options]
 ```
 
@@ -1468,17 +1468,17 @@ Preview or confirmation message.
 # Preview current ConfigMap and changes
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   patch-config --diff
 
 # Update single metric
 docker run --rm \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   patch-config db-a mysql_connections 100 --dry-run
 
 # Apply update
 docker run --rm \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   patch-config db-a mysql_connections 100 --yes
 ```
 
@@ -1504,7 +1504,7 @@ Generate new tenant configuration (interactive or non-interactive).
 ```bash
 docker run --rm -it \
   -v <output_dir>:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   scaffold [options]
 ```
 
@@ -1541,13 +1541,13 @@ docker run --rm -it \
 # Interactive generation
 docker run --rm -it \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   scaffold --output /data/output
 
 # Non-interactive generation (CI/CD)
 docker run --rm \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   scaffold --non-interactive \
     --tenant db-c \
     --db mariadb,redis \
@@ -1576,7 +1576,7 @@ Convert legacy Prometheus rules to dynamic format (AST engine).
 docker run --rm \
   -v <input_file>:/data/input.yml:ro \
   [-v <output_dir>:/data/output] \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   migrate <input_file> [options]
 ```
 
@@ -1618,21 +1618,21 @@ docker run --rm \
 # Preview report (dry run)
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/input.yml:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   migrate /data/input.yml --dry-run
 
 # Convert and output triage report
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/input.yml:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   migrate /data/input.yml --triage -o /data/output
 
 # Complete conversion (with manual review)
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/input.yml:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   migrate /data/input.yml -o /data/output
 ```
 
@@ -1656,7 +1656,7 @@ One-stop configuration validation: YAML format, schema, routing, policy, version
 ```bash
 docker run --rm \
   -v <config_dir>:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate-config --config-dir <path> [options]
 ```
 
@@ -1691,19 +1691,19 @@ Validation result summary (pass/fail list).
 # Basic validation
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate-config --config-dir /etc/config
 
 # CI mode (strict exit code)
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate-config --config-dir /etc/config --ci
 
 # Check webhook domain allowlist
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   validate-config --config-dir /etc/config \
     --policy "webhook.company.com,slack.com"
 ```
@@ -1729,7 +1729,7 @@ Offboard tenant configuration and related resources.
 docker run --rm \
   -v <config_dir>:/etc/config:rw \
   [-v <output>:/data/output] \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   offboard <tenant> [options]
 ```
 
@@ -1758,14 +1758,14 @@ Backup tenant config; optionally remove associated Recording/Alert rules.
 # Preview offboard actions
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   offboard db-old --dry-run
 
 # Execute offboard with backup
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
   -v $(pwd)/backup:/data/backup \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   offboard db-old --backup /data/backup
 ```
 
@@ -1789,7 +1789,7 @@ Mark metrics as disabled to prevent accidental use.
 ```bash
 docker run --rm \
   -v <config_dir>:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   deprecate <metric_keys...> [options]
 ```
 
@@ -1817,7 +1817,7 @@ Add or update metric key with `enabled: false` flag in _defaults.yaml.
 # Mark multiple metrics as disabled
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   deprecate old_metric_1 old_metric_2 \
     --reason "Replaced by new_metric; migration complete"
 ```
@@ -1842,7 +1842,7 @@ Check Custom Rule governance compliance (based on `custom_` prefix rules).
 ```bash
 docker run --rm \
   -v <rules_dir>:/data/rules:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   lint <path...> [options]
 ```
 
@@ -1871,13 +1871,13 @@ docker run --rm \
 # Check single file
 docker run --rm \
   -v $(pwd)/my-custom-rules.yaml:/data/rules/my-rules.yaml:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   lint /data/rules/my-rules.yaml
 
 # Check entire directory
 docker run --rm \
   -v $(pwd)/rule-packs:/data/rules:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   lint /data/rules --strict
 ```
 
@@ -1903,7 +1903,7 @@ Analyze existing Alertmanager or Prometheus config, output migration hints.
 docker run --rm \
   -v <config_file>:/data/config.yml:ro \
   [-v <output>:/data/output] \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   onboard <config_file> [options]
 ```
 
@@ -1934,7 +1934,7 @@ JSON format migration hints (`onboard-hints.json`), including:
 docker run --rm \
   -v $(pwd)/alertmanager.yaml:/data/config.yml:ro \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   onboard /data/config.yml -o /data/output/onboard-hints.json
 ```
 
@@ -1958,7 +1958,7 @@ Compare custom rules with Rule Pack, find duplicates/gaps.
 ```bash
 docker run --rm \
   -v <config_dir>:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   analyze-gaps --config <path> [options]
 ```
 
@@ -1985,7 +1985,7 @@ CSV list where each row represents a custom rule and its Rule Pack coverage rela
 # Analyze coverage gaps
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   analyze-gaps --config /etc/config/db-a.yaml
 ```
 
@@ -2010,7 +2010,7 @@ Compare two config directories (conf.d), output blast radius report.
 docker run --rm \
   -v <old_dir>:/data/old:ro \
   -v <new_dir>:/data/new:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   config-diff --old-dir <path> --new-dir <path> [options]
 ```
 
@@ -2050,14 +2050,14 @@ Markdown format report with per-tenant change tables and summary statistics.
 docker run --rm \
   -v $(pwd)/conf.d-old:/data/old:ro \
   -v $(pwd)/conf.d-new:/data/new:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   config-diff --old-dir /data/old --new-dir /data/new
 
 # JSON output (for CI consumption)
 docker run --rm \
   -v $(pwd)/conf.d-old:/data/old:ro \
   -v $(pwd)/conf.d-new:/data/new:ro \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   config-diff --old-dir /data/old --new-dir /data/new --json-output
 ```
 
@@ -2351,7 +2351,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.3.0
+          image: ghcr.io/vencil/da-tools:v2.4.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

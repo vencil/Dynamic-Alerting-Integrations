@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 
@@ -116,14 +116,14 @@ export PROMETHEUS_URL=http://localhost:9090
 # Basic command
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   <command> [arguments]
 
 # With local files
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.3.0 \
+  ghcr.io/vencil/da-tools:v2.4.0 \
   <command> --config-dir /etc/config
 ```
 

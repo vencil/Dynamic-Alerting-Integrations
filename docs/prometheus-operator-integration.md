@@ -2,7 +2,7 @@
 title: "Prometheus Operator 整合手冊"
 tags: [operator, integration, kube-prometheus-stack]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: zh
 ---
 # Prometheus Operator 整合手冊
@@ -185,7 +185,7 @@ curl -s 'http://localhost:9090/api/v1/query?query=up{tenant!=""}' | jq '.data.re
 
 ```bash
 # 安裝/更新 da-tools
-docker pull ghcr.io/vencil/da-tools:v2.3.0
+docker pull ghcr.io/vencil/da-tools:v2.4.0
 
 # 指定 config-dir，自動掃描並產出 PrometheusRule
 da-tools operator-generate \

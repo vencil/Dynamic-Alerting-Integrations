@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.3.0
+version: v2.4.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書

@@ -39,7 +39,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: scheduler
-              image: ghcr.io/vencil/da-tools:v2.3.0
+              image: ghcr.io/vencil/da-tools:v2.4.0
               args:
                 - maintenance-scheduler
                 - --config-dir

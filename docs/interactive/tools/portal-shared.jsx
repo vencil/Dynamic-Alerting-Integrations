@@ -2,7 +2,7 @@
 title: "Portal Shared Module"
 tags: [self-service, shared, internal]
 audience: ["platform-engineer"]
-version: v2.3.0
+version: v2.4.0
 lang: en
 ---
 
