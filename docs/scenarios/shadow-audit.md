@@ -7,7 +7,7 @@ lang: zh
 ---
 # 場景：Shadow Audit — 不遷移也能評估告警健康度
 
-> **v2.1.0** | 相關文件：[Migration Guide](../migration-guide.md)、[Shadow Monitoring Cutover](shadow-monitoring-cutover.md)、[CLI Reference](../cli-reference.md)
+> **v2.3.0** | 相關文件：[Migration Guide](../migration-guide.md)、[Shadow Monitoring Cutover](shadow-monitoring-cutover.md)、[CLI Reference](../cli-reference.md)
 
 ## 問題
 

@@ -7,7 +7,7 @@ lang: en
 ---
 # Platform Engineer Quick Start Guide
 
-> **v2.1.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
+> **v2.3.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
 > Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../prometheus-operator-integration.en.md)
 

@@ -7,7 +7,7 @@ lang: en
 ---
 # Tenant Quick Start Guide
 
-> **v2.1.0** | Audience: Tenant administrators, DBAs, SREs
+> **v2.3.0** | Audience: Tenant administrators, DBAs, SREs
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 

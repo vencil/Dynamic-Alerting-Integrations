@@ -219,7 +219,6 @@ nav:
     - Tenants: getting-started/for-tenants.md
   - 核心架構:
     - 架構與設計: architecture-and-design.md
-    - Context 圖: context-diagram.md
     - 性能基準: benchmarks.md
     - 架構決策 (ADR):
       - 總覽: adr/README.md

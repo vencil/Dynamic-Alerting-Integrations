@@ -163,7 +163,7 @@ Running validation suite...
 [✓] Threshold format     18 thresholds, all numeric strings
 [✓] Routing validation   2 receivers configured
 [✓] Duration guardrails  group_wait, repeat_interval in range
-[✓] Version consistency  v2.1.0
+[✓] Version consistency  v2.3.0
 
 All checks passed (6/6). Exit code: 0`,
     args: [],

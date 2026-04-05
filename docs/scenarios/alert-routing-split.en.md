@@ -7,7 +7,7 @@ lang: en
 ---
 # Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications
 
-> **v2.1.0** | Related docs: [`architecture-and-design.en.md` §2.9](../architecture-and-design.en.md), [`byo-alertmanager-integration.en.md`](../byo-alertmanager-integration.en.md)
+> **v2.3.0** | Related docs: [`architecture-and-design.en.md` §2.9](../architecture-and-design.en.md), [`byo-alertmanager-integration.en.md`](../byo-alertmanager-integration.en.md)
 
 ## Problem
 

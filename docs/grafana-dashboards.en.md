@@ -8,7 +8,7 @@ lang: en
 
 # Grafana Dashboard Guide
 
-> **v2.1.0** | Audience: Platform Engineers, SREs, DevOps
+> **v2.3.0** | Audience: Platform Engineers, SREs, DevOps
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]
 

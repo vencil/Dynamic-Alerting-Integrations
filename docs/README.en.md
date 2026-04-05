@@ -57,7 +57,6 @@ Want to quickly understand roles, tools, and product interactions?
 
 | Document | Purpose |
 |----------|---------|
-| [Context Diagram](context-diagram.en.md) | Three roles × tools × product interaction visualization |
 | [Project Overview](index.md) | Pain points, business value, quick start (root directory) |
 
 ---

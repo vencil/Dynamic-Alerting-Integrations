@@ -7,7 +7,7 @@ lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
 
-> **v2.1.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.3.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Overview
 
@@ -226,62 +226,21 @@ da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
 
 ### 2.3 Operational Mode Management
 
-Dynamic Alerting provides **three-state operational modes** for flexible alert control.
+Dynamic Alerting provides Normal / Silent / Maintenance three-state operational modes, all supporting `expires` auto-expiry. For full design and YAML syntax, see [Architecture & Design §2.7](../architecture-and-design.en.md#27-three-state-operational-modes).
 
-#### 2.3.1 Normal Mode (Default)
-
-```yaml
-# Example config
-tenants:
-  db-product-01:
-    # No special config → normal mode
-    # All rules evaluate and send notifications normally
-```
-
-**Use case**: Daily operations, all alerts active
-
-#### 2.3.2 Silent Mode
-
-```yaml
-# Example: Disable all alert notifications (rules still evaluate, but notifications blocked)
-tenants:
-  db-product-01:
-    _state_silent_mode:
-      enabled: true
-      expires: "2026-03-20T23:59:59Z"  # Optional; auto-recovers to normal after expiry
-      reason: "Planned database maintenance"
-```
-
-**Use cases**:
-
-- Scheduled maintenance (backups, software upgrades)
-- Planned downtime (data migration, hardware repair)
-- Temporary incident triage (prevent alert storm)
-- Cost optimization (pause non-critical alerts)
-
-**Verification**:
+Common operations:
 
 ```bash
-python3 scripts/tools/ops/diagnose.py db-product-01
+# Enable silent mode (during maintenance)
+da-tools patch-config --tenant db-product-01 --set '_state_silent_mode.enabled=true' --set '_state_silent_mode.expires=2026-03-20T23:59:59Z'
+
+# Verify current mode
+da-tools diagnose db-product-01
 # Output: operational_mode: silent
-# Rules still evaluate, but alerts don't send notifications
+
+# Scheduled maintenance windows (CronJob auto-creates Alertmanager silences)
+da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
 ```
-
-#### 2.3.3 Maintenance Mode
-
-```yaml
-tenants:
-  db-product-01:
-    _state_maintenance:
-      enabled: true
-      recurring:
-        - cron: "0 2 * * 0"    # Every Sunday 2 AM
-          duration: "3600"      # 1 hour duration
-          reason: "Weekly backup"
-      expires: "2026-12-31T23:59:59Z"
-```
-
-`maintenance_scheduler.py` (deployed as CronJob) automatically creates `silence` rules in Alertmanager for each window. Deployment: `da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093`.
 
 ## Phase 3: Special Operations
 

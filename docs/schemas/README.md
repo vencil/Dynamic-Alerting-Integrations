@@ -26,7 +26,7 @@ JSON Schema (draft-07) specifications for validating tenant YAML configurations.
 - Tenant profile references (v1.12.0+)
 - Platform-enforced dual routing (v1.13.0+)
 
-**Version**: v2.1.0
+**Version**: v2.3.0
 
 **Schema Format**: JSON Schema Draft 7 ([specification](https://json-schema.org/specification.html))
 

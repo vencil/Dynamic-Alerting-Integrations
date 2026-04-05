@@ -7,7 +7,7 @@ lang: en
 ---
 # Scenario: Shadow Audit — Evaluate Alert Health Without Migration
 
-> **v2.1.0** | Related: [Migration Guide](../migration-guide.en.md), [Shadow Monitoring Cutover](shadow-monitoring-cutover.en.md), [CLI Reference](../cli-reference.en.md)
+> **v2.3.0** | Related: [Migration Guide](../migration-guide.en.md), [Shadow Monitoring Cutover](shadow-monitoring-cutover.en.md), [CLI Reference](../cli-reference.en.md)
 
 ## Problem
 

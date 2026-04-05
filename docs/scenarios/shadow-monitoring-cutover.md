@@ -7,7 +7,7 @@ lang: zh
 ---
 # 場景：Shadow Monitoring 全自動切換工作流
 
-> **v2.1.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
+> **v2.3.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
 
 ## 問題
 

@@ -7,7 +7,7 @@ lang: zh
 ---
 # Domain Expert (DBA) 快速入門指南
 
-> **v2.1.0** | 適用對象：DBA、資料庫管理員、領域專家
+> **v2.3.0** | 適用對象：DBA、資料庫管理員、領域專家
 >
 > 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4
 

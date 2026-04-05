@@ -177,4 +177,4 @@ groups:
 | [006-tenant-mapping-topologies.en](006-tenant-mapping-topologies.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |
 | ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["Project Context Diagram"](../context-diagram.md) | ⭐⭐ |
+| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |

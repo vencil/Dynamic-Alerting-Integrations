@@ -7,7 +7,7 @@ lang: zh
 ---
 # 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知
 
-> **v2.1.0** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
+> **v2.3.0** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
 
 ## 問題
 

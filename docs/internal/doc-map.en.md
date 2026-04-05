@@ -16,7 +16,6 @@
 | `docs/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
-| `docs/context-diagram.md` (.en.md) | All | Project Context Diagram: Roles, Tools, and Product Interactions |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
 | `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) Quick Start Guide |

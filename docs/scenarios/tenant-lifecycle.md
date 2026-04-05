@@ -7,7 +7,7 @@ lang: zh
 ---
 # 場景：租戶完整生命週期管理
 
-> **v2.1.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.3.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## 概述
 
@@ -227,62 +227,21 @@ da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
 
 ### 2.3 運營模式管理
 
-Dynamic Alerting 提供**三態運營模式**來靈活控制告警行為。
+Dynamic Alerting 提供 Normal / Silent / Maintenance 三態運營模式，均支援 `expires` 自動失效。完整設計與 YAML 語法見 [架構與設計 §2.7](../architecture-and-design.md#27-三態運營模式-operational-modes)。
 
-#### 2.3.1 Normal 模式（預設）
-
-```yaml
-# 配置示例
-tenants:
-  db-product-01:
-    # 無特殊配置 → normal mode
-    # 所有規則正常評估和觸發通知
-```
-
-**應用場景**：日常運營，所有告警活躍
-
-#### 2.3.2 Silent Mode（靜默模式）
-
-```yaml
-# 配置示例：禁用所有告警通知（規則仍評估，但攔截通知）
-tenants:
-  db-product-01:
-    _state_silent_mode:
-      enabled: true
-      expires: "2026-03-20T23:59:59Z"  # 可選，到期後自動恢復 normal
-      reason: "Planned database maintenance"
-```
-
-**應用場景**：
-
-- 定期維護（備份、軟體升級）
-- 計劃中的停機（資料遷移、硬體維修）
-- 臨時故障排查（避免告警轟炸）
-- 費用優化（暫停非關鍵租戶告警）
-
-**驗證**：
+常用操作：
 
 ```bash
-python3 scripts/tools/ops/diagnose.py db-product-01
+# 啟用靜默模式（維護期間）
+da-tools patch-config --tenant db-product-01 --set '_state_silent_mode.enabled=true' --set '_state_silent_mode.expires=2026-03-20T23:59:59Z'
+
+# 驗證目前模式
+da-tools diagnose db-product-01
 # 輸出：operational_mode: silent
-# 規則仍評估，但告警不觸發通知
+
+# 排程式維護窗口（CronJob 自動建立 Alertmanager silence）
+da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
 ```
-
-#### 2.3.3 Maintenance Mode（維護模式）
-
-```yaml
-tenants:
-  db-product-01:
-    _state_maintenance:
-      enabled: true
-      recurring:
-        - cron: "0 2 * * 0"    # 每週日凌晨 2 點
-          duration: "3600"      # 持續 1 小時
-          reason: "Weekly backup"
-      expires: "2026-12-31T23:59:59Z"
-```
-
-`maintenance_scheduler.py`（CronJob 部署）會自動為每個遞迴窗口在 Alertmanager 中建立 silence。部署方式：`da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093`。
 
 ## 階段 3：特殊操作
 

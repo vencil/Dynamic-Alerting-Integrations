@@ -8,7 +8,7 @@ lang: en
 
 # Scenario: Incremental Migration Playbook
 
-> **v2.2.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
+> **v2.3.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
 
 ## Overview
 
@@ -51,78 +51,14 @@ da-tools onboard \
   --output audit-report.json
 ```
 
-**Expected output sample** (`audit-report.json`):
+**Expected output**: `audit-report.json` contains Alertmanager version, global config, receivers list (name, channels), routing tree, inhibit rules, and migration recommendations. Analysis points:
+- Receiver count → potential tenant count
+- Existing group_wait / repeat_interval → reference values for Dynamic Alerting routing guardrails
+- Inhibit rules → whether to migrate to Dynamic Alerting severity dedup
 
-```json
-{
-  "alertmanager_version": "0.25.0",
-  "global": {
-    "slack_api_url": "https://hooks.slack.com/services/T/B/c",
-    "pagerduty_service_key": "pkey_xxx"
-  },
-  "receivers": [
-    {
-      "name": "default",
-      "slack_configs": [{"channel": "#alerts"}],
-      "pagerduty_configs": [{"service_key": "pkey_yyy"}]
-    },
-    {
-      "name": "database-team",
-      "slack_configs": [{"channel": "#db-alerts"}]
-    },
-    {
-      "name": "backend-ops",
-      "slack_configs": [{"channel": "#backend"}],
-      "email_configs": [{"to": "ops@example.com"}]
-    }
-  ],
-  "routes": [
-    {
-      "receiver": "default",
-      "group_wait": "10s",
-      "group_interval": "10s",
-      "repeat_interval": "4h",
-      "matchers": []
-    },
-    {
-      "receiver": "database-team",
-      "group_wait": "10s",
-      "repeat_interval": "2h",
-      "matchers": [
-        {"name": "job", "value": "mariadb"}
-      ]
-    },
-    {
-      "receiver": "backend-ops",
-      "group_wait": "30s",
-      "repeat_interval": "6h",
-      "matchers": [
-        {"name": "job", "value": "~app-.*"}
-      ]
-    }
-  ],
-  "inhibit_rules": [
-    {
-      "source_matchers": [{"name": "severity", "value": "critical"}],
-      "target_matchers": [{"name": "severity", "value": "warning"}],
-      "equal": ["alertname", "instance"]
-    }
-  ],
-  "recommendations": [
-    "Detected 3 receivers. Recommended mapping to 3 independent tenants (redis-prod, mariadb-prod, app-team)",
-    "No tenant-related labels detected. Recommend adding at Recording Rules layer"
-  ]
-}
-```
+### Step 0.2: Analyze Existing Prometheus Alert Rules
 
-**Key insights**:
-- Receiver count → potential number of tenants
-- Current group_wait / repeat_interval → reference values for Dynamic Alerting's Routing Guardrails
-- Inhibit rules → need to migrate to Dynamic Alerting's severity dedup mechanism?
-
-### Step 0.2: Analyze Existing Prometheus Alerting Rules
-
-Analyze existing rules, classify by type (Recording / Alerting), identify migration candidates:
+Analyze existing rules, categorize by type (Recording Rules / Alerting Rules), and identify migration candidates:
 
 ```bash
 da-tools onboard \
@@ -131,55 +67,11 @@ da-tools onboard \
   --output rule-audit.json
 ```
 
-**Expected output sample** (`rule-audit.json`):
+**Expected output**: `rule-audit.json` summarizes alert rule statistics, per-rule migration priority scores, and rule-pack correspondence recommendations. Prioritize migrating high-priority rules (Redis, MariaDB), defer custom business rules.
 
-```json
-{
-  "summary": {
-    "total_rules": 127,
-    "recording_rules": 34,
-    "alerting_rules": 93
-  },
-  "recording_rules": [
-    {
-      "name": "redis:memory:usage_percent",
-      "group": "redis.yaml",
-      "interval": "15s",
-      "expression": "100 * redis_memory_used_bytes / redis_memory_max_bytes",
-      "migration_priority": "high",
-      "reason": "Core metric, easily maps to Rule Pack"
-    }
-  ],
-  "alerting_rules": [
-    {
-      "name": "RedisHighMemory",
-      "group": "redis.yaml",
-      "for": "5m",
-      "expression": "redis:memory:usage_percent > 85",
-      "labels": {"severity": "warning"},
-      "annotations": {"summary": "Redis memory > 85%"},
-      "migration_priority": "high",
-      "rule_pack_equivalent": "rule-pack-redis.yaml::RedisHighMemory",
-      "notes": "Perfect match with Rule Pack, recommend early migration"
-    },
-    {
-      "name": "AppCustomMetricA",
-      "group": "custom.yaml",
-      "expression": "custom_app_metric > 42",
-      "migration_priority": "low",
-      "reason": "Custom business metric, no Rule Pack equivalent yet. Recommend maintaining in current config"
-    }
-  ],
-  "recommendations": [
-    "High Priority (8 rules): Redis, MariaDB, JVM — recommend early migration",
-    "Custom (15 rules): Business-specific rules — recommend Phase 4 integration with Platform Rule Packs"
-  ]
-}
-```
+### Step 0.3: Scan Active Alerts in Cluster
 
-### Step 0.3: Scan Cluster for Existing Alerting Activity
-
-Scan all active scrape targets in Prometheus, understand what's actually being monitored:
+Scan all active scrape targets in Prometheus to understand what's actually being monitored:
 
 ```bash
 da-tools blind-spot \
@@ -189,111 +81,48 @@ da-tools blind-spot \
   > blind-spot-report.json
 ```
 
-**Expected output sample** (`blind-spot-report.json`):
-
-```json
-{
-  "scrape_configs": [
-    {
-      "job_name": "prometheus",
-      "count": 1,
-      "targets": ["localhost:9090"]
-    },
-    {
-      "job_name": "redis",
-      "count": 3,
-      "targets": [
-        "redis-0:6379",
-        "redis-1:6379",
-        "redis-2:6379"
-      ]
-    },
-    {
-      "job_name": "mariadb",
-      "count": 2,
-      "targets": [
-        "db-primary:3306",
-        "db-replica:3306"
-      ]
-    }
-  ],
-  "available_databases": [
-    {
-      "db_type": "redis",
-      "job_name": "redis",
-      "instance_count": 3,
-      "rule_pack_available": "rule-pack-redis.yaml",
-      "recommendation": "✓ Can use Rule Pack directly"
-    },
-    {
-      "db_type": "mariadb",
-      "job_name": "mariadb",
-      "instance_count": 2,
-      "rule_pack_available": "rule-pack-mariadb.yaml",
-      "recommendation": "✓ Can use Rule Pack directly"
-    }
-  ]
-}
-```
+**Expected output**: `blind-spot-report.json` enumerates scrape targets, database types covered by rule-packs, and recommendations for directly usable Rule Packs.
 
 ### Step 0.4: Decision Matrix — Select Pilot Domain
 
-Based on Phase 0.1-0.3 outputs, fill this decision matrix to select the pilot domain (usually the one with cleanest metrics or highest pain points):
+Based on Phase 0.1-0.3 outputs, fill out a decision matrix to select your pilot domain (typically the cleanest metrics or most obvious pain point):
 
 ```yaml
-# decision-matrix.yaml
 candidates:
   redis-prod:
-    metrics_cleanliness: 9/10  # How standard/clean are the metrics?
-    rule_pack_coverage: 9/10   # How much of this domain is covered by a Rule Pack?
+    metrics_cleanliness: 9/10
+    rule_pack_coverage: 9/10
     pain_points: "Alert noise, 15% false positive rate"
     team_readiness: "High"
     recommendation: "✓ PRIMARY CHOICE"
-    migration_effort: "Low"
 
   mariadb-prod:
     metrics_cleanliness: 7/10
     rule_pack_coverage: 8/10
-    pain_points: "Alert latency >10min, impacts RTO"
-    team_readiness: "Medium"
+    pain_points: "Alert latency >10min, affects RTO"
     recommendation: "✓ SECONDARY CHOICE"
-    migration_effort: "Low"
-
-  kafka-prod:
-    metrics_cleanliness: 6/10
-    rule_pack_coverage: 7/10
-    pain_points: "Alert grouping confusion, hard to correlate"
-    team_readiness: "Medium"
-    recommendation: "◯ After Phase 2"
-    migration_effort: "Medium"
 
   custom-app:
     metrics_cleanliness: 3/10
     rule_pack_coverage: 1/10
-    pain_points: "Custom business rules, cannot standardize"
-    team_readiness: "Low"
-    recommendation: "✗ Migrate last, Phase 4"
-    migration_effort: "High"
+    recommendation: "✗ Migrate in Phase 4 last"
 ```
 
-**Selection recommendations**:
-- Prioritize domains with **Rule Pack coverage >= 8/10** (Redis, MariaDB)
-- Avoid highly custom business rules in initial phases
-- Prioritize domains with **obvious pain points** (noise, latency, grouping issues) to show quick value
+**Selection guidance**: Prioritize domains with rule-pack coverage >= 8/10, avoid highly customized business rules early, prioritize domains with obvious pain points to quickly demonstrate value.
 
 ### Phase 0 Rollback
 
-No rollback needed. This phase is read-only and doesn't modify any systems.
+No rollback needed. This phase is read-only; no system changes made.
 
 ---
 
 ## Phase 1: Pilot Domain Deployment
 
-**Goal**: Deploy Dynamic Alerting for ONE selected domain (e.g., Redis) in **shadow mode** alongside existing alerts. New alerts fire but aren't routed to any receiver yet.
+**Goal**: Deploy the selected domain (e.g., Redis) on the Dynamic Alerting platform in shadow mode, running parallel to existing alerts. New alerts are emitted but not routed to any receiver yet.
 
 ### Step 1.1: Generate Tenant Configuration
 
-Using your Phase 0 decision, scaffold the initial configuration:
+Based on Phase 0 decision, use the `scaffold` command to generate initial configuration:
 
 ```bash
 mkdir -p conf.d/
@@ -305,82 +134,26 @@ da-tools scaffold \
   --output conf.d/redis-prod.yaml
 ```
 
-**Expected output** (`conf.d/redis-prod.yaml`):
-
-```yaml
-tenants:
-  redis-prod:
-    tier: standard
-    db: redis
-
-    # Recording Rules configuration
-    recording_rules:
-      enabled: true
-      rule_pack: rule-pack-redis.yaml
-      cardinality_limit: 500
-      scrape_interval: 15s
-
-    # Threshold configuration (initial conservative values)
-    thresholds:
-      memory:
-        warning: 75
-        critical: 90
-      connections:
-        warning: 1000
-        critical: 5000
-      evictions:
-        warning: 10
-        critical: 100
-
-    # Routing configuration (disabled for Phase 1)
-    _routing:
-      enabled: false
-      receiver:
-        type: slack
-        api_url: "https://hooks.slack.com/services/CHANGE_ME"
-        channel: "#redis-alerts"
-```
+**Expected output**: `conf.d/redis-prod.yaml` contains recording rules config, threshold initial values (conservative), and routing config (initially disabled).
 
 ### Step 1.2: Edit Threshold Configuration
 
-Based on Phase 0.2 audit output, adjust threshold parameters to match existing rule logic. **The key is conservative tuning**—we'll refine after collecting Phase 2 data:
-
-```bash
-# Edit thresholds to match existing rules
-cat >> conf.d/redis-prod.yaml << 'EOF'
-
-    thresholds:
-      memory:
-        # Existing rule: redis:memory:usage_percent > 85 → warning
-        warning: 75    # Slightly conservative, room for adjustment
-        critical: 90   # Align with existing critical threshold
-
-      connections:
-        # Based on audit results
-        warning: 800
-        critical: 3000
-
-      evictions_rate:
-        warning: 5
-        critical: 50
-EOF
-```
+Based on Phase 0.2 audit results, adjust threshold parameters to match existing rule logic. **Prioritize conservative settings**; refine after data collection in Phase 2.
 
 ### Step 1.3: Deploy threshold-exporter
 
 Deploy threshold-exporter in the pilot environment, mounting the conf.d/ directory:
 
 ```bash
-# Using Helm (example)
 helm repo add vencil https://ghcr.io/vencil/charts
 helm repo update
 
 helm install threshold-exporter-redis vencil/threshold-exporter \
   --namespace monitoring \
-  --set image.tag=v2.2.0 \
+  --set image.tag=v2.3.0 \
   --set config.dir=/etc/threshold-exporter/conf.d \
   --set replicaCount=2 \
-  -f - << 'EOF'
+  --values - << 'EOF'
 extraVolumes:
   - name: config
     configMap:
@@ -390,7 +163,6 @@ extraVolumeMounts:
     mountPath: /etc/threshold-exporter/conf.d
 EOF
 
-# First, create the ConfigMap
 kubectl create configmap threshold-exporter-config-redis \
   --from-file=conf.d/redis-prod.yaml \
   -n monitoring \
@@ -399,142 +171,83 @@ kubectl create configmap threshold-exporter-config-redis \
 
 ### Step 1.4: Verify Metrics Emission
 
-Query the threshold-exporter for emitted metrics:
+Query the metrics emitted by threshold-exporter:
 
 ```bash
-# Port-forward if needed
-kubectl port-forward -n monitoring \
-  svc/threshold-exporter-redis 8080:8080 &
-
-# Query metrics
+kubectl port-forward -n monitoring svc/threshold-exporter-redis 8080:8080 &
 curl http://localhost:8080/metrics | grep redis_user_threshold
-
-# Expected output
-redis_user_threshold_memory_warning{tenant="redis-prod"} 75
-redis_user_threshold_memory_critical{tenant="redis-prod"} 90
-redis_user_threshold_connections_warning{tenant="redis-prod"} 800
-redis_user_threshold_connections_critical{tenant="redis-prod"} 3000
 ```
+
+**Expected**: `redis_user_threshold_memory_warning`, `redis_user_threshold_memory_critical`, and similar metrics appear with tenant labels.
 
 ### Step 1.5: Mount Rule Pack
 
-Create a ConfigMap containing the Rule Pack and mount it to Prometheus:
+Create a ConfigMap containing the Rule Pack and mount it in Prometheus:
 
 ```bash
-# Fetch Redis Rule Pack from Platform library
 curl -o rule-pack-redis.yaml \
   https://raw.githubusercontent.com/vencil/vibe-k8s-lab/main/rule-packs/rule-pack-redis.yaml
 
-# Create ConfigMap
 kubectl create configmap rule-pack-redis \
   --from-file=rule-pack-redis.yaml \
   -n monitoring \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# Update Prometheus config to mount this ConfigMap
-kubectl patch cm prometheus-config -n monitoring --type merge -p '{
-  "data": {
-    "prometheus.yaml": "global:\n  scrape_interval: 15s\nrule_files:\n  - /etc/prometheus/rules/rule-pack-redis.yaml\nscrape_configs:\n  - job_name: prometheus\n    static_configs:\n      - targets: [localhost:9090]\n"
-  }
-}'
+kubectl patch cm prometheus-config -n monitoring --type merge -p '{"data": {"prometheus.yaml": "... (with rule-pack-redis.yaml in rule_files) ..."}}'
 
-# Restart Prometheus to load new rules
 kubectl rollout restart deployment/prometheus -n monitoring
-
-# Verify rules loaded
-kubectl logs -n monitoring deployment/prometheus -f --tail=50 | grep "rule-pack-redis"
 ```
 
 ### Step 1.6: Verify Recording Rules
 
-Wait for Prometheus to load rules and complete first evaluation (typically 15-30 seconds), then verify:
+Wait for Prometheus to load rules, then verify the metrics generated by recording rules:
 
 ```bash
-# Port-forward Prometheus
 kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-
-# Query recording rule output
 curl 'http://localhost:9090/api/v1/query?query=redis:memory:usage_percent'
-
-# Expected output
-{
-  "status": "success",
-  "data": {
-    "resultType": "vector",
-    "result": [
-      {
-        "metric": {"__name__": "redis:memory:usage_percent", "instance": "redis-0:6379"},
-        "value": [1710796200, "42.5"]
-      }
-    ]
-  }
-}
-
-# Check if alert rules fired (shouldn't see alerts in Phase 1 unless thresholds actually breached)
-curl 'http://localhost:9090/api/v1/query?query=ALERTS{alertname="RedisHighMemory"}'
 ```
 
-### Step 1.7: Verify Alerts Not Yet Routed
+**Expected**: Returns time-series values for `redis:memory:usage_percent`.
 
-Confirm new alerts are produced by Prometheus but not yet routed to any receiver:
+### Step 1.7: Verify Alerts Not Routed
+
+Confirm new alerts are generated by Prometheus but not yet routed by Alertmanager:
 
 ```bash
-# See active alerts in Prometheus
-curl 'http://localhost:9090/api/v1/alerts' | jq '.data.alerts[] | select(.labels.alertname=="RedisHighMemory")'
-
-# Even if alerts fired, Alertmanager shouldn't have a matching group
-# (because we add routing in Phase 2)
-
-kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
-curl 'http://localhost:9093/api/v1/alerts' | jq '.[].alerts[] | select(.labels.alertname=="RedisHighMemory")'
-
-# Expected output: empty or no RedisHighMemory
+curl 'http://localhost:9090/api/v1/alerts' | jq '.data.alerts[] | select(.labels.tenant=="redis-prod")'
+curl 'http://localhost:9093/api/v1/alerts' | jq '.[].alerts[] | select(.labels.tenant=="redis-prod")'
 ```
+
+**Expected**: New alerts in Prometheus; no corresponding groups in Alertmanager (routing not yet added).
 
 ### Phase 1 Verification Checklist
 
-- [ ] threshold-exporter deployed successfully, 2 Pods running
-- [ ] Metrics query returns `redis_user_threshold_*` series
-- [ ] Rule Pack mounted, Prometheus logs show no errors
-- [ ] Recording Rules produce output (`redis:memory:usage_percent`, etc.)
-- [ ] Alerting Rules fire (visible in Prometheus) but not routed to Alertmanager receiver
+- [ ] threshold-exporter deployment successful, 2 pods running
+- [ ] metrics queries return `redis_user_threshold_*` series
+- [ ] Rule Pack mounted, Prometheus logs clean
+- [ ] Recording Rules generating output
+- [ ] Alerting Rules generated (visible in Prometheus), not routed to Alertmanager
 
 ### Phase 1 Rollback
 
-If unexpected issues occur, rollback:
+If rollback needed, execute:
 
 ```bash
-# 1. Delete threshold-exporter deployment
 helm uninstall threshold-exporter-redis -n monitoring
-
-# 2. Delete Rule Pack ConfigMap
 kubectl delete cm rule-pack-redis -n monitoring
-
-# 3. Restore Prometheus config (remove rule-pack-redis.yaml mount)
-kubectl patch cm prometheus-config -n monitoring --type merge -p '{
-  "data": {
-    "prometheus.yaml": "... original config ..."
-  }
-}'
-
-# 4. Restart Prometheus
+kubectl patch cm prometheus-config -n monitoring --type merge -p '{"data": {"prometheus.yaml": "... (original) ..."}}'
 kubectl rollout restart deployment/prometheus -n monitoring
-
-# Verify rollback complete
-kubectl get pods -n monitoring
 ```
-
-**After rollback**: System returns to pre-audit state; existing alerts continue normally.
 
 ---
 
 ## Phase 2: Dual-Run Validation
 
-**Goal**: Both old and new alerts fire simultaneously for 1-2 weeks. Compare quality metrics.
+**Goal**: Run new and old alerts simultaneously, compare quality. Collect data over 1-2 weeks, verify Dynamic Alerting alert quality equals or exceeds existing system.
 
-### Step 2.1: Generate Alertmanager Routes
+### Step 2.1: Generate Alertmanager Routing Fragment
 
-Use `generate-routes` to produce Alertmanager routing for the pilot tenant:
+Use `generate-routes` command to generate Alertmanager routing config for pilot tenant:
 
 ```bash
 da-tools generate-routes \
@@ -543,147 +256,43 @@ da-tools generate-routes \
   --output alertmanager-fragment.yaml
 ```
 
-**Expected output** (`alertmanager-fragment.yaml`):
-
-```yaml
-# New route (insert at top of existing config)
-route:
-  receiver: alertmanager-default
-  routes:
-    # ========== Dynamic Alerting Pilot Route ==========
-    - receiver: da-pilot-slack
-      match:
-        da_managed: "true"
-        tenant: redis-prod
-      group_wait: 5s
-      group_interval: 5m
-      repeat_interval: 4h
-      continue: false
-    # ========== Existing Routes (unchanged) ==========
-    - receiver: database-team
-      match:
-        job: mariadb
-      group_wait: 10s
-      group_interval: 10s
-      repeat_interval: 2h
-    # ... other existing routes
-```
+**Expected output**: YAML fragment containing new route (pointing to da-pilot-slack receiver, matching `tenant=redis-prod`), priority settings, group_wait / group_interval / repeat_interval configuration.
 
 ### Step 2.2: Prepare Dual-Run Configuration
 
-Backup existing Alertmanager config, then insert new routes at the top:
+Backup existing Alertmanager config, then insert new route at top:
 
 ```bash
-# Backup
 cp alertmanager.yaml alertmanager.yaml.backup-phase1
 
-# Merge config
-cat > alertmanager-patch.yaml << 'EOF'
-global:
-  slack_api_url: "https://hooks.slack.com/services/T/B/c"
-
-receivers:
-  # ===== New receiver (for pilot) =====
-  - name: da-pilot-slack
-    slack_configs:
-      - api_url: "https://hooks.slack.com/services/T/B/d"  # Different Slack channel
-        channel: "#da-pilot-redis"
-        title: "[DA PILOT] {{ .GroupLabels.alertname }}"
-        text: "Tenant: {{ .GroupLabels.tenant }} | Severity: {{ .GroupLabels.severity }}"
-
-  # ===== Existing receivers (unchanged) =====
-  - name: default
-    slack_configs:
-      - api_url: "https://hooks.slack.com/services/T/B/c"
-        channel: "#alerts"
-
-route:
-  receiver: default
-  # ===== New route (highest priority) =====
-  routes:
-    - receiver: da-pilot-slack
-      match:
-        da_managed: "true"
-        tenant: redis-prod
-      group_wait: 5s
-      group_interval: 5m
-      repeat_interval: 4h
-      continue: true  # Allow continued matching (dual-run logging)
-
-  # ===== Existing routes (unchanged) =====
-  - receiver: database-team
-    match_re:
-      job: ".*database.*"
-    group_wait: 10s
-    repeat_interval: 2h
-
-inhibit_rules:
-  # Existing inhibit rules
-  - source_matchers:
-      - severity: critical
-    target_matchers:
-      - severity: warning
-    equal: [alertname, instance]
-EOF
-
-# Apply config with kubectl patch (avoid cat << EOF)
+# Use kubectl patch to merge config (avoid cat <<EOF)
 kubectl create configmap alertmanager-config-phase2 \
-  --from-file=alertmanager-patch.yaml \
+  --from-file=alertmanager.yaml \
   -n monitoring \
   --dry-run=client -o yaml | kubectl apply -f -
-
-# Update Alertmanager
-kubectl set env deployment/alertmanager \
-  -n monitoring \
-  ALERTMANAGER_CONFIG_RELOAD="true"
 ```
 
-### Step 2.3: Preflight Check
+New route should match `da_managed: "true" && tenant: redis-prod` at top with priority, set `continue: true` to allow dual-run recording.
 
-Run a preflight check to ensure dual-run is ready:
+### Step 2.3: Preflight Check (Shadow Verify Preflight)
+
+Run preflight check to ensure dual-run config is sound:
 
 ```bash
-# Prepare shadow mapping (maps old to new alerts)
-cat > shadow-mapping.yaml << 'EOF'
-mappings:
-  - old_alert: "RedisHighMemory"
-    new_alert: "RedisHighMemory"
-    comment: "Same alert name, expect consistent behavior"
-
-  - old_alert: "RedisHighConnections"
-    new_alert: "RedisHighConnections"
-    comment: "Corresponding new Rule Pack alert"
-
-  - old_alert: "RedisEvictions"
-    new_alert: "RedisHighEvictionRate"
-    comment: "New rule uses more precise naming"
-EOF
-
-# Run preflight
 da-tools shadow-verify preflight \
-  --mapping shadow-mapping.yaml \
   --config-dir conf.d/ \
   --prometheus http://prometheus:9090 \
   --alertmanager http://alertmanager:9093
 ```
 
-**Expected output**:
-
-```
-✓ Alertmanager config syntax valid
-✓ Route priority: da-pilot-slack (first) > database-team
-✓ Mapping coverage: 3/3 alerts mapped
-⚠ Warning: repeat_interval differs (da-pilot-slack: 4h vs database-team: 2h)
-  → Recommend consistency or add `continue: true` to prevent duplicate routing
-✓ Preflight check passed
-```
+**Expected output**: Syntax check passes, route priority conflict-free, mapping coverage high (>90%), warnings level reasonable. If warnings present (e.g., repeat_interval mismatch), evaluate and adjust if needed.
 
 ### Step 2.4: Monitor Dual-Run (1-2 weeks)
 
-Let the system run in parallel for 1-2 weeks. Compare the two Slack channels daily:
+Let the system run in parallel for 1-2 weeks, observing both Slack channels in real-time:
 
 ```bash
-# Run daily quality assessment
+# Run quality assessment daily
 da-tools alert-quality \
   --prometheus http://prometheus:9090 \
   --tenant redis-prod \
@@ -692,94 +301,38 @@ da-tools alert-quality \
   > alert-quality-$(date +%Y-%m-%d).json
 ```
 
-**Expected output sample** (`alert-quality-2026-03-25.json`):
-
-```json
-{
-  "date": "2026-03-25",
-  "tenant": "redis-prod",
-  "period_hours": 24,
-  "metrics": {
-    "old_alerts": {
-      "total_fired": 12,
-      "false_positives": 2,
-      "mean_latency_sec": 180,
-      "mean_duration_min": 8,
-      "total_notifications": 24
-    },
-    "new_alerts": {
-      "total_fired": 12,
-      "false_positives": 0,
-      "mean_latency_sec": 45,
-      "mean_duration_min": 5,
-      "total_notifications": 12
-    },
-    "quality_delta": {
-      "false_positive_reduction": "100%",
-      "latency_improvement": "75%",
-      "notification_reduction": "50%",
-      "overall_score": "A+"
-    }
-  },
-  "observations": [
-    "New alerts fire faster (45s vs 180s)",
-    "False positives reduced from 2 to 0",
-    "Better alert grouping, total notifications 24 → 12"
-  ]
-}
-```
+**Expected output**: JSON contains alert latency percentiles, false positive rate, grouping effectiveness score, and comparison with old alerts.
 
 ### Step 2.5: Summarize & Decide
 
-After 1-2 weeks, aggregate data and decide whether to proceed:
-
-```bash
-# Aggregate all daily reports
-cat alert-quality-*.json | jq -s '
-  {
-    period: "2026-03-18 to 2026-03-25",
-    old_avg_latency_sec: (map(.metrics.old_alerts.mean_latency_sec) | add / length),
-    new_avg_latency_sec: (map(.metrics.new_alerts.mean_latency_sec) | add / length),
-    old_avg_fps: (map(.metrics.old_alerts.false_positives) | add / length),
-    new_avg_fps: (map(.metrics.new_alerts.false_positives) | add / length),
-    improvement_summary: "Latency down X%, false positives down Y%"
-  }
-'
-```
+Based on dual-run data collection, make cutover decision:
 
 **Decision criteria**:
-- **New alert latency < old alert latency** → Go (typically 75%+ improvement)
-- **New false positive rate <= old rate** → Go
-- **New alert grouping > old grouping** → Better observability → Go
+- New alert latency < old alert latency (typically 75%+ improvement)
+- New alert false positive rate <= old alert rate
+- New alert grouping > old alert grouping (better observability)
 
-If all three are satisfied, proceed to Phase 3. Otherwise, extend dual-run or rollback.
+If all three met, proceed to Phase 3. If concerns, extend dual-run or rollback.
 
 ### Phase 2 Rollback
 
-If validation fails, revert to Phase 1 state:
+If dual-run validation fails, revert to end of Phase 1:
 
 ```bash
-# 1. Remove new route (revert Alertmanager config)
 kubectl patch cm alertmanager-config -n monitoring \
-  --type merge -p '{"data": {"alertmanager.yaml": "... original config ..."}}'
-
-# 2. Restart Alertmanager
+  --type merge -p '{"data": {"alertmanager.yaml": "... (original) ..."}}'
 kubectl rollout restart deployment/alertmanager -n monitoring
-
-# 3. Verify old alerts return
-sleep 30
-curl http://localhost:9093/api/v1/alerts | jq 'length'
 ```
 
 ---
 
 ## Phase 3: Cutover
 
-**Goal**: Disable old alert rules for the pilot domain, make Dynamic Alerting primary. Zero downtime.
+**Goal**: Disable old alerts for pilot domain, make Dynamic Alerting the primary alert source. System experiences no interruption.
 
-### Step 3.1: Dry-Run Cutover
+### Step 3.1: Dry-Run Cutover Rehearsal
 
-Preview cutover without executing:
+Before actual execution, rehearse the cutover process to ensure correctness:
 
 ```bash
 da-tools cutover \
@@ -790,44 +343,13 @@ da-tools cutover \
   --verbose
 ```
 
-**Expected output**:
+**Expected output**: Dry-run report contains current state (Recording Rules, Alerting Rules, Alertmanager routing), planned actions (disable old rules, update route priority), expected result, health checks, and rollback command.
 
-```
-========== Cutover Dry-Run Report ==========
-Tenant: redis-prod
-Current State:
-  - Recording Rules: ACTIVE (redis:memory:usage_percent, etc.)
-  - Alerting Rules (Old): ACTIVE (RedisHighMemory, RedisHighConnections)
-  - Dynamic Alerting: ACTIVE
-
-Planned Actions:
-  1. Keep Recording Rules: redis:* (retained for Dynamic Alerting)
-  2. Disable Old Rules: prometheus.yaml::RedisHighMemory, etc.
-  3. Update Alertmanager route: remove continue: true, finalize da-pilot-slack as primary
-  4. Remove shadow labels: strip da_managed marker
-
-Expected Result:
-  - Recording Rules: ACTIVE
-  - Old Alerting Rules: DISABLED
-  - Dynamic Alerting: ACTIVE (primary)
-  - Alertmanager routing: redis-prod → da-pilot-slack (only)
-
-Health Checks:
-  ✓ No orphaned rules detected
-  ✓ Recording rules will still evaluate
-  ✓ Failover path verified
-
-Rollback Command (if needed):
-  da-tools cutover --tenant redis-prod --rollback
-```
-
-**Verify dry-run output**:
-- Only old Alerting Rules disabled; Recording Rules stay active
-- Alertmanager routes finalize to `da-pilot-slack`, no duplicate sends
+**Verify dry-run output**: Confirm only old Alerting Rules disabled, Recording Rules stay enabled; confirm Alertmanager routing points to new receiver only, no duplicates.
 
 ### Step 3.2: Execute Cutover
 
-After dry-run confirms, execute:
+Confirm dry-run results look good, then execute actual cutover:
 
 ```bash
 da-tools cutover \
@@ -837,188 +359,94 @@ da-tools cutover \
   --execute
 ```
 
-**Step 3.2.1**: Disable old alert rules
+**Execution steps**: Tool automatically disables old Alerting Rules (keeps Recording Rules), updates Alertmanager routing (removes `continue: true`, sets new receiver as only route), removes shadow labels.
+
+### Step 3.3: Comprehensive Health Check
+
+After cutover completes, run comprehensive check:
 
 ```bash
-# Remove or comment out old Redis alerts from Prometheus rules
-# Keep Recording Rules (redis:memory:usage_percent, etc.), remove only alert section
-
-kubectl patch cm prometheus-rules-redis \
-  -n monitoring \
-  -p '{"data": {"old_rules_disabled": "true"}}'
-```
-
-**Step 3.2.2**: Update Alertmanager routes
-
-```bash
-# Remove `continue: true`, make new route the sole target
-kubectl patch cm alertmanager-config -n monitoring --type merge -p '{
-  "data": {
-    "alertmanager.yaml": "route:\n  receiver: default\n  routes:\n    - receiver: da-pilot-slack\n      match:\n        da_managed: \"true\"\n        tenant: redis-prod\n      group_wait: 5s\n      group_interval: 5m\n      repeat_interval: 4h\n      continue: false\n    # other routes unchanged\n"
-  }
-}'
-
-# Restart Alertmanager
-kubectl rollout restart deployment/alertmanager -n monitoring
-```
-
-### Step 3.3: Full Health Check
-
-After cutover, run comprehensive diagnostics:
-
-```bash
-da-tools diagnose redis-prod \
+da-tools diagnose \
   --prometheus http://prometheus:9090 \
   --alertmanager http://alertmanager:9093 \
-  --verbose
+  --tenant redis-prod \
+  --json \
+  > diagnose-post-cutover.json
 ```
 
-**Expected output**:
-
-```
-========== Diagnostic Report for redis-prod ==========
-
-Recording Rules:
-  ✓ redis:memory:usage_percent → 42.5 (healthy)
-  ✓ redis:eviction:rate → 0.05/sec (healthy)
-  ✓ redis:connections:active → 127 (healthy)
-
-Alerting Rules (from Dynamic Alerting):
-  ✓ RedisHighMemory (critical) → FIRING (as expected)
-    Instance: redis-0:6379, Value: 92%, Latency: 15s
-  ✓ RedisHighConnections (warning) → NOT FIRING (threshold: 800, actual: 127)
-  ✓ RedisHighEvictionRate (critical) → NOT FIRING
-
-Alertmanager Routes:
-  ✓ redis-prod alerts routed to: da-pilot-slack
-  ✓ Route priority: 1st (matched)
-  ✓ No orphaned alerts detected
-
-Receiver Health:
-  ✓ da-pilot-slack: last webhook delivery 5s ago (success)
-  ✓ Notification count (last 1h): 2 (expected)
-
-Overall Health: GOOD
-  - All rules evaluate successfully
-  - Routing works as expected
-  - Notifications delivered on time
-```
+**Expected output**: Diagnostic report contains recording rules status (ACTIVE), new alerting rules status (ACTIVE), old alerting rules status (DISABLED), routing health (100%), cardinality (< 500).
 
 ### Step 3.4: Confirm Old Alerts Disabled
 
-Verify old alerts no longer fire:
+Verify old alerts disappeared from Alertmanager, old alert stream in Slack channel stopped:
 
 ```bash
-# Query Prometheus for old alert rules
-curl 'http://prometheus:9090/api/v1/rules' | jq '
-  .data.groups[]
-  | select(.file | contains("redis"))
-  | .rules[]
-  | select(.type == "alert")
-  | {name: .name, state: .state}
-'
-
-# Expected: empty or only Dynamic Alerting alerts (not old rules)
+curl 'http://localhost:9093/api/v1/alerts' | jq '.[].alerts[] | select(.labels.alertname=="RedisHighMemory" and .labels.da_managed!="true")'
 ```
+
+**Expected**: No results (old alerts disabled).
 
 ### Phase 3 Verification Checklist
 
-- [ ] Dry-run succeeds with no warnings
-- [ ] Actual cutover executes without errors
-- [ ] Old alert rules disabled
-- [ ] New alerts fire correctly (Alertmanager visible)
-- [ ] Notifications routed to da-pilot-slack correctly
-- [ ] diagnose report shows GOOD
-- [ ] No anomalous alerts or notification delays in first hour
+- [ ] Dry-run report confirms no anomalies
+- [ ] Cutover execution successful, no error logs
+- [ ] Diagnostics report: Recording Rules ACTIVE, new Rules ACTIVE, old Rules DISABLED
+- [ ] Old alerts gone from Alertmanager, new alerts sending normally
+- [ ] Alert stream in Slack channel stable (no duplicates, no gaps)
 
 ### Phase 3 Rollback
 
-If critical issues arise post-cutover:
+If cutover fails, execute rollback:
 
 ```bash
-da-tools cutover \
-  --tenant redis-prod \
-  --rollback
+da-tools cutover --tenant redis-prod --rollback
 ```
 
-This command:
-1. Re-enables old alert rules
-2. Restores Alertmanager routing (re-adds `continue: true`)
-3. Verifies old alerts resumed
-
-**After rollback**: System returns to Phase 2 end state (dual-run).
+Tool automatically re-enables old Alerting Rules, restores old Alertmanager routing, restores shadow labels.
 
 ---
 
 ## Phase 4: Expand & Cleanup
 
-**Goal**: Repeat Phases 1-3 for remaining domains, then system-level cleanup.
+**Goal**: Based on pilot success, migrate other domains in bulk; complete legacy config cleanup; hand over documentation.
 
 ### Step 4.1: Migrate Next Domain (Loop)
 
-Select next candidate (e.g., MariaDB), repeat Phases 1-3:
+Repeat Phases 1-3 to migrate the next domain (e.g., MariaDB):
 
 ```bash
-# Phase 1: Deploy
-da-tools scaffold --tenant mariadb-prod --db mariadb --non-interactive \
+da-tools scaffold \
+  --tenant mariadb-prod \
+  --db mariadb \
+  --non-interactive \
   --output conf.d/mariadb-prod.yaml
 
-# Edit conf.d/mariadb-prod.yaml, adjust thresholds (from Phase 0 audit)
-# Deploy threshold-exporter, mount Rule Pack
-helm install threshold-exporter-mariadb vencil/threshold-exporter \
-  --namespace monitoring \
-  -f conf.d/mariadb-prod.yaml
-
-# Phase 2: Dual-run validation (1-2 weeks)
-da-tools alert-quality --tenant mariadb-prod --lookback 168h
-
-# Phase 3: Cutover
-da-tools cutover --tenant mariadb-prod --execute
+# Edit thresholds
+# Deploy threshold-exporter (second instance)
+# Mount Rule Pack
+# Generate routes
+# Dual-run validation 1-2 weeks
+# Execute cutover
 ```
 
-Typical sequence for 5 domains:
-
-1. **Week 1-2**: Redis Phase 1
-2. **Week 2-4**: Redis Phase 2
-3. **Week 4**: Redis Phase 3
-4. **Week 5-7**: MariaDB Phase 1-2
-5. **Week 7**: MariaDB Phase 3
-6. **Week 8-10**: Kafka Phase 1-2
-7. **Week 10**: Kafka Phase 3
-8. ...repeat...
+Each domain independently goes through complete Phase 1-3; no need to wait for others.
 
 ### Step 4.2: Full Validation
 
-After all domains migrated, run full validation:
+After all domains migrated, validate all configs:
 
 ```bash
-# Validate all tenant configs
 da-tools validate-config \
   --config-dir conf.d/ \
   --ci \
-  --json \
   > validation-report.json
 
-# Expected
-{
-  "status": "PASS",
-  "summary": {
-    "total_tenants": 5,
-    "valid": 5,
-    "invalid": 0,
-    "cardinality_violations": 0
-  },
-  "details": [
-    {"tenant": "redis-prod", "status": "PASS", "rules": 8, "cardinality": 120},
-    {"tenant": "mariadb-prod", "status": "PASS", "rules": 6, "cardinality": 95},
-    ...
-  ]
-}
+# Expected: all tenants status = PASS, cardinality violations = 0
 ```
 
-### Step 4.3: Batch Diagnostics
+### Step 4.3: Batch Diagnosis
 
-Run health check across all tenants:
+Run health check on all tenants:
 
 ```bash
 da-tools batch-diagnose \
@@ -1029,55 +457,42 @@ da-tools batch-diagnose \
   > batch-diagnose.json
 
 # Expected: all tenants status = GOOD
-jq '.results[] | {tenant: .tenant, status: .status}' batch-diagnose.json
 ```
 
-### Step 4.4: Clean Legacy Config
+### Step 4.4: Clean Up Legacy Configuration
 
-Remove old Prometheus rules for migrated domains:
+Remove old Prometheus rules no longer needed:
 
 ```bash
-# Backup
 cp prometheus-rules.yaml prometheus-rules.yaml.backup-phase4
 
-# Remove migrated rules
+# Remove rules for migrated domains
 grep -v -e "redis" -e "mariadb" -e "kafka" prometheus-rules.yaml \
   > prometheus-rules-cleaned.yaml
 
-# Verify removal
 diff prometheus-rules.yaml prometheus-rules-cleaned.yaml
 
-# Apply new config
 kubectl create configmap prometheus-rules-cleaned \
   --from-file=prometheus-rules-cleaned.yaml \
   -n monitoring \
   --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl patch deployment prometheus -n monitoring --type merge -p \
-  '{"spec": {"template": {"spec": {"containers": [{"name": "prometheus", "args": ["--config.file=/etc/prometheus/prometheus-cleaned.yaml"]}]}}}}'
 ```
 
-### Step 4.5: Offboard Test Tenants
+### Step 4.5: Clean Up Test Tenants
 
-Remove any test or experimental tenants:
+If any test or trial tenants exist, remove them:
 
 ```bash
-# List all tenants
 da-tools ls --config-dir conf.d/
-
-# Offboard unneeded ones
 da-tools offboard --tenant test-domain-1
-
-# Verify
 da-tools validate-config --config-dir conf.d/ --ci
 ```
 
-### Step 4.6: Document Migration Completion
+### Step 4.6: Update Documentation & Handover
 
-Record migration details for handoff:
+Update internal docs to record migration completion details:
 
 ```bash
-# Create migration report
 cat > migration-report.yaml << 'EOF'
 migration_summary:
   start_date: 2026-03-18
@@ -1086,57 +501,53 @@ migration_summary:
 
 domains_migrated:
   - name: redis-prod
-    phase_1_date: 2026-03-18
     phase_3_date: 2026-04-01
     quality_improvement: "75% latency reduction, 100% false positive elimination"
-
   - name: mariadb-prod
-    phase_1_date: 2026-04-02
     phase_3_date: 2026-04-23
-    quality_improvement: "60% latency reduction, alert grouping improved"
-
-  - name: kafka-prod
-    phase_1_date: 2026-04-24
-    phase_3_date: 2026-05-20
-    quality_improvement: "50% latency reduction"
+    quality_improvement: "60% latency reduction"
 
 legacy_rules_removed: 127
-legacy_receivers_decommissioned: 3
-new_recording_rules_added: 24
 total_cardinality_reduction: "18%"
 
 lessons_learned:
-  - "Choose cleanest-metrics domain for pilot, speeds early learning"
-  - "Communicate quality improvements to alert recipients during Phase 2"
-  - "Extend Phase 2 beyond 1 week to capture diverse alert scenarios"
+  - "Pick the cleanest-metrics domain as pilot to accelerate early learning"
+  - "During dual-run validation, actively communicate quality improvements to alert receivers"
+  - "Extend Phase 2 beyond 2 weeks to cover diverse alert scenarios"
 EOF
 ```
 
 ---
 
-## FAQ
+## Frequently Asked Questions
 
-### Q1: Do I need to clean up scrape configs before migrating?
+### Q1: Do I need to clean up scrape config before migration?
 
-**A**: No. Dynamic Alerting's Recording Rules (Part 1) build a clean abstraction layer above messy scrapes. Even if scrape configs are non-standard, Recording Rules aggregate and normalize them into standard metrics.
+**A**: No. Dynamic Alerting's Recording Rules create a clean abstraction over existing scrape config. Even if scrape config is messy, Recording Rules aggregate and normalize to produce standard metrics. You can incrementally improve scrape config after migration completes.
 
-**Recommendation**: After migration completes, you can gradually improve scrape configs (standardize label naming, remove duplicate targets) as part of system cleanup, but it's not a prerequisite.
+### Q2: What if one domain fails during migration?
 
-### Q2: What if one domain fails during cutover?
+**A**: Each domain is independent. If Redis cutover fails, just `da-tools cutover --tenant redis-prod --rollback`. Other domains (MariaDB, Kafka, etc.) continue unaffected. Re-evaluate the issue and retry once fixed.
 
-**A**: Each domain is independent. If Redis cutover fails, simply rollback just Redis (`da-tools cutover --tenant redis-prod --rollback`). MariaDB, Kafka, and others continue normally unaffected.
+### Q3: How long does the entire migration take?
 
-After rollback, reassess the issue (e.g., threshold tuning), fix, and retry cutover.
+**A**: Phase 0 (audit) 1 day; Phase 1-3 per domain 2-3 weeks (Phase 2 usually 1-2 weeks); Phase 4 cleanup 2-3 days. Typical 5-domain migration takes 2-3 months.
 
-### Q3: How long does migration take?
+### Q4: How do I monitor threshold-exporter performance?
 
-**A**: Depends on domain count and verification rigor:
+**A**: `threshold-exporter` itself exposes Prometheus metrics. Query `threshold_exporter_scrape_duration_seconds` to verify scan latency; query `threshold_exporter_metrics_generated` to verify output metrics count.
 
-- **Phase 0** (audit): 1 day
-- **Phases 1-3 per domain**: 2-3 weeks (Phase 2 dual-run typically 1-2 weeks)
-- **Phase 4** (cleanup): 2-3 days
+### Q5: What if I get duplicate alerts (both old and new)?
 
-**Typical 5-domain timeline**:
+**A**: Phase 2 sets `continue: true` to allow both routes, which is intentional. Phase 3 cutover disables old rules to eliminate duplicates.
+
+### Q6: What if a Rule Pack doesn't fit my domain?
+
+**A**: Keep it in the old config. Dynamic Alerting supports incremental migration—some domains use Rule Packs, others stay on legacy rules.
+
+---
+
+## Migration Timeline (Typical 5-Domain Case)
 
 | Phase | Duration |
 |-------|----------|
@@ -1155,11 +566,10 @@ After rollback, reassess the issue (e.g., threshold tuning), fix, and retry cuto
 
 | Resource | Relevance |
 |----------|-----------|
-| [Migration Guide (tool-level reference)](../migration-guide.en.md) | ⭐⭐⭐ |
-| [Scenario: Shadow Monitoring Cutover Workflow](shadow-monitoring-cutover.en.md) | ⭐⭐⭐ |
-| [Architecture & Design §2.13 Performance](../architecture-and-design.en.md) | ⭐⭐⭐ |
-| [da-tools CLI Reference](../cli-reference.en.md) | ⭐⭐ |
-| [Scenario: Tenant Complete Lifecycle](tenant-lifecycle.en.md) | ⭐⭐ |
-| [Scenario: GitOps CI/CD Integration](gitops-ci-integration.en.md) | ⭐⭐ |
-| [Scenario: Hands-on Lab Tutorial](hands-on-lab.en.md) | ⭐⭐ |
-| [Shadow Monitoring SRE SOP](../shadow-monitoring-sop.en.md) | ⭐ |
+| [Migration Guide (tool-level reference)](../migration-guide.md) | ⭐⭐⭐ |
+| [Scenario: Shadow Monitoring Full-Auto Cutover Workflow](shadow-monitoring-cutover.md) | ⭐⭐⭐ |
+| [Architecture & Design §2.13 Performance Architecture](../architecture-and-design.md) | ⭐⭐⭐ |
+| [da-tools CLI Reference](../cli-reference.md) | ⭐⭐ |
+| [Scenario: Tenant Complete Lifecycle Management](tenant-lifecycle.md) | ⭐⭐ |
+| [Scenario: GitOps CI/CD Integration Guide](gitops-ci-integration.md) | ⭐⭐ |
+| [Scenario: Hands-on Lab Tutorial](hands-on-lab.md) | ⭐⭐ |

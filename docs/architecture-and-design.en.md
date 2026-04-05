@@ -1032,9 +1032,30 @@ Export platform configuration in other monitoring systems' native formats: `da-t
 
 ---
 
+## Appendix A: Role & Tool Quick Reference
+
+> Consolidated from the former `context-diagram.en.md`. For detailed tool usage, see [CLI Reference](cli-reference.en.md).
+
+### Role-Tool Mapping
+
+| Role | Responsibility | Core Tools | Occasional Tools |
+|------|---------------|------------|-----------------|
+| **Platform Engineer** | Platform config, Rule Pack maintenance, infra | `validate-config`, `generate-routes`, `config-diff`, `policy-engine` | `bump-docs`, `maintenance-scheduler`, `alert-quality`, `cardinality-forecast` |
+| **Domain Expert (DBA/SRE)** | Specific Rule Packs, metric dictionary, governance | `lint-custom-rules`, `migrate-rule`, `deprecate-rule` | `validate-config`, `backtest-threshold`, `alert-quality` |
+| **Tenant Team (SRE/DBA)** | Tenant config, thresholds, routing, three-state, metadata | `scaffold`, `diagnose`, `check-alert`, Self-Service Portal | `validate-migration`, `offboard`, `patch-config` |
+
+### Quick Start by Role
+
+**Platform Engineer** → Read this document → Learn `validate-config` and `generate-routes` → Use `config-diff` for PR blast radius analysis
+
+**Domain Expert (DBA)** → Read [custom-rule-governance.en.md](custom-rule-governance.en.md) → Use `migrate-rule` for rule migration → Use `backtest-threshold` to validate thresholds
+
+**Tenant Team (SRE/DBA)** → Read [getting-started/for-tenants.en.md](getting-started/for-tenants.en.md) → Use [Self-Service Portal](interactive-tools.en.md) or `scaffold` → Use `diagnose` for health checks
+
+---
+
 ## References
 
-- [Context Diagram](./context-diagram.en.md) — Roles, tools, and product interactions
 - [ADR Overview](adr/README.en.md) — 8 architecture decision records
 - [Benchmarks](benchmarks.en.md) · [Governance & Security](governance-security.en.md) · [Troubleshooting](troubleshooting.en.md)
 - [Migration Guide](migration-guide.en.md) · [Migration Engine](migration-engine.en.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.en.md)
@@ -1043,18 +1064,5 @@ Export platform configuration in other monitoring systems' native formats: `da-t
 
 ---
 
-**Document version:** v2.3.0 — 2026-04-04
+**Document version:** v2.3.0 — 2026-04-05
 **Maintainer:** Platform Engineering Team
-
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](./architecture-and-design.md) | ⭐⭐⭐ |
-| [ADR-008: Operator-Native Integration Path](adr/008-operator-native-integration-path.en.md) | ⭐⭐⭐ |
-| [001-severity-dedup-via-inhibit.en](adr/001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](adr/002-oci-registry-over-chartmuseum.en.md) | ⭐⭐ |
-| [003-sentinel-alert-pattern.en](adr/003-sentinel-alert-pattern.en.md) | ⭐⭐ |
-| [004-federation-scenario-a-first.en](adr/004-federation-scenario-a-first.en.md) | ⭐⭐ |
-| [005-projected-volume-for-rule-packs.en](adr/005-projected-volume-for-rule-packs.en.md) | ⭐⭐ |
-| [README.en](adr/README.en.md) | ⭐⭐ |

@@ -19,7 +19,6 @@
 | `docs/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南 |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
-| `docs/context-diagram.md` (.en.md) | All | 專案 Context 圖：角色、工具與產品互動關係 |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | 多租戶客製化規則治理規範 (Custom Rule Governance Model) |
 | `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |

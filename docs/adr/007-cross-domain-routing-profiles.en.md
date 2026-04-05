@@ -289,4 +289,4 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 | [007-cross-domain-routing-profiles.en](007-cross-domain-routing-profiles.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |
 | ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["Project Context Diagram"](../context-diagram.md) | ⭐⭐ |
+| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |

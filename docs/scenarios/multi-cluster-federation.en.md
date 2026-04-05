@@ -7,7 +7,7 @@ lang: en
 ---
 # Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics
 
-> **v2.1.0** | Related docs: [`federation-integration.md`](../federation-integration.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.3.0** | Related docs: [`federation-integration.md`](../federation-integration.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Problem
 

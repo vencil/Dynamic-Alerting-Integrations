@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs、Tenants (DevOps)
 > **Image**：`ghcr.io/vencil/da-tools`
-> **版本**：2.1.0（獨立版號，與 threshold-exporter 脫鉤）
+> **版本**：2.3.0（獨立版號，與 threshold-exporter 脫鉤）
 
 ---
 
@@ -23,7 +23,7 @@
 
 ```bash
 # 本地建構（見下方「本地建構」章節）
-cd components/da-tools/app && ./build.sh 2.1.0
+cd components/da-tools/app && ./build.sh 2.3.0
 
 # 或從 registry 拉取（需 CI/CD 已推送）
 docker pull ghcr.io/vencil/da-tools:v2.3.0
@@ -380,7 +380,7 @@ cd components/da-tools/app
 ./build.sh
 
 # 建構指定版本
-./build.sh 2.1.0
+./build.sh 2.3.0
 
 # 載入到 Kind cluster（如需要在 K8s Job 中使用）
 kind load docker-image da-tools:dev --name dynamic-alerting-cluster
@@ -418,9 +418,9 @@ spec:
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v2.1.0 | `v2.1.0` | ADR-007 Routing Profiles + Portal 強化 + 文件治理 |
-| threshold-exporter | v2.1.0 | `exporter/v2.1.0` | Go binary |
-| **da-tools** | **v2.1.0** | **`tools/v2.1.0`** | **Python CLI 工具集（23 命令）** |
+| 平台文件 | v2.3.0 | `v2.1.0` | ADR-007 Routing Profiles + Portal 強化 + 文件治理 |
+| threshold-exporter | v2.3.0 | `exporter/v2.3.0` | Go binary |
+| **da-tools** | **v2.3.0** | **`tools/v2.3.0`** | **Python CLI 工具集（23 命令）** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。
 

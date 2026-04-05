@@ -99,4 +99,4 @@ The PromQL-level `unless()` or `absent()` method has fundamental flaws:
 | [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |
 | ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Project Context Diagram"](../context-diagram.md) | ⭐⭐ |
+| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |

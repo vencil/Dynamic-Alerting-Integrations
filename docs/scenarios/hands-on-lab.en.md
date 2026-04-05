@@ -8,7 +8,7 @@ lang: en
 
 # Hands-on Lab: From Zero to Production Alerting
 
-> **v2.2.0** | Estimated time: 30–45 minutes | Prerequisites: Docker installed
+> **v2.3.0** | Estimated time: 30–45 minutes | Prerequisites: Docker installed
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)
 

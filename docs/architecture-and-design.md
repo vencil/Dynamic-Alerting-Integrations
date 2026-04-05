@@ -1106,9 +1106,30 @@ v2.3.0 已有 30 支 JSX 互動工具和 CI matrix。用 Playwright 建立瀏覽
 
 ---
 
+## 附錄 A：角色與工具速查
+
+> 原 `context-diagram.md` 的精華內容。詳細工具用法見 [CLI Reference](cli-reference.md)。
+
+### 角色與工具對應表
+
+| 角色 | 主責 | 核心工具 | 偶用工具 |
+|------|------|---------|---------|
+| **Platform Engineer** | 平台級配置、Rule Pack 維護、基礎設施 | `validate-config`, `generate-routes`, `config-diff`, `policy-engine` | `bump-docs`, `maintenance-scheduler`, `alert-quality`, `cardinality-forecast` |
+| **Domain Expert (DBA/SRE)** | 特定 Rule Pack、metric dictionary、governance | `lint-custom-rules`, `migrate-rule`, `deprecate-rule` | `validate-config`, `backtest-threshold`, `alert-quality` |
+| **Tenant Team (SRE/DBA)** | 租戶配置、閾值、路由、三態、metadata | `scaffold`, `diagnose`, `check-alert`, Self-Service Portal | `validate-migration`, `offboard`, `patch-config` |
+
+### 新手快速導航
+
+**Platform Engineer** → 讀本文件理解架構 → 學習 `validate-config` 和 `generate-routes` → 用 `config-diff` 做 PR blast radius 分析
+
+**Domain Expert (DBA)** → 讀 [custom-rule-governance.md](custom-rule-governance.md) → 用 `migrate-rule` 遷移規則 → 用 `backtest-threshold` 驗證閾值
+
+**Tenant Team (SRE/DBA)** → 讀 [getting-started/for-tenants.md](getting-started/for-tenants.md) → 用 [Self-Service Portal](interactive-tools.md) 或 `scaffold` 建立配置 → 用 `diagnose` 定期檢查
+
+---
+
 ## 相關資源
 
-- [Context 圖](./context-diagram.md) — 角色、工具與產品互動關係
 - [ADR 總覽](adr/README.md) — 8 個架構決策紀錄
 - [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md)
 - [遷移指南](migration-guide.md) · [遷移引擎](migration-engine.md) · [Shadow Monitoring SOP](shadow-monitoring-sop.md)
@@ -1117,5 +1138,5 @@ v2.3.0 已有 30 支 JSX 互動工具和 CI matrix。用 Playwright 建立瀏覽
 
 ---
 
-**文件版本：** v2.3.0 — 2026-04-04
+**文件版本：** v2.3.0 — 2026-04-05
 **維護者：** Platform Engineering Team

@@ -1616,104 +1616,48 @@ tenants:
 // Silent Mode Tests
 // ============================================================
 
-func TestResolveSilentModes_Default(t *testing.T) {
-	// No _silent_mode set → Normal mode → empty result
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"mysql_connections": SV("70")},
-		},
+func TestResolveSilentModes(t *testing.T) {
+	tests := []struct {
+		name       string
+		tenants    map[string]map[string]ScheduledValue
+		expectedLen int
+		validate   func(t *testing.T, result []ResolvedSilentMode)
+	}{
+		{"Default", map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}, 0, nil},
+		{"Warning", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
+			if r[0].Tenant != "db-a" || r[0].TargetSeverity != "warning" {
+				t.Errorf("unexpected: %+v", r[0])
+			}
+		}},
+		{"Critical", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("critical")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
+			if r[0].TargetSeverity != "critical" {
+				t.Errorf("expected critical, got %s", r[0].TargetSeverity)
+			}
+		}},
+		{"All", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("all")}}, 2, func(t *testing.T, r []ResolvedSilentMode) {
+			sev := map[string]bool{}
+			for _, x := range r {
+				sev[x.TargetSeverity] = true
+			}
+			if !sev["warning"] || !sev["critical"] {
+				t.Errorf("expected warning+critical, got %v", sev)
+			}
+		}},
+		{"Disable", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("disable")}}, 0, nil},
+		{"InvalidFallback", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("invalid_value")}}, 0, nil},
+		{"CaseInsensitive", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("WARNING")}, "db-b": {"_silent_mode": SV("All")}, "db-c": {"_silent_mode": SV(" Critical ")}}, 4, nil},
 	}
-	result := cfg.ResolveSilentModes()
-	if len(result) != 0 {
-		t.Errorf("expected 0 silent modes, got %d", len(result))
-	}
-}
-
-func TestResolveSilentModes_Warning(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("warning")},
-		},
-	}
-	result := cfg.ResolveSilentModes()
-	if len(result) != 1 {
-		t.Fatalf("expected 1, got %d", len(result))
-	}
-	if result[0].Tenant != "db-a" || result[0].TargetSeverity != "warning" {
-		t.Errorf("unexpected: %+v", result[0])
-	}
-}
-
-func TestResolveSilentModes_Critical(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("critical")},
-		},
-	}
-	result := cfg.ResolveSilentModes()
-	if len(result) != 1 {
-		t.Fatalf("expected 1, got %d", len(result))
-	}
-	if result[0].TargetSeverity != "critical" {
-		t.Errorf("expected critical, got %s", result[0].TargetSeverity)
-	}
-}
-
-func TestResolveSilentModes_All(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("all")},
-		},
-	}
-	result := cfg.ResolveSilentModes()
-	if len(result) != 2 {
-		t.Fatalf("expected 2 (warning+critical), got %d", len(result))
-	}
-	severities := map[string]bool{}
-	for _, r := range result {
-		severities[r.TargetSeverity] = true
-	}
-	if !severities["warning"] || !severities["critical"] {
-		t.Errorf("expected warning+critical, got %v", severities)
-	}
-}
-
-func TestResolveSilentModes_Disable(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("disable")},
-		},
-	}
-	result := cfg.ResolveSilentModes()
-	if len(result) != 0 {
-		t.Errorf("expected 0 for disable, got %d", len(result))
-	}
-}
-
-func TestResolveSilentModes_InvalidFallback(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("invalid_value")},
-		},
-	}
-	result := cfg.ResolveSilentModes()
-	if len(result) != 0 {
-		t.Errorf("expected 0 for invalid value, got %d", len(result))
-	}
-}
-
-func TestResolveSilentModes_CaseInsensitive(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("WARNING")},
-			"db-b": {"_silent_mode": SV("All")},
-			"db-c": {"_silent_mode": SV(" Critical ")},
-		},
-	}
-	result := cfg.ResolveSilentModes()
-	// db-a: 1 (warning), db-b: 2 (all), db-c: 1 (critical) = 4
-	if len(result) != 4 {
-		t.Errorf("expected 4, got %d", len(result))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ThresholdConfig{Tenants: tt.tenants}
+			result := cfg.ResolveSilentModes()
+			if len(result) != tt.expectedLen {
+				t.Fatalf("expected %d, got %d", tt.expectedLen, len(result))
+			}
+			if tt.validate != nil {
+				tt.validate(t, result)
+			}
+		})
 	}
 }
 
@@ -1777,87 +1721,53 @@ func TestResolveSilentModes_MixedTenants(t *testing.T) {
 // v1.2.0 Severity Dedup Tests
 // ============================================================
 
-func TestResolveSeverityDedup_DefaultEnable(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {}, // No explicit setting → default enable
-		},
+func TestResolveSeverityDedup(t *testing.T) {
+	tests := []struct {
+		name       string
+		tenants    map[string]map[string]ScheduledValue
+		expectedLen int
+		validate   func(t *testing.T, r []ResolvedSeverityDedup)
+	}{
+		{"DefaultEnable", map[string]map[string]ScheduledValue{"db-a": {}}, 1, func(t *testing.T, r []ResolvedSeverityDedup) {
+			if r[0].Tenant != "db-a" || r[0].Mode != "enable" {
+				t.Errorf("expected db-a/enable, got %s/%s", r[0].Tenant, r[0].Mode)
+			}
+		}},
+		{"ExplicitEnable", map[string]map[string]ScheduledValue{"db-a": {"_severity_dedup": SV("enable")}}, 1, func(t *testing.T, r []ResolvedSeverityDedup) {
+			if r[0].Mode != "enable" {
+				t.Errorf("expected mode=enable, got %s", r[0].Mode)
+			}
+		}},
+		{"ExplicitDisable", map[string]map[string]ScheduledValue{"db-a": {"_severity_dedup": SV("disable")}}, 0, nil},
+		{"MultiTenant", map[string]map[string]ScheduledValue{"db-a": {}, "db-b": {"_severity_dedup": SV("disable")}, "db-c": {"_severity_dedup": SV("enable")}}, 2, func(t *testing.T, r []ResolvedSeverityDedup) {
+			ten := map[string]bool{}
+			for _, x := range r {
+				ten[x.Tenant] = true
+			}
+			if !ten["db-a"] || !ten["db-c"] {
+				t.Errorf("expected db-a and db-c, got %v", ten)
+			}
+			if ten["db-b"] {
+				t.Errorf("db-b should not appear (disabled)")
+			}
+		}},
+		{"CaseInsensitive", map[string]map[string]ScheduledValue{"db-a": {"_severity_dedup": SV("DISABLE")}, "db-b": {"_severity_dedup": SV("Enable")}}, 1, func(t *testing.T, r []ResolvedSeverityDedup) {
+			if r[0].Tenant != "db-b" {
+				t.Errorf("expected db-b, got %s", r[0].Tenant)
+			}
+		}},
 	}
-	resolved := cfg.ResolveSeverityDedup()
-	if len(resolved) != 1 {
-		t.Fatalf("expected 1 entry for default enable, got %d", len(resolved))
-	}
-	if resolved[0].Tenant != "db-a" || resolved[0].Mode != "enable" {
-		t.Errorf("expected db-a/enable, got %s/%s", resolved[0].Tenant, resolved[0].Mode)
-	}
-}
-
-func TestResolveSeverityDedup_ExplicitEnable(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"_severity_dedup": SV("enable"),
-			},
-		},
-	}
-	resolved := cfg.ResolveSeverityDedup()
-	if len(resolved) != 1 || resolved[0].Mode != "enable" {
-		t.Fatalf("expected 1 entry with mode=enable, got %+v", resolved)
-	}
-}
-
-func TestResolveSeverityDedup_ExplicitDisable(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"_severity_dedup": SV("disable"),
-			},
-		},
-	}
-	resolved := cfg.ResolveSeverityDedup()
-	if len(resolved) != 0 {
-		t.Fatalf("expected 0 entries for disable, got %d: %+v", len(resolved), resolved)
-	}
-}
-
-func TestResolveSeverityDedup_MultiTenant(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {},                                        // default enable
-			"db-b": {"_severity_dedup": SV("disable")},       // explicit disable
-			"db-c": {"_severity_dedup": SV("enable")},        // explicit enable
-		},
-	}
-	resolved := cfg.ResolveSeverityDedup()
-	// Should have 2: db-a (default) and db-c (explicit enable)
-	if len(resolved) != 2 {
-		t.Fatalf("expected 2 entries, got %d: %+v", len(resolved), resolved)
-	}
-	tenants := map[string]bool{}
-	for _, r := range resolved {
-		tenants[r.Tenant] = true
-	}
-	if !tenants["db-a"] || !tenants["db-c"] {
-		t.Errorf("expected db-a and db-c, got %v", tenants)
-	}
-	if tenants["db-b"] {
-		t.Errorf("db-b should not appear (disabled)")
-	}
-}
-
-func TestResolveSeverityDedup_CaseInsensitive(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_severity_dedup": SV("DISABLE")},
-			"db-b": {"_severity_dedup": SV("Enable")},
-		},
-	}
-	resolved := cfg.ResolveSeverityDedup()
-	if len(resolved) != 1 {
-		t.Fatalf("expected 1 entry, got %d: %+v", len(resolved), resolved)
-	}
-	if resolved[0].Tenant != "db-b" {
-		t.Errorf("expected db-b, got %s", resolved[0].Tenant)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ThresholdConfig{Tenants: tt.tenants}
+			resolved := cfg.ResolveSeverityDedup()
+			if len(resolved) != tt.expectedLen {
+				t.Fatalf("expected %d entries, got %d", tt.expectedLen, len(resolved))
+			}
+			if tt.validate != nil {
+				tt.validate(t, resolved)
+			}
+		})
 	}
 }
 
@@ -2177,76 +2087,33 @@ func TestFormatDuration_NoDay(t *testing.T) {
 // Cardinality Guard (v1.5.0)
 // ============================================================
 
-func TestCardinalityGuard_UnderLimit(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults:            map[string]float64{"mysql_connections": 70, "redis_memory": 80},
-		Tenants:             map[string]map[string]ScheduledValue{"db-a": {}},
-		MaxMetricsPerTenant: 10,
-	}
-	result := cfg.Resolve()
-	if len(result) != 2 {
-		t.Errorf("expected 2 metrics, got %d", len(result))
-	}
-}
-
-func TestCardinalityGuard_AtLimit(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults:            map[string]float64{"m1": 1, "m2": 2},
-		Tenants:             map[string]map[string]ScheduledValue{"t": {}},
-		MaxMetricsPerTenant: 2,
-	}
-	result := cfg.Resolve()
-	if len(result) != 2 {
-		t.Errorf("expected 2 metrics, got %d", len(result))
-	}
-}
-
-func TestCardinalityGuard_OverLimitTruncated(t *testing.T) {
-	// Create many defaults to exceed a low limit
-	defaults := make(map[string]float64)
+func TestCardinalityGuard(t *testing.T) {
+	defsWith20 := make(map[string]float64)
 	for i := 0; i < 20; i++ {
-		defaults[fmt.Sprintf("metric_%d", i)] = float64(i)
+		defsWith20[fmt.Sprintf("metric_%d", i)] = float64(i)
 	}
-	cfg := ThresholdConfig{
-		Defaults:            defaults,
-		Tenants:             map[string]map[string]ScheduledValue{"t": {}},
-		MaxMetricsPerTenant: 5,
-	}
-	result := cfg.Resolve()
-	if len(result) != 5 {
-		t.Errorf("expected 5 metrics (truncated), got %d", len(result))
-	}
-}
-
-func TestCardinalityGuard_DefaultLimit(t *testing.T) {
-	// MaxMetricsPerTenant = 0 → uses DefaultMaxMetricsPerTenant (500)
-	cfg := ThresholdConfig{
-		Defaults: map[string]float64{"m1": 1},
-		Tenants:  map[string]map[string]ScheduledValue{"t": {}},
-	}
-	result := cfg.Resolve()
-	if len(result) != 1 {
-		t.Errorf("expected 1 metric, got %d", len(result))
-	}
-}
-
-func TestCardinalityGuard_MultiTenantIndependent(t *testing.T) {
-	defaults := make(map[string]float64)
+	defsWith10 := make(map[string]float64)
 	for i := 0; i < 10; i++ {
-		defaults[fmt.Sprintf("m_%d", i)] = float64(i)
+		defsWith10[fmt.Sprintf("m_%d", i)] = float64(i)
 	}
-	cfg := ThresholdConfig{
-		Defaults: defaults,
-		Tenants: map[string]map[string]ScheduledValue{
-			"t1": {},
-			"t2": {},
-		},
-		MaxMetricsPerTenant: 3,
+	tests := []struct {
+		name string
+		cfg  ThresholdConfig
+		expected int
+	}{
+		{"UnderLimit", ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70, "redis_memory": 80}, Tenants: map[string]map[string]ScheduledValue{"db-a": {}}, MaxMetricsPerTenant: 10}, 2},
+		{"AtLimit", ThresholdConfig{Defaults: map[string]float64{"m1": 1, "m2": 2}, Tenants: map[string]map[string]ScheduledValue{"t": {}}, MaxMetricsPerTenant: 2}, 2},
+		{"OverLimitTruncated", ThresholdConfig{Defaults: defsWith20, Tenants: map[string]map[string]ScheduledValue{"t": {}}, MaxMetricsPerTenant: 5}, 5},
+		{"DefaultLimit", ThresholdConfig{Defaults: map[string]float64{"m1": 1}, Tenants: map[string]map[string]ScheduledValue{"t": {}}}, 1},
+		{"MultiTenantIndependent", ThresholdConfig{Defaults: defsWith10, Tenants: map[string]map[string]ScheduledValue{"t1": {}, "t2": {}}, MaxMetricsPerTenant: 3}, 6},
 	}
-	result := cfg.Resolve()
-	// Each tenant should be truncated to 3, total 6
-	if len(result) != 6 {
-		t.Errorf("expected 6 metrics (3 per tenant), got %d", len(result))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.cfg.Resolve()
+			if len(result) != tt.expected {
+				t.Errorf("expected %d metrics, got %d", tt.expected, len(result))
+			}
+		})
 	}
 }
 
@@ -2254,93 +2121,47 @@ func TestCardinalityGuard_MultiTenantIndependent(t *testing.T) {
 // ValidateTenantKeys (v1.5.0)
 // ============================================================
 
-func TestValidateTenantKeys_NoWarningsForValidKeys(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 70, "redis_memory": 80},
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"mysql_connections":          {Default: "60"},
-				"mysql_connections_critical":  {Default: "90"},
-				"_silent_mode":               {Default: "warning"},
-				"_severity_dedup":            {Default: "enable"},
-				"_state_maintenance":         {Default: "enable"},
-				"_routing":                   {Default: "receiver: ..."},
-			},
-		},
+func TestValidateTenantKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     ThresholdConfig
+		wantLen int
+		check   func(t *testing.T, w []string)
+	}{
+		{"NoWarningsForValidKeys",
+			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70, "redis_memory": 80}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": {Default: "60"}, "mysql_connections_critical": {Default: "90"}, "_silent_mode": {Default: "warning"}, "_severity_dedup": {Default: "enable"}, "_state_maintenance": {Default: "enable"}, "_routing": {Default: "receiver: ..."}}}},
+			0, nil},
+		{"TypoReservedKey",
+			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silence_mode": {Default: "warning"}}}},
+			1, func(t *testing.T, w []string) {
+				if !strings.Contains(w[0], "unknown reserved key") || !strings.Contains(w[0], "_silence_mode") {
+					t.Errorf("expected unknown reserved key with _silence_mode, got %q", w[0])
+				}
+			}},
+		{"UnknownMetricKey",
+			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"postgres_connections": {Default: "60"}}}},
+			1, func(t *testing.T, w []string) {
+				if !strings.Contains(w[0], "not in defaults") {
+					t.Errorf("expected 'not in defaults', got %q", w[0])
+				}
+			}},
+		{"CriticalSuffixValid",
+			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections_critical": {Default: "90"}}}},
+			0, nil},
+		{"NamespacesReservedKey",
+			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": {Default: "60"}, "_namespaces": {Default: "[\"ns-a\", \"ns-b\"]"}}}},
+			0, nil},
 	}
-	warnings := cfg.ValidateTenantKeys()
-	if len(warnings) != 0 {
-		t.Errorf("expected no warnings, got %v", warnings)
-	}
-}
-
-func TestValidateTenantKeys_TypoReservedKey(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 70},
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"_silence_mode": {Default: "warning"},
-			},
-		},
-	}
-	warnings := cfg.ValidateTenantKeys()
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
-	}
-	if !strings.Contains(warnings[0], "unknown reserved key") {
-		t.Errorf("expected 'unknown reserved key', got %q", warnings[0])
-	}
-	if !strings.Contains(warnings[0], "_silence_mode") {
-		t.Errorf("expected warning to mention '_silence_mode', got %q", warnings[0])
-	}
-}
-
-func TestValidateTenantKeys_UnknownMetricKey(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 70},
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"postgres_connections": {Default: "60"},
-			},
-		},
-	}
-	warnings := cfg.ValidateTenantKeys()
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
-	}
-	if !strings.Contains(warnings[0], "not in defaults") {
-		t.Errorf("expected 'not in defaults', got %q", warnings[0])
-	}
-}
-
-func TestValidateTenantKeys_CriticalSuffixValid(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 70},
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"mysql_connections_critical": {Default: "90"},
-			},
-		},
-	}
-	warnings := cfg.ValidateTenantKeys()
-	if len(warnings) != 0 {
-		t.Errorf("expected no warnings, got %v", warnings)
-	}
-}
-
-func TestValidateTenantKeys_NamespacesReservedKey(t *testing.T) {
-	cfg := ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 70},
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"mysql_connections": {Default: "60"},
-				"_namespaces":      {Default: "[\"ns-a\", \"ns-b\"]"},
-			},
-		},
-	}
-	warnings := cfg.ValidateTenantKeys()
-	if len(warnings) != 0 {
-		t.Errorf("_namespaces should be a valid reserved key, got warnings: %v", warnings)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := tt.cfg.ValidateTenantKeys()
+			if len(w) != tt.wantLen {
+				t.Fatalf("expected %d warnings, got %d: %v", tt.wantLen, len(w), w)
+			}
+			if tt.check != nil {
+				tt.check(t, w)
+			}
+		})
 	}
 }
 
@@ -2348,104 +2169,61 @@ func TestValidateTenantKeys_NamespacesReservedKey(t *testing.T) {
 // Structured Silent Mode Tests (v1.7.0)
 // ============================================================
 
-func TestResolveSilentModes_StructuredWithExpires_Active(t *testing.T) {
-	// Structured _silent_mode with future expires → active (not expired)
+func TestResolveSilentModes_Structured(t *testing.T) {
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
-	yamlStr := "expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV(yamlStr)},
-		},
-	}
-	result := cfg.ResolveSilentModesAt(time.Now())
-	if len(result) != 1 {
-		t.Fatalf("expected 1, got %d", len(result))
-	}
-	if result[0].Tenant != "db-a" || result[0].TargetSeverity != "warning" {
-		t.Errorf("unexpected: %+v", result[0])
-	}
-	if result[0].Expired {
-		t.Error("should not be expired (future)")
-	}
-	if result[0].Reason != "Planned DB migration" {
-		t.Errorf("expected reason 'Planned DB migration', got %q", result[0].Reason)
-	}
-}
-
-func TestResolveSilentModes_StructuredWithExpires_Expired(t *testing.T) {
-	// Structured _silent_mode with past expires → expired
 	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
-	yamlStr := "expires: " + past + "\nreason: DB migration done\ntarget: all\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV(yamlStr)},
-		},
+	tests := []struct {
+		name    string
+		cfg     *ThresholdConfig
+		wantLen int
+		check   func(t *testing.T, r []ResolvedSilentMode)
+	}{
+		{"WithExpires_Active",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n")}}},
+			1, func(t *testing.T, r []ResolvedSilentMode) {
+				if r[0].Tenant != "db-a" || r[0].TargetSeverity != "warning" || r[0].Expired || r[0].Reason != "Planned DB migration" {
+					t.Errorf("unexpected: %+v", r[0])
+				}
+			}},
+		{"WithExpires_Expired",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("expires: " + past + "\nreason: DB migration done\ntarget: all\n")}}},
+			2, func(t *testing.T, r []ResolvedSilentMode) {
+				for _, x := range r {
+					if !x.Expired {
+						t.Errorf("expected expired for %s", x.TargetSeverity)
+					}
+				}
+			}},
+		{"StructuredNoExpires",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("reason: Long-term silencing\ntarget: critical\n")}}},
+			1, func(t *testing.T, r []ResolvedSilentMode) {
+				if r[0].Expired || r[0].Expires != (time.Time{}) {
+					t.Errorf("should not be expired, expires should be zero")
+				}
+			}},
+		{"StructuredDisable",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("target: disable\n")}}},
+			0, nil},
+		{"ScalarBackwardCompat",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}, "db-b": {"_silent_mode": SV("all")}}},
+			3, func(t *testing.T, r []ResolvedSilentMode) {
+				for _, x := range r {
+					if x.Expired || !x.Expires.IsZero() {
+						t.Error("scalar should never be expired")
+					}
+				}
+			}},
 	}
-	result := cfg.ResolveSilentModesAt(time.Now())
-	if len(result) != 2 {
-		t.Fatalf("expected 2 (warning+critical, both expired), got %d", len(result))
-	}
-	for _, r := range result {
-		if !r.Expired {
-			t.Errorf("expected expired for %s, got not expired", r.TargetSeverity)
-		}
-	}
-}
-
-func TestResolveSilentModes_StructuredNoExpires(t *testing.T) {
-	// Structured _silent_mode without expires → always active
-	yamlStr := "reason: Long-term silencing\ntarget: critical\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV(yamlStr)},
-		},
-	}
-	result := cfg.ResolveSilentModesAt(time.Now())
-	if len(result) != 1 {
-		t.Fatalf("expected 1, got %d", len(result))
-	}
-	if result[0].Expired {
-		t.Error("should not be expired (no expires set)")
-	}
-	if result[0].Expires != (time.Time{}) {
-		t.Error("expires should be zero value")
-	}
-}
-
-func TestResolveSilentModes_StructuredDisable(t *testing.T) {
-	// Structured with target: "disable" → no entries
-	yamlStr := "target: disable\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV(yamlStr)},
-		},
-	}
-	result := cfg.ResolveSilentModesAt(time.Now())
-	if len(result) != 0 {
-		t.Errorf("expected 0 for disable, got %d", len(result))
-	}
-}
-
-func TestResolveSilentModes_ScalarBackwardCompat(t *testing.T) {
-	// Scalar strings must still work exactly as before
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("warning")},
-			"db-b": {"_silent_mode": SV("all")},
-		},
-	}
-	result := cfg.ResolveSilentModesAt(time.Now())
-	// db-a: 1, db-b: 2 = 3
-	if len(result) != 3 {
-		t.Errorf("expected 3, got %d", len(result))
-	}
-	for _, r := range result {
-		if r.Expired {
-			t.Error("scalar should never be expired")
-		}
-		if !r.Expires.IsZero() {
-			t.Error("scalar should have zero expires")
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.cfg.ResolveSilentModesAt(time.Now())
+			if len(result) != tt.wantLen {
+				t.Fatalf("expected %d, got %d", tt.wantLen, len(result))
+			}
+			if tt.check != nil {
+				tt.check(t, result)
+			}
+		})
 	}
 }
 
@@ -2457,65 +2235,46 @@ func TestResolveSilentModes_ScalarBackwardCompat(t *testing.T) {
 // Structured Maintenance Mode Tests (v1.7.0)
 // ============================================================
 
-func TestResolveMaintenanceExpiries_NoMaintenance(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"mysql_connections": SV("70")},
-		},
-	}
-	result := cfg.ResolveMaintenanceExpiries()
-	if len(result) != 0 {
-		t.Errorf("expected 0, got %d", len(result))
-	}
-}
-
-func TestResolveMaintenanceExpiries_ScalarEnable(t *testing.T) {
-	// Scalar "enable" has no expires → no expiry entry
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV("enable")},
-		},
-	}
-	result := cfg.ResolveMaintenanceExpiries()
-	if len(result) != 0 {
-		t.Errorf("expected 0 (scalar has no expires), got %d", len(result))
-	}
-}
-
-func TestResolveMaintenanceExpiries_StructuredActive(t *testing.T) {
+func TestResolveMaintenanceExpiries(t *testing.T) {
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
-	yamlStr := "expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
-		},
-	}
-	result := cfg.ResolveMaintenanceExpiriesAt(time.Now())
-	if len(result) != 1 {
-		t.Fatalf("expected 1, got %d", len(result))
-	}
-	if result[0].Expired {
-		t.Error("should not be expired")
-	}
-	if result[0].Reason != "Scheduled upgrade" {
-		t.Errorf("expected reason 'Scheduled upgrade', got %q", result[0].Reason)
-	}
-}
-
-func TestResolveMaintenanceExpiries_StructuredExpired(t *testing.T) {
 	past := time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
-	yamlStr := "expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
-		},
+	tests := []struct {
+		name    string
+		cfg     *ThresholdConfig
+		wantLen int
+		check   func(t *testing.T, r []ResolvedMaintenanceExpiry)
+	}{
+		{"NoMaintenance",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}},
+			0, nil},
+		{"ScalarEnable",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("enable")}}},
+			0, nil},
+		{"StructuredActive",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n")}}},
+			1, func(t *testing.T, r []ResolvedMaintenanceExpiry) {
+				if r[0].Expired || r[0].Reason != "Scheduled upgrade" {
+					t.Errorf("expected active with reason, got: %+v", r[0])
+				}
+			}},
+		{"StructuredExpired",
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n")}}},
+			1, func(t *testing.T, r []ResolvedMaintenanceExpiry) {
+				if !r[0].Expired {
+					t.Error("should be expired")
+				}
+			}},
 	}
-	result := cfg.ResolveMaintenanceExpiriesAt(time.Now())
-	if len(result) != 1 {
-		t.Fatalf("expected 1, got %d", len(result))
-	}
-	if !result[0].Expired {
-		t.Error("should be expired")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.cfg.ResolveMaintenanceExpiriesAt(time.Now())
+			if len(result) != tt.wantLen {
+				t.Fatalf("expected %d, got %d", tt.wantLen, len(result))
+			}
+			if tt.check != nil {
+				tt.check(t, result)
+			}
+		})
 	}
 }
 
@@ -2574,40 +2333,25 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 	}
 }
 
-func TestIsMaintenanceActive_ScalarEnable(t *testing.T) {
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV("enable")},
-		},
-	}
-	if !cfg.IsMaintenanceActive("db-a", time.Now()) {
-		t.Error("scalar enable should be active")
-	}
-}
-
-func TestIsMaintenanceActive_Expired(t *testing.T) {
-	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
-	yamlStr := "expires: " + past + "\ntarget: enable\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
-		},
-	}
-	if cfg.IsMaintenanceActive("db-a", time.Now()) {
-		t.Error("should not be active (expired)")
-	}
-}
-
-func TestIsMaintenanceActive_NotExpiredYet(t *testing.T) {
+func TestIsMaintenanceActive(t *testing.T) {
 	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
-	yamlStr := "expires: " + future + "\ntarget: enable\n"
-	cfg := &ThresholdConfig{
-		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
-		},
+	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	tests := []struct {
+		name     string
+		cfg      *ThresholdConfig
+		tenant   string
+		isActive bool
+	}{
+		{"ScalarEnable", &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("enable")}}}, "db-a", true},
+		{"Expired", &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + past + "\ntarget: enable\n")}}}, "db-a", false},
+		{"NotExpiredYet", &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + future + "\ntarget: enable\n")}}}, "db-a", true},
 	}
-	if !cfg.IsMaintenanceActive("db-a", time.Now()) {
-		t.Error("should be active (not expired yet)")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if active := tt.cfg.IsMaintenanceActive(tt.tenant, time.Now()); active != tt.isActive {
+				t.Errorf("expected active=%v, got %v", tt.isActive, active)
+			}
+		})
 	}
 }
 
@@ -4044,107 +3788,56 @@ tenants:
 // detectConfigSource Unit Test
 // ============================================================
 
-func TestDetectConfigSource_Configmap(t *testing.T) {
-	// Test default configmap mode (no .git-revision, no OPERATOR_CRD_SOURCE)
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
-
-	mgr := NewConfigManager(configPath)
-	if err := mgr.Load(); err != nil {
-		t.Fatalf("Load failed: %v", err)
+func TestDetectConfigSource(t *testing.T) {
+	tests := []struct {
+		name      string
+		withGitRev bool
+		withEnv   bool
+		wantSource string
+		wantCommit string
+	}{
+		{"Configmap", false, false, "configmap", ""},
+		{"GitSync", true, false, "git-sync", "abc123def456"},
+		{"Operator", false, true, "operator", ""},
+		{"GitSyncPrecedence", true, true, "git-sync", "xyz789"},
 	}
-
-	info := mgr.GetConfigInfo()
-	if info.ConfigSource != "configmap" {
-		t.Errorf("expected configmap, got %s", info.ConfigSource)
-	}
-	if info.GitCommit != "" {
-		t.Errorf("expected empty git commit, got %s", info.GitCommit)
-	}
-}
-
-func TestDetectConfigSource_GitSync(t *testing.T) {
-	// Test git-sync mode (.git-revision file present)
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
-	writeTestFile(t, dir, ".git-revision", "abc123def456\n")
-
-	mgr := NewConfigManager(configPath)
-	if err := mgr.Load(); err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	info := mgr.GetConfigInfo()
-	if info.ConfigSource != "git-sync" {
-		t.Errorf("expected git-sync, got %s", info.ConfigSource)
-	}
-	if info.GitCommit != "abc123def456" {
-		t.Errorf("expected abc123def456, got %s", info.GitCommit)
-	}
-}
-
-func TestDetectConfigSource_Operator(t *testing.T) {
-	// Test operator mode (OPERATOR_CRD_SOURCE env set)
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
-
-	// Set environment variable
-	oldEnv := os.Getenv("OPERATOR_CRD_SOURCE")
-	os.Setenv("OPERATOR_CRD_SOURCE", "true")
-	defer func() {
-		if oldEnv == "" {
-			os.Unsetenv("OPERATOR_CRD_SOURCE")
-		} else {
-			os.Setenv("OPERATOR_CRD_SOURCE", oldEnv)
-		}
-	}()
-
-	mgr := NewConfigManager(configPath)
-	if err := mgr.Load(); err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	info := mgr.GetConfigInfo()
-	if info.ConfigSource != "operator" {
-		t.Errorf("expected operator, got %s", info.ConfigSource)
-	}
-	if info.GitCommit != "" {
-		t.Errorf("expected empty git commit, got %s", info.GitCommit)
-	}
-}
-
-func TestDetectConfigSource_GitSyncPrecedence(t *testing.T) {
-	// Test that git-sync takes precedence over operator
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
-	writeTestFile(t, dir, ".git-revision", "xyz789\n")
-
-	// Set environment variable
-	oldEnv := os.Getenv("OPERATOR_CRD_SOURCE")
-	os.Setenv("OPERATOR_CRD_SOURCE", "true")
-	defer func() {
-		if oldEnv == "" {
-			os.Unsetenv("OPERATOR_CRD_SOURCE")
-		} else {
-			os.Setenv("OPERATOR_CRD_SOURCE", oldEnv)
-		}
-	}()
-
-	mgr := NewConfigManager(configPath)
-	if err := mgr.Load(); err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	info := mgr.GetConfigInfo()
-	if info.ConfigSource != "git-sync" {
-		t.Errorf("expected git-sync (precedence), got %s", info.ConfigSource)
-	}
-	if info.GitCommit != "xyz789" {
-		t.Errorf("expected xyz789, got %s", info.GitCommit)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.yaml")
+			writeTestFile(t, dir, "config.yaml", "defaults:\n  mysql_connections: 80\n")
+			if tt.withGitRev {
+				commit := "abc123def456"
+				if tt.name == "GitSyncPrecedence" {
+					commit = "xyz789"
+				}
+				writeTestFile(t, dir, ".git-revision", commit+"\n")
+			}
+			oldEnv := os.Getenv("OPERATOR_CRD_SOURCE")
+			if tt.withEnv {
+				os.Setenv("OPERATOR_CRD_SOURCE", "true")
+			}
+			defer func() {
+				if tt.withEnv {
+					if oldEnv == "" {
+						os.Unsetenv("OPERATOR_CRD_SOURCE")
+					} else {
+						os.Setenv("OPERATOR_CRD_SOURCE", oldEnv)
+					}
+				}
+			}()
+			mgr := NewConfigManager(configPath)
+			if err := mgr.Load(); err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			info := mgr.GetConfigInfo()
+			if info.ConfigSource != tt.wantSource {
+				t.Errorf("expected source %s, got %s", tt.wantSource, info.ConfigSource)
+			}
+			if info.GitCommit != tt.wantCommit {
+				t.Errorf("expected commit %s, got %s", tt.wantCommit, info.GitCommit)
+			}
+		})
 	}
 }
 

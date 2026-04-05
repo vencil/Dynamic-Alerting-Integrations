@@ -7,7 +7,7 @@ lang: en
 ---
 # Scenario: Automated Shadow Monitoring Cutover Workflow
 
-> **v2.1.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
+> **v2.3.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
 
 ## Problem
 
