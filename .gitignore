@@ -34,6 +34,9 @@ cover.out
 node_modules/
 package.json
 package-lock.json
+# E2E tests are the one Node.js component — allow their npm manifests
+!tests/e2e/package.json
+!tests/e2e/package-lock.json
 
 # --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔

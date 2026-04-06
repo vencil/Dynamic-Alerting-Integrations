@@ -1,0 +1,23 @@
+{
+  "name": "@vibe-k8s-lab/e2e-tests",
+  "version": "2.5.0",
+  "description": "Playwright smoke tests for Dynamic Alerting Portal",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:portal": "playwright test tests/e2e/portal-home.spec.ts",
+    "test:tenant": "playwright test tests/e2e/tenant-manager.spec.ts",
+    "test:group": "playwright test tests/e2e/group-management.spec.ts",
+    "test:auth": "playwright test tests/e2e/auth-flow.spec.ts",
+    "test:batch": "playwright test tests/e2e/batch-operations.spec.ts",
+    "test:critical": "playwright test --grep @critical",
+    "serve:portal": "python -m http.server 8080 --directory ../../docs",
+    "install-deps": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^20.19.39"
+  }
+}
