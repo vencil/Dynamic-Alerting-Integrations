@@ -64,8 +64,8 @@ def parse_registry(path: str) -> list:
         if stripped == "tools:":
             continue
 
-        # New tool entry: `- key: xxx`
-        m_tool = re.match(r"^- key:\s*(.+)$", line)
+        # New tool entry: `- key: xxx` (with optional leading whitespace)
+        m_tool = re.match(r"^- key:\s*(.+)$", stripped)
         if m_tool:
             if current:
                 tools.append(current)
@@ -73,9 +73,9 @@ def parse_registry(path: str) -> list:
             in_list_block = False
             continue
 
-        # Tool-level field: `  field: value`
-        m_field = re.match(r"^  ([a-z_]+):\s*(.*)$", line)
-        if m_field and not line.startswith("    "):
+        # Tool-level field: `field: value` (matched on stripped line)
+        m_field = re.match(r"^([a-z_]+):\s*(.*)$", stripped)
+        if m_field and not stripped.startswith("- "):
             key = m_field.group(1)
             val = m_field.group(2).strip()
             in_list_block = False
@@ -100,9 +100,9 @@ def parse_registry(path: str) -> list:
                 current[key] = val.strip("'\"")
             continue
 
-        # Sub-list item: `  - docs/xxx.md`
-        m_sub = re.match(r"^  - (.+)$", line)
-        if m_sub:
+        # Sub-list item: `- docs/xxx.md` (matched on stripped)
+        m_sub = re.match(r"^- (.+)$", stripped)
+        if m_sub and not stripped.startswith("- key:"):
             in_list_block = True
             if current_key not in current:
                 current[current_key] = []

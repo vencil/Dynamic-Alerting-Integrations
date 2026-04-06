@@ -379,3 +379,101 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
         result[dim_key] = dict(sorted(groups.items()))
 
     return result
+
+
+def main():
+    """CLI entry point: 租戶元資料產生器."""
+    parser = argparse.ArgumentParser(
+        description="Generate tenant metadata from conf.d/ YAML files",
+    )
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=DEFAULT_CONFIG_DIR,
+        help=f"Config directory (default: {DEFAULT_CONFIG_DIR.relative_to(REPO_ROOT)})",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Output file path (default: stdout)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="CI mode: exit 1 if metadata is outdated",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print JSON to stdout without writing file",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Format output as pretty JSON",
+    )
+    args = parser.parse_args()
+
+    # Validate config directory
+    if not args.config_dir.exists():
+        print(
+            f"ERROR: Config directory not found: {args.config_dir}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Build metadata
+    data = build_tenant_metadata(args.config_dir)
+
+    # Format output
+    if args.check:
+        data.pop("generated", None)
+
+    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+    # Handle output
+    if args.dry_run or not args.output:
+        print(content, end="")
+        return
+
+    if args.check:
+        if not args.output.exists():
+            print(
+                f"ERROR: {args.output} does not exist. "
+                f"Run without --check first.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        existing = json.loads(args.output.read_text(encoding="utf-8"))
+        existing.pop("generated", None)
+        existing_str = json.dumps(existing, indent=2, ensure_ascii=False) + "\n"
+
+        if existing_str != content:
+            print(
+                f"ERROR: {args.output} is outdated.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        print(f"OK: {args.output} is up to date.")
+        return
+
+    # Write output file
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(content, encoding="utf-8")
+    os.chmod(
+        args.output,
+        stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
+    )
+
+    try:
+        display_path = args.output.relative_to(REPO_ROOT)
+    except ValueError:
+        display_path = args.output
+    print(f"✅ Generated {display_path}")
+    print(f"   {data['totals']['tenants']} tenants, {data['totals']['groups']} groups")
+
+
+if __name__ == "__main__":
+    main()
