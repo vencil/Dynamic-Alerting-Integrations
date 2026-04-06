@@ -76,7 +76,7 @@ function validateRbac(groups) {
     if (group.tenantMode === 'all' && group.permission === 'admin') {
       warnings.push({
         level: 'warning',
-        msg: () => t(`群組 "${group.name}" 有管理員權限且可訪問所有租戶 - 非常寬鬆，請確認', `Group "${group.name}" has admin on all tenants - very broad, please confirm`)
+        msg: () => t(`群組 "${group.name}" 有管理員權限且可訪問所有租戶 - 非常寬鬆，請確認`, `Group "${group.name}" has admin on all tenants - very broad, please confirm`)
       });
     }
     if (group.tenantMode === 'specific' && group.specificTenants.length === 0) {
