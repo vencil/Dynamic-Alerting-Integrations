@@ -4,6 +4,16 @@
 
 | 文件 | 受眾 | 內容 |
 |------|------|------|
+| `docs/adr/001-severity-dedup-via-inhibit.md` (.en.md) | Platform Engineers | ADR-001: 嚴重度 Dedup 採用 Inhibit 規則 |
+| `docs/adr/002-oci-registry-over-chartmuseum.md` (.en.md) | Platform Engineers | ADR-002: OCI Registry 替代 ChartMuseum |
+| `docs/adr/003-sentinel-alert-pattern.md` (.en.md) | Platform Engineers | ADR-003: Sentinel Alert 模式 |
+| `docs/adr/004-federation-scenario-a-first.md` (.en.md) | Platform Engineers | ADR-004: Federation 場景 A 優先實現 |
+| `docs/adr/005-projected-volume-for-rule-packs.md` (.en.md) | Platform Engineers | ADR-005: 投影卷掛載 Rule Pack |
+| `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N) |
+| `docs/adr/007-cross-domain-routing-profiles.md` (.en.md) | Platform Engineers | ADR-007: 跨域路由設定檔與域策略 |
+| `docs/adr/008-operator-native-integration-path.md` (.en.md) | Platform Engineers | ADR-008: Operator-Native 整合路徑 |
+| `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API 架構 |
+| `docs/adr/010-multi-tenant-grouping.md` (.en.md) | Platform Engineers, developers | ADR-010: Multi-Tenant Grouping Architecture |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |
