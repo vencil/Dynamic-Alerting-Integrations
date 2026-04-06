@@ -16,6 +16,7 @@ import argparse
 import os
 import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -184,6 +185,19 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
     if include_adr:
         effective_skip_dirs.discard("adr")
 
+    # Build set of gitignored paths to exclude untracked local-only files
+    _gitignored: set[str] = set()
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard",
+             "--directory", "docs/"],
+            capture_output=True, text=True, cwd=str(REPO_ROOT),
+        )
+        for line in out.stdout.splitlines():
+            _gitignored.add(line.rstrip("/"))
+    except Exception:
+        pass  # git not available — skip check
+
     # Collect all .md and .jsx files, skip .en.md for zh scan
     all_files = []
     for f in sorted(docs_dir.rglob("*")):
@@ -198,6 +212,8 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
         if any(d in effective_skip_dirs for d in parts):
             continue
         if rel in SKIP_FILES:
+            continue
+        if rel in _gitignored:
             continue
         all_files.append(f)
 
