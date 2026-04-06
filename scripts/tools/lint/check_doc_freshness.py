@@ -21,9 +21,13 @@ import argparse
 import sys
 import json
 import subprocess
+import re
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Set
+
+# Constant for ignore file name
+IGNORE_FILE_NAME = ".docfreshness-ignore"
 
 # 嘗試導入共用函式庫
 try:
@@ -41,6 +45,291 @@ except ImportError:
 def i18n_text(zh: str, en: str) -> str:
     """Return localized text based on CLI language."""
     return zh if detect_cli_lang() == 'zh' else en
+
+
+def _load_ignore_patterns(root_path: Path) -> Set[str]:
+    """
+    Load ignore patterns from .docfreshness-ignore file.
+
+    Returns a set of patterns. Each pattern can be:
+    - Generic: "conf.d/" (matches regardless of issue type)
+    - Type-specific: "missing_file:conf.d/" (matches only for specific type)
+    """
+    ignore_file = root_path / IGNORE_FILE_NAME
+    patterns = set()
+
+    if not ignore_file.exists():
+        return patterns
+
+    try:
+        content = ignore_file.read_text(encoding='utf-8')
+        for line in content.splitlines():
+            line = line.strip()
+            # Skip comments and blank lines
+            if not line or line.startswith('#'):
+                continue
+            patterns.add(line)
+    except Exception:
+        pass
+
+    return patterns
+
+
+def _is_ignored(issue: Dict, patterns: Set[str]) -> bool:
+    """
+    Check if an issue should be ignored based on patterns.
+
+    Args:
+        issue: Dict with 'reference' and 'type' keys
+        patterns: Set of ignore patterns
+
+    Returns:
+        True if the issue matches any pattern
+    """
+    reference = issue.get('reference', '')
+    issue_type = issue.get('type', '')
+
+    for pattern in patterns:
+        if ':' in pattern:
+            # Type-specific pattern
+            type_prefix, path_pattern = pattern.split(':', 1)
+            if issue_type == type_prefix and reference.startswith(path_pattern):
+                return True
+        else:
+            # Generic pattern
+            if reference.startswith(pattern):
+                return True
+
+    return False
+
+
+def extract_version_from_claude_md(root_path: Path) -> Optional[str]:
+    """
+    Extract version from CLAUDE.md header like '## 專案概覽 (v2.1.0)'.
+
+    Returns the version string (e.g., 'v2.1.0') or None.
+    """
+    claude_md = root_path / "CLAUDE.md"
+    if not claude_md.exists():
+        return None
+
+    try:
+        content = claude_md.read_text(encoding='utf-8')
+        # Look for pattern like (v2.1.0)
+        match = re.search(r'\(v[\d.]+\)', content)
+        if match:
+            return match.group(0).strip('()')
+    except Exception:
+        pass
+
+    return None
+
+
+def extract_paths_from_markdown(markdown_text: str) -> Set[str]:
+    """
+    Extract file paths from markdown code blocks and inline code.
+
+    Looks for patterns like:
+    - `path/to/file` in inline code
+    - ```
+      key: path/to/file
+      ```
+    """
+    paths = set()
+
+    # Pattern for paths with common file extensions or directory indicators
+    # Matches: path/to/file.ext or path/to/dir/
+    path_pattern = r'(?:^|\s)([a-zA-Z0-9._\-/]+(?:\.[a-zA-Z0-9]+|/))'
+
+    # Extract from inline code and code blocks
+    # Match `...path...` or lines starting with path: or similar
+    inline_pattern = r'`([a-zA-Z0-9._\-/]+(?:\.[a-zA-Z0-9]+)?)`'
+
+    for match in re.finditer(inline_pattern, markdown_text):
+        candidate = match.group(1)
+        if '/' in candidate:  # Must look like a path
+            paths.add(candidate)
+
+    # Also extract from yaml-like lines
+    yaml_pattern = r'(?:path|file):\s*([a-zA-Z0-9._\-/]+(?:\.[a-zA-Z0-9]+)?)'
+    for match in re.finditer(yaml_pattern, markdown_text):
+        candidate = match.group(1)
+        if '/' in candidate:
+            paths.add(candidate)
+
+    return paths
+
+
+_NON_COMMAND_WORDS = {
+    'command', 'commands', 'tool', 'tools', 'image', 'images',
+    'plugin', 'plugins', 'script', 'scripts', 'module', 'modules',
+    'package', 'packages', 'library', 'libraries'
+}
+
+
+def extract_da_tools_commands(markdown_text: str) -> Set[str]:
+    """
+    Extract da-tools commands from markdown.
+
+    Looks for patterns like:
+    - `da-tools <cmd>`
+    - `da-tools <cmd> --flag`
+    """
+    commands = set()
+
+    # Match da-tools commands in code blocks and inline code
+    pattern = r'da-tools\s+([a-z][a-z0-9-]*)'
+
+    for match in re.finditer(pattern, markdown_text):
+        cmd = match.group(1)
+        if cmd not in _NON_COMMAND_WORDS:
+            commands.add(cmd)
+
+    return commands
+
+
+def extract_docker_images(markdown_text: str) -> Dict[str, Tuple[str, str]]:
+    """
+    Extract Docker image references from markdown.
+
+    Returns dict mapping "image-name:tag" -> (image_name, tag)
+
+    Looks for patterns like:
+    - ghcr.io/vencil/threshold-exporter:v1.0.0
+    - ghcr.io/vencil/da-tools:v2.1.0
+    - ghcr.io/vencil/da-portal:v2.1.0
+    """
+    images = {}
+
+    # Match Docker image references
+    pattern = r'ghcr\.io/vencil/([a-z-]+):([a-zA-Z0-9._\-]+)'
+
+    for match in re.finditer(pattern, markdown_text):
+        image_name = match.group(1)
+        tag = match.group(2)
+        key = f"{image_name}:{tag}"
+        images[key] = (image_name, tag)
+
+    return images
+
+
+def file_exists(root_path: Path, file_path: str) -> bool:
+    """Check if a file exists relative to root_path."""
+    target = root_path / file_path
+    return target.exists()
+
+
+def collect_existing_tools(root_path: Path) -> Set[str]:
+    """
+    Collect all existing tool names.
+
+    First tries to extract from docs/cli-reference.md (#### heading style).
+    Falls back to scanning scripts/tools/ directory.
+    """
+    tools = set()
+
+    # Try to extract from cli-reference.md
+    cli_ref = root_path / "docs" / "cli-reference.md"
+    if cli_ref.exists():
+        try:
+            content = cli_ref.read_text(encoding='utf-8')
+            # Match #### command-name
+            for match in re.finditer(r'^####\s+([a-z][a-z0-9-]*)', content, re.MULTILINE):
+                tools.add(match.group(1))
+            if tools:
+                return tools
+        except Exception:
+            pass
+
+    # Fallback: scan scripts/tools/
+    tools_dir = root_path / "scripts" / "tools"
+    if tools_dir.exists():
+        for py_file in tools_dir.glob("*.py"):
+            name = py_file.stem
+            # Skip internal modules
+            if name.startswith('_lib'):
+                continue
+            # Convert snake_case to kebab-case
+            kebab_name = name.replace('_', '-')
+            tools.add(kebab_name)
+            tools.add(name)  # Also include original name
+
+    return tools
+
+
+def extract_chart_version(root_path: Path, component: str) -> Optional[str]:
+    """
+    Extract version from components/{component}/Chart.yaml.
+
+    Returns the version string or None.
+    """
+    chart_file = root_path / "components" / component / "Chart.yaml"
+    if not chart_file.exists():
+        return None
+
+    try:
+        content = chart_file.read_text(encoding='utf-8')
+        match = re.search(r'^version:\s*([a-zA-Z0-9._\-]+)', content, re.MULTILINE)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+
+    return None
+
+
+def check_doc_file(
+    md_file: Path,
+    root_path: Path,
+    version: str,
+    existing_tools: Set[str],
+    issues: List[Dict]
+) -> None:
+    """
+    Check a single markdown file for documentation issues.
+
+    Detects:
+    - Missing file references
+    - Missing da-tools commands
+    - Docker image version mismatches
+
+    Appends issues to the issues list.
+    """
+    try:
+        content = md_file.read_text(encoding='utf-8')
+    except Exception:
+        return
+
+    # Extract and check file paths
+    paths = extract_paths_from_markdown(content)
+    for path in paths:
+        if not file_exists(root_path, path):
+            issues.append({
+                'type': 'missing_file',
+                'reference': path,
+                'file': str(md_file.relative_to(root_path)) if md_file.is_relative_to(root_path) else str(md_file),
+            })
+
+    # Extract and check da-tools commands
+    commands = extract_da_tools_commands(content)
+    for cmd in commands:
+        if cmd not in existing_tools:
+            issues.append({
+                'type': 'missing_command',
+                'reference': cmd,
+                'file': str(md_file.relative_to(root_path)) if md_file.is_relative_to(root_path) else str(md_file),
+            })
+
+    # Extract and check Docker image versions
+    images = extract_docker_images(content)
+    for image_key, (image_name, tag) in images.items():
+        expected_version = extract_chart_version(root_path, image_name)
+        if expected_version and tag != f"v{expected_version}":
+            issues.append({
+                'type': 'version_mismatch',
+                'reference': image_key,
+                'file': str(md_file.relative_to(root_path)) if md_file.is_relative_to(root_path) else str(md_file),
+            })
 
 
 def get_git_last_modified_timestamp(file_path: Path) -> Optional[int]:

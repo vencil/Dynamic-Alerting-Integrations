@@ -192,7 +192,7 @@ func isTenantInPolicy(tenants []string, tenantID string) bool {
 func checkReceiverType(domain string, c Constraints, receiverType string) []Violation {
 	var violations []Violation
 
-	// Check forbidden list
+	// Check forbidden list first (takes precedence)
 	for _, forbidden := range c.ForbiddenReceiverTypes {
 		if receiverType == forbidden {
 			violations = append(violations, Violation{
@@ -200,10 +200,12 @@ func checkReceiverType(domain string, c Constraints, receiverType string) []Viol
 				Constraint: "forbidden_receiver_types",
 				Message:    fmt.Sprintf("receiver type '%s' is forbidden by domain policy '%s'", receiverType, domain),
 			})
+			// If forbidden, don't check allowed list - forbidden takes precedence
+			return violations
 		}
 	}
 
-	// Check allowed list (if specified, receiver must be in the list)
+	// Check allowed list only if not forbidden (if specified, receiver must be in the list)
 	if len(c.AllowedReceiverTypes) > 0 {
 		allowed := false
 		for _, a := range c.AllowedReceiverTypes {

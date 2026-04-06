@@ -322,6 +322,7 @@ func TestPolicyForTenant(t *testing.T) {
 			tenantID:        "db-b",
 			wantFound:       true,
 			wantDomainName:  "finance", // finance policy lists db-b
+			wantDescription: "Finance domain compliance requirements",
 		},
 		{
 			name:      "tenant not in any policy",
