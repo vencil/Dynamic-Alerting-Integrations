@@ -246,4 +246,32 @@ var validReservedPrefixes = []string{
 type RoutingConfig struct {
 	Tenant         string
 	ReceiverType   string                 // "webhook" | "email" | "slack" | "teams"
-	ReceiverConfig map[string]interface{}
+	ReceiverConfig map[string]interface{} // type-specific config fields
+	GroupBy        []string               // optional, platform default if absent
+	GroupWait      string                 // optional, guardrail 5s–5m
+	GroupInterval  string                 // optional, guardrail 5s–5m
+	RepeatInterval string                 // optional, guardrail 1m–72h
+}
+
+// validReceiverTypes lists supported receiver types (must match Python RECEIVER_TYPES).
+var validReceiverTypes = map[string]bool{
+	"webhook":    true,
+	"email":      true,
+	"slack":      true,
+	"teams":      true,
+	"rocketchat": true,
+	"pagerduty":  true,
+}
+
+// Timing guardrail bounds for routing config.
+var routingGuardrails = map[string][2]time.Duration{
+	"group_wait":      {5 * time.Second, 5 * time.Minute},
+	"group_interval":  {5 * time.Second, 5 * time.Minute},
+	"repeat_interval": {1 * time.Minute, 72 * time.Hour},
+}
+
+// ConfigInfo holds config source metadata for the threshold_exporter_config_info metric.
+type ConfigInfo struct {
+	ConfigSource string
+	GitCommit    string
+}

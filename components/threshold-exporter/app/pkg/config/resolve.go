@@ -740,4 +740,12 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 		if gi, ok := routingMap["group_interval"].(string); ok && gi != "" {
 			rc.GroupInterval = clampDuration(gi, "group_interval", tenant)
 		}
-		if ri, ok := routing
+		if ri, ok := routingMap["repeat_interval"].(string); ok && ri != "" {
+			rc.RepeatInterval = clampDuration(ri, "repeat_interval", tenant)
+		}
+
+		result = append(result, rc)
+	}
+
+	return result
+}
