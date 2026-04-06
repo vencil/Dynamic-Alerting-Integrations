@@ -305,6 +305,42 @@ window.addEventListener('pageshow', function(e) {
     } catch(e) {}
   }
 
+  // Tool key → component path mapping (used by both single-component and custom-flow modes)
+  var CUSTOM_FLOW_MAP = {
+    'wizard': '../getting-started/wizard.jsx',
+    'playground': '../interactive/tools/playground.jsx',
+    'rule-pack-selector': '../interactive/tools/rule-pack-selector.jsx',
+    'cli-playground': '../interactive/tools/cli-playground.jsx',
+    'rule-pack-detail': '../interactive/tools/rule-pack-detail.jsx',
+    'threshold-calculator': '../interactive/tools/threshold-calculator.jsx',
+    'template-gallery': '../interactive/tools/template-gallery.jsx',
+    'migration-simulator': '../interactive/tools/migration-simulator.jsx',
+    'alert-simulator': '../interactive/tools/alert-simulator.jsx',
+    'config-diff': '../interactive/tools/config-diff.jsx',
+    'glossary': '../interactive/tools/glossary.jsx',
+    'health-dashboard': '../interactive/tools/health-dashboard.jsx',
+    'rule-pack-matrix': '../interactive/tools/rule-pack-matrix.jsx',
+    'onboarding-checklist': '../interactive/tools/onboarding-checklist.jsx',
+    'alert-timeline': '../interactive/tools/alert-timeline.jsx',
+    'schema-explorer': '../interactive/tools/schema-explorer.jsx',
+    'capacity-planner': '../interactive/tools/capacity-planner.jsx',
+    'runbook-viewer': '../interactive/tools/runbook-viewer.jsx',
+    'dependency-graph': '../interactive/tools/dependency-graph.jsx',
+    'config-lint': '../interactive/tools/config-lint.jsx',
+    'architecture-quiz': '../interactive/tools/architecture-quiz.jsx',
+    'promql-tester': '../interactive/tools/promql-tester.jsx',
+    'platform-demo': '../interactive/tools/platform-demo.jsx',
+    'self-service-portal': '../interactive/tools/self-service-portal.jsx',
+    'cicd-setup-wizard': '../interactive/tools/cicd-setup-wizard.jsx',
+    'notification-previewer': '../interactive/tools/notification-previewer.jsx',
+    'platform-health': '../interactive/tools/platform-health.jsx',
+    'alert-noise-analyzer': '../interactive/tools/alert-noise-analyzer.jsx',
+    'roi-calculator': '../interactive/tools/roi-calculator.jsx',
+    'multi-tenant-comparison': '../interactive/tools/multi-tenant-comparison.jsx',
+    'tenant-manager': '../interactive/tools/tenant-manager.jsx',
+    'deployment-wizard': '../interactive/tools/deployment-wizard.jsx'
+  };
+
   // ── Flow mode ──
   if (flowName) {
     // Custom flow: ?flow=custom&tools=wizard,playground,config-lint
@@ -401,42 +437,6 @@ window.addEventListener('pageshow', function(e) {
       });
     // Skip single-component mode
   }
-  // Tool key → component path mapping (used by both single-component and custom-flow modes)
-  var CUSTOM_FLOW_MAP = {
-    'wizard': '../getting-started/wizard.jsx',
-    'playground': '../interactive/tools/playground.jsx',
-    'rule-pack-selector': '../interactive/tools/rule-pack-selector.jsx',
-    'cli-playground': '../interactive/tools/cli-playground.jsx',
-    'rule-pack-detail': '../interactive/tools/rule-pack-detail.jsx',
-    'threshold-calculator': '../interactive/tools/threshold-calculator.jsx',
-    'template-gallery': '../interactive/tools/template-gallery.jsx',
-    'migration-simulator': '../interactive/tools/migration-simulator.jsx',
-    'alert-simulator': '../interactive/tools/alert-simulator.jsx',
-    'config-diff': '../interactive/tools/config-diff.jsx',
-    'glossary': '../interactive/tools/glossary.jsx',
-    'health-dashboard': '../interactive/tools/health-dashboard.jsx',
-    'rule-pack-matrix': '../interactive/tools/rule-pack-matrix.jsx',
-    'onboarding-checklist': '../interactive/tools/onboarding-checklist.jsx',
-    'alert-timeline': '../interactive/tools/alert-timeline.jsx',
-    'schema-explorer': '../interactive/tools/schema-explorer.jsx',
-    'capacity-planner': '../interactive/tools/capacity-planner.jsx',
-    'runbook-viewer': '../interactive/tools/runbook-viewer.jsx',
-    'dependency-graph': '../interactive/tools/dependency-graph.jsx',
-    'config-lint': '../interactive/tools/config-lint.jsx',
-    'architecture-quiz': '../interactive/tools/architecture-quiz.jsx',
-    'promql-tester': '../interactive/tools/promql-tester.jsx',
-    'platform-demo': '../interactive/tools/platform-demo.jsx',
-    'self-service-portal': '../interactive/tools/self-service-portal.jsx',
-    'cicd-setup-wizard': '../interactive/tools/cicd-setup-wizard.jsx',
-    'notification-previewer': '../interactive/tools/notification-previewer.jsx',
-    'platform-health': '../interactive/tools/platform-health.jsx',
-    'alert-noise-analyzer': '../interactive/tools/alert-noise-analyzer.jsx',
-    'roi-calculator': '../interactive/tools/roi-calculator.jsx',
-    'multi-tenant-comparison': '../interactive/tools/multi-tenant-comparison.jsx',
-    'tenant-manager': '../interactive/tools/tenant-manager.jsx',
-    'deployment-wizard': '../interactive/tools/deployment-wizard.jsx'
-  };
-
   // ── Single component mode (existing) ──
   else if (componentPath) {
     // Resolve bare key (e.g. "cicd-setup-wizard") to full path via CUSTOM_FLOW_MAP
@@ -479,9 +479,6 @@ window.addEventListener('pageshow', function(e) {
   } else {
     showError('No component or flow specified. Use ?component=playground.jsx or ?flow=onboarding');
   }
-
-  // NOTE: CUSTOM_FLOW_MAP is defined above (before single-component mode)
-  //       so that bare key resolution (e.g. ?component=cicd-setup-wizard) works.
 
   function buildCustomFlow(toolsParam) {
     var t = window.__t;
