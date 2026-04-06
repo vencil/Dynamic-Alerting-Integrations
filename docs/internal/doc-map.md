@@ -81,8 +81,8 @@
 | `docs/internal/doc-template.md` | All | 文件模板規範 |
 | `docs/internal/dx-tooling-backlog.md` | All | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
-| `docs/internal/ssot-language-evaluation.md` (.en.md) | maintainers | SSOT 切換影響評估 |
-| `docs/internal/test-map.md` (.en.md) | All | 測試架構導覽 (Test Map) |
+| `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
+| `docs/internal/test-map.md` | All | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
 | `docs/internal/v2.5.0-v2.6.0-planning.md` | maintainers | v2.5.0 / v2.6.0 執行計畫 |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
