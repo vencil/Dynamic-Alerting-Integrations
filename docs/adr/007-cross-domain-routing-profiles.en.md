@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 
@@ -289,4 +289,4 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 | [007-cross-domain-routing-profiles.en](007-cross-domain-routing-profiles.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |
 | ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role-tool-quick-reference) | ⭐⭐ |

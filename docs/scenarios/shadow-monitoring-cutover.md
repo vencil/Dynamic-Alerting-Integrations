@@ -2,12 +2,12 @@
 title: "場景：Shadow Monitoring 全自動切換工作流"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # 場景：Shadow Monitoring 全自動切換工作流
 
-> **v2.4.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
+> **v2.5.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
 
 ## 問題
 
@@ -326,7 +326,7 @@ python3 scripts/tools/ops/cutover_tenant.py \
 
 ## 高級選項
 
-### 選項 A：加速驗證（--tolerance 寬鬆 + --stability-window 縮短）
+### Option A: Accelerated Validation (--tolerance relaxed + --stability-window shortened)
 
 若組織願意接受更高風險，可加速驗證期：
 
@@ -345,7 +345,7 @@ python3 scripts/tools/ops/validate_migration.py \
 
 **何時使用**：測試環境、低風險租戶（如開發環境）
 
-### 選項 B：--force 跳過 Readiness 檢查
+### Option B: --force Skip Readiness Check
 
 在確保手工驗證充分的情況下，可跳過自動 readiness 檢查：
 

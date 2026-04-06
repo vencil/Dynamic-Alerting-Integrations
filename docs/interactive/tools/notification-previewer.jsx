@@ -2,7 +2,7 @@
 title: "Notification Template Previewer"
 tags: [notification, preview, routing, receiver, template]
 audience: ["platform-engineer", "tenant"]
-version: v2.4.0
+version: v2.5.0
 lang: en
 related: [self-service-portal, alert-simulator, template-gallery]
 ---

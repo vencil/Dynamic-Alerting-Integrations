@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 

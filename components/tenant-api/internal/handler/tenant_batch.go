@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
 )
@@ -53,7 +55,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Failure     400  {object} map[string]string
 // @Router      /api/v1/tenants/batch [post]
-func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager) http.HandlerFunc {
+func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, policyMgr *policy.Manager) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		groups := rbac.RequestGroups(r)
@@ -88,6 +90,20 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager) htt
 					Message: "insufficient permissions for tenant " + op.TenantID,
 				})
 				continue
+			}
+			// v2.5.0: Domain policy enforcement
+			if policyMgr != nil {
+				if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+					msgs := make([]string, len(violations))
+					for i, v := range violations {
+						msgs[i] = v.Message
+					}
+					results = append(results, BatchResult{
+						TenantID: op.TenantID, Status: "error",
+						Message: "domain policy violation: " + strings.Join(msgs, "; "),
+					})
+					continue
+				}
 			}
 			result := applyPatch(w, configDir, op, email)
 			results = append(results, result)

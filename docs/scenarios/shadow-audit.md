@@ -2,12 +2,12 @@
 title: "場景：Shadow Audit — 不遷移也能評估告警健康度"
 tags: [scenario, evaluation, shadow-audit, alert-quality]
 audience: [platform-engineer, tenant]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # 場景：Shadow Audit — 不遷移也能評估告警健康度
 
-> **v2.4.0** | 相關文件：[Migration Guide](../migration-guide.md)、[Shadow Monitoring Cutover](shadow-monitoring-cutover.md)、[CLI Reference](../cli-reference.md)
+> **v2.5.0** | 相關文件：[Migration Guide](../migration-guide.md)、[Shadow Monitoring Cutover](shadow-monitoring-cutover.md)、[CLI Reference](../cli-reference.md)
 
 ## 問題
 
@@ -22,7 +22,7 @@ lang: zh
 
 傳統做法是手動逐一檢視 PromQL 規則，工作量大且缺乏量化依據。
 
-## 解決方案：`da-tools alert-quality`
+## Solution: `da-tools alert-quality`
 
 `alert-quality` 工具**直接連接現有的 Prometheus / Alertmanager**，不需要部署任何 Dynamic Alerting 元件，即可產出告警品質評估報告。
 

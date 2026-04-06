@@ -234,6 +234,22 @@ pre-tag: version-check lint-docs ## ⛔ Pre-tag 品質閘門（所有檢查必�
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
+.PHONY: generate-alert-reference
+generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md (使用: make generate-alert-reference 或 --update)
+	@python3 ./scripts/tools/dx/generate_alert_reference.py
+
+.PHONY: generate-cheat-sheet
+generate-cheat-sheet: ## 從 CLI Reference 產生 da-tools 快速參考 (使用: make generate-cheat-sheet ARGS="--lang all")
+	@python3 ./scripts/tools/dx/generate_cheat_sheet.py $(ARGS)
+
+.PHONY: generate-nav
+generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構 (使用: make generate-nav 或 --update)
+	@python3 ./scripts/tools/dx/generate_nav.py
+
+.PHONY: generate-rule-pack-readme
+generate-rule-pack-readme: ## 從 Rule Pack YAML 產生 rule-packs/README.md
+	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py
+
 .PHONY: platform-data
 platform-data: ## 產生 docs/assets/platform-data.json 與 Tenant Metadata
 	@python3 ./scripts/tools/dx/generate_platform_data.py

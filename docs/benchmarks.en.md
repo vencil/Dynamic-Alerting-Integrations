@@ -2,18 +2,20 @@
 title: "Performance Analysis & Benchmarks"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Performance Analysis & Benchmarks
 
 > **Language / 語言：** **English (Current)** | [中文](benchmarks.md)
 
-> Related docs: [Architecture](architecture-and-design.en.md) · [Testing Playbook](internal/testing-playbook.md)
+> Related docs: [Architecture](architecture-and-design.en.md) · [Benchmark Playbook](internal/benchmark-playbook.md) (Methodology, lessons learned) · [Test Map § Benchmark Baseline](internal/test-map.md#benchmark-基線)
+
+**Test Environment:** Kind single-node cluster (Intel Core 7 240H), 2 tenants, 237 rules (15 Rule Packs), 43 rule groups. All data collected uniformly at v2.5.0.
 
 ---
 
-## Vector Matching Complexity Analysis
+## 1. Vector Matching Complexity Analysis
 
 **Traditional approach (multi-tenant hardcoded):**
 ```
@@ -33,9 +35,9 @@ Example: 100 tenants, 35 alert rules
 = 35 rule evaluations (regardless of tenant count)
 ```
 
-## Actual Benchmark Data (Kind Cluster Measurement)
+## 2. Prometheus Rule Evaluation (Idle-State, 5 Rounds)
 
-**v1.12.0 setup: 2 tenants, 237 rules (15 Rule Packs), 43 rule groups**
+**Setup:** 2 tenants, 237 rules (15 Rule Packs), 43 rule groups.
 
 > v1.11.0 (13 packs) vs v1.12.0 (15 packs) comparison from Kind single-node cluster.
 
@@ -65,9 +67,9 @@ v1.11.0 (13 Rule Packs, 5-round mean ± stddev):
 - Traditional approach increases evaluation time by **~48×** at 100 tenants
 - Dynamic approach maintains **constant** evaluation time, linear scalability
 
-## Empty Vector Zero-Cost
+## 3. Empty Vector Zero-Cost
 
-All rule packs are pre-loaded (9 at benchmark time, now expanded to 15 as of v1.8.0). Packs without deployed exporters are evaluated against empty vectors.
+All rule packs are pre-loaded (`optional: true`). Packs without deployed exporters are evaluated against empty vectors.
 
 **Kind cluster actual measurement:**
 
@@ -83,35 +85,26 @@ All rule packs are pre-loaded (9 at benchmark time, now expanded to 15 as of v1.
 - Pre-loading unused rule packs has **negligible** overhead (< 1ms)
 - When new tenants come online, all rules automatically apply, **no redeployment needed**
 
-## Memory Efficiency
+## 4. Resource Usage Baseline (Idle-State, 5 Rounds Median)
 
-> Data below from **5 independent rounds** mean ± stddev.
+| Metric | Component | Median | StdDev |
+|--------|-----------|--------|--------|
+| CPU (5m avg) | Prometheus | 0.017 cores | ±0.001 |
+| RSS Memory | Prometheus | 148.1MB | ±1.3MB |
+| Heap Memory | threshold-exporter (×2 HA) | 3.1MB | ±0.5MB |
+| Scrape Duration | Prometheus → exporter | 6.1ms | ±3.9ms |
+| Active Series | Prometheus | 6,338 | ±10 |
+| TSDB Storage | Prometheus | 3.0MB | ±0.1MB |
+
+**Memory efficiency:**
 
 ```
-Single threshold-exporter pod (measured):
-- Heap memory: 2.4 ± 0.4MB (YAML parsing + metric generation)
-- Output metrics: ~8 user_threshold series (2 tenants)
-- Scrape Duration: 4.1 ± 1.2ms
+threshold-exporter ×2 HA: ~6.2MB
++ Prometheus RSS: 148.1MB
+= Cluster overhead: ~154MB
 
-× 2 HA Replicas: ~4.8MB total
-+ Prometheus RSS: 142.7 ± 1.4MB (9 Rule Packs, 141 rules)
-= Cluster overhead: ~148MB
-
-vs. Traditional approach (100 tenants, 5,600 rules):
-- Prometheus rules cache: ~500MB+
-- Total overhead: ~600MB+ (single hub)
+vs. Traditional approach (9,600 rules @ 100 tenants): ~600MB+ (estimated at ~60KB per-rule memory)
 ```
-
-## Resource Usage Baseline
-
-Kind single-node cluster measurements (2 tenants):
-
-| Metric | Component | v1.11.0 (13 packs, n=5) | v1.12.0 (15 packs) | Purpose |
-|--------|-----------|-------|-------|---------|
-| CPU (5m avg) | Prometheus | ~0.014 ± 0.003 cores | 0.004 cores | Capacity planning |
-| RSS Memory | Prometheus | 142.7 ± 1.4MB | 112.6MB | Memory budgeting |
-| Heap Memory | threshold-exporter (per pod) | 2.4 ± 0.4MB | 2.2MB | Pod resource limits |
-| Scrape Duration | Prometheus → exporter | 4.1 ± 1.2ms | 2.7ms | Scrape performance baseline |
 
 **Automated collection:**
 
@@ -120,37 +113,31 @@ make benchmark              # Full report (human-readable)
 make benchmark ARGS=--json  # JSON output (CI/CD consumption)
 ```
 
-## Storage and Cardinality Analysis
+## 5. Storage and Cardinality Analysis
 
-**Why Cardinality Matters More Than Disk**
+Prometheus performance bottleneck is **Active Series count**, not disk space. Each series consumes ~2KB of memory.
 
-The performance bottleneck in Prometheus is **Active Series count**, not disk space. Each series consumes approximately 2KB of memory, and the series count directly determines: query latency, memory usage, and compaction frequency.
-
-**Kind cluster measurements:**
-
-| Metric | Value | Description |
+| Metric | Value (5 rounds median) | Description |
 |--------|-------|-------------|
-| TSDB Disk Usage | 8.9 ± 0.2MB (v1.11.0) / 0.5MB (v1.12.0) | All rules and metrics included |
-| Active Series Total | ~6,037 (v1.11.0) / 6,239 (v1.12.0) | Includes all exporters + recording rules |
-| `user_threshold` Series | ~8 | Threshold metrics from threshold-exporter |
+| TSDB Disk Usage | 3.0MB | All rules and metrics included |
+| Active Series Total | 6,338 | Includes all exporters + recording rules |
+| `user_threshold` Series | 8 | Threshold metrics from threshold-exporter |
 | Series Per Tenant (marginal) | ~4 | Marginal cost of adding 1 tenant |
 
-**Scaling estimation formula:**
+**Scaling estimation:**
 
 ```
-Marginal cost of adding N tenants:
-  Series delta = N × (series per tenant)
-  Memory delta ≈ Series delta × 2KB
-
-Example (100 tenants):
+100 tenants:
   user_threshold series = 100 × 4 = 400
   Memory delta ≈ (400 - 8) × 2KB ≈ 0.8MB
-  Total series ≈ 6,239 - 8 + 400 = 6,631
+  Total series ≈ 6,338 - 8 + 400 = 6,730
 ```
 
-**Conclusion:** The dynamic architecture has minimal series growth per tenant (~4 series each). 100 tenants add only ~0.8MB of memory. v1.12.0 added JVM + Nginx Rule Packs (+96 rules), active series increased by only ~200 (from 6,037 to 6,239), confirming that Rule Pack expansion has controllable series overhead.
+Dynamic architecture's series growth is minimal per tenant (~4 series). 100 tenants add only ~0.8MB of memory.
 
-## Under-Load Benchmark Mode
+## 6. Go Micro-Benchmark (threshold-exporter)
+
+`config_bench_test.go` measures threshold-exporter config parsing performance (`go test -bench=. -benchmem -count=5`, Intel Core 7 240H):
 
 v0.13.0 added the `--under-load` mode, which validates platform scalability under synthetic tenant load. Idle-state benchmarks only measure performance at rest; under-load mode simulates real multi-tenant environments.
 
@@ -172,39 +159,22 @@ make benchmark ARGS="--under-load --tenants 1000"
 
 `config_bench_test.go` provides precise Go-level performance measurement (Intel Core 7 240H, `-count=5` median):
 
-**v1.12.0 (with Tenant Profiles support):**
-
-| Benchmark | ns/op (median) | B/op | allocs/op |
+**| Benchmark | ns/op (median) | B/op | allocs/op |
 |-----------|------:|-----:|----------:|
-| Resolve_10Tenants_Scalar | 12,209 | 26,488 | 61 |
-| Resolve_100Tenants_Scalar | 100,400 | 202,777 | 520 |
-| Resolve_1000Tenants_Scalar | 1,951,206 | 3,848,574 | 5,039 |
-| ResolveAt_10Tenants_Mixed | 34,048 | 40,052 | 271 |
-| ResolveAt_100Tenants_Mixed | 405,797 | 462,636 | 2,622 |
-| ResolveAt_1000Tenants_Mixed | 5,337,575 | 5,258,548 | 26,056 |
-| ResolveAt_NightWindow_1000 | 5,404,213 | 5,223,925 | 25,056 |
-| ResolveSilentModes_1000 | 86,700 | 186,086 | 10 |
+| Resolve_10Tenants_Scalar | 19,590 | 26,488 | 61 |
+| Resolve_100Tenants_Scalar | 163,839 | 202,777 | 520 |
+| Resolve_1000Tenants_Scalar | 4,076,536 | 3,848,575 | 5,039 |
+| ResolveAt_10Tenants_Mixed | 71,536 | 40,032 | 271 |
+| ResolveAt_100Tenants_Mixed | 927,426 | 461,872 | 2,621 |
+| ResolveAt_1000Tenants_Mixed | 10,274,749 | 5,244,817 | 26,054 |
+| ResolveAt_NightWindow_1000 | 8,438,156 | 5,220,583 | 25,055 |
+| ResolveSilentModes_1000 | 156,172 | 187,218 | 10 |
 
-<details>
-<summary>v1.11.0 comparison data</summary>
+10→100→1000 tenants scale linearly. 1000 tenants with full ResolveAt (including scheduled thresholds) stays under ~10ms. `ResolveSilentModes_1000` is only 156µs—flag metric queries are near-zero cost.
 
-| Benchmark | ns/op (median) | ns/op (stddev) | B/op | allocs/op |
-|-----------|------:|------:|-----:|----------:|
-| Resolve_10Tenants_Scalar | 11,570 | 237 | 26,032 | 58 |
-| Resolve_100Tenants_Scalar | 107,346 | 4,315 | 196,080 | 511 |
-| Resolve_1000Tenants_Scalar | 2,215,080 | 113,589 | 3,739,792 | 5,019 |
-| ResolveAt_10Tenants_Mixed | 39,487 | 1,720 | 39,491 | 268 |
-| ResolveAt_100Tenants_Mixed | 419,960 | 18,120 | 454,366 | 2,612 |
-| ResolveAt_1000Tenants_Mixed | 4,882,962 | 105,810 | 5,160,416 | 26,038 |
-| ResolveAt_NightWindow_1000 | 4,887,959 | 123,943 | 5,123,590 | 25,037 |
+> **Relationship to § 2 (Prometheus Rule Evaluation):** § 2 measures Prometheus rule evaluation (O(M), independent of tenant count), this section measures threshold-exporter config resolution (O(N), linear growth). Two are complementary: the platform's most critical bottleneck (rule evaluation) stays constant, while secondary cost (config resolution) at 1000 tenants is only ~10ms — well below 15-second scrape interval.
 
-</details>
-
-**Conclusion:** v1.12.0 with `applyProfiles()` maintains comparable performance (Scalar 1000 tenants: 1.95ms vs 2.22ms), Mixed slightly increased (5.34ms vs 4.88ms). New `ResolveSilentModes_1000` benchmark (86µs/1000 tenants). 10→100→1000 tenants scale linearly, full resolve for 1000 tenants stays under 5.5ms.
-
-> **Relationship to [Actual Benchmark Data](#actual-benchmark-data-kind-cluster-measurement):** [Actual Benchmark Data](#actual-benchmark-data-kind-cluster-measurement) measures **Prometheus rule evaluation** — since rule count is fixed at O(M), evaluation time does not grow with tenant count (2 tenants ~20ms ≈ 100 tenants ~20ms). This section measures **threshold-exporter config resolution** — each additional tenant adds one more config to resolve, so the cost is O(N) linear growth. The two are complementary: the platform's most critical bottleneck (rule evaluation) remains constant, while the secondary cost (config resolution) grows linearly but stays at ~5ms even at 1000 tenants — well below Prometheus's 15-second scrape interval and negligible in end-to-end performance.
-
-## Rule Evaluation Scaling Curve
+## 7. Route Generation Scaling (Alertmanager Route Output Performance)
 
 Measures the marginal impact of Rule Pack count on Prometheus rule evaluation time. By progressively removing Rule Packs (9→6→3) and measuring `prometheus_rule_group_last_duration_seconds`, we can observe whether evaluation cost grows linearly.
 
@@ -230,36 +200,9 @@ Each tier waits for at least 2 Prometheus evaluation cycles before sampling. All
 
 > **Measurement note:** v1.11.0 data from 3-round median (each round: remove Rule Packs → restart Prometheus → stabilize → sample). v1.12.0 data from idle-state measurement (all 15 packs mounted).
 
-**Conclusion:** From 3→9→15 Rule Packs, eval time grows from 7.7→22.7→23.2ms. 9→15 packs (+96 rules) adds only 0.5ms to eval time, because the new JVM/Nginx Rule Packs trigger [Empty Vector Zero-Cost](#empty-vector-zero-cost) with no matching exporter data. Average eval time per group (23.2ms / 43 groups = 0.54ms) remains stable. Projected Volume horizontal scalability confirmed.
+**Conclusion:** From 3→9→15 Rule Packs, eval time grows from 7.7→22.7→23.2ms. 9→15 packs (+96 rules) adds only 0.5ms to eval time, because the new JVM/Nginx Rule Packs trigger [Empty Vector Zero-Cost](#3-empty-vector-zero-cost) with no matching exporter data. Average eval time per group (23.2ms / 43 groups = 0.54ms) remains stable. Projected Volume horizontal scalability confirmed.
 
-## Route Generation Scaling (Alertmanager Route Output Performance)
-
-`generate_alertmanager_routes.py` converts all tenant YAML into Alertmanager route + receiver + inhibit_rules fragments. As tenant count grows, the output route tree grows linearly. This benchmark measures route generation wall time, confirming that CI pipeline and `--apply` responsiveness are not bottlenecked by tenant scale.
-
-**Test method:**
-```bash
-make benchmark ARGS="--routing-bench --tenants 100"
-```
-
-1. Generate N synthetic tenant configs (cycling through 6 receiver types, with severity_dedup and routing overrides every 5th tenant)
-2. Run `generate_alertmanager_routes.py --dry-run` 5 times per N (2, 10, 50, 100), report median wall time
-3. Record output YAML line count, route count, and inhibit rule count
-
-**Measured data:**
-
-| Tenants | Wall Time (v1.11.0) | Wall Time (v1.12.0) | Output Lines | Routes | Inhibit Rules |
-|---------|-------------------|-------------------|--------------|--------|---------------|
-| 2       | 94ms              | 181ms             | 72           | 3      | 2             |
-| 10      | 118ms             | 196ms             | 209          | 8      | 10            |
-| 50      | 245ms             | 248ms             | 994          | 41     | 50            |
-| 100     | 298ms             | 327ms             | 1,943        | 80     | 100           |
-| 200     | 397ms             | —                 | 3,884        | 161    | 200           |
-
-> **Synthetic tenant spec:** Cycling through 6 receiver types (webhook/email/slack/teams/rocketchat/pagerduty), all tenants with `_severity_dedup` enabled, every 5th tenant with 1 routing override. Wall time includes Python startup + YAML loading + route generation. v1.11.0 is 10-round median, v1.12.0 is single measurement.
-
-**Conclusion:** Base overhead ~80–180ms (Python startup + import), then ~+150–200ms per additional 100 tenants. 100 tenants under 330ms, well within CI pipeline tolerance (seconds). Output lines scale strictly linearly (~19 lines/tenant), inhibit rules = tenant count (1 severity dedup rule per dedup-enabled tenant).
-
-## Alertmanager Notification Performance
+## 8. Alertmanager Notification Performance
 
 Measures Alertmanager runtime performance under dynamic routing configuration, focusing on inhibit rule evaluation and notification latency.
 
@@ -290,11 +233,11 @@ Collects metrics from Prometheus and Alertmanager API:
 
 > **Note:** In idle state, Alertmanager has no notification activity, so the notification latency histogram is empty. Full notification latency measurement requires `make demo-full` (composite load → trigger alerts → observe latency) or `--under-load` mode.
 
-**Key insight:** The inhibited/received ratio reflects severity dedup effectiveness. During normal operations, when both warning + critical fire simultaneously for a dedup-enabled tenant-metric_group pair, the warning should be inhibited. The 3 inhibit rules (2 tenants × 1 severity dedup + 1 default) have negligible impact on Alertmanager route matching performance.
+**Key insight:** The inhibited/received ratio reflects severity dedup effectiveness. During normal operations, when both warning + critical fire simultaneously for a dedup-enabled tenant-metric_group pair, the warning should be inhibited. The 3 inhibit rules have negligible impact on Alertmanager route matching performance.
 
-## Config Reload E2E Latency
+## 9. Config Reload E2E Latency
 
-Measures end-to-end latency for Alertmanager configuration changes to take effect — the time from "tenant changes routing settings" to "new routes are active".
+Measures end-to-end latency from "tenant changes routing settings" to "new routes are active".
 
 **Test method:**
 ```bash
@@ -321,22 +264,121 @@ Tenant YAML change
 **`--apply` E2E 5-round breakdown:** 676ms, 707ms, **763ms**, 858ms, 956ms
 
 **Component analysis:**
-- Route generation (2 tenants): ~94ms (from [Route Generation Scaling](#route-generation-scaling-alertmanager-route-output-performance) data)
+- Route generation (2 tenants): ~94ms (from [Route Generation Scaling](#7-route-generation-scaling-alertmanager-route-output-performance) data)
 - `kubectl patch` ConfigMap + API server response: ~500–700ms
 - `/-/reload` API: ~0.3ms
 - Sum consistent with measured total (~763ms)
 
 > **configmap-reload sidecar note:** The sidecar watches Projected Volume **file content changes**, not ConfigMap annotations. `--apply` mode directly updates ConfigMap `data` section + triggers `/-/reload`, so it does not depend on the sidecar's polling interval. If only annotations are modified without changing data, the sidecar will not detect the change.
 
-**Conclusion:** The full "tenant changes routing → Alertmanager active" path completes in ~760ms (sub-second) on Kind. The bottleneck is kubectl API server interaction (~600ms), not route generation (~94ms) or Alertmanager reload (<1ms). In production environments with dedicated etcd, expect E2E < 500ms.
+**Conclusion:** Full path completes in ~760ms on Kind. Bottleneck is kubectl API server (~600ms), not route generation (~94ms). Production (dedicated etcd) expected < 500ms.
 
-## Incremental Hot-Reload Performance (v2.1.0)
+## 10. Toolchain Performance Baseline
 
-v2.1.0 introduced a per-file SHA-256 index + parsed config cache for incremental reload. The following Go micro-benchmarks measure incremental vs full reload performance (`config_bench_test.go`, `-count=3` median).
+Core toolchain computational performance (excluding Prometheus query I/O, 20 rounds in-process median):
+
+### Policy-as-Code Engine
+
+`evaluate_policies()` evaluates policy rules on all tenants. 3 × PolicyRule per N tenant:
+
+| Tenants | Median | Description |
+|---------|--------|------|
+| 10      | 0.032ms | Real-time response |
+| 50      | 0.148ms | Linear growth |
+| 100     | 0.262ms | Sub-millisecond |
+| 500     | 1.295ms | Linear scaling |
+| 1000    | 2.605ms | 1000 tenants still < 3ms |
+
+100 tenants × 3 rules completes in < 0.3ms, safe for CI pipeline or pre-commit hooks.
+
+### Alert Quality Scoring
+
+`compute_noise_score()` + `compute_stale_score()` are pure computation:
+
+| Operation | Median (20 rounds) | Description |
+|------|---------------|------|
+| noise+stale × 1,000 calls | 1.06ms | ~1.1µs/call |
+| noise+stale × 10,000 calls | 4.73ms | ~0.5µs/call (amortized) |
+
+Bottleneck is Prometheus range query (~1-3s), not computation itself.
+
+### Cardinality Forecasting
+
+`linear_regression()` (pure Python, no NumPy dependency):
+
+| Operation | Median (20 rounds) | Description |
+|------|---------------|------|
+| 100 data points × 100 calls | 2.9ms | ~29µs/call |
+| 100 data points × 1,000 calls | 28.2ms | ~28µs/call |
+| 100 data points × 10,000 calls | 286.7ms | ~29µs/call |
+
+Linear scaling stable. 100 tenants full forecast (including Prometheus query) estimated 3-5s, bottleneck at network I/O.
+
+### validate_config E2E
+
+`da-tools validate-config` all-in-one validation (schema + routing + policy + drift), CLI E2E with all checks (10 rounds median ± stddev):
+
+| Tenants | Wall Time | Description |
+|---------|-----------|------|
+| 2       | 225ms ±5ms | Existing config (fast path) |
+| 10      | 305ms ±54ms | Synthetic config |
+| 50      | 606ms ±289ms | Including routing + policy |
+
+Python startup overhead ~200ms. Pure validation logic < 100ms/50 tenants.
+
+### Schema Validation (validate_tenant_keys)
+
+`validate_tenant_keys()` validates key legality per-tenant (20 rounds median ± stddev):
+
+| Tenants | Median | Description |
+|---------|--------|------|
+| 10      | 0.010ms | Near-zero cost |
+| 100     | 0.128ms | Linear growth |
+| 500     | 0.498ms | Sub-millisecond |
+| 1000    | 0.978ms | 1000 tenants < 1ms |
+
+Pure dict operations, safe to embed in hot-reload path.
+
+## 11. Under-Load Benchmark Mode (100 Synthetic Tenants)
+
+Inject 100 synthetic tenants into ConfigMap, wait for exporter hot-reload + Prometheus scrape, measure system behavior under load.
+
+```bash
+make benchmark ARGS="--under-load --tenants 100"
+```
+
+**Kind single-node cluster measurement (3 independent runs, 102 tenants = 2 existing + 100 synthetic):**
+
+| Metric | Round 1 | Round 2 | Round 3 | Description |
+|--------|---------|---------|---------|------|
+| Prometheus RSS (before) | 148.6MB | 168.2MB | 171.0MB | Baseline before injection |
+| Prometheus RSS (after) | 150.8MB | 168.6MB | 168.7MB | Steady state after injection |
+| **Memory Delta** | **+2.2MB** | **+0.4MB** | **-2.3MB** | GC noise |
+| Scrape Duration (after) | 104.2ms | 6.3ms | 19.9ms | Scrape time |
+| Eval Time (after) | 65.3ms | 29.8ms | 86.6ms | Rule evaluation time |
+| Active Series | 7,338 | 7,378 | 7,378 | Stable |
+| user_threshold Series | 8→408 | 408→408 | 408→408 | = 102 tenants × 4 |
+
+**Alertmanager baseline (Idle-State vs Under-Load):**
+
+| Metric | Idle-State (2 tenants) | Under-Load (102 tenants) |
+|--------|----------------------|------------------------|
+| Active Inhibit Rules | 3 | 3 (fixed cost, no tenant growth) |
+| Active Alerts | 1 (sentinel) | 1 (sentinel) |
+
+Alertmanager inhibit rule count unchanged between idle-state and under-load (2 severity dedup + 1 default), confirming per-tenant routing adds no inhibit overhead.
+
+**Conclusion:**
+
+100 synthetic tenants have minimal memory impact on Prometheus (median delta ~+0.4MB, within GC noise). Active series stable at ~7,360, user_threshold series matches `102 × 4 = 408`, confirming linear per-tenant model. Eval time and scrape duration vary with Prometheus cache state but remain acceptable (< 105ms).
+
+## 12. Incremental Hot-Reload Performance (v2.1.0)
+
+v2.1.0 introduced per-file SHA-256 index + parsed config cache for incremental reload. Go micro-benchmarks measure incremental vs full reload performance (`config_bench_test.go`, `-count=3` median).
 
 **Environment:** Dev Container (Intel Core 7 240H), each tenant with 8 metric thresholds (including scheduled overrides).
 
-> **v2.1.0 optimizations:** (1) Removed `Resolve()` calls from reload path (replaced with `logConfigStats` direct counting); (2) **mtime guard** — `scanDirFileHashes` uses `DirEntry.Info()` mtime+size as first-level cache (eliminates per-file `os.Stat` calls), skipping `os.ReadFile` + SHA-256 when unchanged; (3) **incremental merge** — when only tenant files change, patches merged config directly instead of O(N) `mergePartialConfigs`; (4) **byte cache** — scan phase caches read `[]byte` data, reused by `fullDirLoad`/`IncrementalLoad` Phase 3 to eliminate double disk reads.
+**v2.1.0 optimizations:** (1) Removed `Resolve()` calls from reload path; (2) **mtime guard** — `scanDirFileHashes` uses `DirEntry.Info()` mtime+size as first-level cache, skipping `os.ReadFile` + SHA-256 when unchanged; (3) **incremental merge** — patches config directly instead of O(N) `mergePartialConfigs`; (4) **byte cache** — scan phase caches `[]byte` data, reused to eliminate double disk reads.
 
 **100 Tenants (cold mtime†):**
 
@@ -372,6 +414,36 @@ v2.1.0 introduced a per-file SHA-256 index + parsed config cache for incremental
 - **Scaling**: 100→1000 (×10), `FullDirLoad` from 3.2ms→34.9ms (×10.9); mtime NoChange from ~129µs→1.5ms (×11.6)
 - **Cost breakdown (1000T OneFileChanged = 6.9ms)**: scan 6.2ms (1 changed + 999 stat) + 1 file re-parse ~0.2ms + incremental merge ~0.5ms
 - **v2.1.0 → v2.1.0 total speedup**: `OneFileChanged_1000` 10.5ms→6.9ms (**-34%**), `NoChange_1000` 5.4ms→1.5ms (**-72%**, mtime guard)
+
+## pytest-benchmark Micro-Benchmarks
+
+`pytest -m benchmark` (min_rounds=20, warmup=on). For version-to-version trend detection. Route generation data see § 7.
+
+| Test | Median | Rounds | Description |
+|------|--------|--------|------|
+| `test_parse_integer` | ~102ns | 100,161 | parse_duration_seconds fastest path |
+| `test_parse_seconds` | ~634ns | 164,555 | includes string parsing |
+| `test_parse_minutes` | ~624ns | 168,039 | includes string parsing |
+| `test_parse_hours` | ~619ns | 168,663 | includes string parsing |
+| `test_format_seconds` | ~128ns | 80,167 | format_duration |
+| `test_format_minutes` | ~160ns | 59,443 | format_duration (minutes) |
+| `test_format_hours` | ~147ns | 70,872 | format_duration (hours) |
+| `test_within_bounds` | ~796ns | 131,303 | validate_and_clamp (no clamp) |
+| `test_clamped` | ~1.2µs | 85,129 | validate_and_clamp (with clamp) |
+
+---
+
+## Methodology
+
+Complete methodology and lessons learned detailed in [Benchmark Playbook](internal/benchmark-playbook.md).
+
+**Statistical requirements:**
+- pytest-benchmark: min_rounds=20, warmup enabled, report median
+- benchmark.sh (K8s idle-state): 5 rounds, 30s interval, report median ± stddev
+- benchmark.sh (K8s under-load): each round independent execution (avoid port-forward instability)
+- Go micro-bench: `-count=5`, report median
+- Toolchain performance baseline: 20 rounds in-process, report median
+- CLI E2E: 10 rounds subprocess, report median ± stddev
 
 ---
 

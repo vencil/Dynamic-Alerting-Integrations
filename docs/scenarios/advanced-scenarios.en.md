@@ -2,7 +2,7 @@
 title: "Advanced Scenarios & Test Coverage"
 tags: [scenario, testing, maintenance]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Advanced Scenarios & Test Coverage
@@ -46,6 +46,19 @@ The test system is organized into two layers: **E2E Scenario Tests** (end-to-end
 | **E — Multi-Tenant Isolation** | Modifying Tenant A never affects Tenant B | Lower A threshold/disable A metric → verify B unchanged | A alert fires, B alert inactive; A metric absent, B metric present | `make test-scenario-e` |
 | **F — HA Failover** | Service continues after Pod deletion, thresholds don't double | Kill 1 Pod → verify alert continues → new Pod starts → verify `max by` | Surviving Pods ≥1 (PDB); alert uninterrupted; recording rule value = original (not 2×) | `make test-scenario-f` |
 | **demo-full** | End-to-end lifecycle demonstration | Composite load → alert fires → cleanup → alert resolves | All 6 steps succeed; complete firing → inactive cycle | `make demo-full` |
+
+### E2E Scenario Tests (`make test-scenario-*`)
+
+Core enterprise features end-to-end verification within K8s cluster:
+
+- **Scenario A** — Dynamic threshold reload: tenant config changes immediately take effect (no Pod restart)
+- **Scenario B** — Weakest link detection: recording rule correctly selects worst metric among multiple sources
+- **Scenario C** — Three-state control: custom value + default + disable states all produce correct Prometheus metrics
+- **Scenario E** — Multi-tenant isolation: one tenant's changes never affect another tenant's thresholds/metrics
+- **Scenario F** — HA failover: service continues uninterrupted after Pod deletion, metrics remain correct (not doubled)
+- **demo-full** — Complete lifecycle: scaffold → verify → load → alert fires → cleanup → alert resolves
+
+Each test command modifies config, waits for exporter reload, and asserts correct alert behavior.
 
 ### Unit/Integration Tests (`make test` / `pytest`)
 

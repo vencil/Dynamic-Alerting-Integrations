@@ -2,7 +2,7 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -10,7 +10,7 @@ lang: zh
 
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
 > **容器映像**：`ghcr.io/vencil/da-tools:v2.4.0`
-> **版本**：v2.4.0（與平台版本同步）
+> **版本**：v2.5.0（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
 
@@ -22,7 +22,7 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 2. [全局選項](#全局選項)
 3. [命令分類](#命令分類)
 4. [命令詳解](#命令詳解)
-   - [Prometheus API 工具](#prometheus-api-工具)
+   - [Prometheus API 工具](#prometheus-api-tools)
    - [配置生成工具](#配置生成工具)
    - [檔案系統工具](#檔案系統工具)
 5. [環境變數](#環境變數)
@@ -75,7 +75,7 @@ da-tools <command> --help
 
 ## 命令分類
 
-### Prometheus API 工具（需網路存取）
+### Prometheus API Tools (Network Access Required)
 
 這些工具只需要能連到 Prometheus HTTP API，可從任何位置執行。
 
@@ -148,7 +148,7 @@ da-tools <command> --help
 
 ## 命令詳解
 
-### Prometheus API 工具
+### Prometheus API Tools
 
 #### check-alert
 
@@ -2097,7 +2097,7 @@ spec:
 
 ## 常見問題
 
-### Q: 如何在 CI/CD 中使用 da-tools？
+### Q: How to Use da-tools in CI/CD?
 
 **A**: 使用 `--ci` flag；exit code 0 = success，非 0 = fail。詳見各命令 `--help`。
 

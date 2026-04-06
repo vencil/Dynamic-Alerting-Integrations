@@ -2,7 +2,7 @@
 title: "Migration Dry-Run Simulator"
 tags: [migration, PromQL, dry-run]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: en
 related: [playground, promql-tester, config-diff]
 ---

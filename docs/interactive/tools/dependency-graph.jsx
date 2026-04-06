@@ -2,7 +2,7 @@
 title: "Dependency Graph"
 tags: [graph, dependencies, visual]
 audience: [platform-engineer, domain-expert]
-version: v2.4.0
+version: v2.5.0
 lang: en
 related: [rule-pack-matrix, rule-pack-selector, capacity-planner]
 ---

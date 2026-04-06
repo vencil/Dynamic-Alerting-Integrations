@@ -2,12 +2,12 @@
 title: "Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics
 
-> **v2.4.0** | Related docs: [`federation-integration.md`](../federation-integration.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.5.0** | Related docs: [`federation-integration.md`](../federation-integration.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Problem
 
@@ -259,7 +259,7 @@ prometheus --web.enable-remote-write-receiver \
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.4.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml   # replicaCount: 2 for HA
 ```
@@ -457,6 +457,14 @@ da-tools federation-check e2e \
 - [ ] Alerts routed to correct notification channels per tenant
 - [ ] Grafana dashboard shows global view
 - [ ] No cardinality limit warnings
+
+## Interactive Tools
+
+> 💡 **Interactive Tools** — The following tools can be tested directly in the [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/):
+>
+> - [Dependency Graph](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/dependency-graph.jsx) — Visualize rule pack dependencies and deployment topology
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx) — Compare central and edge configurations
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx) — Test routing across federated clusters
 
 ## Related Resources
 

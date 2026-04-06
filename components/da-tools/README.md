@@ -418,8 +418,8 @@ spec:
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v2.4.0 | `v2.1.0` | ADR-007 Routing Profiles + Portal 強化 + 文件治理 |
-| threshold-exporter | v2.4.0 | `exporter/v2.4.0` | Go binary |
+| 平台文件 | v2.5.0 | `v2.1.0` | ADR-007 Routing Profiles + Portal 強化 + 文件治理 |
+| threshold-exporter | v2.5.0 | `exporter/v2.5.0` | Go binary |
 | **da-tools** | **v2.4.0** | **`tools/v2.4.0`** | **Python CLI 工具集（23 命令）** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。

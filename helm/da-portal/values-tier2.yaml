@@ -1,0 +1,273 @@
+# values-tier2.yaml — da-portal Tier 2: Full Stack (Portal + API + OAuth2-proxy)
+# 適用於完整棧部署階層 — Portal + Tenant API + OAuth2-proxy
+# Used for full-stack deployment tier — Portal + Tenant API + OAuth2-proxy
+
+# ============================================================================
+# Tier 2 Deployment Profile
+# ============================================================================
+#
+# 適用情境 (When to use):
+#   • 多租戶團隊需要 UI 互動式管理介面
+#   • 使用 Tenant API 進行動態配置（非 Git-only）
+#   • 需要 OAuth2 身份驗證（OIDC、GitHub、Google、GitLab）
+#   • 企業環境需要自訂資料和高級客製化
+#   • 適合：託管平台、多客戶 SaaS、企業內部云
+#
+# Use cases:
+#   • Multi-tenant teams need UI-based interactive management
+#   • Using Tenant API for dynamic configuration (not Git-only)
+#   • Need OAuth2 authentication (OIDC, GitHub, Google, GitLab)
+#   • Enterprise environments require custom data and advanced customization
+#   • Best for: managed platforms, multi-customer SaaS, enterprise internal clouds
+#
+# 與 Tier 1 的差異 (vs Tier 1):
+#   Tier 1: Static portal only, no auth, no API
+#   Tier 2: Full stack with OAuth2-proxy + API proxy + Ingress + customization
+#
+# ============================================================================
+
+# Tier 2: 1–3 replicas for HA (production: 3)
+# 生產環境建議 3 個副本以實現高可用
+replicaCount: 1  # Change to 3 for production HA | 生產環境改為 3
+
+image:
+  repository: ghcr.io/vencil/da-portal
+  tag: "2.5.0"
+  pullPolicy: IfNotPresent
+
+# Portal application settings
+portal:
+  listenPort: 80
+  # Tier 2: Full Tenant API URL (required)
+  # Portal 能夠代理 /api/v1/* 請求到後端 Tenant API
+  #
+  # Portal expects the following Tenant API endpoints (RFC):
+  # - GET  /api/v1/me                          — Current user info
+  # - GET  /api/v1/tenants                     — List all tenants
+  # - PUT  /api/v1/tenants/{id}                — Update tenant metadata
+  # - GET  /api/v1/groups/{id}                 — Fetch group by ID
+  # - PUT  /api/v1/groups/{id}                 — Update group
+  # - DELETE /api/v1/groups/{id}               — Delete group
+  # - POST /api/v1/groups/{id}/batch           — Batch add/remove group members
+  # - GET  /api/v1/views/{id}                  — Fetch view by ID
+  # - PUT  /api/v1/views/{id}                  — Update view
+  # - DELETE /api/v1/views/{id}                — Delete view
+  #
+  # All endpoints require valid Bearer token (from OAuth2-proxy) in Authorization header.
+  tenantApiUrl: "http://tenant-api.monitoring.svc.cluster.local:8080"
+
+# nginx configuration
+nginx:
+  enabled: true
+  # 自訂 nginx.conf（可選）：新增自訂日誌、效能優化等
+  # Custom nginx.conf (optional): add custom logging, performance tuning, etc.
+  customConfig: ""
+
+# Tier 2: ENABLED — OAuth2-proxy provides authentication layer
+# 啟用 OAuth2-proxy：作為身份驗證層保護 Portal
+oauth2Proxy:
+  enabled: true
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: "v7.15.1"
+    pullPolicy: IfNotPresent
+  # Provider: github | google | oidc | gitlab
+  # 根據組織選擇提供商（建議：OIDC 用於企業環境）
+  provider: github  # Tier 2: Recommended oidc for enterprise
+  # Redirect URL: 必須與 OAuth2 應用註冊的回調 URL 匹配
+  # Must match registered OAuth2 app callback URL (e.g., your actual Ingress host)
+  redirectUrl: "https://da-portal.yourdomain.com/oauth2/callback"
+  # Accept specific email domains only
+  # 限制特定郵件網域（留空或使用 * 允許所有）
+  emailDomain: "*"  # Change to your.domain.com for enterprise
+  # Cookie settings: HTTPS required for Tier 2 (production)
+  # Cookie 設定：Tier 2 應使用 HTTPS（生產環境必須）
+  cookieSecure: true
+  cookieHttpOnly: true
+  cookieSameSite: "Lax"
+  cookieName: "_da_portal_session"
+  # Tier 2: true — create Secret from Helm values (dev/staging)
+  # 生產環境建議禁用此項，改用 External Secrets Operator
+  createSecret: true
+  secretName: oauth2-proxy-secrets
+
+# Tier 2: Custom data ENABLED (optional but recommended for enterprise)
+# 啟用自訂資料卷以支援企業客製化
+customData:
+  # Set enabled: true if you have custom platform-data.json or flows.json
+  # 如果有自訂 platform-data.json 或 flows.json，啟用此項
+  enabled: false
+  # type: configMap for Kubernetes ConfigMap, emptyDir for init container
+  type: configMap
+  # Must be pre-created with: kubectl create configmap da-portal-custom --from-file=...
+  configMapName: da-portal-custom
+
+# Service configuration
+# Tier 2: ClusterIP for internal service + external access via Ingress
+service:
+  type: ClusterIP
+  # Port 80 → oauth2-proxy (4180) — external traffic from Ingress
+  port: 80
+  # Port 8080 → nginx directly — cluster-internal health checks
+  internalPort: 8080
+
+# Tier 2: ENABLED — Ingress for external access
+# 啟用 Ingress：暴露 Portal 到外部（企業網路或公網）
+ingress:
+  enabled: true
+  # Use your ingress controller class name
+  # nginx | istio | traefik | etc.
+  className: "nginx"  # Change to your ingress controller
+  # TLS annotations, auth annotations, etc.
+  annotations:
+    # Example: cert-manager for automatic TLS cert
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Example: nginx annotations for rate limiting
+    # nginx.ingress.kubernetes.io/rate-limit: "100"
+    {}
+  # Configure your actual domain
+  # 配置實際的網域名稱（不要用 example.com）
+  hosts:
+    - host: da-portal.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # TLS configuration
+  # 配置 TLS 證書（留空則不使用 HTTPS；生產環境必須配置）
+  tls:
+    - secretName: da-portal-tls
+      hosts:
+        - da-portal.yourdomain.com
+
+# Tier 2: Higher resource allocation (Portal + API proxy + OAuth2-proxy)
+# 生產環境下調整資源限制，並啟用 HPA（水平自動擴展）
+resources:
+  nginx:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  oauth2Proxy:
+    requests:
+      cpu: 30m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 96Mi
+
+# Pod security context (non-root, matching tenant-api)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# Tier 2: NetworkPolicy ENABLED (fine-grained access control)
+# 啟用 NetworkPolicy：限制進出站流量，提高安全性
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to query Portal (client-side)
+  # 允許訪問 Portal 的命名空間列表
+  allowedNamespaces:
+    - monitoring    # Infrastructure metrics
+    - db-a          # Tenant A
+    - db-b          # Tenant B
+    - default       # Optional: if Portal accessed from default NS
+
+# Pod annotations for monitoring / logging
+# 如有 Prometheus、Loki 等監控系統，可新增相應註解
+podAnnotations:
+  {}
+  # Example for Prometheus scraping (if Portal exports metrics):
+  # prometheus.io/scrape: "false"  # Portal doesn't export Prometheus metrics
+  # Example for Loki logging:
+  # logs.grafana.com/enabled: "true"
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+
+# ============================================================================
+# 部署指南 (Deployment Guide)
+# ============================================================================
+#
+# 1. 基本部署 (Basic deployment):
+#    helm install da-portal ./da-portal \
+#      -n monitoring \
+#      -f values-tier2.yaml
+#
+# 2. 帶自訂資料的生產部署 (Production with custom data):
+#    # First, create the ConfigMap
+#    kubectl create configmap da-portal-custom \
+#      -n monitoring \
+#      --from-file=platform-data.json=./custom-platform-data.json \
+#      --from-file=flows.json=./custom-flows.json
+#
+#    # Then install with custom data enabled
+#    helm install da-portal ./da-portal \
+#      -n monitoring \
+#      -f values-tier2.yaml \
+#      --set customData.enabled=true
+#
+# 3. OAuth2 配置範例 (OAuth2 configuration examples):
+#
+#    a) GitHub OAuth (需要 GitHub OAuth App):
+#       helm install da-portal ./da-portal \
+#         -n monitoring \
+#         -f values-tier2.yaml \
+#         --set oauth2Proxy.provider=github \
+#         --set-string oauth2Proxy.clientId=YOUR_GITHUB_CLIENT_ID \
+#         --set-string oauth2Proxy.clientSecret=YOUR_GITHUB_CLIENT_SECRET
+#
+#    b) OIDC (建議企業環境使用，例如 Keycloak/Okta):
+#       helm install da-portal ./da-portal \
+#         -n monitoring \
+#         -f values-tier2.yaml \
+#         --set oauth2Proxy.provider=oidc \
+#         --set-string oauth2Proxy.oidcIssuerUrl=https://your-oidc-provider.com \
+#         --set oauth2Proxy.emailDomain=your.domain.com
+#
+# 4. TLS 配置 (TLS setup):
+#    a) 使用 cert-manager + Let's Encrypt:
+#       helm install cert-manager jetstack/cert-manager \
+#         -n cert-manager --create-namespace
+#
+#       # Add annotation to Ingress (in values-tier2.yaml):
+#       # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+#
+#    b) 使用自訂 TLS 證書:
+#       kubectl create secret tls da-portal-tls \
+#         -n monitoring \
+#         --cert=path/to/cert.pem \
+#         --key=path/to/key.pem
+#
+# 5. HA 部署（生產環境）(HA setup for production):
+#    helm install da-portal ./da-portal \
+#      -n monitoring \
+#      -f values-tier2.yaml \
+#      --set replicaCount=3 \
+#      --set resources.nginx.requests.cpu=100m \
+#      --set resources.oauth2Proxy.requests.cpu=50m
+#
+# ============================================================================
+#
+# 注意事項 (Important Notes):
+#
+# • 不要將 OAuth2 密鑰存放在 values 文件中（生產環境用 External Secrets）
+#   Don't commit OAuth2 secrets to values file — use External Secrets Operator in production
+#
+# • Ingress className 需要與集群中可用的 Ingress Controller 匹配
+#   Ingress className must match your actual Ingress Controller (nginx, istio, traefik, etc.)
+#
+# • customData.enabled = true 時，對應 ConfigMap 必須預先建立
+#   When customData.enabled = true, the ConfigMap must be created before Helm install
+#
+# • NetworkPolicy 依賴集群支援網路策略（如 Calico、Cilium）
+#   NetworkPolicy requires cluster CNI support (e.g., Calico, Cilium)
+#
+# ============================================================================

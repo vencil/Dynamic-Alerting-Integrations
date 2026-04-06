@@ -1,0 +1,160 @@
+# values-tier1.yaml — da-portal Tier 1: Static Portal (Git-Native Teams)
+# 適用於 Git-Native 部署階層 — 不使用 Portal、API、OAuth2-proxy
+# Used for Git-Native deployment tier — NO Portal, NO API, NO OAuth2-proxy
+
+# ============================================================================
+# Tier 1 Deployment Profile
+# ============================================================================
+#
+# 適用情境 (When to use):
+#   • 團隊通過 Git + ConfigMap 管理所有配置（threshold-exporter, Prometheus, Alertmanager）
+#   • 不需要 UI 互動式租戶管理或 Portal API
+#   • 靜態工具參考（如果需要）時可使用最小化 Portal（無身份驗證）
+#   • 適合：DevOps/SRE 駐點團隊、完全自動化部署流程
+#
+# Use cases:
+#   • Teams manage everything via Git + ConfigMap (threshold-exporter, Prometheus, Alertmanager)
+#   • No need for UI-based tenant management or Portal API
+#   • Optional: minimal Portal for static tool reference (no authentication)
+#   • Best for: on-site DevOps/SRE teams, fully automated deployment pipelines
+#
+# 與 Tier 2 的差異 (vs Tier 2):
+#   Tier 1: OAuth2-proxy disabled, tenantApiUrl empty, minimal resources
+#   Tier 2: Full stack with OAuth2-proxy + API proxy + Ingress + enterprise customization
+#
+# ============================================================================
+
+# Replica count: 1 for minimal reference portal (optional)
+# Set to 0 if you don't want da-portal at all (use threshold-exporter + Prometheus directly)
+replicaCount: 1
+
+image:
+  repository: ghcr.io/vencil/da-portal
+  tag: "2.5.0"
+  pullPolicy: IfNotPresent
+
+# Portal application settings
+portal:
+  listenPort: 80
+  # Tier 1: NO tenant API proxy — portal runs in read-only static mode
+  # 租戶 API 禁用：Portal 以靜態模式運行（僅參考工具，無管理功能）
+  tenantApiUrl: ""
+
+# nginx configuration
+nginx:
+  # Enable simple nginx serving static assets only
+  enabled: true
+  customConfig: ""
+
+# DISABLED in Tier 1: OAuth2-proxy not needed for Git-Native teams
+# 不啟用 OAuth2-proxy（Git-Native 團隊無需身份驗證）
+oauth2Proxy:
+  enabled: false
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: "v7.15.1"
+    pullPolicy: IfNotPresent
+  provider: github
+  redirectUrl: "http://da-portal.example.com/oauth2/callback"
+  emailDomain: "*"
+  cookieSecure: true
+  cookieHttpOnly: true
+  cookieSameSite: "Lax"
+  cookieName: "_da_portal_session"
+  createSecret: false
+  secretName: oauth2-proxy-secrets
+
+# Tier 1: Custom data disabled — use only built-in platform-data.json
+# 禁用自訂資料卷：僅使用內建 platform-data.json
+customData:
+  enabled: false
+  type: configMap
+  configMapName: da-portal-custom
+
+# Service: ClusterIP, internal access only (not exposed via Ingress)
+# 服務類型：ClusterIP，內部訪問（不通過 Ingress 暴露）
+service:
+  type: ClusterIP
+  port: 80
+  internalPort: 8080
+
+# Ingress DISABLED in Tier 1
+# Tier 1 不使用 Ingress（Git-Native 環境通常無需外部訪問 Portal）
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: da-portal.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Tier 1: Minimal resource allocation (static file serving only)
+# 最少資源分配：僅靜態文件服務，不運行 OAuth2-proxy
+resources:
+  nginx:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi
+  # oauth2Proxy resources ignored when oauth2Proxy.enabled: false
+  oauth2Proxy:
+    requests:
+      cpu: 0m
+      memory: 0Mi
+    limits:
+      cpu: 0m
+      memory: 0Mi
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# Tier 1: NetworkPolicy DISABLED (Git-Native teams manage via kubectl/GitOps)
+# 禁用 NetworkPolicy（Git-Native 環境由團隊通過 kubectl/GitOps 管理網路策略）
+networkPolicy:
+  enabled: false
+  allowedNamespaces:
+    - monitoring
+    - db-a
+    - db-b
+
+# Pod annotations
+podAnnotations:
+  {}
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+
+# ============================================================================
+# 部署指南 (Deployment Guide)
+# ============================================================================
+#
+# 1. 如果完全不需要 Portal：
+#    If you don't need da-portal at all:
+#      helm install da-portal ./da-portal \
+#        -n monitoring \
+#        -f values-tier1.yaml \
+#        --set replicaCount=0
+#
+# 2. 如果需要靜態參考 Portal：
+#    If you want static reference portal:
+#      helm install da-portal ./da-portal \
+#        -n monitoring \
+#        -f values-tier1.yaml
+#
+# 注意：Tier 1 假設所有配置都由 Git + kubectl 管理
+# Note: Tier 1 assumes all config is managed via Git + kubectl (threshold-exporter, Prometheus, Alertmanager)
+#
+# ============================================================================

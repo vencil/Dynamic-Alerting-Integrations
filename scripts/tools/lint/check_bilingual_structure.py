@@ -37,6 +37,13 @@ SKIP_STRUCTURE_CHECK = {
     "CHANGELOG.md",
 }
 
+# Bilingual exemption list
+# Internal docs (docs/internal/) are exempt from bilingual requirements per project policy.
+# Only externally-facing docs need EN counterparts and structure validation.
+BILINGUAL_EXEMPT_DIRS = {
+    "docs/internal/",
+}
+
 
 # ---------------------------------------------------------------------------
 # Heading extraction
@@ -99,7 +106,13 @@ def heading_skeleton(headings: List[Tuple[int, int, str]]) -> List[Tuple[int, st
         key = re.sub(r"[*_`]", "", key)
         # Remove markdown links but keep link text
         key = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", key)
-        # Condense whitespace
+        # Remove CJK characters (Chinese, Japanese, Korean)
+        key = re.sub(r"[\u4e00-\u9fff\u3040-\u309f\uac00-\ud7af]", "", key)
+        # Remove empty parentheses/brackets left after CJK removal
+        key = re.sub(r"[()[\]{}]", "", key)
+        # Normalize dashes and whitespace left after CJK removal
+        key = re.sub(r"[-–—\s]+", " ", key)
+        # Condense remaining whitespace
         key = re.sub(r"\s+", " ", key).strip()
         skeleton.append((level, key))
     return skeleton
@@ -241,7 +254,11 @@ def compare_structure(
 # ---------------------------------------------------------------------------
 
 def discover_bilingual_pairs() -> List[Tuple[Path, Path]]:
-    """Find all zh/en markdown file pairs."""
+    """Find all zh/en markdown file pairs.
+
+    Skips internal docs (docs/internal/) which are exempt from bilingual
+    requirements per project policy.
+    """
     pairs = []
 
     # docs/ and rule-packs/
@@ -251,6 +268,14 @@ def discover_bilingual_pairs() -> List[Tuple[Path, Path]]:
         for en_file in sorted(scan_dir.rglob("*.en.md")):
             zh_file = en_file.parent / en_file.name.replace(".en.md", ".md")
             if zh_file.is_file():
+                # Skip if in exempt directory
+                rel_path = zh_file.relative_to(REPO_ROOT)
+                is_exempt = any(
+                    str(rel_path).startswith(exempt_dir)
+                    for exempt_dir in BILINGUAL_EXEMPT_DIRS
+                )
+                if is_exempt:
+                    continue
                 pairs.append((zh_file, en_file))
 
     # Root READMEs

@@ -2,12 +2,12 @@
 title: "Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications
 
-> **v2.4.0** | Related docs: [`architecture-and-design.en.md` §2.9](../architecture-and-design.en.md), [`byo-alertmanager-integration.en.md`](../byo-alertmanager-integration.en.md)
+> **v2.5.0** | Related docs: [`architecture-and-design.en.md` §2.9](../architecture-and-design.en.md), [`byo-alertmanager-integration.en.md`](../byo-alertmanager-integration.en.md)
 
 ## Problem
 
@@ -185,6 +185,14 @@ Organizations needing fully different semantics can fork Rule Packs:
 2. **Sentinel alerts excluded**: Operational Rule Pack sentinel alerts (e.g., `TenantSilentWarning`) are inherently platform-level and don't need dual perspectives.
 3. **Infrastructure alerts excluded**: `XxxDown`, `ExporterAbsent` alerts are already platform-oriented.
 4. **Fallback**: If a receiver template references `platform_summary` but an alert lacks it, Alertmanager outputs empty string. Use `{{ or .Annotations.platform_summary .Annotations.summary }}` for fallback.
+
+## Interactive Tools
+
+> 💡 **Interactive Tools** — The following tools can be tested directly in the [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/):
+>
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx) — Compare routing configuration changes
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx) — Simulate alert flow and notification routing
+> - [Config Lint](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-lint.jsx) — Validate routing configuration correctness
 
 ## Related Resources
 

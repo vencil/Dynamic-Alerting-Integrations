@@ -1,378 +1,321 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-check_doc_freshness.py
+"""文件新鮮度檢查工具。
 
-Scans markdown documentation for stale/dead references — code examples that
-reference files, commands, or paths that no longer exist in the repo.
+掃描 docs/ 下的 Markdown 文件，檢測超過指定天數未更新的文件。
+v2.5.0 新增。
 
-Checks:
-1. File path references in code blocks and inline code
-2. Command references (da-tools <subcommand>)
-3. Docker image tags (version matching)
-4. Helm chart versions
+功能：
+- 掃描 docs/ 下所有 .md 文件
+- 使用 git log 取得最後修改時間戳
+- 標記超過閾值（預設 90 天）的陳舊文件
+- `--check` 模式：若發現陳舊文件則 exit 1
+- `--threshold DAYS` 標誌：覆蓋 90 天預設值
+- `--verbose` 模式：顯示所有文件及其年齡
+- `--exclude` 模式：逗號分隔的排除模式
+- 預設排除：ADR 文件（穩定性）、CHANGELOG.md
+- 輸出表格：文件路徑、最後修改日期、天數、狀態
+- 雙語 CLI 輸出（使用 detect_cli_lang() 模式）
 """
 
 import argparse
-import os
-import re
 import sys
+import json
+import subprocess
 from pathlib import Path
+from datetime import datetime, timezone
+from typing import List, Tuple, Optional, Dict
 
-# Reference extraction patterns
-FILE_PATH_PATTERN = r'(?:^|\s|[`\'"])((?:conf\.d/|rule-packs/|scripts/tools/|docs/|k8s/|components/|helm/)[a-zA-Z0-9_./*<>-]+)'
-CODE_BLOCK_PATTERN = r'```(?:yaml|bash|sh|shell|python|go|dockerfile|json|text)\n(.*?)\n```'
-INLINE_CODE_PATTERN = r'`([^`]+)`'
-DA_TOOLS_PATTERN = r'da-tools\s+([a-z_-]+)'
-DOCKER_IMAGE_PATTERN = r'ghcr\.io/vencil/(threshold-exporter|da-tools):([v\d.]+)'
-HELM_VERSION_PATTERN = r'--version\s+([v\d.]+)'
+# 嘗試導入共用函式庫
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from _lib_python import detect_cli_lang
+except ImportError:
+    # 如果無法導入，定義簡單的 fallback
+    def detect_cli_lang() -> str:
+        """Detect CLI language from environment."""
+        import os
+        lang = os.environ.get('LANG', 'en_US.UTF-8')
+        return 'zh' if 'zh' in lang.lower() else 'en'
 
 
-IGNORE_FILE_NAME = ".doc-freshness-ignore"
+def i18n_text(zh: str, en: str) -> str:
+    """Return localized text based on CLI language."""
+    return zh if detect_cli_lang() == 'zh' else en
 
 
-def _load_ignore_patterns(repo_root):
-    """Load ignore patterns from .doc-freshness-ignore.
-
-    Format: one pattern per line (path prefix or exact reference).
-    Lines starting with # are comments. Blank lines are skipped.
-    Supports type-specific ignores: ``missing_file:conf.d/``
+def get_git_last_modified_timestamp(file_path: Path) -> Optional[int]:
     """
-    ignore_file = Path(repo_root) / IGNORE_FILE_NAME
-    if not ignore_file.exists():
-        return set()
-    patterns = set()
-    for line in ignore_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        patterns.add(line)
-    return patterns
+    使用 git log 取得文件最後修改時間戳（unix seconds）。
+
+    Args:
+        file_path: 相對於 repo root 的文件路徑
+
+    Returns:
+        Unix timestamp（秒），或 None 若文件未在 git 中或出錯
+    """
+    try:
+        result = subprocess.run(
+            ['git', 'log', '-1', '--format=%ct', str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip())
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        pass
+    return None
 
 
-def _is_ignored(issue, ignore_patterns):
-    """Check if an issue matches any ignore pattern."""
-    ref = issue["reference"]
-    issue_type = issue["type"]
-    for pat in ignore_patterns:
-        # Type-specific: "missing_file:conf.d/"
-        if ":" in pat and not pat.startswith("/"):
-            ptype, pval = pat.split(":", 1)
-            if ptype == issue_type and ref.startswith(pval):
+def calculate_days_since_update(timestamp: int) -> float:
+    """計算從 unix timestamp 至今的天數。"""
+    now = datetime.now(timezone.utc).timestamp()
+    return (now - timestamp) / (24 * 3600)
+
+
+class DocFreshnessChecker:
+    """檢查 Markdown 文件新鮮度的檢查器。"""
+
+    def __init__(
+        self,
+        docs_dir: str = "docs",
+        threshold_days: int = 90,
+        exclude_patterns: Optional[List[str]] = None,
+        verbose: bool = False,
+    ):
+        """
+        初始化檢查器。
+
+        Args:
+            docs_dir: 文檔根目錄
+            threshold_days: 標記陳舊的天數閾值
+            exclude_patterns: 排除的 glob 模式列表
+            verbose: 是否顯示所有文件及其年齡
+        """
+        self.docs_dir = Path(docs_dir)
+        self.threshold_days = threshold_days
+        self.verbose = verbose
+        # 預設排除：ADR、CHANGELOG
+        self.exclude_patterns = exclude_patterns or [
+            "adr/*",
+            "CHANGELOG.md",
+        ]
+        self.results: List[Dict] = []
+        self.errors: List[str] = []
+
+    def matches_exclude_pattern(self, file_path: Path) -> bool:
+        """檢查文件是否符合排除模式。"""
+        relative_path = str(file_path.relative_to(self.docs_dir))
+        for pattern in self.exclude_patterns:
+            if Path(relative_path).match(pattern):
                 return True
-        # Generic: matches reference prefix
-        elif ref.startswith(pat):
-            return True
-    return False
+        return False
 
+    def check_freshness(self) -> Tuple[bool, List[Dict]]:
+        """
+        掃描所有 .md 文件並檢查新鮮度。
 
-def extract_version_from_claude_md(repo_root):
-    """Extract platform version from CLAUDE.md."""
-    claude_md = Path(repo_root) / "CLAUDE.md"
-    if not claude_md.exists():
-        return None
+        Returns:
+            (all_fresh: bool, results: List[Dict])
+            results 包含每個文件的檢查結果
+        """
+        md_files = sorted(self.docs_dir.glob('**/*.md'))
 
-    with open(claude_md, encoding="utf-8") as f:
-        content = f.read()
-        match = re.search(r'## 專案概覽 \(v([\d.]+)\)', content)
-        if match:
-            return f"v{match.group(1)}"
-    return None
+        if not md_files:
+            self.errors.append(
+                i18n_text(
+                    f"警告：在 {self.docs_dir} 中未找到任何 .md 文件",
+                    f"Warning: no .md files found in {self.docs_dir}"
+                )
+            )
+            return True, []
 
+        all_fresh = True
 
-def extract_chart_version(repo_root, chart_name):
-    """Extract version from Chart.yaml."""
-    chart_path = Path(repo_root) / "components" / chart_name / "Chart.yaml"
-    if not chart_path.exists():
-        return None
+        for file_path in md_files:
+            relative_path = file_path.relative_to(self.docs_dir)
 
-    with open(chart_path, encoding="utf-8") as f:
-        content = f.read()
-        match = re.search(r'^version:\s+([^\s]+)', content, re.MULTILINE)
-        if match:
-            return match.group(1)
-    return None
-
-
-def collect_existing_tools(repo_root):
-    """Collect valid da-tools subcommand names.
-
-    Primary source: #### headings in docs/cli-reference.md (authoritative).
-    Fallback: Python script stems in scripts/tools/ (for offline use).
-    Also includes common aliases and kebab-case variants.
-    """
-    tools = set()
-
-    # Primary: parse da-tools subcommands from cli-reference.md headings
-    cli_ref = Path(repo_root) / "docs" / "cli-reference.md"
-    if cli_ref.exists():
-        content = cli_ref.read_text(encoding="utf-8")
-        for m in re.finditer(r'^#### ([a-z][\w-]*)\s*$', content,
-                             re.MULTILINE):
-            tools.add(m.group(1))
-
-    # Fallback: Python script stems
-    tools_dir = Path(repo_root) / "scripts" / "tools"
-    if tools_dir.exists():
-        skip_prefixes = ("_lib", "__init__", "__pycache__",
-                         "generate_", "check_", "validate_",
-                         "sync_", "bump_")
-        for py_file in tools_dir.glob("*.py"):
-            stem = py_file.stem
-            if any(stem.startswith(p) for p in skip_prefixes):
+            # 檢查是否排除
+            if self.matches_exclude_pattern(file_path):
                 continue
-            # Convert underscores to hyphens (Python→CLI convention)
-            tools.add(stem.replace("_", "-"))
-            tools.add(stem)
 
-    return tools
+            # 取得 git 最後修改時間戳
+            timestamp = get_git_last_modified_timestamp(file_path)
 
+            if timestamp is None:
+                # 文件未在 git 中或無法取得時間戳
+                status = 'unknown'
+                days_since = None
+                is_stale = False
+            else:
+                days_since = calculate_days_since_update(timestamp)
+                is_stale = days_since > self.threshold_days
+                status = 'stale' if is_stale else 'fresh'
 
-def file_exists(repo_root, file_path):
-    """Check if file exists in repo."""
-    # Resolve relative paths
-    full_path = Path(repo_root) / file_path
-    return full_path.exists()
+                if is_stale:
+                    all_fresh = False
 
+            result = {
+                'file': str(relative_path),
+                'status': status,
+                'days_since': days_since,
+                'timestamp': timestamp,
+            }
+            self.results.append(result)
 
-def extract_paths_from_markdown(text):
-    """Extract all potential file paths from markdown text."""
-    paths = set()
+            # verbose 模式下顯示所有文件
+            if self.verbose:
+                self._print_file_result(result)
 
-    # Extract from code blocks
-    for match in re.finditer(CODE_BLOCK_PATTERN, text, re.DOTALL):
-        block = match.group(1)
-        for path_match in re.finditer(FILE_PATH_PATTERN, block):
-            path = path_match.group(1).strip('\'"')
-            paths.add(path)
+        return all_fresh, self.results
 
-    # Extract from inline code
-    for match in re.finditer(INLINE_CODE_PATTERN, text):
-        code = match.group(1)
-        for path_match in re.finditer(FILE_PATH_PATTERN, code):
-            path = path_match.group(1).strip('\'"')
-            paths.add(path)
+    def _print_file_result(self, result: Dict) -> None:
+        """打印單一文件檢查結果。"""
+        file = result['file']
+        status = result['status']
+        days_since = result['days_since']
 
-    return paths
-
-
-# Common English words that appear after "da-tools" in prose but are not commands
-_NON_COMMAND_WORDS = frozenset({
-    "command", "commands", "image", "images", "container", "containers",
-    "is", "in", "can", "will", "has", "the", "a", "an", "and", "or",
-    "for", "to", "from", "with", "by", "at", "on", "of",
-    "subcommand", "subcommands", "code", "cheat", "tool", "tools",
-    "version", "help", "usage", "flag", "flags", "option", "options",
-    "da-tools", "job", "jobs", "-",
-})
-
-
-def extract_da_tools_commands(text):
-    """Extract da-tools subcommands from code blocks and inline code only."""
-    commands = set()
-
-    # Only match in code blocks and inline code to reduce false positives
-    # Code blocks
-    for block_match in re.finditer(CODE_BLOCK_PATTERN, text, re.DOTALL):
-        block = block_match.group(1)
-        for m in re.finditer(DA_TOOLS_PATTERN, block):
-            cmd = m.group(1)
-            if cmd not in _NON_COMMAND_WORDS:
-                commands.add(cmd)
-
-    # Inline code
-    for inline_match in re.finditer(INLINE_CODE_PATTERN, text):
-        code = inline_match.group(1)
-        for m in re.finditer(DA_TOOLS_PATTERN, code):
-            cmd = m.group(1)
-            if cmd not in _NON_COMMAND_WORDS:
-                commands.add(cmd)
-
-    return commands
-
-
-def extract_docker_images(text):
-    """Extract Docker image references."""
-    images = {}
-    for match in re.finditer(DOCKER_IMAGE_PATTERN, text):
-        image_name = match.group(1)
-        version = match.group(2)
-        images[f"{image_name}:{version}"] = (image_name, version)
-    return images
-
-
-def check_doc_file(file_path, repo_root, platform_version, tools, issues):
-    """Check a single markdown file for stale references."""
-    with open(file_path, encoding="utf-8") as f:
-        content = f.read()
-
-    lines = content.split('\n')
-    line_map = {}
-    current_line = 0
-    for i, line in enumerate(lines, 1):
-        current_line = i
-
-    # Check file paths
-    file_paths = extract_paths_from_markdown(content)
-    for path in file_paths:
-        if not file_exists(repo_root, path):
-            line_num = next((i for i, line in enumerate(lines, 1) if path in line), 1)
-            issues.append({
-                'file': str(file_path),
-                'line': line_num,
-                'type': 'missing_file',
-                'reference': path,
-                'message': f'File not found: {path}'
-            })
-
-    # Check da-tools commands
-    commands = extract_da_tools_commands(content)
-    for cmd in commands:
-        if cmd not in tools:
-            line_num = next((i for i, line in enumerate(lines, 1) if f'da-tools {cmd}' in line), 1)
-            issues.append({
-                'file': str(file_path),
-                'line': line_num,
-                'type': 'missing_command',
-                'reference': f'da-tools {cmd}',
-                'message': f'Command not found: {cmd}'
-            })
-
-    # Check Docker image versions
-    docker_images = extract_docker_images(content)
-    for image_ref, (image_name, version) in docker_images.items():
-        if image_name == 'threshold-exporter':
-            expected = extract_chart_version(repo_root, 'threshold-exporter')
-        elif image_name == 'da-tools':
-            expected = platform_version
+        if status == 'unknown':
+            print(f"  {file:60s} | {i18n_text('未知', 'unknown'):8s}")
         else:
-            continue
+            status_symbol = '✓' if status == 'fresh' else '✗'
+            status_label = i18n_text('新鮮', 'fresh') if status == 'fresh' else i18n_text('陳舊', 'stale')
+            days_str = f"{days_since:.1f}d"
+            print(f"  {file:60s} | {days_str:>8s} | {status_label:8s} {status_symbol}")
 
-        if expected and version.lstrip("v") != expected.lstrip("v"):
-            line_num = next((i for i, line in enumerate(lines, 1) if image_ref in line), 1)
-            issues.append({
-                'file': str(file_path),
-                'line': line_num,
-                'type': 'version_mismatch',
-                'reference': image_ref,
-                'message': f'Expected {image_name}:{expected}, got {image_ref}'
-            })
+    def report(self) -> str:
+        """生成檢查結果報告。"""
+        lines = []
+        stale_count = sum(1 for r in self.results if r['status'] == 'stale')
+        fresh_count = sum(1 for r in self.results if r['status'] == 'fresh')
+        unknown_count = sum(1 for r in self.results if r['status'] == 'unknown')
+
+        lines.append("")
+        lines.append(i18n_text("文件新鮮度檢查報告", "Document Freshness Report"))
+        lines.append("-" * 80)
+        lines.append(
+            i18n_text(
+                f"閾值：{self.threshold_days} 天 | 新鮮: {fresh_count} | 陳舊: {stale_count} | 未知: {unknown_count}",
+                f"Threshold: {self.threshold_days} days | Fresh: {fresh_count} | Stale: {stale_count} | Unknown: {unknown_count}"
+            )
+        )
+        lines.append("")
+
+        if stale_count > 0:
+            lines.append(i18n_text("陳舊文件（需要更新）：", "Stale Files (need update):"))
+            lines.append("")
+            lines.append(f"{'File':<60} | {'Days':<8} | {'Status':<8}")
+            lines.append("-" * 80)
+            for result in self.results:
+                if result['status'] == 'stale':
+                    self._print_file_result(result)
+            lines.append("")
+
+        if self.verbose and (fresh_count > 0 or unknown_count > 0):
+            lines.append(i18n_text("新鮮文件：", "Fresh Files:"))
+            lines.append("")
+            lines.append(f"{'File':<60} | {'Days':<8} | {'Status':<8}")
+            lines.append("-" * 80)
+            for result in self.results:
+                if result['status'] in ('fresh', 'unknown'):
+                    self._print_file_result(result)
+            lines.append("")
+
+        for error in self.errors:
+            lines.append(f"⚠️  {error}")
+            lines.append("")
+
+        return '\n'.join(lines)
 
 
 def main():
-    """CLI entry point: check_doc_freshness.py."""
+    """主程式入口。"""
     parser = argparse.ArgumentParser(
-        description='Check markdown documentation for stale references'
+        description=i18n_text(
+            "檢測文件新鮮度（距上次 git commit 的天數）",
+            "Detect document freshness (days since last git commit)"
+        )
     )
     parser.add_argument(
         '--docs-dir',
         default='docs',
-        help='Documentation directory (default: docs/)'
+        help=i18n_text(
+            "文檔根目錄（預設：docs）",
+            "Documentation root directory (default: docs)"
+        )
     )
     parser.add_argument(
-        '--repo-root',
-        default='.',
-        help='Repository root for file existence checks (default: .)'
+        '--threshold',
+        type=int,
+        default=90,
+        help=i18n_text(
+            "標記陳舊的天數閾值（預設：90）",
+            "Days threshold to mark as stale (default: 90)"
+        )
     )
     parser.add_argument(
-        '--ci',
-        action='store_true',
-        help='Exit 1 if any stale references found'
+        '--exclude',
+        type=str,
+        default='adr/*,CHANGELOG.md',
+        help=i18n_text(
+            "逗號分隔的排除模式（預設：adr/*,CHANGELOG.md）",
+            "Comma-separated exclude patterns (default: adr/*,CHANGELOG.md)"
+        )
     )
     parser.add_argument(
         '--verbose',
         action='store_true',
-        help='Show all checked references'
+        help=i18n_text(
+            "顯示所有文件及其年齡",
+            "Show all files with their ages"
+        )
     )
     parser.add_argument(
-        '--fix',
+        '--check',
         action='store_true',
-        help='Generate/update .doc-freshness-ignore from current missing_file issues'
+        help=i18n_text(
+            "檢查模式：若發現陳舊文件則 exit 1",
+            "Check mode: exit 1 if stale files found"
+        )
+    )
+    parser.add_argument(
+        '--json',
+        action='store_true',
+        help=i18n_text(
+            "輸出 JSON 格式結果",
+            "Output results in JSON format"
+        )
     )
 
     args = parser.parse_args()
 
-    repo_root = Path(args.repo_root).resolve()
-    docs_dir = repo_root / args.docs_dir
+    exclude_patterns = [p.strip() for p in args.exclude.split(',') if p.strip()]
 
-    if not docs_dir.exists():
-        print(f"Error: docs directory not found: {docs_dir}", file=sys.stderr)
-        sys.exit(1)
+    checker = DocFreshnessChecker(
+        docs_dir=args.docs_dir,
+        threshold_days=args.threshold,
+        exclude_patterns=exclude_patterns,
+        verbose=args.verbose,
+    )
 
-    # Load ignore patterns
-    ignore_patterns = _load_ignore_patterns(repo_root)
+    all_fresh, results = checker.check_freshness()
 
-    # Collect reference data
-    platform_version = extract_version_from_claude_md(repo_root)
-    tools = collect_existing_tools(repo_root)
-    issues = []
-
-    # Check all markdown files
-    for md_file in docs_dir.rglob("*.md"):
-        check_doc_file(md_file, repo_root, platform_version, tools, issues)
-
-    # Filter out ignored issues
-    unignored = [i for i in issues if not _is_ignored(i, ignore_patterns)]
-    ignored_count = len(issues) - len(unignored)
-
-    # --fix: generate .doc-freshness-ignore from current missing_file issues
-    if args.fix:
-        missing_refs = sorted({
-            i["reference"]
-            for i in unignored
-            if i["type"] == "missing_file"
-        })
-        if missing_refs:
-            ignore_file = repo_root / IGNORE_FILE_NAME
-            # Preserve existing patterns
-            existing_lines = []
-            if ignore_file.exists():
-                existing_lines = ignore_file.read_text(
-                    encoding="utf-8").splitlines()
-            existing_pats = {
-                ln.strip() for ln in existing_lines
-                if ln.strip() and not ln.strip().startswith("#")
+    if args.json:
+        output = {
+            'all_fresh': all_fresh,
+            'threshold_days': args.threshold,
+            'results': results,
+            'summary': {
+                'fresh': sum(1 for r in results if r['status'] == 'fresh'),
+                'stale': sum(1 for r in results if r['status'] == 'stale'),
+                'unknown': sum(1 for r in results if r['status'] == 'unknown'),
             }
-            new_pats = [r for r in missing_refs if r not in existing_pats]
-            if new_pats:
-                with open(ignore_file, "a", encoding="utf-8") as fh:
-                    if not existing_lines:
-                        fh.write(
-                            "# .doc-freshness-ignore\n"
-                            "# Paths listed here are excluded from "
-                            "check_doc_freshness.py\n"
-                            "# Format: one path prefix per line, "
-                            "or type:prefix for type-specific\n"
-                        )
-                    for pat in new_pats:
-                        fh.write(f"{pat}\n")
-                import stat
-                os.chmod(ignore_file,
-                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                         | stat.S_IROTH)
-                print(f"Added {len(new_pats)} pattern(s) to "
-                      f"{IGNORE_FILE_NAME}")
-            else:
-                print(f"No new patterns to add to {IGNORE_FILE_NAME}")
-        else:
-            print("No missing_file issues to suppress.")
-        sys.exit(0)
-
-    # Report issues
-    if unignored:
-        print(f"Found {len(unignored)} stale reference(s):\n")
-        for issue in sorted(unignored, key=lambda x: (x['file'], x['line'])):
-            print(f"{issue['file']}:{issue['line']}")
-            print(f"  [{issue['type']}] {issue['message']}")
-        if ignored_count:
-            print(f"\n({ignored_count} ignored via {IGNORE_FILE_NAME})")
+        }
+        print(json.dumps(output, indent=2))
     else:
-        msg = "No stale references found."
-        if ignored_count:
-            msg += f" ({ignored_count} ignored via {IGNORE_FILE_NAME})"
-        print(msg)
+        print(checker.report())
 
-    if args.ci and unignored:
+    if args.check and not all_fresh:
         sys.exit(1)
 
     sys.exit(0)

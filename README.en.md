@@ -2,85 +2,68 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Dynamic Alerting Integrations
 
 > **Language / 語言：** **English (Current)** | [中文](README.md)
 
-![Version](https://img.shields.io/badge/version-v2.3.0-brightgreen) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-54%20pairs-blue)
-
-Rule explosion and change bottlenecks are the core pain points of Prometheus alerting in multi-tenant environments. This platform solves them with a config-driven architecture: tenants write YAML, the platform manages rules — thresholds, routing, notifications, and maintenance windows are all config-driven, and rule count does not grow with tenants.
-
-**Designed for:** Platform teams managing 10+ tenants across multiple technology stacks (DB / Cache / MQ / JVM) who need tenant self-service, unified governance, and zero-PromQL alert management within the Prometheus ecosystem.
-
-> **Not sure where to start?** Try the [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) — answer a few questions and get a personalized reading path.
->
-> Or jump in by role: [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert / DBA](docs/getting-started/for-domain-experts.en.md) · [Tenant Team](docs/getting-started/for-tenants.en.md)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.5.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-15-orange) ![Alerts](https://img.shields.io/badge/alerts-99-red) ![Bilingual](https://img.shields.io/badge/bilingual-60%20pairs-blue)
 
 ---
 
-## Why This Platform
+## Before and After
 
-### Platform Teams: Rule Explosion and Maintenance Bottleneck
-
-In traditional multi-tenant monitoring, each tenant requires its own PromQL rules and routing config. 100 tenants × 50 rules = 5,000 independent expressions, each needing its own PR, review, and deployment. The platform team becomes the bottleneck for every tenant change, and config drift worsens over time.
-
-This platform uses `group_left` vector matching to reduce complexity from O(N×M) to O(M) — rule count depends only on metric types, not tenant count:
+### Without This Platform
 
 ```yaml
-# Traditional: one rule per tenant, N tenants = N rules
+# One rule per tenant — 100 tenants = 100 independent expressions
 - alert: MySQLHighConnections_db-a
   expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
+- alert: MySQLHighConnections_db-b
+  expr: mysql_global_status_threads_connected{namespace="db-b"} > 100
+- alert: MySQLHighConnections_db-c
+  expr: mysql_global_status_threads_connected{namespace="db-c"} > 100
+  # ... 97 more rules
+# Routing: hardcoded per-tenant receivers
+routes:
+  - match: {tenant: "db-a"}
+    receiver: db-a-slack
+  - match: {tenant: "db-b"}
+    receiver: db-b-slack
+  # ... manual per-tenant routing
+```
 
-# Dynamic: single rule covers all tenants
+### With This Platform
+```yaml
+# Single rule covers all tenants via group_left matching
 - alert: MariaDBHighConnections
   expr: |
     tenant:mysql_threads_connected:max
     > on(tenant) group_left
     tenant:alert_threshold:connections
-```
 
-Routing, notifications, and maintenance windows are equally config-driven. 15 Rule Packs are independently maintained via Projected Volume — zero PR conflicts between teams. SHA-256 hash hot-reload means changes take effect without restarting Prometheus.
-
-### Tenant Teams: PromQL Barrier and Change Delays
-
-Tenants know their business best — what connection count is normal, what latency is acceptable. But adjusting thresholds requires PromQL expertise, and every change goes through a ticket → platform team → PR → deploy cycle.
-
-This platform lets tenants write YAML only:
-
-```yaml
+# Tenants declare thresholds only (YAML, no PromQL):
 tenants:
   db-a:
     mysql_connections: "100"
-    _severity_dedup: true
     _routing:
       default_receiver: { type: webhook, url: "https://hooks.slack.com/..." }
+  db-b:
+    mysql_connections: "110"
+    _routing:
+      default_receiver: { type: webhook, url: "https://hooks.slack.com/..." }
+  # Routing auto-generated from config; rule count stays constant
 ```
 
-`da-tools scaffold` generates config interactively, `da-tools validate-config` validates locally, and changes take effect via hot-reload. Scheduled thresholds (auto-relax at night) and recurring maintenance windows (cron + duration auto-silence) let tenants manage their own operational rhythm.
+**Result:** Rule evaluation time 59.1ms → 60.6ms (2 to 102 tenants). Platform evaluates ~237 rules regardless of tenant count; tenant thresholds become self-service YAML.
 
-For teams that prefer not to touch YAML, the tenant-api provides a REST API management plane: browse configs, preview change diffs, and perform bulk operations through the Portal UI. Every write automatically generates a git commit attributed to the operator. If the API is unavailable, the Portal gracefully degrades to read-only mode without affecting existing YAML + GitOps workflows.
+---
 
-### Domain Experts: Alert Quality and Standardization
+## 30-Second Overview
 
-DBAs and SREs need to ensure alert quality and consistency across the organization. In practice, rules are scattered across tenant configs, severity definitions vary, Warning and Critical fire simultaneously causing notification fatigue, and there's no systematic way to analyze coverage.
-
-The platform provides: 15 pre-loaded Rule Packs encoding domain best practices (MariaDB, PostgreSQL, Kafka, and 10 more technology stacks); Severity Dedup at the Alertmanager inhibit layer automatically suppresses duplicate notifications (TSDB retains full records); Alert Quality Scoring quantifies noise and staleness metrics; Policy-as-Code enforces organization-level governance rules in CI.
-
-### Enterprise Benefits
-
-| Aspect | Traditional (100 tenants) | Dynamic Platform (100 tenants) |
-|--------|--------------------------|-------------------------------|
-| Rule evaluations | 9,600 (N×M) | 237 (fixed) |
-| Prometheus memory | ~600MB+ | ~154MB |
-| New tenant onboarding | Days to weeks | Minutes (scaffold → validate) |
-| Threshold change flow | Ticket → PR → Deploy | Tenant self-service YAML + Hot-Reload |
-| Governance | Ad-hoc review | Schema Validation + Policy-as-Code + CI |
-| Change audit | Manual git blame | API auto-commit (operator attribution) + full audit trail |
-
-Measured: scaling from 2 to 102 tenants, rule evaluation time stayed at 59.1ms → 60.6ms ([Benchmark §1](docs/benchmarks.md#1-向量匹配複雜度分析)).
+Multi-tenant Prometheus alerting where rule count is O(M) not O(N×M) — single rule covers all tenants via `group_left` matching. Tenants declare thresholds in YAML, not PromQL. Routing, notifications, and maintenance windows are config-driven. Hot-reload via SHA-256 detects config changes without restarting Prometheus. Choose your deployment tier: **Tier 1 (pure GitOps + CLI)** for teams happy with YAML and command-line tools, or **Tier 2 (Portal + API)** for teams wanting a UI dashboard and programmatic tenant management.
 
 ---
 
@@ -137,7 +120,7 @@ make port-forward
 
 ## Rule Packs
 
-15 Rule Packs pre-loaded via Projected Volume, each with an independent ConfigMap (`optional: true`). Unused packs cost near-zero evaluation ([Benchmark §3](docs/benchmarks.md#3-空向量零成本-empty-vector-zero-cost)).
+15 Rule Packs pre-loaded via Projected Volume, each with an independent ConfigMap (`optional: true`). Unused packs cost near-zero evaluation.
 
 | Rule Pack | Exporter | Recording | Alert |
 |-----------|----------|-----------|-------|
@@ -162,21 +145,120 @@ See [Rule Packs Directory](rule-packs/README.md) · [Alert Reference](rule-packs
 
 ---
 
-## Tools
+## Deployment Tiers
 
-All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`) — no cloning or dependency installation required. The Interactive Tools Portal is available as a separate image (`docker run -p 8080:80 ghcr.io/vencil/da-portal`) for enterprise intranet / air-gapped deployment.
+Choose the tier that matches your team's workflow and maturity level.
 
-**Tenant Lifecycle:** `scaffold_tenant` config generation → `onboard_platform` existing environment analysis → `migrate_rule` AST migration engine → `validate_migration` Shadow dual-track verification → `cutover_tenant` one-click cutover → `offboard_tenant` safe removal
+### Tier 1: Git-Native (Pure GitOps + CLI)
 
-**Day-to-Day Operations:** `diagnose` / `batch_diagnose` health checks · `patch_config` safe updates (with `--diff`) · `check_alert` alert status · `maintenance_scheduler` scheduled silence · `generate_alertmanager_routes` routing generation · `explain_route` routing debugger (ADR-007)
+For teams that prefer declarative, version-controlled configuration with no external management service.
 
-**Adoption Pipeline (v2.2.0):** `init` project scaffold generation (CI/CD + conf.d + Kustomize) · `config_history` config snapshot & history tracking · `gitops-check` GitOps Native Mode validation · `demo-showcase` 5-tenant demo script · [Hands-on Lab](docs/scenarios/hands-on-lab.en.md) hands-on tutorial · [Incremental Migration Playbook](docs/scenarios/incremental-migration-playbook.en.md) zero-downtime 4-phase migration
+**Components:**
+- threshold-exporter (config scanner + YAML-to-metrics)
+- Prometheus + Rule Packs
+- Alertmanager (static or dynamic config via ConfigMap)
 
-**Routing Profiles & Domain Policies (v2.1.0 ADR-007):** `_routing_profiles.yaml` defines cross-tenant shared routing configs, `_domain_policy.yaml` defines business-domain compliance constraints. Four-layer merge: `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`. Tools: `check_routing_profiles` (lint hook) · `explain_route` (debugger) · JSON Schema validation
+**Tenant self-service workflow:**
+1. Tenant writes YAML config → git push
+2. CI validates schema, runs tests
+3. GitOps controller (ArgoCD / Flux) auto-deploys
+4. threshold-exporter detects change via SHA-256 → hot-reload
+5. Routing + notifications take effect immediately
+
+**Tools:** `da-tools scaffold` (config generation) · `da-tools validate-config` (local lint) · `da-tools patch-config` (safe updates) · `da-tools explain-route` (routing debugger)
+
+**When to use Tier 1:**
+- Teams are GitOps-native (ArgoCD/Flux)
+- Configuration churn is low-to-moderate
+- Tenants are comfortable with YAML
+- No need for a shared management dashboard
+
+---
+
+### Tier 2: Portal + API (UI Management)
+
+For teams that want a self-service dashboard, programmatic management API, and centralized configuration browser.
+
+**Tier 1 components, plus:**
+- tenant-api (REST API for RBAC-controlled config read/write)
+- da-portal (web dashboard: config browser, change previewer, bulk operations)
+- oauth2-proxy (authentication layer)
+
+**Tenant self-service workflow (enhanced):**
+1. Tenant logs into Portal UI (OAuth2)
+2. Browse current config → click "Edit" → change threshold
+3. Preview diff → submit
+4. API auto-generates git commit (with operator attribution)
+5. CI validates → deployed as Tier 1
+6. Portal gracefully degrades to read-only if API is unavailable (GitOps remains unaffected)
+
+**API capabilities:**
+- Full CRUD on tenant configs
+- Structured schema validation
+- Atomic multi-tenant operations (bulk change)
+- Audit trail (every API write records operator, timestamp, change delta)
+- Version history browsing
+
+**When to use Tier 2:**
+- Large tenant population (20+) with varying technical expertise
+- High frequency of threshold adjustments
+- Regulatory / compliance requirement for audit trails
+- Team wants a unified operational dashboard
+- Prefer REST API for automation / tooling
+
+---
+
+## Workflow Comparison
+
+| Process | Tier 1 (Git-Native) | Tier 2 (Portal + API) |
+|---------|--------------------|-----------------------|
+| **New tenant onboarding** | `scaffold` → git commit → ArgoCD deploy (minutes) | UI click → API → git commit → ArgoCD deploy (minutes) |
+| **Threshold adjustment** | Edit YAML → commit → hot-reload (seconds) | UI edit → Save → hot-reload (seconds) |
+| **Bulk changes** | Script YAML editing / patch_config | Portal multi-select → bulk edit → one-click submit |
+| **Change audit** | git blame + log | git log + API audit trail |
+| **Offline work** | Supported (local commits, push later) | Requires network (API dependent) |
+| **RBAC** | Git layer (branch protection + code review) | API layer (OIDC + fine-grained permissions) |
+| **Degradation** | N/A | Portal read-only if API fails (YAML workflow unaffected) |
+
+---
+
+## Tool Ecosystem
+
+All tools are packaged in the `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`) — no cloning or dependency installation required. The Portal is available as a separate image (`docker run -p 8080:80 ghcr.io/vencil/da-portal`) for enterprise intranet / air-gapped deployment.
+
+**Tenant Lifecycle:** `scaffold_tenant` config generation → `onboard_platform` existing environment analysis → `migrate_rule` AST migration engine → `validate_migration` shadow dual-track verification → `cutover_tenant` one-click cutover → `offboard_tenant` safe removal
+
+**Day-to-Day Operations:** `diagnose` / `batch_diagnose` health checks · `patch_config` safe updates (with `--diff`) · `check_alert` alert status · `maintenance_scheduler` scheduled silence · `generate_alertmanager_routes` routing generation · `explain_route` routing debugger
+
+**Adoption Pipeline:** `init` project scaffold generation · `config_history` config snapshot & history tracking · `gitops-check` GitOps validation · `demo-showcase` 5-tenant demo script
+
+**Routing Profiles & Domain Policies:** `_routing_profiles.yaml` defines cross-tenant shared routing configs, `_domain_policy.yaml` defines business-domain compliance constraints. Four-layer merge: `_routing_defaults` → profile → tenant `_routing` → `_routing_enforced`.
 
 **Quality & Governance:** `validate_config` all-in-one validation · `alert_quality` alert quality scoring · Policy-as-Code engine · `cardinality_forecast` trend prediction · `backtest_threshold` historical replay · `baseline_discovery` threshold recommendations · `config_diff` diff report
 
 Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md)
+
+---
+
+## Why This Platform
+
+### Platform Teams: Rule Explosion and Maintenance Bottlenecks
+
+In traditional multi-tenant monitoring, each tenant needs independent PromQL rules and routing configs. 100 tenants × 50 rules = 5,000 independent expressions, each requiring PR, review, and deployment. Platform teams become the change bottleneck for all tenants; config drift worsens over time.
+
+This platform uses `group_left` vector matching to reduce complexity from O(N×M) to O(M) — rule count depends only on metric types, not tenant count. Routing, notifications, and maintenance windows are likewise config-driven. 15 Rule Packs are maintained independently via Projected Volume with zero PR conflicts. SHA-256 hash hot-reload means changes require no Prometheus restart.
+
+### Tenant Teams: PromQL Barrier and Change Latency
+
+Tenants know their own business best — what connection counts are normal, what latencies are acceptable. But threshold adjustments require PromQL knowledge; every change is a ticket → platform team → PR → deploy cycle.
+
+This platform lets tenants write only YAML (no PromQL): `da-tools scaffold` generates config interactively, `da-tools validate-config` validates locally, changes take effect via hot-reload. Supports scheduled thresholds (auto-relaxed at night) and scheduled maintenance windows (cron + duration auto-silence).
+
+For teams unwilling to touch YAML, Tier 2 (Portal + API) provides UI management. If API is unavailable, Portal auto-degrades to read-only mode without affecting existing YAML + GitOps workflows.
+
+### Domain Experts: Alert Quality and Standardization
+
+DBAs and SREs must ensure organization-wide alert quality and consistency. The platform provides: 15 pre-loaded Rule Packs encapsulating domain best practices; Severity Dedup auto-suppresses duplicate notifications at the Alertmanager inhibit layer; Alert Quality Scoring quantifies noise; Policy-as-Code enforces governance rules at CI time.
 
 ---
 
@@ -211,4 +293,28 @@ Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](do
 | [Scenarios](docs/scenarios/) | Alert Routing · Shadow Cutover · Federation · Tenant Lifecycle · GitOps CI/CD · Hands-on Lab |
 | Day-2 Operations | `diagnose` → `alert-quality` → `patch-config` → `maintenance-scheduler` ([CLI Reference](docs/cli-reference.en.md)) |
 
-Full doc map: [doc-map.md](docs/intern
+Full doc map: [doc-map.md](docs/internal/doc-map.md) · Tool map: [tool-map.md](docs/internal/tool-map.md)
+
+---
+
+## Enterprise-Wide Benefits
+
+| Aspect | Traditional (100 tenants) | Dynamic Platform (100 tenants) |
+|--------|--------------------------|-------------------------------|
+| Rule evaluations | 9,600 (N×M) | 237 (fixed) |
+| Prometheus memory | ~600MB+ | ~154MB |
+| New tenant onboarding | Days to weeks | Minutes (scaffold → validate) |
+| Threshold change flow | Ticket → PR → Deploy | Tenant self-service YAML + Hot-Reload (or API in Tier 2) |
+| Governance | Ad-hoc review | Schema Validation + Policy-as-Code + CI |
+| Change audit | Manual git blame | API auto-commit (operator attribution) + full audit trail (Tier 2) |
+
+Measured: scaling from 2 to 102 tenants, rule evaluation time stayed at 59.1ms → 60.6ms.
+
+---
+
+## Next Steps
+
+- **New to the platform?** Start with [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) or your role guide ([Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert](docs/getting-started/for-domain-experts.en.md) · [Tenant](docs/getting-started/for-tenants.en.md))
+- **Ready to deploy?** See [Helm install](components/threshold-exporter/README.md#部署-helm) or [GitOps guide](docs/gitops-deployment.en.md)
+- **Migrating from existing setup?** [Migration guide](docs/migration-guide.en.md)
+- **Building custom rules?** [Custom rule governance](docs/custom-rule-governance.en.md)

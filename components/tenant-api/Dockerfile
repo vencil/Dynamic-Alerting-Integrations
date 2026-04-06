@@ -58,4 +58,4 @@ EXPOSE 8080
 LABEL org.opencontainers.image.title="tenant-api" \
       org.opencontainers.image.description="Tenant Management API — Dynamic Alerting Platform" \
       org.opencontainers.image.source="https://github.com/vencil/vibe-k8s-lab" \
-      org.opencontainers.image.version="2.4.0"
+      org.opencontainers.image.version="2.5.0"

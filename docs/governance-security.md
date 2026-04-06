@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # 治理、稽核與安全合規
@@ -56,6 +56,51 @@ rule-packs/rule-pack-mariadb.yaml    @dba-team
 ```
 
 詳見 [GitOps 部署指南](gitops-deployment.md) 的 tenant 自助設定範圍。
+
+### API RBAC (v2.5.0+)
+
+tenant-api 透過 `conf.d/_rbac.yaml` 控制 API 層級的讀寫權限。RBAC Manager 使用 `atomic.Value` 熱更新，檔案變更後無需重啟。
+
+安全預設行為：若 `_rbac.yaml` 不存在或為空，系統進入 **open-read mode**（所有已認證使用者可讀，無人可寫）。
+
+### RBAC 救援 SOP（Break-Glass Procedure）
+
+當管理員不慎修改 `_rbac.yaml` 導致所有人（包括自己）喪失 API 寫入權限時，依照以下步驟恢復：
+
+**情境 A：有 Git 寫入權限（推薦）**
+
+```bash
+# 1. 直接在 Git repo 中編輯 _rbac.yaml，恢復 admin 群組
+git clone <repo-url> && cd <repo>
+vi conf.d/_rbac.yaml   # 加回 admin 群組的 write/admin 權限
+
+# 2. 提交並推送
+git add conf.d/_rbac.yaml
+git commit -m "fix: restore admin RBAC permissions (break-glass)"
+git push
+
+# 3. tenant-api 會透過 SHA-256 hot-reload 自動載入新配置（無需重啟）
+```
+
+**情境 B：無 Git 權限但有 K8s 存取**
+
+```bash
+# 直接編輯 ConfigMap（僅限緊急情況，事後須回寫 Git）
+kubectl edit configmap tenant-config -n <namespace>
+# 在 _rbac.yaml 段落中恢復 admin 群組
+# 儲存後 tenant-api sidecar 自動 reload
+```
+
+**情境 C：完全刪除 `_rbac.yaml`**
+
+```bash
+# 刪除 _rbac.yaml 讓系統回到 open-read mode
+# 所有已認證使用者可讀取，但無人可寫入
+# 這是安全的「停損」操作——先恢復可見性，再重建權限
+git rm conf.d/_rbac.yaml && git commit -m "emergency: remove RBAC to restore read access" && git push
+```
+
+**預防措施**：建議在 CI 中加入 `_rbac.yaml` 的 pre-merge 檢查——確認至少一個群組擁有 admin 權限，防止意外提交空權限配置。
 
 ### 配置驗證與合規
 
@@ -133,7 +178,7 @@ da-tools validate-config --config-dir conf.d/ --json
 
 所有 Pod 設定 `seccompProfile: RuntimeDefault`。Docker image 全部 pin 到具體 patch 版本。
 
-### Container Image Security（v2.2.0 updated）
+### Container Image Security (v2.2.0 updated)
 
 **三層防護策略：**
 

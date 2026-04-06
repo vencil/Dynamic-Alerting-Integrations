@@ -2,7 +2,7 @@
 title: "Prometheus Operator Integration Guide"
 tags: [operator, integration, kube-prometheus-stack]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Prometheus Operator Integration Guide
@@ -10,7 +10,7 @@ lang: en
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.3.0
 > **Prerequisites**: [BYO Prometheus Integration Guide](byo-prometheus-integration.en.md), [Architecture & Design](architecture-and-design.en.md)
-> **Related ADR**: [ADR-008 — Operator CRD Path](adr/008-operator-crd-path.en.md)
+> **Related ADR**: [ADR-008 — Operator CRD Path](adr/008-operator-native-integration-path.en.md)
 
 ---
 
@@ -704,7 +704,7 @@ kubectl create clusterrolebinding prometheus-discovery --clusterrole=prometheus-
 ## FAQ
 
 **Q: I already have native Prometheus config; can I mix with Operator?**
-A: Not recommended. If necessary, use `additionalPrometheusRules` Helm value to inject extra rule files, avoid duplicate ServiceMonitor/PrometheusRule. See [ADR-008](adr/008-operator-crd-path.en.md).
+A: Not recommended. If necessary, use `additionalPrometheusRules` Helm value to inject extra rule files, avoid duplicate ServiceMonitor/PrometheusRule. See [ADR-008](adr/008-operator-native-integration-path.en.md).
 
 **Q: How does Operator handle rule version upgrades?**
 A: On each Dynamic Alerting upgrade, re-run `da-tools operator-generate`, commit new PrometheusRule to Git repo, GitOps tool auto-syncs. Zero-downtime upgrade.
@@ -726,7 +726,7 @@ A: Keep old AlertmanagerConfig alongside the new one, modify receiver to point t
 |----------|-----------|
 | [BYO Prometheus Integration Guide](byo-prometheus-integration.en.md) | ⭐⭐⭐ |
 | [BYO Alertmanager Integration Guide](byo-alertmanager-integration.en.md) | ⭐⭐⭐ |
-| [ADR-008 — Operator CRD Path](adr/008-operator-crd-path.en.md) | ⭐⭐⭐ |
+| [ADR-008 — Operator CRD Path](adr/008-operator-native-integration-path.en.md) | ⭐⭐⭐ |
 | [da-tools CLI Reference — operator-generate](cli-reference.en.md#operator-generate) | ⭐⭐ |
 | [Architecture & Design](architecture-and-design.en.md) | ⭐⭐ |
 | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) | ⭐⭐ |

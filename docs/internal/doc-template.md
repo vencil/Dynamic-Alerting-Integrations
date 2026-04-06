@@ -2,7 +2,7 @@
 title: "文件模板規範"
 tags: [internal, dx]
 audience: [all]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -10,7 +10,7 @@ lang: zh
 
 > **受眾**：所有貢獻者 (All Contributors)
 > **版本**：v2.3.0
-> **相關文件**：[文件導航地圖](doc-map.md) · [開發規範](../CLAUDE.md)
+> **相關文件**：[文件導航地圖](doc-map.md) · [開發規範](../../CLAUDE.md)
 
 本文件定義 Dynamic Alerting 平台所有 Markdown 文檔的標準結構與撰寫規範。遵循本模板能確保文件風格一致、可維護性高、易於自動化檢查。
 
@@ -35,7 +35,7 @@ lang: zh
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 ```
@@ -91,7 +91,7 @@ lang: zh
 或以表格形式（較為簡潔）：
 
 ```markdown
-> **v2.4.0** | 適用對象：Platform Engineer、SRE
+> **v2.5.0** | 適用對象：Platform Engineer、SRE
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md)
 ```
@@ -176,7 +176,7 @@ A：...
 
 | 欄位 | 說明 |
 |------|------|
-| 資源 (Resource) | 超連結 + 簡短標題（例 `[Troubleshooting](./troubleshooting.md)`） |
+| 資源 (Resource) | 超連結 + 簡短標題（例 `[Playbook](./testing-playbook.md)`） |
 | 說明 (Description) | 該資源與本文件的關係（一句話）或相關程度（星號 ⭐⭐⭐） |
 
 ---
@@ -324,7 +324,7 @@ python3 scripts/tools/lint/check_doc_template.py --version v2.3.0 --check-versio
 title: "Your Document Title Here"
 tags: [tag1, tag2]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -370,7 +370,7 @@ lang: zh
 | 資源 | 說明 |
 |------|------|
 | [文件導航地圖](./doc-map.md) | 所有 83 個文檔的完整列表與分類 |
-| [開發規範](../CLAUDE.md) | 平台整體開發指引與架構速查 |
-| [文件維護 Playbook](./internal/testing-playbook.md#文件) | 文件更新與版本管理的實務指南 |
-| [Lint 工具使用](check_doc_template.py) | `check_doc_template.py` 詳細用法 |
+| [開發規範](../../CLAUDE.md) | 平台整體開發指引與架構速查 |
+| [文件維護 Playbook](./testing-playbook.md#文件敘述風格) | 文件更新與版本管理的實務指南 |
+| [Lint 工具使用](../cli-reference.md) | 文件 Lint 工具詳細用法 |
 | [GitHub Release Playbook](./github-release-playbook.md) | 文件版本更新與 Release 流程 |

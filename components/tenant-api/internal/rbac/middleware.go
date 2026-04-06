@@ -42,8 +42,7 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 			}
 
 			if !m.HasPermission(groups, tenantID, want) {
-				writeError(w, http.StatusForbidden,
-					"insufficient permissions for tenant "+tenantID)
+				writeForbidden(w, tenantID, want)
 				return
 			}
 
@@ -59,4 +58,17 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// writeForbidden writes a 403 response with a help link and suggested action.
+// v2.5.0: Enhanced error message with guidance for RBAC troubleshooting.
+func writeForbidden(w http.ResponseWriter, tenantID string, want Permission) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	resp := map[string]string{
+		"error":  "insufficient permissions for tenant " + tenantID,
+		"help":   "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
+		"action": "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) + "' permission for tenant '" + tenantID + "', and that environments[]/domains[] constraints match the tenant metadata.",
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }

@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 
@@ -122,4 +122,4 @@ exporter (tenant_silent_mode)
 | [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |
 | ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role-tool-quick-reference) | ⭐⭐ |

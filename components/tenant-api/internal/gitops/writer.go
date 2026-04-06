@@ -143,6 +143,58 @@ func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
 	return string(out), nil
 }
 
+// WriteGroupsFile validates, persists, and commits the _groups.yaml file.
+// Reuses the same sync.Mutex and HEAD conflict detection as tenant writes.
+func (w *Writer) WriteGroupsFile(authorEmail, yamlContent string) error {
+	return w.writeSpecialFile("_groups.yaml", "groups", authorEmail, yamlContent)
+}
+
+// WriteViewsFile validates, persists, and commits the _views.yaml file.
+// v2.5.0 Phase C: Saved Views support.
+func (w *Writer) WriteViewsFile(authorEmail, yamlContent string) error {
+	return w.writeSpecialFile("_views.yaml", "views", authorEmail, yamlContent)
+}
+
+// writeSpecialFile is a shared implementation for writing _groups.yaml, _views.yaml, etc.
+// These files use the same mutex and conflict detection as tenant writes.
+func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent string) error {
+	// Basic YAML validity check
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	headBefore, err := w.currentHEAD()
+	if err != nil {
+		log.Printf("WARN: gitops: could not read HEAD before %s write: %v", entityType, err)
+	}
+
+	filePath := filepath.Join(w.configDir, filename)
+	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	if err := w.gitCommit(filePath, entityType, authorEmail); err != nil {
+		log.Printf("WARN: gitops: commit failed for %s: %v", entityType, err)
+		return fmt.Errorf("git commit: %w", err)
+	}
+
+	if headBefore != "" {
+		parent, err := w.commitParent()
+		if err == nil && parent != headBefore {
+			log.Printf("WARN: gitops: external commit detected for %s (expected parent=%s, got=%s)",
+				entityType, headBefore[:8], parent[:8])
+			return ErrConflict
+		}
+	}
+
+	log.Printf("gitops: %s committed by %s", entityType, authorEmail)
+	return nil
+}
+
 // currentHEAD returns the current HEAD commit hash of the git repository.
 func (w *Writer) currentHEAD() (string, error) {
 	cmd := exec.Command("git", "-C", w.gitDir, "rev-parse", "HEAD")

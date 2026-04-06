@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -94,7 +94,7 @@ groups:
 - **重啟成本**：映射變更需重啟 exporter，影響所有租戶的指標採集
 - **多 exporter 同步**：HA 部署下兩個 exporter 需一致映射，增加分佈式一致性問題
 
-### 為何拒絕在 Alertmanager 中解決
+### Why Reject Solving in Alertmanager
 
 - **太晚**：Alertmanager 只處理已觸發的告警，無法在指標層級進行拆分
 - **Dashboard 盲區**：Grafana 等工具直接查詢 Prometheus，繞過 Alertmanager
@@ -128,7 +128,7 @@ groups:
 - 優點：單一元件處理
 - 缺點：職責越界、重啟影響大、HA 一致性問題
 
-### 方案 B：Alertmanager 層級映射 (已拒絕)
+### Approach B: Alertmanager-Level Mapping (Rejected)
 - 優點：僅影響通知路徑
 - 缺點：指標層級無法拆分、Dashboard 盲區
 
@@ -136,7 +136,7 @@ groups:
 - 優點：完全解耦
 - 缺點：引入新元件、延遲增加、運維複雜度高
 
-## v2.1.0 實作摘要
+## v2.1.0 Implementation Summary
 
 - `generate_tenant_mapping_rules.py` — 從 `_instance_mapping.yaml` 自動產生 Recording Rules，支援 Oracle/DB2/通用 filter 語法（36 tests）
 - `discover_instance_mappings.py` — 自動偵測 Prometheus 中的實例拓撲（1:1/N:1/1:N），輸出建議映射配置

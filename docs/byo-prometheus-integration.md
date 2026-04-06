@@ -2,14 +2,14 @@
 title: "Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v2.4.0
+> **版本**：v2.5.0
 
 ---
 
@@ -141,7 +141,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{tenant!=""}' \
 
 - **1:N（一個 Namespace → 多個 Tenant）**：共享 namespace 場景，使用方案 B 的 Service label/annotation 區分 tenant。
 
-**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[架構文件 §2.3](architecture-and-design.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)。
+**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[設計文件 §2.3](design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)。
 
 ---
 
@@ -225,7 +225,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{metric=
 
 > **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。未使用的規則包即使掛載，因無對應 metric，evaluation 成本近乎零——但選擇性掛載可保持配置清晰。
 
-### 設定：直接掛載 ConfigMap
+### Configuration: Direct ConfigMap Mounting
 
 將規則包 ConfigMap 掛載到 Prometheus Pod，並在設定中宣告讀取路徑。
 
@@ -323,7 +323,7 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 
 ---
 
-## 使用 da-tools CLI 快速驗證
+## Quick Verification with da-tools CLI
 
 除了上述 `byo-check` 自動化驗證外，`da-tools` 提供更多診斷工具：
 
@@ -357,7 +357,7 @@ da-tools validate-config --config-dir /data/conf.d
 
 ---
 
-## Prometheus Operator 整合
+## Prometheus Operator Integration
 
 > 使用 Prometheus Operator (kube-prometheus-stack)？請參閱 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)，包含完整的 CRD 產出工具、驗證流程與 GitOps 整合指引。
 

@@ -3,8 +3,8 @@
 # Zero build step: all JSX files are transpiled in the browser via Babel standalone.
 # Vendor JS files are bundled for air-gapped / offline deployment.
 #
-# Build:  docker build -t da-portal:v2.3.0 -f components/da-portal/Dockerfile .
-# Run:    docker run -p 8080:80 da-portal:v2.3.0
+# Build:  docker build -t da-portal:v2.5.0 -f components/da-portal/Dockerfile .
+# Run:    docker run -p 8080:80 da-portal:v2.5.0
 #
 # Customisation via volume mounts:
 #   -v ./my-platform-data.json:/usr/share/nginx/html/assets/platform-data.json
@@ -45,7 +45,7 @@ RUN rm -rf /usr/share/nginx/html/*
 # ── Nginx config ──────────────────────────────────────────────
 COPY --chown=nginx:nginx components/da-portal/nginx.conf /etc/nginx/conf.d/default.conf
 
-# ── Interactive Tools Hub + 29 JSX tools ──────────────────────
+# ── Interactive Tools Hub + 38 JSX tools ──────────────────────
 COPY --chown=nginx:nginx docs/interactive/ /usr/share/nginx/html/interactive/
 
 # ── Getting Started Wizard ────────────────────────────────────

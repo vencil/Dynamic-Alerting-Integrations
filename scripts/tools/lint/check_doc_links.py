@@ -29,6 +29,17 @@ class DocLinkChecker:
         self.scan_dirs = ["docs", "rule-packs"]
         self.root_md_files = ["README.md", "README.en.md", "CHANGELOG.md", "CLAUDE.md"]
 
+        # Bilingual exemption list
+        # Internal docs (docs/internal/) are exempt from bilingual requirements per project policy.
+        # Only externally-facing docs need EN counterparts. Utility files also exempt.
+        self.bilingual_exempt_paths = {
+            "docs/internal/",
+            "docs/CHANGELOG.md",
+            "docs/includes/",
+            "docs/tags.md",
+            "docs/getting-started/README.md",
+        }
+
         # Load ignore patterns from .doclinkignore
         self._ignore_patterns: Set[str] = self._load_ignore_file()
         
@@ -403,12 +414,27 @@ class DocLinkChecker:
                         "source_line": line.strip()
                     })
 
+    def _is_bilingual_exempt(self, doc_path: str) -> bool:
+        """Check if a file is exempt from bilingual requirements.
+
+        Internal docs (docs/internal/) are exempt per project policy.
+        Utility/infrastructure files (CHANGELOG, includes, tags, etc.) are also exempt.
+        Only externally-facing docs need EN counterparts.
+        """
+        for exempt_prefix in self.bilingual_exempt_paths:
+            if doc_path.startswith(exempt_prefix):
+                return True
+        return False
+
     def check_cross_language_counterparts(self):
         """Check that zh docs have en counterparts and vice versa.
 
         For each .en.md file, verify the zh counterpart exists (without .en).
         For each zh .md file (not .en.md), check if an .en.md counterpart exists.
         Only checks docs/ directory (not root files like CHANGELOG.md).
+
+        Files under docs/internal/ and utility files are exempt from bilingual
+        requirements per project policy.
         """
         docs_path = self.repo_root / "docs"
         if not docs_path.is_dir():
@@ -428,6 +454,9 @@ class DocLinkChecker:
         for en_rel in sorted(en_files):
             zh_rel = en_rel.replace(".en.md", ".md")
             if zh_rel not in zh_files:
+                # Skip if exempt
+                if self._is_bilingual_exempt(f"docs/{zh_rel}"):
+                    continue
                 self.missing_counterparts.append({
                     "file": f"docs/{en_rel}",
                     "missing": f"docs/{zh_rel}",
@@ -438,6 +467,9 @@ class DocLinkChecker:
         # where at least one .en.md exists in the same directory)
         en_dirs = {str(Path(e).parent) for e in en_files}
         for zh_rel in sorted(zh_files):
+            # Skip if exempt
+            if self._is_bilingual_exempt(f"docs/{zh_rel}"):
+                continue
             zh_dir = str(Path(zh_rel).parent)
             if zh_dir not in en_dirs:
                 continue  # Skip dirs without any .en.md files

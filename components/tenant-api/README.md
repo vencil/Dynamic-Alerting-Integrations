@@ -76,13 +76,13 @@ groups:
 ```bash
 # 安裝
 helm install tenant-api \
-  oci://ghcr.io/vencil/charts/tenant-api --version 2.4.0 \
+  oci://ghcr.io/vencil/charts/tenant-api --version 2.5.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 
 # 升級
 helm upgrade tenant-api \
-  oci://ghcr.io/vencil/charts/tenant-api --version 2.4.0 \
+  oci://ghcr.io/vencil/charts/tenant-api --version 2.5.0 \
   -n monitoring -f values-override.yaml
 ```
 

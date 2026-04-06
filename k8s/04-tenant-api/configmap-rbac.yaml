@@ -10,18 +10,27 @@ data:
   # _rbac.yaml — Group → Tenant permission mapping.
   # Loaded atomically by tenant-api on startup and hot-reloaded every 30s.
   #
-  # group.name   : IdP group name injected by oauth2-proxy via X-Forwarded-Groups header.
-  # tenants      : list of tenant IDs or patterns ("*" = all, "db-a-*" = prefix wildcard).
-  # permissions  : read | write | admin (admin ⊇ write ⊇ read).
+  # group.name    : IdP group name injected by oauth2-proxy via X-Forwarded-Groups header.
+  # tenants       : list of tenant IDs or patterns ("*" = all, "db-a-*" = prefix wildcard).
+  # permissions   : read | write | admin (admin ⊇ write ⊇ read).
+  # environments  : (v2.5.0) optional filter by tenant _metadata.environment. Empty = all.
+  # domains       : (v2.5.0) optional filter by tenant _metadata.domain. Empty = all.
   _rbac.yaml: |
     groups:
       - name: platform-admins
         tenants: ["*"]
         permissions: [read, write, admin]
+        # No environments/domains restriction — full access
 
       - name: db-operators
         tenants: ["db-a-*", "db-b-*"]
         permissions: [read, write]
+        environments: [production, staging]
+
+      - name: finance-viewers
+        tenants: ["*"]
+        permissions: [read]
+        domains: [finance]
 
       - name: viewers
         tenants: ["*"]

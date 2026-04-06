@@ -2,13 +2,13 @@
 title: "Grafana Dashboard 導覽"
 tags: [monitoring, grafana, dashboard, operations]
 audience: [platform-engineer, sre, devops]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
 # Grafana Dashboard 導覽
 
-> **v2.4.0** | 適用對象：Platform Engineer、SRE、DevOps
+> **v2.5.0** | 適用對象：Platform Engineer、SRE、DevOps
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md) · [Shadow Monitoring SOP](./shadow-monitoring-sop.md)
 
@@ -35,7 +35,7 @@ Dynamic Alerting 提供兩份運維導向的 Dashboard：
 2. 上傳 JSON 檔：`k8s/03-monitoring/dynamic-alerting-overview.json`
 3. 選擇 Prometheus datasource，點擊 **Import**
 
-#### 方法 B：ConfigMap Sidecar 自動部署
+#### Method B: ConfigMap Sidecar Auto-Deployment
 
 ```bash
 # 使用 grafana-import 工具自動建立 ConfigMap + 標記 label
@@ -101,7 +101,7 @@ Sidecar 會自動偵測 `grafana_dashboard=1` label，將 ConfigMap 掛載至 Gr
 2. 上傳 JSON 檔：`k8s/03-monitoring/shadow-monitoring-dashboard.json`
 3. 選擇 Prometheus datasource，點擊 **Import**
 
-#### 方法 B：ConfigMap Sidecar 自動部署
+#### Method B: ConfigMap Sidecar Auto-Deployment
 
 ```bash
 da-tools grafana-import \
@@ -292,7 +292,7 @@ kubectl delete configmap grafana-dashboard-shadow -n monitoring
 
 ---
 
-## API 端點健康監控
+## API Endpoint Health Monitoring
 
 除了上述 Dashboard 之外，建議搭配 **Blackbox Exporter** 監控 threshold-exporter 的 API 端點可用性，確保告警管線的基礎健康。
 

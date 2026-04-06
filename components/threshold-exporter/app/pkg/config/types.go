@@ -81,21 +81,38 @@ type RecurringSchedule struct {
 }
 
 // TenantMetadata holds optional metadata labels for a tenant.
-// Exposed as tenant_metadata_info{tenant, runbook_url, owner, tier} = 1 (info metric).
+// Prometheus metric: tenant_metadata_info{tenant, runbook_url, owner, tier} = 1 (info metric).
 // Unconditionally emitted for ALL tenants — unset fields default to empty string.
 // This guarantees PromQL group_left joins always succeed (no False Negatives).
+//
+// v2.5.0: Added environment, region, domain, db_type, tags, groups for API/UI grouping.
+// These new fields are NOT emitted as Prometheus labels (cardinality concern) —
+// they are consumed by tenant-api and generate_tenant_metadata.py only.
 type TenantMetadata struct {
-	RunbookURL string `yaml:"runbook_url"`
-	Owner      string `yaml:"owner"`
-	Tier       string `yaml:"tier"`
+	RunbookURL  string   `yaml:"runbook_url"`
+	Owner       string   `yaml:"owner"`
+	Tier        string   `yaml:"tier"`
+	Environment string   `yaml:"environment"` // v2.5.0: production | staging | development
+	Region      string   `yaml:"region"`      // v2.5.0: cloud region (e.g., ap-northeast-1)
+	Domain      string   `yaml:"domain"`      // v2.5.0: business domain (e.g., finance, cache)
+	DBType      string   `yaml:"db_type"`     // v2.5.0: database type (e.g., mariadb, postgresql)
+	Tags        []string `yaml:"tags"`        // v2.5.0: free-form tags for ad-hoc filtering
+	Groups      []string `yaml:"groups"`      // v2.5.0: group memberships (references _groups.yaml)
 }
 
 // ResolvedMetadata is the resolved metadata for one tenant.
+// v2.5.0: Extended with grouping fields for API/UI consumption.
 type ResolvedMetadata struct {
-	Tenant     string
-	RunbookURL string
-	Owner      string
-	Tier       string
+	Tenant      string
+	RunbookURL  string
+	Owner       string
+	Tier        string
+	Environment string
+	Region      string
+	Domain      string
+	DBType      string
+	Tags        []string
+	Groups      []string
 }
 
 // TimeWindowOverride defines a UTC time window with an override value.
@@ -229,32 +246,4 @@ var validReservedPrefixes = []string{
 type RoutingConfig struct {
 	Tenant         string
 	ReceiverType   string                 // "webhook" | "email" | "slack" | "teams"
-	ReceiverConfig map[string]interface{} // type-specific config fields
-	GroupBy        []string               // optional, platform default if absent
-	GroupWait      string                 // optional, guardrail 5s–5m
-	GroupInterval  string                 // optional, guardrail 5s–5m
-	RepeatInterval string                 // optional, guardrail 1m–72h
-}
-
-// validReceiverTypes lists supported receiver types (must match Python RECEIVER_TYPES).
-var validReceiverTypes = map[string]bool{
-	"webhook":    true,
-	"email":      true,
-	"slack":      true,
-	"teams":      true,
-	"rocketchat": true,
-	"pagerduty":  true,
-}
-
-// Timing guardrail bounds for routing config.
-var routingGuardrails = map[string][2]time.Duration{
-	"group_wait":      {5 * time.Second, 5 * time.Minute},
-	"group_interval":  {5 * time.Second, 5 * time.Minute},
-	"repeat_interval": {1 * time.Minute, 72 * time.Hour},
-}
-
-// ConfigInfo holds config source metadata for the threshold_exporter_config_info metric.
-type ConfigInfo struct {
-	ConfigSource string
-	GitCommit    string
-}
+	ReceiverConfig map[string]interface{}

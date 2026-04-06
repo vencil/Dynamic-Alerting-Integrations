@@ -2,7 +2,7 @@
 title: "Platform Health Dashboard"
 tags: [health, dashboard, monitoring, overview, operations]
 audience: ["platform-engineer"]
-version: v2.4.0
+version: v2.5.0
 lang: en
 related: [health-dashboard, self-service-portal, alert-simulator]
 ---

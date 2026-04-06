@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "da-portal.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "da-portal.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "da-portal.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "da-portal.labels" . | nindent 8 }}
+      annotations:
+        # Force rolling restart when nginx config changes
+        checksum/nginx-config: {{ include (print $.Template.BasePath "/configmap-nginx.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "da-portal.name" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        # ── Primary: nginx (static portal) ──────────────────────────────────────
+        - name: nginx
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.portal.listenPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-tmp
+              mountPath: /var/run
+            {{- if .Values.customData.enabled }}
+            - name: custom-data
+              mountPath: /usr/share/nginx/html/custom
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources.nginx | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.portal.listenPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.portal.listenPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+
+        # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
+        {{- if .Values.oauth2Proxy.enabled }}
+        - name: oauth2-proxy
+          image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.oauth2Proxy.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - --provider={{ .Values.oauth2Proxy.provider }}
+            - --upstream=http://localhost:{{ .Values.portal.listenPort }}/
+            - --http-address=0.0.0.0:4180
+            - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
+            - --email-domain={{ .Values.oauth2Proxy.emailDomain }}
+            - --pass-user-headers=true
+            - --set-xauthrequest=true
+            - --skip-auth-route=^/healthz$
+            - --cookie-secure={{ .Values.oauth2Proxy.cookieSecure }}
+            - --cookie-httponly={{ .Values.oauth2Proxy.cookieHttpOnly }}
+            - --cookie-samesite={{ .Values.oauth2Proxy.cookieSameSite }}
+            - --cookie-name={{ .Values.oauth2Proxy.cookieName }}
+          env:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth2Proxy.secretName }}
+                  key: OAUTH2_PROXY_COOKIE_SECRET
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth2Proxy.secretName }}
+                  key: OAUTH2_PROXY_CLIENT_ID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth2Proxy.secretName }}
+                  key: OAUTH2_PROXY_CLIENT_SECRET
+          ports:
+            - name: http
+              containerPort: 4180
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources.oauth2Proxy | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        {{- end }}
+
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "da-portal.name" . }}-nginx-config
+
+        - name: nginx-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+
+        - name: nginx-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+
+        {{- if .Values.customData.enabled }}
+        {{- if eq .Values.customData.type "configMap" }}
+        - name: custom-data
+          configMap:
+            name: {{ .Values.customData.configMapName }}
+        {{- else if eq .Values.customData.type "emptyDir" }}
+        - name: custom-data
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- end }}
+        {{- end }}

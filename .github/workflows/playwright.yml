@@ -1,0 +1,116 @@
+name: Playwright E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'docs/interactive/**'
+      - 'tests/e2e/**'
+      - 'package.json'
+      - '.github/workflows/playwright.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docs/interactive/**'
+      - 'tests/e2e/**'
+      - 'package.json'
+      - '.github/workflows/playwright.yml'
+
+jobs:
+  test:
+    name: Smoke Tests (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'tests/e2e/package.json'
+
+      - name: Install E2E dependencies
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: tests/e2e
+        run: npx playwright install chromium
+
+      - name: Start Portal server
+        working-directory: tests/e2e
+        run: |
+          npm run serve:portal &
+          SERVER_PID=$!
+          echo "Portal server started with PID: $SERVER_PID"
+
+          # Retry loop: wait up to 30 seconds for Portal readiness
+          RETRY_COUNT=0
+          MAX_RETRIES=30
+          RETRY_INTERVAL=1
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "Checking Portal readiness (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
+            if curl -sf http://localhost:8080 > /dev/null 2>&1; then
+              echo "✓ Portal is ready (HTTP 200)"
+              exit 0
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              sleep $RETRY_INTERVAL
+            fi
+          done
+
+          echo "✗ Portal failed to start within 30 seconds"
+          echo "Final curl attempt for debug info:"
+          curl -v http://localhost:8080 2>&1 || true
+          exit 1
+        timeout-minutes: 2
+
+      - name: Run Playwright smoke tests
+        working-directory: tests/e2e
+        run: npm test
+        env:
+          CI: 'true'
+          BASE_URL: 'http://localhost:8080'
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          retention-days: 7
+
+      - name: Upload test videos (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-videos
+          path: tests/e2e/test-results/
+          retention-days: 3
+
+      - name: Comment on PR with results
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const testReportPath = 'tests/e2e/playwright-report/index.html';
+            if (fs.existsSync(testReportPath)) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '✅ Playwright smoke tests completed. [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
+              });
+            }

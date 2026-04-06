@@ -196,8 +196,8 @@ extra:
   # Platform version — single source of truth for docs
   # Access in templates via {{ config.extra.platform_version }}
   # bump_docs.py updates this field automatically
-  platform_version: "2.4.0"
-  exporter_version: "2.4.0"
+  platform_version: "2.5.0"
+  exporter_version: "2.5.0"
   tools_version: "2.4.0"
 
   # Version info

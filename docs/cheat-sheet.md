@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -128,5 +128,7 @@ docker run --rm --network=host \
 ```
 
 ---
+
+## 相關資源
 
 完整參考見 [cli-reference.md](cli-reference.md)。

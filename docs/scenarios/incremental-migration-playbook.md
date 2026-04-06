@@ -2,13 +2,13 @@
 title: "場景：漸進式遷移 Playbook"
 tags: [scenario, migration, adoption, playbook]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
 # 場景：漸進式遷移 Playbook
 
-> **v2.4.0** | 相關文件：[`migration-guide.md`](../migration-guide.md)、[`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md)、[`architecture-and-design.md` §2](../architecture-and-design.md)
+> **v2.5.0** | 相關文件：[`migration-guide.md`](../migration-guide.md)、[`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md)、[`architecture-and-design.md` §2](../architecture-and-design.md)
 
 ## 概述
 
@@ -41,7 +41,7 @@ lang: zh
 
 **目標**：在不改變任何現存配置的情況下，理解你目前的監控體系。本階段是**唯讀**的，完全無風險。
 
-### 步驟 0.1：分析現有 Alertmanager 配置
+### Step 0.1: Analyze Existing Alertmanager Configuration
 
 執行命令分析現有的 Alertmanager 路由樹、receiver 數量，識別是否已有租戶相關標籤：
 
@@ -56,7 +56,7 @@ da-tools onboard \
 - 現有 group_wait / repeat_interval → 後續 Dynamic Alerting 的 Routing Guardrails 參考值
 - Inhibit rules → 是否需要遷移至 Dynamic Alerting 的 severity dedup 機制
 
-### 步驟 0.2：分析現有 Prometheus 告警規則
+### Step 0.2: Analyze Existing Prometheus Alert Rules
 
 分析現有規則，按類型分類（Recording Rules / Alerting Rules），識別遷移候選：
 
@@ -245,7 +245,7 @@ kubectl rollout restart deployment/prometheus -n monitoring
 
 **目標**：新舊告警同時運作，比較品質。使用 1-2 週時間收集數據，驗證 Dynamic Alerting 的告警品質不低於現有系統。
 
-### 步驟 2.1：生成 Alertmanager 路由片段
+### Step 2.1: Generate Alertmanager Routing Fragment
 
 使用 `generate-routes` 命令為試點租戶生成 Alertmanager 路由配置：
 

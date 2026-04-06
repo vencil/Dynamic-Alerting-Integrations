@@ -2,12 +2,12 @@
 title: "場景：租戶完整生命週期管理"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # 場景：租戶完整生命週期管理
 
-> **v2.4.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.5.0** | 相關文件：[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`getting-started/for-tenants.md`](../getting-started/for-tenants.md)、[`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## 概述
 
@@ -227,7 +227,7 @@ da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
 
 ### 2.3 運營模式管理
 
-Dynamic Alerting 提供 Normal / Silent / Maintenance 三態運營模式，均支援 `expires` 自動失效。完整設計與 YAML 語法見 [架構與設計 §2.7](../architecture-and-design.md#27-三態運營模式-operational-modes)。
+Dynamic Alerting 提供 Normal / Silent / Maintenance 三態運營模式，均支援 `expires` 自動失效。完整設計與 YAML 語法見 [核心設計 §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)。
 
 常用操作：
 

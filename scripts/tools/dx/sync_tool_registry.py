@@ -83,15 +83,15 @@ def parse_registry(path: str) -> list:
         if stripped == "tools:":
             continue
 
-        m_tool = re.match(r"^  - key:\s*(.+)$", line)
+        m_tool = re.match(r"^- key:\s*(.+)$", line)
         if m_tool:
             if current:
                 tools.append(current)
             current = {"key": m_tool.group(1).strip()}
             continue
 
-        m_field = re.match(r"^    ([a-z_]+):\s*(.*)$", line)
-        if m_field and not line.startswith("      "):
+        m_field = re.match(r"^  ([a-z_]+):\s*(.*)$", line)
+        if m_field and not line.startswith("    "):
             key = m_field.group(1)
             val = m_field.group(2).strip()
             current_key = key
@@ -113,7 +113,7 @@ def parse_registry(path: str) -> list:
             current[key] = val.strip("'\"")
             continue
 
-        m_sub = re.match(r"^      - (.+)$", line)
+        m_sub = re.match(r"^  - (.+)$", line)
         if m_sub:
             if current_key not in current:
                 current[current_key] = []

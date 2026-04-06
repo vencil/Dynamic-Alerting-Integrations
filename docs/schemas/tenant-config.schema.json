@@ -3,7 +3,7 @@
   "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/tenant-config.schema.json",
   "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
   "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
-  "version": "v2.4.0",
+  "version": "v2.5.0",
   "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/tenant-config.schema.json\": \"conf.d/*.yaml\" }",
   "type": "object",
   "required": ["tenants"],
@@ -187,9 +187,47 @@
           "title": "Business Tier",
           "description": "Business tier/SLA level for prioritization. Examples: tier-1, tier-2, non-critical.",
           "examples": ["tier-1", "tier-2", "non-critical"]
+        },
+        "environment": {
+          "type": "string",
+          "title": "Environment",
+          "description": "Deployment environment for RBAC filtering. Examples: production, staging, development.",
+          "examples": ["production", "staging", "development"]
+        },
+        "region": {
+          "type": "string",
+          "title": "Region",
+          "description": "Geographic region or data center for this tenant.",
+          "examples": ["us-east-1", "eu-west-1", "ap-northeast-1"]
+        },
+        "domain": {
+          "type": "string",
+          "title": "Business Domain",
+          "description": "Business domain for RBAC filtering and grouping. Examples: finance, ecommerce, infrastructure.",
+          "examples": ["finance", "ecommerce", "infrastructure"]
+        },
+        "db_type": {
+          "type": "string",
+          "title": "Database Type",
+          "description": "Primary database type for this tenant. Used for dimension-based grouping.",
+          "examples": ["postgresql", "mariadb", "mongodb", "redis"]
+        },
+        "tags": {
+          "type": "array",
+          "title": "Tags",
+          "description": "Free-form tags for flexible categorization and filtering.",
+          "items": { "type": "string" },
+          "examples": [["critical-path", "pci-compliant"]]
+        },
+        "groups": {
+          "type": "array",
+          "title": "Groups",
+          "description": "Group membership references. Groups are defined in _groups.yaml.",
+          "items": { "type": "string" },
+          "examples": [["team-alpha", "tier-1-dbs"]]
         }
       },
-      "additionalProperties": false
+      "additionalProperties": true
     },
     "silentMode": {
       "oneOf": [

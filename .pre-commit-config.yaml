@@ -193,6 +193,22 @@ repos:
         stages: [manual]
         additional_dependencies: ['pyyaml']
 
+      - id: check-doc-reading-time
+        name: Check document reading time (>15 min = needs split)
+        entry: python3 scripts/tools/lint/check_doc_reading_time.py --ci
+        language: system
+        pass_filenames: false
+        files: ^docs/.*\.md$
+        stages: [manual]
+
+      - id: check-doc-freshness
+        name: Check document freshness (>90 days = stale)
+        entry: python3 scripts/tools/lint/check_doc_freshness.py --ci
+        language: system
+        pass_filenames: false
+        files: ^docs/.*\.md$
+        stages: [manual]
+
       - id: check-doc-template
         name: Check document template compliance
         entry: python3 scripts/tools/lint/check_doc_template.py

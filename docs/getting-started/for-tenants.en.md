@@ -2,12 +2,12 @@
 title: "Tenant Quick Start Guide"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Tenant Quick Start Guide
 
-> **v2.4.0** | Audience: Tenant administrators, DBAs, SREs
+> **v2.5.0** | Audience: Tenant administrators, DBAs, SREs
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 

@@ -2,12 +2,12 @@
 title: "Scenario: Complete Tenant Lifecycle Management"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
 
-> **v2.4.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.5.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Overview
 
@@ -226,7 +226,7 @@ da-tools backtest --config-dir conf.d --baseline conf.d-old --lookback 7
 
 ### 2.3 Operational Mode Management
 
-Dynamic Alerting provides Normal / Silent / Maintenance three-state operational modes, all supporting `expires` auto-expiry. For full design and YAML syntax, see [Architecture & Design §2.7](../architecture-and-design.en.md#27-three-state-operational-modes).
+Dynamic Alerting provides Normal / Silent / Maintenance three-state operational modes, all supporting `expires` auto-expiry. For full design and YAML syntax, see [Core Design §2.7](../design/config-driven.en.md#27-three-state-operational-modes).
 
 Common operations:
 
@@ -442,6 +442,14 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 - [ ] offboard_tenant.py executed
 - [ ] Archival complete (backups uploaded to long-term storage)
 - [ ] Cleanup verified (no orphaned config or rules)
+
+## Interactive Tools
+
+> 💡 **Interactive Tools** — The following tools can be tested directly in the [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/):
+>
+> - [Tenant Manager](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx) — Step-by-step tenant lifecycle management and onboarding
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx) — Compare configuration changes during lifecycle
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx) — Test alert firing across tenant phases
 
 ## Related Resources
 

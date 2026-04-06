@@ -2,13 +2,13 @@
 title: "Scenario: Incremental Migration Playbook"
 tags: [scenario, migration, adoption, playbook]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 
 # Scenario: Incremental Migration Playbook
 
-> **v2.4.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
+> **v2.5.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
 
 ## Overview
 

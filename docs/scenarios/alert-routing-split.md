@@ -2,12 +2,12 @@
 title: "場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"
 tags: [scenario, routing, dual-perspective]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知
 
-> **v2.4.0** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
+> **v2.5.0** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../byo-alertmanager-integration.md)
 
 ## 問題
 
@@ -35,7 +35,7 @@ annotations:
 
 Alertmanager 的通知模板可以根據 receiver 選擇要引用哪個 annotation。
 
-### 為什麼不用 Alertmanager 全域模板？
+### Why Not Alertmanager Global Templates?
 
 Alertmanager 的 notification template 是 **per-receiver-type 全域的**，不是 per-route。也就是說，你無法讓「走 webhook_configs 的 NOC route」和「走 webhook_configs 的 tenant route」使用不同模板。
 

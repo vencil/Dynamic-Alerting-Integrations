@@ -517,6 +517,12 @@ func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 				meta.RunbookURL = tm.RunbookURL
 				meta.Owner = tm.Owner
 				meta.Tier = tm.Tier
+				meta.Environment = tm.Environment
+				meta.Region = tm.Region
+				meta.Domain = tm.Domain
+				meta.DBType = tm.DBType
+				meta.Tags = tm.Tags
+				meta.Groups = tm.Groups
 			}
 		}
 
@@ -734,12 +740,4 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 		if gi, ok := routingMap["group_interval"].(string); ok && gi != "" {
 			rc.GroupInterval = clampDuration(gi, "group_interval", tenant)
 		}
-		if ri, ok := routingMap["repeat_interval"].(string); ok && ri != "" {
-			rc.RepeatInterval = clampDuration(ri, "repeat_interval", tenant)
-		}
-
-		result = append(result, rc)
-	}
-
-	return result
-}
+		if ri, ok := routing

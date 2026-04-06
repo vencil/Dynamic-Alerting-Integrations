@@ -20,8 +20,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
+	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/views"
 )
 
 func main() {
@@ -48,9 +51,18 @@ func main() {
 
 	writer := gitops.NewWriter(*configDir, *gitDir)
 
-	// ── RBAC hot-reload goroutine ─────────────────────────────────────────────
+	groupMgr := groups.NewManager(*configDir)
+
+	// v2.5.0: Domain policy enforcement at API layer
+	policyMgr := policy.NewManager(*configDir)
+
+	// v2.5.0: Saved Views for tenant-manager UI
+	viewMgr := views.NewManager(*configDir)
+
+	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
+	go policyMgr.WatchLoop(*reloadInterval, stopCh)
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -68,9 +80,14 @@ func main() {
 
 	// API v1 — all routes require identity headers (injected by oauth2-proxy)
 	r.Route("/api/v1", func(r chi.Router) {
-		// Tenant list (read permission, no specific tenant ID)
+		// Identity endpoint (no specific permission required, just authenticated)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tenants", handler.ListTenants(*configDir))
+			Get("/me", handler.Me(rbacMgr))
+
+		// Tenant list (read permission, no specific tenant ID)
+		// v2.5.0: RBAC-filtered — only returns tenants the user can access
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/tenants", handler.ListTenants(*configDir, rbacMgr))
 
 		// Per-tenant routes
 		r.Route("/tenants/{id}", func(r chi.Router) {
@@ -83,7 +100,7 @@ func main() {
 
 			// Write endpoints
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
-				Put("/", handler.PutTenant(writer))
+				Put("/", handler.PutTenant(writer, policyMgr))
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Post("/validate", handler.ValidateTenant(*configDir))
@@ -92,7 +109,42 @@ func main() {
 		// Batch operations — route-level middleware checks read (authenticated),
 		// per-tenant write permission is enforced inside the handler.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Post("/tenants/batch", handler.BatchTenants(writer, *configDir, rbacMgr))
+			Post("/tenants/batch", handler.BatchTenants(writer, *configDir, rbacMgr, policyMgr))
+
+		// Group management (v2.5.0)
+		// v2.5.0: RBAC-filtered — only returns groups with accessible members
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/groups", handler.ListGroups(groupMgr, rbacMgr))
+
+		r.Route("/groups/{id}", func(r chi.Router) {
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Get("/", handler.GetGroup(groupMgr))
+
+			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+				Put("/", handler.PutGroup(groupMgr, writer))
+
+			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+				Delete("/", handler.DeleteGroup(groupMgr, writer))
+
+			// Batch operations on group members
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Post("/batch", handler.GroupBatch(groupMgr, writer, *configDir, rbacMgr))
+		})
+
+		// Saved Views (v2.5.0 Phase C)
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/views", handler.ListViews(viewMgr))
+
+		r.Route("/views/{id}", func(r chi.Router) {
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Get("/", handler.GetView(viewMgr))
+
+			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+				Put("/", handler.PutView(viewMgr, writer))
+
+			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+				Delete("/", handler.DeleteView(viewMgr, writer))
+		})
 	})
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────

@@ -3,7 +3,7 @@ title: "Dynamic Alerting Platform — Home"
 description: "Enterprise-grade Multi-Tenant Dynamic Alerting for Kubernetes"
 tags: [home, overview]
 audience: [all]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 
@@ -114,7 +114,7 @@ docker run --rm -it ghcr.io/vencil/da-tools:v2.4.0 scaffold \
 ```bash
 # One-line deployment — no repo clone needed
 helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter:2.4.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter:2.5.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```

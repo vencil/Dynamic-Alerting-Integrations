@@ -1,399 +1,796 @@
-# ============================================================
-# tool-registry.yaml — Interactive Tools 單一真相源
-# ============================================================
-# 所有互動工具的 metadata 集中管理。
-# CI 驗證腳本 (lint_tool_consistency.py) 從此檔案反向檢查：
-#   - Hub index.html 卡片一致性
-#   - jsx-loader.html TOOL_META 一致性
-#   - JSX frontmatter 一致性
-#   - Markdown 文件引用完整性
-#
-# 變更此檔案後請執行: make lint-docs
-# ============================================================
-
 tools:
-  - key: wizard
-    title: { en: "Getting Started Wizard", zh: "入門精靈" }
-    file: getting-started/wizard.jsx
-    audience: [platform, domain, tenant]
-    icon: wizard
-    tags: [onboarding, guided, 3 min]
-    desc: { en: "Find your learning path", zh: "找到你的學習路徑" }
-    related: [onboarding-checklist, architecture-quiz, rule-pack-selector]
-    hub_section: interactive
-    appears_in:
-      - docs/getting-started/for-tenants.md
-
-  - key: playground
-    title: { en: "Tenant YAML Validator", zh: "YAML 驗證器" }
-    file: interactive/tools/playground.jsx
-    audience: [platform, tenant]
-    icon: validation
-    tags: [validation, yaml, live preview]
-    desc: { en: "Validate & preview YAML", zh: "驗證並預覽 YAML" }
-    related: [config-lint, schema-explorer, template-gallery]
-    hub_section: interactive
-    appears_in:
-      - docs/getting-started/for-tenants.md
-      - docs/scenarios/tenant-lifecycle.md
-
-  - key: rule-pack-selector
-    title: { en: "Rule Pack Selector", zh: "Rule Pack 選擇器" }
-    file: interactive/tools/rule-pack-selector.jsx
-    audience: [platform, domain]
-    icon: rules
-    tags: [prometheus, rule packs, config gen]
-    desc: { en: "Pick your Rule Packs", zh: "選擇你的 Rule Pack" }
-    related: [rule-pack-detail, dependency-graph, threshold-calculator]
-    hub_section: interactive
-    appears_in:
-      - docs/getting-started/for-platform-engineers.md
-      - docs/getting-started/for-tenants.md
-      - docs/scenarios/multi-cluster-federation.md
-
-  - key: cli-playground
-    title: { en: "CLI Playground", zh: "CLI 互動場" }
-    file: interactive/tools/cli-playground.jsx
-    audience: [platform]
-    icon: cli
-    tags: [cli, da-tools, docker]
-    desc: { en: "Build da-tools commands", zh: "建構 da-tools 指令" }
-    related: [wizard, onboarding-checklist, glossary]
-    hub_section: interactive
-    appears_in: []
-
-  - key: rule-pack-detail
-    title: { en: "Rule Pack Details", zh: "Rule Pack 細節" }
-    file: interactive/tools/rule-pack-detail.jsx
-    audience: [platform, domain]
-    icon: rules
-    tags: [rules, PromQL, reference]
-    desc: { en: "Recording & alert rules", zh: "Recording 與 Alert 規則" }
-    related: [rule-pack-matrix, rule-pack-selector, runbook-viewer]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-
-  - key: threshold-calculator
-    title: { en: "Threshold Calculator", zh: "閾值計算器" }
-    file: interactive/tools/threshold-calculator.jsx
-    audience: [domain, tenant]
-    icon: validation
-    tags: [calculator, thresholds, yaml]
-    desc: { en: "Compute thresholds from percentiles", zh: "從百分位計算閾值" }
-    related: [playground, alert-simulator, schema-explorer]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-      - docs/getting-started/for-tenants.md
-
-  - key: template-gallery
-    title: { en: "Config Template Gallery", zh: "配置模板庫" }
-    file: interactive/tools/template-gallery.jsx
-    audience: [tenant, platform]
-    icon: wizard
-    tags: [templates, examples, stacks]
-    desc: { en: "24 templates covering all 13 Rule Packs with scenario + quick-start modes", zh: "24 個模板覆蓋全部 13 個 Rule Pack，含場景模板與快速入門" }
-    related: [playground, rule-pack-selector, threshold-calculator]
-    hub_section: advanced
-    appears_in: []
-
-  - key: cicd-setup-wizard
-    title: { en: "CI/CD Setup Wizard", zh: "CI/CD 導入精靈" }
-    file: interactive/tools/cicd-setup-wizard.jsx
-    audience: [platform]
-    icon: wizard
-    tags: [cicd, gitops, setup, wizard, adoption]
-    desc: { en: "Interactive 4-step wizard to generate da-tools init command and CI/CD pipeline configs", zh: "互動式四步精靈，產生 da-tools init 命令和 CI/CD 管線配置" }
-    related: [self-service-portal, template-gallery, onboarding-checklist]
-    hub_section: interactive
-    appears_in:
-      - docs/scenarios/gitops-ci-integration.md
-
-  - key: notification-previewer
-    title: { en: "Notification Template Previewer", zh: "通知模板預覽器" }
-    file: interactive/tools/notification-previewer.jsx
-    audience: [platform, tenant]
-    icon: wizard
-    tags: [notification, preview, routing, receiver, template]
-    desc: { en: "Preview alert notifications for Slack, Email, PagerDuty, Teams, Webhook", zh: "預覽 Slack、Email、PagerDuty、Teams、Webhook 的告警通知" }
-    related: [self-service-portal, alert-simulator, template-gallery]
-    hub_section: interactive
-    appears_in: []
-
-  - key: platform-health
-    title: { en: "Platform Health Dashboard", zh: "平台健康儀表板" }
-    file: interactive/tools/platform-health.jsx
-    audience: [platform]
-    icon: dashboard
-    tags: [health, dashboard, monitoring, overview, operations]
-    desc: { en: "Component status, tenant overview, Rule Pack distribution, event timeline", zh: "元件狀態、Tenant 概覽、Rule Pack 分佈、事件時間軸" }
-    related: [health-dashboard, self-service-portal, alert-simulator]
-    hub_section: interactive
-    appears_in: []
-
-  - key: migration-simulator
-    title: { en: "Migration Simulator", zh: "遷移模擬器" }
-    file: interactive/tools/migration-simulator.jsx
-    audience: [platform]
-    icon: cli
-    tags: [migration, PromQL, dry-run]
-    desc: { en: "PromQL to YAML preview", zh: "PromQL 轉 YAML 預覽" }
-    related: [playground, promql-tester, config-diff]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-      - docs/scenarios/shadow-monitoring-cutover.md
-
-  - key: alert-simulator
-    title: { en: "Alert Simulator", zh: "告警模擬器" }
-    file: interactive/tools/alert-simulator.jsx
-    audience: [domain, tenant]
-    icon: cli
-    tags: [simulation, alerts, dedup]
-    desc: { en: "Simulate what-if scenarios", zh: "模擬假設情境" }
-    related: [alert-timeline, runbook-viewer, config-lint]
-    hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
-      - docs/getting-started/for-tenants.md
-      - docs/scenarios/alert-routing-split.md
-
-  - key: config-diff
-    title: { en: "Config Diff Viewer", zh: "配置差異檢視器" }
-    file: interactive/tools/config-diff.jsx
-    audience: [platform]
-    icon: validation
-    tags: [diff, compare, yaml]
-    desc: { en: "Compare YAML configs", zh: "比較 YAML 配置" }
-    related: [config-lint, playground, migration-simulator]
-    hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
-      - docs/getting-started/for-platform-engineers.md
-      - docs/scenarios/alert-routing-split.md
-      - docs/scenarios/shadow-monitoring-cutover.md
-
-  - key: glossary
-    title: { en: "Platform Glossary", zh: "平台術語表" }
-    file: interactive/tools/glossary.jsx
-    audience: [platform, domain, tenant]
-    icon: wizard
-    tags: [glossary, reference, terms]
-    desc: { en: "Platform terminology", zh: "平台術語" }
-    related: [schema-explorer, wizard, onboarding-checklist]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-
-  - key: health-dashboard
-    title: { en: "Health Dashboard", zh: "健康儀表板" }
-    file: interactive/tools/health-dashboard.jsx
-    audience: [platform, tenant]
-    icon: validation
-    tags: [dashboard, health, demo]
-    desc: { en: "Simulated tenant health", zh: "模擬租戶健康狀態" }
-    related: [alert-simulator, runbook-viewer, alert-timeline]
-    hub_section: advanced
-    appears_in:
-      - docs/scenarios/shadow-monitoring-cutover.md
-
-  - key: rule-pack-matrix
-    title: { en: "Rule Pack Matrix", zh: "Rule Pack 矩陣" }
-    file: interactive/tools/rule-pack-matrix.jsx
-    audience: [platform, domain]
-    icon: rules
-    tags: [matrix, comparison, rule packs]
-    desc: { en: "Compare all 15 packs", zh: "比較全部 15 個 Pack" }
-    related: [rule-pack-detail, dependency-graph, rule-pack-selector]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-      - docs/scenarios/advanced-scenarios.md
-
-  - key: onboarding-checklist
-    title: { en: "Onboarding Checklist", zh: "入職清單" }
-    file: interactive/tools/onboarding-checklist.jsx
-    audience: [platform, domain, tenant]
-    icon: wizard
-    tags: [onboarding, checklist, progress]
-    desc: { en: "Step-by-step from zero", zh: "從零開始逐步引導" }
-    related: [wizard, architecture-quiz, glossary]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-platform-engineers.md
-      - docs/getting-started/for-tenants.md
-
-  - key: alert-timeline
-    title: { en: "Alert Timeline Replay", zh: "告警時間線重播" }
-    file: interactive/tools/alert-timeline.jsx
-    audience: [domain, tenant]
-    icon: cli
-    tags: [animation, timeline, dedup]
-    desc: { en: "Animated alert replay", zh: "動畫告警重播" }
-    related: [alert-simulator, runbook-viewer, glossary]
-    hub_section: advanced
-    appears_in: []
-
-  - key: alert-noise-analyzer
-    title: { en: "Alert Noise Analyzer", zh: "告警噪音分析器" }
-    file: interactive/tools/alert-noise-analyzer.jsx
-    audience: [platform, domain-expert]
-    icon: chart
-    tags: [alerts, noise, MTTA, MTTR, analysis]
-    desc: { en: "Analyze alert noise and find optimization opportunities", zh: "分析告警噪音，找出優化機會" }
-    related: [alert-simulator, alert-timeline, health-dashboard]
-    hub_section: advanced
-    appears_in: []
-
-  - key: schema-explorer
-    title: { en: "YAML Schema Explorer", zh: "YAML 結構探索器" }
-    file: interactive/tools/schema-explorer.jsx
-    audience: [platform, domain]
-    icon: validation
-    tags: [schema, reference, yaml]
-    desc: { en: "Browse all YAML keys", zh: "瀏覽所有 YAML 鍵" }
-    related: [playground, glossary, config-lint]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-      - docs/scenarios/tenant-lifecycle.md
-
-  - key: capacity-planner
-    title: { en: "Capacity Planner", zh: "容量規劃器" }
-    file: interactive/tools/capacity-planner.jsx
-    audience: [platform]
-    icon: wizard
-    tags: [capacity, planning, estimation]
-    desc: { en: "Estimate resources", zh: "估算資源" }
-    related: [architecture-quiz, rule-pack-matrix, dependency-graph]
-    hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
-      - docs/getting-started/for-platform-engineers.md
-      - docs/scenarios/multi-cluster-federation.md
-
-  - key: runbook-viewer
-    title: { en: "Runbook Viewer", zh: "Runbook 檢視器" }
-    file: interactive/tools/runbook-viewer.jsx
-    audience: [platform, domain]
-    icon: rules
-    tags: [runbook, operations, alerts]
-    desc: { en: "Diagnose → Fix → Verify", zh: "診斷 → 修復 → 驗證" }
-    related: [alert-simulator, alert-timeline, health-dashboard]
-    hub_section: advanced
-    appears_in: []
-
-  - key: dependency-graph
-    title: { en: "Dependency Graph", zh: "依賴圖" }
-    file: interactive/tools/dependency-graph.jsx
-    audience: [platform, domain]
-    icon: cli
-    tags: [graph, dependencies, visual]
-    desc: { en: "Rule Pack dependencies", zh: "Rule Pack 依賴關係" }
-    related: [rule-pack-matrix, rule-pack-selector, capacity-planner]
-    hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
-      - docs/getting-started/for-platform-engineers.md
-      - docs/scenarios/multi-cluster-federation.md
-
-  - key: config-lint
-    title: { en: "Config Lint Report", zh: "配置 Lint 報告" }
-    file: interactive/tools/config-lint.jsx
-    audience: [platform, tenant]
-    icon: validation
-    tags: [lint, validation, best practices]
-    desc: { en: "Best-practice validation", zh: "最佳實踐驗證" }
-    related: [config-diff, playground, schema-explorer]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-platform-engineers.md
-      - docs/scenarios/advanced-scenarios.md
-      - docs/scenarios/alert-routing-split.md
-      - docs/scenarios/tenant-lifecycle.md
-
-  - key: architecture-quiz
-    title: { en: "Architecture Quiz", zh: "架構問答" }
-    file: interactive/tools/architecture-quiz.jsx
-    audience: [platform]
-    icon: wizard
-    tags: [architecture, quiz, decision]
-    desc: { en: "Find your deployment pattern", zh: "找到你的部署模式" }
-    related: [capacity-planner, dependency-graph, onboarding-checklist]
-    hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
-      - docs/getting-started/for-platform-engineers.md
-
-  - key: promql-tester
-    title: { en: "PromQL Tester", zh: "PromQL 測試器" }
-    file: interactive/tools/promql-tester.jsx
-    audience: [domain, platform]
-    icon: cli
-    tags: [PromQL, testing, recording rules]
-    desc: { en: "Test queries & find rules", zh: "測試查詢並找到規則" }
-    related: [rule-pack-detail, schema-explorer, migration-simulator]
-    hub_section: advanced
-    appears_in:
-      - docs/architecture-and-design.md
-      - docs/getting-started/for-domain-experts.md
-      - docs/scenarios/advanced-scenarios.md
-
-  - key: platform-demo
-    title: { en: "Platform Demo", zh: "平台 Demo" }
-    file: interactive/tools/platform-demo.jsx
-    audience: [platform, domain, tenant]
-    icon: wizard
-    tags: [demo, walkthrough, interactive]
-    desc: { en: "Interactive make demo walkthrough", zh: "互動式 make demo 導覽" }
-    related: [wizard, cli-playground, onboarding-checklist]
-    hub_section: advanced
-    appears_in:
-      - docs/getting-started/for-domain-experts.md
-      - docs/getting-started/for-platform-engineers.md
-      - docs/getting-started/for-tenants.md
-
-  - key: roi-calculator
-    title: { en: "ROI Calculator", zh: "採用效益試算器" }
-    file: interactive/tools/roi-calculator.jsx
-    audience: [platform]
-    icon: wizard
-    tags: [roi, cost, adoption, evaluation]
-    desc: { en: "Calculate adoption benefits", zh: "計算平台採用效益" }
-    related: [capacity-planner, health-dashboard, self-service-portal]
-    hub_section: advanced
-    appears_in: []
-
-  - key: self-service-portal
-    title: { en: "Tenant Self-Service Portal", zh: "租戶自助入口" }
-    file: interactive/tools/self-service-portal.jsx
-    audience: [platform, domain, tenant]
-    icon: wizard
-    tags: [self-service, validation, routing, alerts, tenant]
-    desc: { en: "Validate configs, multi-metric alert preview, routing trace with inhibit rules", zh: "驗證配置、多指標告警預覽、路由追蹤含 inhibit 規則" }
-    related: [playground, config-lint, alert-simulator, schema-explorer]
-    hub_section: interactive
-    appears_in: []
-
-  - key: multi-tenant-comparison
-    title: { en: "Multi-Tenant Comparison", zh: "多租戶閾值比較" }
-    file: interactive/tools/multi-tenant-comparison.jsx
-    audience: [platform, domain-expert]
-    icon: chart
-    tags: [tenant, comparison, threshold, outlier, analysis]
-    desc: { en: "Compare thresholds across tenants, detect outliers", zh: "跨租戶閾值比較，偵測離群值" }
-    related: [capacity-planner, roi-calculator, alert-noise-analyzer]
-    hub_section: advanced
-    appears_in: []
-
-  - key: tenant-manager
-    title: { en: "Tenant Manager", zh: "租戶管理器" }
-    file: interactive/tools/tenant-manager.jsx
-    audience: [platform, sre]
-    icon: dashboard
-    tags: [tenants, management, operations, batch, comparison]
-    desc: { en: "Multi-tenant overview, batch operations, config drift detection", zh: "多租戶概覽、批次操作、配置漂移偵測" }
-    related: [multi-tenant-comparison, config-diff, playground, threshold-calculator]
-    hub_section: interactive
-    appears_in: []
+- key: wizard
+  title:
+    en: Getting Started Wizard
+    zh: 入門精靈
+  file: getting-started/wizard.jsx
+  audience:
+  - platform
+  - domain
+  - tenant
+  icon: wizard
+  tags:
+  - onboarding
+  - guided
+  - 3 min
+  desc:
+    en: Find your learning path
+    zh: 找到你的學習路徑
+  related:
+  - onboarding-checklist
+  - architecture-quiz
+  - rule-pack-selector
+  journey_phase: deploy
+  hub_section: interactive
+  appears_in:
+  - docs/getting-started/for-tenants.md
+- key: playground
+  title:
+    en: Tenant YAML Validator
+    zh: YAML 驗證器
+  file: interactive/tools/playground.jsx
+  audience:
+  - platform
+  - tenant
+  icon: validation
+  tags:
+  - validation
+  - yaml
+  - live preview
+  desc:
+    en: Validate & preview YAML
+    zh: 驗證並預覽 YAML
+  related:
+  - config-lint
+  - schema-explorer
+  - template-gallery
+  hub_section: interactive
+  appears_in:
+  - docs/getting-started/for-tenants.md
+  - docs/scenarios/tenant-lifecycle.md
+  journey_phase: configure
+- key: rule-pack-selector
+  title:
+    en: Rule Pack Selector
+    zh: Rule Pack 選擇器
+  file: interactive/tools/rule-pack-selector.jsx
+  audience:
+  - platform
+  - domain
+  icon: rules
+  tags:
+  - prometheus
+  - rule packs
+  - config gen
+  desc:
+    en: Pick your Rule Packs
+    zh: 選擇你的 Rule Pack
+  related:
+  - rule-pack-detail
+  - dependency-graph
+  - threshold-calculator
+  hub_section: interactive
+  appears_in:
+  - docs/getting-started/for-platform-engineers.md
+  - docs/getting-started/for-tenants.md
+  - docs/scenarios/multi-cluster-federation.md
+  journey_phase: deploy
+- key: cli-playground
+  title:
+    en: CLI Playground
+    zh: CLI 互動場
+  file: interactive/tools/cli-playground.jsx
+  audience:
+  - platform
+  icon: cli
+  tags:
+  - cli
+  - da-tools
+  - docker
+  desc:
+    en: Build da-tools commands
+    zh: 建構 da-tools 指令
+  related:
+  - wizard
+  - onboarding-checklist
+  - glossary
+  hub_section: interactive
+  appears_in: []
+  journey_phase: troubleshoot
+- key: rule-pack-detail
+  title:
+    en: Rule Pack Details
+    zh: Rule Pack 細節
+  file: interactive/tools/rule-pack-detail.jsx
+  audience:
+  - platform
+  - domain
+  icon: rules
+  tags:
+  - rules
+  - PromQL
+  - reference
+  desc:
+    en: Recording & alert rules
+    zh: Recording 與 Alert 規則
+  related:
+  - rule-pack-matrix
+  - rule-pack-selector
+  - runbook-viewer
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  journey_phase: configure
+- key: threshold-calculator
+  title:
+    en: Threshold Calculator
+    zh: 閾值計算器
+  file: interactive/tools/threshold-calculator.jsx
+  audience:
+  - domain
+  - tenant
+  icon: validation
+  tags:
+  - calculator
+  - thresholds
+  - yaml
+  desc:
+    en: Compute thresholds from percentiles
+    zh: 從百分位計算閾值
+  related:
+  - playground
+  - alert-simulator
+  - schema-explorer
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  - docs/getting-started/for-tenants.md
+  journey_phase: configure
+- key: template-gallery
+  title:
+    en: Config Template Gallery
+    zh: 配置模板庫
+  file: interactive/tools/template-gallery.jsx
+  audience:
+  - tenant
+  - platform
+  icon: wizard
+  tags:
+  - templates
+  - examples
+  - stacks
+  desc:
+    en: 24 templates covering all 13 Rule Packs with scenario + quick-start modes
+    zh: 24 個模板覆蓋全部 13 個 Rule Pack，含場景模板與快速入門
+  related:
+  - playground
+  - rule-pack-selector
+  - threshold-calculator
+  hub_section: advanced
+  appears_in: []
+  journey_phase: configure
+- key: cicd-setup-wizard
+  title:
+    en: CI/CD Setup Wizard
+    zh: CI/CD 導入精靈
+  file: interactive/tools/cicd-setup-wizard.jsx
+  audience:
+  - platform
+  icon: wizard
+  tags:
+  - cicd
+  - gitops
+  - setup
+  - wizard
+  - adoption
+  desc:
+    en: Interactive 4-step wizard to generate da-tools init command and CI/CD pipeline
+      configs
+    zh: 互動式四步精靈，產生 da-tools init 命令和 CI/CD 管線配置
+  related:
+  - self-service-portal
+  - template-gallery
+  - onboarding-checklist
+  hub_section: interactive
+  appears_in:
+  - docs/scenarios/gitops-ci-integration.md
+  journey_phase: deploy
+- key: notification-previewer
+  title:
+    en: Notification Template Previewer
+    zh: 通知模板預覽器
+  file: interactive/tools/notification-previewer.jsx
+  audience:
+  - platform
+  - tenant
+  icon: wizard
+  tags:
+  - notification
+  - preview
+  - routing
+  - receiver
+  - template
+  desc:
+    en: Preview alert notifications for Slack, Email, PagerDuty, Teams, Webhook
+    zh: 預覽 Slack、Email、PagerDuty、Teams、Webhook 的告警通知
+  related:
+  - self-service-portal
+  - alert-simulator
+  - template-gallery
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
+- key: platform-health
+  title:
+    en: Platform Health Dashboard
+    zh: 平台健康儀表板
+  file: interactive/tools/platform-health.jsx
+  audience:
+  - platform
+  icon: dashboard
+  tags:
+  - health
+  - dashboard
+  - monitoring
+  - overview
+  - operations
+  desc:
+    en: Component status, tenant overview, Rule Pack distribution, event timeline
+    zh: 元件狀態、Tenant 概覽、Rule Pack 分佈、事件時間軸
+  related:
+  - health-dashboard
+  - self-service-portal
+  - alert-simulator
+  hub_section: interactive
+  appears_in: []
+  journey_phase: monitor
+- key: migration-simulator
+  title:
+    en: Migration Simulator
+    zh: 遷移模擬器
+  file: interactive/tools/migration-simulator.jsx
+  audience:
+  - platform
+  icon: cli
+  tags:
+  - migration
+  - PromQL
+  - dry-run
+  desc:
+    en: PromQL to YAML preview
+    zh: PromQL 轉 YAML 預覽
+  related:
+  - playground
+  - promql-tester
+  - config-diff
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  - docs/scenarios/shadow-monitoring-cutover.md
+  journey_phase: troubleshoot
+- key: alert-simulator
+  title:
+    en: Alert Simulator
+    zh: 告警模擬器
+  file: interactive/tools/alert-simulator.jsx
+  audience:
+  - domain
+  - tenant
+  icon: cli
+  tags:
+  - simulation
+  - alerts
+  - dedup
+  desc:
+    en: Simulate what-if scenarios
+    zh: 模擬假設情境
+  related:
+  - alert-timeline
+  - runbook-viewer
+  - config-lint
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-tenants.md
+  - docs/scenarios/alert-routing-split.md
+  journey_phase: troubleshoot
+- key: config-diff
+  title:
+    en: Config Diff Viewer
+    zh: 配置差異檢視器
+  file: interactive/tools/config-diff.jsx
+  audience:
+  - platform
+  icon: validation
+  tags:
+  - diff
+  - compare
+  - yaml
+  desc:
+    en: Compare YAML configs
+    zh: 比較 YAML 配置
+  related:
+  - config-lint
+  - playground
+  - migration-simulator
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-platform-engineers.md
+  - docs/scenarios/alert-routing-split.md
+  - docs/scenarios/shadow-monitoring-cutover.md
+  journey_phase: configure
+- key: glossary
+  title:
+    en: Platform Glossary
+    zh: 平台術語表
+  file: interactive/tools/glossary.jsx
+  audience:
+  - platform
+  - domain
+  - tenant
+  icon: wizard
+  tags:
+  - glossary
+  - reference
+  - terms
+  desc:
+    en: Platform terminology
+    zh: 平台術語
+  related:
+  - schema-explorer
+  - wizard
+  - onboarding-checklist
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  journey_phase: reference
+- key: health-dashboard
+  title:
+    en: Health Dashboard
+    zh: 健康儀表板
+  file: interactive/tools/health-dashboard.jsx
+  audience:
+  - platform
+  - tenant
+  icon: validation
+  tags:
+  - dashboard
+  - health
+  - demo
+  desc:
+    en: Simulated tenant health
+    zh: 模擬租戶健康狀態
+  related:
+  - alert-simulator
+  - runbook-viewer
+  - alert-timeline
+  hub_section: advanced
+  appears_in:
+  - docs/scenarios/shadow-monitoring-cutover.md
+  journey_phase: monitor
+- key: rule-pack-matrix
+  title:
+    en: Rule Pack Matrix
+    zh: Rule Pack 矩陣
+  file: interactive/tools/rule-pack-matrix.jsx
+  audience:
+  - platform
+  - domain
+  icon: rules
+  tags:
+  - matrix
+  - comparison
+  - rule packs
+  desc:
+    en: Compare all 15 packs
+    zh: 比較全部 15 個 Pack
+  related:
+  - rule-pack-detail
+  - dependency-graph
+  - rule-pack-selector
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  - docs/scenarios/advanced-scenarios.md
+  journey_phase: deploy
+- key: onboarding-checklist
+  title:
+    en: Onboarding Checklist
+    zh: 入職清單
+  file: interactive/tools/onboarding-checklist.jsx
+  audience:
+  - platform
+  - domain
+  - tenant
+  icon: wizard
+  tags:
+  - onboarding
+  - checklist
+  - progress
+  desc:
+    en: Step-by-step from zero
+    zh: 從零開始逐步引導
+  related:
+  - wizard
+  - architecture-quiz
+  - glossary
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-platform-engineers.md
+  - docs/getting-started/for-tenants.md
+  journey_phase: reference
+- key: alert-timeline
+  title:
+    en: Alert Timeline Replay
+    zh: 告警時間線重播
+  file: interactive/tools/alert-timeline.jsx
+  audience:
+  - domain
+  - tenant
+  icon: cli
+  tags:
+  - animation
+  - timeline
+  - dedup
+  desc:
+    en: Animated alert replay
+    zh: 動畫告警重播
+  related:
+  - alert-simulator
+  - runbook-viewer
+  - glossary
+  hub_section: advanced
+  appears_in: []
+  journey_phase: troubleshoot
+- key: alert-noise-analyzer
+  title:
+    en: Alert Noise Analyzer
+    zh: 告警噪音分析器
+  file: interactive/tools/alert-noise-analyzer.jsx
+  audience:
+  - platform
+  - domain-expert
+  icon: chart
+  tags:
+  - alerts
+  - noise
+  - MTTA
+  - MTTR
+  - analysis
+  desc:
+    en: Analyze alert noise and find optimization opportunities
+    zh: 分析告警噪音，找出優化機會
+  related:
+  - alert-simulator
+  - alert-timeline
+  - health-dashboard
+  hub_section: advanced
+  appears_in: []
+  journey_phase: monitor
+- key: schema-explorer
+  title:
+    en: YAML Schema Explorer
+    zh: YAML 結構探索器
+  file: interactive/tools/schema-explorer.jsx
+  audience:
+  - platform
+  - domain
+  icon: validation
+  tags:
+  - schema
+  - reference
+  - yaml
+  desc:
+    en: Browse all YAML keys
+    zh: 瀏覽所有 YAML 鍵
+  related:
+  - playground
+  - glossary
+  - config-lint
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  - docs/scenarios/tenant-lifecycle.md
+  journey_phase: configure
+- key: capacity-planner
+  title:
+    en: Capacity Planner
+    zh: 容量規劃器
+  file: interactive/tools/capacity-planner.jsx
+  audience:
+  - platform
+  icon: wizard
+  tags:
+  - capacity
+  - planning
+  - estimation
+  desc:
+    en: Estimate resources
+    zh: 估算資源
+  related:
+  - architecture-quiz
+  - rule-pack-matrix
+  - dependency-graph
+  hub_section: advanced
+  appears_in:
+  - docs/architecture-and-design.md
+  - docs/getting-started/for-platform-engineers.md
+  - docs/scenarios/multi-cluster-federation.md
+  journey_phase: deploy
+- key: runbook-viewer
+  title:
+    en: Runbook Viewer
+    zh: Runbook 檢視器
+  file: interactive/tools/runbook-viewer.jsx
+  audience:
+  - platform
+  - domain
+  icon: rules
+  tags:
+  - runbook
+  - operations
+  - alerts
+  desc:
+    en: Diagnose → Fix → Verify
+    zh: 診斷 → 修復 → 驗證
+  related:
+  - alert-simulator
+  - alert-timeline
+  - health-dashboard
+  hub_section: advanced
+  appears_in: []
+  journey_phase: troubleshoot
+- key: dependency-graph
+  title:
+    en: Dependency Graph
+    zh: 依賴圖
+  file: interactive/tools/dependency-graph.jsx
+  audience:
+  - platform
+  - domain
+  icon: cli
+  tags:
+  - graph
+  - dependencies
+  - visual
+  desc:
+    en: Rule Pack dependencies
+    zh: Rule Pack 依賴關係
+  related:
+  - rule-pack-matrix
+  - rule-pack-selector
+  - capacity-planner
+  hub_section: advanced
+  appears_in:
+  - docs/architecture-and-design.md
+  - docs/getting-started/for-platform-engineers.md
+  - docs/scenarios/multi-cluster-federation.md
+  journey_phase: deploy
+- key: config-lint
+  title:
+    en: Config Lint Report
+    zh: 配置 Lint 報告
+  file: interactive/tools/config-lint.jsx
+  audience:
+  - platform
+  - tenant
+  icon: validation
+  tags:
+  - lint
+  - validation
+  - best practices
+  desc:
+    en: Best-practice validation
+    zh: 最佳實踐驗證
+  related:
+  - config-diff
+  - playground
+  - schema-explorer
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-platform-engineers.md
+  - docs/scenarios/advanced-scenarios.md
+  - docs/scenarios/alert-routing-split.md
+  - docs/scenarios/tenant-lifecycle.md
+  journey_phase: configure
+- key: architecture-quiz
+  title:
+    en: Architecture Quiz
+    zh: 架構問答
+  file: interactive/tools/architecture-quiz.jsx
+  audience:
+  - platform
+  icon: wizard
+  tags:
+  - architecture
+  - quiz
+  - decision
+  desc:
+    en: Find your deployment pattern
+    zh: 找到你的部署模式
+  related:
+  - capacity-planner
+  - dependency-graph
+  - onboarding-checklist
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-platform-engineers.md
+  journey_phase: deploy
+- key: promql-tester
+  title:
+    en: PromQL Tester
+    zh: PromQL 測試器
+  file: interactive/tools/promql-tester.jsx
+  audience:
+  - domain
+  - platform
+  icon: cli
+  tags:
+  - PromQL
+  - testing
+  - recording rules
+  desc:
+    en: Test queries & find rules
+    zh: 測試查詢並找到規則
+  related:
+  - rule-pack-detail
+  - schema-explorer
+  - migration-simulator
+  hub_section: advanced
+  appears_in:
+  - docs/architecture-and-design.md
+  - docs/getting-started/for-domain-experts.md
+  - docs/scenarios/advanced-scenarios.md
+  journey_phase: troubleshoot
+- key: platform-demo
+  title:
+    en: Platform Demo
+    zh: 平台 Demo
+  file: interactive/tools/platform-demo.jsx
+  audience:
+  - platform
+  - domain
+  - tenant
+  icon: wizard
+  tags:
+  - demo
+  - walkthrough
+  - interactive
+  desc:
+    en: Interactive make demo walkthrough
+    zh: 互動式 make demo 導覽
+  related:
+  - wizard
+  - cli-playground
+  - onboarding-checklist
+  hub_section: advanced
+  appears_in:
+  - docs/getting-started/for-domain-experts.md
+  - docs/getting-started/for-platform-engineers.md
+  - docs/getting-started/for-tenants.md
+  journey_phase: monitor
+- key: roi-calculator
+  title:
+    en: ROI Calculator
+    zh: 採用效益試算器
+  file: interactive/tools/roi-calculator.jsx
+  audience:
+  - platform
+  icon: wizard
+  tags:
+  - roi
+  - cost
+  - adoption
+  - evaluation
+  desc:
+    en: Calculate adoption benefits
+    zh: 計算平台採用效益
+  related:
+  - capacity-planner
+  - health-dashboard
+  - self-service-portal
+  hub_section: advanced
+  appears_in: []
+  journey_phase: monitor
+- key: self-service-portal
+  title:
+    en: Tenant Self-Service Portal
+    zh: 租戶自助入口
+  file: interactive/tools/self-service-portal.jsx
+  audience:
+  - platform
+  - domain
+  - tenant
+  icon: wizard
+  tags:
+  - self-service
+  - validation
+  - routing
+  - alerts
+  - tenant
+  desc:
+    en: Validate configs, multi-metric alert preview, routing trace with inhibit rules
+    zh: 驗證配置、多指標告警預覽、路由追蹤含 inhibit 規則
+  related:
+  - playground
+  - config-lint
+  - alert-simulator
+  - schema-explorer
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
+- key: multi-tenant-comparison
+  title:
+    en: Multi-Tenant Comparison
+    zh: 多租戶閾值比較
+  file: interactive/tools/multi-tenant-comparison.jsx
+  audience:
+  - platform
+  - domain-expert
+  icon: chart
+  tags:
+  - tenant
+  - comparison
+  - threshold
+  - outlier
+  - analysis
+  desc:
+    en: Compare thresholds across tenants, detect outliers
+    zh: 跨租戶閾值比較，偵測離群值
+  related:
+  - capacity-planner
+  - roi-calculator
+  - alert-noise-analyzer
+  hub_section: advanced
+  appears_in: []
+  journey_phase: monitor
+- key: tenant-manager
+  title:
+    en: Tenant Manager
+    zh: 租戶管理器
+  file: interactive/tools/tenant-manager.jsx
+  audience:
+  - platform
+  - sre
+  icon: dashboard
+  tags:
+  - tenants
+  - management
+  - operations
+  - batch
+  - groups
+  - comparison
+  desc:
+    en: Multi-tenant overview, group management, batch operations, auth-aware UI
+    zh: 多租戶概覽、群組管理、批次操作、權限感知 UI
+  related:
+  - multi-tenant-comparison
+  - config-diff
+  - playground
+  - threshold-calculator
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
+- key: deployment-wizard
+  title:
+    en: Deployment Profile Wizard
+    zh: 部署配置精靈
+  file: interactive/tools/deployment-wizard.jsx
+  audience:
+  - platform
+  - sre
+  icon: wizard
+  tags:
+  - deployment
+  - helm
+  - guided
+  - configuration
+  desc:
+    en: Generate Helm values for Tier 1/2 deployment
+    zh: 產生 Tier 1/2 部署 Helm values
+  related:
+  - architecture-quiz
+  - cicd-setup-wizard
+  - platform-health
+  journey_phase: deploy
+  hub_section: interactive
+  appears_in: []

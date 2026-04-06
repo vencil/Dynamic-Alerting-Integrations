@@ -2,12 +2,12 @@
 title: "Scenario: Automated Shadow Monitoring Cutover Workflow"
 tags: [scenario, shadow-monitoring, cutover]
 audience: [sre, devops]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Scenario: Automated Shadow Monitoring Cutover Workflow
 
-> **v2.4.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
+> **v2.5.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
 
 ## Problem
 
@@ -423,6 +423,14 @@ After cutover:
 - [ ] `diagnose` shows no anomalies
 - [ ] Old rules completely removed
 - [ ] Backups archived
+
+## Interactive Tools
+
+> 💡 **Interactive Tools** — The following tools can be tested directly in the [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/):
+>
+> - [Config Diff](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx) — Compare configuration changes
+> - [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx) — Simulate rule transformation and validation
+> - [Alert Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx) — Test alert firing during shadow monitoring
 
 ## Related Resources
 

@@ -2,13 +2,13 @@
 title: "動手實驗：從零到生產告警"
 tags: [scenario, hands-on, lab, adoption, tutorial]
 audience: [platform-engineer, tenant]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
 # 動手實驗：從零到生產告警
 
-> **v2.4.0** | 預計時間：30–45 分鐘 | 前置需求：已安裝 Docker
+> **v2.5.0** | 預計時間：30–45 分鐘 | 前置需求：已安裝 Docker
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
@@ -35,7 +35,7 @@ docker pull ghcr.io/vencil/da-tools:latest
 mkdir -p ~/da-lab && cd ~/da-lab
 ```
 
-## 練習 1：使用 da-tools init 快速建立
+## Exercise 1: Bootstrap with da-tools init
 
 可使用 CI/CD 導入精靈或直接執行 `da-tools init`：
 
@@ -191,7 +191,7 @@ docker run --rm \
 
 **檢查點**：你能解釋為什麼 `group_wait: "2s"` 會驗證失敗嗎？（提示：guardrail 最小值是 5s）
 
-## 練習 4：產生 Alertmanager 路由
+## Exercise 4: Generate Alertmanager Routes
 
 ```bash
 mkdir -p .output

@@ -2,7 +2,7 @@
 title: "Shadow Monitoring SRE SOP"
 tags: [migration, shadow-monitoring, sop]
 audience: [sre, platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # Shadow Monitoring SRE SOP
@@ -46,7 +46,7 @@ da-tools shadow-verify preflight \
 
 > 手動替代：`curl -s http://localhost:9090/api/v1/rules | python3 -c "..."` + `ls -la migration_output/prefix-mapping.yaml`
 
-### 2.3 Alertmanager 攔截設定
+### 2.3 Alertmanager Interception Configuration
 
 `migrate_rule.py` 產出的規則已自帶 `migration_status: shadow` label，Alertmanager 必須攔截以避免誤報：
 
@@ -215,7 +215,7 @@ curl -s "http://localhost:9090/api/v1/label/__name__/values" | \
 
 可能原因：新 Recording Rule 尚未被 evaluate（等待 1–2 個 evaluation interval）、`prefix-mapping.yaml` 拼寫錯誤、該 tenant metric 已被 `disable`（三態機制）。
 
-### 5.3 da-tools validate 本身失敗
+### 5.3 da-tools validate Itself Fails
 
 ```bash
 # 確認 Prometheus 可達

@@ -2,12 +2,12 @@
 title: "場景：GitOps CI/CD 整合指南"
 tags: [scenario, gitops, ci-cd, adoption]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # 場景：GitOps CI/CD 整合指南
 
-> **v2.4.0** | 相關文件：[`architecture-and-design.md`](../architecture-and-design.md)、[`for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`cli-reference.md`](../cli-reference.md) · 互動工具：[CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
+> **v2.5.0** | 相關文件：[`architecture-and-design.md`](../architecture-and-design.md)、[`for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`cli-reference.md`](../cli-reference.md) · 互動工具：[CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
 
 ## 概述
 
@@ -27,7 +27,7 @@ lang: zh
 
 ## 1. 快速初始化
 
-### 1.1 使用 da-tools init
+### 1.1 Using da-tools init
 
 最快的方式是執行 `da-tools init`，它會在你的 repo 中自動產生完整的整合骨架。
 

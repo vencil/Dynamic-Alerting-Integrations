@@ -57,6 +57,10 @@ tests/_test_multidb_output/
 .claude/
 site/
 
+# --- Planning (internal, time-bound) ---
+docs/internal/v*-planning.md
+docs/internal/*-plan-draft.md
+
 # --- Validation ---
 .validation-baseline.json
 .validation-profile.csv

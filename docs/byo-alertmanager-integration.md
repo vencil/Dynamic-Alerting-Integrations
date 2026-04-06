@@ -2,12 +2,12 @@
 title: "BYO Alertmanager 整合指南"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # BYO Alertmanager 整合指南
 
-> **版本**：v2.4.0
+> **版本**：v2.5.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -65,7 +65,7 @@ graph LR
 
 ## 2. 整合步驟
 
-### Step 1: 啟用 Alertmanager Lifecycle API
+### Step 1: Enable Alertmanager Lifecycle API
 
 在 Alertmanager deployment 加入 `--web.enable-lifecycle` flag：
 
@@ -83,7 +83,7 @@ kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
 curl -sf http://localhost:9093/-/ready && echo "OK"
 ```
 
-### Step 2: 確保 Prometheus 連接 Alertmanager
+### Step 2: Ensure Prometheus is Connected to Alertmanager
 
 ```yaml
 # prometheus.yml
@@ -94,7 +94,7 @@ alerting:
             - "alertmanager.monitoring.svc.cluster.local:9093"
 ```
 
-### Step 3: 設定 Tenant Routing Config
+### Step 3: Configure Tenant Routing Config (設定 Tenant Routing)
 
 在 tenant YAML 中定義 `_routing` section：
 
@@ -112,7 +112,7 @@ tenants:
       repeat_interval: "4h"
 ```
 
-### Step 4: 產出 Alertmanager Fragment
+### Step 4: Generate Alertmanager Fragment
 
 ```bash
 # 產出 fragment
@@ -130,7 +130,7 @@ da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom
 - `receivers[]`: Per-tenant receiver（webhook/email/slack/teams/rocketchat/pagerduty）
 - `inhibit_rules[]`: Per-tenant severity dedup rules
 
-### Step 5: 合併至 Alertmanager ConfigMap
+### Step 5: Merge into Alertmanager ConfigMap
 
 將產出的 fragment 合併至 Alertmanager 主配置。**兩種模式根據部署流程選擇：**
 
@@ -171,7 +171,7 @@ git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 
 > **注意**：`--apply` 與 `--output-configmap` 互斥，不能同時使用。
 
-### Step 6: 重載 Alertmanager
+### Step 6: Reload Alertmanager
 
 ```bash
 # HTTP reload（需 Step 1 的 --web.enable-lifecycle）
@@ -183,7 +183,7 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 
 ---
 
-## 3. generate_alertmanager_routes.py 工具
+## 3. generate_alertmanager_routes.py Tool
 
 ### 功能
 
@@ -429,7 +429,7 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 
 ---
 
-## Alertmanager Operator 路徑
+## Alertmanager Operator Path
 
 > 使用 Prometheus Operator 的 AlertmanagerConfig CRD？請參閱 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)，包含 AlertmanagerConfig v1beta1 產出、驗證與遷移指引。
 

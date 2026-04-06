@@ -2,12 +2,12 @@
 title: "Platform Engineer 快速入門指南"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # Platform Engineer 快速入門指南
 
-> **v2.4.0** | 適用對象：Platform Engineers、SRE、基礎設施管理員
+> **v2.5.0** | 適用對象：Platform Engineers、SRE、基礎設施管理員
 >
 > 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator 整合](../prometheus-operator-integration.md)
 
@@ -151,7 +151,7 @@ tenants:
     mysql_connections: "70"     # 覆蓋 profile 的值
 ```
 
-### 配置 Routing Profiles 與 Domain Policies（v2.1.0 ADR-007）
+### Configuring Routing Profiles & Domain Policies (v2.1.0 ADR-007)
 
 當多個 tenant 共用相同的路由配置時，建立 `_routing_profiles.yaml` 定義命名路由設定檔：
 
@@ -218,7 +218,7 @@ python3 scripts/tools/ops/validate_config.py \
 - Policy 檢查通過
 - 版本一致性
 
-### 告警品質評估（v2.1.0）
+### Alert Quality Scoring (v2.1.0)
 
 ```bash
 # 掃描所有 tenant 的告警品質（Noise / Stale / Latency / Suppression）
@@ -228,7 +228,7 @@ da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
 da-tools alert-quality --prometheus http://localhost:9090 --ci --min-score 60
 ```
 
-### Policy-as-Code 策略驗證（v2.1.0）
+### Policy-as-Code Validation (v2.1.0)
 
 ```bash
 # 用 _defaults.yaml 中的 _policies DSL 評估所有 tenant
@@ -238,7 +238,7 @@ da-tools evaluate-policy --config-dir conf.d/
 da-tools evaluate-policy --config-dir conf.d/ --ci
 ```
 
-### 基數趨勢預測（v2.1.0）
+### Cardinality Forecasting (v2.1.0)
 
 ```bash
 # 預測 per-tenant 基數成長趨勢、觸頂天數
@@ -312,17 +312,77 @@ kubectl create secret generic grafana-credentials \
   -n monitoring --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### Secrets 管理
+### Lifecycle 端點保護
+
+Prometheus 和 Alertmanager 的 `/-/quit` 端點可關閉服務。應透過 NetworkPolicy 限制存取，僅允許 `configmap-reload` sidecar 呼叫管理埠。
+
+### Secrets Management — Migrating from ConfigMap to K8s Secret
 
 Alertmanager receiver 的敏感資訊（Slack token、webhook URL 等）必須存放在 K8s Secret，不可用 ConfigMap。基本做法是 `secretKeyRef`，進階做法整合 External Secrets Operator + HashiCorp Vault（自動輪換 + 審計日誌）。
+
+**基本做法 — K8s Secret + secretKeyRef：**
+
+```yaml
+# 1. 建立 Secret（一次性或由 CI 管理）
+kubectl create secret generic alertmanager-secrets \
+  --from-literal=slack-api-url='https://hooks.slack.com/services/T.../B.../xxx' \
+  --from-literal=pagerduty-key='your-service-key' \
+  -n monitoring
+
+# 2. 在 Alertmanager Deployment 中參照
+env:
+  - name: SLACK_API_URL
+    valueFrom:
+      secretKeyRef:
+        name: alertmanager-secrets
+        key: slack-api-url
+  - name: PAGERDUTY_KEY
+    valueFrom:
+      secretKeyRef:
+        name: alertmanager-secrets
+        key: pagerduty-key
+```
+
+在 `generate_alertmanager_routes.py` 產生的 receiver 配置中，使用 `<secret>` 或環境變數參照而非明文值。
+
+**進階做法 — External Secrets Operator + HashiCorp Vault：**
+
+生產環境若需中央化 secrets 管理、自動輪換和審計日誌，整合 External Secrets Operator (ESO)：
+
+```yaml
+# 1. 安裝 External Secrets Operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
+
+# 2. 設定 SecretStore（連接 Vault）
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: vault-backend
+  namespace: monitoring
+spec:
+  provider:
+    vault:
+      server: "https://vault.internal:8200"
+      path: "secret"
+      version: "v2"
+```
 
 ### Webhook Domain Allowlist
 
 `generate_alertmanager_routes.py --policy` 的空清單表示不限制。**生產環境強烈建議設定白名單**。
 
-### TLS 加密
+### TLS 加密通訊指南
 
 元件間通訊應啟用 TLS。推薦用 cert-manager 簽發憑證，threshold-exporter 支援 `--tls-cert-file` / `--tls-key-file` 參數，Prometheus 用 `scheme: https` + `tls_config` 抓取。
+
+### Config Reload 端點安全
+
+Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設定重新載入的 HTTP POST 端點。本專案使用 `configmap-reload` sidecar 自動呼叫這些端點。
+
+**安全影響：** 這些端點不需認證。如果攻擊者可以到達 Prometheus/Alertmanager 埠，他們可以重複觸發重新載入造成效能衝擊，或透過 `/-/quit` 關閉服務（如啟用）。
+
+**生產環境建議：** 使用上面「Lifecycle Endpoint Protection」章節的 NetworkPolicy 限制存取。確保 Prometheus 和 Alertmanager 使用 ClusterIP Services（不是 NodePort/LoadBalancer），僅在叢集內可達。
 
 ## 常見問題
 

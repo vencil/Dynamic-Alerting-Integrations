@@ -13,6 +13,7 @@
 | `docs/adr/007-cross-domain-routing-profiles.md` (.en.md) | Platform Engineers | ADR-007: 跨域路由設定檔與域策略 |
 | `docs/adr/008-operator-native-integration-path.md` (.en.md) | Platform Engineers | ADR-008: Operator-Native 整合路徑 |
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API 架構 |
+| `docs/adr/010-multi-tenant-grouping.md` (.en.md) | Platform Engineers, developers | ADR-010: Multi-Tenant Grouping Architecture |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |
@@ -21,6 +22,10 @@
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | 多租戶客製化規則治理規範 (Custom Rule Governance Model) |
+| `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven 架構設計 — 三態配置、動態路由、Tenant API |
+| `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | 高可用性 (HA) 設計 — 副本、PDB、防雙倍計算 |
+| `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
+| `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
 | `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |
@@ -45,6 +50,7 @@
 | `docs/interactive/tools/config-diff.jsx` | Platform Engineers | Config Version Diff |
 | `docs/interactive/tools/config-lint.jsx` | Platform Engineers, Tenants | Config Lint Report |
 | `docs/interactive/tools/dependency-graph.jsx` | Platform Engineers, Domain Experts (DBA) | Dependency Graph |
+| `docs/interactive/tools/deployment-wizard.jsx` | Platform Engineers, SREs, DevOps | Deployment Profile Wizard |
 | `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
 | `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
 | `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
@@ -56,6 +62,8 @@
 | `docs/interactive/tools/playground.jsx` | Platform Engineers, Tenants | YAML Playground |
 | `docs/interactive/tools/portal-shared.jsx` | Platform Engineers | Portal Shared Module |
 | `docs/interactive/tools/promql-tester.jsx` | Platform Engineers, Domain Experts (DBA) | Prometheus Query Tester |
+| `docs/interactive/tools/rbac-setup-wizard.jsx` | Platform Engineers, SREs | RBAC Setup Wizard |
+| `docs/interactive/tools/release-notes-generator.jsx` | Platform Engineers, SREs | Release Notes Generator |
 | `docs/interactive/tools/roi-calculator.jsx` | Platform Engineers | ROI Calculator |
 | `docs/interactive/tools/rule-pack-detail.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Detail Viewer |
 | `docs/interactive/tools/rule-pack-matrix.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Comparison Matrix |
@@ -66,14 +74,17 @@
 | `docs/interactive/tools/template-gallery.jsx` | Tenants, Platform Engineers | Config Template Gallery |
 | `docs/interactive/tools/tenant-manager.jsx` | Platform Engineers, SREs | Tenant Manager |
 | `docs/interactive/tools/threshold-calculator.jsx` | Domain Experts (DBA), Tenants | Threshold Calculator |
+| `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | All | Conventional Commits Guide |
 | `docs/internal/doc-template.md` | All | 文件模板規範 |
 | `docs/internal/dx-tooling-backlog.md` | All | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
+| `docs/internal/ssot-language-evaluation.md` (.en.md) | maintainers | SSOT 切換影響評估 |
 | `docs/internal/test-map.md` (.en.md) | All | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
+| `docs/internal/v2.5.0-v2.6.0-planning.md` | maintainers | v2.5.0 / v2.6.0 執行計畫 |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |

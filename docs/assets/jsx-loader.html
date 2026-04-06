@@ -465,7 +465,8 @@ window.addEventListener('pageshow', function(e) {
     'alert-noise-analyzer': '../interactive/tools/alert-noise-analyzer.jsx',
     'roi-calculator': '../interactive/tools/roi-calculator.jsx',
     'multi-tenant-comparison': '../interactive/tools/multi-tenant-comparison.jsx',
-    'tenant-manager': '../interactive/tools/tenant-manager.jsx'
+    'tenant-manager': '../interactive/tools/tenant-manager.jsx',
+    'deployment-wizard': '../interactive/tools/deployment-wizard.jsx'
   };
 
   function buildCustomFlow(toolsParam) {
@@ -763,7 +764,8 @@ window.addEventListener('pageshow', function(e) {
         'alert-noise-analyzer': { title: 'Alert Noise Analyzer', desc: 'Analyze alert noise and find optimization opportunities', path: '../interactive/tools/alert-noise-analyzer.jsx' },
         'roi-calculator': { title: 'ROI Calculator', desc: 'Calculate adoption benefits', path: '../interactive/tools/roi-calculator.jsx' },
         'multi-tenant-comparison': { title: 'Multi-Tenant Comparison', desc: 'Compare thresholds across tenants, detect outliers', path: '../interactive/tools/multi-tenant-comparison.jsx' },
-        'tenant-manager': { title: 'Tenant Manager', desc: 'Multi-instance management with filtering and batch operations', path: '../interactive/tools/tenant-manager.jsx' }
+        'tenant-manager': { title: 'Tenant Manager', desc: 'Multi-instance management with filtering and batch operations', path: '../interactive/tools/tenant-manager.jsx' },
+        'deployment-wizard': { title: 'Deployment Profile Wizard', desc: 'Generate Helm values for Tier 1/2 deployment', path: '../interactive/tools/deployment-wizard.jsx' }
       };
       var footer = document.createElement('div');
       footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';

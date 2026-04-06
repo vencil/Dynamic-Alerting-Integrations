@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -169,7 +169,7 @@ domain_policies:
 - 優點：直覺的分組概念
 - 缺點：隱式繼承易產生意外覆蓋、與現行 defaults/enforced 機制衝突
 
-### 方案 C：Alertmanager 原生 Route Tree (已考量)
+### Approach C: Native Alertmanager Route Tree (Considered)
 - 優點：零額外抽象
 - 缺點：Alertmanager route tree 不支援「命名模板」，需手工重複；無約束驗證能力
 
@@ -243,7 +243,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
     return violations
 ```
 
-## v2.1.0 實作摘要
+## v2.1.0 Implementation Summary
 
 - `generate_alertmanager_routes.py` — 四層合併（defaults → profile → tenant → enforced）+ `check_domain_policies()` 驗證（21 tests）
 - `check_routing_profiles.py` — Profile/Policy lint 工具（28 tests + pre-commit hook 自動執行）

@@ -2,7 +2,7 @@
 title: "Alert Preview Tab"
 tags: [self-service, alerts, internal]
 audience: ["platform-engineer", "tenant"]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 

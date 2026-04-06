@@ -1,0 +1,125 @@
+# da-portal Helm values
+# Self-Hosted Interactive Tools Portal
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/vencil/da-portal
+  tag: "2.5.0"
+  pullPolicy: IfNotPresent
+
+# Portal application settings
+portal:
+  # Port nginx listens on inside container
+  listenPort: 80
+  # Tenant API URL for reverse proxy /api/v1/
+  tenantApiUrl: "http://tenant-api.monitoring.svc.cluster.local:8080"
+
+# nginx configuration
+nginx:
+  # Enable custom nginx.conf from configmap-nginx.yaml
+  enabled: true
+  # Custom nginx.conf content (optional override)
+  # Leave empty to use built-in config
+  customConfig: ""
+
+# oauth2-proxy sidecar configuration
+oauth2Proxy:
+  enabled: true
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: "v7.15.1"
+    pullPolicy: IfNotPresent
+  # Provider: github | google | oidc | gitlab
+  provider: github
+  # Redirect URL must match the registered OAuth2 app callback URL.
+  # Set to your actual Ingress host.
+  redirectUrl: "http://da-portal.example.com/oauth2/callback"
+  # Accept all email domains — restrict further via firewall/network policies
+  emailDomain: "*"
+  # Cookie settings
+  cookieSecure: true  # Requires HTTPS; set false only for local dev
+  cookieHttpOnly: true
+  cookieSameSite: "Lax"
+  cookieName: "_da_portal_session"
+  # Set to false to skip creating the placeholder Secret
+  # (use this in production with externally managed secrets)
+  createSecret: true
+  # Secret name (must be pre-created; see secret-oauth2proxy.yaml template)
+  secretName: oauth2-proxy-secrets
+
+# Data volume mounts for customization (optional)
+# Use these to provide custom platform-data.json, flows.json, or static content
+customData:
+  # Enable custom data volume
+  enabled: false
+  # Use ConfigMap or emptyDir
+  type: configMap  # configMap | emptyDir
+  configMapName: da-portal-custom
+  # If type: emptyDir, you can use init container to clone/setup
+
+# Service configuration
+service:
+  type: ClusterIP
+  # Port 80 → oauth2-proxy (4180) — external traffic
+  port: 80
+  # Port 8080 → nginx directly — cluster-internal (health checks, internal access)
+  internalPort: 8080
+
+# Ingress (disabled by default — configure per-environment)
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: da-portal.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource requests and limits
+resources:
+  nginx:
+    requests:
+      cpu: 30m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  oauth2Proxy:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# Pod security context (non-root, matching tenant-api)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# NetworkPolicy
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to access the portal
+  allowedNamespaces:
+    - monitoring
+    - db-a
+    - db-b
+
+# Pod annotations
+podAnnotations:
+  # Portal is a static file server; no metrics to scrape
+  # Leave empty or add custom annotations as needed
+  {}
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""

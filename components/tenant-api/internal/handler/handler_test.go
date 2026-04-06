@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -212,7 +213,7 @@ func TestGetTenant_EmptyID(t *testing.T) {
 func TestListTenants_Empty(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 
-	h := ListTenants(configDir)
+	h := ListTenants(configDir, newRBACManager(t, ""))
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -235,7 +236,7 @@ func TestListTenants_MultipleTenants(t *testing.T) {
 		"db-b.yaml": "tenants:\n  db-b:\n    _state_maintenance: \"enable\"\n",
 	})
 
-	h := ListTenants(configDir)
+	h := ListTenants(configDir, newRBACManager(t, ""))
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -276,7 +277,7 @@ func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
 		"not-yaml.txt":   "not yaml",
 	})
 
-	h := ListTenants(configDir)
+	h := ListTenants(configDir, newRBACManager(t, ""))
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -295,7 +296,7 @@ func TestListTenants_WithYmlExtension(t *testing.T) {
 		"db-c.yml": "tenants:\n  db-c:\n    mysql_cpu: \"75\"\n",
 	})
 
-	h := ListTenants(configDir)
+	h := ListTenants(configDir, newRBACManager(t, ""))
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -318,7 +319,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 		"db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
 	})
 
-	h := ListTenants(configDir)
+	h := ListTenants(configDir, newRBACManager(t, ""))
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -611,7 +612,7 @@ func TestPutTenant_InvalidID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw)
+	h := PutTenant(gw, policy.NewManager(configDir))
 	body := bytes.NewBufferString("tenants:\n  bad:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/../bad", "id", "../bad", body)
 	w := httptest.NewRecorder()
@@ -626,7 +627,7 @@ func TestPutTenant_EmptyID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw)
+	h := PutTenant(gw, policy.NewManager(configDir))
 	body := bytes.NewBufferString("tenants:\n  test:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/", "id", "", body)
 	w := httptest.NewRecorder()
@@ -642,7 +643,7 @@ func TestPutTenant_ValidationFailure(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw)
+	h := PutTenant(gw, policy.NewManager(configDir))
 	// Valid ID but YAML doesn't contain the matching tenant section
 	body := bytes.NewBufferString("tenants:\n  other-tenant:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
@@ -659,7 +660,7 @@ func TestPutTenant_InvalidYAML(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw)
+	h := PutTenant(gw, policy.NewManager(configDir))
 	body := bytes.NewBufferString("{{invalid yaml")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	w := httptest.NewRecorder()
@@ -677,7 +678,7 @@ func TestBatchTenants_EmptyOperations(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := BatchTenants(gw, configDir, rbacMgr)
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
 	reqBody, _ := json.Marshal(BatchRequest{Operations: []BatchOperation{}})
 	body := bytes.NewBuffer(reqBody)
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
@@ -695,7 +696,7 @@ func TestBatchTenants_InvalidJSON(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := BatchTenants(gw, configDir, rbacMgr)
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
 	body := bytes.NewBufferString("{invalid json")
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
 	req.Header.Set("Content-Type", "application/json")
@@ -712,7 +713,7 @@ func TestBatchTenants_InvalidTenantID(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := BatchTenants(gw, configDir, rbacMgr)
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
 			{TenantID: "../bad", Patch: map[string]string{"_silent_mode": "warning"}},
@@ -746,7 +747,7 @@ func TestBatchTenants_PermissionDenied(t *testing.T) {
     permissions: [read]
 `)
 
-	h := BatchTenants(gw, configDir, rbacMgr)
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
 			{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}},
@@ -989,7 +990,7 @@ func TestFullRouter_ListTenants(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-		Get("/api/v1/tenants", ListTenants(configDir))
+		Get("/api/v1/tenants", ListTenants(configDir, newRBACManager(t, "")))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -999,5 +1000,143 @@ func TestFullRouter_ListTenants(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("router ListTenants status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// TestMe tests the GET /api/v1/me endpoint
+func TestMe(t *testing.T) {
+	rbacYAML := `
+groups:
+  - name: platform-admins
+    tenants: ["*"]
+    permissions: [read, write, admin]
+  - name: db-operators
+    tenants: ["db-a-*", "db-b-*"]
+    permissions: [read, write]
+`
+	rbacMgr := newRBACManager(t, rbacYAML)
+
+	tests := []struct {
+		name         string
+		email        string
+		groups       string
+		expectStatus int
+		checkResp    func(*testing.T, MeResponse)
+	}{
+		{
+			name:         "single group",
+			email:        "alice@example.com",
+			groups:       "platform-admins",
+			expectStatus: http.StatusOK,
+			checkResp: func(t *testing.T, m MeResponse) {
+				if m.Email != "alice@example.com" {
+					t.Errorf("Email = %q, want %q", m.Email, "alice@example.com")
+				}
+				if m.User != "alice" {
+					t.Errorf("User = %q, want %q", m.User, "alice")
+				}
+				if len(m.Groups) != 1 || m.Groups[0] != "platform-admins" {
+					t.Errorf("Groups = %v, want [platform-admins]", m.Groups)
+				}
+				if len(m.AccessibleTenants) != 1 || m.AccessibleTenants[0] != "*" {
+					t.Errorf("AccessibleTenants = %v, want [*]", m.AccessibleTenants)
+				}
+				if perms, ok := m.Permissions["platform-admins"]; !ok || len(perms) != 3 {
+					t.Errorf("platform-admins permissions = %v, want [admin read write]", perms)
+				}
+			},
+		},
+		{
+			name:         "multiple groups",
+			email:        "bob@example.com",
+			groups:       "platform-admins, db-operators",
+			expectStatus: http.StatusOK,
+			checkResp: func(t *testing.T, m MeResponse) {
+				if m.Email != "bob@example.com" {
+					t.Errorf("Email = %q, want %q", m.Email, "bob@example.com")
+				}
+				if m.User != "bob" {
+					t.Errorf("User = %q, want %q", m.User, "bob")
+				}
+				if len(m.Groups) != 2 {
+					t.Errorf("Groups length = %d, want 2", len(m.Groups))
+				}
+				// Check accessible tenants contains both patterns
+				if len(m.AccessibleTenants) < 3 {
+					t.Errorf("AccessibleTenants = %v, want at least 3 entries", m.AccessibleTenants)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := Me(rbacMgr)
+
+			// Create request and inject RBAC context
+			req := httptest.NewRequest("GET", "/api/v1/me", nil)
+			req.Header.Set("X-Forwarded-Email", tt.email)
+			req.Header.Set("X-Forwarded-Groups", tt.groups)
+
+			// Wrap with RBAC middleware to inject identity into context
+			w := httptest.NewRecorder()
+			wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+			wrapped.ServeHTTP(w, req)
+
+			if w.Code != tt.expectStatus {
+				t.Errorf("status = %d, want %d", w.Code, tt.expectStatus)
+			}
+
+			var resp MeResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+
+			if tt.checkResp != nil {
+				tt.checkResp(t, resp)
+			}
+		})
+	}
+}
+
+// TestMeMissingIdentity tests that /api/v1/me returns 401 without identity headers
+func TestMeMissingIdentity(t *testing.T) {
+	rbacMgr := newRBACManager(t, "")
+
+	handler := Me(rbacMgr)
+	req := httptest.NewRequest("GET", "/api/v1/me", nil)
+	// Intentionally omit X-Forwarded-Email
+
+	w := httptest.NewRecorder()
+	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+	wrapped.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestMeEmptyEmailDirect tests the handler-level guard when called without middleware
+// (e.g., if middleware is misconfigured or bypassed). The handler itself should return 401.
+func TestMeEmptyEmailDirect(t *testing.T) {
+	rbacMgr := newRBACManager(t, "")
+
+	handler := Me(rbacMgr)
+	req := httptest.NewRequest("GET", "/api/v1/me", nil)
+	// No middleware — RequestEmail(r) returns "" from empty context
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["error"] == "" {
+		t.Error("expected non-empty error message in response body")
 	}
 }

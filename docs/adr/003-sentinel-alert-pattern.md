@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -90,11 +90,11 @@ exporter (tenant_silent_mode)
 
 ## 替代方案考量
 
-### 方案 A：直接 PromQL 抑制 (已拒絕)
+### Approach A: Direct PromQL Suppression (Rejected)
 - 優點：概念簡單
 - 缺點：不可組合、難以維護、無可觀測性
 
-### 方案 B：Alertmanager 路由層級 (已考量)
+### Approach B: Alertmanager Routing Layer (Considered)
 - 優點：無需修改告警規則
 - 缺點：只能禁止通知，無法控制告警生成；難以應對複雜的租戶級邏輯
 

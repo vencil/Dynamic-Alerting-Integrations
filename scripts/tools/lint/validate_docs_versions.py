@@ -543,8 +543,11 @@ def check_bilingual_number_consistency() -> List[Issue]:
         pairs.append((zh_root, en_root))
 
     for zh_file, en_file in pairs:
-        zh_content = zh_file.read_text(encoding="utf-8")
-        en_content = en_file.read_text(encoding="utf-8")
+        try:
+            zh_content = zh_file.read_text(encoding="utf-8")
+            en_content = en_file.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            continue  # phantom mount or missing file — skip pair
 
         for pat, desc in BILINGUAL_NUMBER_PATTERNS:
             zh_nums = sorted(set(re.findall(pat, zh_content, re.IGNORECASE)))

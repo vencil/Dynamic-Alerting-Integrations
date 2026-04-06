@@ -455,10 +455,65 @@ def check_versions() -> dict[str, object]:
 # ============================================================
 # Report
 # ============================================================
+# v2.5.0 Phase C: Suggested actions for each check type.
+# Maps check name → (hint_message, docs_link).
+_CHECK_HINTS: dict[str, tuple[str, str]] = {
+    "yaml_syntax": (
+        "Fix YAML syntax errors (indentation, quoting, colons) in the listed files.",
+        "docs/getting-started/for-platform-engineers.md",
+    ),
+    "schema": (
+        "Remove unknown keys or add them to the schema. "
+        "Run: da-tools explain-route --tenant <id> to inspect resolved config.",
+        "docs/scenarios/hands-on-lab.md",
+    ),
+    "routes": (
+        "Check _routing and _routing_defaults for invalid receiver types, "
+        "group_by, or timing values. "
+        "Run: da-tools explain-route --config-dir <dir> --tenant <id>",
+        "docs/scenarios/alert-routing-split.md",
+    ),
+    "policy": (
+        "Review _domain_policy.yaml constraints (allowed/forbidden receiver types, "
+        "timing guardrails). Contact a domain admin to update if needed.",
+        "docs/scenarios/advanced-scenarios.md",
+    ),
+    "custom_rules": (
+        "Validate rule pack YAML syntax and ensure referenced profiles exist. "
+        "Run: da-tools rule-pack-split --check to verify.",
+        "docs/scenarios/advanced-scenarios.md",
+    ),
+    "profiles": (
+        "Ensure all _profile references in tenant configs match a defined profile "
+        "in _defaults.yaml or the profiles section.",
+        "docs/architecture-and-design.md",
+    ),
+    "versions": (
+        "Run: make version-check && make bump-docs to synchronize version numbers.",
+        "docs/internal/github-release-playbook.md",
+    ),
+    "policy_dsl": (
+        "Check Policy-as-Code DSL syntax. "
+        "Run: da-tools opa-evaluate --policy <file> --config-dir <dir>",
+        "docs/scenarios/gitops-ci-integration.md",
+    ),
+}
+
+
 def print_report(results: list[dict[str, object]], as_json: bool = False) -> None:
-    """Print the validation report."""
+    """Print the validation report with suggested actions (v2.5.0)."""
+    # v2.5.0: Inject hints into JSON output for programmatic consumers
     if as_json:
-        print(json.dumps(results, indent=2))
+        enriched = []
+        for r in results:
+            entry = dict(r)
+            if r["status"] != PASS:
+                hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
+                if hint:
+                    entry["suggested_action"] = hint
+                    entry["docs_link"] = docs
+            enriched.append(entry)
+        print(json.dumps(enriched, indent=2))
         return
 
     print("=" * 60)
@@ -472,6 +527,13 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         print(f"\n[{icon}] {r['check']}")
         for detail in r.get("details", []):
             print(f"       {detail}")
+
+        # v2.5.0 Phase C: Show suggested action for non-passing checks
+        if r["status"] != PASS:
+            hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
+            if hint:
+                print(f"       -> Suggested action: {hint}")
+                print(f"       -> See: {docs}")
 
     # Summary
     total = len(results)

@@ -2,7 +2,7 @@
 title: "Threshold Exporter API Reference"
 tags: [api, reference, threshold-exporter]
 audience: [platform-engineer, sre]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -22,7 +22,7 @@ Threshold Exporter 是 Multi-Tenant Dynamic Alerting 平台的核心元件，負
 | 最大標頭大小 | 8192 字節 |
 | 指標格式 | OpenMetrics text format |
 
-## API 總覽
+## API Overview
 
 ```
 GET /metrics          → Prometheus 指標匯出 (200 OK)
@@ -33,7 +33,7 @@ GET /api/v1/config    → 設定狀態除錯端點 (200 OK)
 
 ---
 
-## 1. GET /metrics - Prometheus 指標匯出
+## 1. GET /metrics - Prometheus Metrics Export
 
 ### 說明
 
@@ -283,7 +283,7 @@ metadata:
 spec:
   containers:
   - name: threshold-exporter
-    image: ghcr.io/vencil/threshold-exporter:v2.4.0
+    image: ghcr.io/vencil/threshold-exporter:v2.5.0
     ports:
     - containerPort: 8080
       name: metrics
@@ -331,7 +331,7 @@ spec:
 
 ---
 
-## 4. GET /api/v1/config - 設定狀態除錯端點
+## 4. GET /api/v1/config - Configuration State Debug Endpoint
 
 ### 說明
 
@@ -482,7 +482,7 @@ curl -s http://localhost:8080/api/v1/config | grep -A 10 "Metadata:"
 
 ---
 
-## Prometheus Scrape 設定
+## Prometheus Scrape Configuration
 
 ### 簡單設定
 

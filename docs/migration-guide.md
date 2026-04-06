@@ -2,7 +2,7 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 # Migration Guide — 遷移指南
@@ -56,7 +56,7 @@ flowchart TD
 
 ---
 
-## 0. 企業級反向分析 — da-tools onboard
+## 0. Enterprise-Grade Reverse Analysis — da-tools onboard
 
 對於已有成熟監控體系的企業，`onboard_platform.py` 支援**反向分析**既有配置，自動生成遷移計畫：
 
@@ -89,7 +89,7 @@ da-tools onboard --alertmanager-config /data/alertmanager.yml \
 
 ---
 
-## 1. 新租戶快速接入 — da-tools scaffold
+## 1. New Tenant Quick Onboarding — da-tools scaffold
 
 對於全新租戶，使用互動式產生器即可在 30 秒內完成設定：
 
@@ -129,7 +129,7 @@ scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-expor
 # 方式 A (推薦): Helm values 覆寫 — OCI registry
 #   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.4.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
   -n monitoring -f values-override.yaml
 
 # 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
@@ -144,7 +144,7 @@ ConfigMap 變更後，exporter 會在 1-3 分鐘內自動 hot-reload（K8s propa
 
 ---
 
-## 2. 既有規則遷移 — da-tools migrate
+## 2. Existing Rule Migration — da-tools migrate
 
 已有傳統 Prometheus alert rules 的團隊，使用自動轉換工具（v4 — AST + regex 雙引擎）：
 
@@ -207,9 +207,11 @@ kubectl create configmap prometheus-rules-custom \
 
 > **Helm 使用者**：也可將 recording/alert rules 整合至 Helm chart 的 values 中統一管理。詳見 [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-部署與配置管理)。
 
-### 聚合模式與 Auto-Suppression
+### 聚合模式智能猜測
 
 對於複雜表達式，工具會依據 6 條啟發規則自動猜測 `sum` 或 `max`。猜測的 recording rule 會帶有醒目的 ASCII 警告方塊，提醒使用者在複製貼上前確認聚合模式（`sum`=叢集總量, `max`=單點瓶頸）。如不確定，可用 `--interactive` 模式重新執行。
+
+### Auto-Suppression
 
 當輸入的規則同時包含 warning 和 critical 版本（相同 base metric key），工具會自動配對並為 warning alert 注入第二層 `unless` 子句（Auto-Suppression），確保 critical 觸發時抑制 warning。配對邏輯：warning key `custom_X` 對應 critical key `custom_X_critical`。若只有單一嚴重度則不注入。
 
@@ -224,7 +226,7 @@ kubectl create configmap prometheus-rules-custom \
 ```bash
 # 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.4.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -248,7 +250,7 @@ curl -s http://localhost:8080/metrics | grep user_threshold
 curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 ```
 
-### 在 K8s 叢集內使用 da-tools
+### Use da-tools in K8s Cluster
 
 da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v2.4.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
 
@@ -309,7 +311,7 @@ tenants:
 
 ---
 
-## 5. Alertmanager 路由遷移
+## 5. Alertmanager Routing Migration
 
 ### 傳統 (基於 instance)
 
@@ -616,7 +618,7 @@ da-tools validate --mapping /data/prefix-mapping.yaml \
 kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 ```
 
-**長期 Shadow Monitoring (K8s Job)**：大型客戶建議將 `da-tools validate --watch` 包成 K8s Job，在叢集內持續運行 1-2 週（例如 `--interval 300 --rounds 4032` = 每 5 分鐘一次 × 14 天）。K8s Job 模式參見 [§3 在 K8s 叢集內使用 da-tools](#在-k8s-叢集內使用-da-tools)。
+**長期 Shadow Monitoring (K8s Job)**：大型客戶建議將 `da-tools validate --watch` 包成 K8s Job，在叢集內持續運行 1-2 週（例如 `--interval 300 --rounds 4032` = 每 5 分鐘一次 × 14 天）。K8s Job 模式參見 [§3 Use da-tools in K8s Cluster](#use-da-tools-in-k8s-cluster)。
 
 ### Phase C: 切換與收斂
 

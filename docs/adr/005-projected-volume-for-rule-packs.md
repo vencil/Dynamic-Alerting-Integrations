@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: zh
 ---
 
@@ -68,7 +68,7 @@ volumes:
 
 **運維簡潔**：無需自定義 controller 或複雜的初始化邏輯。純 K8s 原生功能，易於理解與維護。
 
-### 為何拒絕單一大 ConfigMap
+### Why Reject Single Large ConfigMap
 
 - **All-or-nothing**：無法選擇卸載，租戶被迫接受所有 pack
 - **版本管理困難**：Rule Pack 的更新週期不同 (K8s pack 頻繁，Database pack 穩定)，難以統一版本
@@ -99,7 +99,7 @@ volumes:
 
 ## 替代方案考量
 
-### 方案 A：單一大 ConfigMap (已拒絕)
+### Approach A: Single Large ConfigMap (Rejected)
 - 優點：配置簡單、部署快速
 - 缺點：無選擇性、故障放大、版本管理困難
 
@@ -107,7 +107,7 @@ volumes:
 - 優點：更靈活、可支援執行時 Rule Pack 變更
 - 缺點：引入自定義 controller、複雜度高、難於維護
 
-### 方案 C：Helm subcharts (已考量)
+### Approach C: Helm Subcharts (Considered)
 - 優點：每個 pack 可獨立 chart
 - 缺點：Helm release 碎片化、依賴管理複雜
 

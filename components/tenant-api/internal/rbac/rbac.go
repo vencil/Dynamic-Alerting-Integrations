@@ -39,10 +39,15 @@ const (
 )
 
 // GroupRule maps an IdP group to a set of tenants and permissions.
+//
+// v2.5.0: Added Environments and Domains for metadata-based filtering.
+// These fields are optional — omitting them is equivalent to wildcard (all).
 type GroupRule struct {
-	Name        string       `yaml:"name"`
-	Tenants     []string     `yaml:"tenants"`     // tenant IDs or patterns ("*", "db-a-*")
-	Permissions []Permission `yaml:"permissions"` // [read, write, admin]
+	Name         string       `yaml:"name"`
+	Tenants      []string     `yaml:"tenants"`                // tenant IDs or patterns ("*", "db-a-*")
+	Permissions  []Permission `yaml:"permissions"`             // [read, write, admin]
+	Environments []string     `yaml:"environments,omitempty"` // ["production", "staging"] — empty = all
+	Domains      []string     `yaml:"domains,omitempty"`      // ["finance", "ecommerce"] — empty = all
 }
 
 // RBACConfig is the parsed _rbac.yaml structure.
@@ -158,6 +163,133 @@ func (m *Manager) HasPermission(idpGroups []string, tenantID string, want Permis
 			if permCovers(p, want) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// HasMetadataAccess checks whether any of the provided IdP groups grants
+// access for a tenant with the given environment and domain metadata.
+// Returns true if at least one matching rule allows the metadata values.
+// Empty environment or domain in the tenant metadata always passes (no restriction).
+func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, domain string) bool {
+	cfg := m.Get()
+	if len(cfg.Groups) == 0 {
+		return true // open mode — no metadata restrictions
+	}
+
+	groupSet := make(map[string]bool, len(idpGroups))
+	for _, g := range idpGroups {
+		groupSet[g] = true
+	}
+
+	for _, rule := range cfg.Groups {
+		if !groupSet[rule.Name] {
+			continue
+		}
+		if !tenantMatches(rule.Tenants, tenantID) {
+			continue
+		}
+		// Check environment constraint (empty = wildcard)
+		if !metadataMatches(rule.Environments, environment) {
+			continue
+		}
+		// Check domain constraint (empty = wildcard)
+		if !metadataMatches(rule.Domains, domain) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// AccessibleEnvironments returns the set of environments the user's IdP groups
+// can access (empty set means "all" — no restriction).
+func (m *Manager) AccessibleEnvironments(idpGroups []string) []string {
+	cfg := m.Get()
+	if len(cfg.Groups) == 0 {
+		return nil // open mode
+	}
+
+	groupSet := make(map[string]bool, len(idpGroups))
+	for _, g := range idpGroups {
+		groupSet[g] = true
+	}
+
+	hasWildcard := false
+	envs := make(map[string]bool)
+	for _, rule := range cfg.Groups {
+		if !groupSet[rule.Name] {
+			continue
+		}
+		if len(rule.Environments) == 0 {
+			hasWildcard = true
+			break
+		}
+		for _, e := range rule.Environments {
+			envs[e] = true
+		}
+	}
+	if hasWildcard {
+		return nil // no restriction
+	}
+	result := make([]string, 0, len(envs))
+	for e := range envs {
+		result = append(result, e)
+	}
+	return result
+}
+
+// AccessibleDomains returns the set of domains the user's IdP groups
+// can access (empty set means "all" — no restriction).
+func (m *Manager) AccessibleDomains(idpGroups []string) []string {
+	cfg := m.Get()
+	if len(cfg.Groups) == 0 {
+		return nil
+	}
+
+	groupSet := make(map[string]bool, len(idpGroups))
+	for _, g := range idpGroups {
+		groupSet[g] = true
+	}
+
+	hasWildcard := false
+	doms := make(map[string]bool)
+	for _, rule := range cfg.Groups {
+		if !groupSet[rule.Name] {
+			continue
+		}
+		if len(rule.Domains) == 0 {
+			hasWildcard = true
+			break
+		}
+		for _, d := range rule.Domains {
+			doms[d] = true
+		}
+	}
+	if hasWildcard {
+		return nil
+	}
+	result := make([]string, 0, len(doms))
+	for d := range doms {
+		result = append(result, d)
+	}
+	return result
+}
+
+// metadataMatches checks if a metadata value matches a rule's allowed list.
+// Empty allowList means wildcard (all values allowed).
+// Empty value in the tenant always matches (no metadata to restrict on).
+func metadataMatches(allowList []string, value string) bool {
+	if len(allowList) == 0 {
+		return true // wildcard — no restriction
+	}
+	if value == "" {
+		return true // tenant has no metadata → passes (be permissive)
+	}
+	for _, allowed := range allowList {
+		if allowed == value {
+			return true
 		}
 	}
 	return false

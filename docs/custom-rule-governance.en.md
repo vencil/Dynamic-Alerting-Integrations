@@ -2,7 +2,7 @@
 title: "Multi-Tenant Custom Rule Governance Model"
 tags: [governance, custom-rules]
 audience: [platform-engineer]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 # Multi-Tenant Custom Rule Governance Model
@@ -243,21 +243,6 @@ flowchart TD
     G --> G1["Not optimized in 30 days<br/>→ Forced removal"]
     F -- NO --> H["Retain until next review"]
 ```
-
-### Health Metrics (Planned, Not Yet Implemented)
-
-Recommended tracking in threshold-exporter:
-
-```
-# Custom Rule count distribution
-da_custom_rule_count{tenant="db-a", tier="2"} 3
-da_custom_rule_count{tenant="db-a", tier="3"} 1
-
-# Alert when Tier 3 ratio exceeds 5%
-da_custom_rule_ratio_tier3 > 0.05
-```
-
-If a specific tenant's Tier 3 count keeps rising, this signals that Tier 2 scenario design may need expansion — not that the tenant's requirements are uniquely special.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, operator]
 audience: [platform-engineers]
-version: v2.4.0
+version: v2.5.0
 lang: en
 ---
 
@@ -58,6 +58,38 @@ graph TB
     end
 ```
 
+### Path B Tool Design
+
+**`da-tools operator-generate`**:
+- Read `rule-packs/` → output 15 PrometheusRule CRD YAML
+- Read `conf.d/` → output per-tenant AlertmanagerConfig CRD
+- Output ServiceMonitor for threshold-exporter
+- `--api-version` flag specifies AlertmanagerConfig API version (`v1alpha1` | `v1beta1`, default `v1beta1`)
+- `--gitops` flag: sorted keys, no timestamps/resourceVersion/status, deterministic output
+- `--namespace` flag: target namespace (affects CRD metadata.namespace)
+- `--output-dir` flag: Kustomize/Helm friendly output
+
+**`da-tools operator-check`**:
+- Detect Operator presence (`kubectl get crd prometheusrules.monitoring.coreos.com`)
+- Verify PrometheusRule loading status (label match ruleSelector)
+- Verify ServiceMonitor target status (Prometheus `/api/v1/targets`)
+- Verify AlertmanagerConfig effectiveness (Alertmanager status API)
+- Output diagnostic report (PASS / WARN / FAIL)
+
+### Detection Logic
+
+```python
+def detect_deployment_mode(kubeconfig=None):
+    """Detect whether target cluster uses ConfigMap or Operator deployment"""
+    try:
+        result = kubectl("get", "crd", "prometheusrules.monitoring.coreos.com")
+        if result.returncode == 0:
+            return "operator"
+    except Exception:
+        pass
+    return "configmap"
+```
+
 ### Mutual Exclusion Boundary
 
 | Item | Path A (ConfigMap) | Path B (Operator) |
@@ -80,6 +112,13 @@ We evaluated rewriting threshold-exporter to watch a custom `DynamicAlertTenant`
 3. **Proven stability**: Hot-reload benchmarked at 2,000 tenants / 10ms reload in v2.2.0
 4. **Incremental adoption**: Toolchain adaptation lets users migrate gradually
 
+### Why not just provide documentation (instead of building tools)?
+
+v2.2.0 BYO documentation's Operator Appendix was only CRD example translation. User feedback revealed:
+- Manual conversion of 15 Rule Pack ConfigMaps → PrometheusRule is time-consuming and error-prone
+- AlertmanagerConfig API version differences are easy to get wrong
+- GitOps pipelines require deterministic output
+
 ## Consequences
 
 ### Positive
@@ -87,13 +126,20 @@ We evaluated rewriting threshold-exporter to watch a custom `DynamicAlertTenant`
 - Operator users get first-class experience (auto-generated CRDs + validation tools)
 - Existing ConfigMap users are unaffected
 - GitOps pipelines integrate directly (`operator-generate --gitops` for deterministic YAML)
+- Clear migration path (ConfigMap → CRD gradual conversion)
 
 ### Negative
 
-- Increased toolchain maintenance (Path A + Path B)
+- Increased toolchain maintenance cost (Path A + Path B two paths)
 - Must track AlertmanagerConfig API version evolution
+- `operator-generate` CRD output must maintain compatibility with Operator versions
 
-### Future Direction
+### Risks
+
+- AlertmanagerConfig `v1alpha1` may be removed in future Operator versions → Default to `v1beta1`, mark `v1alpha1` as deprecated
+- Operator ruleSelector label strategies vary → `operator-check` provides diagnostic guidance
+
+## Future Direction
 
 1. **v2.4.0+ candidate**: threshold-exporter as Kubernetes Operator watching custom `DynamicAlertTenant` CRD
 2. **Helm Chart values.yaml integration**: kube-prometheus-stack Helm values examples
