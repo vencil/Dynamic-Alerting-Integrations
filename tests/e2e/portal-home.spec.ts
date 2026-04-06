@@ -21,25 +21,25 @@ test.describe('Portal Home Page @critical', () => {
   test('should render tool cards', async ({ page }) => {
     await page.goto('/');
 
-    // Wait for tool cards to load - we expect at least 10 tools (reasonable minimum)
-    const toolCardCount = await page.locator('.tool-card, [data-testid="tool-card"]').count();
+    // Wait for tool cards to load - cards use class "card" and are rendered as <a> links
+    // We expect at least 10 tools (reasonable minimum)
+    const toolCardCount = await page.locator('a.card').count();
     expect(toolCardCount).toBeGreaterThanOrEqual(10);
 
     // Verify tool cards are visible and have proper content
-    const toolCards = page.locator('.tool-card, [data-testid="tool-card"]').first();
+    const toolCards = page.locator('a.card').first();
     await expect(toolCards).toBeVisible({ timeout: 10000 });
   });
 
-  test('should display journey phase sections', async ({ page }) => {
+  test('should display phase section headers', async ({ page }) => {
     await page.goto('/');
 
-    // Assert journey phases exist: Deploy, Configure, Monitor, Troubleshoot
+    // Assert phase section headers exist: Deploy, Configure, Monitor, Troubleshoot
     const phases = ['Deploy', 'Configure', 'Monitor', 'Troubleshoot'];
 
     for (const phase of phases) {
-      const phaseSection = page.locator(`:text("${phase}")`).first();
-      // Phase sections should exist in page content
-      const count = await page.locator(`:text-is("${phase}")`).count();
+      // Each phase has a section header with emoji + phase name + badge
+      const count = await page.locator(`.section-title:has-text("${phase}")`).count();
       expect(count).toBeGreaterThanOrEqual(1);
     }
   });
