@@ -145,7 +145,7 @@ Portal 中的三個核心模組（portal-shared、tabs 三層）由 `jsx-loader.
 
 ### GitHub Actions CI 運行
 
-CI matrix 配置：Python 3.10/3.13 × Go 1.22/1.26，8 種組合平行執行。新工具應在本地通過 `pytest -v --cov-fail-under=85` 且 `mypy scripts/tools/_lib_*.py` 無誤後才提交。
+CI matrix 配置：Python 3.13 × Go 1.26（自 v2.5.0 起統一為單一版本）。新工具應在本地通過 `pytest -v --cov-fail-under=85` 且 `mypy scripts/tools/_lib_*.py` 無誤後才提交。
 
 ### Snapshot 測試工作流
 

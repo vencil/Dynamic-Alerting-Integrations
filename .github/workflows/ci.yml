@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.10", "3.13"]
+        python: ["3.13"]
       fail-fast: false
     steps:
       - name: Checkout code
