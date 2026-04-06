@@ -30,13 +30,6 @@
     --stat-bg: rgba(255,255,255,0.08);
     --stat-border: rgba(255,255,255,0.12);
     --mermaid-bg: rgba(255,255,255,0.05);
-
-    /* Journey phase colors */
-    --journey-deploy: #ec4899;
-    --journey-configure: #3b82f6;
-    --journey-monitor: #10b981;
-    --journey-troubleshoot: #f59e0b;
-    --journey-reference: #8b5cf6;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -131,66 +124,6 @@
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-  }
-
-  /* ── User Journey Diagram ── */
-  .journey-diagram {
-    background: var(--mermaid-bg);
-    border-radius: 12px;
-    padding: 24px 16px;
-    margin-top: 24px;
-    overflow-x: auto;
-  }
-  .journey-label {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--hero-muted);
-    margin-bottom: 16px;
-  }
-  .journey-flow {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 0;
-  }
-  .journey-step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 20px;
-    border-radius: 10px;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1);
-    min-width: 110px;
-    text-align: center;
-  }
-  .journey-step.deploy { border-color: var(--journey-deploy); }
-  .journey-step.configure { border-color: var(--journey-configure); }
-  .journey-step.monitor { border-color: var(--journey-monitor); }
-  .journey-step.troubleshoot { border-color: var(--journey-troubleshoot); }
-  .journey-step.reference { border-color: var(--journey-reference); }
-
-  .journey-icon {
-    font-size: 1.6rem;
-    display: block;
-  }
-  .journey-text {
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--hero-fg);
-  }
-  .journey-arrow {
-    color: var(--hero-muted);
-    font-size: 1.2rem;
-  }
-  @media (max-width: 600px) {
-    .journey-arrow { display: none; }
   }
 
   /* ── Main content ── */
@@ -699,7 +632,6 @@
     .role-filter { font-size: 0.7rem; padding: 4px 10px; }
     .qa-chip { font-size: 0.75rem; padding: 8px 14px; }
     .flow-cards { grid-template-columns: 1fr; }
-    .journey-flow { flex-wrap: wrap; justify-content: center; }
   }
   @media (max-width: 768px) {
     .main { padding: 24px 16px; }
@@ -759,37 +691,6 @@
       <div class="stat">
         <div class="stat-value">5</div>
         <div class="stat-label">Guided Flows</div>
-      </div>
-    </div>
-
-    <!-- User Journey Diagram -->
-    <div class="journey-diagram">
-      <div class="journey-label">USER JOURNEY</div>
-      <div class="journey-flow">
-        <div class="journey-step deploy">
-          <span class="journey-icon">🚀</span>
-          <span class="journey-text">Deploy</span>
-        </div>
-        <span class="journey-arrow">→</span>
-        <div class="journey-step configure">
-          <span class="journey-icon">⚙️</span>
-          <span class="journey-text">Configure</span>
-        </div>
-        <span class="journey-arrow">→</span>
-        <div class="journey-step monitor">
-          <span class="journey-icon">📊</span>
-          <span class="journey-text">Monitor</span>
-        </div>
-        <span class="journey-arrow">→</span>
-        <div class="journey-step troubleshoot">
-          <span class="journey-icon">🔧</span>
-          <span class="journey-text">Troubleshoot</span>
-        </div>
-        <span class="journey-arrow">→</span>
-        <div class="journey-step reference">
-          <span class="journey-icon">📚</span>
-          <span class="journey-text">Reference</span>
-        </div>
       </div>
     </div>
 
