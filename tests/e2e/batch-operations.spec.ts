@@ -6,7 +6,7 @@ import { test, expect, Page } from '@playwright/test';
  */
 
 async function navigateToTenantManager(page: Page) {
-  await page.goto('/');
+  await page.goto('./');
   await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 
   // Find and click tenant-manager

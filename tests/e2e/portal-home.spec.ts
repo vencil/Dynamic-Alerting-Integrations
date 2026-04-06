@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Portal Home Page @critical', () => {
   test('should load portal home page and render tool list', async ({ page }) => {
     // Navigate to portal root
-    await page.goto('/');
+    await page.goto('./');
 
     // Assert page title contains "Dynamic Alerting" or portal identifier
     await expect(page).toHaveTitle(/Dynamic Alerting|Interactive Tools/i);
@@ -19,20 +19,20 @@ test.describe('Portal Home Page @critical', () => {
   });
 
   test('should render tool cards', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('./');
 
-    // Wait for tool cards to load - cards use class "card" and are rendered as <a> links
+    // Dynamic cards are rendered into phase containers (deploy-cards, configure-cards, etc.)
+    // after JS fetches tool-registry.yaml. Static linter-cards div is display:none.
+    const visibleCards = page.locator('.cards a.card');
+    await expect(visibleCards.first()).toBeVisible({ timeout: 10000 });
+
     // We expect at least 10 tools (reasonable minimum)
-    const toolCardCount = await page.locator('a.card').count();
+    const toolCardCount = await visibleCards.count();
     expect(toolCardCount).toBeGreaterThanOrEqual(10);
-
-    // Verify tool cards are visible and have proper content
-    const toolCards = page.locator('a.card').first();
-    await expect(toolCards).toBeVisible({ timeout: 10000 });
   });
 
   test('should display phase section headers', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('./');
 
     // Assert phase section headers exist: Deploy, Configure, Monitor, Troubleshoot
     const phases = ['Deploy', 'Configure', 'Monitor', 'Troubleshoot'];
@@ -45,7 +45,7 @@ test.describe('Portal Home Page @critical', () => {
   });
 
   test('should allow language switching', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('./');
 
     // Look for language switcher button or dropdown using Playwright's .or() API
     // Common patterns: data-testid="lang-switch", aria-label containing "language"
@@ -66,7 +66,7 @@ test.describe('Portal Home Page @critical', () => {
   test('should have responsive layout', async ({ page }) => {
     // Set viewport to desktop
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto('/');
+    await page.goto('./');
 
     // Main container should be visible
     const mainContent = page.locator('main, [role="main"]');

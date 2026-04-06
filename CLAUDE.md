@@ -53,7 +53,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## Pre-commit 品質閘門
 
-28 個 auto-run hooks（每次 commit）+ 9 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
+28 個 auto-run hooks（每次 commit）+ 10 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
 
 ```bash
 pre-commit run --all-files                              # 全跑 auto hooks
@@ -91,6 +91,7 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 | `make pre-tag` | ⛔ Pre-tag 品質閘門（version-check + lint-docs，打 tag 前必跑） |
 | `make benchmark` | 效能基準（idle + routing + alertmanager + reload） |
 | `make validate-config` | 一站式配置驗證 |
+| `make test-e2e` | Portal Playwright E2E 煙霧測試（需 Node.js ≥ 20） |
 | `make portal-image` / `portal-run` | Self-Hosted Portal Docker image |
 
 完整目標見 `make help`。

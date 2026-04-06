@@ -6,7 +6,7 @@ import { test, expect, Page } from '@playwright/test';
 
 async function loadTenantManager(page: Page) {
   // Navigate to tenant-manager tool via jsx-loader or direct route
-  await page.goto('/');
+  await page.goto('./');
 
   // Try to find and click tenant-manager tool card
   const tenantCard = page.locator(

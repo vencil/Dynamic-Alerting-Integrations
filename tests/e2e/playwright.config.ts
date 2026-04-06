@@ -8,9 +8,14 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * See https://playwright.dev/docs/test-configuration.
+ *
+ * The Portal (docs/interactive/index.html) fetches assets via relative paths
+ * like "../assets/tool-registry.yaml". To resolve these correctly, the HTTP
+ * server must serve from docs/ (not docs/interactive/), and baseURL must
+ * point to the /interactive/ subdirectory.
  */
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: './',
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
@@ -23,8 +28,8 @@ export default defineConfig({
   reporter: 'html',
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
-    /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: process.env.BASE_URL || 'http://localhost:8080',
+    /* Base URL to use in actions like `await page.goto('./')`. */
+    baseURL: process.env.BASE_URL || 'http://localhost:8080/interactive/',
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
     /* Screenshot on failure */
@@ -53,7 +58,7 @@ export default defineConfig({
     ? undefined
     : {
         command: 'npm run serve:portal',
-        url: 'http://localhost:8080',
+        url: 'http://localhost:8080/interactive/',
         reuseExistingServer: !process.env.CI,
         timeout: 120 * 1000,
       },

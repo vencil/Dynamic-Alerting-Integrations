@@ -376,6 +376,88 @@ for keyword, db_type in JOB_DB_MAP.items():
 7. **`--diff-report` 實作要注意 git restore**：fix → diff → `git checkout .` 三步驟，timeout 時仍須執行 restore
 8. **`--format summary` badge 風格**：一行輸出適合嵌入 CI badge 或 Makefile target echo
 
+## Playwright E2E 測試（Portal Smoke Tests）
+
+### 架構概覽
+
+5 個 spec 檔案（33 tests）覆蓋 Portal 首頁、Tenant Manager、Group Management、Auth Flow、Batch Operations。全部使用 Chromium，由 `tests/e2e/playwright.config.ts` 統一配置。
+
+| 檔案 | 測試數 | 涵蓋範圍 |
+|------|--------|---------|
+| `portal-home.spec.ts` | 5 | 首頁載入、工具卡片渲染、Phase 標題、語言切換、RWD |
+| `tenant-manager.spec.ts` | 6 | 載入、名稱過濾、metadata 過濾、計數、狀態持久、降級 |
+| `group-management.spec.ts` | 7 | 導覽、建立群組、API 隔離、sidebar、成員管理 |
+| `auth-flow.spec.ts` | 8 | Dev 模式、OAuth2 redirect、/api/v1/me mock、401 處理、session 過期 |
+| `batch-operations.spec.ts` | 7 | 群組選取、批次選單、silent mode、確認對話框、API payload |
+
+### 本地執行
+
+```bash
+# 一鍵執行（自動啟動 HTTP server + 跑測試）
+make test-e2e
+
+# 手動執行（debug 用）
+cd tests/e2e
+npm install --include=dev          # 首次安裝
+npx playwright install chromium    # 首次安裝瀏覽器
+npx playwright test                # 跑全部
+npx playwright test --headed       # 有頭模式觀察
+npx playwright test --ui           # Playwright UI 互動模式
+```
+
+**前置條件：** Node.js ≥ 20（`npx playwright install chromium` 需要網路）。Windows 環境下 `npm install` 務必加 `--include=dev`（npm 11 預設 `omit=dev` 會跳過 devDependencies）。
+
+### 關鍵陷阱與已知解法
+
+#### 1. Server Root 必須是 `docs/`，不是 `docs/interactive/`
+
+Portal 首頁 `index.html` 透過相對路徑 `fetch('../assets/tool-registry.yaml')` 載入工具資料。若 HTTP server root 設為 `docs/interactive/`，`../assets/` 會超出 server root 導致 404。
+
+```
+✅ python -m http.server 8080 --directory docs     → ../assets/ → docs/assets/
+❌ python -m http.server 8080 --directory docs/interactive → ../assets/ → 404
+```
+
+因此 `baseURL` 設為 `http://localhost:8080/interactive/`，讓 server root 留在 `docs/`。
+
+#### 2. `page.goto('/')` vs `page.goto('./')`
+
+Playwright 的 `page.goto('/')` 將 `/` 視為**絕對路徑**，解析為 `http://localhost:8080/`（忽略 baseURL 的 `/interactive/` path）。改用 `page.goto('./')` 是正確做法——相對路徑會正確解析 baseURL：
+
+```
+baseURL = http://localhost:8080/interactive/
+page.goto('/')   → http://localhost:8080/           ← 錯：看到 "Directory listing for /"
+page.goto('./')  → http://localhost:8080/interactive/ ← 對：載入 Portal
+```
+
+**所有 spec 檔案統一用 `page.goto('./')`，禁止 `page.goto('/')`。**
+
+#### 3. Windows npm 11 的 `omit=dev` 行為
+
+npm 11 預設 `npm config get omit` 回傳 `dev`，導致 `npm install` 跳過 devDependencies（`@playwright/test` 就在 devDependencies）。解法：
+
+```bash
+npm install --include=dev
+```
+
+#### 4. 動態卡片 selector
+
+Portal 工具卡片是從 `tool-registry.yaml` 動態產生的 `.cards a.card`，不要用 `#linter-cards` 裡的靜態 `a.card`（那個 div 是 `display:none`）。
+
+#### 5. CI vs Local 差異
+
+| 項目 | CI (GitHub Actions) | Local |
+|------|-------------------|-------|
+| Server | `npm run serve:portal` 背景啟動 | `playwright.config.ts` 的 `webServer` 自動管理 |
+| Browser | `npx playwright install chromium` 每次安裝 | 本地快取，首次安裝即可 |
+| Workers | 1（避免 race） | 自動（CPU 核心數） |
+| Retries | 1 | 0 |
+| `BASE_URL` | env 注入 | 讀 config 預設值 |
+
+### 測試設計原則
+
+所有 spec 採 **defensive assertion** 風格：先檢查 UI 元素是否存在（`count() > 0`），才進行互動。這是因為 Portal 依賴 Mock API 注入資料，非 mock 路徑下只驗「不爆炸」而非「資料正確」。
+
 ## v2.2.0 Lessons Learned（2026-03-18）
 
 1. **`apk del` 後必須驗證移除成功**：`|| true` 吃掉錯誤導致 CVE 殘留。Dockerfile 加 `if apk info -e <pkg>; then exit 1; fi` 做 build-time 斷言

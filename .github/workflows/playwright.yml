@@ -60,7 +60,7 @@ jobs:
 
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "Checking Portal readiness (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
-            if curl -sf http://localhost:8080 > /dev/null 2>&1; then
+            if curl -sf http://localhost:8080/interactive/ > /dev/null 2>&1; then
               echo "✓ Portal is ready (HTTP 200)"
               exit 0
             fi
@@ -72,7 +72,7 @@ jobs:
 
           echo "✗ Portal failed to start within 30 seconds"
           echo "Final curl attempt for debug info:"
-          curl -v http://localhost:8080 2>&1 || true
+          curl -v http://localhost:8080/interactive/ 2>&1 || true
           exit 1
         timeout-minutes: 2
 
@@ -81,7 +81,7 @@ jobs:
         run: npm test
         env:
           CI: 'true'
-          BASE_URL: 'http://localhost:8080'
+          BASE_URL: 'http://localhost:8080/interactive/'
 
       - name: Upload test results
         if: always()

@@ -224,3 +224,11 @@ repos:
         pass_filenames: false
         files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
         stages: [manual]
+
+      - id: playwright-e2e
+        name: Playwright Portal E2E smoke tests
+        entry: bash -c 'cd tests/e2e && npx playwright test'
+        language: system
+        pass_filenames: false
+        files: ^(docs/interactive/|tests/e2e/|docs/assets/(tool-registry|jsx-loader|flows))
+        stages: [manual]

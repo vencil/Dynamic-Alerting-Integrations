@@ -9,7 +9,7 @@ import { Page, expect } from '@playwright/test';
  * Wait for portal to be ready
  */
 export async function waitForPortalReady(page: Page, timeout = 10000) {
-  await page.goto('/');
+  await page.goto('./');
   await page.waitForLoadState('networkidle', { timeout }).catch(() => {
     // Graceful degradation - portal may load without network idle
   });

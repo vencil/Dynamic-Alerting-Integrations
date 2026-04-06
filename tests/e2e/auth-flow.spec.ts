@@ -8,7 +8,7 @@ import { test, expect, Page } from '@playwright/test';
 test.describe('Authentication Flow @critical', () => {
   test('should navigate to protected endpoint without redirect in dev mode', async ({ page }) => {
     // In local dev without auth, should load directly
-    await page.goto('/');
+    await page.goto('./');
 
     // Verify page loaded successfully
     const content = await page.locator('body').textContent();
@@ -24,7 +24,7 @@ test.describe('Authentication Flow @critical', () => {
     });
 
     // Attempt to navigate
-    await page.goto('/', { waitUntil: 'domcontentloaded' }).catch(() => {
+    await page.goto('./', { waitUntil: 'domcontentloaded' }).catch(() => {
       // Expected - may fail if auth is enforced
     });
 
@@ -54,7 +54,7 @@ test.describe('Authentication Flow @critical', () => {
     });
 
     // Navigate and trigger API call
-    await page.goto('/');
+    await page.goto('./');
 
     // Manually call the endpoint to verify mock works
     const response = await page.evaluate(async () => {
@@ -83,7 +83,7 @@ test.describe('Authentication Flow @critical', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('./');
 
     // Optionally wait for auth to be loaded by the app
     await page.waitForTimeout(1000);
@@ -109,7 +109,7 @@ test.describe('Authentication Flow @critical', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('./');
 
     // Page should still load but may show restricted state
     const content = await page.locator('body').textContent();
@@ -133,7 +133,7 @@ test.describe('Authentication Flow @critical', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('./');
 
     // Look for admin-only buttons or features
     const adminButtons = page.locator('[data-restricted], [data-role="admin"], [aria-label*="admin" i]');
@@ -176,7 +176,7 @@ test.describe('Authentication Flow @critical', () => {
       }
     });
 
-    await page.goto('/');
+    await page.goto('./');
 
     // Make second request to trigger expiry
     await page.evaluate(async () => {
@@ -209,7 +209,7 @@ test.describe('Authentication Flow @critical', () => {
     });
 
     // Navigate to home
-    await page.goto('/');
+    await page.goto('./');
 
     // Verify auth works
     const response1 = await page.evaluate(async () => {
@@ -219,7 +219,7 @@ test.describe('Authentication Flow @critical', () => {
     expect(response1).toBe(true);
 
     // Navigate to different page (if it exists)
-    await page.evaluate(() => window.history.replaceState({}, '', '/'));
+    await page.evaluate(() => window.history.replaceState({}, '', '/interactive/'));
     await page.reload();
 
     // Verify auth still works

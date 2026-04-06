@@ -7,7 +7,7 @@ import { test, expect, Page } from '@playwright/test';
 
 async function setupTestContext(page: Page) {
   // Navigate to portal
-  await page.goto('/');
+  await page.goto('./');
   await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 }
 
