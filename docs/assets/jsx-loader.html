@@ -401,39 +401,7 @@ window.addEventListener('pageshow', function(e) {
       });
     // Skip single-component mode
   }
-  // ── Single component mode (existing) ──
-  else if (componentPath) {
-    // Update page title from component name
-    var name = componentPath.split('/').pop().replace('.jsx', '');
-    document.title = name.replace(/-/g, ' ').replace(/\b\w/g, function(c) {
-      return c.toUpperCase();
-    }) + ' — Dynamic Alerting';
-
-    fetch(componentPath)
-      .then(function(r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
-        return r.text();
-      })
-      .then(function(jsx) {
-        // Load dependencies before rendering main component
-        var basePath = componentPath.substring(0, componentPath.lastIndexOf('/'));
-        var deps = parseDependencies(jsx, basePath);
-        if (deps.length > 0) {
-          console.log('[DA] Loading ' + deps.length + ' dependencies for ' + componentPath);
-        }
-        return loadDependencies(deps).then(function() {
-          document.getElementById('loading').style.display = 'none';
-          renderJSX(jsx);
-        });
-      })
-      .catch(function(err) {
-        showError('Failed to load component: ' + err.message);
-      });
-  } else {
-    showError('No component or flow specified. Use ?component=playground.jsx or ?flow=onboarding');
-  }
-
-  // Tool key → component path mapping for custom flows
+  // Tool key → component path mapping (used by both single-component and custom-flow modes)
   var CUSTOM_FLOW_MAP = {
     'wizard': '../getting-started/wizard.jsx',
     'playground': '../interactive/tools/playground.jsx',
@@ -468,6 +436,52 @@ window.addEventListener('pageshow', function(e) {
     'tenant-manager': '../interactive/tools/tenant-manager.jsx',
     'deployment-wizard': '../interactive/tools/deployment-wizard.jsx'
   };
+
+  // ── Single component mode (existing) ──
+  else if (componentPath) {
+    // Resolve bare key (e.g. "cicd-setup-wizard") to full path via CUSTOM_FLOW_MAP
+    if (componentPath.indexOf('/') === -1 && !componentPath.endsWith('.jsx')) {
+      var resolved = CUSTOM_FLOW_MAP[componentPath];
+      if (resolved) {
+        componentPath = resolved;
+      } else {
+        // Fallback: assume it's under interactive/tools/
+        componentPath = '../interactive/tools/' + componentPath + '.jsx';
+      }
+    }
+
+    // Update page title from component name
+    var name = componentPath.split('/').pop().replace('.jsx', '');
+    document.title = name.replace(/-/g, ' ').replace(/\b\w/g, function(c) {
+      return c.toUpperCase();
+    }) + ' — Dynamic Alerting';
+
+    fetch(componentPath)
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
+        return r.text();
+      })
+      .then(function(jsx) {
+        // Load dependencies before rendering main component
+        var basePath = componentPath.substring(0, componentPath.lastIndexOf('/'));
+        var deps = parseDependencies(jsx, basePath);
+        if (deps.length > 0) {
+          console.log('[DA] Loading ' + deps.length + ' dependencies for ' + componentPath);
+        }
+        return loadDependencies(deps).then(function() {
+          document.getElementById('loading').style.display = 'none';
+          renderJSX(jsx);
+        });
+      })
+      .catch(function(err) {
+        showError('Failed to load component: ' + err.message);
+      });
+  } else {
+    showError('No component or flow specified. Use ?component=playground.jsx or ?flow=onboarding');
+  }
+
+  // NOTE: CUSTOM_FLOW_MAP is defined above (before single-component mode)
+  //       so that bare key resolution (e.g. ?component=cicd-setup-wizard) works.
 
   function buildCustomFlow(toolsParam) {
     var t = window.__t;

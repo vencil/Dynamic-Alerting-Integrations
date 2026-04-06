@@ -63,6 +63,24 @@ test.describe('Portal Home Page @critical', () => {
     }
   });
 
+  test('should load tool via bare key (jsx-loader component resolution)', async ({ page }) => {
+    // Regression guard: jsx-loader must resolve bare keys like ?component=cicd-setup-wizard
+    // to full paths via CUSTOM_FLOW_MAP. Without this, fetch("cicd-setup-wizard") → 404.
+    const loaderUrl = page.url().replace(/interactive\/.*$/, 'assets/jsx-loader.html');
+    await page.goto(loaderUrl + '?component=cicd-setup-wizard');
+
+    // Should NOT show error message
+    const errorBox = page.locator('.error, [role="alert"]');
+    const hasError = await errorBox.count();
+    if (hasError > 0) {
+      const errorText = await errorBox.first().textContent();
+      expect(errorText).not.toContain('404');
+    }
+
+    // Should show the component title (Babel-rendered)
+    await expect(page.locator('body')).not.toContainText('Failed to load component', { timeout: 10000 });
+  });
+
   test('should have responsive layout', async ({ page }) => {
     // Set viewport to desktop
     await page.setViewportSize({ width: 1280, height: 720 });
