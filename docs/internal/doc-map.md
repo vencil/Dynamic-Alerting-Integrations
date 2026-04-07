@@ -8,7 +8,6 @@
 | `docs/adr/002-oci-registry-over-chartmuseum.md` (.en.md) | Platform Engineers | ADR-002: OCI Registry 替代 ChartMuseum |
 | `docs/adr/003-sentinel-alert-pattern.md` (.en.md) | Platform Engineers | ADR-003: Sentinel Alert 模式 |
 | `docs/adr/004-federation-central-exporter-first.md` (.en.md) | Platform Engineers | ADR-004: Federation 架構——中央 Exporter 優先 |
-| `docs/adr/004-federation-scenario-a-first.md` (.en.md) | Platform Engineers | ADR-004: Federation 場景 A 優先實現 |
 | `docs/adr/005-projected-volume-for-rule-packs.md` (.en.md) | Platform Engineers | ADR-005: 投影卷掛載 Rule Pack |
 | `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N) |
 | `docs/adr/007-cross-domain-routing-profiles.md` (.en.md) | Platform Engineers | ADR-007: 跨域路由設定檔與域策略 |
