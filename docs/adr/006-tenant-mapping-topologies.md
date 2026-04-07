@@ -156,7 +156,7 @@ groups:
 ## 相關決策
 
 - [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — Recording Rules 透過同一 Projected Volume 機制分發
-- [ADR-004: Federation 場景 A 優先](./004-federation-central-exporter-first.md) — Federation 下的映射一致性
+- [ADR-004: Federation 架構——中央 Exporter 優先](./004-federation-central-exporter-first.md) — Federation 下的映射一致性
 - [ADR-001: 嚴重度 Dedup 採用 Inhibit 規則](./001-severity-dedup-via-inhibit.md) — 映射後指標仍適用 inhibit dedup
 
 ## 參考資料
