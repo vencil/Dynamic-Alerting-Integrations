@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
@@ -49,7 +49,7 @@ graph LR
 | **認證機制** | oauth2-proxy sidecar | K8s 原生模式，API server 只讀 HTTP header，零 auth 程式碼；支援 GitHub OAuth / Google OIDC / 通用 OIDC |
 | **寫回機制** | commit-on-write | UI 操作 → API → 修改 conf.d/ YAML → git commit（以操作者 email 為 author）。完整 audit trail，與 GitOps 流程相容 |
 | **權限模型** | `_rbac.yaml` 靜態映射 | 維護一份 `_rbac.yaml`：`groups[].tenants[]` 對應表。IdP groups 為 source of truth，動態載入，無需硬編碼 |
-| **並發模型** | `sync.Mutex` + `task_id` 預留 | v2.4.0 同步執行（Kind cluster 並發極低）；response 已預留 `task_id` 欄位，v2.5.0 引入 async queue 時 client 無需改動 |
+| **並發模型** | `sync.Mutex` → goroutine pool | v2.4.0 同步執行；v2.6.0 升級為 goroutine pool + `task_id` 輪詢非同步模式 |
 | **API 文件** | swaggo/swag annotation | 從 Go handler annotation 自動產出 `swagger.yaml`，與程式碼保持同步 |
 | **Portal 定位** | 擴展現有 da-portal | 不另起新專案；新增 API client layer，tenant-manager.jsx 降級保護（API 不可用 → 靜態 JSON 唯讀模式）|
 | **Go module 邊界** | 獨立 module + replace | `github.com/vencil/tenant-api` 有自己的 `go.mod`，以 `replace` directive 指向本地 `threshold-exporter/`；未來可獨立發布 |
@@ -69,7 +69,7 @@ type RBACManager struct {
 
 ### 批量操作回應格式
 
-v2.4.0 同步執行，`status` 永遠為 `"completed"`，但結構已預留 `task_id` 供 v2.5.0 async 升級：
+v2.4.0 同步執行，`status` 永遠為 `"completed"`。v2.6.0 已升級為非同步模式（goroutine pool + `task_id` 輪詢）：
 
 ```json
 {
@@ -96,9 +96,9 @@ Git repo 已是 source of truth。引入資料庫會產生 Git state ↔ DB stat
 
 oauth2-proxy 是 CNCF 生態的成熟工具，支援所有主流 IdP（GitHub、Google、Azure AD、通用 OIDC）。注入 `X-Forwarded-Email` 和 `X-Forwarded-Groups` header 後，API server 只需讀取 header，無需任何 token 驗證程式碼。這遵循 separation of concerns 原則，且與 K8s ingress auth 模式一致。
 
-### 為何不做即時 WebSocket 推播？
+### 為何 v2.4.0 不做即時推播？
 
-v2.4.0 的主要用戶場景是低頻操作（每次操作間隔 ≥1 秒），polling 或手動重新整理已足夠。引入 WebSocket 需要額外的 goroutine pool、connection management 和錯誤處理，超出本版本 scope。列入 v2.5.0 roadmap。
+v2.4.0 的主要用戶場景是低頻操作（每次操作間隔 ≥1 秒），polling 或手動重新整理已足夠。v2.6.0 以 SSE（Server-Sent Events）實現配置變更即時通知，取代最初規劃的 WebSocket 方案——SSE 單向推播更簡潔，且與 HTTP/2 原生相容。
 
 ## 後果
 
@@ -121,12 +121,14 @@ v2.4.0 的主要用戶場景是低頻操作（每次操作間隔 ≥1 秒），p
 - **Git conflict**：多個操作者同時寫入同一 tenant 配置可能產生 conflict。Mitigation：寫入前 HEAD 快照比對，衝突時返回 409，要求操作者重新整理後重試
 - **git binary 依賴**：API server 以 `os/exec` 呼叫 `git` 指令，容器內需安裝 git。Mitigation：Dockerfile 使用 `golang:alpine` build stage 確保 git 可用
 
-## 未來演進方向
+## 演進狀態
 
-- **v2.5.0**: 非同步批量操作（`status: "pending"` + task_id 輪詢），引入 goroutine pool
-- **v2.5.0**: WebSocket 推播（配置變更即時通知 Portal）
-- **v2.6.0**: PR-based 寫回（高安全環境：UI 操作 → 建立 PR → reviewer 核准 → 合併）
-- **v2.6.0**: 細粒度欄位級 RBAC（目前為 tenant 層級）
+- **v2.4.0**（已完成）：核心 CRUD API、commit-on-write、oauth2-proxy 認證、`_rbac.yaml` 權限模型、Portal 降級安全
+- **v2.5.0**（已完成）：Multi-Tenant Grouping（ADR-010）、多維度篩選、Group CRUD + batch 操作
+- **v2.6.0**（已完成）：非同步批量操作（goroutine pool + `task_id` 輪詢）、SSE 即時推播（取代 WebSocket）、PR-based 寫回（ADR-011，GitHub + GitLab 雙平台）
+
+**殘留**：
+- 細粒度欄位級 RBAC（目前為 tenant 層級）— 排入 v2.7.0 候選
 
 ## 相關決策
 

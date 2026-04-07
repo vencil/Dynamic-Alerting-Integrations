@@ -2,14 +2,14 @@
 title: "Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v2.5.0
+> **版本**：v2.6.0
 
 ---
 
@@ -343,7 +343,7 @@ da-tools diagnose db-a
 da-tools validate-config --config-dir /data/conf.d
 ```
 
-> **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull ghcr.io/vencil/da-tools:v2.4.0` 即可使用。
+> **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull ghcr.io/vencil/da-tools:v2.6.0` 即可使用。
 
 ---
 
@@ -390,5 +390,5 @@ A: `threshold-exporter` 部署在資料叢集內（靠近 tenant ConfigMap）。
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
 | ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |

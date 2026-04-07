@@ -75,7 +75,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install pyyaml croniter pytest pytest-cov promql-parser
+        run: pip install pyyaml croniter pytest pytest-cov promql-parser hypothesis
 
       - name: Collect tests
         run: pytest tests/ scripts/tools/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --ignore=tests/test_pipeline_integration.py --tb=short -q --co -q

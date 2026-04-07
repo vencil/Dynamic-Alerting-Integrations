@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
 
 /**
  * Batch Operations smoke tests
@@ -304,5 +305,23 @@ test.describe('Batch Operations @critical', () => {
     const errorElements = page.locator('[role="alert"], .error, .toast-error');
     const errorCount = await errorElements.count();
     expect(errorCount).toBeGreaterThanOrEqual(0);
+  });
+
+  test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
+    // Navigate to tenant-manager for batch operations testing
+    await navigateToTenantManager(page);
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+
+    // Run accessibility check
+    const results = await checkA11y(page);
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
+    if (results.violations.length > 0) {
+      const violationDetails = formatA11yViolations(results.violations);
+      throw new Error(
+        `Batch operations page failed accessibility checks:\n${violationDetails}`
+      );
+    }
   });
 });

@@ -2,7 +2,7 @@
 title: "High Availability (HA) Design — Replicas, PDB, Preventing Double-Counting"
 tags: [architecture, high-availability, design]
 audience: [platform-engineer, devops]
-version: v2.5.0
+version: v2.6.0
 lang: en
 parent: architecture-and-design.en.md
 ---

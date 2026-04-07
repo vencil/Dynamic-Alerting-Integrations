@@ -2,7 +2,7 @@
 title: "Performance Analysis & Benchmarks"
 tags: [performance, benchmarks]
 audience: [platform-engineer, sre]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Performance Analysis & Benchmarks
@@ -459,5 +459,5 @@ Complete methodology and lessons learned detailed in [Benchmark Playbook](intern
 | ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

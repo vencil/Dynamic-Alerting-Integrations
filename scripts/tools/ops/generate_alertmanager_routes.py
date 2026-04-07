@@ -54,6 +54,10 @@ from _lib_python import (  # noqa: E402
 )
 
 
+# ============================================================
+# Helper Functions: URL/Domain Validation
+# ============================================================
+
 def _extract_host(value: str | None) -> str | None:
     """Extract hostname from a URL or host:port string.
 
@@ -118,6 +122,10 @@ def load_policy(policy_path: str | None) -> list[str]:
     return [d for d in domains if isinstance(d, str)]
 
 
+# ============================================================
+# Helper Functions: Routing Configuration Merging & Substitution
+# ============================================================
+
 def _apply_timing_params(source_dict: dict, context_name: str) -> tuple[dict, list[str]]:
     """Apply timing parameters with guardrails to a route dict.
 
@@ -138,6 +146,10 @@ def _apply_timing_params(source_dict: dict, context_name: str) -> tuple[dict, li
                 timing[param] = clamped
     return timing, warnings
 
+
+# ============================================================
+# Tenant Substitution & Placeholder Handling
+# ============================================================
 
 def _substitute_tenant(obj: object, tenant_name: str) -> object:
     """Replace {{tenant}} placeholders in all string values recursively."""
@@ -206,6 +218,10 @@ def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -
             warnings.append(f"  WARN: {tenant}: unknown key '{key}' not in defaults")
     return warnings
 
+
+# ============================================================
+# Configuration Loading & Parsing
+# ============================================================
 
 def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     """Extract platform-level config from a _ prefixed YAML file.
@@ -629,6 +645,97 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
     return {spec["am_key"]: [am_entry]}, warnings
 
 
+# ============================================================
+# Routing Override Processing (Tenant-level alert routing overrides)
+# ============================================================
+
+def _validate_override_matcher(override: dict, idx: int, tenant: str) -> tuple[bool, list[str], bool, bool]:
+    """Validate override has exactly one of alertname or metric_group.
+
+    Returns (is_valid, warnings, has_alertname, has_metric_group).
+    """
+    warnings = []
+    has_alertname = "alertname" in override and override["alertname"]
+    has_metric_group = "metric_group" in override and override["metric_group"]
+
+    if not has_alertname and not has_metric_group:
+        warnings.append(
+            f"  WARN: {tenant}: override[{idx}] must have either "
+            "'alertname' or 'metric_group', skipping")
+        return False, warnings, has_alertname, has_metric_group
+
+    if has_alertname and has_metric_group:
+        warnings.append(
+            f"  WARN: {tenant}: override[{idx}] has both 'alertname' and "
+            "'metric_group' (exactly one required), skipping")
+        return False, warnings, has_alertname, has_metric_group
+
+    return True, warnings, has_alertname, has_metric_group
+
+
+def _build_override_matchers(override: dict, tenant: str, has_alertname: bool) -> list[str]:
+    """Build matcher list based on override type (alertname or metric_group)."""
+    if has_alertname:
+        alertname = override["alertname"]
+        return [f'tenant="{tenant}"', f'alertname="{alertname}"']
+    else:
+        metric_group = override["metric_group"]
+        return [f'tenant="{tenant}"', f'metric_group="{metric_group}"']
+
+
+def _process_override_receiver(override: dict, idx: int, tenant: str,
+                               allowed_domains: list[str] | None) -> tuple[dict | None, list[str]]:
+    """Process receiver config for a single override.
+
+    Returns (am_config, warnings) — am_config is None if invalid.
+    """
+    warnings = []
+    receiver_obj = override.get("receiver")
+    if not receiver_obj:
+        warnings.append(f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping")
+        return None, warnings
+
+    am_config, recv_warnings = build_receiver_config(receiver_obj, f"{tenant}-override-{idx}")
+    warnings.extend(recv_warnings)
+    if am_config is None:
+        return None, warnings
+
+    # Domain allowlist check (SSRF prevention)
+    if allowed_domains:
+        domain_warnings = validate_receiver_domains(
+            receiver_obj, f"{tenant}-override-{idx}", allowed_domains)
+        warnings.extend(domain_warnings)
+        if any("not in allowed_domains" in w for w in domain_warnings):
+            return None, warnings
+
+    return am_config, warnings
+
+
+def _build_override_route(idx: int, tenant: str, matchers: list[str],
+                         override: dict) -> tuple[dict, list[str]]:
+    """Build a sub-route dict for an override with timing parameters.
+
+    Returns (route_dict, timing_warnings).
+    """
+    warnings = []
+    sub_route = {
+        "matchers": matchers,
+        "receiver": f"tenant-{tenant}-override-{idx}",
+    }
+
+    # Optional: group_by from override
+    group_by = override.get("group_by")
+    if group_by and isinstance(group_by, list):
+        sub_route["group_by"] = group_by
+
+    # Optional: timing parameters with guardrails
+    timing, timing_warnings = _apply_timing_params(override, f"{tenant}-override-{idx}")
+    warnings.extend(timing_warnings)
+    sub_route.update(timing)
+
+    return sub_route, warnings
+
+
 def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Expand per-rule routing overrides into sub-routes.
 
@@ -664,73 +771,25 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
             continue
 
         # Validate exactly one of alertname or metric_group is set
-        has_alertname = "alertname" in override and override["alertname"]
-        has_metric_group = "metric_group" in override and override["metric_group"]
-
-        if not has_alertname and not has_metric_group:
-            warnings.append(
-                f"  WARN: {tenant}: override[{idx}] must have either "
-                "'alertname' or 'metric_group', skipping")
+        is_valid, val_warnings, has_alertname, has_metric_group = _validate_override_matcher(
+            override, idx, tenant)
+        warnings.extend(val_warnings)
+        if not is_valid:
             continue
 
-        if has_alertname and has_metric_group:
-            warnings.append(
-                f"  WARN: {tenant}: override[{idx}] has both 'alertname' and "
-                "'metric_group' (exactly one required), skipping")
-            continue
+        # Build matcher list
+        matchers = _build_override_matchers(override, tenant, has_alertname)
 
-        # Build matcher based on override type
-        if has_alertname:
-            alertname = override["alertname"]
-            matchers = [
-                f'tenant="{tenant}"',
-                f'alertname="{alertname}"',
-            ]
-        else:  # has_metric_group
-            metric_group = override["metric_group"]
-            matchers = [
-                f'tenant="{tenant}"',
-                f'metric_group="{metric_group}"',
-            ]
-
-        # Validate and build receiver config
-        receiver_obj = override.get("receiver")
-        if not receiver_obj:
-            warnings.append(
-                f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping")
-            continue
-
-        am_config, recv_warnings = build_receiver_config(receiver_obj, f"{tenant}-override-{idx}")
+        # Process receiver config
+        am_config, recv_warnings = _process_override_receiver(override, idx, tenant, allowed_domains)
         warnings.extend(recv_warnings)
         if am_config is None:
             continue
 
-        # Domain allowlist check (SSRF prevention)
-        if allowed_domains:
-            domain_warnings = validate_receiver_domains(
-                receiver_obj, f"{tenant}-override-{idx}", allowed_domains)
-            warnings.extend(domain_warnings)
-            if any("not in allowed_domains" in w for w in domain_warnings):
-                continue
-
-        # Receiver name for this override
+        # Build sub-route with timing parameters
         receiver_name = f"tenant-{tenant}-override-{idx}"
-
-        # Build sub-route with specific matchers
-        sub_route = {
-            "matchers": matchers,
-            "receiver": receiver_name,
-        }
-
-        # Optional: group_by from override
-        group_by = override.get("group_by")
-        if group_by and isinstance(group_by, list):
-            sub_route["group_by"] = group_by
-
-        # Optional: timing parameters with guardrails
-        timing, timing_warnings = _apply_timing_params(override, f"{tenant}-override-{idx}")
+        sub_route, timing_warnings = _build_override_route(idx, tenant, matchers, override)
         warnings.extend(timing_warnings)
-        sub_route.update(timing)
 
         sub_routes.append(sub_route)
 
@@ -740,6 +799,106 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         override_receivers.append(receiver)
 
     return sub_routes, override_receivers, warnings
+
+
+# ============================================================
+# Platform Enforced Routing (NOC/SRE always-on notifications)
+# ============================================================
+
+def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
+                                      allowed_domains: list[str] | None) -> tuple[dict | None, dict | None, list[str]]:
+    """Build a single per-tenant enforced route with receiver.
+
+    Returns (route_dict, receiver_dict, warnings) — both None if invalid.
+    """
+    warnings = []
+    substituted = _substitute_tenant(enforced_routing, tenant)
+    sub_receiver = substituted.get("receiver")
+    am_config, recv_warnings = build_receiver_config(
+        sub_receiver, f"platform-enforced-{tenant}")
+    warnings.extend(recv_warnings)
+    if am_config is None:
+        return None, None, warnings
+
+    if allowed_domains:
+        domain_warnings = validate_receiver_domains(
+            sub_receiver, f"platform-enforced-{tenant}", allowed_domains)
+        warnings.extend(domain_warnings)
+        if any("not in allowed_domains" in w for w in domain_warnings):
+            return None, None, warnings
+
+    receiver_name = f"platform-enforced-{tenant}"
+    route = {
+        "matchers": [f'tenant="{tenant}"'],
+        "receiver": receiver_name,
+        "continue": True,
+    }
+
+    # Optional extra matchers (also substituted)
+    match = substituted.get("match")
+    if match and isinstance(match, list):
+        route["matchers"].extend(match)
+
+    group_by = substituted.get("group_by")
+    if group_by and isinstance(group_by, list):
+        route["group_by"] = group_by
+
+    timing, timing_warnings = _apply_timing_params(
+        substituted, f"platform-enforced-{tenant}")
+    warnings.extend(timing_warnings)
+    route.update(timing)
+
+    receiver = {"name": receiver_name}
+    receiver.update(am_config)
+    return route, receiver, warnings
+
+
+def _build_single_enforced_route(enforced_routing: dict,
+                                 allowed_domains: list[str] | None) -> tuple[dict | None, dict | None, list[str]]:
+    """Build a single platform-wide enforced route with receiver.
+
+    Returns (route_dict, receiver_dict, warnings) — both None if invalid.
+    """
+    warnings = []
+    enforced_receiver = enforced_routing.get("receiver")
+    am_config, recv_warnings = build_receiver_config(enforced_receiver, "platform-enforced")
+    warnings.extend(recv_warnings)
+    if am_config is None:
+        return None, None, warnings
+
+    # Domain allowlist check for platform receiver too
+    if allowed_domains:
+        domain_warnings = validate_receiver_domains(
+            enforced_receiver, "platform-enforced", allowed_domains)
+        warnings.extend(domain_warnings)
+        if any("not in allowed_domains" in w for w in domain_warnings):
+            warnings.append("  WARN: _routing_enforced: receiver blocked by domain policy")
+            return None, None, warnings
+
+    receiver_name = "platform-enforced"
+    route = {
+        "receiver": receiver_name,
+        "continue": True,
+    }
+
+    # Optional matchers
+    match = enforced_routing.get("match")
+    if match and isinstance(match, list):
+        route["matchers"] = match
+
+    # Optional group_by
+    group_by = enforced_routing.get("group_by")
+    if group_by and isinstance(group_by, list):
+        route["group_by"] = group_by
+
+    # Timing parameters with guardrails
+    timing, timing_warnings = _apply_timing_params(enforced_routing, "platform-enforced")
+    warnings.extend(timing_warnings)
+    route.update(timing)
+
+    receiver = {"name": receiver_name}
+    receiver.update(am_config)
+    return route, receiver, warnings
 
 
 def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, dict], allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
@@ -778,93 +937,29 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
         return routes, receivers, warnings
 
     if _contains_tenant_placeholder(enforced_routing):
-        # Per-tenant enforced routes: 為每個 tenant 展開 {{tenant}} 佔位符
+        # Per-tenant enforced routes: expand {{tenant}} for each tenant
         for tenant in sorted(routing_configs.keys()):
-            substituted = _substitute_tenant(enforced_routing, tenant)
-            sub_receiver = substituted.get("receiver")
-            am_config, recv_warnings = build_receiver_config(
-                sub_receiver, f"platform-enforced-{tenant}")
-            warnings.extend(recv_warnings)
-            if am_config is None:
-                continue
-
-            if allowed_domains:
-                domain_warnings = validate_receiver_domains(
-                    sub_receiver, f"platform-enforced-{tenant}", allowed_domains)
-                warnings.extend(domain_warnings)
-                if any("not in allowed_domains" in w for w in domain_warnings):
-                    continue
-
-            receiver_name = f"platform-enforced-{tenant}"
-            route = {
-                "matchers": [f'tenant="{tenant}"'],
-                "receiver": receiver_name,
-                "continue": True,
-            }
-
-            # Optional extra matchers (also substituted)
-            match = substituted.get("match")
-            if match and isinstance(match, list):
-                route["matchers"].extend(match)
-
-            group_by = substituted.get("group_by")
-            if group_by and isinstance(group_by, list):
-                route["group_by"] = group_by
-
-            timing, timing_warnings = _apply_timing_params(
-                substituted, f"platform-enforced-{tenant}")
-            warnings.extend(timing_warnings)
-            route.update(timing)
-
-            routes.append(route)
-            receiver = {"name": receiver_name}
-            receiver.update(am_config)
-            receivers.append(receiver)
+            route, receiver, route_warnings = _build_per_tenant_enforced_route(
+                tenant, enforced_routing, allowed_domains)
+            warnings.extend(route_warnings)
+            if route is not None and receiver is not None:
+                routes.append(route)
+                receivers.append(receiver)
     else:
-        # 單一平台 enforced route（無 {{tenant}} 佔位符）
-        am_config, recv_warnings = build_receiver_config(enforced_receiver, "platform-enforced")
-        warnings.extend(recv_warnings)
-        if am_config is not None:
-            # Domain allowlist check for platform receiver too
-            if allowed_domains:
-                domain_warnings = validate_receiver_domains(
-                    enforced_receiver, "platform-enforced", allowed_domains)
-                warnings.extend(domain_warnings)
-                if any("not in allowed_domains" in w for w in domain_warnings):
-                    warnings.append("  WARN: _routing_enforced: receiver blocked by domain policy")
-                    am_config = None
-
-        if am_config is not None:
-            receiver_name = "platform-enforced"
-            route = {
-                "receiver": receiver_name,
-                "continue": True,  # critical: alert 繼續比對 tenant routes
-            }
-
-            # Optional matchers — 若指定，僅符合的 alert 傳送至 NOC
-            match = enforced_routing.get("match")
-            if match and isinstance(match, list):
-                route["matchers"] = match
-
-            # Optional group_by
-            group_by = enforced_routing.get("group_by")
-            if group_by and isinstance(group_by, list):
-                route["group_by"] = group_by
-
-            # Timing parameters with guardrails
-            timing, timing_warnings = _apply_timing_params(
-                enforced_routing, "platform-enforced")
-            warnings.extend(timing_warnings)
-            route.update(timing)
-
+        # Single platform-wide enforced route
+        route, receiver, route_warnings = _build_single_enforced_route(
+            enforced_routing, allowed_domains)
+        warnings.extend(route_warnings)
+        if route is not None and receiver is not None:
             routes.append(route)
-
-            receiver = {"name": receiver_name}
-            receiver.update(am_config)
             receivers.append(receiver)
 
     return routes, receivers, warnings
 
+
+# ============================================================
+# Main Route Generation (Tenant routing + inhibit rules)
+# ============================================================
 
 def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """Generate tenant-specific Alertmanager routes and receivers.
@@ -1195,6 +1290,108 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
                      allow_unicode=True, sort_keys=False)
 
 
+# ============================================================
+# ConfigMap Operations (K8s cluster deployment)
+# ============================================================
+
+def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict | None, list[str]]:
+    """Read existing Alertmanager ConfigMap from K8s cluster.
+
+    Returns (config_dict, warnings) — config_dict is None if read failed.
+    """
+    warnings = []
+    result = subprocess.run(
+        ["kubectl", "get", "configmap", configmap_name, "-n", namespace, "-o", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}")
+        return None, warnings
+
+    cm = json.loads(result.stdout)
+    existing_yml = cm.get("data", {}).get("alertmanager.yml", "")
+    if not existing_yml:
+        warnings.append("ERROR: ConfigMap has no 'alertmanager.yml' key")
+        return None, warnings
+
+    existing = yaml.safe_load(existing_yml)
+    return existing, warnings
+
+
+def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
+                                     receivers: list[dict], inhibit_rules: list[dict]) -> dict:
+    """Merge generated routes, receivers, and inhibit rules into existing config.
+
+    Returns merged config dict.
+    """
+    if routes:
+        if "route" not in existing:
+            existing["route"] = {}
+        existing["route"]["routes"] = routes
+
+    if receivers:
+        # Keep default receiver, replace tenant receivers
+        existing_names = {r["name"] for r in receivers}
+        kept = [r for r in existing.get("receivers", [])
+                if r["name"] not in existing_names]
+        existing["receivers"] = kept + receivers
+
+    if inhibit_rules:
+        # Keep non-generated inhibit rules (e.g., Silent Mode sentinel rules)
+        kept_rules = [r for r in existing.get("inhibit_rules", [])
+                      if not any('metric_group' in m for m in r.get("source_matchers", []))]
+        existing["inhibit_rules"] = kept_rules + inhibit_rules
+
+    return existing
+
+
+def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str) -> bool:
+    """Apply merged ConfigMap to K8s cluster.
+
+    Returns True if successful, False otherwise.
+    """
+    apply_result = subprocess.run(
+        ["kubectl", "create", "configmap", configmap_name,
+         f"--from-literal=alertmanager.yml={merged_yml}",
+         "-n", namespace, "--dry-run=client", "-o", "yaml"],
+        capture_output=True, text=True
+    )
+    if apply_result.returncode != 0:
+        print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}", file=sys.stderr)
+        return False
+
+    pipe_result = subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=apply_result.stdout, capture_output=True, text=True
+    )
+    if pipe_result.returncode != 0:
+        print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
+        return False
+
+    print(f"ConfigMap {namespace}/{configmap_name} updated")
+    return True
+
+
+def _reload_alertmanager(namespace: str) -> bool:
+    """Reload Alertmanager configuration via HTTP POST.
+
+    Returns True on success (or if warning-level failure), False on critical error.
+    """
+    svc_url = f"http://alertmanager.{namespace}.svc.cluster.local:9093"
+    reload_result = subprocess.run(
+        ["curl", "-sf", "-X", "POST", f"{svc_url}/-/reload"],
+        capture_output=True, text=True
+    )
+    if reload_result.returncode != 0:
+        print(f"WARN: Alertmanager reload failed (is --web.enable-lifecycle enabled?)",
+              file=sys.stderr)
+        print("ConfigMap was updated — Alertmanager will pick up changes on next restart")
+        return True
+
+    print("Alertmanager reloaded")
+    return True
+
+
 def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str) -> bool:
     """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
@@ -1211,7 +1408,6 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
       - Keeps existing base routes/receivers, appends tenant-generated ones
       - Preserves non-generated inhibit rules (e.g., Silent Mode sentinel rules)
       - Requires Alertmanager --web.enable-lifecycle flag for /-/reload to work
-      - Confirms with user before applying (unless --yes flag)
 
     Args:
         routes: generated tenant route dicts
@@ -1224,83 +1420,133 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         True if merge and reload succeeded, False otherwise.
     """
     # 1. Read existing ConfigMap
-    result = subprocess.run(
-        ["kubectl", "get", "configmap", configmap_name, "-n", namespace,
-         "-o", "json"],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}",
-              file=sys.stderr)
+    existing, read_warnings = _read_existing_configmap(namespace, configmap_name)
+    if existing is None:
+        for w in read_warnings:
+            print(w, file=sys.stderr)
         return False
-
-    cm = json.loads(result.stdout)
-    existing_yml = cm.get("data", {}).get("alertmanager.yml", "")
-    if not existing_yml:
-        print("ERROR: ConfigMap has no 'alertmanager.yml' key", file=sys.stderr)
-        return False
-
-    existing = yaml.safe_load(existing_yml)
 
     # 2. Merge fragment into existing config
-    if routes:
-        if "route" not in existing:
-            existing["route"] = {}
-        existing["route"]["routes"] = routes
-
-    if receivers:
-        # Keep default receiver, replace tenant receivers
-        existing_names = {r["name"] for r in receivers}
-        kept = [r for r in existing.get("receivers", [])
-                if r["name"] not in existing_names]
-        existing["receivers"] = kept + receivers
-
-    if inhibit_rules:
-        # Keep non-generated inhibit rules (e.g., Silent Mode sentinel rules)
-        # Generated rules have metric_group matcher; silent mode rules don't
-        kept_rules = [r for r in existing.get("inhibit_rules", [])
-                      if not any('metric_group' in m for m in r.get("source_matchers", []))]
-        existing["inhibit_rules"] = kept_rules + inhibit_rules
-
+    existing = _merge_routes_receivers_inhibits(existing, routes, receivers, inhibit_rules)
     merged_yml = yaml.dump(existing, default_flow_style=False,
                            allow_unicode=True, sort_keys=False)
 
     # 3. Apply updated ConfigMap
-    apply_result = subprocess.run(
-        ["kubectl", "create", "configmap", configmap_name,
-         f"--from-literal=alertmanager.yml={merged_yml}",
-         "-n", namespace, "--dry-run=client", "-o", "yaml"],
-        capture_output=True, text=True
-    )
-    if apply_result.returncode != 0:
-        print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}",
-              file=sys.stderr)
+    if not _apply_merged_configmap(merged_yml, namespace, configmap_name):
         return False
-
-    pipe_result = subprocess.run(
-        ["kubectl", "apply", "-f", "-"],
-        input=apply_result.stdout, capture_output=True, text=True
-    )
-    if pipe_result.returncode != 0:
-        print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
-        return False
-
-    print(f"ConfigMap {namespace}/{configmap_name} updated")
 
     # 4. Reload Alertmanager
-    svc_url = f"http://alertmanager.{namespace}.svc.cluster.local:9093"
-    reload_result = subprocess.run(
-        ["curl", "-sf", "-X", "POST", f"{svc_url}/-/reload"],
-        capture_output=True, text=True
-    )
-    if reload_result.returncode != 0:
-        print(f"WARN: Alertmanager reload failed (is --web.enable-lifecycle enabled?)",
-              file=sys.stderr)
-        print("ConfigMap was updated — Alertmanager will pick up changes on next restart")
-        return True
+    return _reload_alertmanager(namespace)
 
-    print("Alertmanager reloaded")
-    return True
+
+# ============================================================
+# CLI Mode Handlers (--validate, --apply, --output-configmap, default render)
+# ============================================================
+
+def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
+                   all_warnings: list[str]) -> None:
+    """Handle --validate mode: check for errors and exit."""
+    errors = [w for w in all_warnings if "WARN" in w and "skipping" in w]
+    route_count = len(routes)
+    inhibit_count = len(inhibit_rules)
+    print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "
+          f"{inhibit_count} inhibit rule(s)")
+    if errors:
+        print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
+        for e in errors:
+            print(e, file=sys.stderr)
+        sys.exit(1)
+    print("OK: all configs valid")
+    sys.exit(0)
+
+
+def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
+                namespace: str, configmap_name: str, yes_flag: bool) -> None:
+    """Handle --apply mode: merge into ConfigMap and reload."""
+    route_count = len(routes)
+    inhibit_count = len(inhibit_rules)
+    print(f"\nApply: {route_count} route(s), {len(receivers)} receiver(s), "
+          f"{inhibit_count} inhibit rule(s)")
+    print(f"Target: {namespace}/{configmap_name}")
+    if not yes_flag:
+        confirm = input("Proceed? [y/N] ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("Aborted.")
+            sys.exit(0)
+    success = apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name)
+    sys.exit(0 if success else 1)
+
+
+def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
+                           base_config: str | None, namespace: str, configmap_name: str,
+                           dry_run: bool, output: str | None) -> None:
+    """Handle --output-configmap mode: produce complete ConfigMap YAML."""
+    base = load_base_config(base_config)
+    cm_yaml = assemble_configmap(
+        base, routes, receivers, inhibit_rules,
+        namespace=namespace, configmap_name=configmap_name)
+
+    route_count = len(routes)
+    inhibit_count = len(inhibit_rules)
+
+    if dry_run:
+        print("\n--- DRY RUN: ConfigMap YAML ---")
+        print(cm_yaml)
+        print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
+              f"{inhibit_count} inhibit rule(s) ---")
+        return
+
+    if output:
+        write_text_secure(output, cm_yaml)
+        print(f"Written to {output} ({route_count} routes, "
+              f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
+    else:
+        print(cm_yaml)
+
+
+def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
+                       dry_run: bool, output: str | None) -> None:
+    """Handle default render mode: output routes/receivers fragment."""
+    header = (
+        "# ============================================================\n"
+        "# Alertmanager Route + Receiver + Inhibit Rules Fragment\n"
+        "# Generated by: generate_alertmanager_routes.py\n"
+        "# Merge into your Alertmanager config:\n"
+        "#   - route.routes: append the routes below\n"
+        "#   - receivers: append the receivers below\n"
+        "#   - inhibit_rules: append the severity dedup inhibit rules below\n"
+        "# ============================================================\n"
+    )
+    body = render_output(routes, receivers, inhibit_rules)
+    content = header + body
+
+    route_count = len(routes)
+    inhibit_count = len(inhibit_rules)
+
+    if dry_run:
+        print("\n--- DRY RUN OUTPUT ---")
+        print(content)
+        print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
+              f"{inhibit_count} inhibit rule(s) ---")
+        return
+
+    if output:
+        write_text_secure(output, content)
+        print(f"Written to {output} ({route_count} routes, {len(receivers)} receivers, "
+              f"{inhibit_count} inhibit rules)")
+    else:
+        print(content)
+
+
+def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_routing: dict | None) -> None:
+    """Print summary of loaded configs."""
+    if enforced_routing:
+        print("Platform enforced routing: ENABLED")
+    if routing_configs:
+        print(f"Found {len(routing_configs)} tenant(s) with routing config: "
+              f"{', '.join(sorted(routing_configs.keys()))}")
+    print(f"Found {len(dedup_configs)} tenant(s) for severity dedup: "
+          f"{', '.join(sorted(dedup_configs.keys()))}")
 
 
 def main() -> None:
@@ -1357,13 +1603,7 @@ def main() -> None:
         print("No tenants found in config directory.")
         sys.exit(0)
 
-    if enforced_routing:
-        print("Platform enforced routing: ENABLED")
-    if has_routing:
-        print(f"Found {len(routing_configs)} tenant(s) with routing config: "
-              f"{', '.join(sorted(routing_configs.keys()))}")
-    print(f"Found {len(dedup_configs)} tenant(s) for severity dedup: "
-          f"{', '.join(sorted(dedup_configs.keys()))}")
+    _print_config_summary(routing_configs, dedup_configs, enforced_routing)
 
     # Generate routes + receivers (enforced route inserted first)
     routes, receivers, route_warnings = generate_routes(
@@ -1382,92 +1622,23 @@ def main() -> None:
         print("No valid routes or inhibit rules generated.")
         sys.exit(1)
 
-    # Validate mode: check for errors and exit
+    # Validate mode
     if args.validate:
-        errors = [w for w in all_warnings if "WARN" in w and "skipping" in w]
-        route_count = len(routes)
-        inhibit_count = len(inhibit_rules)
-        print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "
-              f"{inhibit_count} inhibit rule(s)")
-        if errors:
-            print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
-            for e in errors:
-                print(e, file=sys.stderr)
-            sys.exit(1)
-        print("OK: all configs valid")
-        sys.exit(0)
+        _validate_mode(routes, receivers, inhibit_rules, all_warnings)
 
-    # Apply mode: merge into ConfigMap + reload
+    # Apply mode
     if args.apply:
-        route_count = len(routes)
-        inhibit_count = len(inhibit_rules)
-        print(f"\nApply: {route_count} route(s), {len(receivers)} receiver(s), "
-              f"{inhibit_count} inhibit rule(s)")
-        print(f"Target: {args.namespace}/{args.configmap}")
-        if not args.yes:
-            confirm = input("Proceed? [y/N] ").strip().lower()
-            if confirm not in ("y", "yes"):
-                print("Aborted.")
-                sys.exit(0)
-        success = apply_to_configmap(routes, receivers, inhibit_rules,
-                                     args.namespace, args.configmap)
-        sys.exit(0 if success else 1)
+        _apply_mode(routes, receivers, inhibit_rules, args.namespace,
+                    args.configmap, args.yes)
 
-    # Output-configmap mode: produce complete ConfigMap YAML for GitOps
+    # Output-configmap mode
     if args.output_configmap:
-        base = load_base_config(args.base_config)
-        cm_yaml = assemble_configmap(
-            base, routes, receivers, inhibit_rules,
-            namespace=args.namespace, configmap_name=args.configmap)
-
-        route_count = len(routes)
-        inhibit_count = len(inhibit_rules)
-
-        if args.dry_run:
-            print("\n--- DRY RUN: ConfigMap YAML ---")
-            print(cm_yaml)
-            print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
-                  f"{inhibit_count} inhibit rule(s) ---")
-            return
-
-        if args.output:
-            write_text_secure(args.output, cm_yaml)
-            print(f"Written to {args.output} ({route_count} routes, "
-                  f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
-        else:
-            print(cm_yaml)
+        _output_configmap_mode(routes, receivers, inhibit_rules, args.base_config,
+                              args.namespace, args.configmap, args.dry_run, args.output)
         return
 
-    # Render output
-    header = (
-        "# ============================================================\n"
-        "# Alertmanager Route + Receiver + Inhibit Rules Fragment\n"
-        "# Generated by: generate_alertmanager_routes.py\n"
-        "# Merge into your Alertmanager config:\n"
-        "#   - route.routes: append the routes below\n"
-        "#   - receivers: append the receivers below\n"
-        "#   - inhibit_rules: append the severity dedup inhibit rules below\n"
-        "# ============================================================\n"
-    )
-    body = render_output(routes, receivers, inhibit_rules)
-    content = header + body
-
-    route_count = len(routes)
-    inhibit_count = len(inhibit_rules)
-
-    if args.dry_run:
-        print("\n--- DRY RUN OUTPUT ---")
-        print(content)
-        print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
-              f"{inhibit_count} inhibit rule(s) ---")
-        return
-
-    if args.output:
-        write_text_secure(args.output, content)
-        print(f"Written to {args.output} ({route_count} routes, {len(receivers)} receivers, "
-              f"{inhibit_count} inhibit rules)")
-    else:
-        print(content)
+    # Default render mode
+    _render_output_mode(routes, receivers, inhibit_rules, args.dry_run, args.output)
 
 
 if __name__ == "__main__":

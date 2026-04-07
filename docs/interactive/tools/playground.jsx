@@ -2,7 +2,7 @@
 title: "YAML Playground"
 tags: [validation, yaml, live preview]
 audience: ["platform-engineer", tenant]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [config-lint, schema-explorer, template-gallery]
 ---

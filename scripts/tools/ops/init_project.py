@@ -107,6 +107,10 @@ _HELP = {
 }
 
 
+# ============================================================
+# Bilingual Helper & Validation Functions
+# ============================================================
+
 def _h(key: str) -> str:
     return _HELP[key].get(_LANG, _HELP[key]['en'])
 
@@ -350,19 +354,14 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     return header + yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
-def _gen_github_actions(
-    namespace: str,
-    da_tools_image: str,
-    deploy_method: str,
-) -> str:
-    """Generate GitHub Actions workflow for Dynamic Alerting CI/CD."""
+# ============================================================
+# CI/CD Pipeline Generators (GitHub Actions / GitLab CI)
+# ============================================================
 
-    kustomize_apply = ""
-    helm_apply = ""
-    argocd_apply = ""
-
+def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
+    """Build GitHub Actions apply stage based on deployment method."""
     if deploy_method == 'kustomize':
-        kustomize_apply = textwrap.dedent("""\
+        return textwrap.dedent("""\
 
       # ── Stage 3: Apply (manual trigger only) ──────────────
       apply:
@@ -384,8 +383,9 @@ def _gen_github_actions(
             run: |
               kubectl rollout restart deployment/prometheus -n {namespace}
     """).format(namespace=namespace)
+
     elif deploy_method == 'helm':
-        helm_apply = textwrap.dedent("""\
+        return textwrap.dedent("""\
 
       # ── Stage 3: Apply via Helm (manual trigger only) ─────
       apply:
@@ -403,8 +403,9 @@ def _gen_github_actions(
                 -n {namespace} \\
                 --wait --timeout 5m
     """).format(namespace=namespace)
-    elif deploy_method == 'argocd':
-        argocd_apply = textwrap.dedent("""\
+
+    else:  # argocd
+        return textwrap.dedent("""\
 
       # ── Stage 3: Sync ArgoCD Application ──────────────────
       apply:
@@ -418,7 +419,14 @@ def _gen_github_actions(
               argocd app sync dynamic-alerting --prune --timeout 300
     """)
 
-    apply_stage = kustomize_apply or helm_apply or argocd_apply
+
+def _gen_github_actions(
+    namespace: str,
+    da_tools_image: str,
+    deploy_method: str,
+) -> str:
+    """Generate GitHub Actions workflow for Dynamic Alerting CI/CD."""
+    apply_stage = _build_github_apply_stage(deploy_method, namespace)
 
     return textwrap.dedent("""\
     # Dynamic Alerting CI/CD Pipeline
@@ -529,16 +537,10 @@ def _gen_github_actions(
     )
 
 
-def _gen_gitlab_ci(
-    namespace: str,
-    da_tools_image: str,
-    deploy_method: str,
-) -> str:
-    """Generate GitLab CI pipeline for Dynamic Alerting CI/CD."""
-
-    apply_stage = ""
+def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
+    """Build GitLab CI apply stage based on deployment method."""
     if deploy_method == 'kustomize':
-        apply_stage = textwrap.dedent("""\
+        return textwrap.dedent("""\
 
     # ── Stage 3: Apply ───────────────────────────────────────
     apply:
@@ -554,8 +556,9 @@ def _gen_gitlab_ci(
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n {namespace}
     """).format(namespace=namespace)
+
     elif deploy_method == 'helm':
-        apply_stage = textwrap.dedent("""\
+        return textwrap.dedent("""\
 
     # ── Stage 3: Apply via Helm ──────────────────────────────
     apply:
@@ -573,8 +576,9 @@ def _gen_gitlab_ci(
             -n {namespace} \\
             --wait --timeout 5m
     """).format(namespace=namespace)
-    elif deploy_method == 'argocd':
-        apply_stage = textwrap.dedent("""\
+
+    else:  # argocd
+        return textwrap.dedent("""\
 
     # ── Stage 3: Sync ArgoCD Application ─────────────────────
     apply:
@@ -587,6 +591,15 @@ def _gen_gitlab_ci(
       script:
         - argocd app sync dynamic-alerting --prune --timeout 300
     """)
+
+
+def _gen_gitlab_ci(
+    namespace: str,
+    da_tools_image: str,
+    deploy_method: str,
+) -> str:
+    """Generate GitLab CI pipeline for Dynamic Alerting CI/CD."""
+    apply_stage = _build_gitlab_apply_stage(deploy_method, namespace)
 
     return textwrap.dedent("""\
     # Dynamic Alerting CI/CD Pipeline (GitLab CI)
@@ -652,6 +665,10 @@ def _gen_gitlab_ci(
         apply_stage=apply_stage,
     )
 
+
+# ============================================================
+# Configuration File Generators (YAML templates & Kustomize)
+# ============================================================
 
 def _gen_kustomize_base(tenants: list[str], namespace: str) -> str:
     """Generate kustomize/base/kustomization.yaml."""
@@ -1265,6 +1282,109 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
 # CLI entry point
 # ============================================================
 
+# ============================================================
+# Initialization & CLI Validation
+# ============================================================
+
+def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser) -> None:
+    """Check if directory is already initialized."""
+    marker_path = os.path.join(output_dir, '.da-init.yaml')
+    if os.path.isfile(marker_path) and not force:
+        if _LANG == 'zh':
+            print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
+            print("   使用 --force 覆寫或手動刪除 .da-init.yaml。", file=sys.stderr)
+        else:
+            print(f"⚠️  This directory is already initialized ({marker_path}).", file=sys.stderr)
+            print("   Use --force to overwrite or remove .da-init.yaml manually.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
+    """Build configuration from CLI args or interactive flow."""
+    if args.config_source == 'git' and not args.git_repo:
+        parser.error("--config-source git requires --git-repo <url>")
+
+    has_cli_args = args.ci or args.tenants or args.rule_packs or args.deploy
+    if args.non_interactive or has_cli_args:
+        if args.non_interactive and not args.tenants:
+            parser.error("--non-interactive requires --tenants")
+        return {
+            'ci': args.ci or 'both',
+            'deploy': args.deploy or 'kustomize',
+            'rule_packs': [r.strip() for r in (args.rule_packs or 'mariadb,kubernetes').split(',')],
+            'tenants': [t.strip() for t in (args.tenants or 'db-a,db-b').split(',')],
+            'namespace': args.namespace,
+            'da_tools_image': args.da_tools_image,
+            'config_source': args.config_source,
+            'git_repo': args.git_repo,
+            'git_branch': args.git_branch,
+            'git_path': args.git_path,
+            'git_period': args.git_period,
+        }
+    else:
+        config = _interactive_flow()
+        config['da_tools_image'] = args.da_tools_image
+        config.setdefault('config_source', args.config_source)
+        config.setdefault('git_repo', args.git_repo)
+        config.setdefault('git_branch', args.git_branch)
+        config.setdefault('git_path', args.git_path)
+        config.setdefault('git_period', args.git_period)
+        return config
+
+
+def _validate_config(config: dict) -> None:
+    """Validate tenant names and rule packs in config."""
+    # Validate tenant names (K8s naming conventions)
+    invalid_tenants = [t for t in config['tenants']
+                       if not _validate_tenant_name(t)]
+    if invalid_tenants:
+        if _LANG == 'zh':
+            print(f"⚠️  以下租戶名稱不符合 K8s 命名規範: "
+                  f"{', '.join(invalid_tenants)}", file=sys.stderr)
+            print("   規則: 小寫英數 + 連字號, 最長 63 字元", file=sys.stderr)
+        else:
+            print(f"⚠️  Invalid tenant names (K8s convention): "
+                  f"{', '.join(invalid_tenants)}", file=sys.stderr)
+            print("   Rules: lowercase alphanumeric + hyphens, max 63 chars",
+                  file=sys.stderr)
+        sys.exit(1)
+
+    # Reject empty tenant list
+    if not config['tenants']:
+        if _LANG == 'zh':
+            print("⚠️  至少需要一個租戶名稱", file=sys.stderr)
+        else:
+            print("⚠️  At least one tenant name is required", file=sys.stderr)
+        sys.exit(1)
+
+    # Filter out auto-enabled packs and validate remaining ones
+    selectable = set(_selectable_rule_packs())
+    auto = set(_auto_enabled_rule_packs())
+    config['rule_packs'] = [r for r in config['rule_packs'] if r not in auto]
+
+    invalid = [r for r in config['rule_packs'] if r not in selectable]
+    if invalid:
+        if _LANG == 'zh':
+            print(f"⚠️  未知的 Rule Pack: {', '.join(invalid)}", file=sys.stderr)
+            print(f"   可用的: {', '.join(sorted(selectable))}", file=sys.stderr)
+        else:
+            print(f"⚠️  Unknown Rule Packs: {', '.join(invalid)}", file=sys.stderr)
+            print(f"   Available: {', '.join(sorted(selectable))}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _handle_dry_run(config: dict, output_dir: str) -> None:
+    """Handle --dry-run mode: preview files without writing."""
+    is_zh = _LANG == 'zh'
+    print("DRY RUN — " + ("以下檔案會被產生：" if is_zh else "The following files would be created:"))
+    print()
+    files = _preview_files(config, output_dir)
+    for f in files:
+        print(f"  {os.path.relpath(f, output_dir)}")
+    print(f"\n  {'總計' if is_zh else 'Total'}: {len(files)}")
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=_h('description'),
@@ -1301,100 +1421,14 @@ def main():
 
     args = parser.parse_args()
 
-    # Check for existing init
-    marker_path = os.path.join(args.output_dir, '.da-init.yaml')
-    if os.path.isfile(marker_path) and not args.force:
-        if _LANG == 'zh':
-            print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
-            print("   使用 --force 覆寫或手動刪除 .da-init.yaml。", file=sys.stderr)
-        else:
-            print(f"⚠️  This directory is already initialized ({marker_path}).", file=sys.stderr)
-            print("   Use --force to overwrite or remove .da-init.yaml manually.", file=sys.stderr)
-        sys.exit(1)
-
-    # Determine mode — build config from CLI args or interactive flow
-    # Validate --config-source git requirements
-    if args.config_source == 'git' and not args.git_repo:
-        parser.error("--config-source git requires --git-repo <url>")
-
-    has_cli_args = args.ci or args.tenants or args.rule_packs or args.deploy
-    if args.non_interactive or has_cli_args:
-        if args.non_interactive and not args.tenants:
-            parser.error("--non-interactive requires --tenants")
-        config = {
-            'ci': args.ci or 'both',
-            'deploy': args.deploy or 'kustomize',
-            'rule_packs': [r.strip() for r in (args.rule_packs or 'mariadb,kubernetes').split(',')],
-            'tenants': [t.strip() for t in (args.tenants or 'db-a,db-b').split(',')],
-            'namespace': args.namespace,
-            'da_tools_image': args.da_tools_image,
-            'config_source': args.config_source,
-            'git_repo': args.git_repo,
-            'git_branch': args.git_branch,
-            'git_path': args.git_path,
-            'git_period': args.git_period,
-        }
-    else:
-        config = _interactive_flow()
-        config['da_tools_image'] = args.da_tools_image
-        config.setdefault('config_source', args.config_source)
-        config.setdefault('git_repo', args.git_repo)
-        config.setdefault('git_branch', args.git_branch)
-        config.setdefault('git_path', args.git_path)
-        config.setdefault('git_period', args.git_period)
-
-    # Validate tenant names (K8s naming conventions)
-    invalid_tenants = [t for t in config['tenants']
-                       if not _validate_tenant_name(t)]
-    if invalid_tenants:
-        if _LANG == 'zh':
-            print(f"⚠️  以下租戶名稱不符合 K8s 命名規範: "
-                  f"{', '.join(invalid_tenants)}", file=sys.stderr)
-            print("   規則: 小寫英數 + 連字號, 最長 63 字元", file=sys.stderr)
-        else:
-            print(f"⚠️  Invalid tenant names (K8s convention): "
-                  f"{', '.join(invalid_tenants)}", file=sys.stderr)
-            print("   Rules: lowercase alphanumeric + hyphens, max 63 chars",
-                  file=sys.stderr)
-        sys.exit(1)
-
-    # Reject empty tenant list
-    if not config['tenants']:
-        if _LANG == 'zh':
-            print("⚠️  至少需要一個租戶名稱", file=sys.stderr)
-        else:
-            print("⚠️  At least one tenant name is required", file=sys.stderr)
-        sys.exit(1)
-
-    # Filter out auto-enabled packs from user selection (they're always included)
-    # but don't reject them as invalid if user explicitly typed them
-    selectable = set(_selectable_rule_packs())
-    auto = set(_auto_enabled_rule_packs())
-    config['rule_packs'] = [r for r in config['rule_packs'] if r not in auto]
-
-    # Validate rule packs
-    invalid = [r for r in config['rule_packs'] if r not in selectable]
-    if invalid:
-        if _LANG == 'zh':
-            print(f"⚠️  未知的 Rule Pack: {', '.join(invalid)}", file=sys.stderr)
-            print(f"   可用的: {', '.join(sorted(selectable))}", file=sys.stderr)
-        else:
-            print(f"⚠️  Unknown Rule Packs: {', '.join(invalid)}", file=sys.stderr)
-            print(f"   Available: {', '.join(sorted(selectable))}", file=sys.stderr)
-        sys.exit(1)
+    _check_existing_init(args.output_dir, args.force, parser)
+    config = _build_config_from_args(args, parser)
+    _validate_config(config)
 
     output_dir = os.path.abspath(args.output_dir)
 
     if args.dry_run:
-        is_zh = _LANG == 'zh'
-        print("DRY RUN — " + ("以下檔案會被產生：" if is_zh else "The following files would be created:"))
-        print()
-        # Simulate without writing
-        files = _preview_files(config, output_dir)
-        for f in files:
-            print(f"  {os.path.relpath(f, output_dir)}")
-        print(f"\n  {'總計' if is_zh else 'Total'}: {len(files)}")
-        sys.exit(0)
+        _handle_dry_run(config, output_dir)
 
     created = run_init(config, output_dir)
     _print_summary(created, output_dir, config)

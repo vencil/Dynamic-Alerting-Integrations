@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, operator]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
@@ -10,6 +10,7 @@ lang: zh
 ## 狀態
 
 ✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷
+📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum
 
 ## 背景
 
@@ -139,18 +140,67 @@ v2.2.0 BYO 文件的 Operator Appendix 僅是 CRD 範例翻譯，用戶反映：
 - AlertmanagerConfig `v1alpha1` 可能在未來 Operator 版本中被移除 → 預設 `v1beta1`，`v1alpha1` 標注 deprecation
 - Operator ruleSelector label 策略多樣 → `operator-check` 提供診斷指引
 
-## 未來演進方向
+## Addendum: 架構邊界宣言 (v2.6.0)
 
-1. **v2.4.0+ 候選**：threshold-exporter 作為 Kubernetes Operator 監聽自定義 `DynamicAlertTenant` CRD，實現完全 Operator-native 的配置管理
-2. **Helm Chart values.yaml 整合**：提供 kube-prometheus-stack Helm values 範例
-3. **ArgoCD ApplicationSet 整合**：多叢集 Federation 場景的 CRD 部署自動化
+> **新增於 v2.6.0 Phase .a** — 正式記錄核心元件的職責邊界，防止功能蔓延。
+
+### 不可違反的邊界
+
+1. **threshold-exporter 不 watch 任何 CRD**。它只讀 `conf.d/` YAML 檔案，透過 SHA-256 hot-reload 機制偵測變更。這是刻意的設計——維持 exporter 在非 K8s 環境也能運行的通用性。
+
+2. **CRD → conf.d/ 的轉換由外部負責**。兩種支援路徑：
+   - **da-assembler-controller**（未來 Operator 模式）：watch `ThresholdConfig` CRD → 渲染 `conf.d/` 檔案
+   - **CI pipeline 中的 `operator-generate`**：靜態轉換 → 輸出 CRD YAML 供 GitOps 部署
+
+3. **`operator-generate` 僅是「組裝 / 渲染」角色**。它讀取 `rule-packs/` 和 `conf.d/` 目錄，產出標準 CRD YAML。它不擴充 exporter 本身的職責，不連線叢集，不執行 `kubectl apply`。
+
+### 邊界圖
+
+```mermaid
+graph LR
+    subgraph "核心（不變）"
+        TE["threshold-exporter<br/>YAML → Metrics"]
+    end
+
+    subgraph "外部轉換層"
+        OG["operator-generate<br/>（CI / 開發時靜態產出）"]
+        AC["da-assembler-controller<br/>（K8s Operator 模式）"]
+    end
+
+    subgraph "配置來源"
+        YAML["conf.d/ YAML"]
+        CRD["ThresholdConfig CRD"]
+    end
+
+    YAML --> TE
+    CRD -->|watch + render| AC --> YAML
+    OG -->|靜態產出| K8sCRD["PrometheusRule<br/>AlertmanagerConfig<br/>ServiceMonitor"]
+```
+
+### 新增 Operator 工具的判斷標準
+
+任何新增與 Operator 相關的工具或功能，必須通過以下三個問題：
+
+1. **是否改變了 threshold-exporter 的輸入介面？** → 如果是，違反邊界，不可進行
+2. **是否需要 exporter 連線 K8s API？** → 如果是，違反邊界，應由外部工具處理
+3. **是否只是「讀取 → 轉換 → 輸出」？** → 如果是，屬於工具鏈範疇，可以進行
+
+## 演進狀態
+
+- **v2.3.0**（已完成）：`operator-generate` / `operator-check` 工具鏈、PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD 產出
+- **v2.6.0**（已完成）：架構邊界宣言（見上方 §Addendum）、`operator-generate --kustomize` 多叢集部署、`drift_detect.py --mode operator` 跨叢集 CRD 漂移偵測
+
+**殘留**：
+- **da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`。注意：此元件在 threshold-exporter 外部，不違反架構邊界宣言
+- **Helm Chart kube-prometheus-stack values 範例**：提供常見 Operator 部署的 values.yaml 參考
+- **ArgoCD ApplicationSet 整合**：多叢集 Federation 場景的 CRD 部署自動化
 
 ## 相關決策
 
 | ADR | 關係 |
 |-----|------|
 | [ADR-001](001-severity-dedup-via-inhibit.md) | Inhibit rule 在 Operator CRD 中的等價表達 |
-| [ADR-004](004-federation-scenario-a-first.md) | Federation 場景 CRD 部署需考慮 edge/central 分層 |
+| [ADR-004](004-federation-central-exporter-first.md) | Federation 場景 CRD 部署需考慮 edge/central 分層 |
 | [ADR-005](005-projected-volume-for-rule-packs.md) | Path A 的 projected volume 設計；Path B 用 PrometheusRule 取代 |
 | [ADR-007](007-cross-domain-routing-profiles.md) | 路由 Profile 在 AlertmanagerConfig CRD 中的映射 |
 

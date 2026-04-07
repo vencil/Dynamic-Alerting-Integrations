@@ -2,12 +2,12 @@
 title: "Scenario: Complete Tenant Lifecycle Management"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
 
-> **v2.5.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.6.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Overview
 
@@ -456,7 +456,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | Resource | Relevance |
 |----------|-----------|
 | ["Scenario: Complete Tenant Lifecycle Management"](tenant-lifecycle.en.md) | ⭐⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications"](alert-routing-split.en.md) | ⭐⭐ |
 | ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](multi-cluster-federation.en.md) | ⭐⭐ |
 | ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐ |

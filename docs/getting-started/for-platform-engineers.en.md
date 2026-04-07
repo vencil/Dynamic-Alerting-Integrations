@@ -2,14 +2,14 @@
 title: "Platform Engineer Quick Start Guide"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Platform Engineer Quick Start Guide
 
-> **v2.5.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
+> **v2.6.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
-> Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../prometheus-operator-integration.en.md)
+> Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../prometheus-operator-integration.en.md) · [Deployment Decision Matrix](decision-matrix.md)
 
 ## Three Things You Need to Know
 
@@ -18,6 +18,15 @@ lang: en
 **2. Rule Packs are self-contained units.** 15 Rule Packs mount via Projected Volume into Prometheus, each covering a database or service type (MariaDB, PostgreSQL, Redis, etc.). Use the `optional: true` mechanism to safely uninstall unwanted Rule Packs.
 
 **3. Everything is config-driven.** `_defaults.yaml` controls global platform behavior, tenant YAML overrides defaults, and `_profiles.yaml` provides inheritance chains. No hardcoding, no secrets.
+
+## Deployment Path Selection
+
+The platform supports two deployment paths. Not sure which to choose? See the [Deployment Decision Matrix](decision-matrix.md).
+
+| Path | Use Case | Guide |
+|------|----------|-------|
+| **Path A: ConfigMap** | Any Prometheus environment, non-K8s | This guide (below) |
+| **Path B: Operator CRD** | kube-prometheus-stack installed | [Operator Integration Guide](../prometheus-operator-integration.md) |
 
 ## 30-Second Quick Deploy
 
@@ -529,6 +538,17 @@ Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints 
 **Security implications:** These endpoints require no authentication. If an attacker can reach the Prometheus/Alertmanager port, they can repeatedly trigger reloads causing performance impact, or shut down the service via `/-/quit` if enabled.
 
 **Production recommendation:** Use the NetworkPolicy from the "Lifecycle Endpoint Protection" section above to restrict access. Ensure Prometheus and Alertmanager use ClusterIP Services (not NodePort/LoadBalancer), reachable only within the cluster.
+
+## Self-Service Portal (tenant-api)
+
+The platform provides a Web UI (tenant-manager) for Domain Experts to self-manage tenant configurations without editing YAML directly:
+
+- **tenant-api**: Go HTTP server with oauth2-proxy authentication, commit-on-write preserving full Git audit trail
+- **RBAC**: `_rbac.yaml` controls which teams can manage which tenants
+- **Group Management**: `_groups.yaml` supports custom groups + batch operations
+- **PR Mode**: High-security environments can enable `_write_mode: pr` — UI operations create GitHub PR / GitLab MR, requiring reviewer approval before taking effect
+
+See [ADR-009](../adr/009-tenant-manager-crud-api.en.md) (API architecture) and [ADR-011](../adr/011-pr-based-write-back.md) (PR write-back mode).
 
 ## FAQ
 

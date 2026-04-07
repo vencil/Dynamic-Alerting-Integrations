@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -33,18 +36,28 @@ type BatchResult struct {
 }
 
 // BatchResponse is the full response for POST /api/v1/tenants/batch.
-// task_id is pre-reserved for v2.5.0 async queue upgrade — currently always "completed".
 type BatchResponse struct {
-	Status  string        `json:"status"`   // "completed" in v2.4.0
-	TaskID  string        `json:"task_id"`  // reserved for v2.5.0 async
-	Results []BatchResult `json:"results"`
+	Status   string        `json:"status"`              // "completed" | "pending_review" (PR mode)
+	TaskID   string        `json:"task_id,omitempty"`   // async task ID
+	PRURL    string        `json:"pr_url,omitempty"`    // v2.6.0: PR/MR URL in PR mode
+	PRNumber int           `json:"pr_number,omitempty"` // v2.6.0: PR/MR number in PR mode
+	Results  []BatchResult `json:"results"`
+	Summary  string        `json:"summary"`           // e.g., "5 succeeded, 1 failed"
+	Message  string        `json:"message,omitempty"` // v2.6.0: human-readable message
 }
 
 // BatchTenants handles POST /api/v1/tenants/batch
 //
-// Executes a list of patch operations synchronously.
+// Executes a list of patch operations synchronously (default) or asynchronously (if ?async=true).
 // The sync.Mutex inside gitops.Writer ensures serial execution.
-// Response includes task_id for future async upgrade compatibility.
+// Response includes task_id for async tracking.
+//
+// v2.6.0 Phase E: Supports both GitHub PRs and GitLab MRs via platform.Client interface.
+//
+// Query Parameters:
+//
+//	?async=true  — Enable async mode; returns 202 with task_id for polling
+//	(default)    — Sync mode; returns 200 with completed results
 //
 // @Summary     Batch tenant operations
 // @Description Apply patch operations to multiple tenants in one call.
@@ -52,10 +65,12 @@ type BatchResponse struct {
 // @Accept      json
 // @Produce     json
 // @Param       body body     BatchRequest true "Batch operations"
+// @Param       async query   string       false "Enable async mode (true/false)"
 // @Success     200  {object} BatchResponse
+// @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} map[string]string
 // @Router      /api/v1/tenants/batch [post]
-func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, policyMgr *policy.Manager) http.HandlerFunc {
+func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, policyMgr *policy.Manager, taskMgr *async.Manager, writeMode WriteMode, prClient platform.Client, prTracker platform.Tracker) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		groups := rbac.RequestGroups(r)
@@ -73,40 +88,137 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 		taskID := fmt.Sprintf("batch-%s-%04d",
 			time.Now().UTC().Format("20060102"), len(req.Operations))
 
-		results := make([]BatchResult, 0, len(req.Operations))
-
-		for _, op := range req.Operations {
-			if err := ValidateTenantID(op.TenantID); err != nil {
-				results = append(results, BatchResult{
-					TenantID: op.TenantID, Status: "error", Message: err.Error(),
-				})
-				continue
-			}
-			// Per-tenant write permission check (the route-level middleware
-			// only checks wildcard; scoped users need per-tenant validation).
-			if !rbacMgr.HasPermission(groups, op.TenantID, rbac.PermWrite) {
-				results = append(results, BatchResult{
-					TenantID: op.TenantID, Status: "error",
-					Message: "insufficient permissions for tenant " + op.TenantID,
-				})
-				continue
-			}
-			// v2.5.0: Domain policy enforcement
-			if policyMgr != nil {
-				if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
-					msgs := make([]string, len(violations))
-					for i, v := range violations {
-						msgs[i] = v.Message
-					}
-					results = append(results, BatchResult{
-						TenantID: op.TenantID, Status: "error",
-						Message: "domain policy violation: " + strings.Join(msgs, "; "),
-					})
+		// v2.6.0: PR-based write-back mode for batch operations (ADR-011)
+		// All operations are consolidated into a single PR/MR.
+		// Supports both GitHub PRs and GitLab MRs via platform interfaces.
+		if writeMode.IsPRMode() && prClient != nil && prTracker != nil {
+			// Pre-validate all ops (RBAC + policy) before creating any branch
+			var batchOps []gitops.PRBatchOp
+			var batchResults []BatchResult
+			for _, op := range req.Operations {
+				if err := ValidateTenantID(op.TenantID); err != nil {
+					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 					continue
 				}
+				if !rbacMgr.HasPermission(groups, op.TenantID, rbac.PermWrite) {
+					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
+					continue
+				}
+				if policyMgr != nil {
+					if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+						msgs := make([]string, len(violations))
+						for i, v := range violations {
+							msgs[i] = v.Message
+						}
+						batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "policy violation: " + strings.Join(msgs, "; ")})
+						continue
+					}
+				}
+				yamlContent := buildPatchYAML(op.TenantID, op.Patch)
+				batchOps = append(batchOps, gitops.PRBatchOp{TenantID: op.TenantID, YAMLContent: yamlContent})
+				batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
 			}
-			result := applyPatch(w, configDir, op, email)
-			results = append(results, result)
+
+			if len(batchOps) == 0 {
+				rw.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(rw).Encode(BatchResponse{
+					Status:  "completed",
+					Results: batchResults,
+					Summary: fmt.Sprintf("%d failed", len(batchResults)),
+					Message: "No valid operations to create PR/MR.",
+				})
+				return
+			}
+
+			result, err := w.WritePRBatch(batchOps, email)
+			if err != nil {
+				writeJSONError(rw, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+				return
+			}
+
+			prTitle := fmt.Sprintf("[tenant-api] Batch update %d tenants", len(batchOps))
+			tenantList := make([]string, len(batchOps))
+			for i, op := range batchOps {
+				tenantList[i] = op.TenantID
+			}
+			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
+				email, strings.Join(tenantList, ", "))
+			pr, err := prClient.CreatePR(prTitle, prBody, result.BranchName, []string{"tenant-api", "auto-generated", "batch"})
+			if err != nil {
+				provider := prClient.ProviderName()
+				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				return
+			}
+
+			// Register each tenant's PR/MR in tracker
+			for _, op := range batchOps {
+				prTracker.RegisterPR(platform.PRInfo{
+					Number:   pr.Number,
+					WebURL:   pr.WebURL,
+					State:    "open",
+					Title:    pr.Title,
+					HeadRef:  result.BranchName,
+					TenantID: op.TenantID,
+				})
+			}
+
+			rw.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(rw).Encode(BatchResponse{
+				Status:   "pending_review",
+				PRURL:    pr.WebURL,
+				PRNumber: pr.Number,
+				Results:  batchResults,
+				Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
+				Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
+			})
+			return
+		}
+
+		// v2.6.0: Async mode — submit to goroutine pool and return immediately
+		if r.URL.Query().Get("async") == "true" && taskMgr != nil {
+			task := taskMgr.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
+				results := executeBatchOps(w, configDir, req.Operations, email, groups, rbacMgr, policyMgr)
+				asyncResults := make([]async.TaskResult, len(results))
+				for i, br := range results {
+					asyncResults[i] = async.TaskResult{
+						TenantID: br.TenantID,
+						Status:   br.Status,
+						Message:  br.Message,
+					}
+				}
+				return asyncResults, nil
+			})
+
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(rw).Encode(map[string]interface{}{
+				"status":  "pending",
+				"task_id": task.ID,
+				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
+			})
+			return
+		}
+
+		// Synchronous mode (default, backward compatible)
+		results := executeBatchOps(w, configDir, req.Operations, email, groups, rbacMgr, policyMgr)
+
+		// Compute summary
+		successes := 0
+		failures := 0
+		for _, result := range results {
+			if result.Status == "ok" {
+				successes++
+			} else {
+				failures++
+			}
+		}
+		var summary string
+		if failures == 0 {
+			summary = fmt.Sprintf("%d succeeded", successes)
+		} else if successes == 0 {
+			summary = fmt.Sprintf("%d failed", failures)
+		} else {
+			summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
 		}
 
 		rw.Header().Set("Content-Type", "application/json")
@@ -114,8 +226,38 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 			Status:  "completed",
 			TaskID:  taskID,
 			Results: results,
+			Summary: summary,
 		})
 	}
+}
+
+// executeBatchOps runs batch operations synchronously and returns results.
+// This function is shared between sync and async paths to ensure consistency.
+func executeBatchOps(w *gitops.Writer, configDir string, ops []BatchOperation, email string, idpGroups []string, rbacMgr *rbac.Manager, policyMgr *policy.Manager) []BatchResult {
+	results := make([]BatchResult, 0, len(ops))
+	for _, op := range ops {
+		if err := ValidateTenantID(op.TenantID); err != nil {
+			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
+			continue
+		}
+		if !rbacMgr.HasPermission(idpGroups, op.TenantID, rbac.PermWrite) {
+			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions for tenant " + op.TenantID})
+			continue
+		}
+		if policyMgr != nil {
+			if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+				msgs := make([]string, len(violations))
+				for i, v := range violations {
+					msgs[i] = v.Message
+				}
+				results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "domain policy violation: " + strings.Join(msgs, "; ")})
+				continue
+			}
+		}
+		result := applyPatch(w, configDir, op, email)
+		results = append(results, result)
+	}
+	return results
 }
 
 // applyPatch applies a single patch operation to a tenant config file.

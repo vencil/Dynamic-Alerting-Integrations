@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -36,19 +37,19 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
 # ---------------------------------------------------------------------------
 _HELP: Dict[str, Dict[str, str]] = {
     "description": {
-        "zh": "跨叢集配置漂移偵測 — 比對多個 config-dir 目錄的差異",
-        "en": "Cross-cluster config drift detection — compare multiple config dirs",
+        "zh": "跨叢集配置漂移偵測 — 比對多個 config-dir 目錄或 PrometheusRule CRD 的差異",
+        "en": "Cross-cluster config drift detection — compare config dirs or PrometheusRule CRDs",
     },
     "dirs": {
-        "zh": "以逗號分隔的配置目錄列表 (至少 2 個)",
-        "en": "Comma-separated list of config directories (at least 2)",
+        "zh": "以逗號分隔的配置目錄列表 (configmap 模式需≥2個；operator 模式需1個)",
+        "en": "Comma-separated config directories (configmap: ≥2; operator: 1)",
     },
     "labels": {
         "zh": "對應每個目錄的標籤 (預設: dir-1,dir-2,...)",
@@ -57,6 +58,22 @@ _HELP: Dict[str, Dict[str, str]] = {
     "ignore_prefix": {
         "zh": "忽略此前綴的檔案 (預設: _cluster_)",
         "en": "Ignore files with this prefix (default: _cluster_)",
+    },
+    "mode": {
+        "zh": "執行模式: configmap (多目錄比對) 或 operator (叢集 CRD vs 本地)",
+        "en": "Mode: configmap (multi-dir compare) or operator (cluster CRD vs local)",
+    },
+    "kubeconfig": {
+        "zh": "kubeconfig 檔案路徑 (operator 模式)",
+        "en": "kubeconfig file path (operator mode)",
+    },
+    "context": {
+        "zh": "Kubernetes context 名稱 (operator 模式)",
+        "en": "Kubernetes context name (operator mode)",
+    },
+    "namespace": {
+        "zh": "監視命名空間 (operator 模式，預設: monitoring)",
+        "en": "Monitoring namespace (operator mode, default: monitoring)",
     },
 }
 
@@ -220,10 +237,12 @@ def analyze_drift(
     return reports
 
 
-def suggest_reconcile(item: DriftItem) -> str:
+def suggest_reconcile(item: DriftItem, is_operator: bool = False) -> str:
     """Generate a reconciliation suggestion for a drift item."""
-    tenant = item.filename.replace(".yaml", "")
+    if is_operator:
+        return _operator_suggest_reconcile(item)
 
+    # ConfigMap mode
     if item.drift_type == "added":
         return (
             f"Copy {item.filename} from {item.target_label} to "
@@ -249,11 +268,99 @@ def suggest_reconcile(item: DriftItem) -> str:
         )
 
 
+def _operator_suggest_reconcile(item: DriftItem) -> str:
+    """Generate CRD-specific reconciliation suggestions."""
+    if item.drift_type == "added":
+        return (
+            f"CRD exists in cluster but no local source: "
+            f"review PrometheusRule {item.filename} in cluster"
+        )
+    elif item.drift_type == "removed":
+        return (
+            f"CRD missing from cluster: "
+            f"kubectl apply -f {item.filename}"
+        )
+    else:  # modified
+        return (
+            f"Drift detected in PrometheusRule {item.filename}: "
+            f"review and re-apply from local source"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Operator mode: CRD manifest & comparison
+# ---------------------------------------------------------------------------
+
+def compute_crd_manifest(
+    namespace: str,
+    kubeconfig: Optional[str] = None,
+    context: Optional[str] = None,
+) -> FileManifest:
+    """Build manifest from in-cluster PrometheusRule CRDs.
+
+    Runs: kubectl get prometheusrules -n {namespace} -o json
+    For each CRD, computes SHA-256 of spec.groups JSON.
+
+    Returns FileManifest with label="cluster-crd" and files={name: sha256}.
+    """
+    cmd = ["kubectl", "get", "prometheusrules", "-n", namespace, "-o", "json"]
+    if kubeconfig:
+        cmd.extend(["--kubeconfig", kubeconfig])
+    if context:
+        cmd.extend(["--context", context])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            print(f"ERROR: kubectl failed: {result.stderr}", file=sys.stderr)
+            sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("ERROR: kubectl command timeout", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError:
+        print("ERROR: kubectl not found", file=sys.stderr)
+        sys.exit(1)
+
+    manifest = FileManifest(label="cluster-crd", path=f"kubernetes:{namespace}")
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: invalid JSON from kubectl: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    items = data.get("items", [])
+    for item in items:
+        name = item.get("metadata", {}).get("name", "unknown")
+        spec_groups = item.get("spec", {}).get("groups", [])
+        spec_json = json.dumps(spec_groups, sort_keys=True, separators=(',', ':'))
+        sha = hashlib.sha256(spec_json.encode()).hexdigest()
+        manifest.files[f"{name}.yaml"] = sha
+
+    return manifest
+
+
+def compare_local_vs_crd(
+    local_dir: str,
+    crd_manifest: FileManifest,
+    ignore_prefixes: Tuple[str, ...] = EXPECTED_PREFIXES,
+) -> DriftReport:
+    """Compare local directory vs in-cluster CRD manifest.
+
+    Builds local manifest using compute_dir_manifest, then compares
+    using existing compare_manifests logic.
+
+    Returns DriftReport showing drift between local and cluster CRD state.
+    """
+    local_manifest = compute_dir_manifest(local_dir, label="local")
+    return compare_manifests(local_manifest, crd_manifest,
+                             ignore_prefixes=ignore_prefixes)
+
+
 # ---------------------------------------------------------------------------
 # Report builders
 # ---------------------------------------------------------------------------
 
-def build_summary(reports: List[DriftReport]) -> dict:
+def build_summary(reports: List[DriftReport], is_operator: bool = False) -> dict:
     """Build a structured summary from all pairwise reports."""
     total_unexpected = sum(r.unexpected_count for r in reports)
     total_expected = sum(r.expected_count for r in reports)
@@ -274,7 +381,10 @@ def build_summary(reports: List[DriftReport]) -> dict:
                 "filename": item.filename,
                 "type": item.drift_type,
                 "expected": item.expected,
-                "suggestion": suggest_reconcile(item) if not item.expected else "",
+                "suggestion": (
+                    suggest_reconcile(item, is_operator=is_operator)
+                    if not item.expected else ""
+                ),
             }
             if item.source_sha:
                 item_data["source_sha"] = item.source_sha[:12]
@@ -405,12 +515,28 @@ def build_parser() -> argparse.ArgumentParser:
         help=h["dirs"],
     )
     parser.add_argument(
+        "--mode", default="configmap", choices=["configmap", "operator"],
+        help=h["mode"],
+    )
+    parser.add_argument(
         "--labels", default=None,
         help=h["labels"],
     )
     parser.add_argument(
         "--ignore-prefix", default="_cluster_,_local_",
         help=h["ignore_prefix"],
+    )
+    parser.add_argument(
+        "--kubeconfig", default=None,
+        help=h["kubeconfig"],
+    )
+    parser.add_argument(
+        "--context", default=None,
+        help=h["context"],
+    )
+    parser.add_argument(
+        "--namespace", default="monitoring",
+        help=h["namespace"],
     )
     parser.add_argument("--json", action="store_true",
                         help="JSON output")
@@ -427,33 +553,62 @@ def main():
     args = parser.parse_args()
 
     dirs = [d.strip() for d in args.dirs.split(",") if d.strip()]
-    if len(dirs) < 2:
-        print("ERROR: at least 2 directories required", file=sys.stderr)
-        sys.exit(1)
-
-    labels = None
-    if args.labels:
-        labels = [l.strip() for l in args.labels.split(",")]
-        if len(labels) != len(dirs):
-            print("ERROR: --labels count must match --dirs count",
-                  file=sys.stderr)
-            sys.exit(1)
-
     ignore_prefixes = tuple(
         p.strip() for p in args.ignore_prefix.split(",") if p.strip()
     )
 
-    # Check directories exist
-    missing = [d for d in dirs if not Path(d).is_dir()]
-    if missing:
-        for m in missing:
-            print(f"ERROR: directory not found: {m}", file=sys.stderr)
-        sys.exit(1)
+    # Operator mode: compare local vs in-cluster CRDs
+    if args.mode == "operator":
+        if len(dirs) != 1:
+            print("ERROR: operator mode requires exactly 1 directory",
+                  file=sys.stderr)
+            sys.exit(1)
 
-    reports = analyze_drift(dirs, labels=labels,
-                            ignore_prefixes=ignore_prefixes)
-    summary = build_summary(reports)
+        local_dir = dirs[0]
+        if not Path(local_dir).is_dir():
+            print(f"ERROR: directory not found: {local_dir}",
+                  file=sys.stderr)
+            sys.exit(1)
 
+        crd_manifest = compute_crd_manifest(
+            namespace=args.namespace,
+            kubeconfig=args.kubeconfig,
+            context=args.context,
+        )
+        report = compare_local_vs_crd(
+            local_dir, crd_manifest,
+            ignore_prefixes=ignore_prefixes
+        )
+        summary = build_summary([report], is_operator=True)
+
+    # ConfigMap mode: multi-directory comparison
+    else:
+        if len(dirs) < 2:
+            print("ERROR: configmap mode requires at least 2 directories",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        labels = None
+        if args.labels:
+            labels = [l.strip() for l in args.labels.split(",")]
+            if len(labels) != len(dirs):
+                print("ERROR: --labels count must match --dirs count",
+                      file=sys.stderr)
+                sys.exit(1)
+
+        # Check directories exist
+        missing = [d for d in dirs if not Path(d).is_dir()]
+        if missing:
+            for m in missing:
+                print(f"ERROR: directory not found: {m}",
+                      file=sys.stderr)
+            sys.exit(1)
+
+        reports = analyze_drift(dirs, labels=labels,
+                                ignore_prefixes=ignore_prefixes)
+        summary = build_summary(reports, is_operator=False)
+
+    # Output (same for both modes)
     if args.json:
         print(format_json_report(summary))
     elif args.markdown:

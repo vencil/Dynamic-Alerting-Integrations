@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
@@ -137,7 +137,7 @@ volumes:
 | [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
 | [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
 | [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
-| [004-federation-scenario-a-first](004-federation-scenario-a-first.md) | ⭐⭐⭐ |
+| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐⭐⭐ |
 | [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
 | [README](README.md) | ⭐⭐⭐ |
 | ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐ |

@@ -891,6 +891,58 @@ def check_image_tag_v_prefix() -> List[Issue]:
     return issues
 
 
+def check_e2e_and_jsx_versions(expected_platform: str) -> List[Issue]:
+    """Check e2e/package.json and JSX frontmatter versions match platform version.
+
+    v2.6.0: Expanded coverage per v2.5.0 Lesson Learned #4 (version sync gaps).
+    Checks:
+      - tests/e2e/package.json "version" field
+      - JSX tool frontmatter "version:" field
+    """
+    issues = []
+    e2e_pkg = REPO_ROOT / "tests" / "e2e" / "package.json"
+
+    # Check e2e/package.json
+    if e2e_pkg.exists():
+        try:
+            pkg = json.loads(e2e_pkg.read_text(encoding="utf-8"))
+            found = pkg.get("version", "")
+            # Normalize: remove leading 'v' for comparison
+            norm_expected = expected_platform.lstrip("v")
+            norm_found = found.lstrip("v")
+            if norm_found and norm_found != norm_expected:
+                issues.append(Issue(
+                    "e2e-package-version", "error",
+                    str(e2e_pkg.relative_to(REPO_ROOT)), 0,
+                    f'package.json version "{found}" should be "{expected_platform}"',
+                ))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Check JSX frontmatter versions
+    jsx_dir = DOCS_DIR / "interactive" / "tools"
+    if jsx_dir.exists():
+        for jsx_file in sorted(jsx_dir.glob("*.jsx")):
+            content = jsx_file.read_text(encoding="utf-8", errors="replace")
+            # JSX frontmatter is between --- delimiters
+            if content.startswith("---"):
+                end = content.find("---", 3)
+                if end > 0:
+                    frontmatter = content[3:end]
+                    m = re.search(r"^version:\s*v?(\S+)", frontmatter, re.MULTILINE)
+                    if m:
+                        found = m.group(1)
+                        norm = expected_platform.lstrip("v")
+                        if found != norm and found != expected_platform:
+                            rel = jsx_file.relative_to(REPO_ROOT)
+                            issues.append(Issue(
+                                "jsx-frontmatter-version", "warn",
+                                str(rel), 0,
+                                f'version: "{found}" should be "{expected_platform}"',
+                            ))
+    return issues
+
+
 def check_mkdocs_extra_versions(versions: Dict[str, str]) -> List[Issue]:
     """Check mkdocs.yml extra vars match source-of-truth versions.
 
@@ -978,6 +1030,8 @@ def main():
     all_issues.extend(check_scenario_count_in_docs())
     all_issues.extend(check_image_tag_v_prefix())
     all_issues.extend(check_mkdocs_extra_versions(versions))
+    if "platform" in versions:
+        all_issues.extend(check_e2e_and_jsx_versions(versions["platform"]))
 
     # --fix mode: auto-fix fixable issues
     if args.fix and all_issues:

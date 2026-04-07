@@ -2,7 +2,7 @@
 title: "治理、稽核與安全合規"
 tags: [governance, security, audit]
 audience: [platform-engineer, security]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # 治理、稽核與安全合規
@@ -107,7 +107,7 @@ git rm conf.d/_rbac.yaml && git commit -m "emergency: remove RBAC to restore rea
 v1.7.0 起，`validate_config.py` 提供一站式配置驗證，涵蓋：
 
 1. **YAML 格式驗證** — 語法正確性
-2. **Schema 驗證** — Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` 偵測未知/typo key
+2. **Schema 驗證** — Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` 偵測未知/typo key（JSON Schema 定義見 [docs/schemas/](schemas/README.md)）
 3. **路由驗證** — `generate_alertmanager_routes.py --validate` 檢查 receiver 結構 + domain allowlist
 4. **Custom Rule Lint** — `lint_custom_rules.py` deny-list 合規檢查
 5. **版號一致性** — `bump_docs.py --check` 確認三條版號線同步

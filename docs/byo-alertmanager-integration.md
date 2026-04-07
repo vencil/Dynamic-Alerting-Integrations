@@ -2,12 +2,12 @@
 title: "BYO Alertmanager 整合指南"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # BYO Alertmanager 整合指南
 
-> **版本**：v2.5.0
+> **版本**：v2.6.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -443,5 +443,5 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
 | ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |

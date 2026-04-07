@@ -3,7 +3,7 @@ name: tenant-api
 description: Tenant Management API for the Dynamic Alerting Platform (ADR-009)
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
-version: 2.5.0
+version: 2.6.0
 # appVersion: Go binary 版本
 appVersion: "2.5.0"
 keywords:

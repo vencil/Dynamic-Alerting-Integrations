@@ -1,10 +1,12 @@
 // Package gitops implements commit-on-write operations for tenant config files.
 //
-// Design (ADR-009):
+// Design (ADR-009, ADR-011):
 //   - All write operations hold a sync.Mutex to prevent concurrent git conflicts.
 //   - Each write records the HEAD commit before and after to detect conflicts.
 //   - Commits use the operator's email as git author for audit trail.
 //   - Schema validation is run before any disk write.
+//   - v2.6.0: PR-based write-back mode (ADR-011) creates feature branches
+//     and pushes for external PR creation instead of committing to the main branch.
 package gitops
 
 import (
@@ -25,6 +27,13 @@ import (
 // ErrConflict is returned when the git HEAD moved during a write operation.
 var ErrConflict = errors.New("conflict: repository was updated concurrently, please refresh and retry")
 
+// ErrPendingPR is returned when a tenant already has a pending PR (PR mode only).
+var ErrPendingPR = errors.New("pending PR exists for this tenant")
+
+// OnWriteFunc is called after a successful config write.
+// tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
+type OnWriteFunc func(tenantID string)
+
 // Writer handles GitOps write-back operations.
 type Writer struct {
 	mu             sync.Mutex
@@ -32,6 +41,7 @@ type Writer struct {
 	gitDir         string // git repository root (may differ from configDir)
 	committerName  string // cached from GIT_COMMITTER_NAME env var
 	committerEmail string // cached from GIT_COMMITTER_EMAIL env var
+	onWrite        OnWriteFunc // v2.6.0: callback for post-write notifications (e.g. SSE hub)
 }
 
 // NewWriter creates a Writer for the given directories.
@@ -47,6 +57,12 @@ func NewWriter(configDir, gitDir string) *Writer {
 		committerName:  os.Getenv("GIT_COMMITTER_NAME"),
 		committerEmail: os.Getenv("GIT_COMMITTER_EMAIL"),
 	}
+}
+
+// SetOnWrite registers a callback to be invoked after a successful config write.
+// This is used by v2.6.0 WebSocket/SSE hub to broadcast config change events.
+func (w *Writer) SetOnWrite(fn OnWriteFunc) {
+	w.onWrite = fn
 }
 
 // Write validates, persists, and commits a tenant's config YAML.
@@ -101,6 +117,12 @@ func (w *Writer) Write(tenantID, authorEmail, yamlContent string) error {
 	}
 
 	log.Printf("gitops: tenant=%s committed by %s", tenantID, authorEmail)
+
+	// v2.6.0: Notify via callback (e.g. SSE hub broadcast)
+	if w.onWrite != nil {
+		w.onWrite(tenantID)
+	}
+
 	return nil
 }
 
@@ -192,6 +214,12 @@ func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent
 	}
 
 	log.Printf("gitops: %s committed by %s", entityType, authorEmail)
+
+	// v2.6.0: Notify via callback (e.g. SSE hub broadcast)
+	if w.onWrite != nil {
+		w.onWrite(entityType)
+	}
+
 	return nil
 }
 
@@ -265,6 +293,144 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string) error {
 	)
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit: %w — %s", err, string(out))
+	}
+	return nil
+}
+
+// PRWriteResult contains the result of a PR-mode write operation.
+type PRWriteResult struct {
+	BranchName string // the feature branch name (e.g. "tenant-api/db-a-prod/20260406-143022")
+	FilePath   string // the path of the written file
+}
+
+// WritePR validates and writes a tenant config to a feature branch for PR creation.
+//
+// Unlike Write(), this method:
+//  1. Creates a new branch from the current HEAD
+//  2. Writes the file and commits on the feature branch
+//  3. Pushes the branch to origin
+//  4. Returns the branch name (caller creates the PR via GitHub API)
+//
+// The caller (handler) is responsible for creating the GitHub PR using the returned branch name.
+func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
+	// Step 1: validate schema before anything
+	if errs := validate(tenantID, yamlContent); len(errs) > 0 {
+		return nil, fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Step 2: generate branch name
+	ts := time.Now().UTC().Format("20060102-150405")
+	branchName := fmt.Sprintf("tenant-api/%s/%s", tenantID, ts)
+
+	// Step 3: create and checkout feature branch
+	if err := w.gitExec("checkout", "-b", branchName); err != nil {
+		return nil, fmt.Errorf("create branch: %w", err)
+	}
+
+	// Step 4: write file
+	filePath := filepath.Join(w.configDir, tenantID+".yaml")
+	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
+		// Rollback: switch back to original branch
+		_ = w.gitExec("checkout", "-")
+		_ = w.gitExec("branch", "-D", branchName)
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	// Step 5: commit on feature branch
+	if err := w.gitCommit(filePath, tenantID, authorEmail); err != nil {
+		_ = w.gitExec("checkout", "-")
+		_ = w.gitExec("branch", "-D", branchName)
+		return nil, fmt.Errorf("git commit on branch: %w", err)
+	}
+
+	// Step 6: push branch to origin
+	if err := w.gitExec("push", "origin", branchName); err != nil {
+		log.Printf("WARN: gitops: push branch %s failed: %v (PR creation will fail)", branchName, err)
+		// Don't delete the branch — the commit is valuable even if push fails
+	}
+
+	// Step 7: switch back to the original branch (main/HEAD)
+	if err := w.gitExec("checkout", "-"); err != nil {
+		log.Printf("WARN: gitops: failed to switch back from branch %s: %v", branchName, err)
+	}
+
+	log.Printf("gitops: PR branch %s created for tenant=%s by %s", branchName, tenantID, authorEmail)
+
+	return &PRWriteResult{
+		BranchName: branchName,
+		FilePath:   filePath,
+	}, nil
+}
+
+// WritePRBatch validates and writes multiple tenant configs to a single feature branch.
+// This supports batch PR mode where all changes are consolidated into one PR.
+func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResult, error) {
+	if len(ops) == 0 {
+		return nil, fmt.Errorf("empty batch operations")
+	}
+
+	// Validate all operations first
+	for _, op := range ops {
+		if errs := validate(op.TenantID, op.YAMLContent); len(errs) > 0 {
+			return nil, fmt.Errorf("validation failed for %s: %s", op.TenantID, strings.Join(errs, "; "))
+		}
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	ts := time.Now().UTC().Format("20060102-150405")
+	branchName := fmt.Sprintf("tenant-api/batch/%s", ts)
+
+	if err := w.gitExec("checkout", "-b", branchName); err != nil {
+		return nil, fmt.Errorf("create branch: %w", err)
+	}
+
+	// Write all files and commit each
+	for _, op := range ops {
+		filePath := filepath.Join(w.configDir, op.TenantID+".yaml")
+		if err := os.WriteFile(filePath, []byte(op.YAMLContent), 0644); err != nil {
+			_ = w.gitExec("checkout", "-")
+			_ = w.gitExec("branch", "-D", branchName)
+			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
+		}
+		if err := w.gitCommit(filePath, op.TenantID, authorEmail); err != nil {
+			_ = w.gitExec("checkout", "-")
+			_ = w.gitExec("branch", "-D", branchName)
+			return nil, fmt.Errorf("commit for %s: %w", op.TenantID, err)
+		}
+	}
+
+	if err := w.gitExec("push", "origin", branchName); err != nil {
+		log.Printf("WARN: gitops: push branch %s failed: %v", branchName, err)
+	}
+
+	if err := w.gitExec("checkout", "-"); err != nil {
+		log.Printf("WARN: gitops: failed to switch back from branch %s: %v", branchName, err)
+	}
+
+	log.Printf("gitops: PR batch branch %s created with %d ops by %s", branchName, len(ops), authorEmail)
+
+	return &PRWriteResult{
+		BranchName: branchName,
+	}, nil
+}
+
+// PRBatchOp represents a single operation in a PR-mode batch write.
+type PRBatchOp struct {
+	TenantID    string
+	YAMLContent string
+}
+
+// gitExec runs a git command in the git directory.
+func (w *Writer) gitExec(args ...string) error {
+	fullArgs := append([]string{"-C", w.gitDir}, args...)
+	cmd := exec.Command("git", fullArgs...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git %s: %w — %s", args[0], err, string(out))
 	}
 	return nil
 }

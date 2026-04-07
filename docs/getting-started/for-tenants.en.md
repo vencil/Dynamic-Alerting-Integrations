@@ -2,12 +2,12 @@
 title: "Tenant Quick Start Guide"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Tenant Quick Start Guide
 
-> **v2.5.0** | Audience: Tenant administrators, DBAs, SREs
+> **v2.6.0** | Audience: Tenant administrators, DBAs, SREs
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
@@ -15,7 +15,7 @@ lang: en
 
 **1. Your monitoring is already active.** The platform ships with 15 Rule Packs covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Kafka, and more. As long as your exporter is running, alert rules are in effect.
 
-**2. You only manage one YAML file.** All customization lives in `conf.d/<tenant>.yaml` — thresholds, notification routing, maintenance windows, everything.
+**2. You only manage one YAML file (or use the Web UI).** All customization lives in `conf.d/<tenant>.yaml` — thresholds, notification routing, maintenance windows, everything. If your Platform Team has deployed the Self-Service Portal (tenant-manager UI), you can manage everything directly in the browser without editing YAML.
 
 **3. Defaults are reasonable. You may not need to change anything.** Unless your business scenario requires stricter or more relaxed thresholds, the defaults in `_defaults.yaml` are sufficient.
 

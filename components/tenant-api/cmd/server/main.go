@@ -19,12 +19,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/async"
+	gh "github.com/vencil/tenant-api/internal/github"
+	gl "github.com/vencil/tenant-api/internal/gitlab"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/views"
+	"github.com/vencil/tenant-api/internal/ws"
 )
 
 func main() {
@@ -39,6 +44,23 @@ func main() {
 		"HTTP listen address")
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
 		"How often to check for RBAC config changes")
+
+	// v2.6.0: PR-based write-back mode (ADR-011)
+	// Supports: "direct" (default), "pr" or "pr-github" (GitHub PRs), "pr-gitlab" (GitLab MRs)
+	writeMode := flag.String("write-mode", envOrDefault("TA_WRITE_MODE", "direct"),
+		"Write-back mode: 'direct' (commit-on-write), 'pr' or 'pr-github' (GitHub PR), 'pr-gitlab' (GitLab MR)")
+
+	// GitHub flags
+	ghRepo := flag.String("github-repo", envOrDefault("TA_GITHUB_REPO", ""),
+		"GitHub repository in owner/repo format (required for pr/pr-github mode)")
+	ghBaseBranch := flag.String("github-base-branch", envOrDefault("TA_GITHUB_BASE_BRANCH", "main"),
+		"Target branch for GitHub PRs (default: main)")
+
+	// v2.6.0 Phase E: GitLab flags
+	glProject := flag.String("gitlab-project", envOrDefault("TA_GITLAB_PROJECT", ""),
+		"GitLab project path (group/project) or numeric ID (required for pr-gitlab mode)")
+	glTargetBranch := flag.String("gitlab-target-branch", envOrDefault("TA_GITLAB_TARGET_BRANCH", "main"),
+		"Target branch for GitLab MRs (default: main)")
 	flag.Parse()
 
 	log.Printf("tenant-api starting — config-dir=%s addr=%s", *configDir, *listenAddr)
@@ -49,7 +71,19 @@ func main() {
 		log.Fatalf("FATAL: rbac init: %v", err)
 	}
 
+	// v2.6.0: WebSocket/SSE hub for real-time config change notifications
+	eventHub := ws.NewHub()
+
 	writer := gitops.NewWriter(*configDir, *gitDir)
+	// v2.6.0: Register callback for real-time event broadcasting
+	writer.SetOnWrite(func(tenantID string) {
+		eventHub.Broadcast(ws.Event{
+			Type:      "config_change",
+			TenantID:  tenantID,
+			Timestamp: time.Now(),
+			Detail:    "tenant config updated",
+		})
+	})
 
 	groupMgr := groups.NewManager(*configDir)
 
@@ -59,10 +93,75 @@ func main() {
 	// v2.5.0: Saved Views for tenant-manager UI
 	viewMgr := views.NewManager(*configDir)
 
+	// v2.6.0: Async task manager for batch operations
+	taskMgr := async.NewManager(4) // 4 worker goroutines
+
+	// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
+	wm := handler.WriteMode(*writeMode)
+	var prClient platform.Client
+	var prTracker platform.Tracker
+
+	switch wm {
+	case handler.WriteModePR, handler.WriteModePRGitHub:
+		// GitHub PR mode
+		wm = handler.WriteModePR // normalize
+		ghToken := os.Getenv("TA_GITHUB_TOKEN")
+		if ghToken == "" {
+			log.Fatalf("FATAL: TA_GITHUB_TOKEN is required when write-mode=pr/pr-github")
+		}
+		if *ghRepo == "" {
+			log.Fatalf("FATAL: --github-repo (or TA_GITHUB_REPO) is required when write-mode=pr/pr-github")
+		}
+		ghClient, err := gh.NewClient(ghToken, *ghRepo, *ghBaseBranch)
+		if err != nil {
+			log.Fatalf("FATAL: github client: %v", err)
+		}
+		if gheURL := os.Getenv("TA_GITHUB_API_URL"); gheURL != "" {
+			ghClient.SetBaseURL(gheURL)
+		}
+		if err := ghClient.ValidateToken(); err != nil {
+			log.Printf("WARN: GitHub token validation failed: %v (PR operations may fail)", err)
+		}
+		ghTracker := gh.NewTracker(ghClient, *reloadInterval)
+		prClient = ghClient
+		prTracker = ghTracker
+		log.Printf("tenant-api: GitHub PR write-back mode enabled (repo=%s, base=%s)", *ghRepo, *ghBaseBranch)
+
+	case handler.WriteModePRGitLab:
+		// GitLab MR mode
+		glToken := os.Getenv("TA_GITLAB_TOKEN")
+		if glToken == "" {
+			log.Fatalf("FATAL: TA_GITLAB_TOKEN is required when write-mode=pr-gitlab")
+		}
+		if *glProject == "" {
+			log.Fatalf("FATAL: --gitlab-project (or TA_GITLAB_PROJECT) is required when write-mode=pr-gitlab")
+		}
+		glClient, err := gl.NewClient(glToken, *glProject, *glTargetBranch)
+		if err != nil {
+			log.Fatalf("FATAL: gitlab client: %v", err)
+		}
+		if glURL := os.Getenv("TA_GITLAB_API_URL"); glURL != "" {
+			glClient.SetBaseURL(glURL)
+		}
+		if err := glClient.ValidateToken(); err != nil {
+			log.Printf("WARN: GitLab token validation failed: %v (MR operations may fail)", err)
+		}
+		glTracker := gl.NewTracker(glClient, *reloadInterval)
+		prClient = glClient
+		prTracker = glTracker
+		log.Printf("tenant-api: GitLab MR write-back mode enabled (project=%s, target=%s)", *glProject, *glTargetBranch)
+
+	default:
+		log.Printf("tenant-api: direct write mode (commit-on-write)")
+	}
+
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
 	go policyMgr.WatchLoop(*reloadInterval, stopCh)
+	if prTracker != nil {
+		go prTracker.WatchLoop(stopCh)
+	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -100,7 +199,7 @@ func main() {
 
 			// Write endpoints
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
-				Put("/", handler.PutTenant(writer, policyMgr))
+				Put("/", handler.PutTenant(writer, policyMgr, wm, prClient, prTracker))
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Post("/validate", handler.ValidateTenant(*configDir))
@@ -109,7 +208,7 @@ func main() {
 		// Batch operations — route-level middleware checks read (authenticated),
 		// per-tenant write permission is enforced inside the handler.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Post("/tenants/batch", handler.BatchTenants(writer, *configDir, rbacMgr, policyMgr))
+			Post("/tenants/batch", handler.BatchTenants(writer, *configDir, rbacMgr, policyMgr, taskMgr, wm, prClient, prTracker))
 
 		// Group management (v2.5.0)
 		// v2.5.0: RBAC-filtered — only returns groups with accessible members
@@ -128,7 +227,7 @@ func main() {
 
 			// Batch operations on group members
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Post("/batch", handler.GroupBatch(groupMgr, writer, *configDir, rbacMgr))
+				Post("/batch", handler.GroupBatch(groupMgr, writer, *configDir, rbacMgr, taskMgr))
 		})
 
 		// Saved Views (v2.5.0 Phase C)
@@ -145,6 +244,21 @@ func main() {
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
 				Delete("/", handler.DeleteView(viewMgr, writer))
 		})
+
+		// Task polling (v2.6.0 — async batch operations)
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/tasks/{id}", handler.GetTask(taskMgr))
+
+		// PR/MR tracking (v2.6.0 Phase C — ADR-011 PR-based write-back)
+		// Works for both GitHub PRs and GitLab MRs via platform.Tracker
+		if prTracker != nil {
+			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				Get("/prs", handler.ListPRs(prTracker))
+		}
+
+		// Real-time event stream (v2.6.0 — SSE for config change notifications)
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/events", eventHub.ServeHTTP)
 	})
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────
@@ -170,6 +284,7 @@ func main() {
 	<-quit
 	log.Println("tenant-api shutting down...")
 
+	taskMgr.Close()
 	close(stopCh)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
@@ -144,16 +144,19 @@ groups:
 - 範例配置 `conf.d/examples/_instance_mapping.yaml`
 - Go/Python 雙端 reserved key 同步
 
-## 後續方向
+## 演進狀態
 
-- 在實際多 schema Oracle 環境驗證端到端流程
-- Schema validation（`_instance_mapping.yaml` JSON Schema）
-- 與 Federation 場景 B 結合驗證邊緣/中央分層架構下的行為
+- **v2.1.0**（已完成）：核心工具鏈（generate_tenant_mapping_rules / discover_instance_mappings / scaffold_tenant --topology=1:N）
+- **v2.1.0**（已完成）：Federation 場景 B（`rule-pack-split`）支援邊緣/中央分層架構下的映射行為
+
+**殘留**：
+- 在實際多 schema Oracle 環境驗證端到端流程（待生產環境回饋）
+- Schema validation（`_instance_mapping.yaml` JSON Schema）排入後續
 
 ## 相關決策
 
 - [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — Recording Rules 透過同一 Projected Volume 機制分發
-- [ADR-004: Federation 場景 A 優先](./004-federation-scenario-a-first.md) — Federation 下的映射一致性
+- [ADR-004: Federation 場景 A 優先](./004-federation-central-exporter-first.md) — Federation 下的映射一致性
 - [ADR-001: 嚴重度 Dedup 採用 Inhibit 規則](./001-severity-dedup-via-inhibit.md) — 映射後指標仍適用 inhibit dedup
 
 ## 參考資料
@@ -170,7 +173,7 @@ groups:
 | [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐ |
 | [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐ |
 | [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐ |
-| [004-federation-scenario-a-first](004-federation-scenario-a-first.md) | ⭐⭐⭐ |
+| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐⭐⭐ |
 | [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
 | [006-tenant-mapping-topologies](006-tenant-mapping-topologies.md) | ⭐⭐⭐ |
 | [README](README.md) | ⭐⭐⭐ |

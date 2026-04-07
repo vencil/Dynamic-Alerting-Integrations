@@ -65,6 +65,7 @@ def _build_help_text(lang):
 命令 (Operator-Native — CRD 產生與驗證):
     operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
     operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
+    migrate-to-operator ConfigMap 格式遷移至 Operator 原生 CRD (含遷移清單與預檢)
 
 命令 (Federation — 多叢集):
     rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
@@ -128,6 +129,7 @@ Commands (File System — offline):
 Commands (Operator-Native — CRD generation & validation):
     operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
     operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
+    migrate-to-operator Migrate ConfigMap format to Operator native CRD (migration checklist + pre-check)
 
 Commands (Federation — multi-cluster):
     rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
@@ -202,6 +204,7 @@ COMMAND_MAP = {
     # Group D: Operator-native (CRD generation + validation)
     "operator-generate": "operator_generate.py",
     "operator-check": "operator_check.py",
+    "migrate-to-operator": "migrate_to_operator.py",
     # Group E: Federation (multi-cluster)
     "rule-pack-split": "generate_rule_pack_split.py",
     # Group F: Policy (OPA/Rego)

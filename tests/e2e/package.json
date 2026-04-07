@@ -1,6 +1,6 @@
 {
   "name": "@vibe-k8s-lab/e2e-tests",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Playwright smoke tests for Dynamic Alerting Portal",
   "scripts": {
     "test": "playwright test",
@@ -17,6 +17,7 @@
     "install-deps": "playwright install chromium"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.8.0",
     "@playwright/test": "^1.59.1",
     "@types/node": "^20.19.39"
   }

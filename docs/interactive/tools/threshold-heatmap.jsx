@@ -2,7 +2,7 @@
 title: "Threshold Heatmap"
 tags: [threshold, visualization, heatmap, metrics, distribution]
 audience: [platform-engineer, domain-expert, sre]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [rule-pack-matrix, capacity-planner, multi-tenant-comparison]
 ---
@@ -260,7 +260,7 @@ export default function ThresholdHeatmap() {
             </div>
 
             {/* Statistics */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4" role="region" aria-live="polite" aria-label={t('統計摘要', 'Statistics summary')}>
               <h3 className="text-xs font-semibold text-slate-900 uppercase tracking-wide mb-3">
                 {t('統計', 'Statistics')}
               </h3>
@@ -298,7 +298,7 @@ export default function ThresholdHeatmap() {
           </div>
 
           {/* Main: Heatmap */}
-          <div className="xl:col-span-3 bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-auto">
+          <div className="xl:col-span-3 bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-auto" role="region" aria-live="polite" aria-label={t('閾值熱力圖', 'Threshold heatmap grid')}>
             <div className="inline-block min-w-full">
               {/* Heatmap Table */}
               <table className="border-collapse">
@@ -373,7 +373,7 @@ export default function ThresholdHeatmap() {
         {/* Detail Panel */}
         {detailCell && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 relative">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 relative" role="dialog" aria-live="polite" aria-atomic="true" aria-label={t('閾值詳情', 'Threshold details')}>
               <button
                 onClick={() => setDetailCell(null)}
                 className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"

@@ -2,7 +2,7 @@
 title: "Getting Started Wizard"
 tags: [onboarding, guided, 3 min]
 audience: [tenant, platform-engineer, domain-expert]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [onboarding-checklist, architecture-quiz, rule-pack-selector]
 ---
@@ -135,7 +135,7 @@ const RECOMMENDATIONS = {
       { name: "Platform Engineer Quick Start", path: "for-platform-engineers.md", priority: "start-here", summary: "Deploy the platform end-to-end: Helm install, config, and verify." },
       { name: "Migration Engine Guide", path: "../migration-engine.md", summary: "AST-based PromQL-to-YAML converter internals." },
       { name: "Migration User Guide", path: "../migration-guide.md", summary: "Step-by-step onboarding flow with scaffold and migrate tools." },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Advanced Scenarios", path: "../internal/test-coverage-matrix.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
       { name: "Shadow Monitoring SOP", path: "../shadow-monitoring-sop.md", summary: "Dual-track old/new rules, auto-convergence detection." },
       { name: "Shadow Monitoring Cutover", path: "../scenarios/shadow-monitoring-cutover.md", summary: "Zero-risk cutover: readiness check, one-click switch, rollback." },
     ],
@@ -212,7 +212,7 @@ const RECOMMENDATIONS = {
       { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
       { name: "Custom Rule Governance", path: "../custom-rule-governance.md", summary: "Three-tier governance model, CI linting, naming conventions." },
       { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Advanced Scenarios", path: "../internal/test-coverage-matrix.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
     ],
   },
   "tenant-onboard": {
@@ -232,7 +232,7 @@ const RECOMMENDATIONS = {
       { name: "Alert Reference", path: "../rule-packs/ALERT-REFERENCE.md", summary: "All 99 alerts with severity, meaning, and suggested actions." },
       { name: "Rule Packs Overview", path: "../rule-packs/README.md", summary: "15 rule packs: which metrics they cover, exporter requirements." },
       { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Advanced Scenarios", path: "../internal/test-coverage-matrix.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
       { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
     ],
   },
@@ -252,7 +252,7 @@ const RECOMMENDATIONS = {
       { name: "Tenant Quick Start", path: "for-tenants.md", priority: "start-here", summary: "The 3 things every tenant needs to know in 30 seconds." },
       { name: "Tenant Lifecycle Scenarios", path: "../scenarios/tenant-lifecycle.md", summary: "Scaffold → validate → deploy → offboard full lifecycle." },
       { name: "Architecture & Design", path: "../architecture-and-design.md", summary: "Core concepts: group_left matching, three-state mode, severity dedup." },
-      { name: "Advanced Scenarios", path: "../scenarios/advanced-scenarios.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
+      { name: "Advanced Scenarios", path: "../internal/test-coverage-matrix.md", summary: "Regex thresholds, scheduled values, cross-midnight configs." },
       { name: "Troubleshooting Guide", path: "../troubleshooting.md", summary: "Common issues, diagnostic commands, recovery procedures." },
     ],
   },

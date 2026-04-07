@@ -76,13 +76,13 @@ groups:
 ```bash
 # 安裝
 helm install tenant-api \
-  oci://ghcr.io/vencil/charts/tenant-api --version 2.5.0 \
+  oci://ghcr.io/vencil/charts/tenant-api --version 2.6.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 
 # 升級
 helm upgrade tenant-api \
-  oci://ghcr.io/vencil/charts/tenant-api --version 2.5.0 \
+  oci://ghcr.io/vencil/charts/tenant-api --version 2.6.0 \
   -n monitoring -f values-override.yaml
 ```
 
@@ -130,6 +130,49 @@ curl -s http://localhost:8080/metrics
 | `TA_GIT_DIR` | (同 config-dir) | Git repository root |
 | `TA_RBAC_PATH` | (空 = open-read) | `_rbac.yaml` 路徑 |
 | `TA_ADDR` | `:8080` | HTTP listen address |
+| `TA_WRITE_MODE` | `direct` | 寫入模式：`direct`（直接 commit）/ `pr` 或 `pr-github`（GitHub PR）/ `pr-gitlab`（GitLab MR） |
+| `TA_GITHUB_TOKEN` | (空) | GitHub PAT（`write-mode=pr` 或 `pr-github` 時必填） |
+| `TA_GITHUB_REPO` | (空) | GitHub repo（`owner/repo` 格式） |
+| `TA_GITHUB_BASE_BRANCH` | `main` | GitHub PR 目標分支 |
+| `TA_GITHUB_API_URL` | (空) | GitHub Enterprise Server API URL |
+| `TA_GITLAB_TOKEN` | (空) | GitLab access token（`write-mode=pr-gitlab` 時必填） |
+| `TA_GITLAB_PROJECT` | (空) | GitLab 專案路徑（`group/project`）或數字 ID |
+| `TA_GITLAB_TARGET_BRANCH` | `main` | GitLab MR 目標分支 |
+| `TA_GITLAB_API_URL` | (空) | 自託管 GitLab 實例 URL |
+
+## Write-back 模式
+
+tenant-api 支援四種寫入模式，透過 `TA_WRITE_MODE` 環境變數切換：
+
+| 模式 | 說明 | 適用場景 |
+|------|------|----------|
+| `direct` | 直接 `git commit` 到本地 repo | 開發環境、單人操作 |
+| `pr` / `pr-github` | 建立 GitHub Pull Request | GitHub.com 或 GitHub Enterprise Server |
+| `pr-gitlab` | 建立 GitLab Merge Request | GitLab.com 或自託管 GitLab |
+
+### GitHub（含 Enterprise Server）
+
+```bash
+export TA_WRITE_MODE=pr-github
+export TA_GITHUB_TOKEN=ghp_xxxxxxxxxxxx   # Fine-grained PAT (contents:write + pull_requests:write)
+export TA_GITHUB_REPO=org/config-repo
+
+# 自託管 GitHub Enterprise Server（選填，預設 github.com）
+export TA_GITHUB_API_URL=https://github.internal.example.com/api/v3
+```
+
+### GitLab（含自託管實例）
+
+```bash
+export TA_WRITE_MODE=pr-gitlab
+export TA_GITLAB_TOKEN=glpat-xxxxxxxxxxxx  # Project/Group/Personal Access Token (api scope)
+export TA_GITLAB_PROJECT=infra/alerting-config  # 或數字 ID
+
+# 自託管 GitLab（選填，預設 gitlab.com）
+export TA_GITLAB_API_URL=https://gitlab.internal.example.com
+```
+
+兩種 PR 模式都支援自託管部署，只需額外設定對應的 `*_API_URL` 環境變數即可。啟動時會自動執行 `ValidateToken()` 驗證連線和權限，若配置有誤會在啟動階段立即報錯。
 
 ## 開發
 

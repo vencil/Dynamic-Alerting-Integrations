@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Interactive Component</title>
+<link rel="stylesheet" href="design-tokens.css">
 <!--
   Vendor loading strategy:
   1. Try local vendor/ files first (for offline/air-gapped environments)
@@ -58,10 +59,21 @@
 <script>
   // Configure Tailwind to use class-based dark mode
   tailwind.config = { darkMode: 'class' };
-  // Apply dark mode on load if system prefers dark
-  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.classList.add('dark');
-  }
+  // Theme toggle: Light / Dark / System (three-state)
+  // Priority: localStorage > System preference > Light
+  (function() {
+    var stored = null;
+    try { stored = localStorage.getItem('__da_theme_pref'); } catch(e) {}
+    var pref = stored || 'system';
+    var isDark = (pref === 'dark') || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+    window.__DA_THEME_PREF = pref;
+  })();
 </script>
 <script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.react+'"><\/scr'+'ipt>')</script>
 <script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.reactDom+'"><\/scr'+'ipt>')</script>
@@ -249,7 +261,7 @@
 <a class="back-home" href="../interactive/index.html">← Tools</a>
 <button class="theme-toggle" id="kbd-hint" title="Keyboard shortcuts (?)" style="right:100px;font-size:0.75rem;width:auto;padding:0 10px" onclick="document.getElementById('kbd-overlay').style.display='flex'">?</button>
 <button class="theme-toggle" id="lang-toggle" title="切換語言 / Switch language" style="right:56px;font-size:0.75rem;width:auto;padding:0 10px">EN</button>
-<button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
+<button class="da-theme-toggle" id="theme-toggle" title="Toggle theme: Light / Dark / System" aria-label="Toggle theme">🌙</button>
 <div id="loading"><div class="spinner"></div><div class="label">Loading component…</div></div>
 <div id="error"></div>
 <div id="root"></div>
@@ -338,7 +350,10 @@ window.addEventListener('pageshow', function(e) {
     'roi-calculator': '../interactive/tools/roi-calculator.jsx',
     'multi-tenant-comparison': '../interactive/tools/multi-tenant-comparison.jsx',
     'tenant-manager': '../interactive/tools/tenant-manager.jsx',
-    'deployment-wizard': '../interactive/tools/deployment-wizard.jsx'
+    'deployment-wizard': '../interactive/tools/deployment-wizard.jsx',
+    'rbac-setup-wizard': '../interactive/tools/rbac-setup-wizard.jsx',
+    'release-notes-generator': '../interactive/tools/release-notes-generator.jsx',
+    'threshold-heatmap': '../interactive/tools/threshold-heatmap.jsx'
   };
 
   // ── Flow mode ──
@@ -776,7 +791,13 @@ window.addEventListener('pageshow', function(e) {
         'roi-calculator': { title: 'ROI Calculator', desc: 'Calculate adoption benefits', path: '../interactive/tools/roi-calculator.jsx' },
         'multi-tenant-comparison': { title: 'Multi-Tenant Comparison', desc: 'Compare thresholds across tenants, detect outliers', path: '../interactive/tools/multi-tenant-comparison.jsx' },
         'tenant-manager': { title: 'Tenant Manager', desc: 'Multi-instance management with filtering and batch operations', path: '../interactive/tools/tenant-manager.jsx' },
-        'deployment-wizard': { title: 'Deployment Profile Wizard', desc: 'Generate Helm values for Tier 1/2 deployment', path: '../interactive/tools/deployment-wizard.jsx' }
+        'deployment-wizard': { title: 'Deployment Profile Wizard', desc: 'Generate Helm values for Tier 1/2 deployment', path: '../interactive/tools/deployment-wizard.jsx' },
+        'rbac-setup-wizard': { title: 'RBAC Setup Wizard', desc: 'Configure role-based access control', path: '../interactive/tools/rbac-setup-wizard.jsx' },
+        'migration-roi-calculator': { title: 'Migration ROI Calculator', desc: 'Calculate PromQL migration benefits', path: '../interactive/tools/migration-roi-calculator.jsx' },
+        'cost-estimator': { title: 'Cost Estimator', desc: 'Estimate infrastructure costs based on tenant and pack configuration', path: '../interactive/tools/cost-estimator.jsx' },
+        'operator-setup-wizard': { title: 'Operator Setup Wizard', desc: 'Interactive wizard for Prometheus Operator integration setup', path: '../interactive/tools/operator-setup-wizard.jsx' },
+        'release-notes-generator': { title: 'Release Notes Generator', desc: 'Automate release notes from commits', path: '../interactive/tools/release-notes-generator.jsx' },
+        'threshold-heatmap': { title: 'Threshold Heatmap', desc: 'Visualize threshold distribution across metrics', path: '../interactive/tools/threshold-heatmap.jsx' }
       };
       var footer = document.createElement('div');
       footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';
@@ -871,16 +892,35 @@ window.__checkFlowGate = function(el) {
   window.__setLanguage = setLanguage;
 })();
 
-// Dark mode toggle
+// Dark mode toggle — Light / Dark / System (three-state cycle)
 (function() {
   var btn = document.getElementById('theme-toggle');
-  function updateIcon() {
-    btn.textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+  var CYCLE = ['light', 'dark', 'system'];
+  var ICONS = { light: '☀️', dark: '🌙', system: '💻' };
+  var LABELS = { light: 'Light', dark: 'Dark', system: 'System' };
+  var pref = window.__DA_THEME_PREF || 'system';
+
+  function applyTheme(mode) {
+    var isDark = (mode === 'dark') || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.classList.toggle('dark', isDark);
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    btn.textContent = ICONS[mode];
+    btn.title = 'Theme: ' + LABELS[mode] + ' (click to cycle)';
+    btn.setAttribute('aria-label', 'Theme: ' + LABELS[mode]);
+    try { localStorage.setItem('__da_theme_pref', mode); } catch(e) {}
+    window.__DA_THEME_PREF = mode;
   }
-  updateIcon();
+  applyTheme(pref);
+
   btn.addEventListener('click', function() {
-    document.documentElement.classList.toggle('dark');
-    updateIcon();
+    var idx = CYCLE.indexOf(window.__DA_THEME_PREF);
+    var next = CYCLE[(idx + 1) % CYCLE.length];
+    applyTheme(next);
+  });
+
+  // Listen for OS theme changes when in "system" mode
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+    if (window.__DA_THEME_PREF === 'system') applyTheme('system');
   });
 })();
 

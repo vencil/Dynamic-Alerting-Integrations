@@ -1,22 +1,58 @@
 ---
-title: "場景：Shadow Monitoring 全自動切換工作流"
-tags: [scenario, shadow-monitoring, cutover]
-audience: [sre, devops]
-version: v2.5.0
+title: "場景：Shadow Monitoring — 從告警健康評估到全自動切換"
+tags: [scenario, shadow-monitoring, cutover, alert-quality]
+audience: [platform-engineer, sre, devops, tenant]
+version: v2.6.0
 lang: zh
 ---
-# 場景：Shadow Monitoring 全自動切換工作流
+# 場景：Shadow Monitoring — 從告警健康評估到全自動切換
 
-> **v2.5.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`migration-guide.md`](../migration-guide.md)
+> **v2.6.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`migration-guide.md`](../migration-guide.md)、[`CLI Reference`](../cli-reference.md)
+
+本指南涵蓋從告警品質評估到完整遷移切換的端對端流程：Phase 0（評估）→ Phase 1–6（遷移 & 切換）。
+
+## Phase 0：告警品質評估（不需部署任何元件）
+
+在決定是否遷移之前，先用 `da-tools alert-quality` 量化現有告警品質。此工具直接連接現有 Prometheus/Alertmanager，不需要部署 Dynamic Alerting 元件。
+
+### 四大品質指標
+
+| 指標 | 衡量 | 判定標準 |
+|------|------|---------|
+| **Noise Score** | 單位時間 firing 次數 | >20 = BAD, >10 = WARN |
+| **Stale Score** | 距離上次 fire 天數 | >14 天 = WARN |
+| **Resolution Latency** | firing → resolved 平均時間 | <5 分鐘 = flapping（BAD） |
+| **Suppression Ratio** | 被 inhibit/silence 壓制比例 | >50% = WARN |
+
+### 執行品質掃描
+
+```bash
+# 掃描全部 tenant，分析過去 30 天
+docker run --rm --network host \
+  ghcr.io/vencil/da-tools:v2.6.0 alert-quality \
+  --prometheus http://localhost:9090 \
+  --period 30d
+
+# 單一 tenant + JSON 輸出
+da-tools alert-quality --prometheus http://localhost:9090 --period 30d \
+  --tenant db-a --json > audit-report.json
+```
+
+### 根據結果決策
+
+| 分數區間 | 建議行動 |
+|---------|---------|
+| **80–100** | 現有告警品質良好。評估是否需要 Dynamic Alerting 的治理、多租戶能力 |
+| **50–79** | 存在改善空間。建議逐步遷移 WARN/BAD 告警，享受 auto-suppression + scheduled thresholds |
+| **0–49** | 告警品質需系統性改造。建議進入完整 Shadow Monitoring → Cutover 流程（Phase 1–6） |
+
+可選：將品質掃描納入 CI（每週 cron job），追蹤告警品質趨勢。
+
+---
 
 ## 問題
 
-組織正在從傳統告警系統（如特定廠商告警規則集或人工閾值維護）遷移到 Dynamic Alerting 平台，面臨的核心風險：
-
-- **規則行為差異**：新規則與舊規則的邏輯是否完全等價？數值輸出是否一致？
-- **無停機轉換**：無法在遷移期間中斷告警服務
-- **驗證時間長**：新舊規則並行運行需要 1–2 週的觀察期
-- **手工切換容易出錯**：多個系統聯動（Prometheus rule、Alertmanager、ConfigMap reload）
+組織正在從傳統告警系統遷移到 Dynamic Alerting 平台，面臨的核心風險：規則行為差異、無停機轉換需求、驗證期長（1–2 週）、多系統聯動容易出錯。
 
 ## 解決方案：Shadow Monitoring 全自動切換
 
@@ -399,11 +435,8 @@ python3 scripts/tools/ops/cutover_tenant.py \
 
 | 資源 | 相關性 |
 |------|--------|
-| ["場景：Shadow Monitoring 全自動切換工作流"](shadow-monitoring-cutover.md) | ⭐⭐⭐ |
-| ["進階場景與測試覆蓋"](advanced-scenarios.md) | ⭐⭐ |
-| ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.md) | ⭐⭐ |
-| ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
-| ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
-| ["場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知"](alert-routing-split.md) | ⭐⭐ |
-| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](multi-cluster-federation.md) | ⭐⭐ |
-| ["場景：租戶完整生命週期管理"](tenant-lifecycle.md) | ⭐⭐ |
+| [Shadow Monitoring SRE SOP](../shadow-monitoring-sop.md) | ⭐⭐⭐ |
+| [Migration Guide](../migration-guide.md) | ⭐⭐⭐ |
+| [da-tools CLI Reference](../cli-reference.md) | ⭐⭐ |
+| [Grafana Dashboard 導覽](../grafana-dashboards.md) | ⭐⭐ |
+| [場景：租戶完整生命週期管理](tenant-lifecycle.md) | ⭐⭐ |

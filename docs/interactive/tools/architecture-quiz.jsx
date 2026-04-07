@@ -2,7 +2,7 @@
 title: "Architecture Decision Quiz"
 tags: [architecture, quiz, decision]
 audience: [platform-engineer]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [capacity-planner, dependency-graph, onboarding-checklist]
 ---
@@ -381,3 +381,4 @@ export default function ArchitectureQuiz() {
     </div>
   );
 }
+            

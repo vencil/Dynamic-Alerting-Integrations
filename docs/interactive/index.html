@@ -4,67 +4,49 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dynamic Alerting — Interactive Tools</title>
+<link rel="stylesheet" href="../assets/design-tokens.css">
 <style>
+  /* Legacy aliases — map old variable names to design tokens.
+     New code should use --da-* tokens directly. */
   :root {
-    --bg: #fafbfc;
-    --fg: #1a1a2e;
-    --hero-bg: #0f172a;
-    --hero-fg: #e2e8f0;
-    --hero-muted: #94a3b8;
-    --hero-accent: #38bdf8;
-    --card-bg: #ffffff;
-    --card-border: #e2e6ea;
-    --card-hover-border: #3b82f6;
-    --card-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    --card-hover-shadow: 0 4px 12px rgba(59,130,246,0.15);
-    --accent: #3b82f6;
-    --accent-soft: #eff6ff;
-    --muted: #64748b;
-    --tag-bg: #f1f5f9;
-    --tag-fg: #475569;
-    --section-border: #e2e8f0;
-    --icon-validation: #10b981;
-    --icon-cli: #f59e0b;
-    --icon-rules: #8b5cf6;
-    --icon-wizard: #ec4899;
-    --stat-bg: rgba(255,255,255,0.08);
-    --stat-border: rgba(255,255,255,0.12);
+    --bg: var(--da-color-bg);
+    --fg: var(--da-color-fg);
+    --hero-bg: var(--da-color-hero-bg);
+    --hero-fg: var(--da-color-hero-fg);
+    --hero-muted: var(--da-color-hero-muted);
+    --hero-accent: var(--da-color-hero-accent);
+    --card-bg: var(--da-color-card-bg);
+    --card-border: var(--da-color-card-border);
+    --card-hover-border: var(--da-color-card-hover-border);
+    --card-shadow: var(--da-color-card-shadow);
+    --card-hover-shadow: var(--da-color-card-hover-shadow);
+    --accent: var(--da-color-accent);
+    --accent-soft: var(--da-color-accent-soft);
+    --muted: var(--da-color-muted);
+    --tag-bg: var(--da-color-tag-bg);
+    --tag-fg: var(--da-color-tag-fg);
+    --section-border: var(--da-color-section-border);
+    --icon-validation: var(--da-color-icon-validation);
+    --icon-cli: var(--da-color-icon-cli);
+    --icon-rules: var(--da-color-icon-rules);
+    --icon-wizard: var(--da-color-icon-wizard);
+    --stat-bg: var(--da-color-stat-bg);
+    --stat-border: var(--da-color-stat-border);
     --mermaid-bg: rgba(255,255,255,0.05);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0b0f1a;
-      --fg: #e2e8f0;
-      --hero-bg: #0f172a;
-      --card-bg: #1e293b;
-      --card-border: #334155;
-      --card-hover-border: #60a5fa;
-      --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
-      --card-hover-shadow: 0 4px 12px rgba(96,165,250,0.2);
-      --accent: #60a5fa;
-      --accent-soft: #1e3a5f;
-      --muted: #94a3b8;
-      --tag-bg: #1e293b;
-      --tag-fg: #94a3b8;
-      --section-border: #1e293b;
-      --stat-bg: rgba(255,255,255,0.05);
-      --stat-border: rgba(255,255,255,0.08);
-      --mermaid-bg: rgba(255,255,255,0.03);
-    }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--fg);
+    background: var(--da-color-bg);
+    color: var(--da-color-fg);
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
   }
 
   /* ── Hero ── */
   .hero {
-    background: var(--hero-bg);
-    color: var(--hero-fg);
+    background: var(--da-color-hero-bg);
+    color: var(--da-color-hero-fg);
     padding: 56px 24px 48px;
     text-align: center;
   }
@@ -75,8 +57,8 @@
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--hero-accent);
-    border: 1px solid var(--hero-accent);
+    color: var(--da-color-hero-accent);
+    border: 1px solid var(--da-color-hero-accent);
     border-radius: 20px;
     padding: 3px 12px;
     margin-bottom: 16px;
@@ -89,7 +71,7 @@
     line-height: 1.2;
   }
   .hero-desc {
-    color: var(--hero-muted);
+    color: var(--da-color-hero-muted);
     font-size: 1.05rem;
     line-height: 1.6;
     max-width: 560px;
@@ -105,8 +87,8 @@
     margin-bottom: 36px;
   }
   .stat {
-    background: var(--stat-bg);
-    border: 1px solid var(--stat-border);
+    background: var(--da-color-stat-bg);
+    border: 1px solid var(--da-color-stat-border);
     border-radius: 8px;
     padding: 10px 20px;
     text-align: center;
@@ -115,12 +97,12 @@
   .stat-value {
     font-size: 1.5rem;
     font-weight: 700;
-    color: var(--hero-accent);
+    color: var(--da-color-hero-accent);
     line-height: 1;
   }
   .stat-label {
     font-size: 0.75rem;
-    color: var(--hero-muted);
+    color: var(--da-color-hero-muted);
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -140,8 +122,8 @@
     flex-wrap: wrap;
     margin-bottom: 32px;
     padding: 16px;
-    background: var(--accent-soft);
-    border: 1px solid var(--card-border);
+    background: var(--da-color-accent-soft);
+    border: 1px solid var(--da-color-card-border);
     border-radius: 12px;
   }
   .quick-access-label {
@@ -150,7 +132,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--accent);
+    color: var(--da-color-accent);
     margin-bottom: 4px;
   }
   a.qa-chip {
@@ -162,15 +144,15 @@
     font-size: 0.82rem;
     font-weight: 600;
     text-decoration: none;
-    color: var(--fg);
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    box-shadow: var(--card-shadow);
+    color: var(--da-color-fg);
+    background: var(--da-color-card-bg);
+    border: 1px solid var(--da-color-card-border);
+    box-shadow: var(--da-color-card-shadow);
     transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
   }
   a.qa-chip:hover {
-    border-color: var(--card-hover-border);
-    box-shadow: var(--card-hover-shadow);
+    border-color: var(--da-color-card-hover-border);
+    box-shadow: var(--da-color-card-hover-shadow);
     transform: translateY(-1px);
   }
   .qa-icon { font-size: 1rem; }
@@ -182,14 +164,14 @@
     justify-content: space-between;
     margin-bottom: 20px;
     padding-bottom: 8px;
-    border-bottom: 1px solid var(--section-border);
+    border-bottom: 1px solid var(--da-color-section-border);
   }
   .section-title {
     font-size: 0.78rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--muted);
+    color: var(--da-color-muted);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -207,29 +189,29 @@
     white-space: nowrap;
   }
   .journey-phase-badge.deploy {
-    background: rgba(236, 72, 153, 0.25);
-    color: #be185d;
-    border: 1px solid #be185d;
+    background: var(--da-color-journey-deploy-bg);
+    color: var(--da-color-journey-deploy);
+    border: 1px solid var(--da-color-journey-deploy);
   }
   .journey-phase-badge.configure {
-    background: rgba(59, 130, 246, 0.2);
-    color: #1d4ed8;
-    border: 1px solid #1d4ed8;
+    background: var(--da-color-journey-configure-bg);
+    color: var(--da-color-journey-configure);
+    border: 1px solid var(--da-color-journey-configure);
   }
   .journey-phase-badge.monitor {
-    background: rgba(16, 185, 129, 0.2);
-    color: #047857;
-    border: 1px solid #047857;
+    background: var(--da-color-journey-monitor-bg);
+    color: var(--da-color-journey-monitor);
+    border: 1px solid var(--da-color-journey-monitor);
   }
   .journey-phase-badge.troubleshoot {
-    background: rgba(245, 158, 11, 0.2);
-    color: #b45309;
-    border: 1px solid #b45309;
+    background: var(--da-color-journey-troubleshoot-bg);
+    color: var(--da-color-journey-troubleshoot);
+    border: 1px solid var(--da-color-journey-troubleshoot);
   }
   .journey-phase-badge.reference {
-    background: rgba(139, 92, 246, 0.2);
-    color: #6d28d9;
-    border: 1px solid #6d28d9;
+    background: var(--da-color-journey-reference-bg);
+    color: var(--da-color-journey-reference);
+    border: 1px solid var(--da-color-journey-reference);
   }
 
   /* ── Tool cards grid ── */
@@ -243,18 +225,18 @@
     display: flex;
     flex-direction: column;
     padding: 24px;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
+    background: var(--da-color-card-bg);
+    border: 1px solid var(--da-color-card-border);
     border-radius: 12px;
     text-decoration: none;
     color: inherit;
-    box-shadow: var(--card-shadow);
+    box-shadow: var(--da-color-card-shadow);
     transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     position: relative;
   }
   a.card:hover {
-    border-color: var(--card-hover-border);
-    box-shadow: var(--card-hover-shadow);
+    border-color: var(--da-color-card-hover-border);
+    box-shadow: var(--da-color-card-hover-shadow);
     transform: translateY(-2px);
   }
   a.card[data-hidden="true"] { display: none; }
@@ -269,27 +251,25 @@
     margin-bottom: 14px;
     font-size: 1.2rem;
   }
-  .card-icon.validation { background: #ecfdf5; color: var(--icon-validation); }
-  .card-icon.cli { background: #fffbeb; color: var(--icon-cli); }
-  .card-icon.rules { background: #f5f3ff; color: var(--icon-rules); }
-  .card-icon.wizard { background: #fdf2f8; color: var(--icon-wizard); }
-  .card-icon.dashboard { background: #e0e7ff; color: #6366f1; }
-  .card-icon.chart { background: #fce7f3; color: #db2777; }
-  @media (prefers-color-scheme: dark) {
-    .card-icon.validation { background: #064e3b; color: #34d399; }
-    .card-icon.cli { background: #451a03; color: #fbbf24; }
-    .card-icon.rules { background: #2e1065; color: #a78bfa; }
-    .card-icon.wizard { background: #500724; color: #f472b6; }
-    .card-icon.dashboard { background: #312e81; color: #818cf8; }
-    .card-icon.chart { background: #500724; color: #f472b6; }
+  .card-icon.validation { background: var(--da-color-icon-validation-bg); color: var(--da-color-icon-validation); }
+  .card-icon.cli { background: var(--da-color-icon-cli-bg); color: var(--da-color-icon-cli); }
+  .card-icon.rules { background: var(--da-color-icon-rules-bg); color: var(--da-color-icon-rules); }
+  .card-icon.wizard { background: var(--da-color-icon-wizard-bg); color: var(--da-color-icon-wizard); }
+  .card-icon.dashboard { background: var(--da-color-icon-dashboard-bg); color: var(--da-color-icon-dashboard); }
+  .card-icon.chart { background: var(--da-color-icon-chart-bg); color: var(--da-color-icon-chart); }
+  [data-theme="dark"] .card-icon.validation { background: var(--da-color-icon-validation-bg); color: var(--da-color-icon-validation); }
+  [data-theme="dark"] .card-icon.cli { background: var(--da-color-icon-cli-bg); color: var(--da-color-icon-cli); }
+  [data-theme="dark"] .card-icon.rules { background: var(--da-color-icon-rules-bg); color: var(--da-color-icon-rules); }
+  [data-theme="dark"] .card-icon.wizard { background: var(--da-color-icon-wizard-bg); color: var(--da-color-icon-wizard); }
+  [data-theme="dark"] .card-icon.dashboard { background: var(--da-color-icon-dashboard-bg); color: var(--da-color-icon-dashboard); }
+  [data-theme="dark"] .card-icon.chart { background: var(--da-color-icon-chart-bg); color: var(--da-color-icon-chart); }
 
-    /* Journey phase badges — dark mode contrast fix */
-    .journey-phase-badge.deploy { background: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: #f472b6; }
-    .journey-phase-badge.configure { background: rgba(59, 130, 246, 0.2); color: #93c5fd; border-color: #93c5fd; }
-    .journey-phase-badge.monitor { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border-color: #6ee7b7; }
-    .journey-phase-badge.troubleshoot { background: rgba(245, 158, 11, 0.2); color: #fcd34d; border-color: #fcd34d; }
-    .journey-phase-badge.reference { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; border-color: #c4b5fd; }
-  }
+  /* Journey phase badges — dark mode uses design tokens */
+  [data-theme="dark"] .journey-phase-badge.deploy { background: var(--da-color-journey-deploy-bg); color: var(--da-color-journey-deploy); border-color: var(--da-color-journey-deploy); }
+  [data-theme="dark"] .journey-phase-badge.configure { background: var(--da-color-journey-configure-bg); color: var(--da-color-journey-configure); border-color: var(--da-color-journey-configure); }
+  [data-theme="dark"] .journey-phase-badge.monitor { background: var(--da-color-journey-monitor-bg); color: var(--da-color-journey-monitor); border-color: var(--da-color-journey-monitor); }
+  [data-theme="dark"] .journey-phase-badge.troubleshoot { background: var(--da-color-journey-troubleshoot-bg); color: var(--da-color-journey-troubleshoot); border-color: var(--da-color-journey-troubleshoot); }
+  [data-theme="dark"] .journey-phase-badge.reference { background: var(--da-color-journey-reference-bg); color: var(--da-color-journey-reference); border-color: var(--da-color-journey-reference); }
   .card-title {
     font-size: 1rem;
     font-weight: 600;
@@ -298,7 +278,7 @@
   }
   .card-desc {
     font-size: 0.88rem;
-    color: var(--muted);
+    color: var(--da-color-muted);
     line-height: 1.55;
     flex: 1;
     margin-bottom: 14px;
@@ -312,8 +292,8 @@
     font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 4px;
-    background: var(--tag-bg);
-    color: var(--tag-fg);
+    background: var(--da-color-tag-bg);
+    color: var(--da-color-tag-fg);
     font-weight: 500;
     letter-spacing: 0.02em;
   }
@@ -330,15 +310,15 @@
     padding: 2px 8px;
     border-radius: 4px;
     background: rgba(255,255,255,0.1);
-    color: var(--hero-fg);
+    color: var(--da-color-hero-fg);
   }
 
   /* ── Role filter ── */
   .filter-controls {
     margin-bottom: 32px;
     padding: 16px;
-    background: var(--accent-soft);
-    border: 1px solid var(--card-border);
+    background: var(--da-color-accent-soft);
+    border: 1px solid var(--da-color-card-border);
     border-radius: 12px;
   }
   .filter-label {
@@ -346,7 +326,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--accent);
+    color: var(--da-color-accent);
     margin-bottom: 12px;
     display: block;
   }
@@ -357,18 +337,18 @@
   }
   .role-filter {
     padding: 6px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 500;
-    border: 1px solid var(--card-border); background: var(--card-bg); color: var(--muted);
+    border: 1px solid var(--da-color-card-border); background: var(--da-color-card-bg); color: var(--da-color-muted);
     cursor: pointer; transition: all 0.2s;
   }
-  .role-filter:hover { border-color: var(--accent); color: var(--accent); }
-  .role-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .role-filter:hover { border-color: var(--da-color-accent); color: var(--da-color-accent); }
+  .role-filter.active { background: var(--da-color-accent); color: #fff; border-color: var(--da-color-accent); }
 
   /* ── Flow Analytics ── */
   .flow-analytics {
     margin-bottom: 16px;
-    border: 1px solid var(--card-border);
+    border: 1px solid var(--da-color-card-border);
     border-radius: 12px;
-    background: var(--card-bg);
+    background: var(--da-color-card-bg);
     overflow: hidden;
   }
   .flow-analytics summary {
@@ -376,7 +356,7 @@
     cursor: pointer;
     font-size: 0.82rem;
     font-weight: 600;
-    color: var(--muted);
+    color: var(--da-color-muted);
     list-style: none;
     display: flex;
     align-items: center;
@@ -389,7 +369,7 @@
     padding: 0 20px 20px;
   }
   .flow-stat-card {
-    background: var(--tag-bg);
+    background: var(--da-color-tag-bg);
     border-radius: 10px;
     padding: 14px 16px;
   }
@@ -401,7 +381,7 @@
   .flow-stat-bar {
     height: 6px;
     border-radius: 3px;
-    background: var(--section-border);
+    background: var(--da-color-section-border);
     overflow: hidden;
     margin-bottom: 6px;
   }
@@ -412,12 +392,12 @@
   }
   .flow-stat-detail {
     font-size: 0.7rem;
-    color: var(--muted);
+    color: var(--da-color-muted);
   }
   .flow-analytics-empty {
     padding: 0 20px 20px;
     font-size: 0.82rem;
-    color: var(--muted);
+    color: var(--da-color-muted);
   }
 
   /* ── Guided Flow cards ── */
@@ -431,21 +411,21 @@
     display: flex; flex-direction: column;
     padding: 24px; border-radius: 12px;
     text-decoration: none; color: inherit;
-    border: 1px solid var(--card-border);
-    background: linear-gradient(135deg, var(--card-bg) 0%, var(--accent-soft) 100%);
-    box-shadow: var(--card-shadow);
+    border: 1px solid var(--da-color-card-border);
+    background: linear-gradient(135deg, var(--da-color-card-bg) 0%, var(--da-color-accent-soft) 100%);
+    box-shadow: var(--da-color-card-shadow);
     transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
   }
   a.flow-card:hover {
-    border-color: var(--card-hover-border);
-    box-shadow: var(--card-hover-shadow);
+    border-color: var(--da-color-card-hover-border);
+    box-shadow: var(--da-color-card-hover-shadow);
     transform: translateY(-2px);
   }
   .flow-card-badge {
     display: inline-block; font-size: 0.65rem; font-weight: 700;
     letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--accent); background: var(--accent-soft);
-    border: 1px solid var(--accent);
+    color: var(--da-color-accent); background: var(--da-color-accent-soft);
+    border: 1px solid var(--da-color-accent);
     padding: 2px 10px; border-radius: 12px;
     margin-bottom: 12px; width: fit-content;
   }
@@ -453,7 +433,7 @@
     font-size: 1.05rem; font-weight: 600; margin-bottom: 8px;
   }
   .flow-card-desc {
-    font-size: 0.88rem; color: var(--muted); line-height: 1.55; flex: 1;
+    font-size: 0.88rem; color: var(--da-color-muted); line-height: 1.55; flex: 1;
     margin-bottom: 14px;
   }
   .flow-card-steps {
@@ -461,7 +441,7 @@
   }
   .flow-card-step {
     font-size: 0.68rem; padding: 2px 8px; border-radius: 10px;
-    background: var(--tag-bg); color: var(--tag-fg); font-weight: 500;
+    background: var(--da-color-tag-bg); color: var(--da-color-tag-fg); font-weight: 500;
   }
 
   /* ── Custom Flow Builder ── */
@@ -470,11 +450,11 @@
   }
   .builder-header {
     padding: 14px 20px;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
+    background: var(--da-color-card-bg);
+    border: 1px solid var(--da-color-card-border);
     border-radius: 12px 12px 0 0;
     font-weight: 600;
-    color: var(--muted);
+    color: var(--da-color-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -489,8 +469,8 @@
   }
   .builder-content {
     padding: 20px;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
+    background: var(--da-color-card-bg);
+    border: 1px solid var(--da-color-card-border);
     border-top: none;
     border-radius: 0 0 12px 12px;
   }
@@ -502,15 +482,15 @@
   }
   #builder-selected {
     font-size: 0.82rem;
-    color: var(--muted);
+    color: var(--da-color-muted);
     display: block;
     margin-bottom: 12px;
   }
   #builder-launch {
     padding: 8px 16px;
     border-radius: 8px;
-    border: 1px solid var(--accent);
-    background: var(--accent);
+    border: 1px solid var(--da-color-accent);
+    background: var(--da-color-accent);
     color: #fff;
     font-weight: 600;
     font-size: 0.82rem;
@@ -537,7 +517,7 @@
     align-items: center;
     gap: 10px;
     padding: 14px 16px;
-    border: 1px solid var(--card-border);
+    border: 1px solid var(--da-color-card-border);
     border-radius: 8px;
     text-decoration: none;
     color: inherit;
@@ -546,8 +526,8 @@
     transition: border-color 0.15s, background 0.15s;
   }
   a.link-item:hover {
-    border-color: var(--accent);
-    background: var(--accent-soft);
+    border-color: var(--da-color-accent);
+    background: var(--da-color-accent-soft);
   }
   .link-icon {
     font-size: 1rem;
@@ -559,14 +539,14 @@
   /* ── Footer ── */
   footer {
     padding: 20px 24px;
-    border-top: 1px solid var(--section-border);
+    border-top: 1px solid var(--da-color-section-border);
     text-align: center;
     font-size: 0.8rem;
-    color: var(--muted);
+    color: var(--da-color-muted);
     line-height: 1.6;
   }
   footer a {
-    color: var(--accent);
+    color: var(--da-color-accent);
     text-decoration: none;
   }
   footer a:hover { text-decoration: underline; }
@@ -577,39 +557,39 @@
     top: 24px;
     right: 24px;
     padding: 6px 12px;
-    border: 1px solid var(--hero-accent);
+    border: 1px solid var(--da-color-hero-accent);
     background: transparent;
-    color: var(--hero-fg);
+    color: var(--da-color-hero-fg);
     border-radius: 6px;
     font-size: 0.75rem;
     cursor: pointer;
     transition: all 0.2s;
   }
   #lang-toggle:hover {
-    background: var(--hero-accent);
+    background: var(--da-color-hero-accent);
   }
 
   /* ── Tour overlay ── */
   .tour-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 999; display: none; }
   .tour-overlay.active { display: block; }
   .tour-tooltip {
-    position: absolute; z-index: 1000; background: var(--card-bg); color: var(--fg); border-radius: 12px; padding: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3); display: none; max-width: 320px;
+    position: absolute; z-index: 1000; background: var(--da-color-card-bg); color: var(--da-color-fg); border-radius: 12px; padding: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3); display: none; max-width: 320px;
   }
-  .tour-step-indicator { font-size: 0.7rem; color: var(--muted); margin-bottom: 8px; }
+  .tour-step-indicator { font-size: 0.7rem; color: var(--da-color-muted); margin-bottom: 8px; }
   .tour-tooltip h4 { font-size: 1rem; margin-bottom: 8px; }
   .tour-tooltip p { font-size: 0.88rem; margin-bottom: 14px; line-height: 1.5; }
   .tour-actions { display: flex; gap: 8px; }
-  .tour-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--fg); cursor: pointer; font-size: 0.8rem; font-weight: 500; transition: all 0.2s; }
-  .tour-btn-next { border-color: var(--accent); color: var(--accent); }
-  .tour-btn-next:hover { background: var(--accent); color: #fff; }
-  .tour-highlight { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+  .tour-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--da-color-card-border); background: var(--da-color-card-bg); color: var(--da-color-fg); cursor: pointer; font-size: 0.8rem; font-weight: 500; transition: all 0.2s; }
+  .tour-btn-next { border-color: var(--da-color-accent); color: var(--da-color-accent); }
+  .tour-btn-next:hover { background: var(--da-color-accent); color: #fff; }
+  .tour-highlight { outline: 3px solid var(--da-color-accent); outline-offset: 2px; border-radius: 12px; }
 
   /* ── Accessibility: Skip link ── */
   .skip-link {
     position: absolute;
     top: -40px;
     left: 0;
-    background: var(--accent);
+    background: var(--da-color-accent);
     color: #fff;
     padding: 8px 16px;
     z-index: 100;
@@ -637,31 +617,32 @@
     .main { padding: 24px 16px; }
   }
 
-  /* ── Accessibility: Focus indicators ── */
-  a:focus-visible,
-  button:focus-visible,
-  input:focus-visible,
-  select:focus-visible,
-  details:focus-visible,
-  [tabindex]:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
+  /* ── Accessibility: Focus indicators ──
+     Global *:focus-visible is in design-tokens.css §8.
+     Only card-specific enhancements below. */
   a.card:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-    border-color: var(--card-hover-border);
-    box-shadow: var(--card-hover-shadow);
-  }
-  .role-filter:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    border-color: var(--da-color-card-hover-border);
+    box-shadow: var(--da-color-card-hover-shadow);
   }
 </style>
+<script>
+// Theme initialization — must run before body renders to prevent flash
+(function() {
+  var stored = null;
+  try { stored = localStorage.getItem('__da_theme_pref'); } catch(e) {}
+  var pref = stored || 'system';
+  var isDark = (pref === 'dark') || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  window.__DA_THEME_PREF = pref;
+})();
+</script>
 </head>
 <body>
 
 <a href="#main-content" class="skip-link">Skip to main content</a>
+
+<!-- Theme toggle (Light / Dark / System) -->
+<button class="da-theme-toggle" id="theme-toggle" aria-label="Toggle theme">🌙</button>
 
 <!-- Hero -->
 <header class="hero" role="banner">
@@ -741,7 +722,7 @@
   <!-- Guided Flows section -->
   <div style="margin-bottom: 48px;">
     <h2 class="section-title" id="flows-title">Guided Flows</h2>
-    <div style="margin-bottom: 16px; font-size: 0.88rem; color: var(--muted);" id="flows-desc">
+    <div style="margin-bottom: 16px; font-size: 0.88rem; color: var(--da-color-muted);" id="flows-desc">
       Step-by-step interactive paths to accomplish key tasks. Track your progress across the platform.
     </div>
 
@@ -929,6 +910,18 @@
   <a class="card" data-audience="platform,sre" href="interactive/tools/tenant-manager.jsx">Tenant Manager</a>
   <!-- deployment-wizard (interactive/tools/deployment-wizard.jsx) -->
   <a class="card" data-audience="platform,sre" href="interactive/tools/deployment-wizard.jsx">Deployment Profile Wizard</a>
+  <!-- rbac-setup-wizard (interactive/tools/rbac-setup-wizard.jsx) -->
+  <a class="card" data-audience="platform,sre" href="interactive/tools/rbac-setup-wizard.jsx">RBAC Setup Wizard</a>
+  <!-- operator-setup-wizard (interactive/tools/operator-setup-wizard.jsx) -->
+  <a class="card" data-audience="platform,sre" href="interactive/tools/operator-setup-wizard.jsx">Operator Setup Wizard</a>
+  <!-- migration-roi-calculator (interactive/tools/migration-roi-calculator.jsx) -->
+  <a class="card" data-audience="platform,sre" href="interactive/tools/migration-roi-calculator.jsx">Migration ROI Calculator</a>
+  <!-- cost-estimator (interactive/tools/cost-estimator.jsx) -->
+  <a class="card" data-audience="platform,sre,management" href="interactive/tools/cost-estimator.jsx">Cost Estimator</a>
+  <!-- release-notes-generator (interactive/tools/release-notes-generator.jsx) -->
+  <a class="card" data-audience="platform,sre" href="interactive/tools/release-notes-generator.jsx">Release Notes Generator</a>
+  <!-- threshold-heatmap (interactive/tools/threshold-heatmap.jsx) -->
+  <a class="card" data-audience="platform,domain,sre" href="interactive/tools/threshold-heatmap.jsx">Threshold Heatmap</a>
 </div>
 
 <footer>
@@ -1352,7 +1345,7 @@
     container.innerHTML = TOOL_LIST.map(function(t) {
       var idx = selected.indexOf(t.key);
       var isOn = idx >= 0;
-      var bg = isOn ? 'background:var(--accent);color:#fff' : 'background:var(--tag-bg);color:var(--tag-fg)';
+      var bg = isOn ? 'background:var(--da-color-accent);color:#fff' : 'background:var(--da-color-tag-bg);color:var(--da-color-tag-fg)';
       var badge = isOn ? '<span style="font-size:0.6rem;background:rgba(255,255,255,0.3);border-radius:50%;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;margin-right:4px">' + (idx+1) + '</span>' : '';
       return '<button data-key="' + t.key + '" style="' + bg + ';padding:4px 10px;border-radius:10px;font-size:0.72rem;font-weight:500;border:none;cursor:pointer;transition:all 0.15s;display:inline-flex;align-items:center">' + badge + t.label + '</button>';
     }).join('');
@@ -1408,6 +1401,39 @@
       window.__setHubLanguage(newLang);
     });
   }
+})();
+</script>
+
+<!-- Theme toggle: Light / Dark / System (three-state cycle) -->
+<script>
+(function() {
+  var btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  var CYCLE = ['light', 'dark', 'system'];
+  var ICONS = { light: '☀️', dark: '🌙', system: '💻' };
+  var LABELS = { light: 'Light', dark: 'Dark', system: 'System' };
+  var pref = window.__DA_THEME_PREF || 'system';
+
+  function applyTheme(mode) {
+    var isDark = (mode === 'dark') || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    btn.textContent = ICONS[mode];
+    btn.title = 'Theme: ' + LABELS[mode] + ' (click to cycle)';
+    btn.setAttribute('aria-label', 'Theme: ' + LABELS[mode]);
+    try { localStorage.setItem('__da_theme_pref', mode); } catch(e) {}
+    window.__DA_THEME_PREF = mode;
+  }
+  applyTheme(pref);
+
+  btn.addEventListener('click', function() {
+    var idx = CYCLE.indexOf(window.__DA_THEME_PREF);
+    var next = CYCLE[(idx + 1) % CYCLE.length];
+    applyTheme(next);
+  });
+
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+    if (window.__DA_THEME_PREF === 'system') applyTheme('system');
+  });
 })();
 </script>
 

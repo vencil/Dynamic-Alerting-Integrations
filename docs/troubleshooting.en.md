@@ -2,7 +2,7 @@
 title: "Troubleshooting and Edge Cases"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Troubleshooting and Edge Cases
@@ -83,6 +83,71 @@ On the other hand, **data recording rules** use context-dependent aggregation. F
 
 > This document was extracted from [`architecture-and-design.en.md`](architecture-and-design.en.md).
 
+## Prometheus Operator Common Issues
+
+**Scenario:** PrometheusRule not taking effect when using Prometheus Operator (kube-prometheus-stack)
+
+**Diagnosis**:
+```bash
+# Check if PrometheusRule is loaded
+kubectl get prometheusrules -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+
+# Check if Prometheus rejected the rule
+kubectl logs prometheus-kube-prometheus-stack-prometheus-0 -c prometheus | grep "rule"
+
+# Verify ruleSelector match
+kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
+```
+
+**Common Causes and Fixes**:
+
+1. **ruleSelector label mismatch**
+   - Cause: PrometheusRule lacks labels required by the Prometheus CRD
+   - Diagnosis: Compare `kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'` output with PrometheusRule labels
+   - Fix: Ensure PrometheusRule includes both `prometheus: kube-prometheus` and `release: kube-prometheus-stack`
+   ```bash
+   # Use operator-generate to produce correct labels automatically
+   da-tools operator-generate --tenant <name> --output-dir ./crds/
+   # Or manually patch existing CRD
+   kubectl label prometheusrule <name> -n monitoring release=kube-prometheus-stack prometheus=kube-prometheus
+   ```
+
+2. **Namespace not in Prometheus monitoring scope**
+   - Cause: Prometheus CRD's `ruleNamespaceSelector` does not include the target namespace
+   - Diagnosis: `kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleNamespaceSelector}'`
+   - Fix: Extend namespace selector or deploy PrometheusRule to an already-monitored namespace
+   ```bash
+   # Option A: Deploy CRD to monitoring namespace
+   da-tools operator-generate --tenant <name> --namespace monitoring --output-dir ./crds/
+   # Option B: Modify Prometheus CRD ruleNamespaceSelector to include target namespace
+   kubectl edit prometheus -n monitoring kube-prometheus-stack-prometheus
+   # Add target namespace label under spec.ruleNamespaceSelector.matchLabels
+   ```
+
+3. **CRD API version mismatch**
+   - Cause: Cluster Operator version does not match generated CRD apiVersion
+   - Diagnosis: `kubectl api-versions | grep monitoring.coreos.com`
+   - Fix:
+   ```bash
+   # Specify API version matching your cluster
+   da-tools operator-generate --tenant <name> --api-version v1 --output-dir ./crds/
+   ```
+
+**Rollback Procedure** (from Operator back to ConfigMap mode):
+```bash
+# 1. Stop Operator management: delete PrometheusRule / AlertmanagerConfig CRDs
+kubectl delete prometheusrule -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+# 2. Restore ConfigMap mode: Helm upgrade to switch rules.mode
+helm upgrade threshold-exporter ./helm/threshold-exporter --set rules.mode=configmap
+# 3. Verify ConfigMap rules are active
+kubectl get configmap -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+da-tools validate-config --config-dir ./conf.d/
+```
+
+> See also: [Operator Prometheus Integration](operator-prometheus-integration.en.md) · [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) · [Operator GitOps Deployment](operator-gitops-deployment.en.md)
+
+---
+
 ## Related Resources
 
 | Resource | Relevance |
@@ -94,4 +159,4 @@ On the other hand, **data recording rules** use context-dependent aggregation. F
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["BYO Alertmanager Integration Guide"] | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |

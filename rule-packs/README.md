@@ -117,4 +117,4 @@ Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_met
 - **clickhouse_exporter**: https://github.com/ClickHouse/clickhouse_exporter (或 ClickHouse 內建 /metrics)
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter
 - **rabbitmq_exporter**: https://github.com/kbudde/rabbitmq_exporter
-- **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics
+- **kube-state-metrics**: https://github.com/kubernetes/kube-state-metr

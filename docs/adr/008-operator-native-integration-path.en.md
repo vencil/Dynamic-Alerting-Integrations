@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, operator]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -10,6 +10,7 @@ lang: en
 ## Status
 
 ✅ **Accepted** (v2.3.0) — Platform supports both ConfigMap and Operator CRD paths; detection logic auto-selects
+📎 **Addendum** (v2.6.0) — Architecture boundary declaration added, see §Addendum below
 
 ## Context
 
@@ -139,18 +140,67 @@ v2.2.0 BYO documentation's Operator Appendix was only CRD example translation. U
 - AlertmanagerConfig `v1alpha1` may be removed in future Operator versions → Default to `v1beta1`, mark `v1alpha1` as deprecated
 - Operator ruleSelector label strategies vary → `operator-check` provides diagnostic guidance
 
-## Future Direction
+## Addendum: Architecture Boundary Declaration (v2.6.0)
 
-1. **v2.4.0+ candidate**: threshold-exporter as Kubernetes Operator watching custom `DynamicAlertTenant` CRD
-2. **Helm Chart values.yaml integration**: kube-prometheus-stack Helm values examples
-3. **ArgoCD ApplicationSet integration**: Multi-cluster Federation CRD deployment automation
+> **Added in v2.6.0 Phase .a** — Formally documents core component responsibility boundaries to prevent scope creep.
+
+### Inviolable Boundaries
+
+1. **threshold-exporter does NOT watch any CRD**. It only reads `conf.d/` YAML files via SHA-256 hot-reload. This is intentional — it preserves the exporter's ability to run in non-K8s environments.
+
+2. **CRD → conf.d/ conversion is handled externally**. Two supported paths:
+   - **da-assembler-controller** (future Operator mode): watches `ThresholdConfig` CRD → renders `conf.d/` files
+   - **`operator-generate` in CI pipeline**: static conversion → outputs CRD YAML for GitOps deployment
+
+3. **`operator-generate` is strictly an "assemble / render" role**. It reads `rule-packs/` and `conf.d/` directories and outputs standard CRD YAML. It does not extend the exporter's responsibilities, does not connect to clusters, and does not run `kubectl apply`.
+
+### Boundary Diagram
+
+```mermaid
+graph LR
+    subgraph "Core (unchanged)"
+        TE["threshold-exporter<br/>YAML → Metrics"]
+    end
+
+    subgraph "External Conversion Layer"
+        OG["operator-generate<br/>(CI / dev-time static output)"]
+        AC["da-assembler-controller<br/>(K8s Operator mode)"]
+    end
+
+    subgraph "Configuration Sources"
+        YAML["conf.d/ YAML"]
+        CRD["ThresholdConfig CRD"]
+    end
+
+    YAML --> TE
+    CRD -->|watch + render| AC --> YAML
+    OG -->|static output| K8sCRD["PrometheusRule<br/>AlertmanagerConfig<br/>ServiceMonitor"]
+```
+
+### Decision Criteria for New Operator Tools
+
+Any new Operator-related tool or feature must pass these three questions:
+
+1. **Does it change threshold-exporter's input interface?** → If yes, boundary violation — do not proceed
+2. **Does it require the exporter to connect to the K8s API?** → If yes, boundary violation — delegate to external tools
+3. **Is it purely "read → transform → output"?** → If yes, falls within toolchain scope — proceed
+
+## Evolution Status
+
+- **v2.3.0** (completed): `operator-generate` / `operator-check` toolchain, PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD output
+- **v2.6.0** (completed): Architecture boundary declaration (see §Addendum above), `operator-generate --kustomize` multi-cluster deployment, `drift_detect.py --mode operator` cross-cluster CRD drift detection
+
+**Remaining**:
+- **da-assembler-controller** (long-term exploration): external Operator watches `ThresholdConfig` CRD → renders `conf.d/`. Note: this component lives outside threshold-exporter, does not violate the architecture boundary declaration
+- **Helm Chart kube-prometheus-stack values examples**: provide values.yaml reference for common Operator deployments
+- **ArgoCD ApplicationSet integration**: multi-cluster Federation CRD deployment automation
 
 ## Related Decisions
 
 | ADR | Relationship |
 |-----|-------------|
 | [ADR-001](001-severity-dedup-via-inhibit.en.md) | Inhibit rule equivalence in Operator CRDs |
-| [ADR-004](004-federation-scenario-a-first.en.md) | Federation CRD deployment for edge/central split |
+| [ADR-004](004-federation-central-exporter-first.en.md) | Federation CRD deployment for edge/central split |
 | [ADR-005](005-projected-volume-for-rule-packs.en.md) | Path A projected volume design; Path B replaces with PrometheusRule |
 | [ADR-007](007-cross-domain-routing-profiles.en.md) | Routing Profile mapping in AlertmanagerConfig CRD |
 

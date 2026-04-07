@@ -2,15 +2,15 @@
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
 # da-tools CLI Reference
 
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
-> **容器映像**：`ghcr.io/vencil/da-tools:v2.4.0`
-> **版本**：v2.5.0（與平台版本同步）
+> **容器映像**：`ghcr.io/vencil/da-tools:v2.6.0`
+> **版本**：v2.6.0（與平台版本同步）
 
 da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗證、遷移、配置與運維工具。本文件是所有子命令的完整參考。
 
@@ -36,7 +36,7 @@ da-tools 是一個可攜式 CLI 容器，打包了 Dynamic Alerting 平台的驗
 
 ```bash
 # 從 OCI registry 拉取（需要 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:v2.4.0
+docker pull ghcr.io/vencil/da-tools:v2.6.0
 
 # 本地建構（開發用）
 cd components/da-tools/app && ./build.sh v1.11.0
@@ -45,8 +45,8 @@ cd components/da-tools/app && ./build.sh v1.11.0
 ### 查看說明
 
 ```bash
-docker run --rm ghcr.io/vencil/da-tools:v2.4.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.4.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v2.6.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.6.0 --version
 da-tools <command> --help
 ```
 
@@ -1103,41 +1103,137 @@ da-tools gitops-check sidecar --namespace monitoring --json
 
 從 Rule Packs 與 Tenant 配置產出 Kubernetes Operator CRD（PrometheusRule、AlertmanagerConfig、ServiceMonitor）。
 
-**用途**：Prometheus Operator 叢集中的動態告警規則與路由部署；Federation 場景多叢集配置管理。
+**用途**：Prometheus Operator 叢集中的動態告警規則與路由部署；GitOps 友好的 CRD YAML 產生。
 
 **語法**
 
 ```bash
-da-tools operator-generate --rule-packs-dir <dir> --config-dir <dir> [options]
+da-tools operator-generate [options]
 ```
-
-**必需參數**
-
-| 參數 | 說明 |
-|------|------|
-| `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 |
-| `--config-dir <DIR>` | 租戶配置目錄路徑 |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 | `rule-packs/` |
+| `--config-dir <DIR>` | 租戶配置目錄路徑 | `conf.d/` |
+| `--output-dir <DIR>` | 輸出 CRD 目錄 | `operator-output/` |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
-| `--output <FILE>` | 輸出至檔案 | stdout |
-| `--split` | 產出個別 CRD 檔案（按 Rule Pack 分離） | false |
-| `--include-servicemonitor` | 並產出 ServiceMonitor CRD | false |
-| `--dry-run` | 僅輸出預覽 | false |
-| `--apply` | 直接套用至 Kubernetes | false |
+| `--api-version <VER>` | AlertmanagerConfig API 版本（`v1alpha1` / `v1beta1`） | `v1beta1` |
+| `--components <COMP>` | 要生成的元件（`all` / `rules` / `alertmanager` / `servicemonitor`） | `all` |
+| `--receiver-template <TYPE>` | Receiver 模板類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
+| `--secret-name <NAME>` | K8s Secret 名稱（receiver 機密引用），需搭配 `--receiver-template` | `da-{tenant}-{type}` |
+| `--secret-key <KEY>` | K8s Secret 中的 key 名稱 | 依 receiver 類型自動推斷 |
+| `--gitops` | GitOps 模式（sorted keys、無 timestamps） | false |
+| `--dry-run` | 列印輸出而不寫入檔案 | false |
+| `--json` | 以 JSON 格式輸出結果報告 | false |
 
 **範例**
 
 ```bash
-# 輸出 CRD YAML 到檔案
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ -o crds.yaml
+# 基本：產出所有 CRD 到目錄
+da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/
 
-# 分割產出個別檔案並直接應用
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --split --apply --namespace monitoring
+# GitOps 模式 + Slack receiver
+da-tools operator-generate \
+  --config-dir conf.d/ \
+  --output-dir ./operator-crds \
+  --receiver-template slack \
+  --gitops
+
+# PagerDuty + 自訂 Secret
+da-tools operator-generate \
+  --receiver-template pagerduty \
+  --secret-name org-pd-secret \
+  --secret-key routing-key
+
+# 僅產出 AlertmanagerConfig
+da-tools operator-generate --components alertmanager --receiver-template email
+
+# Dry-run JSON 報告
+da-tools operator-generate --dry-run --json
 ```
+
+---
+
+#### migrate-to-operator
+
+讀取現有 ConfigMap 格式的 Prometheus 規則，產出等效的 CRD YAML 及遷移清單。
+
+**用途**：從 ConfigMap 原生格式遷移至 Operator 原生 CRD；GitOps 友好的轉換工具；遷移前置檢查與預覽。
+
+**語法**
+
+```bash
+da-tools migrate-to-operator [options]
+```
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄 | （必填） |
+| `--config-dir <DIR>` | 租戶配置目錄 | `conf.d` |
+| `--output-dir <DIR>` | 輸出目錄 | `migration-output` |
+| `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
+| `--receiver-template <TYPE>` | Receiver 類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
+| `--secret-name <NAME>` | K8s Secret 名稱 | — |
+| `--secret-key <KEY>` | K8s Secret 內的 key | — |
+| `--dry-run` | 僅預覽，不寫入檔案 | false |
+| `--checklist-only` | 僅產出遷移清單 | false |
+| `--json` | JSON 輸出模式 | false |
+
+**範例**
+
+```bash
+# 基本遷移
+da-tools migrate-to-operator --source-dir configmaps/
+
+# 預覽遷移計畫
+da-tools migrate-to-operator --source-dir configmaps/ --dry-run
+
+# 含 receiver 設定
+da-tools migrate-to-operator --source-dir configmaps/ \
+  --receiver-template slack --secret-name da-slack
+
+# 僅產出 checklist
+da-tools migrate-to-operator --source-dir configmaps/ --checklist-only
+
+# JSON 報告模式
+da-tools migrate-to-operator --source-dir configmaps/ --json
+```
+
+#### Rollback 程序
+
+若遷移至 Operator 後需回退至 ConfigMap 模式：
+
+**Step 1: 停止 Operator 路徑**
+```bash
+# 移除 PrometheusRule CRDs
+kubectl delete prometheusrules -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+
+# 移除 AlertmanagerConfig CRDs (若有)
+kubectl delete alertmanagerconfigs -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+```
+
+**Step 2: 恢復 ConfigMap 路徑**
+```bash
+# 切換 Helm values
+helm upgrade threshold-exporter ./charts/threshold-exporter \
+  --set rules.mode=configmap
+
+# 驗證 ConfigMap rules 已重新載入
+kubectl logs -n monitoring deployment/threshold-exporter | grep "SHA256"
+```
+
+**Step 3: 驗證**
+```bash
+# 確認 alerts 正常觸發
+da-tools drift-check --dirs conf.d --mode configmap
+promtool query instant 'count(ALERTS{alertstate="firing"})'
+```
+
+> ⚠️ Rollback 後 Operator 產出的 CRD 檔案仍保留在 `operator-output/` 目錄，可隨時重新 apply。
 
 ---
 
@@ -1590,7 +1686,7 @@ da-tools deprecate <metric_keys...> [options]
 # 標記多個指標為 disabled
 docker run --rm \
   -v $(pwd)/conf.d:/etc/config:rw \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   deprecate old_metric_1 old_metric_2 \
     --reason "Replaced by new_metric; migration complete"
 ```
@@ -2084,7 +2180,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.4.0
+          image: ghcr.io/vencil/da-tools:v2.6.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

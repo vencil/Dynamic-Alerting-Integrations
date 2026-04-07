@@ -2,12 +2,12 @@
 title: "Tenant 快速入門指南"
 tags: [getting-started, tenant-onboard]
 audience: [tenant]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # Tenant 快速入門指南
 
-> **v2.5.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
+> **v2.6.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
 >
 > 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
 
@@ -15,7 +15,7 @@ lang: zh
 
 **1. 你的監控已經啟用了。** 平台預載 15 個 Rule Pack，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Kafka 等。只要你的 exporter 在跑，alert rules 就已經生效。
 
-**2. 你只需要管理一個 YAML 檔案。** 所有自訂都在 `conf.d/<tenant>.yaml`，包括閾值調整、通知路由、維護窗口。
+**2. 你只需要管理一個 YAML 檔案（或用 Web UI）。** 所有自訂都在 `conf.d/<tenant>.yaml`，包括閾值調整、通知路由、維護窗口。如果 Platform Team 部署了 Self-Service Portal（tenant-manager UI），你可以直接在瀏覽器中管理，無需編輯 YAML。
 
 **3. 預設值很合理，你不一定需要改。** 除非你的業務場景需要更嚴格或更寬鬆的閾值，否則 `_defaults.yaml` 的預設已足夠。
 

@@ -73,7 +73,6 @@ tools:
   appears_in:
   - docs/getting-started/for-platform-engineers.md
   - docs/getting-started/for-tenants.md
-  - docs/scenarios/multi-cluster-federation.md
   journey_phase: deploy
 - key: cli-playground
   title:
@@ -197,8 +196,8 @@ tools:
   journey_phase: deploy
 - key: notification-previewer
   title:
-    en: Notification Template Previewer
-    zh: 通知模板預覽器
+    en: Notification Template Editor
+    zh: 通知模板編輯器
   file: interactive/tools/notification-previewer.jsx
   audience:
   - platform
@@ -390,7 +389,7 @@ tools:
   hub_section: advanced
   appears_in:
   - docs/getting-started/for-domain-experts.md
-  - docs/scenarios/advanced-scenarios.md
+  - docs/internal/test-coverage-matrix.md
   journey_phase: deploy
 - key: onboarding-checklist
   title:
@@ -588,7 +587,7 @@ tools:
   hub_section: advanced
   appears_in:
   - docs/getting-started/for-platform-engineers.md
-  - docs/scenarios/advanced-scenarios.md
+  - docs/internal/test-coverage-matrix.md
   - docs/scenarios/alert-routing-split.md
   - docs/scenarios/tenant-lifecycle.md
   journey_phase: configure
@@ -639,7 +638,7 @@ tools:
   appears_in:
   - docs/architecture-and-design.md
   - docs/getting-started/for-domain-experts.md
-  - docs/scenarios/advanced-scenarios.md
+  - docs/internal/test-coverage-matrix.md
   journey_phase: troubleshoot
 - key: platform-demo
   title:
@@ -691,6 +690,55 @@ tools:
   hub_section: advanced
   appears_in: []
   journey_phase: monitor
+- key: migration-roi-calculator
+  title:
+    en: Migration ROI Calculator
+    zh: 遷移效益試算器
+  file: interactive/tools/migration-roi-calculator.jsx
+  audience:
+  - platform
+  - sre
+  icon: wizard
+  tags:
+  - migration
+  - roi
+  - promql
+  - conversion
+  desc:
+    en: Calculate PromQL migration benefits
+    zh: 計算 PromQL 遷移效益
+  related:
+  - roi-calculator
+  - operator-setup-wizard
+  - migration-simulator
+  hub_section: advanced
+  appears_in: []
+  journey_phase: deploy
+- key: cost-estimator
+  title:
+    en: Cost Estimator
+    zh: 成本估算器
+  file: interactive/tools/cost-estimator.jsx
+  audience:
+  - platform
+  - sre
+  - management
+  icon: calculator
+  tags:
+  - cost
+  - estimation
+  - resources
+  - capacity
+  desc:
+    en: Estimate infrastructure costs based on tenant and pack configuration
+    zh: 依租戶與 pack 配置估算基礎設施成本
+  related:
+  - roi-calculator
+  - capacity-planner
+  - migration-roi-calculator
+  hub_section: advanced
+  appears_in: []
+  journey_phase: deploy
 - key: self-service-portal
   title:
     en: Tenant Self-Service Portal
@@ -793,4 +841,104 @@ tools:
   - platform-health
   journey_phase: deploy
   hub_section: interactive
+  appears_in: []
+- key: rbac-setup-wizard
+  title:
+    en: RBAC Setup Wizard
+    zh: RBAC 設置精靈
+  file: interactive/tools/rbac-setup-wizard.jsx
+  audience:
+  - platform
+  - sre
+  icon: wizard
+  tags:
+  - rbac
+  - authorization
+  - security
+  - setup
+  - wizard
+  desc:
+    en: Configure role-based access control
+    zh: 設置角色型存取控制
+  related:
+  - config-lint
+  - tenant-manager
+  - self-service-portal
+  journey_phase: deploy
+  hub_section: interactive
+  appears_in: []
+- key: operator-setup-wizard
+  title:
+    en: Operator Setup Wizard
+    zh: Operator 設定精靈
+  file: interactive/tools/operator-setup-wizard.jsx
+  audience:
+  - platform
+  - sre
+  icon: wizard
+  tags:
+  - operator
+  - wizard
+  - migration
+  - crd
+  - setup
+  desc:
+    en: Interactive wizard for Prometheus Operator integration setup
+    zh: Prometheus Operator 整合設定互動精靈
+  related:
+  - operator-generate
+  - deployment-wizard
+  - rbac-setup-wizard
+  journey_phase: deploy
+  hub_section: interactive
+  appears_in: []
+- key: release-notes-generator
+  title:
+    en: Release Notes Generator
+    zh: 發布說明產生器
+  file: interactive/tools/release-notes-generator.jsx
+  audience:
+  - platform
+  - sre
+  icon: chart
+  tags:
+  - release
+  - changelog
+  - automation
+  - communication
+  desc:
+    en: Automate release notes from commits
+    zh: 自動從提交產生發布說明
+  related:
+  - deployment-wizard
+  - health-dashboard
+  - platform-health
+  journey_phase: reference
+  hub_section: advanced
+  appears_in: []
+- key: threshold-heatmap
+  title:
+    en: Threshold Heatmap
+    zh: 閾值熱圖
+  file: interactive/tools/threshold-heatmap.jsx
+  audience:
+  - platform
+  - domain
+  - sre
+  icon: dashboard
+  tags:
+  - threshold
+  - visualization
+  - heatmap
+  - metrics
+  - distribution
+  desc:
+    en: Visualize threshold distribution across metrics
+    zh: 視覺化指標中的閾值分佈
+  related:
+  - rule-pack-matrix
+  - capacity-planner
+  - multi-tenant-comparison
+  journey_phase: monitor
+  hub_section: advanced
   appears_in: []

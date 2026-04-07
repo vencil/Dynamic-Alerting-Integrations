@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -115,11 +115,11 @@ Smooth upgrade path when Scenario B is implemented in the future:
 - [ADR-006: 1:N Tenant Mapping Topologies](./006-tenant-mapping-topologies.en.md) — Builds on Scenario A's data-plane Recording Rules for 1:N mapping
 - [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — Rule Pack mounting mechanism used in Federation scenarios
 
-## Current Status & Next Steps
+## Evolution Status
 
 - **v1.12.0** (completed): Scenario A core implementation, `remote_read` integration tests, documentation
-- **v2.1.0** (completed): `federation_check.py` migrated to shared `query_prometheus_instant`, edge/central dual-mode validation
-- **Future**: Scenario B (Rule Pack layering) remains a future direction, see [`architecture-and-design.md` §5.1](../architecture-and-design.md)
+- **v2.1.0** (completed): `federation_check.py` migrated to shared `query_prometheus_instant`, edge/central dual-mode validation. Scenario B (Rule Pack layering) implemented — `da-tools rule-pack-split` supports edge normalization + central aggregation + Operator CRD output
+- **v2.6.0** (completed): `operator-generate --kustomize` supports multi-cluster Federation scenarios for CRD deployment; `drift_detect.py --mode operator` detects cross-cluster CRD drift
 
 ## References
 

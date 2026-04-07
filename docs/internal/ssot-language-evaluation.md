@@ -5,7 +5,7 @@ audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
 status: draft
 lang: zh
-version: v2.5.0
+version: v2.6.0
 ---
 
 # SSOT 切換影響評估：中文↔英文主次互換
@@ -590,7 +590,7 @@ done
   ## v2.6.0
 
   - **BREAKING: 語言策略切換** — 文檔現以英文為主 SSOT，中文為輔
-    - doc pair 現為 .md (en) + .zh.md (zh)，反向於 v2.5.0
+    - doc pair 現為 .md (en) + .zh.md (zh)，反向於 v2.6.0
     - lint hook 邏輯已適配
     - JSX i18n 參數順序反轉為 __t(en, zh)
     - 告警樣板優先英文 annotation，fallback 中文

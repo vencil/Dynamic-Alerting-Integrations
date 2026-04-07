@@ -7,6 +7,7 @@
 | `docs/adr/001-severity-dedup-via-inhibit.md` (.en.md) | Platform Engineers | ADR-001: 嚴重度 Dedup 採用 Inhibit 規則 |
 | `docs/adr/002-oci-registry-over-chartmuseum.md` (.en.md) | Platform Engineers | ADR-002: OCI Registry 替代 ChartMuseum |
 | `docs/adr/003-sentinel-alert-pattern.md` (.en.md) | Platform Engineers | ADR-003: Sentinel Alert 模式 |
+| `docs/adr/004-federation-central-exporter-first.md` (.en.md) | Platform Engineers | ADR-004: Federation 架構——中央 Exporter 優先 |
 | `docs/adr/004-federation-scenario-a-first.md` (.en.md) | Platform Engineers | ADR-004: Federation 場景 A 優先實現 |
 | `docs/adr/005-projected-volume-for-rule-packs.md` (.en.md) | Platform Engineers | ADR-005: 投影卷掛載 Rule Pack |
 | `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N) |
@@ -14,6 +15,7 @@
 | `docs/adr/008-operator-native-integration-path.md` (.en.md) | Platform Engineers | ADR-008: Operator-Native 整合路徑 |
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API 架構 |
 | `docs/adr/010-multi-tenant-grouping.md` (.en.md) | Platform Engineers, developers | ADR-010: Multi-Tenant Grouping Architecture |
+| `docs/adr/011-pr-based-write-back.md` (.en.md) | Platform Engineers, developers | ADR-011: PR-based Write-back 模式 |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |
@@ -28,6 +30,7 @@
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
 | `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
+| `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer 快速入門指南 |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant 快速入門指南 |
@@ -36,7 +39,7 @@
 | `docs/glossary.md` (.en.md) | All | 術語表 |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, 安全合規 | 治理、稽核與安全合規 |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard 導覽 |
-| `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
+| `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — 首頁 |
 | `docs/interactive/tools/AlertPreviewTab.jsx` | Platform Engineers, Tenants | Alert Preview Tab |
 | `docs/interactive/tools/RoutingTraceTab.jsx` | Platform Engineers, Tenants | Routing Trace Tab |
 | `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
@@ -49,14 +52,17 @@
 | `docs/interactive/tools/cli-playground.jsx` | Platform Engineers | da-tools CLI Playground |
 | `docs/interactive/tools/config-diff.jsx` | Platform Engineers | Config Version Diff |
 | `docs/interactive/tools/config-lint.jsx` | Platform Engineers, Tenants | Config Lint Report |
+| `docs/interactive/tools/cost-estimator.jsx` | Platform Engineers, SREs, management | Cost Estimator |
 | `docs/interactive/tools/dependency-graph.jsx` | Platform Engineers, Domain Experts (DBA) | Dependency Graph |
 | `docs/interactive/tools/deployment-wizard.jsx` | Platform Engineers, SREs, DevOps | Deployment Profile Wizard |
 | `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
 | `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
+| `docs/interactive/tools/migration-roi-calculator.jsx` | Platform Engineers, SREs | Migration ROI Calculator |
 | `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
 | `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |
-| `docs/interactive/tools/notification-previewer.jsx` | Platform Engineers, Tenants | Notification Template Previewer |
+| `docs/interactive/tools/notification-previewer.jsx` | Platform Engineers, Tenants | Notification Template Editor |
 | `docs/interactive/tools/onboarding-checklist.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Onboarding Checklist Generator |
+| `docs/interactive/tools/operator-setup-wizard.jsx` | Platform Engineers, SREs, DevOps | Operator Setup Wizard |
 | `docs/interactive/tools/platform-demo.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Platform Demo |
 | `docs/interactive/tools/platform-health.jsx` | Platform Engineers | Platform Health Dashboard |
 | `docs/interactive/tools/playground.jsx` | Platform Engineers, Tenants | YAML Playground |
@@ -78,28 +84,36 @@
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | All | Conventional Commits Guide |
+| `docs/internal/design-system-guide.md` | maintainers | Design System Guide |
 | `docs/internal/doc-template.md` | All | 文件模板規範 |
 | `docs/internal/dx-tooling-backlog.md` | All | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
 | `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
+| `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
 | `docs/internal/test-map.md` | All | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |
-| `docs/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊 |
+| `docs/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager 整合指南 |
+| `docs/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps 部署指南 |
+| `docs/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus 整合指南 |
+| `docs/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring 策略 |
+| `docs/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊（Hub） |
+| `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |
 | `docs/scenarios/hands-on-lab.md` (.en.md) | Platform Engineers, Tenants | 動手實驗：從零到生產告警 |
 | `docs/scenarios/incremental-migration-playbook.md` (.en.md) | Platform Engineers, SREs | 場景：漸進式遷移 Playbook |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標 |
-| `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | 場景：Shadow Audit — 不遷移也能評估告警健康度 |
-| `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | SREs, DevOps | 場景：Shadow Monitoring 全自動切換工作流 |
+| `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | 場景：Shadow Audit — 告警品質評估 |
+| `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | 場景：Shadow Monitoring — 從告警健康評估到全自動切換 |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | 場景：租戶完整生命週期管理 |
 | `docs/schemas/README.md` | Platform Engineers, Tenants | JSON Schema Reference |
 | `docs/shadow-monitoring-sop.md` (.en.md) | SREs, Platform Engineers | Shadow Monitoring SRE SOP |
 | `docs/troubleshooting.md` (.en.md) | Platform Engineers, SREs, Tenants | 故障排查與邊界情況 |
+| `docs/vcs-integration-guide.md` | Platform Engineers | VCS 整合指南 — GitHub / GitLab / 自託管實例 |
 | `docs/internal/doc-map.md` | AI Agent | 本文件（文件導覽總表） |
 | `docs/internal/tool-map.md` | AI Agent | 工具導覽（自動生成） |
 | `docs/schemas/tenant-config.schema.json` | All | Tenant YAML JSON Schema（VS Code 自動補全） |

@@ -1,0 +1,43 @@
+# Files consumed by tooling or build systems, not orphans
+# Format: one path per line (relative to repo root)
+# Trailing / matches directory prefix
+
+# MkDocs Material
+docs/tags.md
+docs/includes/
+docs/assets/
+
+# SSOT evaluation (referenced from roadmap inline, not via markdown link)
+docs/internal/ssot-language-evaluation.md
+
+# MkDocs copies of root README (mkdocs.yml nav references)
+docs/README-root.md
+docs/README-root.en.md
+
+# Redirect stubs (point readers to merged location)
+docs/scenarios/shadow-audit.md
+
+# Internal docs not required to be cross-linked
+docs/internal/commit-convention.md
+docs/internal/doc-template.md
+docs/internal/design-system-guide.md
+
+# Planning docs excluded via .gitignore (local only)
+docs/internal/v2.5.0-v2.6.0-planning.md
+
+# Component READMEs (entry via GitHub directory browsing)
+components/da-portal/README.md
+components/da-tools/README.md
+
+# MkDocs CHANGELOG copy (nav entry, not cross-linked)
+docs/CHANGELOG.md
+
+# .pytest_cache artifacts
+components/threshold-exporter/app/.pytest_cache/
+
+# Getting-started README (entry via nav, not cross-links)
+docs/getting-started/README.md
+
+# EN counterparts discovered via language switcher, not explicit links
+docs/interactive-tools.en.md
+docs/scenarios/hands-on-lab.en.md

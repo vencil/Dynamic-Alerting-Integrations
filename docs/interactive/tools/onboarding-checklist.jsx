@@ -2,7 +2,7 @@
 title: "Onboarding Checklist Generator"
 tags: [onboarding, checklist, progress]
 audience: [tenant, platform-engineer, domain-expert]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [wizard, architecture-quiz, glossary]
 ---
@@ -99,8 +99,8 @@ const CHECKLISTS = {
           { text: t('建立 tenant YAML 並設定閾值', 'Create tenant YAML with thresholds'), doc: 'docs/getting-started/for-tenants.md' },
           { text: t('設定 warning 和 critical 兩層嚴重度', 'Set warning and critical severity levels'), doc: 'docs/architecture-and-design.md' },
           { text: t('用 YAML Validator 驗證配置', 'Validate config with YAML Validator'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
-          { text: t('（選用）配置排程式閾值', '(Optional) Configure scheduled thresholds'), doc: 'docs/scenarios/advanced-scenarios.md' },
-          { text: t('（選用）配置 regex 維度閾值', '(Optional) Configure regex dimension thresholds'), doc: 'docs/scenarios/advanced-scenarios.md' },
+          { text: t('（選用）配置排程式閾值', '(Optional) Configure scheduled thresholds'), doc: 'docs/internal/test-coverage-matrix.md' },
+          { text: t('（選用）配置 regex 維度閾值', '(Optional) Configure regex dimension thresholds'), doc: 'docs/internal/test-coverage-matrix.md' },
         ],
       },
       {

@@ -2,7 +2,7 @@
 title: "文件模板規範"
 tags: [internal, dx]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
@@ -35,7 +35,7 @@ lang: zh
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 ```
@@ -91,7 +91,7 @@ lang: zh
 或以表格形式（較為簡潔）：
 
 ```markdown
-> **v2.5.0** | 適用對象：Platform Engineer、SRE
+> **v2.6.0** | 適用對象：Platform Engineer、SRE
 >
 > 相關文件：[Architecture](./architecture-and-design.md) · [Troubleshooting](./troubleshooting.md)
 ```
@@ -324,7 +324,7 @@ python3 scripts/tools/lint/check_doc_template.py --version v2.3.0 --check-versio
 title: "Your Document Title Here"
 tags: [tag1, tag2]
 audience: [platform-engineer]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 

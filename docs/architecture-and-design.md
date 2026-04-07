@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -13,29 +13,18 @@ lang: zh
 
 本文件針對 Platform Engineers 和 Site Reliability Engineers (SREs) 深入探討「多租戶動態警報平台」(Multi-Tenant Dynamic Alerting Platform) 的技術架構。
 
-**本文涵蓋內容：**
-- 系統架構與核心設計理念（含 Regex 維度閾值、排程式閾值）
-- 高可用性 (HA) 設計
-- Rule Pack 治理模型簡介（詳見 [design/rule-packs.md](design/rule-packs.md)）
+本文件是架構 Hub — 系統架構圖 + 設計概念索引。詳細內容在各 spoke 文件中展開。
 
-**獨立設計文件（spoke 檔案）：**
-- **Config-Driven 設計詳解** → [design/config-driven.md](design/config-driven.md)
-- **Rule Packs 與 Projected Volume** → [design/rule-packs.md](design/rule-packs.md)
-- **高可用性 (HA) 深度** → [design/high-availability.md](design/high-availability.md)
-- **未來擴展路線** → [design/roadmap-future.md](design/roadmap-future.md)
+**設計文件（spoke）：**
 
-**獨立專題文件：** 性能基準測試 → [benchmarks.md](benchmarks.md) · 治理與安全 → [governance-security.md](governance-security.md) · 故障排查 → [troubleshooting.md](troubleshooting.md) · 進階場景 → [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) · 遷移引擎 → [migration-engine.md](migration-engine.md)
+| 文件 | 涵蓋主題 |
+|------|---------|
+| [Config-Driven 設計](design/config-driven.md) | 三態配置、Directory Scanner、多層嚴重度、排程式閾值、路由、Tenant API |
+| [Rule Packs 與 Projected Volume](design/rule-packs.md) | 15 個規則包、三部分結構、雙語 Annotation |
+| [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ |
+| [未來擴展路線](design/roadmap-future.md) | v2.7.0 計畫中 → 長期探索方向 |
 
-**其他相關文件：**
-- **快速入門** → [README.md](index.md)
-- **遷移指南** → [migration-guide.md](migration-guide.md)
-- **規則包文件** → [rule-packs/README.md](rule-packs/README.md)
-- **threshold-exporter 元件** → [components/threshold-exporter/README.md](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md)
-- **性能基準測試** → [benchmarks.md](benchmarks.md)
-- **治理與安全合規** → [governance-security.md](governance-security.md)
-- **故障排查與邊界情況** → [troubleshooting.md](troubleshooting.md)
-- **進階場景與測試覆蓋** → [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md)
-- **AST 遷移引擎架構** → [migration-engine.md](migration-engine.md)
+**專題文件：** [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md) · [進階場景](internal/test-coverage-matrix.md) · [遷移引擎](migration-engine.md) · [VCS 整合](vcs-integration-guide.md) · [Backstage Plugin](../components/backstage-plugin/README.md)
 
 ---
 
@@ -146,20 +135,22 @@ graph TB
 
 ## 設計概念總覽
 
+> **為何這套架構值得投資？** 在典型的 50-tenant 環境中，Config-Driven 架構將規則維護從 O(N×M) 降至 O(M)，每月節省 40+ 小時工程時間。Severity Dedup 與三態模式組合壓制 60%+ 告警噪音，大幅改善 On-call 團隊的工作品質。
+
 以下表格總結核心設計概念，每項都有獨立的深入文件供進一步閱讀：
 
-| 設計概念 | 概述 | 詳見 |
-|--------|------|------|
-| **Config-Driven 架構** | 三態配置（Custom/Default/Disable）、Directory Scanner、SHA-256 hot-reload、Tenant-Namespace 映射 | [design/config-driven.md](design/config-driven.md) |
-| **多層嚴重度** | `_critical` 後綴與 `"value:severity"` 語法、Severity Dedup、Alertmanager inhibit | [design/config-driven.md](design/config-driven.md) |
-| **Regex 與排程式閾值** | Regex 維度匹配 (`=~`)、時間窗口排程 (UTC)、ResolveAt 機制 | [design/config-driven.md](design/config-driven.md) |
-| **三態運營模式** | Normal / Silent / Maintenance、自動失效、Sentinel Alert 模式 | [design/config-driven.md](design/config-driven.md) |
-| **Alert Routing 與 Receivers** | 6 種 receiver type、Timing Guardrails、Per-rule Overrides、Enforced Routing、Routing Profiles | [design/config-driven.md](design/config-driven.md) |
-| **Tenant API 架構** | Commit-on-write、RBAC 熱更新、驗證邏輯共用、Portal 降級安全 | [design/config-driven.md](design/config-driven.md) |
-| **Rule Packs 與 Projected Volume** | 15 個獨立規則包、三部分結構、雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
-| **效能架構** | Pre-computed Recording Rule vs Runtime Aggregation、O(M) vs O(M×N)、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
-| **高可用性 (HA)** | 2 副本部署、RollingUpdate、PodDisruptionBudget、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
-| **未來路線** | Design System 統一、K8s Operator、Async Write-back、Auto-Discovery、Dashboard as Code 等 | [design/roadmap-future.md](design/roadmap-future.md) |
+| 設計概念 | 業務影響 | 技術機制 | 詳見 |
+|--------|---------|---------|------|
+| **Config-Driven 架構** | 新增租戶零額外規則成本，Onboard 從 2hr 降至 5min | 三態配置、Directory Scanner、SHA-256 hot-reload | [design/config-driven.md](design/config-driven.md) |
+| **多層嚴重度** | 消除告警重複通知，團隊只收到最高優先級 | `_critical` 後綴、Severity Dedup、Alertmanager inhibit | [design/config-driven.md](design/config-driven.md) |
+| **Regex 與排程式閾值** | 非工作時段自動調寬閾值，減少夜間假告警 | Regex 維度匹配、時間窗口排程 (UTC)、ResolveAt | [design/config-driven.md](design/config-driven.md) |
+| **三態運營模式** | 維護窗口期間零告警干擾，自動恢復不遺忘 | Normal / Silent / Maintenance + expires 自動失效 | [design/config-driven.md](design/config-driven.md) |
+| **Alert Routing** | 多通道通知確保關鍵告警必達正確人員 | 6 種 receiver、Timing Guardrails、Enforced Routing | [design/config-driven.md](design/config-driven.md) |
+| **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back (v2.6.0) | [design/config-driven.md](design/config-driven.md) |
+| **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
+| **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
+| **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
+| **未來路線** | 國際化 × 權限 × 可觀測性閉環 × 智慧化 | EN-first SSOT、Field-level RBAC、Auto-Discovery、DaC | [design/roadmap-future.md](design/roadmap-future.md) |
 
 ---
 
@@ -216,72 +207,24 @@ Config-Driven 架構是平台的核心，涵蓋以下主題：
 
 ## 4. 高可用性設計 (High Availability)
 
-### 4.1 部署策略
+threshold-exporter 採用 2 副本 + PodAntiAffinity + PodDisruptionBudget 策略，確保滾動更新零停機、維護期間始終有 1 個副本服務 Prometheus 抓取。Recording rule 使用 `max by(tenant)` 防止 HA 翻倍計算。
 
-```yaml
-replicas: 2
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxUnavailable: 0    # 零停機滾動更新
-    maxSurge: 1
-
-affinity:
-  podAntiAffinity:
-    preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        podAffinityTerm:
-          topologyKey: kubernetes.io/hostname
-```
-
-**特性：**
-- 2 個副本分散在不同節點
-- 滾動更新時，總有 1 個副本可用
-- Kind 單節點叢集：軟親和性允許裝箱
-
-### 4.2 Pod 中斷預算 (PodDisruptionBudget)
-
-```yaml
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: threshold-exporter-pdb
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: threshold-exporter
-```
-
-**保證：** 即使在主動維護期間，也始終有 1 個副本服務於 Prometheus 抓取
+**完整部署 YAML 與 SLA 分析見** [design/high-availability.md](design/high-availability.md)
 
 ---
 
 ## 5. 未來擴展路線 (Future Roadmap)
 
-- **短期（v2.6.0）**：Design System 統一 + K8s Operator 遷移路徑 + PR-based async write-back
-- **中期（v2.7.0）**：Tenant Auto-Discovery + Grafana Dashboard as Code + Release Automation
-- **長期**：Anomaly-Aware Dynamic Threshold + Log-to-Metric Bridge + Multi-Format Export
-
-**完整詳解見** [design/roadmap-future.md](design/roadmap-future.md)
-
----
-
-## 拆分文件導覽
-
-以下章節已獨立為專題文件，便於按角色與需求查閱：
-
-| 專題 | 文件 | 適用對象 |
+| 時程 | 主題 | 重點方向 |
 |------|------|---------|
-| 性能分析與基準測試 | [benchmarks.md](benchmarks.md) | Platform Engineers, SREs |
-| 治理、稽核與安全合規 | [governance-security.md](governance-security.md) | Platform Engineers, 安全與合規團隊 |
-| 故障排查與邊界情況 | [troubleshooting.md](troubleshooting.md) | Platform Engineers, SREs, Tenant 管理者 |
-| 進階場景與測試覆蓋 | [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) | Platform Engineers, SREs |
-| AST 遷移引擎架構 | [migration-engine.md](migration-engine.md) | Platform Engineers, DevOps |
+| **v2.7.0 計畫中** | 國際化 × 權限 × 自動化 | EN-first SSOT、Field-level RBAC、Tenant Auto-Discovery、Grafana DaC、Release Automation |
+| **長期探索** | 智慧化 × 去耦合 | Anomaly-Aware Threshold、Log-to-Metric Bridge、Multi-Format Export、CRD、ChatOps |
+
+**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)
 
 ---
 
-## 附錄 A：角色與工具速查
+## 附錄：角色與工具速查
 
 > 詳細工具用法見 [CLI Reference](cli-reference.md)。
 

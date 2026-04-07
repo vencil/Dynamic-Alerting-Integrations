@@ -2,7 +2,7 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # Migration Guide — 遷移指南
@@ -14,7 +14,7 @@ lang: zh
 
 > **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
 >
-> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.4.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
+> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.6.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
 
 ## 你在哪個階段？(Where Are You?)
 
@@ -129,7 +129,7 @@ scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-expor
 # 方式 A (推薦): Helm values 覆寫 — OCI registry
 #   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
   -n monitoring -f values-override.yaml
 
 # 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
@@ -226,7 +226,7 @@ kubectl create configmap prometheus-rules-custom \
 ```bash
 # 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -242,6 +242,18 @@ kind load docker-image threshold-exporter:dev --name dynamic-alerting-cluster
 make component-deploy COMP=threshold-exporter ENV=local
 ```
 
+### 選項 C: Operator CRD 路徑
+
+已安裝 kube-prometheus-stack 的環境可用 `operator-generate` 產出 PrometheusRule CRD，取代 ConfigMap 掛載：
+
+```bash
+da-tools operator-generate --config-dir conf.d/ --rule-packs rule-packs/ \
+  --output-dir operator-output/ --gitops
+kubectl apply -f operator-output/
+```
+
+兩種路徑的詳細比較與決策指引見 [Deployment Decision Matrix](getting-started/decision-matrix.md)。
+
 ### 驗證部署
 
 ```bash
@@ -252,7 +264,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### Use da-tools in K8s Cluster
 
-da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v2.4.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
+da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v2.6.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
 
 > Job 產出可透過 `kubectl cp` 取回，再注入 `threshold-config` ConfigMap。長期運行的 Shadow Monitoring Job 範例參見 [§11 企業級遷移 Phase B](#11-企業級遷移-大型租戶-1000-條規則)。
 
@@ -495,7 +507,7 @@ tenants:
 
 ## 9. 進階：擴展不支援的 DB 類型
 
-v1.8.0 已預載 13 個 Rule Pack ConfigMap，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、Kubernetes、Operational 及 Platform 自我監控。若需支援尚無 Rule Pack 的 DB 類型，需手動建立正規化層。
+平台預載 15 個 Rule Pack ConfigMap，涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Kubernetes、Operational 及 Platform 自我監控。若需支援尚無 Rule Pack 的 DB 類型，需手動建立正規化層。
 
 ### 正規化命名規範
 

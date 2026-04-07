@@ -1,0 +1,20 @@
+{{- if eq .Values.rules.mode "operator" }}
+{{- if .Values.rules.operator.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: da-threshold-exporter
+  namespace: {{ .Release.Namespace | default "monitoring" }}
+  labels:
+    app: threshold-exporter
+    app.kubernetes.io/part-of: dynamic-alerting
+spec:
+  selector:
+    matchLabels:
+      app: threshold-exporter
+  endpoints:
+  - port: http
+    interval: {{ .Values.rules.operator.serviceMonitor.interval | default "15s" }}
+    path: /metrics
+{{- end }}
+{{- end }}

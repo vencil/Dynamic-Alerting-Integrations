@@ -64,6 +64,31 @@ thresholdConfig:
   # 完整範例參見 config/conf.d/examples/
   tenants: {}
 
+# Rules deployment mode: configmap (default) or operator (CRD-based)
+# - configmap: Rule Packs mounted as ConfigMap via projected volume (Path A)
+# - operator: Rule Packs deployed as PrometheusRule CRD (Path B)
+# See ADR-008 for architecture details.
+# IMPORTANT: Do NOT mix modes in the same cluster's Alertmanager.
+rules:
+  mode: configmap    # configmap | operator
+  # Operator-mode settings (only used when mode: operator)
+  operator:
+    # PrometheusRule labels for Operator ruleSelector matching
+    ruleLabels:
+      prometheus: kube-prometheus
+    # ServiceMonitor for threshold-exporter scraping
+    serviceMonitor:
+      enabled: true
+      interval: 15s
+    # AlertmanagerConfig receiver template
+    # Supported: slack, pagerduty, email, teams, opsgenie, webhook
+    receiverTemplate: webhook
+    # K8s Secret reference for receiver credentials
+    # NEVER put plaintext credentials in values.yaml
+    secretRef:
+      name: ""       # e.g. da-alerts-secret
+      key: ""        # e.g. webhook-url
+
 resources:
   requests:
     cpu: 50m

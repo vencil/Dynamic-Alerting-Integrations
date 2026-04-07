@@ -2,7 +2,7 @@
 title: "GitHub Release — 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # GitHub Release — 操作手冊 (Playbook)
@@ -247,63 +247,79 @@ git push origin "tenant-api/v<VERSION>"
    ```
    目標：無孤兒文件（doc-map 有但實際不存在）、無遺漏文件（存在但 map 未收錄）
 
-2. **advanced-scenarios.md 現況更新**
+2. **test-coverage-matrix.md 現況更新**
    確認「進階場景與測試覆蓋」中的場景列表、測試數量、工具引用是否反映最新版本。
 
-3. **dx-tooling-backlog.md + architecture §5 Roadmap**
-   已完成項目只能在 CHANGELOG 和功能文件中出現，不能殘留在 backlog / roadmap。可新增 Agent 發想的未來方向。
+3. **Backlog + Roadmap 衛生**
+   - `dx-tooling-backlog.md`：只保留未完成項目。已交付功能從 backlog 徹底刪除（CHANGELOG 是唯一的交付紀錄）
+   - `roadmap-future.md`：只保留「計畫中」和「探索方向」。已完成項目不留存——版本演進表和 CHANGELOG 負責展示歷史
+   - `architecture-and-design.md` §5 摘要表：同步更新，確保與 roadmap 一致
+   - 可新增本版開發過程發現的未來方向
 
-### Phase 2: 經驗回寫
+### Phase 2: 文件品質維護
 
-4. **Playbook 經驗回寫**
+> **設計原則**：每份文件有明確職責，不重複。README 做「為什麼 + 怎麼開始」，Roadmap 做「接下來」，CHANGELOG 做「做過什麼」，Playbook 做「怎麼不踩坑」。文件膨脹的根因是職責模糊——同一件事在多處描述。
+
+4. **文件簡潔性檢查**
+   - README（root）：維持 ~190 行以內，「5s→30s→5min」漸進式揭露結構完整
+   - `docs/index.md`：維持 ~140 行以內，專注 MkDocs 導航入口角色
+   - `architecture-and-design.md`：Hub 文件 ≤ 250 行，細節在 spoke 文件
+   - 新增內容時先問：「這屬於哪份文件的職責？」而非「放哪裡最方便？」
+
+5. **敘述風格一致性**
+   - 禁止代號/暗語進入文件（如「場景 A/B」）——用描述性名稱（如「中央評估/邊緣評估」）
+   - 禁止推銷語言進入 repo（CLAUDE.md 規範 #6）
+   - 數字引用（場景數、工具數、Rule Pack 數）與 `platform-data.json` / `tool-registry.yaml` 對齊
+
+6. **Playbook 經驗回寫**
    回顧踩坑經驗，只記錄**跨版本可復用**的教訓。判斷標準：「下次開發時如果沒看到這條會再踩一次嗎？」是才寫。不為寫而寫。
 
 ### Phase 3: 架構文件一致性
 
-5. **architecture-and-design.md + ADR 審核**
+7. **architecture-and-design.md + ADR 審核**
    - 確認 arch doc 與 ADR 不過度重疊（arch doc 放設計概覽，ADR 放決策紀錄與取捨）
    - 確認 arch doc 所有 §N 編號連續且 Mermaid 圖同步
    - 若 arch doc 超過 1,200 行，評估拆分或精煉
 
-6. **README 連結 + 價值傳達**
+8. **README 連結 + 導航完整性**
    - `check_doc_links.py` 零 broken links
-   - README 對客戶的「為什麼要用」和「怎麼開始」路徑清晰
+   - README 的「為什麼要用」和「怎麼開始」路徑清晰
    - 場景數、工具數、Rule Pack 數等數字與實際一致
 
-7. **CLAUDE.md 準確性**
+9. **CLAUDE.md 準確性**
    - 工具數量、場景數、CLI 命令數與 CHANGELOG 一致
    - Playbook 引用路徑正確
-   - 新增概念（如 GitOps Native Mode）有被收錄
+   - 新增概念有被收錄
 
 ### Phase 4: 版號 + 品質閘門
 
-8. **版號治理**（⛔ 硬性要求）
-   ```bash
-   make version-check              # 全 repo 版號一致性 — 必須 ✅
-   make bump-docs                  # 若需更新 — 必須完全覆蓋
-   check_frontmatter_versions.py --fix   # frontmatter 批次更新 — 必須 0 failed
-   ```
-   **任何版號不一致進入下一步都是致命風險。必須全數修正才能推送。**
+10. **版號治理**（⛔ 硬性要求）
+    ```bash
+    make version-check              # 全 repo 版號一致性 — 必須 ✅
+    make bump-docs                  # 若需更新 — 必須完全覆蓋
+    check_frontmatter_versions.py --fix   # frontmatter 批次更新 — 必須 0 failed
+    ```
+    **任何版號不一致進入下一步都是致命風險。必須全數修正才能推送。**
 
-9. **品質閘門**
-   ```bash
-   pre-commit run --all-files                           # 13 auto hooks
-   pre-commit run --hook-stage manual --all-files        # 18 manual hooks
-   python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -q
-   ```
+11. **品質閘門**
+    ```bash
+    pre-commit run --all-files                           # 30 auto hooks
+    pre-commit run --hook-stage manual --all-files        # 10 manual hooks
+    python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -q
+    ```
 
 ### Phase 5: 收尾
 
-10. **Rebase 為單一 commit**
+12. **Rebase 為單一 commit**
     將本版所有 WIP commit 合併為一個語義完整的 release commit。CHANGELOG 以全局角度更新，不囉嗦不遺漏。
 
-11. **CHANGELOG 真實性檢查**
+13. **CHANGELOG 真實性檢查**
     逐條確認 CHANGELOG 提到的功能確實存在、數字準確、檔案路徑可訪問。
 
-12. **等待 Owner 確認**
+14. **等待 Owner 確認**
     停下來等主人 review + 提供臨時 GitHub token。Token 不記錄到任何 repo 檔案。
 
-13. **推送前：驗證 base image + Chart.yaml**
+15. **推送前：驗證 base image + Chart.yaml**
     ```bash
     # Dockerfile base image 必須在 Docker Hub 存在（CI build 階段才會 fail，太遲了）
     docker manifest inspect <每個 Dockerfile 的 FROM tag> > /dev/null
@@ -311,7 +327,7 @@ git push origin "tenant-api/v<VERSION>"
     grep "^version:" components/threshold-exporter/Chart.yaml
     ```
 
-14. **推送 + 等 CI 全綠 + Release**
+16. **推送 + 等 CI 全綠 + Release**
     - `git push origin main` + 推對應 tag
     - **等所有 Release workflow 完成並 success 後**才建 GitHub Release
     - 若 CI 失敗：修正 → amend → force-push → 刪遠端 tag → 重推 tag

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
 
 test.describe('Portal Home Page @critical', () => {
   test('should load portal home page and render tool list', async ({ page }) => {
@@ -95,5 +96,23 @@ test.describe('Portal Home Page @critical', () => {
     const bodyWidth = await page.evaluate(() => document.documentElement.scrollWidth);
     const viewportWidth = await page.evaluate(() => window.innerWidth);
     expect(bodyWidth).toBeLessThanOrEqual(viewportWidth + 1); // +1 for rounding
+  });
+
+  test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
+    // Navigate to portal home
+    await page.goto('./');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+
+    // Run accessibility check
+    const results = await checkA11y(page);
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
+    if (results.violations.length > 0) {
+      const violationDetails = formatA11yViolations(results.violations);
+      throw new Error(
+        `Portal home page failed accessibility checks:\n${violationDetails}`
+      );
+    }
   });
 });

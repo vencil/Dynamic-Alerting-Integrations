@@ -32,7 +32,7 @@ DOCS_DIR = REPO_ROOT / "docs"
 # ============================================================================
 
 # Extensions to scan for version references
-SCANNABLE_EXTENSIONS: Tuple[str, ...] = (".md", ".jsx")
+SCANNABLE_EXTENSIONS: Tuple[str, ...] = (".md", ".jsx", ".json")
 
 # Directories to scan (used by _collect_scannable_files)
 SCAN_DIRECTORIES = {
@@ -48,6 +48,10 @@ SCAN_DIRECTORIES = {
 
 # Root files to include in scans
 ROOT_FILES = ("README.md", "README.en.md", "CLAUDE.md", "mkdocs.yml")
+
+# E2E and JSX version checks: additional files to scan for version references
+E2E_PACKAGE_JSON = REPO_ROOT / "tests" / "e2e" / "package.json"
+JSX_VERSION_FILES = list((DOCS_DIR / "interactive" / "tools").glob("*.jsx")) if (DOCS_DIR / "interactive" / "tools").exists() else []
 
 # ============================================================================
 # Pattern definitions for each type of version/count check

@@ -2,14 +2,14 @@
 title: "Federation Integration Guide"
 tags: [federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Federation Integration Guide
 
 > **Language / 語言：** **English (Current)** | [中文](federation-integration.md)
 
-> **v2.5.0** — Scenario A architecture blueprint: central threshold-exporter + multi-edge Prometheus scrape
+> **v2.6.0** — Central Evaluation architecture: central threshold-exporter + multi-edge Prometheus scrape. §2–§7 describes Central Evaluation; §8 describes Edge Evaluation.
 
 ## 1. Overview
 
@@ -17,18 +17,18 @@ This document describes the deployment architecture of the Dynamic Alerting plat
 
 ### 1.1 Applicable Scenarios
 
-Scenario A (scope of this document) applies to the following conditions:
+The Central Evaluation architecture (scope of this document) applies to the following conditions:
 
 - Multiple Kubernetes clusters (edge/branch/regional), each running databases and business workloads
 - Need for unified alert threshold management and notification routing
 - Central SRE/NOC team responsible for global monitoring
 - Each edge cluster already has or will deploy Prometheus + DB exporter
 
-Not applicable: single-cluster deployments (refer directly to main README), Scenario B Rule Pack stratification (see §6).
+Not applicable: single-cluster deployments (refer directly to main README), Edge Evaluation with Rule Pack stratification (see §8).
 
-### 1.2 Architecture Choice: Scenario A vs Scenario B
+### 1.2 Architecture Choice: Central Evaluation vs Edge Evaluation
 
-| Aspect | Scenario A (Central Evaluation) | Scenario B (Edge Evaluation) |
+| Aspect | Central Evaluation | Edge Evaluation |
 |--------|--------------------------------|------------------------------|
 | threshold-exporter Location | Central cluster | Each edge cluster |
 | Rule Pack Evaluation Location | Central Prometheus | Edge Prometheus |
@@ -37,7 +37,7 @@ Not applicable: single-cluster deployments (refer directly to main README), Scen
 | Complexity | Low (single-point deployment) | High (Rule Packs need partitioning) |
 | Suitable Scale | < 20 edge clusters | 20+ edge clusters or high-latency cross-region |
 
-This document focuses on Scenario A. Scenario B's Rule Pack stratification design will proceed after Scenario A stabilizes and customer requirements become clear (see `architecture-and-design.md` §11.2).
+This document focuses on the Central Evaluation architecture (§2–§7). The Edge Evaluation architecture (§8) partitions Rule Packs to edge clusters for lower latency at scale.
 
 ## 2. Architecture Diagram
 
@@ -386,9 +386,9 @@ Mitigation measures:
 - Central Prometheus recommended to use Thanos/Cortex/VictoriaMetrics for HA + long-term storage
 - Alertmanager dual instances + gossip clustering
 
-## 8. Scenario B: Rule Pack Stratification (v2.3.0)
+## 8. Edge Evaluation: Rule Pack Stratification (v2.3.0)
 
-Scenario B (edge evaluation) partitions Rule Packs into two layers, enabling edge clusters to perform data normalization locally while the central cluster handles threshold comparison and alerting. Recommended for 20+ edge clusters or high-latency cross-region environments.
+The Edge Evaluation architecture partitions Rule Packs into two layers, enabling edge clusters to perform data normalization locally while the central cluster handles threshold comparison and alerting. Recommended for 20+ edge clusters or high-latency cross-region environments.
 
 ### 8.1 Stratification Architecture
 
@@ -472,14 +472,14 @@ da-tools federation-check e2e \
 4. **Central deployment**: Deploy `central-rules/*.yaml` to central Prometheus alongside threshold-exporter
 5. **Verify**: Run `da-tools federation-check e2e` to confirm end-to-end alerting pipeline
 
-### 8.5 Migrating from Scenario A to Scenario B
+### 8.5 Migrating from Central Evaluation to Edge Evaluation
 
-Scenario A can be seamlessly upgraded to Scenario B:
+The Central Evaluation architecture can be seamlessly upgraded to Edge Evaluation:
 
 1. Replace full Rule Packs in central cluster with `central-rules/` content (Parts 2+3)
 2. Deploy `edge-rules/` content (Part 1) to edge clusters
 3. Switch federation/remote-write from raw metrics to recording rule results
-4. Roll out per-cluster — Scenario A and Scenario B can coexist (different edge clusters choose independently)
+4. Roll out per-cluster — both architectures can coexist (different edge clusters choose independently)
 
 ## Related Resources
 

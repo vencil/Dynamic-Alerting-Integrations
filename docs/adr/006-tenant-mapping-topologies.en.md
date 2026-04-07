@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -138,24 +138,19 @@ groups:
 - Pros: Fully decoupled
 - Cons: Introduces new component, increased latency, high operational complexity
 
-## v2.1.0 Implementation Summary
+## Evolution Status
 
-- `generate_tenant_mapping_rules.py` — Auto-generate Recording Rules from `_instance_mapping.yaml`, supporting Oracle/DB2/generic filter syntax (36 tests)
-- `discover_instance_mappings.py` — Auto-detect instance topologies (1:1/N:1/1:N) from Prometheus, output suggested mapping config
-- `scaffold_tenant.py --topology=1:N` — Onboarding integration (with `--mapping-instance`, `--mapping-filter`)
-- Example config `conf.d/examples/_instance_mapping.yaml`
-- Go/Python dual-side reserved key sync
+- **v2.1.0** (completed): Core toolchain (`generate_tenant_mapping_rules.py` / `discover_instance_mappings.py` / `scaffold_tenant.py --topology=1:N`), Federation Scenario B support via `rule-pack-split` with edge/central layered mapping behavior
+- **v2.1.0 & v2.6.0** (completed): Federated topology validation across central and edge clusters
 
-## Future Directions
-
-- End-to-end validation in real multi-schema Oracle environments
-- Schema validation (`_instance_mapping.yaml` JSON Schema)
-- Integration with Federation Scenario B for edge/central layered architecture validation
+**Remaining**:
+- End-to-end validation in real multi-schema Oracle environments (pending production feedback)
+- Schema validation (`_instance_mapping.yaml` JSON Schema) deferred to next cycle
 
 ## Related Decisions
 
 - [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.md) — Recording Rules distributed via same Projected Volume mechanism
-- [ADR-004: Federation Scenario A First](./004-federation-scenario-a-first.md) — Mapping consistency under federation
+- [ADR-004: Federation Central Exporter First](./004-federation-central-exporter-first.en.md) — Mapping consistency under federation
 - [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.md) — Mapped metrics still subject to inhibit dedup
 
 ## References
@@ -172,7 +167,7 @@ groups:
 | [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
 | [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐ |
 | [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐ |
-| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ⭐⭐⭐ |
+| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐⭐⭐ |
 | [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
 | [006-tenant-mapping-topologies.en](006-tenant-mapping-topologies.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |

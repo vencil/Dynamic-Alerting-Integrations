@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide
@@ -345,7 +345,7 @@ da-tools diagnose db-a
 da-tools validate-config --config-dir /data/conf.d
 ```
 
-> **Tip**: `da-tools` doesn't require cloning the entire project, just `docker pull ghcr.io/vencil/da-tools:v2.4.0` is enough.
+> **Tip**: `da-tools` doesn't require cloning the entire project, just `docker pull ghcr.io/vencil/da-tools:v2.6.0` is enough.
 
 ---
 
@@ -392,5 +392,5 @@ A: `threshold-exporter` is deployed in the data cluster (near tenant ConfigMaps)
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

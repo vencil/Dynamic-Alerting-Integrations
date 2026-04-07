@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -49,7 +49,7 @@ graph LR
 | **Authentication** | oauth2-proxy sidecar | K8s-native pattern, API server only reads HTTP headers, zero auth code; supports GitHub OAuth / Google OIDC / generic OIDC |
 | **Write-back** | commit-on-write | UI action → API → modify conf.d/ YAML → git commit (with operator email as author). Full audit trail, compatible with GitOps workflow |
 | **Permission model** | `_rbac.yaml` static mapping | Maintain one `_rbac.yaml`: `groups[].tenants[]` mapping. IdP groups as source of truth, dynamically loaded, no hardcoding |
-| **Concurrency model** | `sync.Mutex` + `task_id` reserved | v2.4.0 synchronous execution (Kind cluster concurrency is extremely low); response already includes `task_id` field — v2.5.0 async queue upgrade requires no client changes |
+| **Concurrency model** | `sync.Mutex` → goroutine pool | v2.4.0 synchronous execution; v2.6.0 upgraded to goroutine pool + `task_id` polling async mode |
 | **API documentation** | swaggo/swag annotation | Auto-generate `swagger.yaml` from Go handler annotations, keeps docs in sync with code |
 | **Portal positioning** | Extend existing da-portal | No new project; add API client layer; tenant-manager.jsx fallback protection (API unavailable → static JSON read-only mode) |
 | **Go module boundary** | Standalone module + replace | `github.com/vencil/tenant-api` has its own `go.mod`, with `replace` directive pointing to local `threshold-exporter/`; can be independently published later |
@@ -69,7 +69,7 @@ type RBACManager struct {
 
 ### Batch Operation Response Format
 
-v2.4.0 executes synchronously; `status` is always `"completed"`, but structure reserves `task_id` for v2.5.0 async upgrade:
+v2.4.0 executed synchronously; `status` was always `"completed"`. v2.6.0 upgraded to async mode (goroutine pool + `task_id` polling):
 
 ```json
 {
@@ -98,7 +98,7 @@ oauth2-proxy is a mature CNCF ecosystem tool supporting all major IdPs (GitHub, 
 
 ### Why no real-time WebSocket push?
 
-v2.4.0's primary user scenario is low-frequency operations (≥1 second between operations); polling or manual refresh is sufficient. Introducing WebSockets requires additional goroutine pools, connection management, and error handling that exceeds this version's scope. Listed in v2.5.0 roadmap.
+v2.4.0's primary user scenario is low-frequency operations (≥1 second between operations); polling or manual refresh is sufficient. Async batch operations with task_id polling introduced in v2.6.0; SSE server-sent events replaced WebSocket in v2.6.0 for real-time push notifications without persistent connection overhead.
 
 ## Consequences
 
@@ -121,12 +121,14 @@ v2.4.0's primary user scenario is low-frequency operations (≥1 second between 
 - **Git conflict**: Multiple operators writing to the same tenant config simultaneously may cause conflicts. Mitigation: HEAD snapshot comparison before write; return 409 on conflict, requiring operator to refresh and retry
 - **git binary dependency**: API server calls `git` via `os/exec`; container must have git installed. Mitigation: Dockerfile uses `golang:alpine` build stage to ensure git availability
 
-## Future Evolution
+## Evolution Status
 
-- **v2.5.0**: Async batch operations (`status: "pending"` + task_id polling), goroutine pool
-- **v2.5.0**: WebSocket push (real-time configuration change notifications to Portal)
-- **v2.6.0**: PR-based write-back (high-security environments: UI action → create PR → reviewer approves → merge)
-- **v2.6.0**: Field-level fine-grained RBAC (currently tenant-level granularity)
+- **v2.4.0** (completed): Core CRUD API, commit-on-write, oauth2-proxy authentication, `_rbac.yaml` permission model, Portal degradation safety
+- **v2.5.0** (completed): Multi-Tenant Grouping (ADR-010), multi-dimension filtering, Group CRUD + batch operations
+- **v2.6.0** (completed): Async batch operations (goroutine pool + `task_id` polling), SSE real-time push (replacing WebSocket), PR-based write-back (ADR-011, GitHub + GitLab dual platform)
+
+**Remaining**:
+- Field-level fine-grained RBAC (currently tenant-level) — v2.7.0 candidate
 
 ## Related Decisions
 

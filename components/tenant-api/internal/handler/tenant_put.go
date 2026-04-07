@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -18,7 +19,29 @@ import (
 type PutTenantResponse struct {
 	Status   string   `json:"status"`
 	TenantID string   `json:"tenant_id"`
+	PRURL    string   `json:"pr_url,omitempty"`
+	PRNumber int      `json:"pr_number,omitempty"`
+	Message  string   `json:"message,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
+}
+
+// WriteMode represents the tenant-api write-back mode (ADR-011).
+type WriteMode string
+
+const (
+	// WriteModeDirect is the default commit-on-write mode (ADR-009).
+	WriteModeDirect WriteMode = "direct"
+	// WriteModePR creates a GitHub PR instead of committing directly (ADR-011).
+	WriteModePR WriteMode = "pr"
+	// WriteModePRGitHub is an explicit alias for GitHub PR mode.
+	WriteModePRGitHub WriteMode = "pr-github"
+	// WriteModePRGitLab creates a GitLab MR instead of committing directly (ADR-011).
+	WriteModePRGitLab WriteMode = "pr-gitlab"
+)
+
+// IsPRMode returns true if the write mode is any PR/MR-based mode.
+func (wm WriteMode) IsPRMode() bool {
+	return wm == WriteModePR || wm == WriteModePRGitHub || wm == WriteModePRGitLab
 }
 
 // PutTenant handles PUT /api/v1/tenants/{id}
@@ -28,6 +51,10 @@ type PutTenantResponse struct {
 //
 // v2.5.0 Phase C: Domain policy enforcement — writes that violate the
 // tenant's domain policy return 403 with details.
+//
+// v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
+// creates a feature branch and PR/MR instead of direct commit.
+// Supports both GitHub PRs and GitLab MRs via platform.Client interface.
 //
 // @Summary     Update tenant config
 // @Description Validates, writes, and commits a tenant's YAML configuration.
@@ -42,7 +69,7 @@ type PutTenantResponse struct {
 // @Failure     409   {object} map[string]string
 // @Failure     500   {object} map[string]string
 // @Router      /api/v1/tenants/{id} [put]
-func PutTenant(w *gitops.Writer, policyMgr *policy.Manager) http.HandlerFunc {
+func PutTenant(w *gitops.Writer, policyMgr *policy.Manager, writeMode WriteMode, prClient platform.Client, prTracker platform.Tracker) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -66,6 +93,55 @@ func PutTenant(w *gitops.Writer, policyMgr *policy.Manager) http.HandlerFunc {
 			}
 		}
 
+		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
+		if writeMode.IsPRMode() && prClient != nil && prTracker != nil {
+			// Check for existing pending PR/MR
+			if prTracker.HasPendingPR(tenantID) {
+				existingPR, _ := prTracker.PendingPRForTenant(tenantID)
+				rw.Header().Set("Content-Type", "application/json")
+				rw.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(rw).Encode(map[string]interface{}{
+					"error":           "pending_pr_exists",
+					"existing_pr_url": existingPR.WebURL,
+					"pr_number":       existingPR.Number,
+					"message":         fmt.Sprintf("A pending PR/MR for %s already exists. Merge or close it first.", tenantID),
+				})
+				return
+			}
+
+			// Create feature branch + commit
+			result, err := w.WritePR(tenantID, email, string(body))
+			if err != nil {
+				writeJSONError(rw, http.StatusInternalServerError, "PR write failed: "+err.Error())
+				return
+			}
+
+			// Create PR/MR via platform client
+			prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
+			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
+			pr, err := prClient.CreatePR(prTitle, prBody, result.BranchName, []string{"tenant-api", "auto-generated"})
+			if err != nil {
+				provider := prClient.ProviderName()
+				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				return
+			}
+
+			// Register in tracker immediately
+			pr.TenantID = tenantID
+			prTracker.RegisterPR(*pr)
+
+			rw.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(rw).Encode(PutTenantResponse{
+				Status:   "pending_review",
+				TenantID: tenantID,
+				PRURL:    pr.WebURL,
+				PRNumber: pr.Number,
+				Message:  "PR/MR created. Configuration will take effect after merge.",
+			})
+			return
+		}
+
+		// Default: direct commit-on-write (ADR-009)
 		if err := w.Write(tenantID, email, string(body)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				writeJSONError(rw, http.StatusConflict, err.Error())
@@ -144,7 +220,7 @@ func writePolicyViolation(w http.ResponseWriter, violations []policy.Violation) 
 	resp := map[string]interface{}{
 		"error":      "domain policy violation",
 		"violations": violations,
-		"help":       "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/scenarios/advanced-scenarios.md",
+		"help":       "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/internal/test-coverage-matrix.md",
 		"action":     "Review the _domain_policy.yaml constraints for this tenant's domain. Contact a platform admin to update the policy if this change is necessary.",
 	}
 	_ = json.NewEncoder(w).Encode(resp)

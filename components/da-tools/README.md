@@ -2,7 +2,7 @@
 
 > **受眾**：Platform Engineers、SREs、Tenants (DevOps)
 > **Image**：`ghcr.io/vencil/da-tools`
-> **版本**：2.4.0（獨立版號，與 threshold-exporter 脫鉤）
+> **版本**：2.6.0（獨立版號，與 threshold-exporter 脫鉤）
 
 ---
 
@@ -23,16 +23,16 @@
 
 ```bash
 # 本地建構（見下方「本地建構」章節）
-cd components/da-tools/app && ./build.sh 2.4.0
+cd components/da-tools/app && ./build.sh 2.6.0
 
 # 或從 registry 拉取（需 CI/CD 已推送）
-docker pull ghcr.io/vencil/da-tools:v2.4.0
+docker pull ghcr.io/vencil/da-tools:v2.6.0
 
 # 查看說明
-docker run --rm ghcr.io/vencil/da-tools:v2.4.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.6.0 --help
 
 # 查看版本
-docker run --rm ghcr.io/vencil/da-tools:v2.4.0 --version
+docker run --rm ghcr.io/vencil/da-tools:v2.6.0 --version
 ```
 
 ---
@@ -96,20 +96,20 @@ export PROM=http://prometheus.monitoring.svc.cluster.local:9090
 # 1. 確認 alert 狀態
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   check-alert MariaDBHighConnections db-a
 
 # 2. 觀測指標並取得閾值建議
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對
 docker run --rm --network=host \
   -v $(pwd)/mapping.csv:/data/mapping.csv \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   validate --mapping /data/mapping.csv --watch --rounds 5
 ```
 
@@ -120,7 +120,7 @@ docker run --rm --network=host \
 docker run --rm \
   -v $(pwd)/my-rules.yml:/data/my-rules.yml \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   migrate /data/my-rules.yml -o /data/output --dry-run --triage
 
 # 產出：
@@ -134,7 +134,7 @@ docker run --rm \
 # 非互動式產生 tenant 配置
 docker run --rm \
   -v $(pwd)/configs:/data/configs \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/configs
 ```
 
@@ -144,14 +144,14 @@ docker run --rm \
 # 從 tenant YAML 產出 Alertmanager route + receiver + inhibit_rules fragment
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   generate-routes --config-dir /data/conf.d --dry-run
 
 # 寫入檔案
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml
 ```
 
@@ -163,14 +163,14 @@ docker run --rm \
 # Dry run — 在 stdout 預覽完整 ConfigMap（含 global + route + receivers + inhibit_rules）
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   generate-routes --config-dir /data/conf.d --output-configmap --dry-run
 
 # 寫入檔案，供 Git commit + PR review
 docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   generate-routes --config-dir /data/conf.d --output-configmap \
     -o /data/output/alertmanager-configmap.yaml
 
@@ -179,7 +179,7 @@ docker run --rm \
   -v $(pwd)/conf.d:/data/conf.d \
   -v $(pwd)/base-alertmanager.yaml:/data/base.yaml \
   -v $(pwd)/output:/data/output \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   generate-routes --config-dir /data/conf.d --output-configmap \
     --base-config /data/base.yaml -o /data/output/alertmanager-configmap.yaml
 ```
@@ -227,7 +227,7 @@ data:
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a --dry-run
 
@@ -235,13 +235,13 @@ docker run --rm --network=host \
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 
 # 強制切換（跳過 readiness 檢查，僅限確認安全後使用）
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   cutover --tenant db-a --force
 ```
 
@@ -258,21 +258,21 @@ docker run --rm --network=host \
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/data/conf.d \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   blind-spot --config-dir /data/conf.d
 
 # 排除不需要納管的 job（如 node-exporter、kube-state-metrics）
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/data/conf.d \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   blind-spot --config-dir /data/conf.d --exclude-jobs node-exporter,kube-state-metrics
 
 # JSON 結構化輸出（供 CI 或其他工具消費）
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/data/conf.d \
   -e PROMETHEUS_URL=$PROM \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   blind-spot --config-dir /data/conf.d --json-output
 ```
 
@@ -308,14 +308,14 @@ Summary: 2 covered, 3 blind spots, 1 unrecognized
 docker run --rm \
   -v $(pwd)/conf.d-old:/data/old \
   -v $(pwd)/conf.d-new:/data/new \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   config-diff --old-dir /data/old --new-dir /data/new
 
 # JSON 結構化輸出
 docker run --rm \
   -v $(pwd)/conf.d-old:/data/old \
   -v $(pwd)/conf.d-new:/data/new \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   config-diff --old-dir /data/old --new-dir /data/new --json-output
 ```
 
@@ -380,7 +380,7 @@ cd components/da-tools/app
 ./build.sh
 
 # 建構指定版本
-./build.sh 2.4.0
+./build.sh 2.6.0
 
 # 載入到 Kind cluster（如需要在 K8s Job 中使用）
 kind load docker-image da-tools:dev --name dynamic-alerting-cluster
@@ -401,7 +401,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.4.0
+          image: ghcr.io/vencil/da-tools:v2.6.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"
@@ -418,9 +418,9 @@ spec:
 
 | 元件 | 版號 | Git Tag | 說明 |
 |------|------|---------|------|
-| 平台文件 | v2.5.0 | `v2.1.0` | ADR-007 Routing Profiles + Portal 強化 + 文件治理 |
-| threshold-exporter | v2.5.0 | `exporter/v2.5.0` | Go binary |
-| **da-tools** | **v2.4.0** | **`tools/v2.4.0`** | **Python CLI 工具集（23 命令）** |
+| 平台文件 | v2.6.0 | `v2.1.0` | ADR-007 Routing Profiles + Portal 強化 + 文件治理 |
+| threshold-exporter | v2.6.0 | `exporter/v2.6.0` | Go binary |
+| **da-tools** | **v2.6.0** | **`tools/v2.6.0`** | **Python CLI 工具集（23 命令）** |
 
 CI/CD 透過 `tools/v*` tag 觸發，不會被平台文件更新或 exporter 變更影響。
 

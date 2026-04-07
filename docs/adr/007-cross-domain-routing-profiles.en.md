@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -11,7 +11,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v2.1.0) — Four-layer routing + domain policy validation completed, profile inheritance chain as future direction
+✅ **Accepted** (v2.1.0) — Four-layer routing + domain policy validation completed, profile inheritance chain as v2.7.0+ candidate
 
 ## Background
 
@@ -257,11 +257,16 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - Go/Python dual-side `_routing_profile` reserved key sync
 - Self-Service Portal: routing profile validation + example toggle UI
 
-## Future Directions
+## Evolution Status
 
-- Profile inheritance chain (profile extends another profile)
-- `tenant_matchers` (regex / prefix) to replace hardcoded `tenants` arrays
-- OPA integration (§5.2) to allow security teams to define domain policies via Rego
+- **v2.1.0** (completed): Four-layer merge pipeline, `check_routing_profiles` lint, `explain_route` debug tool
+- **v2.3.0** (completed): OPA integration — `da-tools opa-evaluate` supports Rego-defined domain policies (routing-compliance, threshold-bounds, naming-convention example policies)
+- **v2.5.0** (completed): Domain Policy enforcement moved from CI-time validation to API-time enforcement (tenant-api 403 responses)
+- **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
+
+**Remaining**:
+- Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate
+- `tenant_matchers` (regex / prefix) to replace hardcoded `tenants` arrays — v2.7.0+ candidate
 
 ## Related Decisions
 
@@ -283,7 +288,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 | [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
 | [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐ |
 | [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐ |
-| [004-federation-scenario-a-first.en](004-federation-scenario-a-first.en.md) | ⭐ |
+| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐ |
 | [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐ |
 | [006-tenant-mapping-topologies.en](006-tenant-mapping-topologies.en.md) | ⭐⭐⭐ |
 | [007-cross-domain-routing-profiles.en](007-cross-domain-routing-profiles.en.md) | ⭐⭐⭐ |

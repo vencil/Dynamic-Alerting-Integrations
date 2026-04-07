@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
 
 /**
  * Group Management smoke tests
@@ -179,6 +180,24 @@ test.describe('Group Management @critical', () => {
       const detailsCount = await details.count();
 
       expect(detailsCount).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
+    // Setup test context and navigate
+    await setupTestContext(page);
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+
+    // Run accessibility check
+    const results = await checkA11y(page);
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
+    if (results.violations.length > 0) {
+      const violationDetails = formatA11yViolations(results.violations);
+      throw new Error(
+        `Group management page failed accessibility checks:\n${violationDetails}`
+      );
     }
   });
 });

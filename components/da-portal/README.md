@@ -52,13 +52,39 @@ directly without CORS restrictions.
 | Port           | 80                     |
 | Build step     | None (browser-side Babel transpile) |
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NGINX_PORT` | `80` | Listening port inside the container |
+| `NGINX_WORKER_PROCESSES` | `auto` | Worker process count |
+
+Configuration is primarily done via volume mounts (see Customisation above) rather than environment variables.
+
+## Troubleshooting
+
+| 症狀 / Symptom | 可能原因 / Cause | 解法 / Fix |
+|----------------|-----------------|-----------|
+| Blank page after load | CDN deps not available (air-gapped) | Run `make vendor-download` before `make portal-image` |
+| Tools show stale data | Mounted `platform-data.json` outdated | Re-run `make platform-data` and re-mount |
+| CORS errors in browser console | Prometheus proxy not configured | Mount custom `nginx.conf` with `/api/v1/` proxy (see above) |
+| 404 on `/healthz` | Old image version | Rebuild with `make portal-image` (health check added in v2.3.0) |
+| JSX tools fail to render | Babel transpile error | Check browser console; ensure JSX files are valid |
+
+## Related Documentation
+
+- [Interactive Tools Hub](../../docs/interactive-tools.md) — Tool registry and usage guide
+- [Platform Data Generation](../../docs/cli-reference.md) — `make platform-data` reference
+- [Guided Flows](../../docs/assets/flows.json) — Flow definitions
+
 ## Version Governance
 
-The portal follows the project's four-line versioning scheme:
+The portal follows the project's five-line versioning scheme:
 
 | Tag pattern    | Artifact                     |
 |----------------|------------------------------|
 | `portal/v*`    | `ghcr.io/vencil/da-portal`   |
 | `exporter/v*`  | threshold-exporter + Helm    |
 | `tools/v*`     | da-tools CLI image           |
+| `tenant-api/v*`| tenant-api REST API          |
 | `v*`           | Platform tag (GitHub Release)|

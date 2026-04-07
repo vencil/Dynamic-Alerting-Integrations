@@ -2,7 +2,7 @@
 title: "Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform
@@ -16,7 +16,7 @@ lang: en
 
 > **⚠️ Migration Safety Guarantee:** The migration process on this platform is designed to be **progressive and reversible**. Your legacy rules don't need to be switched all at once—new rules via the `custom_` prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's `optional: true` mechanism ensures that deleting any rule pack will not affect Prometheus operation.
 >
-> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.4.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
+> **Tip:** All `da-tools` commands can be executed directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.6.0 <cmd>`). The examples below use the simplified `da-tools <cmd>` notation.
 
 ## Where Are You? (你在哪個階段？)
 
@@ -131,7 +131,7 @@ The files produced by scaffold need to be injected into the `threshold-config` C
 # Method A (recommended): Helm values override — OCI registry
 #   Merge the output tenant config into values-override.yaml, then helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
   -n monitoring -f values-override.yaml
 
 # Method B: Direct ConfigMap reconstruction (suitable for non-Helm environments)
@@ -228,7 +228,7 @@ When input rules include both warning and critical versions (same base metric ke
 ```bash
 # Production deployment — install chart from OCI registry with custom values-override to inject tenant config
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.5.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -244,6 +244,18 @@ kind load docker-image threshold-exporter:dev --name dynamic-alerting-cluster
 make component-deploy COMP=threshold-exporter ENV=local
 ```
 
+### Option C: Operator CRD Path
+
+For environments with kube-prometheus-stack already installed, use `operator-generate` to produce PrometheusRule CRD, replacing ConfigMap mounting:
+
+```bash
+da-tools operator-generate --config-dir conf.d/ --rule-packs rule-packs/ \
+  --output-dir operator-output/ --gitops
+kubectl apply -f operator-output/
+```
+
+For detailed comparison and decision guidance between the two paths, see [Deployment Decision Matrix](getting-started/decision-matrix.md).
+
 ### Verify Deployment
 
 ```bash
@@ -254,7 +266,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### Use da-tools in K8s Cluster
 
-da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:v2.4.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
+da-tools can also run directly as K8s Job (`image: ghcr.io/vencil/da-tools:v2.6.0`), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (`http://prometheus.monitoring.svc.cluster.local:9090`), suitable for commands like `check-alert`, `validate`, `baseline` that need Prometheus API.
 
 > Job output can be retrieved via `kubectl cp`, then injected into `threshold-config` ConfigMap. For long-running Shadow Monitoring Job examples, see [§11 Enterprise-Grade Migration Phase B](#phase-b-conversion-shadow-monitoring).
 
@@ -497,7 +509,7 @@ When `da-tools migrate` encounters unparseable rules, it produces a Prompt suita
 
 ## 9. Advanced: Extending Unsupported DB Types
 
-v1.8.0 pre-loads 13 Rule Pack ConfigMaps covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, Kubernetes, Operational, and Platform self-monitoring. To support DB types without Rule Packs, you need to manually create a normalization layer.
+The platform pre-loads 15 Rule Pack ConfigMaps, covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Kubernetes, Operational and Platform self-monitoring. To support DB types without Rule Packs, you need to manually create a normalization layer.
 
 ### Normalization Naming Convention
 

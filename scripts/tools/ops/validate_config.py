@@ -476,12 +476,12 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     "policy": (
         "Review _domain_policy.yaml constraints (allowed/forbidden receiver types, "
         "timing guardrails). Contact a domain admin to update if needed.",
-        "docs/scenarios/advanced-scenarios.md",
+        "docs/internal/test-coverage-matrix.md",
     ),
     "custom_rules": (
         "Validate rule pack YAML syntax and ensure referenced profiles exist. "
         "Run: da-tools rule-pack-split --check to verify.",
-        "docs/scenarios/advanced-scenarios.md",
+        "docs/internal/test-coverage-matrix.md",
     ),
     "profiles": (
         "Ensure all _profile references in tenant configs match a defined profile "

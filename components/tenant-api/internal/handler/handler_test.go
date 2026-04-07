@@ -612,7 +612,7 @@ func TestPutTenant_InvalidID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw, policy.NewManager(configDir))
+	h := PutTenant(gw, policy.NewManager(configDir), WriteModeDirect, nil, nil)
 	body := bytes.NewBufferString("tenants:\n  bad:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/../bad", "id", "../bad", body)
 	w := httptest.NewRecorder()
@@ -627,7 +627,7 @@ func TestPutTenant_EmptyID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw, policy.NewManager(configDir))
+	h := PutTenant(gw, policy.NewManager(configDir), WriteModeDirect, nil, nil)
 	body := bytes.NewBufferString("tenants:\n  test:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/", "id", "", body)
 	w := httptest.NewRecorder()
@@ -643,7 +643,7 @@ func TestPutTenant_ValidationFailure(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw, policy.NewManager(configDir))
+	h := PutTenant(gw, policy.NewManager(configDir), WriteModeDirect, nil, nil)
 	// Valid ID but YAML doesn't contain the matching tenant section
 	body := bytes.NewBufferString("tenants:\n  other-tenant:\n    x: \"1\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
@@ -660,7 +660,7 @@ func TestPutTenant_InvalidYAML(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
-	h := PutTenant(gw, policy.NewManager(configDir))
+	h := PutTenant(gw, policy.NewManager(configDir), WriteModeDirect, nil, nil)
 	body := bytes.NewBufferString("{{invalid yaml")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	w := httptest.NewRecorder()
@@ -678,7 +678,7 @@ func TestBatchTenants_EmptyOperations(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir), nil, WriteModeDirect, nil, nil)
 	reqBody, _ := json.Marshal(BatchRequest{Operations: []BatchOperation{}})
 	body := bytes.NewBuffer(reqBody)
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
@@ -696,7 +696,7 @@ func TestBatchTenants_InvalidJSON(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir), nil, WriteModeDirect, nil, nil)
 	body := bytes.NewBufferString("{invalid json")
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", body)
 	req.Header.Set("Content-Type", "application/json")
@@ -713,7 +713,7 @@ func TestBatchTenants_InvalidTenantID(t *testing.T) {
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
-	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir), nil, WriteModeDirect, nil, nil)
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
 			{TenantID: "../bad", Patch: map[string]string{"_silent_mode": "warning"}},
@@ -747,7 +747,7 @@ func TestBatchTenants_PermissionDenied(t *testing.T) {
     permissions: [read]
 `)
 
-	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir))
+	h := BatchTenants(gw, configDir, rbacMgr, policy.NewManager(configDir), nil, WriteModeDirect, nil, nil)
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
 			{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}},

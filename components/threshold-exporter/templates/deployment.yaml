@@ -72,6 +72,14 @@ spec:
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
       volumes:
+      {{- if eq .Values.rules.mode "configmap" }}
       - name: config
         configMap:
           name: threshold-config
+      {{- else }}
+      # Operator mode: threshold-exporter still reads conf.d/ for tenant thresholds.
+      # Rule Packs are delivered via PrometheusRule CRD (not file-mounted).
+      - name: config
+        configMap:
+          name: threshold-config
+      {{- end }}

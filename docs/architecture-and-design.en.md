@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -19,16 +19,16 @@ This document provides Platform Engineers and Site Reliability Engineers (SREs) 
 - Rule Pack governance model overview (see [design/rule-packs.en.md](design/rule-packs.en.md) for details)
 
 **Standalone design documents (spoke files):**
-- **Config-Driven Design Deep Dive** → [design/config-driven.en.md](design/config-driven.en.md)
-- **Rule Packs & Projected Volume** → [design/rule-packs.en.md](design/rule-packs.en.md)
-- **High Availability (HA) Deep Dive** → [design/high-availability.en.md](design/high-availability.en.md)
-- **Future Roadmap** → [design/roadmap-future.en.md](design/roadmap-future.en.md)
+- **Config-Driven Design Deep Dive** → [design/config-driven.en.md](design/config-driven.en.md) — The core mechanism that eliminates N×M config explosion; zero additional rule maintenance per new tenant
+- **Rule Packs & Projected Volume** → [design/rule-packs.en.md](design/rule-packs.en.md) — 15 independent rule packs with zero PR conflicts, enabling cross-team parallel development
+- **High Availability (HA) Deep Dive** → [design/high-availability.en.md](design/high-availability.en.md) — Achieving 99.9%+ alert reliability SLA with zero monitoring blind spots during maintenance
+- **Future Roadmap** → [design/roadmap-future.en.md](design/roadmap-future.en.md) — Operator-native integration, PR-based change review, automated Dashboard generation, and more
 
 **Standalone topic documents:**
 - **Benchmarks** → [benchmarks.en.md](benchmarks.en.md)
 - **Governance & Security** → [governance-security.en.md](governance-security.en.md)
 - **Troubleshooting** → [troubleshooting.en.md](troubleshooting.en.md)
-- **Advanced Scenarios** → [scenarios/advanced-scenarios.en.md](scenarios/advanced-scenarios.en.md)
+- **Advanced Scenarios** → [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md)
 - **Migration Engine** → [migration-engine.en.md](migration-engine.en.md)
 
 **Related documentation:**
@@ -259,9 +259,8 @@ spec:
 
 ## 5. Future Roadmap
 
-- **Short-term (v2.6.0)**: Design System unification + K8s Operator migration path + PR-based async write-back
-- **Mid-term (v2.7.0)**: Tenant Auto-Discovery + Grafana Dashboard as Code + Release Automation
-- **Long-term**: Anomaly-Aware Dynamic Threshold + Log-to-Metric Bridge + Multi-Format Export
+- **Planned (v2.7.0)**: EN-first Bilingual SSOT + Field-level RBAC + Tenant Auto-Discovery + Grafana DaC + Release Automation completion
+- **Exploratory**: Anomaly-Aware Dynamic Threshold + Log-to-Metric Bridge + Multi-Format Export + CRD + ChatOps
 
 **Complete reference** [design/roadmap-future.en.md](design/roadmap-future.en.md)
 
@@ -276,7 +275,7 @@ The following sections have been extracted into standalone documents for focused
 | §4 Performance Analysis & Benchmarks | [benchmarks.en.md](benchmarks.en.md) | Platform Engineers, SREs |
 | §6–§7 Governance, Audit & Security | [governance-security.en.md](governance-security.en.md) | Platform Engineers, Security & Compliance |
 | §8 Troubleshooting & Edge Cases | [troubleshooting.en.md](troubleshooting.en.md) | Platform Engineers, SREs, Tenants |
-| §9 Advanced Scenarios & Test Coverage | [scenarios/advanced-scenarios.en.md](scenarios/advanced-scenarios.en.md) | Platform Engineers, SREs |
+| §9 Advanced Scenarios & Test Coverage | [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md) | Platform Engineers, SREs |
 | §10 AST Migration Engine | [migration-engine.en.md](migration-engine.en.md) | Platform Engineers, DevOps |
 
 ---

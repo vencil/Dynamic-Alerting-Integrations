@@ -8,6 +8,14 @@
 repos:
   - repo: local
     hooks:
+      # --- File hygiene auto-fixer (runs first) ---
+      - id: file-hygiene
+        name: Fix null bytes & EOF newline
+        entry: python3 scripts/tools/lint/fix_file_hygiene.py
+        language: python
+        types: [text]
+        files: \.(md|yaml|yml|py|jsx|json)$
+
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage
@@ -224,6 +232,31 @@ repos:
         pass_filenames: false
         files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
         stages: [manual]
+
+      - id: orphan-doc-check
+        name: Orphan document detection
+        entry: python3 scripts/tools/lint/check_orphan_docs.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.md$
+        stages: [manual]
+
+      - id: glossary-coverage-check
+        name: Glossary coverage for frequent terms
+        entry: python3 scripts/tools/lint/check_glossary_coverage.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.md$
+        stages: [manual]
+
+      - id: md-yaml-drift-check
+        name: Markdown YAML example ↔ schema drift
+        entry: python3 scripts/tools/lint/check_md_yaml_drift.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.(md|yaml)$
+        stages: [manual]
+        additional_dependencies: ['pyyaml']
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests

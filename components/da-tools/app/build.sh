@@ -109,6 +109,8 @@ TOOL_FILES=(
     # v2.3.0 Operator-native tools
     ops/operator_generate.py
     ops/operator_check.py
+    # v2.6.0 Migration tools
+    ops/migrate_to_operator.py
     # v2.3.0 Federation tools
     ops/generate_rule_pack_split.py
     # Shared library sub-modules

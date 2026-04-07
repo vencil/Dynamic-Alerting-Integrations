@@ -2,7 +2,7 @@
 title: "Alert Simulator"
 tags: [simulation, alerts, dedup]
 audience: ["domain-expert", tenant]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [alert-timeline, runbook-viewer, config-lint]
 ---

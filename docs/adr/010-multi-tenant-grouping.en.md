@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture, groups, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -105,7 +105,7 @@ Advantages of a static `members[]` list:
 - **Predictable**: Group membership doesn't change unexpectedly due to metadata changes
 - **Simple**: No need to implement a filter expression parser
 
-Filter-based auto-membership is preserved in the `filters` field, but v2.5.0 does not activate auto-matching logic. Planned for v2.6.0+ as an advanced feature.
+Filter-based auto-membership is preserved in the `filters` field, but auto-matching logic is not yet activated. Planned as a v2.7.0+ candidate.
 
 ### Why Add Metadata Fields Rather Than Using Tags Only?
 
@@ -134,22 +134,22 @@ Structured fields (environment, domain, db_type) are better suited for UI filter
 | Risk | Mitigation |
 |------|-----------|
 | `_groups.yaml` concurrent edits causing conflicts | Reuses writer's HEAD conflict detection, returns 409 requiring retry |
-| Group member referencing a non-existent tenant ID | v2.5.0 does not validate on write (soft reference), v2.6.0+ adds lint hook |
+| Group member referencing a non-existent tenant ID | Not validated on write (soft reference); lint hook planned as v2.7.0+ candidate |
 | Metadata field growth making YAML verbose | All new fields are optional; tenants without metadata are unaffected |
 
 ## Evolution Status
 
-**Delivered in v2.5.0**:
+**v2.5.0 delivered**:
 - Static `members[]` group CRUD + batch operations
-- Multi-dimensional filtering (environment / domain / db_type dropdowns)
+- Multi-dimensional filtering (environment / domain / db_type dropdown)
 - Group sidebar + auth-aware UI
 - Environment / domain dimension RBAC (`_rbac.yaml` dimension filtering)
-- Optimistic update + 409 conflict toast (added in v2.5.0-final)
+- Optimistic update + 409 conflict toast (v2.5.0-final)
 
-**Next steps (v2.6.0+)**:
-1. **Filter-based auto-membership**: Enable the `filters` field to automatically match tenants into groups based on metadata, reducing manual maintenance overhead
-2. **Group member lint hook**: Validate that member-referenced tenant IDs exist on write, upgrading from soft references to validated references
-3. **Group nesting** (v2.7.0+): Groups can contain sub-groups, supporting hierarchical organizational structures
+**Remaining**:
+1. **Filter-based auto-membership** (v2.7.0+ candidate): Enable `filters` field to automatically match tenants into groups based on metadata, reducing manual maintenance
+2. **Group member lint hook** (v2.7.0+ candidate): Validate that member-referenced tenant IDs exist on write, upgrading from soft reference to validated reference
+3. **Group nesting** (v2.7.0+ candidate): Groups can contain sub-groups, supporting hierarchical organizational structures
 
 ## Related Decisions
 

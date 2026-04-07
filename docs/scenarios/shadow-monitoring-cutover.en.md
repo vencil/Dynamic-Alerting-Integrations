@@ -1,13 +1,54 @@
 ---
-title: "Scenario: Automated Shadow Monitoring Cutover Workflow"
-tags: [scenario, shadow-monitoring, cutover]
-audience: [sre, devops]
-version: v2.5.0
+title: "Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover"
+tags: [scenario, shadow-monitoring, cutover, alert-quality]
+audience: [platform-engineer, sre, devops, tenant]
+version: v2.6.0
 lang: en
 ---
-# Scenario: Automated Shadow Monitoring Cutover Workflow
+# Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover
 
-> **v2.5.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`migration-guide.md`](../migration-guide.md)
+> **v2.6.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`migration-guide.md`](../migration-guide.md), [`CLI Reference`](../cli-reference.en.md)
+
+This guide covers the end-to-end workflow from alert quality assessment through full migration cutover: Phase 0 (assessment) → Phase 1–6 (migration & cutover).
+
+## Phase 0: Alert Quality Assessment (No Deployment Required)
+
+Before deciding to migrate, use `da-tools alert-quality` to quantify your existing alert health. This tool connects directly to your existing Prometheus/Alertmanager — no Dynamic Alerting components need to be deployed.
+
+### Four Quality Metrics
+
+| Metric | Measures | Threshold |
+|--------|----------|-----------|
+| **Noise Score** | Firings per time unit | >20 = BAD, >10 = WARN |
+| **Stale Score** | Days since last fire | >14 days = WARN |
+| **Resolution Latency** | Average firing → resolved time | <5 min = flapping (BAD) |
+| **Suppression Ratio** | Proportion inhibited/silenced | >50% = WARN |
+
+### Run Quality Scan
+
+```bash
+# Scan all tenants, analyze past 30 days
+docker run --rm --network host \
+  ghcr.io/vencil/da-tools:v2.6.0 alert-quality \
+  --prometheus http://localhost:9090 \
+  --period 30d
+
+# Single tenant + JSON output
+da-tools alert-quality --prometheus http://localhost:9090 --period 30d \
+  --tenant db-a --json > audit-report.json
+```
+
+### Decide Based on Results
+
+| Score Range | Recommended Action |
+|-------------|-------------------|
+| **80–100** | Existing alert quality is good. Evaluate if you need Dynamic Alerting's governance and multi-tenant capabilities |
+| **50–79** | Room for improvement. Gradually migrate WARN/BAD alerts to benefit from auto-suppression + scheduled thresholds |
+| **0–49** | Systematic alert overhaul needed. Proceed to full Shadow Monitoring → Cutover workflow (Phase 1–6) |
+
+Optional: Integrate quality scanning into CI (weekly cron job) to track alert quality trends.
+
+---
 
 ## Problem
 
@@ -437,7 +478,7 @@ After cutover:
 | Resource | Relevance |
 |----------|-----------|
 | ["Scenario: Automated Shadow Monitoring Cutover Workflow"](shadow-monitoring-cutover.en.md) | ⭐⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](advanced-scenarios.en.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.en.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](../cli-reference.en.md) | ⭐⭐ |
 | ["Grafana Dashboard Guide"](../grafana-dashboards.en.md) | ⭐⭐ |

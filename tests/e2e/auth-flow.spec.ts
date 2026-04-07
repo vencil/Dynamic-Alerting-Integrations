@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
 
 /**
  * Auth Flow smoke tests
@@ -228,5 +229,39 @@ test.describe('Authentication Flow @critical', () => {
       return res.ok;
     });
     expect(response2).toBe(true);
+  });
+
+  test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
+    // Mock identity endpoint for auth flow
+    const mockUser = {
+      id: 'a11y-test-user',
+      email: 'a11y@example.com',
+      name: 'Accessibility Test User',
+      roles: ['viewer'],
+    };
+
+    await page.route('**/api/v1/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockUser),
+      });
+    });
+
+    // Navigate to page
+    await page.goto('./');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+
+    // Run accessibility check
+    const results = await checkA11y(page);
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
+    if (results.violations.length > 0) {
+      const violationDetails = formatA11yViolations(results.violations);
+      throw new Error(
+        `Authentication flow page failed accessibility checks:\n${violationDetails}`
+      );
+    }
   });
 });

@@ -2,7 +2,7 @@
 title: "BYO Alertmanager Integration Guide"
 tags: [integration, alertmanager]
 audience: [platform-engineer, sre]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # BYO Alertmanager Integration Guide
@@ -445,5 +445,5 @@ The tool has built-in idempotency checks (no duplicate silence creation) and aut
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](scenarios/advanced-scenarios.en.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

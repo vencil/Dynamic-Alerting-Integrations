@@ -2,7 +2,7 @@
 title: "Tenant Manager"
 tags: [tenants, management, operations, batch, groups]
 audience: [platform-engineer, sre]
-version: v2.5.0
+version: v2.6.0
 lang: en
 related: [config-diff, playground, threshold-calculator, alert-simulator]
 dependencies: []
@@ -68,16 +68,18 @@ const DEMO_GROUPS = {
   }
 };
 
+// ── Styles using design tokens (--da-*) from design-tokens.css ──
+// All hardcoded colors replaced with CSS variable references for theme support.
 const styles = {
   container: {
     minHeight: '100vh',
-    background: 'linear-gradient(to bottom right, #f8fafc, #f1f5f9)',
-    padding: '32px',
+    background: 'var(--da-color-bg)',
+    padding: 'var(--da-space-8)',
   },
   layout: {
     display: 'grid',
     gridTemplateColumns: '280px 1fr',
-    gap: '24px',
+    gap: 'var(--da-space-6)',
     maxWidth: '1600px',
     margin: '0 auto',
   },
@@ -86,299 +88,302 @@ const styles = {
     margin: '0 auto',
   },
   header: {
-    marginBottom: '24px',
+    marginBottom: 'var(--da-space-6)',
     maxWidth: '1600px',
-    margin: '0 auto 24px',
+    margin: '0 auto var(--da-space-6)',
   },
   title: {
-    fontSize: '28px',
-    fontWeight: 'bold',
-    color: '#0f172a',
-    marginBottom: '8px',
+    fontSize: 'var(--da-font-size-2xl)',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-2)',
   },
   subtitle: {
-    fontSize: '14px',
-    color: '#64748b',
+    fontSize: 'var(--da-font-size-base)',
+    color: 'var(--da-color-muted)',
   },
   authBanner: {
-    backgroundColor: '#f0f9ff',
-    border: '1px solid #7dd3fc',
-    borderRadius: '8px',
-    padding: '8px 16px',
-    marginBottom: '16px',
+    backgroundColor: 'var(--da-color-info-soft)',
+    border: '1px solid var(--da-color-accent)',
+    borderRadius: 'var(--da-radius-md)',
+    padding: 'var(--da-space-2) var(--da-space-4)',
+    marginBottom: 'var(--da-space-4)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    fontSize: '13px',
-    color: '#0369a1',
+    fontSize: 'var(--da-font-size-sm-md)',
+    color: 'var(--da-color-info)',
   },
   sidebar: {
-    backgroundColor: 'white',
-    border: '1px solid #e2e8f0',
-    borderRadius: '12px',
-    padding: '16px',
-    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    boxShadow: 'var(--da-shadow-subtle)',
     alignSelf: 'start',
     position: 'sticky',
-    top: '32px',
+    top: 'var(--da-space-8)',
   },
   sidebarTitle: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    color: '#0f172a',
-    marginBottom: '12px',
+    fontSize: 'var(--da-font-size-md)',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-3)',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   groupItem: {
-    padding: '10px 12px',
-    borderRadius: '8px',
+    padding: '10px var(--da-space-3)',
+    borderRadius: 'var(--da-radius-md)',
     cursor: 'pointer',
-    marginBottom: '4px',
-    fontSize: '13px',
-    transition: 'background-color 0.15s',
+    marginBottom: 'var(--da-space-1)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    transition: 'background-color var(--da-transition-fast)',
   },
   groupItemActive: {
-    backgroundColor: '#e0e7ff',
-    color: '#3730a3',
-    fontWeight: '600',
+    backgroundColor: 'var(--da-color-accent-soft)',
+    color: 'var(--da-color-accent)',
+    fontWeight: 'var(--da-font-weight-semibold)',
   },
   groupItemDefault: {
     backgroundColor: 'transparent',
-    color: '#374151',
+    color: 'var(--da-color-fg)',
   },
   groupMemberCount: {
-    fontSize: '11px',
-    color: '#94a3b8',
-    marginLeft: '4px',
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-muted)',
+    marginLeft: 'var(--da-space-1)',
   },
   emptyState: {
     textAlign: 'center',
-    padding: '32px 16px',
-    color: '#94a3b8',
-    fontSize: '13px',
-    lineHeight: '1.6',
+    padding: 'var(--da-space-8) var(--da-space-4)',
+    color: 'var(--da-color-muted)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    lineHeight: 'var(--da-line-height-relaxed)',
   },
   statsBar: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: '16px',
-    marginBottom: '24px',
+    gap: 'var(--da-space-4)',
+    marginBottom: 'var(--da-space-6)',
   },
   statCard: {
-    backgroundColor: 'white',
-    border: '1px solid #e2e8f0',
-    borderRadius: '12px',
-    padding: '16px',
-    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    boxShadow: 'var(--da-shadow-subtle)',
   },
   statValue: {
-    fontSize: '24px',
-    fontWeight: 'bold',
-    color: '#2563eb',
-    marginBottom: '4px',
+    fontSize: 'var(--da-font-size-xl)',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-accent)',
+    marginBottom: 'var(--da-space-1)',
   },
   statLabel: {
-    fontSize: '12px',
-    color: '#64748b',
-    fontWeight: '500',
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-muted)',
+    fontWeight: 'var(--da-font-weight-medium)',
   },
   controlsPanel: {
-    backgroundColor: 'white',
-    border: '1px solid #e2e8f0',
-    borderRadius: '12px',
-    padding: '16px',
-    marginBottom: '24px',
-    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    marginBottom: 'var(--da-space-6)',
+    boxShadow: 'var(--da-shadow-subtle)',
   },
   searchInput: {
     width: '100%',
-    padding: '10px 12px',
-    border: '1px solid #cbd5e1',
-    borderRadius: '8px',
-    fontSize: '14px',
-    marginBottom: '12px',
+    padding: '10px var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-base)',
+    marginBottom: 'var(--da-space-3)',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
+    backgroundColor: 'var(--da-color-surface)',
+    color: 'var(--da-color-fg)',
   },
   filterRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-    gap: '12px',
-    marginBottom: '12px',
+    gap: 'var(--da-space-3)',
+    marginBottom: 'var(--da-space-3)',
   },
   filterSelect: {
-    padding: '8px 12px',
-    border: '1px solid #cbd5e1',
-    borderRadius: '8px',
-    fontSize: '13px',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-sm-md)',
     fontFamily: 'inherit',
-    backgroundColor: 'white',
+    backgroundColor: 'var(--da-color-surface)',
+    color: 'var(--da-color-fg)',
   },
   chipContainer: {
     display: 'flex',
     flexWrap: 'wrap',
-    gap: '8px',
-    marginBottom: '12px',
+    gap: 'var(--da-space-2)',
+    marginBottom: 'var(--da-space-3)',
   },
   chip: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: '6px',
-    backgroundColor: '#e0e7ff',
-    color: '#3730a3',
-    padding: '6px 12px',
-    borderRadius: '16px',
-    fontSize: '12px',
-    fontWeight: '500',
+    backgroundColor: 'var(--da-color-accent-soft)',
+    color: 'var(--da-color-accent)',
+    padding: '6px var(--da-space-3)',
+    borderRadius: 'var(--da-radius-pill)',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-medium)',
   },
   chipClose: {
     cursor: 'pointer',
-    fontWeight: 'bold',
+    fontWeight: 'var(--da-font-weight-bold)',
   },
   buttonGroup: {
     display: 'flex',
-    gap: '8px',
-    marginBottom: '12px',
+    gap: 'var(--da-space-2)',
+    marginBottom: 'var(--da-space-3)',
     flexWrap: 'wrap',
   },
   button: {
-    padding: '8px 16px',
-    backgroundColor: '#2563eb',
-    color: 'white',
+    padding: 'var(--da-space-2) var(--da-space-4)',
+    backgroundColor: 'var(--da-color-accent)',
+    color: 'var(--da-color-accent-fg)',
     border: 'none',
-    borderRadius: '8px',
-    fontSize: '13px',
-    fontWeight: '500',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    fontWeight: 'var(--da-font-weight-medium)',
     cursor: 'pointer',
-    transition: 'background-color 0.2s',
+    transition: 'background-color var(--da-transition-base)',
   },
   buttonSecondary: {
-    backgroundColor: '#f1f5f9',
-    color: '#475569',
-    border: '1px solid #cbd5e1',
+    backgroundColor: 'var(--da-color-tag-bg)',
+    color: 'var(--da-color-tag-fg)',
+    border: '1px solid var(--da-color-surface-border)',
   },
   buttonSmall: {
-    padding: '4px 10px',
-    fontSize: '12px',
+    padding: 'var(--da-space-1) 10px',
+    fontSize: 'var(--da-font-size-xs)',
   },
   buttonDanger: {
-    backgroundColor: '#fef2f2',
-    color: '#991b1b',
-    border: '1px solid #fca5a5',
+    backgroundColor: 'var(--da-color-error-soft)',
+    color: 'var(--da-color-error)',
+    border: '1px solid var(--da-color-error)',
   },
   buttonDisabled: {
     opacity: 0.5,
     cursor: 'not-allowed',
   },
   actionBar: {
-    backgroundColor: '#f0f9ff',
-    border: '1px solid #7dd3fc',
-    borderRadius: '8px',
-    padding: '12px',
-    marginBottom: '12px',
+    backgroundColor: 'var(--da-color-info-soft)',
+    border: '1px solid var(--da-color-accent)',
+    borderRadius: 'var(--da-radius-md)',
+    padding: 'var(--da-space-3)',
+    marginBottom: 'var(--da-space-3)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     flexWrap: 'wrap',
-    gap: '8px',
+    gap: 'var(--da-space-2)',
   },
   actionText: {
-    fontSize: '13px',
-    color: '#0369a1',
-    fontWeight: '500',
+    fontSize: 'var(--da-font-size-sm-md)',
+    color: 'var(--da-color-info)',
+    fontWeight: 'var(--da-font-weight-medium)',
   },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-    gap: '16px',
-    marginBottom: '24px',
+    gap: 'var(--da-space-4)',
+    marginBottom: 'var(--da-space-6)',
   },
   card: {
-    backgroundColor: 'white',
-    border: '1px solid #e2e8f0',
-    borderRadius: '12px',
-    padding: '16px',
-    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
-    transition: 'all 0.2s',
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    boxShadow: 'var(--da-shadow-subtle)',
+    transition: 'all var(--da-transition-base)',
     cursor: 'pointer',
     position: 'relative',
   },
   cardHover: {
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+    boxShadow: 'var(--da-shadow-hover)',
     transform: 'translateY(-2px)',
   },
   cardCheckbox: {
     position: 'absolute',
-    top: '12px',
-    right: '12px',
+    top: 'var(--da-space-3)',
+    right: 'var(--da-space-3)',
     width: '20px',
     height: '20px',
     cursor: 'pointer',
   },
   cardTitle: {
     fontSize: '18px',
-    fontWeight: 'bold',
-    color: '#0f172a',
-    marginBottom: '12px',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-3)',
     paddingRight: '28px',
   },
   badge: {
     display: 'inline-block',
-    padding: '4px 8px',
-    borderRadius: '4px',
-    fontSize: '11px',
-    fontWeight: '600',
+    padding: 'var(--da-space-1) var(--da-space-2)',
+    borderRadius: 'var(--da-radius-sm)',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-semibold)',
     marginRight: '6px',
-    marginBottom: '8px',
+    marginBottom: 'var(--da-space-2)',
   },
   environmentBadge: {
-    production: { backgroundColor: '#fee2e2', color: '#991b1b' },
-    staging: { backgroundColor: '#fef3c7', color: '#92400e' },
-    development: { backgroundColor: '#d1fae5', color: '#065f46' },
+    production: { backgroundColor: 'var(--da-color-error-soft)', color: 'var(--da-color-error)' },
+    staging: { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning)' },
+    development: { backgroundColor: 'var(--da-color-success-soft)', color: 'var(--da-color-success)' },
   },
   tierBadge: {
-    'tier-1': { backgroundColor: '#fef3c7', color: '#854d0e' },
-    'tier-2': { backgroundColor: '#e5e7eb', color: '#374151' },
-    'tier-3': { backgroundColor: '#f3f4f6', color: '#6b7280' },
+    'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning)' },
+    'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
+    'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-muted)' },
   },
   pills: {
     display: 'flex',
     flexWrap: 'wrap',
-    gap: '4px',
-    marginBottom: '12px',
+    gap: 'var(--da-space-1)',
+    marginBottom: 'var(--da-space-3)',
   },
   pill: {
-    backgroundColor: '#f1f5f9',
-    color: '#475569',
-    padding: '4px 8px',
-    borderRadius: '12px',
-    fontSize: '11px',
-    fontWeight: '500',
+    backgroundColor: 'var(--da-color-tag-bg)',
+    color: 'var(--da-color-tag-fg)',
+    padding: 'var(--da-space-1) var(--da-space-2)',
+    borderRadius: 'var(--da-radius-pill)',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-medium)',
   },
   row: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '8px 0',
-    borderTop: '1px solid #f1f5f9',
-    fontSize: '13px',
+    padding: 'var(--da-space-2) 0',
+    borderTop: '1px solid var(--da-color-tag-bg)',
+    fontSize: 'var(--da-font-size-sm-md)',
   },
   rowLabel: {
-    color: '#64748b',
-    fontWeight: '500',
+    color: 'var(--da-color-muted)',
+    fontWeight: 'var(--da-font-weight-medium)',
   },
   rowValue: {
-    color: '#0f172a',
-    fontWeight: '600',
+    color: 'var(--da-color-fg)',
+    fontWeight: 'var(--da-font-weight-semibold)',
   },
   modeIndicator: {
     display: 'inline-block',
     width: '8px',
     height: '8px',
-    borderRadius: '50%',
-    marginRight: '4px',
+    borderRadius: 'var(--da-radius-full)',
+    marginRight: 'var(--da-space-1)',
   },
   modal: {
     position: 'fixed',
@@ -386,71 +391,73 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'var(--da-color-modal-backdrop)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1000,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: '12px',
-    padding: '24px',
+    backgroundColor: 'var(--da-color-surface)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-6)',
     maxWidth: '600px',
     width: '90%',
     maxHeight: '80vh',
     overflow: 'auto',
-    boxShadow: '0 20px 25px rgba(0, 0, 0, 0.15)',
+    boxShadow: 'var(--da-shadow-modal)',
   },
   modalTitle: {
     fontSize: '18px',
-    fontWeight: 'bold',
-    color: '#0f172a',
-    marginBottom: '16px',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-4)',
   },
   codeBlock: {
-    backgroundColor: '#1e293b',
-    color: '#e2e8f0',
-    padding: '12px',
-    borderRadius: '8px',
-    fontFamily: 'monospace',
-    fontSize: '12px',
+    backgroundColor: 'var(--da-color-hero-bg)',
+    color: 'var(--da-color-hero-fg)',
+    padding: 'var(--da-space-3)',
+    borderRadius: 'var(--da-radius-md)',
+    fontFamily: 'var(--da-font-mono)',
+    fontSize: 'var(--da-font-size-xs)',
     lineHeight: '1.4',
-    marginBottom: '12px',
+    marginBottom: 'var(--da-space-3)',
     overflow: 'auto',
     whiteSpace: 'pre-wrap',
   },
   buttonGroup2: {
     display: 'flex',
-    gap: '8px',
-    marginTop: '16px',
+    gap: 'var(--da-space-2)',
+    marginTop: 'var(--da-space-4)',
   },
   tooltip: {
     position: 'relative',
     display: 'inline-block',
   },
   tooltipText: {
-    fontSize: '11px',
-    color: '#94a3b8',
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-muted)',
     fontStyle: 'italic',
-    marginTop: '4px',
+    marginTop: 'var(--da-space-1)',
   },
   inputField: {
     width: '100%',
-    padding: '8px 12px',
-    border: '1px solid #cbd5e1',
-    borderRadius: '8px',
-    fontSize: '13px',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-sm-md)',
     fontFamily: 'inherit',
-    marginBottom: '8px',
+    marginBottom: 'var(--da-space-2)',
     boxSizing: 'border-box',
+    backgroundColor: 'var(--da-color-surface)',
+    color: 'var(--da-color-fg)',
   },
   formLabel: {
     display: 'block',
-    fontSize: '12px',
-    fontWeight: '600',
-    color: '#475569',
-    marginBottom: '4px',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-semibold)',
+    color: 'var(--da-color-tag-fg)',
+    marginBottom: 'var(--da-space-1)',
   },
 };
 
@@ -506,7 +513,7 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
   const groupEntries = Object.entries(groups);
 
   return (
-    <div style={styles.sidebar} role="complementary" aria-label={t('群組管理側欄', 'Group management sidebar')}>
+    <div style={styles.sidebar} role="complementary" aria-label={t('群組管理側欄', 'Group management sidebar')} aria-live="polite" aria-atomic="true">
       <div style={styles.sidebarTitle}>
         <span>{t('群組', 'Groups')} ({groupEntries.length})</span>
         {canWrite && (
@@ -521,7 +528,7 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
       </div>
 
       {showCreate && (
-        <div style={{ marginBottom: '12px', padding: '8px', backgroundColor: '#f8fafc', borderRadius: '8px' }}>
+        <div style={{ marginBottom: 'var(--da-space-3)', padding: 'var(--da-space-2)', backgroundColor: 'var(--da-color-bg)', borderRadius: 'var(--da-radius-md)' }}>
           <label style={styles.formLabel}>{t('群組 ID', 'Group ID')}</label>
           <input
             style={styles.inputField}
@@ -581,7 +588,7 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
           </span>
           {canWrite && (
             <span
-              style={{ ...styles.chipClose, fontSize: '14px', color: '#94a3b8' }}
+              style={{ ...styles.chipClose, fontSize: '14px', color: 'var(--da-color-muted)' }}
               title={t('刪除此群組', 'Delete this group')}
               onClick={(e) => { e.stopPropagation(); onDeleteGroup(id); }}
             >
@@ -615,6 +622,9 @@ export default function TenantManager() {
   // Auth state
   const [authUser, setAuthUser] = useState(null);
   const [canWrite, setCanWrite] = useState(true); // default true for demo/no-auth mode
+  // v2.6.0: Pending PR tracking (ADR-011)
+  const [pendingPRs, setPendingPRs] = useState([]);
+  const [prByTenant, setPrByTenant] = useState({});
 
   // Fetch user identity from /api/v1/me (auth-aware)
   useEffect(() => {
@@ -636,6 +646,30 @@ export default function TenantManager() {
       }
     };
     fetchMe();
+  }, []);
+
+  // v2.6.0: Fetch pending PRs (ADR-011 PR-based write-back)
+  useEffect(() => {
+    const fetchPRs = async () => {
+      try {
+        const resp = await fetch('/api/v1/prs');
+        if (resp.ok) {
+          const data = await resp.json();
+          setPendingPRs(data.pending_prs || []);
+          const byTenant = {};
+          for (const pr of (data.pending_prs || [])) {
+            if (pr.tenant_id) byTenant[pr.tenant_id] = pr;
+          }
+          setPrByTenant(byTenant);
+        }
+      } catch (e) {
+        // No PR endpoint — direct write mode, ignore
+      }
+    };
+    fetchPRs();
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchPRs, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -865,7 +899,7 @@ export default function TenantManager() {
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#8987;</div>
-          <div style={{ color: '#64748b' }}>{t('載入租戶數據中...', 'Loading tenant data...')}</div>
+          <div style={{ color: 'var(--da-color-muted)' }}>{t('載入租戶數據中...', 'Loading tenant data...')}</div>
         </div>
       </div>
     );
@@ -876,8 +910,8 @@ export default function TenantManager() {
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', backgroundColor: 'white', padding: '24px', borderRadius: '12px' }}>
           <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#10060;</div>
-          <div style={{ color: '#991b1b', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
-          <div style={{ color: '#64748b', marginTop: '8px' }}>{error}</div>
+          <div style={{ color: 'var(--da-color-error)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
+          <div style={{ color: 'var(--da-color-muted)', marginTop: 'var(--da-space-2)' }}>{error}</div>
         </div>
       </div>
     );
@@ -892,9 +926,9 @@ export default function TenantManager() {
   ].filter(Boolean);
 
   const modeColors = {
-    normal: '#10b981',
-    silent: '#f59e0b',
-    maintenance: '#ef4444',
+    normal: 'var(--da-color-mode-normal)',
+    silent: 'var(--da-color-mode-silent)',
+    maintenance: 'var(--da-color-mode-maintenance)',
   };
 
   const modalRef = useRef(null);
@@ -935,9 +969,9 @@ export default function TenantManager() {
         <div role="alert" aria-live="assertive" style={{
           position: 'fixed', top: '16px', right: '16px', zIndex: 10000,
           padding: '12px 20px', borderRadius: '8px', maxWidth: '420px',
-          backgroundColor: apiNotification.type === 'error' ? '#fef2f2' : '#f0fdf4',
-          border: `1px solid ${apiNotification.type === 'error' ? '#fecaca' : '#bbf7d0'}`,
-          color: apiNotification.type === 'error' ? '#991b1b' : '#166534',
+          backgroundColor: apiNotification.type === 'error' ? 'var(--da-color-error-soft)' : 'var(--da-color-success-soft)',
+          border: `1px solid ${apiNotification.type === 'error' ? 'var(--da-color-error)' : 'var(--da-color-success)'}`,
+          color: apiNotification.type === 'error' ? 'var(--da-color-error)' : 'var(--da-color-success)',
           fontSize: '14px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
           display: 'flex', alignItems: 'center', gap: '8px',
         }}>
@@ -972,6 +1006,49 @@ export default function TenantManager() {
           ))}
         </div>
 
+        {/* v2.6.0: Pending PRs banner (ADR-011) */}
+        {pendingPRs.length > 0 && (
+          <div role="status" aria-live="polite" aria-atomic="true" style={{
+            backgroundColor: 'var(--da-color-warning-soft)',
+            border: '1px solid var(--da-color-warning)',
+            borderRadius: 'var(--da-radius-md)',
+            padding: 'var(--da-space-3) var(--da-space-4)',
+            marginBottom: 'var(--da-space-4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: 'var(--da-font-size-sm-md)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)' }}>
+              <span style={{ fontSize: '16px' }} aria-hidden="true">{'\uD83D\uDD04'}</span>
+              <span style={{ color: 'var(--da-color-fg)', fontWeight: 'var(--da-font-weight-medium)' }}>
+                {t(
+                  `${pendingPRs.length} 個待審核 PR — 配置變更尚未生效`,
+                  `${pendingPRs.length} pending PR${pendingPRs.length > 1 ? 's' : ''} — config changes awaiting review`
+                )}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 'var(--da-space-2)', flexWrap: 'wrap' }}>
+              {pendingPRs.slice(0, 3).map(pr => (
+                <a key={pr.number} href={pr.html_url} target="_blank" rel="noopener noreferrer"
+                  style={{
+                    padding: '2px 8px', borderRadius: 'var(--da-radius-sm)',
+                    backgroundColor: 'var(--da-color-warning)', color: 'white',
+                    fontSize: 'var(--da-font-size-xs)', textDecoration: 'none',
+                    fontWeight: 'var(--da-font-weight-medium)',
+                  }}>
+                  #{pr.number}
+                </a>
+              ))}
+              {pendingPRs.length > 3 && (
+                <span style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-muted)' }}>
+                  +{pendingPRs.length - 3} {t('更多', 'more')}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         <div style={styles.controlsPanel}>
           <label style={styles.formLabel} htmlFor="search-tenants">
             {t('搜尋租戶', 'Search')}
@@ -990,8 +1067,8 @@ export default function TenantManager() {
               style={{
                 padding: '8px 12px',
                 marginLeft: '8px',
-                backgroundColor: '#f3f4f6',
-                border: '1px solid #d1d5db',
+                backgroundColor: 'var(--da-color-tag-bg)',
+                border: '1px solid var(--da-color-surface-border)',
                 borderRadius: '6px',
                 cursor: 'pointer',
               }}
@@ -1131,7 +1208,7 @@ export default function TenantManager() {
         </div>
 
         {selected.size > 0 && (
-          <div style={styles.actionBar}>
+          <div style={styles.actionBar} role="region" aria-live="assertive" aria-atomic="true" aria-label={t('批次操作結果', 'Batch operation results')}>
             <div style={styles.actionText}>
               {t('已選擇', 'Selected')}: {selected.size} {t('租戶', 'tenant(s)')}
             </div>
@@ -1150,7 +1227,7 @@ export default function TenantManager() {
         )}
 
         {!selected.size && (
-          <div style={{ ...styles.controlsPanel, backgroundColor: '#f9fafb' }}>
+          <div style={{ ...styles.controlsPanel, backgroundColor: 'var(--da-color-bg)' }}>
             <div style={styles.buttonGroup}>
               <button onClick={selectAll} style={styles.button}>
                 {t('全選過濾的租戶', 'Select All Filtered')}
@@ -1159,7 +1236,7 @@ export default function TenantManager() {
           </div>
         )}
 
-        <div style={styles.grid}>
+        <div style={styles.grid} role="region" aria-live="polite" aria-label={t('租戶列表', 'Tenant list')}>
           {filtered.map(([name, data]) => (
             <article
               key={name}
@@ -1190,6 +1267,20 @@ export default function TenantManager() {
                 <span style={{ ...styles.badge, ...styles.tierBadge[data.tier] }}>
                   {data.tier.toUpperCase()}
                 </span>
+                {/* v2.6.0: Pending PR indicator (ADR-011) */}
+                {prByTenant[name] && (
+                  <a href={prByTenant[name].html_url} target="_blank" rel="noopener noreferrer"
+                    title={t('有待審核的 PR', 'Pending PR')}
+                    style={{
+                      ...styles.badge,
+                      backgroundColor: 'var(--da-color-warning)',
+                      color: 'white',
+                      textDecoration: 'none',
+                      fontSize: 'var(--da-font-size-xs)',
+                    }}>
+                    PR #{prByTenant[name].number}
+                  </a>
+                )}
               </div>
 
               <div style={styles.pills}>
@@ -1248,7 +1339,7 @@ export default function TenantManager() {
         {filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: '48px', backgroundColor: 'white', borderRadius: '12px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
-            <div style={{ color: '#64748b', fontWeight: '500' }}>
+            <div style={{ color: 'var(--da-color-muted)', fontWeight: 'var(--da-font-weight-medium)' }}>
               {t('未找到符合條件的租戶', 'No tenants match your filters')}
             </div>
             {!activeFilters.length && !searchText && (
@@ -1267,14 +1358,14 @@ export default function TenantManager() {
             style={{
               ...styles.controlsPanel,
               marginTop: '24px',
-              backgroundColor: '#eff6ff',
-              borderLeft: '4px solid #3b82f6',
+              backgroundColor: 'var(--da-color-info-soft)',
+              borderLeft: '4px solid var(--da-color-accent)',
             }}
             role="region"
             aria-label={`Group: ${groups[activeGroupId].label}`}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div role="heading" aria-level="2" style={{ fontWeight: 'bold', color: '#1e40af' }}>
+              <div role="heading" aria-level="2" style={{ fontWeight: 'var(--da-font-weight-bold)', color: 'var(--da-color-accent)' }}>
                 {groups[activeGroupId].label}
               </div>
               <button
@@ -1283,12 +1374,12 @@ export default function TenantManager() {
                     handleDeleteGroup(activeGroupId);
                   }
                 }}
-                style={{ ...styles.button, ...styles.buttonSecondary, color: '#dc2626' }}
+                style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error)' }}
               >
                 {t('刪除群組', 'Delete Group')}
               </button>
             </div>
-            <div style={{ marginTop: '8px', fontSize: '12px', color: '#1e40af' }}>
+            <div style={{ marginTop: 'var(--da-space-2)', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-accent)' }}>
               {groups[activeGroupId].members.length} {t('個成員', 'member(s)')}
             </div>
           </div>

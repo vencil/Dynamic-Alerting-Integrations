@@ -2,7 +2,7 @@
 
 > 測試基礎設施結構與慣例速查，供 AI Agent 與開發者快速掌握測試配置。
 >
-> **相關文件：** [Testing Playbook](testing-playbook.md)（排錯手冊）· [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [進階場景與測試覆蓋](../scenarios/advanced-scenarios.md)（E2E + 功能域矩陣）· [Benchmarks](../benchmarks.md)（效能數據）
+> **相關文件：** [Testing Playbook](testing-playbook.md)（排錯手冊）· [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [進階場景與測試覆蓋](test-coverage-matrix.md)（E2E + 功能域矩陣）· [Benchmarks](../benchmarks.md)（效能數據）
 
 ## 測試基礎設施
 

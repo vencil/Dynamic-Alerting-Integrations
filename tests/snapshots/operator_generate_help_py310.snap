@@ -4,6 +4,9 @@ usage: operator_generate.py [-h] [--rule-packs-dir RULE_PACKS_DIR]
                             [--api-version {v1alpha1,v1beta1}] [--gitops]
                             [--dry-run] [--json]
                             [--components {all,rules,alertmanager,servicemonitor}]
+                            [--receiver-template {slack,pagerduty,email,teams,opsgenie,webhook}]
+                            [--secret-name SECRET_NAME]
+                            [--secret-key SECRET_KEY] [--kustomize]
 
 Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)
 
@@ -25,3 +28,13 @@ options:
   --components {all,rules,alertmanager,servicemonitor}
                         Components to generate (all | rules | alertmanager |
                         servicemonitor)
+  --receiver-template {slack,pagerduty,email,teams,opsgenie,webhook}
+                        Receiver template type (slack | pagerduty | email |
+                        teams | opsgenie | webhook)
+  --secret-name SECRET_NAME
+                        K8s Secret name (for receiver credential reference)
+  --secret-key SECRET_KEY
+                        Key within the K8s Secret (auto-inferred from receiver
+                        type if omitted)
+  --kustomize           Generate kustomization.yaml listing all CRD files as
+                        resources

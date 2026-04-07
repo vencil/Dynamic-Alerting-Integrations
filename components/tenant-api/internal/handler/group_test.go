@@ -375,7 +375,7 @@ func TestGroupBatch_Success(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(groupMgr, writer, configDir, rbacMgr)
+	h := GroupBatch(groupMgr, writer, configDir, rbacMgr, nil)
 	h(w, req)
 
 	if w.Code != http.StatusOK {
@@ -409,7 +409,7 @@ func TestGroupBatch_GroupNotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(groupMgr, writer, configDir, rbacMgr)
+	h := GroupBatch(groupMgr, writer, configDir, rbacMgr, nil)
 	h(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -430,7 +430,7 @@ func TestGroupBatch_EmptyPatch(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(groupMgr, writer, configDir, rbacMgr)
+	h := GroupBatch(groupMgr, writer, configDir, rbacMgr, nil)
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {

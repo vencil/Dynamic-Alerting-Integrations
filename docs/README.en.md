@@ -2,7 +2,7 @@
 title: "Documentation Guide"
 tags: [overview, introduction]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # Documentation Guide
@@ -71,7 +71,7 @@ Real-world common scenarios and corresponding solutions.
 | Shadow Monitoring one-click cutover | [scenarios/shadow-monitoring-cutover.en.md](scenarios/shadow-monitoring-cutover.en.md) | Platform Engineer, DevOps |
 | Multi-cluster Federation | [scenarios/multi-cluster-federation.en.md](scenarios/multi-cluster-federation.en.md) | Platform Engineer |
 | Tenant lifecycle (onboarding, modification, offboarding) | [scenarios/tenant-lifecycle.en.md](scenarios/tenant-lifecycle.en.md) | Platform Engineer, DevOps |
-| Advanced scenarios & test coverage | [scenarios/advanced-scenarios.en.md](scenarios/advanced-scenarios.en.md) | Platform Engineer, SRE |
+| Advanced scenarios & test coverage | [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md) | Platform Engineer, SRE |
 
 ---
 

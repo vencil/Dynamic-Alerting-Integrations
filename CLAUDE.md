@@ -1,6 +1,6 @@
 # CLAUDE.md — AI 開發上下文指引
 
-## 專案概覽 (v2.5.0)
+## 專案概覽 (v2.6.0)
 
 Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Directory Scanner (`-config-dir`)。
 
@@ -41,6 +41,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 8. **Sentinel Alert 模式**: 新 flag metric 一律用 sentinel → Alertmanager inhibit
 9. **i18n 三層架構**: JSX 用 `window.__t(zh, en)` + Rule Pack 用 `*_zh` 後綴 annotation + Python CLI 用 `detect_cli_lang()` 切換 argparse help
 10. **雙語政策**: `docs/internal/` 及工具性檔案（CHANGELOG、tags、includes）**不需要英文版**，僅外部面向文件需維持 ZH/EN 雙語對。pre-commit hook 已設定 `BILINGUAL_EXEMPT_PATHS` 自動豁免。**Agent 不需詢問是否補 internal docs 英文版 — 答案一律是不用。**
+11. **檔案衛生**：禁止對掛載路徑的檔案使用 `sed -i`（會截斷缺少 EOF 換行的檔案）。批量文字替換用 `git show HEAD:file | sed | tr -d '\0' > file` pipe 模式，或用 Read + Edit 工具。`file-hygiene` pre-commit hook 會自動修復 null bytes 與缺失的 EOF 換行。
 
 ## 互動工具生態（39 JSX tools）
 
@@ -53,7 +54,7 @@ Multi-Tenant Dynamic Alerting 平台。Config-driven, Hot-reload (SHA-256), Dire
 
 ## Pre-commit 品質閘門
 
-28 個 auto-run hooks（每次 commit）+ 10 個 manual-stage hooks。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
+30 個 auto-run hooks（每次 commit，含 `file-hygiene`）+ 13 個 manual-stage hooks（含 orphan-doc-check、glossary-coverage-check、md-yaml-drift-check）。Hook 清單與觸發規則見 `.pre-commit-config.yaml`。
 
 ```bash
 pre-commit run --all-files                              # 全跑 auto hooks
@@ -62,19 +63,28 @@ pre-commit run --hook-stage manual --all-files           # manual-stage（schema
 
 ## 文件導覽
 
-完整文件對照表（103 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
+完整文件對照表（143 個文件，含受眾與內容摘要）見 [`docs/internal/doc-map.md`](docs/internal/doc-map.md)。
 
-快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (10 ADRs)
+快速入口：`docs/getting-started/` (3 角色入門) | `docs/scenarios/` (9 場景，含 [README 導覽](docs/scenarios/README.md)) | `docs/internal/` (Playbook + doc-map + test-map) | `docs/adr/` (11 ADRs，含[快速導讀](docs/adr/README.md))
+
+**近期結構變更**（doc-quality-improvement-plan Phase 1–3）：
+- `README.md` / `README.en.md`：採用「5s → 30s → 5min」漸進式揭露，367 → ~190 行
+- `docs/index.md`：精簡為 MkDocs site 導航入口，326 → ~140 行
+- `docs/federation-integration.md`：清除「場景 A/B」代號 → 中央評估/邊緣評估描述性名稱
+- `docs/scenarios/shadow-audit.md`：已合併至 `shadow-monitoring-cutover.md` Phase 0（redirect stub）
+- `docs/vcs-integration-guide.md`：新建 VCS 整合指南（GitHub/GitLab/自託管）
+- `docs/internal/ssot-language-evaluation.md`：恢復為 `status: draft` 活文件（v2.7.0 EN-first 遷移參考）
+- 改善計畫詳見 [`docs/internal/doc-quality-improvement-plan.md`](docs/internal/doc-quality-improvement-plan.md)
 
 ## 工具 (scripts/tools/)
 
-92 個 Python 工具（不含共用函式庫，ops+dx+lint=92），依職責分三子目錄：
+96 個 Python 工具（不含共用函式庫，ops+dx+lint=96），依職責分三子目錄：
 
 | 子目錄 | 用途 | 數量 |
 |--------|------|------|
-| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check, operator-generate, operator-check, rule-pack-split, policy-opa-bridge...） | 44 |
+| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check, operator-generate, operator-check, rule-pack-split, policy-opa-bridge...） | 45 |
 | `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis, generate_tenant_metadata...） | 20 |
-| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | 27 |
+| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | 31 |
 | root | 共用（`validate_all.py`）+ 函式庫（`_lib_python.py` facade + 4 子模組）+ 資料（`metric-dictionary.yaml`） | 1 + 5 lib |
 
 完整工具表見 [`docs/internal/tool-map.md`](docs/internal/tool-map.md)。常用工具速查：`da-tools <cmd> --help` | CLI 完整參考見 [`docs/cli-reference.md`](docs/cli-reference.md)

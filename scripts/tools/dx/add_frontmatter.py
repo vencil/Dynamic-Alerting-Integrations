@@ -96,7 +96,7 @@ TAG_ASSIGNMENTS = {
         'tags': ['scenario', 'routing', 'dual-perspective'],
         'audience': ['platform-engineer']
     },
-    r'scenarios/advanced-scenarios': {
+    r'internal/test-coverage-matrix': {
         'tags': ['scenario', 'testing', 'maintenance'],
         'audience': ['platform-engineer', 'sre']
     },

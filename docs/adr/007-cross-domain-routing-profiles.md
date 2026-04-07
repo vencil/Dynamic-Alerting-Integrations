@@ -1,7 +1,7 @@
 ---
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
@@ -9,7 +9,7 @@ lang: zh
 
 ## 狀態
 
-✅ **Accepted** (v2.1.0) — 四層路由 + 域策略驗證已完成，Profile 繼承鏈為後續方向
+✅ **Accepted** (v2.1.0) — 四層路由 + 域策略驗證已完成，Profile 繼承鏈為 v2.7.0+ 候選
 
 ## 背景
 
@@ -255,11 +255,16 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - Go/Python 雙端 `_routing_profile` reserved key 同步
 - Self-Service Portal：routing profile 驗證 + 範例切換 UI
 
-## 後續方向
+## 演進狀態
 
-- Profile 繼承鏈（profile extends another profile）
-- `tenant_matchers`（regex / prefix）替代硬編碼 `tenants` 陣列
-- OPA 整合（§5.2）使域策略可由安全團隊透過 Rego 定義
+- **v2.1.0**（已完成）：四層合併管線、check_routing_profiles lint、explain_route 偵錯工具
+- **v2.3.0**（已完成）：OPA 整合——`da-tools opa-evaluate` 支援 Rego 定義域策略（routing-compliance / threshold-bounds / naming-convention 三個範例策略）
+- **v2.5.0**（已完成）：Domain Policy 從 CI-time validation 前移到 API-time enforcement（tenant-api 403 回應）
+- **v2.6.0**（已完成）：`generate_alertmanager_routes.py` 重構（21 helpers extracted），`_build_receiver_config()` 改為 strategy pattern
+
+**殘留**：
+- Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選
+- `tenant_matchers`（regex / prefix）替代硬編碼 `tenants` 陣列 — 排入 v2.7.0+ 候選
 
 ## 相關決策
 
@@ -281,7 +286,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 | [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐ |
 | [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐ |
 | [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐ |
-| [004-federation-scenario-a-first](004-federation-scenario-a-first.md) | ⭐ |
+| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐ |
 | [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐ |
 | [006-tenant-mapping-topologies](006-tenant-mapping-topologies.md) | ⭐⭐⭐ |
 | [007-cross-domain-routing-profiles](007-cross-domain-routing-profiles.md) | ⭐⭐⭐ |

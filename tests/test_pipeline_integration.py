@@ -69,7 +69,7 @@ class TestPipelineIntegration:
         # Step 1: Scaffold
         scaffold_result = subprocess.run(
             [sys.executable, str(TOOLS_DIR / "ops" / "scaffold_tenant.py"),
-             "--tenant", "pipeline-test-db", "--db", "mysql",
+             "--tenant", "pipeline-test-db", "--db", "mariadb",
              "--non-interactive", "--output-dir", str(work_dir)],
             capture_output=True, timeout=30, cwd=str(work_dir)
         )

@@ -2,7 +2,7 @@
 title: "AST Migration Engine Architecture"
 tags: [migration, ast-engine]
 audience: [platform-engineer, devops]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 # AST Migration Engine Architecture

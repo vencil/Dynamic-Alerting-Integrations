@@ -38,6 +38,7 @@
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
+| `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |
 | `notification_tester.py` | Multi-channel notification connectivity testing. |
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
@@ -94,17 +95,21 @@
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
+| `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
+| `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
+| `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
+| `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
 | `lint_jsx_babel.py` | Validate JSX files parse correctly via Babel standalone. |
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |

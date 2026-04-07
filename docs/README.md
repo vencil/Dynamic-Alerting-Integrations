@@ -2,7 +2,7 @@
 title: "文件導覽"
 tags: [overview, introduction]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # 文件導覽
@@ -71,7 +71,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | Shadow Monitoring 一鍵切換 | [scenarios/shadow-monitoring-cutover.md](scenarios/shadow-monitoring-cutover.md) | Platform Engineer、DevOps |
 | 多叢集 Federation | [scenarios/multi-cluster-federation.md](scenarios/multi-cluster-federation.md) | Platform Engineer |
 | Tenant 生命週期（新增、修改、下架） | [scenarios/tenant-lifecycle.md](scenarios/tenant-lifecycle.md) | Platform Engineer、DevOps |
-| 進階場景 & 測試覆蓋 | [scenarios/advanced-scenarios.md](scenarios/advanced-scenarios.md) | Platform Engineer、SRE |
+| 進階場景 & 測試覆蓋 | [internal/test-coverage-matrix.md](internal/test-coverage-matrix.md) | Platform Engineer、SRE |
 
 ---
 
@@ -95,7 +95,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 
 da-tools 容器封裝 23 個 CLI 命令，涵蓋租戶生命週期、日常運維、品質治理三大面向。`scripts/tools/` 下另有 73 個 Python 工具（含 DX 自動化與 lint）。
 
-完整參考：[da-tools CLI](cli-reference.md) · [工具總表](internal/tool-map.md) · [速查表](cheat-sheet.md)
+完整參考：[da-tools CLI](cli-reference.md) · [工具總表](internal/tool-map.md) · [速查表](cheat-sheet.md) · [互動工具索引](interactive-tools.md)
 
 ---
 

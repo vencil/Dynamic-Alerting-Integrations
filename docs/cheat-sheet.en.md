@@ -2,7 +2,7 @@
 title: "da-tools Quick Reference"
 tags: [reference, cli, cheat-sheet]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: en
 ---
 
@@ -54,6 +54,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
 | `operator-generate` | Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor) | --rule-packs-dir <DIR>, --config-dir <DIR>, --namespace, --split, --apply | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
+| `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --scenario | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 
@@ -116,14 +117,14 @@ export PROMETHEUS_URL=http://localhost:9090
 # Basic command
 docker run --rm --network=host \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   <command> [arguments]
 
 # With local files
 docker run --rm --network=host \
   -v $(pwd)/conf.d:/etc/config:ro \
   -e PROMETHEUS_URL=$PROMETHEUS_URL \
-  ghcr.io/vencil/da-tools:v2.4.0 \
+  ghcr.io/vencil/da-tools:v2.6.0 \
   <command> --config-dir /etc/config
 ```
 

@@ -1,240 +1,95 @@
 ---
-title: "Dynamic Alerting Platform — Home"
-description: "Enterprise-grade Multi-Tenant Dynamic Alerting for Kubernetes"
+title: "Dynamic Alerting Platform — 首頁"
+description: "企業級多租戶動態告警平台"
 tags: [home, overview]
 audience: [all]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 
 # Dynamic Alerting Platform
 
-> **Language / 語言：** | **中文（當前）**
+<!-- 這是 MkDocs 站台首頁。GitHub repo README 見 ../README.md -->
 
-## Overview
+> **Language / 語言：** [English](index.en.md) | **中文（當前）**
 
-Prometheus 告警在多租戶環境中不具備擴展性：100 個租戶 × 50 條規則 = 每 15 秒 5,000 次獨立 PromQL 評估，租戶必須學習 PromQL 才能自助修改閾值，而每次門檻變更都需要數小時的 PR → Review → Deploy 流程。
+Config-driven 多租戶告警平台，基於 Prometheus `group_left` 向量匹配。規則數量固定為 O(M)，不隨租戶數增長——租戶只寫 YAML，不碰 PromQL。
 
-Dynamic Alerting 將分散在各團隊的 Prometheus 告警設定，收斂為**可治理、可審計、可自助**的統一架構：租戶只寫 YAML，平台以固定 56 條規則涵蓋所有租戶的閾值評估，變更在 5 分鐘內透過 hot-reload 生效。
-
-### Key Highlights
-
-- **Zero PromQL for Tenants**: YAML-only configuration, no complex query language
-- **High Performance**: O(N×M) → O(M) complexity via `group_left` vector matching
-- **15 Rule Packs**: Pre-built monitoring for MariaDB, PostgreSQL, Redis, Kafka, K8s, and more
-- **Full Migration Automation**: Onboard → Scaffold → Shadow → Cutover → Health Report
-- **Config-driven Routing**: Dynamic Alertmanager routes, receivers, and inhibitions
-- **Three-State Operations**: Normal / Silent / Maintenance modes with auto-expiry
-- **Security First**: SSRF policy, schema validation, cardinality guards
-- **HA Deployment**: Multi-tenant, multi-namespace support with hot-reload
+> **100 租戶：5,000 條手寫規則 → 237 條固定規則。** 新租戶分鐘級導入，變更秒級生效。
 
 ---
 
-## Problems Solved
+## 按角色快速入門
 
-### Rule Explosion & Performance Bottleneck
+<div class="grid cards" markdown>
 
-**❌ Traditional Pain Points:**
-- 100 tenants × 50 rules = 5,000 independent PromQL evaluations (every 15s)
-- Prometheus CPU spikes, rule evaluation latency impacts SLA
-- Each new tenant causes linear rule growth
+- **:material-rocket: Platform Engineer**
 
-**✅ Our Solution:**
-- Dynamic thresholding with `group_left` vector matching
-- Platform maintains **fixed M rules**, evaluates all tenant thresholds in **one pass**
-- Complexity: O(N×M) → O(M)
+    部署與運維平台。[**開始 →**](getting-started/for-platform-engineers.md)
 
-=== "Traditional (❌)"
+    HA 架構、Helm 整合、Prometheus/Alertmanager 路由。
+
+- **:material-database: Domain Expert**
+
+    定義監控標準。[**開始 →**](getting-started/for-domain-experts.md)
+
+    Rule Pack、基線探索、客製化治理。
+
+- **:material-account-multiple: Tenant**
+
+    導入並配置閾值。[**開始 →**](getting-started/for-tenants.md)
+
+    `da-tools scaffold`、YAML 配置、零 PromQL。
+
+</div>
+
+不確定角色？試試 [Getting Started Wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx)。
+
+---
+
+## 運作原理
+
+=== "傳統做法 (❌)"
 
     ```yaml
-    # Each tenant = separate rule
+    # 每個租戶 = 獨立規則 — 100 租戶 × 50 規則 = 5,000 條表達式
     - alert: MySQLHighConnections_db-a
       expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
     - alert: MySQLHighConnections_db-b
       expr: mysql_global_status_threads_connected{namespace="db-b"} > 80
-    # ... repeat for every tenant
+    # ... 每個租戶重複一次
     ```
 
-=== "Dynamic (✅)"
+=== "Dynamic Alerting (✅)"
 
     ```yaml
-    # 1 rule covers all tenants
+    # 1 條規則透過 group_left 匹配覆蓋所有租戶
     - alert: MariaDBHighConnections
       expr: |
         tenant:mysql_threads_connected:max
         > on(tenant) group_left
         tenant:alert_threshold:connections
+
+    # 租戶只需宣告閾值（YAML，零 PromQL）：
+    tenants:
+      db-a: { mysql_connections: "100" }
+      db-b: { mysql_connections: "80" }
     ```
 
-**Tenant Configuration (Zero PromQL):**
-
-```yaml
-# conf.d/db-a.yaml
-tenants:
-  db-a:
-    mysql_connections: "100"
-  db-b:
-    mysql_connections: "80"
-```
-
-### Tenant Onboarding Friction
-
-**❌ Traditional Pain Points:**
-- Tenants must learn PromQL (`rate`, `sum by`, `group_left`)
-- Single label typo = silent failure, no alert triggering
-- Onboarding tool ecosystem scattered across repo
-- Typical onboarding: 1-2 days with platform team assistance
-
-**✅ Our Solution:**
-- **Zero PromQL**: Tenants write YAML only (`mysql_connections: "80"`)
-- **da-tools container**: All tooling encapsulated, `docker pull` ready to use
-- **Interactive scaffold**: `da-tools scaffold` generates configuration interactively
-- **Automated migration**: `da-tools migrate` converts legacy rules with auto-aggregation detection
-
-```bash
-# No clone needed — direct usage
-docker run --rm -it ghcr.io/vencil/da-tools:v2.4.0 scaffold \
-  --tenant my-app --db mariadb,redis
-```
-
-### Platform Maintenance & Deployment Complexity
-
-**❌ Traditional Pain Points:**
-- All rules in one giant ConfigMap = merge conflicts
-- Emergency threshold adjustment: 2-4 hours to deploy
-- Manual chart path + image tag alignment
-- No hot-reload — every change requires Prometheus restart
-
-**✅ Our Solution:**
-- **15 independent Rule Pack ConfigMaps** mounted via Projected Volume
-- **SHA-256 hot-reload** — no Prometheus restart
-- **Directory mode** (`conf.d/`) per-tenant YAML files
-- **OCI Helm chart** — single command deployment
-
-```bash
-# One-line deployment — no repo clone needed
-helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter:2.5.0 \
-  -n monitoring --create-namespace \
-  -f values-override.yaml
-```
-
-### Alert Fatigue
-
-**❌ Traditional Pain Points:**
-- Maintenance window = alert storm (dozens of duplicate alerts)
-- Non-critical Redis queue alert wakes up on-call at 3 AM
-- Warning + Critical for same issue = two notifications
-- Result: on-call mutes channel → real P0 gets buried
-
-**✅ Our Solution:**
-- **Maintenance Mode** (`_state_maintenance: enable`)
-- **Scheduled Maintenance Windows** (cron + duration → auto-silence)
-- **Multi-tier Severity** with **Auto-Suppression** (Critical mutes Warning)
-- **Dimension-level Thresholds** (e.g., `redis_queue_length{queue="email"}: 1000`)
-- **Scheduled Thresholds** (auto-adjust for business hours vs. night)
-
-### Governance & Audit Trail
-
-**❌ Traditional Pain Points:**
-- Who changed what threshold? No audit trail
-- No separation of concerns — anyone can modify global rules
-- Hand-slip = impact all tenants
-
-**✅ Our Solution:**
-- **Per-tenant YAML in Git** = native audit trail
-- **Three-Layer Governance**: Platform Defaults → Domain Standards → Tenant Customization
-- **RBAC via Git permissions**
-- **CI linting** ensures compliance
-
-### Legacy Rule Migration Risk
-
-**❌ Traditional Pain Points:**
-- Hundreds of hand-written PromQL rules can't auto-convert
-- Manual migration takes weeks, error-prone
-- Big-bang cutover risk = monitoring blind spot
-
-**✅ Our Solution:**
-- **AST Migration Engine** (`promql-parser` Rust PyO3 bindings)
-- **Shadow Monitoring**: Parallel validation (≤5% tolerance)
-- **Triage Mode**: CSV classification for each rule
-- **Zero-risk incremental cutover**
-
-### Dimension-Level Control
-
-**❌ Traditional Pain Points:**
-- Oracle DBA needs 85% for `USERS` tablespace, 95% for `SYSTEM`
-- N dimensions = N rules → rule explosion again
-
-**✅ Our Solution:**
-- **Regex Dimension Thresholds**: Support `=~` operator in YAML
-- Exporter outputs `_re` label suffix for regex pattern matching
-- Recording rules complete matching in PromQL — **tenants still write zero PromQL**
-
-```yaml
-# Tenant config (no PromQL needed)
-tenants:
-  dba-oracle:
-    tablespace_usage_pct:
-      - condition: 'tablespace=~"SYS.*"'
-        threshold: "95"
-      - condition: 'tablespace=~"USR.*"'
-        threshold: "85"
-```
-
 ---
 
-## Enterprise Value Proposition
-
-| Value | Solves | Mechanism | Verification |
-|-------|--------|-----------|--------------|
-| **End-to-End Migration Automation** | Legacy rules → weeks of analysis, risky cutover | Onboard → Scaffold → Shadow → Auto-Convergence → Health Report | `da-tools validate --auto-detect-convergence` |
-| **Change Confidence Guarantee** | Unknown blast radius, PR review is manual | `--diff` preview + 7-day backtesting with risk scoring | `da-tools patch-config --diff db-a mysql_connections 50` |
-| **Alert Fatigue → Zero** | Maintenance alerts + duplicate notifications | Auto-Suppression + Maintenance Mode + Scheduled Silence + Scheduled Thresholds | `make demo-full` < 5 min verification |
-| **Low Adoption Cost** | Tenants learn PromQL (days), manual version sync | OCI Helm (one-line), `da-tools` container (20+ CLI tools) | `docker run ghcr.io/vencil/da-tools:v2.4.0 scaffold` |
-| **Governance & Compliance** | No audit trail, no RBAC | Per-tenant YAML in Git + CI linting + three-layer model | Git history = audit log |
-| **Performance at Scale** | 200+ tenants → Prometheus overload | Dynamic thresholding O(M), Projected Volume 15 packs | Benchmark: 56 rules, ~20ms/cycle vs. 5,600 rules @ 800ms+ |
-
----
-
-## Quick Start by Role
-
-<div class="grid cards" markdown>
-
-- **:material-rocket: Platform Engineers**
-
-    Deploy & operate the platform. [**Get Started →**](getting-started/for-platform-engineers.md)
-
-    Learn HA architecture, Helm integration, Prometheus/Alertmanager routing.
-
-- **:material-database: Domain Experts**
-
-    Define monitoring standards. [**Get Started →**](getting-started/for-domain-experts.md)
-
-    Create rule packs, baseline discovery, custom governance.
-
-- **:material-account-multiple: Tenants**
-
-    Onboard & configure thresholds. [**Get Started →**](getting-started/for-tenants.md)
-
-    Use `da-tools scaffold`, manage YAML, zero PromQL.
-
-</div>
-
----
-
-## Architecture at a Glance
+## 架構總覽
 
 ```mermaid
 graph TB
-    A["Tenant Config\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
+    A["租戶配置\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
     B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(15 Rule Packs)"]
-    C -->|group_left matching| D["Alert Rules\n(56 rules, fixed)"]
+    C -->|group_left matching| D["Alert Rules\n(固定數量)"]
     D -->|AlertGroup| E["Alertmanager"]
     E -->|dynamic route| F["Receivers\nwebhook/email/slack/teams"]
 
     G["Config-driven\nRouting"] -->|YAML| E
-    H["Three-State Mode\n(Normal/Silent/Maintenance)"] -->|suppress| D
+    H["三態模式\n(Normal/Silent/Maintenance)"] -->|suppress| D
 
     style A fill:#e8f5e9
     style B fill:#fff3e0
@@ -244,88 +99,45 @@ graph TB
     style F fill:#e0f2f1
 ```
 
----
-
-## Key Components
-
-### threshold-exporter
-
-- **Port**: 8080
-- **Mode**: Config-driven YAML input → Prometheus metrics output
-- **Features**: Multi-tenant support, hot-reload (SHA-256), three-state mode
-- **Deployment**: Helm OCI chart, 2× HA pods
-
-### Prometheus Rules
-
-- **15 Rule Packs**: MariaDB, PostgreSQL, Redis, Kafka, K8s, JVM, Nginx, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, RabbitMQ, Operational, Custom
-- **Optional Carve-out**: Unused rule packs have near-zero cost (Projected Volume)
-- **Recording Rules**: Auto-generate per-tenant threshold metrics
-- **Alerting Rules**: Fixed set (56) matched against all tenant thresholds
-
-### Alertmanager
-
-- **Dynamic Configuration**: Generated from tenant YAML
-- **Config Reload Sidecar**: Automatic hot-reload on ConfigMap change
-- **Multi-tenant Routing**: Per-tenant channels + platform enforced NOC routing
-- **Inhibit Rules**: Deduplication, auto-suppression for multi-tier severity
-
-### da-tools
-
-- **20+ CLI Tools**: scaffold, migrate, diagnose, backtest, onboard, etc.
-- **Distribution**: OCI container (`ghcr.io/vencil/da-tools:v2.4.0`)
-- **No Local Setup**: `docker pull` → ready to use
+詳細架構見 [架構與設計](architecture-and-design.md)。效能數據見 [基準測試](benchmarks.md)。
 
 ---
 
-## Documentation Map
+## 核心指標
 
-| Document | For | Learn |
-|----------|-----|-------|
-| [Architecture & Design](architecture-and-design.md) | Platform Engineers, SREs | System design, HA, roadmap |
-| [Migration Guide](migration-guide.md) | DevOps, Tenants | Step-by-step onboarding |
-| [Governance & Security](governance-security.md) | Platform Leads, Compliance | Three-layer governance, audit |
-| [Performance Benchmarks](benchmarks.md) | Platform Engineers | Idle, scaling, routing, reload |
-| [BYO Prometheus](byo-prometheus-integration.md) | Platform Engineers | Minimal integration for existing Prometheus |
-| [BYO Alertmanager](byo-alertmanager-integration.md) | Platform Engineers | Alertmanager integration guide |
-| [GitOps Deployment](gitops-deployment.md) | DevOps | ArgoCD/Flux + RBAC patterns |
-| [Rule Packs Reference](rule-packs/README.md) | All | 15 rule packs + optional carve-out |
-| [Alert Reference](rule-packs/ALERT-REFERENCE.md) | Tenants, SREs | 96 alerts + remediation guide |
-| [Shadow Audit](scenarios/shadow-audit.md) | Platform Engineers, Tenants | Evaluate alert health without migration |
-| [Troubleshooting](troubleshooting.md) | All | Common issues & solutions |
+| 指標 | 傳統方案（100 租戶） | Dynamic Alerting |
+|------|---------------------|-----------------|
+| 規則數量 | 5,000+（隨租戶線性增長） | 237（固定，O(M)） |
+| 新租戶導入 | 1–3 天 | < 5 分鐘 |
+| Prometheus 記憶體 | ~600MB+ | ~154MB |
+| 規則評估時間 | 隨租戶線性增長 | 60ms（2 或 102 租戶皆同） |
+| 租戶所需知識 | PromQL + Alertmanager 配置 | YAML 閾值設定 |
 
 ---
 
-## Platform Comparison
+## 平台能力
 
-| Feature | Traditional | Dynamic Alerting |
-|---------|------------|------------------|
-| **Rules per 100 tenants** | 5,600+ (5,000 user + 600 base) | 56 (fixed) |
-| **PromQL for Tenants** | Required | Zero — YAML only |
-| **Rule Eval Time** | ~800ms+ (linear) | ~20ms (fixed) |
-| **Deployment** | Clone repo + manual chart sync | OCI Helm one-line |
-| **Onboarding Time** | 1-2 days | <1 hour (scaffold + docs) |
-| **Threshold Changes** | 2-4 hours (PR → review → deploy) | 5 min (patch → hot-reload) |
-| **Audit Trail** | Slack history | Git commits + RBAC |
-| **Governance** | Informal | Three-layer model |
-| **Migration Risk** | High (big-bang) | Low (shadow + validation) |
+**規則引擎：** O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volume 獨立部署 · Severity Dedup via Alertmanager Inhibit（[ADR-001](adr/001-severity-dedup-via-inhibit.md)）
+
+**租戶管理：** 三態模式（Normal/Silent/Maintenance）· 四層路由合併（[ADR-007](adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation · Cardinality Guard
+
+**工具鏈：** `da-tools` CLI（scaffold → migrate → validate → cutover → diagnose）· [CLI 參考](cli-reference.md) · [速查表](cheat-sheet.md)
+
+**部署層級：** Tier 1（Git-Native / GitOps）或 Tier 2（Portal + API，含 RBAC）。對比詳見 [README](../README.md#部署層級)。
 
 ---
 
-## Getting Help
+## 文件導覽
 
-- **Issues & Questions**: [GitHub Issues](https://github.com/vencil/Dynamic-Alerting-Integrations/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vencil/Dynamic-Alerting-Integrations/discussions)
-- **Documentation**: [Full Site Map](#documentation-map) above
-- **Playbooks**: See `docs/internal/` for operational procedures
+| 文件 | 適用角色 | 主題 |
+|------|---------|------|
+| [架構與設計](architecture-and-design.md) | Platform Engineer | 核心設計、HA、Rule Pack |
+| [遷移指南](migration-guide.md) | DevOps, Tenant | 導入流程、AST 引擎 |
+| [治理與安全](governance-security.md) | 合規、主管 | 三層治理模型、審計 |
+| [基準測試](benchmarks.md) | Platform Engineer | 效能數據與方法論 |
+| 整合指南 | Platform Engineer | [BYO Prometheus](byo-prometheus-integration.md) · [BYO Alertmanager](byo-alertmanager-integration.md) · [Federation](federation-integration.md) · [GitOps](gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
+| [Rule Packs](rule-packs/README.md) | All | 15 個規則包 + [Alert 速查](rule-packs/ALERT-REFERENCE.md) |
+| [場景指南](scenarios/) | All | 9 個實戰場景 |
+| [疑難排解](troubleshooting.md) | All | 常見問題與解法 |
 
----
-
-## License
-
-Apache License 2.0 — See [LICENSE](../LICENSE) in the repository.
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| ["文件導覽"](index.md) | ⭐⭐ |
+完整文件對照表：[doc-map.md](internal/doc-map.md) · 工具表：[tool-map.md](internal/tool-map.md)

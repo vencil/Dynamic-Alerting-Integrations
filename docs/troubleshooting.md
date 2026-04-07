@@ -2,7 +2,7 @@
 title: "故障排查與邊界情況"
 tags: [troubleshooting, operations]
 audience: [platform-engineer, sre, tenant]
-version: v2.5.0
+version: v2.6.0
 lang: zh
 ---
 # 故障排查與邊界情況
@@ -83,6 +83,69 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 
 > 本文件從 [`architecture-and-design.md`](architecture-and-design.md) 獨立拆分。
 
+## Prometheus Operator 環境常見問題
+
+**情景：** 使用 Prometheus Operator（kube-prometheus-stack）時 PrometheusRule 不生效
+
+**診斷**：
+```bash
+# 檢查 PrometheusRule 是否已載入
+kubectl get prometheusrules -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+
+# 檢查 Prometheus 是否 reject rule
+kubectl logs prometheus-kube-prometheus-stack-prometheus-0 -c prometheus | grep "rule"
+
+# 確認 ruleSelector 匹配
+kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
+```
+
+**常見原因與修正**：
+
+1. **ruleSelector label 不匹配**
+   - 原因：PrometheusRule 缺少 Prometheus CRD 所要求的 label
+   - 診斷：比對 `kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'` 輸出與 PrometheusRule labels
+   - 修正：確保 PrometheusRule 同時包含 `prometheus: kube-prometheus` 和 `release: kube-prometheus-stack`
+   ```bash
+   # 使用 operator-generate 自動產出正確 label
+   da-tools operator-generate --tenant <name> --output-dir ./crds/
+   # 或手動 patch 現有 CRD
+   kubectl label prometheusrule <name> -n monitoring release=kube-prometheus-stack prometheus=kube-prometheus
+   ```
+
+2. **namespace 不在 Prometheus 監控範圍**
+   - 原因：Prometheus CRD 的 `ruleNamespaceSelector` 未包含目標 namespace
+   - 診斷：`kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleNamespaceSelector}'`
+   - 修正：擴展 namespace selector 或將 PrometheusRule 部署至已納入監控的 namespace
+   ```bash
+   # 方案 A：將 CRD 部署到 monitoring namespace
+   da-tools operator-generate --tenant <name> --namespace monitoring --output-dir ./crds/
+   # 方案 B：修改 Prometheus CRD 的 ruleNamespaceSelector 納入目標 namespace
+   kubectl edit prometheus -n monitoring kube-prometheus-stack-prometheus
+   # 在 spec.ruleNamespaceSelector.matchLabels 加入目標 namespace label
+   ```
+
+3. **CRD API 版本不匹配**
+   - 原因：叢集安裝的 Operator 版本與產出的 CRD apiVersion 不一致
+   - 診斷：`kubectl api-versions | grep monitoring.coreos.com`
+   - 修正：
+   ```bash
+   # 指定與叢集相符的 API 版本
+   da-tools operator-generate --tenant <name> --api-version v1 --output-dir ./crds/
+   ```
+
+**Rollback 程序**（從 Operator 退回 ConfigMap 模式）：
+```bash
+# 1. 停止 Operator 管理：刪除 PrometheusRule / AlertmanagerConfig CRD
+kubectl delete prometheusrule -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+# 2. 恢復 ConfigMap 模式：Helm upgrade 切換 rules.mode
+helm upgrade threshold-exporter ./helm/threshold-exporter --set rules.mode=configmap
+# 3. 驗證 ConfigMap rules 已生效
+kubectl get configmap -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+da-tools validate-config --config-dir ./conf.d/
+```
+
+> 詳見：[Operator Prometheus 整合](operator-prometheus-integration.md) · [Operator Alertmanager 整合](operator-alertmanager-integration.md) · [Operator GitOps 部署](operator-gitops-deployment.md)
+
 ## 相關資源
 
 | 資源 | 相關性 |
@@ -94,4 +157,7 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
 | ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](scenarios/advanced-scenarios.md) | ⭐⭐ |
+| ["Operator Prometheus 整合"](prometheus-operator-integration.md) | ⭐⭐ |
+| ["Operator Alertmanager 整合"](operator-alertmanager-integration.md) | ⭐⭐ |
+| ["Operator GitOps 部署"](operator-gitops-deployment.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |

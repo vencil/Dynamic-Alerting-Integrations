@@ -83,6 +83,16 @@ metadata:
 | `user_state_filter` | `user_state_filter{filter="maintenance"}` | Maintenance mode |
 | `ALERTS` | `ALERTS{alertstate="firing"}` | Currently firing alerts |
 
+## Troubleshooting
+
+| 症狀 / Symptom | 可能原因 / Cause | 解法 / Fix |
+|----------------|-----------------|-----------|
+| "No data" on tenant tab | Prometheus proxy misconfigured | Verify `proxy.endpoints['/prometheus'].target` in `app-config.yaml` points to reachable Prometheus |
+| Entity tab not appearing | Missing annotation | Add `dynamic-alerting.io/tenant: "<tenant-id>"` to entity's `catalog-info.yaml` |
+| Stale alert data | Polling interval too long | Default is 30s; check network latency to Prometheus |
+| 403 from Prometheus proxy | Backstage proxy not forwarding headers | Ensure `allowedHeaders: ['Accept']` is set in proxy config |
+| Mock data shown instead of real | Dev mode active | Set `dynamicAlerting.useMockData: false` in `app-config.yaml` |
+
 ## Development
 
 ```bash
@@ -92,3 +102,8 @@ yarn start   # Starts Backstage dev server with plugin
 yarn test    # Run unit tests
 yarn build   # Build for production
 ```
+
+## Related Documentation
+
+- [Architecture & Design — Backstage Integration](../../docs/architecture-and-design.md)
+- [Threshold Exporter `/metrics` Reference](../threshold-exporter/README.md)
