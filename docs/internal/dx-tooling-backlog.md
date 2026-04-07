@@ -62,9 +62,19 @@ v2.6.0-final 發現 troubleshooting.en.md 缺少 Operator 章節（直到 final 
 
 v2.2.0 在 Routing Trace Tab 加入 Copy JSON 匯出。完整版需要獨立工具：side-by-side 比較兩個 tenant 或兩個版本的 YAML 配置差異，利用 `config-diff --json` 輸出渲染 diff view（新增/移除/修改 highlight）。
 
+### Playwright E2E CI 環境修復
+
+v2.6.0 的 `playwright.yml` workflow 在 CI 持續失敗，因為 Portal 需要 static file server 但 CI 環境沒有啟動。需要選擇一種方案讓 E2E 在 CI 跑綠：
+
+- **方案 A（推薦）**：CI 中用 `npx serve docs/` 或 `python -m http.server` 做輕量 static serve，workflow 已有 30s retry loop 可對接
+- **方案 B**：用 `da-portal` Docker image 當 GitHub Actions service container（`services:` block）
+- **方案 C**：將 workflow 標記 `continue-on-error: true`，僅作為 advisory check 不阻塞 merge
+
+驗收標準：Playwright workflow 在 push to main 時穩定通過（或明確標記為 non-blocking）。
+
 ### Interactive Tool Playwright E2E — 完整覆蓋
 
-v2.6.0 已整合 axe-core 自動化無障礙測試至現有 smoke tests。擴展至覆蓋全部 42 支 JSX 工具：每支工具可載入、基本互動正常、無 console error、i18n 切換不破版。
+v2.6.0 已整合 axe-core 自動化無障礙測試至 6 個 spec files（39+ test cases），含 Operator Setup Wizard 12 tests。擴展至覆蓋全部 42 支 JSX 工具：每支工具可載入、基本互動正常、無 console error、i18n 切換不破版。前置條件：先完成上方 CI 環境修復。
 
 ### Cost Estimator 動態連動 platform-data.json
 
