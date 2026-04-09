@@ -129,6 +129,35 @@ shell: ## 進入 DB CLI (使用: make shell TENANT=db-a)
 inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant TENANT=db-a)
 	@python3 ./scripts/tools/ops/diagnose.py $(TENANT)
 
+.PHONY: git-lock
+git-lock: ## 診斷 .git lock 殘留 (加 ARGS="--clean" 安全清理)
+	@bash scripts/ops/git_check_lock.sh $(ARGS)
+
+.PHONY: git-preflight
+git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale lock）
+	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
+	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+
+.PHONY: vscode-git-off
+vscode-git-off: ## 關閉 VS Code Git（Agent session 用）
+	@python3 scripts/ops/vscode_git_toggle.py off
+
+.PHONY: vscode-git-on
+vscode-git-on: ## 開啟 VS Code Git（手動開發用）
+	@python3 scripts/ops/vscode_git_toggle.py on
+
+.PHONY: session-cleanup
+session-cleanup: ## Session 結束或異常終止後的清理
+	@python3 scripts/ops/vscode_git_toggle.py on 2>/dev/null || true
+	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
+	@rm -f _out.txt _err.txt 2>/dev/null || true
+	@echo "✅ Session cleanup 完成"
+
+.PHONY: playbook-freshness
+playbook-freshness: ## 檢查 Playbook 知識退火狀態（verified-at-version 是否跨版本過久）
+	@python3 scripts/tools/lint/check_playbook_freshness.py
+
 .PHONY: port-forward
 port-forward: ## 啟動 Port-Forward (9090, 3000, 9093, 8080)
 	@echo "Prometheus:9090 | Grafana:3000 | Alertmanager:9093 | Exporter:8080"

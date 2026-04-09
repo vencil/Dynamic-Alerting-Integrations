@@ -104,7 +104,7 @@ groups:
 
 Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
 
-若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 11 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
+若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 15 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
 
 ## Exporter 文件連結
 

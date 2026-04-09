@@ -3,6 +3,7 @@ title: "測試注意事項 — 排錯手冊 (Testing Playbook)"
 tags: [documentation]
 audience: [all]
 version: v2.6.0
+verified-at-version: v2.6.0
 lang: zh
 ---
 # 測試注意事項 — 排錯手冊 (Testing Playbook)
@@ -156,7 +157,7 @@ python3 -m pytest tests/test_snapshot.py::test_tool_help_mariadb --snapshot-upda
 # 驗證 .snapshot/ 變更後再 commit
 ```
 
-Exit code 合約測試（`test_tool_exit_codes.py`）覆蓋全部 84+ 工具的 `--help` / invalid args，預期 exit code 0 (成功) 或 2 (CLI 誤用)。
+Exit code 合約測試（`test_tool_exit_codes.py`）覆蓋全部 84+ 個 CLI entrypoint 的 `--help` / invalid args，預期 exit code 0 (成功) 或 2 (CLI 誤用)。（全 repo 含 96 個 Python 工具模組，此處僅測有 CLI 進入點的工具。）
 
 ## Performance Benchmark
 
@@ -213,23 +214,16 @@ CI workflow 與 build script 的工具清單容易 drift。用守衛測試自動
 
 CHANGELOG / CLAUDE.md 的測試計數必須在 `pytest -v` 執行後才寫入。先跑 pytest → 逐 class 加總交叉驗證 → 再更新文件。
 
-### 三線版號管理
+### 版號管理
 
-Platform、Exporter、da-tools 三條版號線獨立演進。Release 自檢流程：
+> **完整版號治理流程見 [GitHub Release Playbook](github-release-playbook.md)**。
+> 五條獨立版號線（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*` / `tenant-api/v*`）各有各的生命週期。
 
-```bash
-# 1. 先用 bump_docs.py 批次更新（只升有變的版號線）
-python3 scripts/tools/dx/bump_docs.py --platform 1.9.0 --tools 1.9.0
-# ⚠️ 不加 --exporter 則 exporter 版號不動
+測試相關的版號重點：
 
-# 2. 驗證一致性
-python3 scripts/tools/dx/bump_docs.py --check
-
-# 3. ⚠️ 避免 replace_all 批次改版號
-#    用 Edit tool 的 replace_all 把 "1.8.0" 全改 "1.9.0" 會誤改跨元件版號
-#    例：da-tools README 的 exporter 版號被意外升版
-#    正確做法：用 bump_docs.py 按版號線分別處理，改完後 --check 驗證
-```
+- **`bump_docs.py --check`** 驗證全 repo 版號一致性（pre-commit hook `version-consistency` 自動執行）
+- **避免 `replace_all` 批次改版號**：用 `bump_docs.py` 按版號線分別處理，改完後 `--check` 驗證
+- **文件計數**必須在 `pytest -v` 執行後才寫入（見上方「文件計數驗證」）
 
 ## SAST 合規
 
@@ -303,7 +297,9 @@ for keyword, db_type in JOB_DB_MAP.items():
 
 **檢查方式：** `grep -rn "python3 scripts/tools/" docs/` — 面向使用者的文件中不應出現（`docs/internal/` 例外）。
 
-## v2.1.0 Lessons Learned（2026-03-15）
+## v2.1.0 Lessons Learned — Go / Backstage / 覆蓋率（2026-03-15）
+
+> **自動化覆蓋摘要：** 本節 11 條中，#9 frontmatter 解析已有 `test_check_frontmatter_versions.py` 覆蓋（🛡️），#10 coverage 格式已有 `test_coverage_gap_analysis.py` 覆蓋（🛡️），#11 triple globals 已有 `test_check_frontmatter_versions.py` 覆蓋（🛡️）。其餘為設計模式知識，不適合自動化。
 
 ### Go Incremental Reload 設計模式
 
@@ -324,51 +320,55 @@ for keyword, db_type in JOB_DB_MAP.items():
 
 ### DX 工具測試模式
 
-9. **frontmatter 解析需處理 `---` delimiter edge cases**：檔案開頭非 `---`、frontmatter 未閉合、多個 `---` 區段都需要測試。用 `re.compile(r"^---\s*$")` 比固定字串比對更寬鬆
-10. **coverage text output 格式依 pytest-cov 版本不同**：regex pattern 需足夠寬鬆以匹配不同版本的空白和對齊，`r"^(\S+\.py)\s+(\d+)\s+(\d+)\s+(\d+)%\s*(.*)?$"` 涵蓋主流格式
-11. **monkeypatch triple globals 隔離檔案系統**：`check_frontmatter_versions` 同時依賴 `DOCS_DIR`、`REPO_ROOT`、`CLAUDE_MD` 三個 module-level 常數，全部需要 monkeypatch 到 tmp_path
+9. 🛡️ **frontmatter 解析需處理 `---` delimiter edge cases**：檔案開頭非 `---`、frontmatter 未閉合、多個 `---` 區段都需要測試。用 `re.compile(r"^---\s*$")` 比固定字串比對更寬鬆 `[已自動化於 test: test_check_frontmatter_versions]`
+10. 🛡️ **coverage text output 格式依 pytest-cov 版本不同**：regex pattern 需足夠寬鬆以匹配不同版本的空白和對齊，`r"^(\S+\.py)\s+(\d+)\s+(\d+)\s+(\d+)%\s*(.*)?$"` 涵蓋主流格式 `[已自動化於 test: test_coverage_gap_analysis]`
+11. 🛡️ **monkeypatch triple globals 隔離檔案系統**：`check_frontmatter_versions` 同時依賴 `DOCS_DIR`、`REPO_ROOT`、`CLAUDE_MD` 三個 module-level 常數，全部需要 monkeypatch 到 tmp_path `[已自動化於 test: test_check_frontmatter_versions]`
 
 ---
 
-## v2.1.0 Lessons Learned（2026-03-15）
+## v2.1.0 Lessons Learned — 關聯分析 / 漂移偵測 / Lint（2026-03-15）
+
+> **自動化覆蓋摘要：** 本節 11 條中，#1-3 已有 `test_alert_correlate.py` 覆蓋（🛡️），#4-6 已有 `test_drift_detect.py` / `test_config_diff.py` 覆蓋（🛡️），#7-8 已有 `test_validate_all.py` 覆蓋（🛡️），#9 已有 `test_bump_docs.py` 覆蓋（🛡️），#10-11 已有 `test_check_bilingual_content.py` 覆蓋（🛡️）。本節全部已有測試防守。
 
 ### 關聯分析演算法測試
 
-1. **時間相關測試需 freeze 或相對值**：`_time_overlap()` 內部用 `datetime.now()` 處理 "still firing" 告警。測試中 `end==start` 不等於 "零長度" 而是 "still firing"，需理解業務語義再寫斷言
-2. **4 因子關聯分數好測試**：每個因子獨立 0-1 且權重固定，可分別測試 identical、diff namespace、diff everything 三種極端情況快速驗證正確性
-3. **根因推斷用 severity rank + earliest 雙排序**：比單一排序穩定且可預測，測試只需驗證返回的 alertname 和 tenant
+1. 🛡️ **時間相關測試需 freeze 或相對值**：`_time_overlap()` 內部用 `datetime.now()` 處理 "still firing" 告警。測試中 `end==start` 不等於 "零長度" 而是 "still firing"，需理解業務語義再寫斷言 `[已自動化於 test: test_alert_correlate]`
+2. 🛡️ **4 因子關聯分數好測試**：每個因子獨立 0-1 且權重固定，可分別測試 identical、diff namespace、diff everything 三種極端情況快速驗證正確性 `[已自動化於 test: test_alert_correlate]`
+3. 🛡️ **根因推斷用 severity rank + earliest 雙排序**：比單一排序穩定且可預測，測試只需驗證返回的 alertname 和 tenant `[已自動化於 test: test_alert_correlate]`
 
 ### 漂移偵測測試模式
 
-4. **tmp_path fixture + write_text 是最佳 config-dir mock**：不需要真實 YAML 結構，只需要可 hash 的內容。SHA-256 確定性保證測試穩定
-5. **pairwise 組合數 = n*(n-1)/2**：三目錄產生 3 個 report，四目錄產生 6 個——測試時注意斷言 report 數量而非內容
-6. **expected vs unexpected 用 prefix tuple**：`EXPECTED_PREFIXES = ("_cluster_", "_local_")` 可自定義，測試時用自定義 prefix 驗證分類邏輯
+4. 🛡️ **tmp_path fixture + write_text 是最佳 config-dir mock**：不需要真實 YAML 結構，只需要可 hash 的內容。SHA-256 確定性保證測試穩定 `[已自動化於 test: test_drift_detect]`
+5. 🛡️ **pairwise 組合數 = n*(n-1)/2**：三目錄產生 3 個 report，四目錄產生 6 個——測試時注意斷言 report 數量而非內容 `[已自動化於 test: test_drift_detect]`
+6. 🛡️ **expected vs unexpected 用 prefix tuple**：`EXPECTED_PREFIXES = ("_cluster_", "_local_")` 可自定義，測試時用自定義 prefix 驗證分類邏輯 `[已自動化於 test: test_drift_detect]`
 
 ### 覆蓋率提升技巧
 
-7. **main() 的 sys.exit() 要 catch**：validate_all.py main() 結尾固定 `sys.exit(0/1)`，pytest 需要 `pytest.raises(SystemExit)` 包裹
-8. **mock _run_one 跳過子進程**：validate_all 內部用 subprocess 跑其他 Python 腳本，mock `_run_one` 回傳 `(name, "pass", 0.1, "ok", "output")` tuple 即可覆蓋 main() 邏輯
-9. **_init_changelog_entry 需 monkeypatch REPO_ROOT**：bump_docs 的 CHANGELOG 操作依賴 REPO_ROOT，tmp_path mock 後可安全測試插入邏輯
+7. 🛡️ **main() 的 sys.exit() 要 catch**：validate_all.py main() 結尾固定 `sys.exit(0/1)`，pytest 需要 `pytest.raises(SystemExit)` 包裹 `[已自動化於 test: test_validate_all]`
+8. 🛡️ **mock _run_one 跳過子進程**：validate_all 內部用 subprocess 跑其他 Python 腳本，mock `_run_one` 回傳 `(name, "pass", 0.1, "ok", "output")` tuple 即可覆蓋 main() 邏輯 `[已自動化於 test: test_validate_all]`
+9. 🛡️ **_init_changelog_entry 需 monkeypatch REPO_ROOT**：bump_docs 的 CHANGELOG 操作依賴 REPO_ROOT，tmp_path mock 後可安全測試插入邏輯 `[已自動化於 test: test_bump_docs]`
 
 ### DX lint 測試模式
 
-10. **CJK ratio 測試用純中文/純英文/混合三極端**：count_cjk_ratio("你好世界")=1.0, ("Hello")=0.0, 混合在 0-1 之間，避免浮點精確比較用 range 斷言
-11. **monkeypatch 雙 global**：check_bilingual_content 同時用 DOCS_DIR 和 PROJECT_ROOT，兩者都需要 monkeypatch 到 tmp_path 才能隔離真實文件系統
+10. 🛡️ **CJK ratio 測試用純中文/純英文/混合三極端**：count_cjk_ratio("你好世界")=1.0, ("Hello")=0.0, 混合在 0-1 之間，避免浮點精確比較用 range 斷言 `[已自動化於 test: test_check_bilingual_content]`
+11. 🛡️ **monkeypatch 雙 global**：check_bilingual_content 同時用 DOCS_DIR 和 PROJECT_ROOT，兩者都需要 monkeypatch 到 tmp_path 才能隔離真實文件系統 `[已自動化於 test: test_check_bilingual_content]`
 
 ---
 
-## v2.1.0 Lessons Learned（2026-03-15）
+## v2.1.0 Lessons Learned — Ops 工具 / DX 增強（2026-03-15）
+
+> **自動化覆蓋摘要：** 本節 8 條中，#1 的 main() 覆蓋模式已在多個 test 檔案實踐（🛡️），#3 Help text 同步已有 `check_cli_coverage.py` hook 防守（🛡️），#5 反向驗證模式已有 `check_cli_coverage.py` 實作（🛡️）。其餘為測試技巧知識。
 
 ### Ops 工具測試模式
 
-1. **main() 覆蓋是低垂果實**：大多數 ops 工具的 `main()` CLI entry point 佔 30-40% 程式碼但常被忽略。使用 `monkeypatch.setattr(sys, "argv", [...])` + mock 外部依賴即可快速提升覆蓋率（batch_diagnose 71%→99%，blind_spot 74%→99%）
+1. 🛡️ **main() 覆蓋是低垂果實**：大多數 ops 工具的 `main()` CLI entry point 佔 30-40% 程式碼但常被忽略。使用 `monkeypatch.setattr(sys, "argv", [...])` + mock 外部依賴即可快速提升覆蓋率（batch_diagnose 71%→99%，blind_spot 74%→99%） `[已自動化於 test: test_batch_diagnose, test_blind_spot_discovery 等]`
 2. **mock 外部 API 的安全模式**：`query_prometheus_targets()` 等函式用 `@patch("module.http_get_json")` 而非 `@patch("urllib.request.urlopen")`，mock 粒度在自己的 wrapper 層
-3. **Help text 與 COMMAND_MAP 不同步是常見漏洞**：`validate-config` 在 COMMAND_MAP 中但 help text 沒列。`check_cli_coverage.py` lint 工具可捕獲此類不同步
+3. 🛡️ **Help text 與 COMMAND_MAP 不同步是常見漏洞**：`validate-config` 在 COMMAND_MAP 中但 help text 沒列。`check_cli_coverage.py` lint 工具可捕獲此類不同步 `[已自動化於 hook: cli-coverage-check]`
 4. **Triple-quoted string parsing**：解析 Python help text 時，用 `re.findall(r'"""(.*?)"""', content, re.DOTALL)` 限制在三引號字串內，避免匹配到 Python 程式碼中的變數名
 
 ### Lint 工具模式
 
-5. **反向驗證 > 正向驗證**：以 COMMAND_MAP 為 single source of truth，反向檢查 4 份文件是否涵蓋，比在每份文件中各自維護清單更可靠
+5. 🛡️ **反向驗證 > 正向驗證**：以 COMMAND_MAP 為 single source of truth，反向檢查 4 份文件是否涵蓋，比在每份文件中各自維護清單更可靠 `[已自動化於 hook: cli-coverage-check]`
 6. **Warning vs Error 分級**：docs 裡多出的命令（已規劃但未整合）是 warning 非 error，避免 CI 假陽性
 
 ### DX 增強模式

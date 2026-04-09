@@ -342,7 +342,7 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
     # Collect valid JSX files
     valid_jsx = set()
     for f in (PROJECT_ROOT / "docs").rglob("*.jsx"):
-        valid_jsx.add(str(f.relative_to(PROJECT_ROOT / "docs")))
+        valid_jsx.add(f.relative_to(PROJECT_ROOT / "docs").as_posix())
 
     # Pre-filter: only scan files that contain jsx-loader (fast grep)
     needle = b"jsx-loader.html?component="
@@ -367,7 +367,7 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
             continue
 
         content = raw.decode("utf-8")
-        rel_path = str(md_path.relative_to(PROJECT_ROOT))
+        rel_path = md_path.relative_to(PROJECT_ROOT).as_posix()
 
         for match in link_pattern.finditer(content):
             link_text = match.group(1)

@@ -1,0 +1,40 @@
+# Cross-platform line ending normalization
+# ==========================================
+# 確保 repo 內一律 LF，checkout 時依平台自動處理。
+# 對 FUSE 掛載環境尤其重要 — 避免 CRLF/LF 混用造成的 diff 雜訊。
+
+* text=auto eol=lf
+
+# Source code
+*.sh    text eol=lf
+*.py    text eol=lf
+*.go    text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.ts    text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+
+# Config / Data
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+
+# Documentation
+*.md    text eol=lf
+*.txt   text eol=lf
+
+# Dockerfile / Makefile
+Dockerfile* text eol=lf
+Makefile    text eol=lf
+
+# Binary — 不做任何轉換
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.gz    binary
+*.tar   binary
+*.zip   binary
+*.woff  binary
+*.woff2 binary

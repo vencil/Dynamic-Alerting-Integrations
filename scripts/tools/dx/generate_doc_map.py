@@ -72,7 +72,9 @@ SKIP_FILES = {
 }
 
 # Directories to skip entirely (adr is conditionally included via --include-adr)
-SKIP_DIRS = {"includes", "adr"}
+# rule-packs is skipped because it's a junction/symlink on Windows/Linux pointing
+# to the top-level rule-packs/ dir; its README is added via EXTRA_ENTRIES instead.
+SKIP_DIRS = {"includes", "adr", "rule-packs"}
 
 # Extra non-docs entries (manually curated, appended at end)
 EXTRA_ENTRIES = {
@@ -207,7 +209,7 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
             continue
         if f.name.endswith(".en.md"):
             continue
-        rel = str(f.relative_to(REPO_ROOT))
+        rel = f.relative_to(REPO_ROOT).as_posix()
         parts = Path(rel).parts
         if any(d in effective_skip_dirs for d in parts):
             continue
@@ -218,7 +220,7 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
         all_files.append(f)
 
     for f in all_files:
-        rel = str(f.relative_to(REPO_ROOT))
+        rel = f.relative_to(REPO_ROOT).as_posix()
         has_en = _has_en_pair(f)
 
         # Read the primary content file

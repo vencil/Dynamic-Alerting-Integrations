@@ -14,6 +14,8 @@ parent: architecture-and-design.md
 
 ## 3. Projected Volume 架構 (Rule Packs)
 
+> **⚠️ 計數陷阱**：Rule Pack **總數為 15**（以 `docs/assets/platform-data.json` 為準），但 `rule-packs/` 目錄下只會看到 **14 個 YAML 檔案**——因為 `prometheus-rules-platform` 是透過 ConfigMap 直接管理，不以 YAML 形式存在。當 Agent 或工具要報告 Rule Pack 數量時，請以 `platform-data.json` 為單一真實來源，不要用 `ls rule-packs/*.yaml | wc -l`。
+
 ### 3.1 十五個獨立規則包
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |

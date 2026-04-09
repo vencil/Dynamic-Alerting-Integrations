@@ -92,7 +92,7 @@ class DocLinkChecker:
         """Check if a broken link should be ignored."""
         if not self._ignore_patterns:
             return False
-        rel = str(source_file.relative_to(self.repo_root))
+        rel = source_file.relative_to(self.repo_root).as_posix()
         # Match "file:link" or just "link"
         return (f"{rel}:{link_url}" in self._ignore_patterns
                 or link_url in self._ignore_patterns)

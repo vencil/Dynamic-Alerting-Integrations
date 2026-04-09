@@ -3,6 +3,7 @@ title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
 version: v2.6.0
+verified-at-version: v2.6.0
 lang: zh
 ---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
@@ -225,7 +226,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline |
 | 16 | PAT push `.github/workflows/` 被 reject | PAT 需含 Workflows scope（詳見 [GitHub Release Playbook](github-release-playbook.md)） |
 | 17 | Windows MCP Shell 長 REST body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 完成後 `Remove-Item` |
-| 18 | GitHub Release `already_exists` 422 | tag 推送後 GitHub 可能自動建 release；改用 PATCH 更新（GET tag → 取 id → PATCH body） |
+| 18 | ~~GitHub Release `already_exists` 422~~ | 🗄️ 已歸檔（PATCH 繞道已固化為 Re-tag SOP）。詳見 [archive/lessons-learned.md](archive/lessons-learned.md) |
 | 19 | Dev Container `Exited (255)` 未啟動 | `docker start vibe-dev-container`；每次 session 開始先 `docker ps` 確認 |
 | 20 | Benchmark / Go test 複雜指令在 PowerShell 下失敗 | 寫 `.sh` 輔助腳本 → `docker exec [-d] bash script.sh`（見 [Benchmark Playbook → 在 Dev Container 內執行](benchmark-playbook.md#在-dev-container-內執行)）|
 | 21 | Go test 從 repo root 執行失敗 | `go.mod` 在 `components/threshold-exporter/app/`，必須 `-w` 指定或 `cd` 進去 |
@@ -234,12 +235,78 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
 | 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
 | 26 | PAT 查 GHCR packages 回 403 | GitHub Packages API 需要 `packages:read` scope；PAT 沒此 scope 時 GET `/users/{owner}/packages` 回 403，但 **CI 用 `GITHUB_TOKEN` 有 `packages:write` 所以 push 成功**。驗證 image 是否存在最快的方式是瀏覽器開 `github.com/{owner}?tab=packages`，不繞 API |
-| 27 | `.git/*.lock` 殘留阻擋 git 操作 | Cowork VM 無法刪除 `.git/index.lock` / `HEAD.lock`（`Operation not permitted`）；用 Windows MCP `Remove-Item "path\.git\*.lock" -Force` 清理。每次 git 操作異常中斷後必須先清 lock |
+| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/ops/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。詳見 [§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
 | 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
 | 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |
 | 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
 | 31 | Cowork VM proxy 封鎖 `api.github.com` | `git push` 走得通（git 協議通道），但 `requests` / `curl` 對 `api.github.com` 回 403 Forbidden（proxy 層封鎖）。GitHub API 操作必須透過 Windows MCP 的 `curl.exe` |
 | 32 | `Set-Content` 預設加 BOM 導致 JSON parse 失敗 | GitHub API `curl.exe --data-binary @file` 讀入含 BOM 的 UTF-8 檔案會回 `Problems parsing JSON`。用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫入無 BOM 版本 |
+
+## FUSE Phantom Lock 防治
+
+FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind mount）是 `.git/*.lock` 殘留的根本原因。以下是分層防治措施（預防 → 偵測 → 修復 → 驗證）：
+
+### 預防層：降低 Lock 發生機率
+
+**1. VS Code Git 開關（專案級，不影響其他專案）**
+
+```bash
+# Agent session 開始時 — 關閉 VS Code 背景 Git
+python scripts/ops/vscode_git_toggle.py off
+
+# Session 結束或手動開發時 — 打開
+python scripts/ops/vscode_git_toggle.py on
+
+# 查看目前狀態
+python scripts/ops/vscode_git_toggle.py
+```
+
+原理：VS Code 即時 hot-reload `.vscode/settings.json`，切換後立即生效。檔案已在 `.gitignore` 排除。
+
+**⚠️ Agent 起手式**：每次 Cowork session 開始，**先跑 `vscode_git_toggle.py off`** 再做任何 git 操作。
+
+**2. Git Config FUSE 調校（路徑條件式，只影響本 repo）**
+
+安裝 `scripts/ops/gitconfig-fuse-tuning.sample`：
+
+```bash
+# Windows 端：
+copy scripts\ops\gitconfig-fuse-tuning.sample %USERPROFILE%\gitconfig-fuse-tuning
+```
+
+然後在 `%USERPROFILE%\.gitconfig` 加入：
+
+```ini
+[includeIf "gitdir:C:/Users/<USERNAME>/vibe-k8s-lab/"]
+    path = ~/gitconfig-fuse-tuning
+```
+
+> 將 `<USERNAME>` 替換為你的 Windows 使用者名稱。路徑用正斜線 `/`、結尾需有 `/`。
+
+效果：`fsmonitor=false` + `trustctime=false` + `untrackedCache=false` + `filesRefLockTimeout=1500`，只在本 repo 生效。
+
+**3. Windows 端降噪**
+
+```powershell
+# Defender 排除 .git/ 即時掃描（以系統管理員執行）
+Add-MpPreference -ExclusionPath "C:\Users\<USERNAME>\vibe-k8s-lab\.git"
+```
+
+### 診斷層：遇到 Lock 時的安全處理
+
+```bash
+# 診斷（不刪除，只報告）
+bash scripts/ops/git_check_lock.sh
+
+# 診斷 + 清理（只清 >30s 且無活躍 git process 的 stale lock）
+bash scripts/ops/git_check_lock.sh --clean
+```
+
+若 Cowork VM 無法刪除（`Operation not permitted`），腳本會輸出對應的 Windows MCP 指令。
+
+### 跨平台 Line Ending
+
+`.gitattributes` 確保 repo 內一律 LF，避免 CRLF/LF 混用在 FUSE 上造成額外的 diff 雜訊和 index 更新。
 
 ## 指令快速參考
 

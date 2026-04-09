@@ -103,6 +103,7 @@
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
+| `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
