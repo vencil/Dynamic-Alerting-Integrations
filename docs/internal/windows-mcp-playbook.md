@@ -241,6 +241,12 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
 | 31 | Cowork VM proxy 封鎖 `api.github.com` | `git push` 走得通（git 協議通道），但 `requests` / `curl` 對 `api.github.com` 回 403 Forbidden（proxy 層封鎖）。GitHub API 操作必須透過 Windows MCP 的 `curl.exe` |
 | 32 | `Set-Content` 預設加 BOM 導致 JSON parse 失敗 | GitHub API `curl.exe --data-binary @file` 讀入含 BOM 的 UTF-8 檔案會回 `Problems parsing JSON`。用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫入無 BOM 版本 |
+| 33 | MCP `start_process` 的 runtime ≠ 子行程真正執行時間 | `cmd.exe` 啟動 `git push` 後，MCP 可能在 ~1s 就 report「completed exit 0」，log 看起來被截在中間，但 git.exe 其實還在背景跑完。**不要信 MCP runtime**，一律用 side-effect 驗證：`git ls-remote origin HEAD` 比對遠端 SHA，或 `git fetch origin main` 看 refs 有沒有更新。詳見 [§修復層 C：Windows 原生 Git Fallback](#修復層-cwindows-原生-git-fallback) |
+| 34 | Windows `cmd` batch 少了 `PATHEXT` 就找不到 `git.exe` | MCP 繼承到的 `PATHEXT` 可能沒包含 `.EXE`。所有 batch 起手必寫：`set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"` |
+| 35 | cmd `(echo ... & echo ...)` parenthesized group 被 `%PATH%` 裡的 NVIDIA 閉括號拆掉 | `C:\Program Files (x86)\NVIDIA ...` 的 `)` 會提早結束 group，報 `此時候不應有 \NVIDIA`。**不要用 parenthesized group 包 echo**，改成獨立 `echo` 行 |
+| 36 | pre-commit 產生的 `.git/hooks/pre-push` 硬寫死 Linux python 路徑 | `INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3` 在 Windows 不存在 → fallback 去找 `pre-commit` on PATH，但 Python 通常沒裝 console script shim。解法：把 hook 的第 6 行改成 `INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe`（Git Bash 吃 POSIX 路徑），或 `pip install --force-reinstall pre-commit` 重建 entry point |
+| 37 | `~/.ssh/` 無 private key 但 `credential.helper=manager` 有存 token | Windows 使用者常走 Git Credential Manager 不走 SSH。push 前臨時把 remote URL 切 HTTPS，讓 GCM 自動帶 stored token；push 完切回 SSH：`git remote set-url origin https://github.com/<o>/<r>.git; git push origin main; git remote set-url origin git@github.com:<o>/<r>.git` |
+| 38 | pre-commit 範圍模式 `--from-ref A --to-ref B` 的觸發 glob 只看範圍內改動檔案 | 要避免 hook 掃到整個 repo 的累積 drift（例如 `bilingual-structure-check` 對整個 repo 的 `.en.md`），把 trigger glob 會命中的檔案從 commit 範圍內拿掉就夠。例：把 `docs/internal/doc-map.en.md` 以 `git rm --cached` 移出 commit，hook 就 Skipped |
 
 ## FUSE Phantom Lock 防治
 
@@ -307,6 +313,134 @@ bash scripts/ops/git_check_lock.sh --clean
 ### 跨平台 Line Ending
 
 `.gitattributes` 確保 repo 內一律 LF，避免 CRLF/LF 混用在 FUSE 上造成額外的 diff 雜訊和 index 更新。
+
+### 修復層 B：FUSE Cache 重建（Level 1 ~ 5）
+
+當檔案殘影 / phantom lock 反覆出現、`rm` 過的檔案還看得到、或 git index 與磁碟內容對不上時，按以下層次逐步重建（輕 → 重）。優先跑 `make fuse-reset`，它會自動串 Level 1 + Level 3。
+
+**Level 1 — Cowork VM 端 drop dentry/inode cache**
+
+```bash
+sync
+echo 2 | sudo tee /proc/sys/vm/drop_caches   # 需要 sudo；Cowork VM 常沒給
+```
+
+只影響 VM 側的 kernel cache。無 sudo 時跳過，不影響後面層級。
+
+**Level 2 — Cowork UI 把 workspace unmount 再重選**（**最實用**）
+
+在 Cowork 桌面應用側邊欄把目前選取的資料夾取消，再重新選一次同樣的資料夾。這會讓 Cowork 重啟 FUSE driver 的 per-session state，等效於 FUSE userspace cache 冷啟動。9 成的殘影問題這一步就能解決。
+
+**Level 3 — Windows 端把壓住 inode 的 process 清掉**
+
+爛掉的 FUSE cache 多半是 Windows 上的 VS Code 或 Git for Windows 背景程序持續握著 file handle，讓 FUSE 以為檔案 busy → 快取無法驗證一致性。對應動作（`make fuse-reset` 自動跑 a/b/c）：
+
+```powershell
+# (a) 關 VS Code 背景 Git 掃描
+python scripts/ops/vscode_git_toggle.py off
+
+# (b) 清 stale .git/*.lock
+bash scripts/ops/git_check_lock.sh --clean
+
+# (c) 砍殘留的 port-forward / helm / kubectl / git process
+Get-Process Code, git, pre-commit -ErrorAction SilentlyContinue | Stop-Process -Force
+```
+
+**Level 4 — 整個 Session 重啟（核彈選項）**
+
+```bash
+make session-cleanup
+```
+
+然後**關 Cowork 桌面應用**、重開、開新 session。這會重建 FUSE driver process 跟所有 kernel mount 狀態。
+
+**Level 5 — 深層診斷（最後手段）**
+
+用 Sysinternals `handle64.exe` 列出誰還握著 `vibe-k8s-lab/` 下的 file handle：
+
+```powershell
+# 下載 handle64.exe：https://learn.microsoft.com/sysinternals/downloads/handle
+handle64.exe -accepteula -nobanner "vibe-k8s-lab"
+# 找到 PID 後：
+Stop-Process -Id <PID> -Force
+```
+
+若仍有殘影，跑 `chkdsk C: /scan`（唯讀掃描，不影響 FUSE）檢查底層 NTFS metadata 是否出錯。
+
+> **驗證重建成功**：`ls -la .git/ | grep -E 'lock|index'`（應該無 `*.lock`）+ `git status -sb`（應該無「殘影檔案」）。
+
+### 修復層 C：Windows 原生 Git Fallback（FUSE 側卡死時的備援路徑）
+
+FUSE 側 git 操作反覆卡住、或 pre-commit hook 在 FUSE mount 上一直踩到 index lock 時，**Windows 原生 cmd/PowerShell 是第二條可走的路徑**。工作模式：
+
+| 操作類型 | 走哪邊 | 原因 |
+|---------|-------|------|
+| 檔案 Read/Edit/Write | Claude 的檔案 tool（走 FUSE mount） | 雙向可見、原子寫入 |
+| `git status` / `git add` / `git commit` / `git push` | Desktop Commander MCP → Windows 原生 `C:\Program Files\Git\cmd\git.exe` | git index lock 寫在 Windows NTFS，不走 FUSE metadata |
+| pre-commit 執行 | Windows 原生 Python (`C:\Users\<USER>\AppData\Local\Python\bin\python.exe`) + `python -m pre_commit` | 避開 FUSE stat 延遲 |
+
+兩端共用同一份工作樹，但 git 的檔案鎖、pre-commit 的 hook cache 都在 NTFS 上，不受 FUSE phantom lock 影響。
+
+**Batch 起手式模板**（含所有必填 env，複製即用）：
+
+```batch
+@echo off
+setlocal
+set "PATH=C:\Users\<USER>\AppData\Local\Python\bin;C:\Program Files\Git\cmd;C:\Program Files\Git\usr\bin;C:\Windows\System32;C:\Windows;%PATH%"
+set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "GIT_TERMINAL_PROMPT=0"
+cd /d C:\Users\<USER>\vibe-k8s-lab
+
+:: 所有輸出一律重導到檔案 — MCP stdout 擷取不可靠
+git status -sb > C:\Users\<USER>\vibe-k8s-lab\_out.log 2>&1
+```
+
+然後用 Claude 的 `Read` tool 讀 `_out.log`。**不要**用 `(echo ... & echo ...)` parenthesized group 包 echo（會被 `%PATH%` 裡 NVIDIA 路徑的閉括號拆掉，見陷阱 #35）。
+
+**PowerShell 模式**（需要 `$LASTEXITCODE` 或複雜物件處理時）：
+
+```powershell
+$git = 'C:\Program Files\Git\cmd\git.exe'
+Start-Process -FilePath $git -ArgumentList 'ls-remote','origin','HEAD' `
+  -NoNewWindow -Wait `
+  -RedirectStandardOutput 'C:\Users\<USER>\vibe-k8s-lab\_lsr.txt' `
+  -RedirectStandardError  'C:\Users\<USER>\vibe-k8s-lab\_lsr_err.txt'
+Get-Content C:\Users\<USER>\vibe-k8s-lab\_lsr.txt
+```
+
+用 `Start-Process -NoNewWindow -Wait` 比 `& $git args 2>&1 | Tee-Object` 穩得多——後者在 MCP session 下常拿不到 `$LASTEXITCODE`。
+
+**驗證 push 成功的唯一可靠方法**（陷阱 #33：MCP runtime 不可信）：
+
+```powershell
+# 跑完 git push 之後，不看 MCP 回報的 runtime/exit，改問遠端
+Start-Process -FilePath $git -ArgumentList 'ls-remote','origin','HEAD' `
+  -NoNewWindow -Wait -RedirectStandardOutput _lsr.txt
+# 比對 _lsr.txt 裡的 SHA 是否 == 本地 HEAD
+```
+
+**Auth 路徑切換**：若 `~/.ssh/` 沒有 private key，但 `git config credential.helper` 是 `manager`（Git Credential Manager）、且 Windows Credential Manager 有存 `git:https://x-access-token@github.com` 這種憑證，則臨時切 HTTPS 讓 GCM 自動帶 token：
+
+```batch
+git remote set-url origin https://github.com/<owner>/<repo>.git
+git push origin main
+git remote set-url origin git@github.com:<owner>/<repo>.git
+```
+
+**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路徑（陷阱 #36）。兩種修法擇一：
+
+```bash
+# 修法 A：把 hook 的 INSTALL_PYTHON 改成 Windows POSIX 路徑（Git Bash 吃這個格式）
+INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe
+
+# 修法 B：把 pre-commit 裝成 console script shim
+pip install --force-reinstall pre-commit
+# 然後確保 Scripts 目錄在 PATH 上
+```
+
+> **什麼時候該走 Fallback C？** (1) `make git-preflight` + Level 2/3 都清過還是 lock；(2) pre-commit 在 FUSE mount 上跑得異常慢（> 10 倍平常）；(3) 檔案改了但 git 看不到 diff（FUSE metadata 不同步）。平常走 Cowork VM 的 bash/git 就好，Fallback C 是**應急路徑，不是常態**。
 
 ## 指令快速參考
 

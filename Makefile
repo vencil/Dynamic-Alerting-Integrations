@@ -154,6 +154,38 @@ session-cleanup: ## Session 結束或異常終止後的清理
 	@rm -f _out.txt _err.txt 2>/dev/null || true
 	@echo "✅ Session cleanup 完成"
 
+.PHONY: fuse-reset
+fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘影時用
+	@echo "=== FUSE Cache Reset: Level 1 → Level 3 ==="
+	@echo ""
+	@echo "[Level 1] Flush Cowork VM dentry/inode cache"
+	@sync 2>/dev/null || true
+	@if echo 2 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1; then \
+		echo "  ✓ drop_caches=2"; \
+	else \
+		echo "  ⚠ no sudo → skip (VM kernel cache untouched)"; \
+	fi
+	@echo ""
+	@echo "[Level 3a] 關 VS Code Git 背景掃描"
+	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
+	@echo ""
+	@echo "[Level 3b] 清 stale .git/*.lock"
+	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@echo ""
+	@echo "[Level 3c] Kill 殘留 port-forward"
+	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
+	@echo ""
+	@echo "=== 若仍有殘影，手動執行以下層級 ==="
+	@echo "  Level 2 (最實用): Cowork UI 把資料夾 unmount → 重選"
+	@echo "  Level 4 (核彈):   make session-cleanup → 關 Cowork 桌面 → 重開"
+	@echo "  Level 5 (診斷):   Windows 端 handle64.exe -accepteula vibe-k8s-lab"
+	@echo ""
+	@echo "詳細說明: docs/internal/windows-mcp-playbook.md §修復層 B"
+	@echo ""
+	@echo "驗證："
+	@echo "  ls -la .git/ | grep -E 'lock|index'   # 應無 *.lock"
+	@echo "  git status -sb                         # 應無殘影檔"
+
 .PHONY: playbook-freshness
 playbook-freshness: ## 檢查 Playbook 知識退火狀態（verified-at-version 是否跨版本過久）
 	@python3 scripts/tools/lint/check_playbook_freshness.py
