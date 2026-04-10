@@ -17,6 +17,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # changelog-lint calls `git describe --tags --abbrev=0` and
+          # walks `<tag>..HEAD`. The default fetch-depth: 1 shallow
+          # clone has neither tags nor history, so it falls back to
+          # linting only the GitHub-generated PR merge commit (not a
+          # conventional commit) and always fails. Need full history
+          # and tags for the tag-boundary walk to work.
+          fetch-depth: 0
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
