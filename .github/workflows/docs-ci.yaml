@@ -39,15 +39,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "18"
-          cache: "npm"
+          # NOTE: cache: "npm" is intentionally omitted — this repo has no
+          # root-level package-lock.json (only docs/interactive/ has one).
+          # Enabling cache without a lockfile makes setup-node fail with
+          # "Dependencies lock file is not found".
 
-      - name: Cache npm dependencies
+      - name: Cache npm global dir (mermaid-cli, puppeteer)
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-npm-mermaid-cli
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-npm-mermaid-
 
       - name: Install mermaid-cli
         run: |
@@ -72,9 +75,11 @@ jobs:
 
       - name: Validate and render Mermaid diagrams
         run: |
-          python scripts/tools/lint/validate_mermaid.py \
-            docs/ rule-packs/ \
-            --ci --render
+          # validate_mermaid.py takes a single positional path (nargs='?').
+          # Run it twice — once for docs/, once for rule-packs/ — so both
+          # trees are covered. Both must pass.
+          python scripts/tools/lint/validate_mermaid.py docs/ --ci --render
+          python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
 
   check-links:
     name: Check Documentation Links
@@ -102,9 +107,11 @@ jobs:
 
       - name: Check document links and cross-references
         run: |
-          python scripts/tools/lint/check_doc_links.py \
-            docs/ rule-packs/ \
-            --ci
+          # check_doc_links.py scans the whole repo from --repo-root (default
+          # ".") and does not accept positional path arguments. Passing
+          # `docs/ rule-packs/` here used to fail with
+          # `unrecognized arguments: docs/ rule-packs/`.
+          python scripts/tools/lint/check_doc_links.py --ci
 
   check-frontmatter:
     name: Check Documentation Front Matter
@@ -132,9 +139,11 @@ jobs:
 
       - name: Validate documentation YAML front matter
         run: |
-          python scripts/tools/dx/add_frontmatter.py \
-            docs/ rule-packs/ \
-            --check
+          # add_frontmatter.py scans a single base directory via --base-dir
+          # and does not accept positional paths. Run it twice so both
+          # docs/ and rule-packs/ are covered; both must pass.
+          python scripts/tools/dx/add_frontmatter.py --check --base-dir docs/
+          python scripts/tools/dx/add_frontmatter.py --check --base-dir rule-packs/
 
   check-coverage:
     name: Check Documentation Coverage
@@ -162,16 +171,16 @@ jobs:
 
       - name: Check documentation coverage (80% minimum)
         run: |
-          python scripts/tools/dx/doc_coverage.py \
-            docs/ rule-packs/ \
-            --ci
+          # doc_coverage.py scans the whole repo from --repo-root (default
+          # ".") and does not accept positional paths. Passing
+          # `docs/ rule-packs/` here used to fail with
+          # `unrecognized arguments: docs/ rule-packs/`.
+          python scripts/tools/dx/doc_coverage.py --ci
 
       - name: Update coverage badge JSON
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          python scripts/tools/dx/doc_coverage.py \
-            docs/ rule-packs/ \
-            --badge --json > docs/assets/doc-coverage-badge.json || true
+          python scripts/tools/dx/doc_coverage.py --badge --json > docs/assets/doc-coverage-badge.json || true
 
       - name: Sync glossary abbreviations
         run: |
