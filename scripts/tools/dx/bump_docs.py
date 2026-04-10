@@ -454,12 +454,18 @@ def _build_platform_rules():
 
     # NOTE: Chart.yaml version 已移至 _build_exporter_rules()
 
-    # CLAUDE.md project overview (only the "## 專案概覽 (vX.Y.Z)" line)
+    # CLAUDE.md project overview platform version.
+    # Format (since v2.6.0, when the heading was simplified):
+    #   ## 專案概覽
+    #
+    #   **Multi-Tenant Dynamic Alerting 平台 (v2.6.0)** — ...
+    # The version lives in the bold lead-in line, not the heading itself,
+    # so the anchor is the platform name + version, not the heading text.
     rules.append({
         "file": "CLAUDE.md",
         "desc": "CLAUDE.md project overview version",
-        "pattern": r"專案概覽 \(v[0-9]+\.[0-9]+[^)]*\)",
-        "replacement": lambda v: f"專案概覽 (v{v})",
+        "pattern": r"Multi-Tenant Dynamic Alerting 平台 \(v[0-9]+\.[0-9]+[^)]*\)",
+        "replacement": lambda v: f"Multi-Tenant Dynamic Alerting 平台 (v{v})",
     })
 
     # da-tools README platform version reference
@@ -893,11 +899,19 @@ def read_current_versions():
         if m:
             versions["exporter"] = m.group(1)
 
-    # Platform version from CLAUDE.md "專案概覽 (vX.Y.Z)"
+    # Platform version from CLAUDE.md.
+    # Since v2.6.0 the heading "## 專案概覽" no longer carries a version
+    # suffix; the version moved to the bold lead-in line below the heading
+    # ("**Multi-Tenant Dynamic Alerting 平台 (vX.Y.Z)** — ..."). The
+    # anchor here must stay in sync with the write rule in
+    # _build_platform_rules() above.
     claude_md = REPO_ROOT / "CLAUDE.md"
     if claude_md.exists():
         content = claude_md.read_text(encoding="utf-8")
-        m = re.search(r"專案概覽 \(v([0-9]+\.[0-9]+[^)]*)\)", content)
+        m = re.search(
+            r"Multi-Tenant Dynamic Alerting 平台 \(v([0-9]+\.[0-9]+[^)]*)\)",
+            content,
+        )
         if m:
             versions["platform"] = m.group(1)
 
