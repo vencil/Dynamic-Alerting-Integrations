@@ -10,6 +10,7 @@
 """
 
 import argparse
+import atexit
 import os
 import re
 import subprocess
@@ -17,6 +18,16 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
+
+# Puppeteer config required for mmdc to launch headless Chrome inside
+# sandboxed CI runners (GitHub Actions, containers, WSL, etc.). Without
+# --no-sandbox, mmdc fails with "Failed to launch the browser process!"
+# whenever the runner cannot grant the default Chrome sandbox capabilities.
+# The config is materialised lazily on first render via
+# MermaidValidator._ensure_puppeteer_config and cleaned up at process exit.
+_PUPPETEER_CONFIG_JSON = (
+    '{"args": ["--no-sandbox", "--disable-setuid-sandbox"]}'
+)
 
 
 class MermaidValidator:
@@ -32,6 +43,46 @@ class MermaidValidator:
         self.errors: List[Dict] = []
         self.total_diagrams = 0
         self.valid_diagrams = 0
+        # Lazily materialised on first render call.
+        self._puppeteer_config_path: Optional[str] = None
+
+    def _ensure_puppeteer_config(self) -> str:
+        """Materialise the puppeteer config file once per instance.
+
+        Returns the path to a JSON file that tells mmdc to launch
+        headless Chrome with --no-sandbox / --disable-setuid-sandbox.
+        Required on GitHub Actions runners and most container/sandbox
+        environments where Chrome cannot grant itself a user namespace.
+
+        The temp file is registered for cleanup at interpreter exit.
+        """
+        if self._puppeteer_config_path is not None:
+            return self._puppeteer_config_path
+
+        fd, path = tempfile.mkstemp(
+            prefix='mmdc-puppeteer-', suffix='.json'
+        )
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(_PUPPETEER_CONFIG_JSON)
+        except Exception:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
+
+        # Best-effort cleanup at exit; ignore failures (file may be gone
+        # already if /tmp was wiped between calls).
+        def _cleanup(p: str = path) -> None:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+        atexit.register(_cleanup)
+        self._puppeteer_config_path = path
+        return path
 
     def validate_file(self, filepath: Path) -> List[Dict]:
         """驗證單個檔案中的所有 Mermaid 區塊"""
@@ -307,10 +358,18 @@ class MermaidValidator:
                 tmp_path = tmp.name
 
             try:
-                # Run mmdc with output to temp PNG (just validation, not stored)
+                # Run mmdc with output to temp PNG (just validation, not stored).
+                # -p <puppeteer-config> is required so headless Chrome can launch
+                # in sandboxed environments (CI runners, containers, WSL).
+                puppeteer_cfg = self._ensure_puppeteer_config()
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=True) as out:
                     result = subprocess.run(
-                        ['mmdc', '-i', tmp_path, '-o', out.name],
+                        [
+                            'mmdc',
+                            '-p', puppeteer_cfg,
+                            '-i', tmp_path,
+                            '-o', out.name,
+                        ],
                         capture_output=True,
                         text=True,
                         timeout=10,
