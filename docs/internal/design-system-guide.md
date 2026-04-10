@@ -555,10 +555,10 @@ docs/
 
 ## 相關文件
 
-- [`docs/assets/design-tokens.css`](../../assets/design-tokens.css) — Token 定義（SSOT）
-- [`docs/assets/tool-registry.yaml`](../../assets/tool-registry.yaml) — 互動工具註冊表
-- [`docs/interactive/index.html`](../../interactive/index.html) — Tools Hub
-- [`docs/jsx-loader.html`](../../jsx-loader.html) — JSX 工具載入器
+- [`docs/assets/design-tokens.css`](../assets/design-tokens.css) — Token 定義（SSOT）
+- [`docs/assets/tool-registry.yaml`](../assets/tool-registry.yaml) — 互動工具註冊表
+- [`docs/interactive/index.html`](../interactive/index.html) — Tools Hub
+- [`docs/assets/jsx-loader.html`](../assets/jsx-loader.html) — JSX 工具載入器
 - [`docs/internal/tool-map.md`](tool-map.md) — 所有工具清單
 - [`CHANGELOG.md`](../../CHANGELOG.md) — 版本歷程
 

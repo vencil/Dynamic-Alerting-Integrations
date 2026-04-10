@@ -76,7 +76,7 @@ graph TD
 # Tenants just declare thresholds: db-a: { mysql_connections: "100" }
 ```
 
-Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/architecture-and-design.en.md#21-config-driven-核心架構).
+Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/architecture-and-design.en.md#2-core-design-config-driven-architecture).
 
 ---
 

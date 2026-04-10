@@ -76,7 +76,7 @@ graph TD
 # 租戶只需宣告閾值：db-a: { mysql_connections: "100" }
 ```
 
-完整對比範例（含 Alertmanager 路由）見 [Config-Driven 設計](docs/architecture-and-design.md#21-config-driven-核心架構)。
+完整對比範例（含 Alertmanager 路由）見 [Config-Driven 設計](docs/architecture-and-design.md#2-核心設計config-driven-架構)。
 
 ---
 

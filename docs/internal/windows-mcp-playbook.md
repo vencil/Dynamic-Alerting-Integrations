@@ -235,13 +235,13 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
 | 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
 | 26 | PAT 查 GHCR packages 回 403 | GitHub Packages API 需要 `packages:read` scope；PAT 沒此 scope 時 GET `/users/{owner}/packages` 回 403，但 **CI 用 `GITHUB_TOKEN` 有 `packages:write` 所以 push 成功**。驗證 image 是否存在最快的方式是瀏覽器開 `github.com/{owner}?tab=packages`，不繞 API |
-| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/ops/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。詳見 [§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
+| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/ops/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1-5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
 | 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
 | 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |
 | 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
 | 31 | Cowork VM proxy 封鎖 `api.github.com` | `git push` 走得通（git 協議通道），但 `requests` / `curl` 對 `api.github.com` 回 403 Forbidden（proxy 層封鎖）。GitHub API 操作必須透過 Windows MCP 的 `curl.exe` |
 | 32 | `Set-Content` 預設加 BOM 導致 JSON parse 失敗 | GitHub API `curl.exe --data-binary @file` 讀入含 BOM 的 UTF-8 檔案會回 `Problems parsing JSON`。用 `[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))` 寫入無 BOM 版本 |
-| 33 | MCP `start_process` 的 runtime ≠ 子行程真正執行時間 | `cmd.exe` 啟動 `git push` 後，MCP 可能在 ~1s 就 report「completed exit 0」，log 看起來被截在中間，但 git.exe 其實還在背景跑完。**不要信 MCP runtime**，一律用 side-effect 驗證：`git ls-remote origin HEAD` 比對遠端 SHA，或 `git fetch origin main` 看 refs 有沒有更新。詳見 [§修復層 C：Windows 原生 Git Fallback](#修復層-cwindows-原生-git-fallback) |
+| 33 | MCP `start_process` 的 runtime ≠ 子行程真正執行時間 | `cmd.exe` 啟動 `git push` 後，MCP 可能在 ~1s 就 report「completed exit 0」，log 看起來被截在中間，但 git.exe 其實還在背景跑完。**不要信 MCP runtime**，一律用 side-effect 驗證：`git ls-remote origin HEAD` 比對遠端 SHA，或 `git fetch origin main` 看 refs 有沒有更新。詳見 [§修復層 C：Windows 原生 Git Fallback](#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) |
 | 34 | Windows `cmd` batch 少了 `PATHEXT` 就找不到 `git.exe` | MCP 繼承到的 `PATHEXT` 可能沒包含 `.EXE`。所有 batch 起手必寫：`set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"` |
 | 35 | cmd `(echo ... & echo ...)` parenthesized group 被 `%PATH%` 裡的 NVIDIA 閉括號拆掉 | `C:\Program Files (x86)\NVIDIA ...` 的 `)` 會提早結束 group，報 `此時候不應有 \NVIDIA`。**不要用 parenthesized group 包 echo**，改成獨立 `echo` 行 |
 | 36 | pre-commit 產生的 `.git/hooks/pre-push` 硬寫死 Linux python 路徑 | `INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3` 在 Windows 不存在 → fallback 去找 `pre-commit` on PATH，但 Python 通常沒裝 console script shim。解法：把 hook 的第 6 行改成 `INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe`（Git Bash 吃 POSIX 路徑），或 `pip install --force-reinstall pre-commit` 重建 entry point |
@@ -368,6 +368,39 @@ Stop-Process -Id <PID> -Force
 若仍有殘影，跑 `chkdsk C: /scan`（唯讀掃描，不影響 FUSE）檢查底層 NTFS metadata 是否出錯。
 
 > **驗證重建成功**：`ls -la .git/ | grep -E 'lock|index'`（應該無 `*.lock`）+ `git status -sb`（應該無「殘影檔案」）。
+
+**Level 6 — Cowork VM 內的 rename-trick（Level 2/4/5 都不可用時的最後救命稻草）**
+
+2026-04-10 遇到的案例：Cowork 桌面無法重選資料夾、沒有 PowerShell、沒有 docker、沒有 sudo。phantom `.git/index.lock`（inode `7599824371576445`）被 stat/exists 看見，但 `ls`、`open`、`unlink`、`shutil.copy` 全部 ENOENT 或 EPERM。同時 `os.unlink` 在整個 `.git/` 下都回 EPERM（FUSE 層 block unlink）。
+
+關鍵觀察：**CREATE 仍可以成功、RENAME 也可以成功**。於是可以繞過：
+
+```python
+import os
+# (1) 建一個其他名字的檔案
+fd = os.open('.git/_scratch.tmp', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+os.close(fd)
+
+# (2) 把它 rename 到 phantom 路徑 — rename 會 override 掉 phantom dentry，
+#     讓 .git/index.lock 變成一個真正存在的 0-byte 檔案
+os.rename('.git/_scratch.tmp', '.git/index.lock')
+
+# (3) 再 rename 走 — 此時 .git/index.lock 已是真檔，rename 成功後 dentry 消失
+os.rename('.git/index.lock', '.git/_old_lock.tmp')
+
+# (4) 驗證 phantom 已清除
+assert 'index.lock' not in os.listdir('.git')
+assert not os.path.exists('.git/index.lock')
+
+# (5) 測試 git 的 O_CREAT|O_EXCL 現在可以用
+fd = os.open('.git/index.lock', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+os.close(fd)
+os.rename('.git/index.lock', '.git/_old_lock2.tmp')  # 讓 git 可以自己 acquire
+```
+
+清理殘留的 `.git/_old_lock*.tmp` 需要等下次 Level 2/4 cold-restart — 這些 0-byte 檔案不影響 git 操作。
+
+為何 rename 可行：FUSE 的 rename 走 `create+unlink` path 的相反操作（由 userspace driver 代為執行 NTFS 層的 `MoveFileEx`），而 Windows 的 `MoveFileEx` 在 phantom dentry 情況下會對齊到真實 NTFS 狀態，等於強制 dentry 重新 validate 一次。同理，`O_CREAT|O_EXCL` 在 phantom dentry 下會 EEXIST，但 rename-over 不會。
 
 ### 修復層 C：Windows 原生 Git Fallback（FUSE 側卡死時的備援路徑）
 

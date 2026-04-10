@@ -27,14 +27,14 @@ New here? Pick based on your needs:
 | [001](#001-severity-dedup-via-inhibit-rules) | Severity Dedup via Inhibit Rules | ✅ Accepted | Use Alertmanager inhibit_rules instead of PromQL for severity deduplication, preserving TSDB completeness |
 | [002](#002-oci-registry-over-chartmuseum) | OCI Registry over ChartMuseum | ✅ Accepted | Consolidate Helm charts and Docker images distribution via ghcr.io OCI registry, eliminating ChartMuseum dependency |
 | [003](#003-sentinel-alert-pattern) | Sentinel Alert Pattern | ✅ Accepted | Implement tri-state control via sentinel alerts + inhibit, replacing direct PromQL suppression |
-| [004](#004-federation-architecture--central-exporter-first) | Federation Architecture — Central Exporter First | ✅ Accepted → Extended | Prioritize central exporter + edge Prometheus federation (v2.1.0+: both architectures implemented) |
+| [004](#004-federation-architecture-central-exporter-first) | Federation Architecture — Central Exporter First | ✅ Accepted → Extended | Prioritize central exporter + edge Prometheus federation (v2.1.0+: both architectures implemented) |
 | [005](#005-projected-volume-for-rule-packs) | Projected Volume for Rule Packs | ✅ Accepted | Use Projected Volume with optional:true to implement selectable Rule Pack unloading |
 | [006](#006-tenant-mapping-topologies) | Tenant Mapping Topologies (1:1, N:1, 1:N) | ✅ Accepted | Data plane Recording Rules resolve three instance-tenant mapping topologies; exporter zero changes |
 | [007](#007-cross-domain-routing-profiles-and-domain-policies) | Cross-Domain Routing Profiles and Domain Policies | ✅ Accepted | Routing Profiles (reuse) + Domain Policies (constraints) two-layer architecture |
 | [008](#008-operator-native-integration-path) | Operator-Native Integration Path | ✅ Accepted | Dual-path toolchain for Prometheus Operator CRD conversion; core exporter architecture unchanged |
 | [009](#009-tenant-manager-crud-api) | Tenant Manager CRUD API | ✅ Accepted | Go HTTP server with oauth2-proxy, commit-on-write Git audit, async batch operations and SSE push |
 | [010](#010-multi-tenant-grouping-architecture) | Multi-Tenant Grouping Architecture | ✅ Accepted | Custom tenant groups with static members, multi-dimensional filtering via extended metadata schema |
-| [011](#011-pr-based-write-back) | PR-based Write-back Mode | ✅ Accepted | Dual-mode architecture (direct commit / pull request), supporting GitHub PR and GitLab MR |
+| [011](#011-pr-based-write-back-mode) | PR-based Write-back Mode | ✅ Accepted | Dual-mode architecture (direct commit / pull request), supporting GitHub PR and GitLab MR |
 
 ---
 
