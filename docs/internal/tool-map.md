@@ -96,6 +96,7 @@
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
+| `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
@@ -111,6 +112,7 @@
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
+| `lint_html_doc_links.py` | Raw HTML doc-link validator for MkDocs output. |
 | `lint_jsx_babel.py` | Validate JSX files parse correctly via Babel standalone. |
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |

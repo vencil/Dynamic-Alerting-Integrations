@@ -19,13 +19,19 @@ on:
     paths:
       - "docs/**/*.md"
       - "docs/**/*.jsx"
+      - "docs/**/*.html"
       - "rule-packs/**/*.md"
       - "README.md"
       - "README.en.md"
       - "CLAUDE.md"
+      - "mkdocs.yml"
       - "scripts/tools/**/*.py"
       - ".github/workflows/docs-ci.yaml"
       - ".pre-commit-config.yaml"
+  # head-blob-hygiene also runs on every push so historical drift is caught
+  # without waiting for a PR that touches docs/.
+  push:
+    branches: [main]
 
 jobs:
   validate-mermaid:
@@ -100,11 +106,37 @@ jobs:
         run: |
           pip install pyyaml
 
-      - name: Check document links and cross-references
+      - name: Check document links and cross-references (Markdown)
         run: |
           python scripts/tools/lint/check_doc_links.py \
             docs/ rule-packs/ \
             --ci
+
+      - name: Check raw HTML doc-links (MkDocs-aware)
+        run: |
+          python scripts/tools/lint/lint_html_doc_links.py --ci
+
+  head-blob-hygiene:
+    name: HEAD Blob Hygiene (strict)
+    # Scans every committed blob in HEAD for corruption the staged-file
+    # hygiene hook cannot retroactively fix:
+    #   - NUL bytes (e.g. the architecture-quiz.jsx regression)
+    #   - Truncated YAML/JSON (e.g. mkdocs.yml ending in 'CHANGELOG.m')
+    #   - Missing EOF newlines (strict mode only — the upstream cause of
+    #     'sed -i' induced NUL corruption per dev-rules #11)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Scan HEAD blobs (strict mode)
+        run: |
+          python scripts/tools/lint/check_head_blob_hygiene.py --ci --strict
 
   check-frontmatter:
     name: Check Documentation Front Matter
@@ -285,6 +317,7 @@ jobs:
     needs:
       - validate-mermaid
       - check-links
+      - head-blob-hygiene
       - check-frontmatter
       - check-coverage
       - mkdocs-build
@@ -294,12 +327,14 @@ jobs:
         run: |
           echo "validate-mermaid: ${{ needs.validate-mermaid.result }}"
           echo "check-links: ${{ needs.check-links.result }}"
+          echo "head-blob-hygiene: ${{ needs.head-blob-hygiene.result }}"
           echo "check-frontmatter: ${{ needs.check-frontmatter.result }}"
           echo "check-coverage: ${{ needs.check-coverage.result }}"
           echo "mkdocs-build: ${{ needs.mkdocs-build.result }}"
           echo "drift-checks: ${{ needs.drift-checks.result }}"
           if [[ "${{ needs.validate-mermaid.result }}" == "failure" || \
                 "${{ needs.check-links.result }}" == "failure" || \
+                "${{ needs.head-blob-hygiene.result }}" == "failure" || \
                 "${{ needs.check-frontmatter.result }}" == "failure" || \
                 "${{ needs.check-coverage.result }}" == "failure" || \
                 "${{ needs.mkdocs-build.result }}" == "failure" || \

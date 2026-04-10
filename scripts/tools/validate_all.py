@@ -70,6 +70,8 @@ TOOLS = [
     ("repo_name", "lint/check_repo_name.py", ["--ci"], "Repo name guard (no vibe-k8s-lab in URLs)"),
     ("structure", "lint/check_structure.py", ["--ci"], "Project structure enforcement"),
     ("jsx_babel", "lint/lint_jsx_babel.py", ["--ci"], "JSX Babel standalone parse validation"),
+    ("html_doc_links", "lint/lint_html_doc_links.py", ["--ci"], "Raw HTML doc-link validation (MkDocs-aware)"),
+    ("head_blob_hygiene", "lint/check_head_blob_hygiene.py", ["--ci"], "HEAD blob hygiene (NUL bytes / truncated EOF)"),
     ("cli_coverage", "lint/check_cli_coverage.py", ["--ci"], "CLI command coverage (entrypoint ↔ docs)"),
     ("bilingual_content", "lint/check_bilingual_content.py", ["--ci"], "Bilingual content CJK ratio check"),
     ("frontmatter_versions", "lint/check_frontmatter_versions.py", ["--ci"], "Frontmatter version global scan"),
