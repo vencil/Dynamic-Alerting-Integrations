@@ -10,7 +10,7 @@ lang: en
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Related Document**: [BYO Prometheus Integration Guide](byo-prometheus-integration.en.md) (ConfigMap Path)
-> **Related ADR**: [ADR-008 — Operator CRD Path](adr/008-operator-native-integration-path.en.md)
+> **Related ADR**: [ADR-008 — Operator CRD Path](../adr/008-operator-native-integration-path.en.md)
 
 ---
 
@@ -18,7 +18,7 @@ lang: en
 
 This guide covers how to integrate the Dynamic Alerting **Prometheus component** (ServiceMonitor + PrometheusRule) with your cluster in a Prometheus Operator (kube-prometheus-stack) environment.
 
-If you have not yet decided between the ConfigMap or Operator path, please refer to [Deployment Decision Matrix](getting-started/decision-matrix.md).
+If you have not yet decided between the ConfigMap or Operator path, please refer to [Deployment Decision Matrix](../getting-started/decision-matrix.md).
 
 ---
 
@@ -273,4 +273,4 @@ kubectl get clusterrolebinding | grep prometheus
 | [Operator GitOps Deployment](operator-gitops-deployment.en.md) | ArgoCD / Flux integration |
 | [Operator Shadow Monitoring](operator-shadow-monitoring.en.md) | Dual-track observation strategy |
 | [BYO Prometheus Integration](byo-prometheus-integration.en.md) | ConfigMap path (Path A) |
-| [ADR-008](adr/008-operator-native-integration-path.en.md) | Architecture Decision Record |
+| [ADR-008](../adr/008-operator-native-integration-path.en.md) | Architecture Decision Record |

@@ -144,7 +144,7 @@ kubectl get configmap -n monitoring -l app.kubernetes.io/part-of=dynamic-alertin
 da-tools validate-config --config-dir ./conf.d/
 ```
 
-> See also: [Operator Prometheus Integration](operator-prometheus-integration.en.md) · [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) · [Operator GitOps Deployment](operator-gitops-deployment.en.md)
+> See also: [Operator Prometheus Integration](integration/operator-prometheus-integration.en.md) · [Operator Alertmanager Integration](integration/operator-alertmanager-integration.en.md) · [Operator GitOps Deployment](integration/operator-gitops-deployment.en.md)
 
 ---
 

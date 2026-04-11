@@ -10,7 +10,7 @@ lang: zh
 > **受眾**：Platform Engineers、SREs
 > **版本**：v2.6.0
 > **對應文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)（ConfigMap 路徑）
-> **相關 ADR**：[ADR-008 — Operator CRD 路徑](adr/008-operator-native-integration-path.md)
+> **相關 ADR**：[ADR-008 — Operator CRD 路徑](../adr/008-operator-native-integration-path.md)
 
 ---
 
@@ -18,7 +18,7 @@ lang: zh
 
 本指南涵蓋 Prometheus Operator（kube-prometheus-stack）環境下，如何將 Dynamic Alerting 的 **Prometheus 端**（ServiceMonitor + PrometheusRule）與你的叢集整合。
 
-如果你尚未決定使用 ConfigMap 或 Operator 路徑，請先參考 [Deployment Decision Matrix](getting-started/decision-matrix.md)。
+如果你尚未決定使用 ConfigMap 或 Operator 路徑，請先參考 [Deployment Decision Matrix](../getting-started/decision-matrix.md)。
 
 ---
 
@@ -273,4 +273,4 @@ kubectl get clusterrolebinding | grep prometheus
 | [Operator GitOps 部署](operator-gitops-deployment.md) | ArgoCD / Flux 整合 |
 | [Operator Shadow Monitoring](operator-shadow-monitoring.md) | 雙軌觀察策略 |
 | [BYO Prometheus 整合](byo-prometheus-integration.md) | ConfigMap 路徑（Path A） |
-| [ADR-008](adr/008-operator-native-integration-path.md) | 架構決策記錄 |
+| [ADR-008](../adr/008-operator-native-integration-path.md) | 架構決策記錄 |

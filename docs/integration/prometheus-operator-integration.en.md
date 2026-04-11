@@ -9,7 +9,7 @@ lang: en
 
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
-> **Related ADR**: [ADR-008 — Operator CRD Path](adr/008-operator-native-integration-path.en.md)
+> **Related ADR**: [ADR-008 — Operator CRD Path](../adr/008-operator-native-integration-path.en.md)
 
 ---
 
@@ -24,7 +24,7 @@ Starting from v2.6.0, this guide is split into four symmetric documents that mir
 | [Operator Prometheus Integration](operator-prometheus-integration.en.md) | [BYO Prometheus Integration](byo-prometheus-integration.en.md) | ServiceMonitor + PrometheusRule |
 | [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) | [BYO Alertmanager Integration](byo-alertmanager-integration.en.md) | AlertmanagerConfig + 6 Receiver Templates + Tri-state Inhibit Rules |
 | [Operator GitOps Deployment](operator-gitops-deployment.en.md) | [GitOps Deployment Guide](gitops-deployment.en.md) | ArgoCD / Flux Integration + CI Pipeline |
-| [Operator Shadow Monitoring](operator-shadow-monitoring.en.md) | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) | Dual-track Observation Strategy |
+| [Operator Shadow Monitoring](operator-shadow-monitoring.en.md) | [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md) | Dual-track Observation Strategy |
 
 ---
 
@@ -32,7 +32,7 @@ Starting from v2.6.0, this guide is split into four symmetric documents that mir
 
 ### Not sure which path to use?
 
-→ See the [Deployment Decision Matrix](getting-started/decision-matrix.md)
+→ See the [Deployment Decision Matrix](../getting-started/decision-matrix.md)
 
 ### First-time Operator path deployment?
 
@@ -68,7 +68,7 @@ rules:
 
 | Resource | Description |
 |----------|-------------|
-| [ADR-008 — Operator CRD Path](adr/008-operator-native-integration-path.en.md) | Architecture Decision Record (with v2.6.0 boundary declaration) |
-| [da-tools CLI Reference — operator-generate](cli-reference.en.md#operator-generate) | CLI usage guide |
-| [Architecture & Design](architecture-and-design.en.md) | Platform architecture |
+| [ADR-008 — Operator CRD Path](../adr/008-operator-native-integration-path.en.md) | Architecture Decision Record (with v2.6.0 boundary declaration) |
+| [da-tools CLI Reference — operator-generate](../cli-reference.en.md#operator-generate) | CLI usage guide |
+| [Architecture & Design](../architecture-and-design.en.md) | Platform architecture |
 | [Prometheus Operator Documentation](https://prometheus-operator.dev/) | Upstream docs |

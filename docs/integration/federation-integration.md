@@ -13,7 +13,7 @@ lang: zh
 
 本文件描述 Dynamic Alerting 平台在多叢集（multi-cluster）環境中的部署架構。核心原則是 **中央集中閾值管理，邊緣各自收集指標**，透過 Prometheus federation 或 remote-write 實現全域統一告警。
 
-快速部署步驟見 [場景快速指引](scenarios/multi-cluster-federation.md)。
+快速部署步驟見 [場景快速指引](../scenarios/multi-cluster-federation.md)。
 
 ### 1.1 適用場景
 
@@ -485,4 +485,4 @@ da-tools federation-check e2e \
 | 資源 | 相關性 |
 |------|--------|
 | ["Federation Integration Guide"] | ⭐⭐⭐ |
-| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](scenarios/multi-cluster-federation.md) | ⭐⭐⭐ |
+| ["場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"](../scenarios/multi-cluster-federation.md) | ⭐⭐⭐ |

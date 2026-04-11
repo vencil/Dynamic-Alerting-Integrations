@@ -326,7 +326,7 @@ kubectl create configmap threshold-config \
 
 **方式 C：GitOps (生產環境推薦)**
 
-將 `conf.d/` 目錄納入 Git repo，CI/CD pipeline 組裝為 ConfigMap 並 apply。詳見 [GitOps 部署指南](../../docs/gitops-deployment.md)。
+將 `conf.d/` 目錄納入 Git repo，CI/CD pipeline 組裝為 ConfigMap 並 apply。詳見 [GitOps 部署指南](../../docs/integration/gitops-deployment.md)。
 
 > **Hot-reload**：無論哪種方式，ConfigMap 變更後 K8s 會在 1-2 分鐘內 propagate 新內容至 Pod volume，exporter 的 SHA-256 watcher 在下一個 reload-interval (預設 30s) 自動偵測並載入。不需重啟 Pod。
 

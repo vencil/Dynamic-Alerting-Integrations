@@ -486,4 +486,4 @@ The Central Evaluation architecture can be seamlessly upgraded to Edge Evaluatio
 | Resource | Relevance |
 |----------|-----------|
 | ["Federation Integration Guide"](./federation-integration.md) | ⭐⭐⭐ |
-| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](scenarios/multi-cluster-federation.en.md) | ⭐⭐⭐ |
+| ["Scenario: Multi-Cluster Federation Architecture — Central Thresholds + Edge Metrics"](../scenarios/multi-cluster-federation.en.md) | ⭐⭐⭐ |

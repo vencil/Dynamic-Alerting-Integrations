@@ -425,7 +425,7 @@ da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-polic
 da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
 ```
 
-工具內建冪等檢查（不重複建立相同 silence）與自動延展（既有 silence 到期早於視窗結束時自動 extend）。詳見 [Shadow Monitoring SOP §8](shadow-monitoring-sop.md) 中的維護窗口操作說明。
+工具內建冪等檢查（不重複建立相同 silence）與自動延展（既有 silence 到期早於視窗結束時自動 extend）。詳見 [Shadow Monitoring SOP §8](../shadow-monitoring-sop.md) 中的維護窗口操作說明。
 
 ---
 
@@ -439,9 +439,9 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 |------|--------|
 | ["BYO Alertmanager Integration Guide"] | ⭐⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐⭐ |
-| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
-| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
-| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](../api/README.md) | ⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](../benchmarks.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.md) | ⭐⭐ |

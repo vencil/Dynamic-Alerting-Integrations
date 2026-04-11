@@ -407,8 +407,8 @@ v2.1.0 引入 per-file SHA-256 index + parsed config cache 的增量重載路徑
 |------|--------|
 | [Architecture & Design](architecture-and-design.md) | ⭐⭐⭐ |
 | [Threshold Exporter API Reference](api/README.md) | ⭐⭐ |
-| [BYO Alertmanager 整合指南](./byo-alertmanager-integration.md) | ⭐⭐ |
-| [BYO Prometheus 整合指南](./byo-prometheus-integration.md) | ⭐⭐ |
+| [BYO Alertmanager 整合指南](integration/byo-alertmanager-integration.md) | ⭐⭐ |
+| [BYO Prometheus 整合指南](integration/byo-prometheus-integration.md) | ⭐⭐ |
 | [da-tools CLI Reference](./cli-reference.md) | ⭐⭐ |
 | [Grafana Dashboard 導覽](./grafana-dashboards.md) | ⭐⭐ |
 | [進階場景與測試覆蓋](internal/test-coverage-matrix.md) | ⭐⭐ |

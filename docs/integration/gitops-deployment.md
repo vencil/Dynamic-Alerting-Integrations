@@ -253,6 +253,6 @@ Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routin
 | 資源 | 相關性 |
 |------|--------|
 | ["GitOps Deployment Guide"] | ⭐⭐⭐ |
-| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
-| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
-| ["AST 遷移引擎架構"](./migration-engine.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
+| ["AST 遷移引擎架構"](../migration-engine.md) | ⭐⭐ |

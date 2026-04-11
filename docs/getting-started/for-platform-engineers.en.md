@@ -9,7 +9,7 @@ lang: en
 
 > **v2.6.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
-> Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../prometheus-operator-integration.en.md) · [Deployment Decision Matrix](decision-matrix.md)
+> Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../integration/gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../integration/prometheus-operator-integration.en.md) · [Deployment Decision Matrix](decision-matrix.md)
 
 ## Three Things You Need to Know
 
@@ -26,7 +26,7 @@ The platform supports two deployment paths. Not sure which to choose? See the [D
 | Path | Use Case | Guide |
 |------|----------|-------|
 | **Path A: ConfigMap** | Any Prometheus environment, non-K8s | This guide (below) |
-| **Path B: Operator CRD** | kube-prometheus-stack installed | [Operator Integration Guide](../prometheus-operator-integration.md) |
+| **Path B: Operator CRD** | kube-prometheus-stack installed | [Operator Integration Guide](../integration/prometheus-operator-integration.md) |
 
 ## 30-Second Quick Deploy
 

@@ -383,15 +383,15 @@ da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
-平台對時序參數設有 guardrails（group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h），超限值自動 clamp。完整 receiver 類型範例與 Go template 訊息客製化詳見 [BYO Alertmanager 整合指南 §5](byo-alertmanager-integration.md#5-receiver-類型)。
+平台對時序參數設有 guardrails（group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h），超限值自動 clamp。完整 receiver 類型範例與 Go template 訊息客製化詳見 [BYO Alertmanager 整合指南 §5](integration/byo-alertmanager-integration.md#5-receiver-類型)。
 
 ### 進階路由功能
 
 | 功能 | 說明 | 詳見 |
 |------|------|------|
-| Per-rule Routing Overrides | `_routing.overrides[]` 指定特定 alertname/metric_group 使用不同 receiver | [BYO Alertmanager §7](byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
+| Per-rule Routing Overrides | `_routing.overrides[]` 指定特定 alertname/metric_group 使用不同 receiver | [BYO Alertmanager §7](integration/byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
 | Silent / Maintenance Mode | `_silent_mode` / `_state_maintenance` + `expires` 自動失效 | [Architecture §2.7](architecture-and-design.md) |
-| Platform Enforced Routing | `_routing_enforced` NOC 必收（雙軌通知） | [BYO Alertmanager §8](byo-alertmanager-integration.md#8-platform-enforced-routing) |
+| Platform Enforced Routing | `_routing_enforced` NOC 必收（雙軌通知） | [BYO Alertmanager §8](integration/byo-alertmanager-integration.md#8-platform-enforced-routing) |
 
 ---
 
@@ -429,7 +429,7 @@ da-tools diagnose db-a
 | `_state_maintenance` | 維護模式（完全不觸發） | 同上，支援 `expires` 自動失效 |
 | `_severity_dedup` | 嚴重度去重 | `enabled: true` |
 
-Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routing_defaults`、`_routing_enforced`。詳見 [GitOps 部署指南 §7](gitops-deployment.md#7-tenant-自助設定範圍)。
+Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routing_defaults`、`_routing_enforced`。詳見 [GitOps 部署指南 §7](integration/gitops-deployment.md#7-tenant-自助設定範圍)。
 
 ---
 

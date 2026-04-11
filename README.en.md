@@ -116,9 +116,9 @@ make setup && make verify && make test-alert
 
 | Environment | Recommended Path | Guide |
 |-------------|-----------------|-------|
-| Existing Prometheus Operator | Helm + `rules.mode=operator` | [Operator Integration](docs/prometheus-operator-integration.en.md) |
-| Self-managed Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/byo-prometheus-integration.en.md) |
-| GitOps (ArgoCD / Flux) | Helm + Git repo | [GitOps Deployment](docs/gitops-deployment.en.md) |
+| Existing Prometheus Operator | Helm + `rules.mode=operator` | [Operator Integration](docs/integration/prometheus-operator-integration.en.md) |
+| Self-managed Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) |
+| GitOps (ArgoCD / Flux) | Helm + Git repo | [GitOps Deployment](docs/integration/gitops-deployment.en.md) |
 | Not sure? | Interactive Decision Matrix | [Decision Matrix](docs/getting-started/decision-matrix.en.md) |
 
 All paths support [OCI Registry installation](components/threshold-exporter/README.md#部署-helm).
@@ -204,7 +204,7 @@ Full ADR index: [docs/adr/](docs/adr/README.en.md)
 | [Architecture & Design](docs/architecture-and-design.en.md) | Core design, HA, Rule Pack architecture |
 | Getting Started (by role) | [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert](docs/getting-started/for-domain-experts.en.md) · [Tenant](docs/getting-started/for-tenants.en.md) |
 | [Migration Guide](docs/migration-guide.en.md) | Onboarding flow, AST engine, Shadow Monitoring |
-| Integration guides | [BYO Prometheus](docs/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/byo-alertmanager-integration.en.md) · [Federation](docs/federation-integration.en.md) · [GitOps](docs/gitops-deployment.en.md) |
+| Integration guides | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.en.md) · [Federation](docs/integration/federation-integration.en.md) · [GitOps](docs/integration/gitops-deployment.en.md) |
 | [Custom Rule Governance](docs/custom-rule-governance.en.md) | Three-tier governance, CI linting |
 | [Benchmarks](docs/benchmarks.md) | Full benchmark data and methodology |
 | [Scenarios](docs/scenarios/) | 9 hands-on scenarios (Routing · Shadow · Federation · Lifecycle · GitOps · Lab) |

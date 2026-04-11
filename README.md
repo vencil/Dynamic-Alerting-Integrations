@@ -116,9 +116,9 @@ make setup && make verify && make test-alert
 
 | 環境 | 推薦路徑 | 指南 |
 |------|---------|------|
-| 已有 Prometheus Operator | Helm + `rules.mode=operator` | [Operator 整合](docs/prometheus-operator-integration.md) |
-| 自管 Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/byo-prometheus-integration.md) |
-| GitOps（ArgoCD / Flux） | Helm + Git repo | [GitOps 部署](docs/gitops-deployment.md) |
+| 已有 Prometheus Operator | Helm + `rules.mode=operator` | [Operator 整合](docs/integration/prometheus-operator-integration.md) |
+| 自管 Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
+| GitOps（ArgoCD / Flux） | Helm + Git repo | [GitOps 部署](docs/integration/gitops-deployment.md) |
 | 不確定？ | 互動式決策矩陣 | [Decision Matrix](docs/getting-started/decision-matrix.md) |
 
 所有路徑均支援 [OCI Registry 安裝](components/threshold-exporter/README.md#部署-helm)。
@@ -204,7 +204,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volum
 | [架構與設計](docs/architecture-and-design.md) | 核心設計、HA、Rule Pack 架構 |
 | 快速入門（按角色） | [Platform Engineer](docs/getting-started/for-platform-engineers.md) · [Domain Expert](docs/getting-started/for-domain-experts.md) · [Tenant](docs/getting-started/for-tenants.md) |
 | [遷移指南](docs/migration-guide.md) | 導入流程、AST 引擎、Shadow Monitoring |
-| 整合指南 | [BYO Prometheus](docs/byo-prometheus-integration.md) · [BYO Alertmanager](docs/byo-alertmanager-integration.md) · [Federation](docs/federation-integration.md) · [GitOps](docs/gitops-deployment.md) |
+| 整合指南 | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.md) · [Federation](docs/integration/federation-integration.md) · [GitOps](docs/integration/gitops-deployment.md) |
 | [客製化規則治理](docs/custom-rule-governance.md) | 三層治理模型、CI Linting |
 | [性能基準](docs/benchmarks.md) | Benchmark 數據與方法論 |
 | [場景指南](docs/scenarios/) | 9 個實戰場景（Routing · Shadow · Federation · Lifecycle · GitOps · Lab） |

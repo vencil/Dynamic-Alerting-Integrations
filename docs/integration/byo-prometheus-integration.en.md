@@ -8,7 +8,7 @@ lang: en
 # Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide
 
 > **Audience**: Platform Engineers, SREs
-> **Prerequisite Reading**: [Architecture and Design](architecture-and-design.md) §1–§3 (Vector matching and Projected Volume principles)
+> **Prerequisite Reading**: [Architecture and Design](../architecture-and-design.md) §1–§3 (Vector matching and Projected Volume principles)
 > **Version**: 
 
 > **Language / 語言:** **English (Current)** | [中文](byo-prometheus-integration.md)
@@ -143,7 +143,7 @@ Option A assumes 1:1 (one namespace = one tenant). The platform also supports ot
 
 - **1:N (one Namespace → multiple Tenants)**: For shared namespace scenarios, use Option B with Service labels/annotations to distinguish tenants.
 
-**Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Design Document §2.3](design/config-driven.en.md#23-tenant-namespace-mapping) and [ADR-006](adr/006-tenant-mapping-topologies.en.md) for details.
+**Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Design Document §2.3](../design/config-driven.en.md#23-tenant-namespace-mapping) and [ADR-006](../adr/006-tenant-mapping-topologies.en.md) for details.
 
 ---
 
@@ -374,7 +374,7 @@ A: No. If you enable `--web.enable-lifecycle`, `curl -X POST /-/reload` performs
 A: Yes. All rule packs use `optional: true`; you only need to add the ones you need. Unmounted rule packs have no impact on Prometheus.
 
 **Q: Will my existing alerting rules conflict?**
-A: No. Dynamic threshold rule packs use independent metric namespaces (`user_threshold`, `user_state_filter`, `tenant:*` recording rules) and won't conflict with your existing rules. However, we recommend running both in parallel during the Shadow Monitoring phase (see [Shadow Monitoring SOP](shadow-monitoring-sop.md)) before switching.
+A: No. Dynamic threshold rule packs use independent metric namespaces (`user_threshold`, `user_state_filter`, `tenant:*` recording rules) and won't conflict with your existing rules. However, we recommend running both in parallel during the Shadow Monitoring phase (see [Shadow Monitoring SOP](../shadow-monitoring-sop.md)) before switching.
 
 **Q: Does threshold-exporter need to be deployed in my cluster?**
 A: Yes. `threshold-exporter` must access tenant ConfigMaps, so it must be deployed in the same cluster's `monitoring` namespace. It is a lightweight Go binary deployed as HA ×2 replicas with extremely low resource consumption (< 50MB RSS).
@@ -388,9 +388,9 @@ A: `threshold-exporter` is deployed in the data cluster (near tenant ConfigMaps)
 |----------|-----------|
 | ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐⭐ |
 | ["BYO Alertmanager Integration Guide"] | ⭐⭐⭐ |
-| ["Threshold Exporter API Reference"](api/README.en.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](../api/README.en.md) | ⭐⭐ |
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

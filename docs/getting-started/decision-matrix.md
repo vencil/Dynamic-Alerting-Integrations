@@ -55,7 +55,7 @@ lang: zh
 - 團隊不熟悉 Kubernetes CRD
 - 需要支援非 K8s 環境（VM、Docker Compose）
 
-→ 開始：[BYO Prometheus 整合指南](../byo-prometheus-integration.md)
+→ 開始：[BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md)
 
 ### 適合 Operator 路徑的場景
 
@@ -65,7 +65,7 @@ lang: zh
 - 需要 CRD-level 的 RBAC 控制
 - Enterprise 環境要求 Secret 不以明文存在 YAML
 
-→ 開始：[Operator Prometheus 整合指南](../operator-prometheus-integration.md)
+→ 開始：[Operator Prometheus 整合指南](../integration/operator-prometheus-integration.md)
 
 ---
 
@@ -81,4 +81,4 @@ lang: zh
 |------|------|
 | [Platform Engineer 入門](for-platform-engineers.md) | 完整入門指南 |
 | [ADR-008](../adr/008-operator-native-integration-path.md) | 雙路徑架構決策 |
-| [Operator 整合手冊（Hub）](../prometheus-operator-integration.md) | Operator 路徑導航 |
+| [Operator 整合手冊（Hub）](../integration/prometheus-operator-integration.md) | Operator 路徑導航 |

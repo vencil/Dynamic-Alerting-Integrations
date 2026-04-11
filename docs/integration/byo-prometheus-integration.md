@@ -8,7 +8,7 @@ lang: zh
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
 
 > **受眾**：Platform Engineers、SREs
-> **前置閱讀**：[架構與設計](architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
+> **前置閱讀**：[架構與設計](../architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
 > **版本**：v2.6.0
 
 ---
@@ -141,7 +141,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{tenant!=""}' \
 
 - **1:N（一個 Namespace → 多個 Tenant）**：共享 namespace 場景，使用方案 B 的 Service label/annotation 區分 tenant。
 
-**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[設計文件 §2.3](design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)。
+**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[設計文件 §2.3](../design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)。
 
 ---
 
@@ -372,7 +372,7 @@ A: 不需要。如果你啟用了 `--web.enable-lifecycle`，`curl -X POST /-/re
 A: 可以。所有規則包使用 `optional: true`，你只需加入你需要的。未掛載的規則包不會影響 Prometheus。
 
 **Q: 我現有的 alerting rule 會衝突嗎？**
-A: 不會。動態閾值規則包使用獨立的指標命名空間（`user_threshold`、`user_state_filter`、`tenant:*` recording rules），不會與你現有的規則衝突。但建議在 Shadow Monitoring 階段（參考 [Shadow Monitoring SOP](shadow-monitoring-sop.md)）雙軌並行一段時間再切換。
+A: 不會。動態閾值規則包使用獨立的指標命名空間（`user_threshold`、`user_state_filter`、`tenant:*` recording rules），不會與你現有的規則衝突。但建議在 Shadow Monitoring 階段（參考 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)）雙軌並行一段時間再切換。
 
 **Q: threshold-exporter 需要部署在我的叢集裡嗎？**
 A: 是的。`threshold-exporter` 需要存取 tenant ConfigMap，因此必須部署在同一叢集的 `monitoring` namespace。它是一個輕量的 Go binary，HA ×2 副本，資源消耗極低（< 50MB RSS）。
@@ -386,9 +386,9 @@ A: `threshold-exporter` 部署在資料叢集內（靠近 tenant ConfigMap）。
 |------|--------|
 | ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐⭐ |
 | ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐⭐ |
-| ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
-| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
-| ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
-| ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |
-| ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |
-| ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](../api/README.md) | ⭐⭐ |
+| ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](../benchmarks.md) | ⭐⭐ |
+| ["da-tools CLI Reference"](../cli-reference.md) | ⭐⭐ |
+| ["Grafana Dashboard 導覽"](../grafana-dashboards.md) | ⭐⭐ |
+| ["進階場景與測試覆蓋"](../internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Shadow Monitoring SRE SOP"](../shadow-monitoring-sop.md) | ⭐⭐ |

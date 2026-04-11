@@ -33,7 +33,7 @@ helm install threshold-exporter ./helm/threshold-exporter \
 
 - Go 應用 + 三種 config 注入方式（Helm / kubectl / GitOps）：[`components/threshold-exporter/README.md`](../../components/threshold-exporter/README.md)
 - 架構與設計：[`docs/architecture-and-design.md`](../../docs/architecture-and-design.md)
-- 部署整合：[`docs/byo-prometheus-integration.md`](../../docs/byo-prometheus-integration.md) · [`docs/gitops-deployment.md`](../../docs/gitops-deployment.md)
+- 部署整合：[`docs/byo-prometheus-integration.md`](../../docs/integration/byo-prometheus-integration.md) · [`docs/gitops-deployment.md`](../../docs/integration/gitops-deployment.md)
 - 版本歷程：[`CHANGELOG.md`](../../CHANGELOG.md)
 
 ## values.yaml 參數

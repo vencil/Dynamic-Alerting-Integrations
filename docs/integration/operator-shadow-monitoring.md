@@ -212,4 +212,4 @@ kubectl apply -f alertmanagerconfig-db-a-new.yaml
 |------|------|
 | [Operator Alertmanager 整合](operator-alertmanager-integration.md) | AlertmanagerConfig 完整設定 |
 | [Operator GitOps 部署](operator-gitops-deployment.md) | CI/CD 整合 |
-| [Shadow Monitoring SOP](shadow-monitoring-sop.md) | 通用 Shadow Monitoring 流程 |
+| [Shadow Monitoring SOP](../shadow-monitoring-sop.md) | 通用 Shadow Monitoring 流程 |

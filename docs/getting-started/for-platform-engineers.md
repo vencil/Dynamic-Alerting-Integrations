@@ -9,7 +9,7 @@ lang: zh
 
 > **v2.6.0** | 適用對象：Platform Engineers、SRE、基礎設施管理員
 >
-> 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator 整合](../prometheus-operator-integration.md) · [Deployment Decision Matrix](decision-matrix.md)
+> 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../integration/gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator 整合](../integration/prometheus-operator-integration.md) · [Deployment Decision Matrix](decision-matrix.md)
 
 ## 你需要知道的三件事
 
@@ -26,7 +26,7 @@ lang: zh
 | 路徑 | 適用場景 | 指南 |
 |------|---------|------|
 | **Path A: ConfigMap** | 任何 Prometheus 環境、非 K8s 環境 | 本文（下方） |
-| **Path B: Operator CRD** | 已安裝 kube-prometheus-stack | [Operator 整合指南](../prometheus-operator-integration.md) |
+| **Path B: Operator CRD** | 已安裝 kube-prometheus-stack | [Operator 整合指南](../integration/prometheus-operator-integration.md) |
 
 ## 30 秒快速部署
 

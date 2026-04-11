@@ -10,7 +10,7 @@ lang: zh
 > **受眾**：Platform Engineers、SREs
 > **版本**：v2.6.0
 > **對應文件**：[BYO Alertmanager 整合指南](byo-alertmanager-integration.md)（ConfigMap 路徑）
-> **相關 ADR**：[ADR-008 — Operator CRD 路徑](adr/008-operator-native-integration-path.md)
+> **相關 ADR**：[ADR-008 — Operator CRD 路徑](../adr/008-operator-native-integration-path.md)
 
 ---
 
@@ -349,4 +349,4 @@ kubectl get secret -n monitoring | grep da-
 | [Operator Prometheus 整合](operator-prometheus-integration.md) | ServiceMonitor + PrometheusRule |
 | [Operator GitOps 部署](operator-gitops-deployment.md) | ArgoCD / Flux 整合 |
 | [BYO Alertmanager 整合](byo-alertmanager-integration.md) | ConfigMap 路徑（Path A） |
-| [ADR-008](adr/008-operator-native-integration-path.md) | 架構決策記錄 |
+| [ADR-008](../adr/008-operator-native-integration-path.md) | 架構決策記錄 |

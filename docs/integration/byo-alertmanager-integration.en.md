@@ -427,7 +427,7 @@ If tenant configuration includes `_state_maintenance.recurring[]` (cron + durati
 da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
 ```
 
-The tool has built-in idempotency checks (no duplicate silence creation) and auto-extension (if existing silence expires before window ends, automatically extends). See [Shadow Monitoring SOP §8](shadow-monitoring-sop.en.md) for maintenance window operation details.
+The tool has built-in idempotency checks (no duplicate silence creation) and auto-extension (if existing silence expires before window ends, automatically extends). See [Shadow Monitoring SOP §8](../shadow-monitoring-sop.en.md) for maintenance window operation details.
 
 ---
 
@@ -441,9 +441,9 @@ The tool has built-in idempotency checks (no duplicate silence creation) and aut
 |----------|-----------|
 | ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐⭐ |
 | ["Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide"] | ⭐⭐⭐ |
-| ["Threshold Exporter API Reference"](api/README.en.md) | ⭐⭐ |
+| ["Threshold Exporter API Reference"](../api/README.en.md) | ⭐⭐ |
 | ["Performance Analysis & Benchmarks"] | ⭐⭐ |
 | ["da-tools CLI Reference"] | ⭐⭐ |
 | ["Grafana Dashboard Guide"] | ⭐⭐ |
-| ["Advanced Scenarios & Test Coverage"](internal/test-coverage-matrix.md) | ⭐⭐ |
+| ["Advanced Scenarios & Test Coverage"](../internal/test-coverage-matrix.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"] | ⭐⭐ |

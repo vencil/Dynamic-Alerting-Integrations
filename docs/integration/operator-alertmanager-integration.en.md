@@ -10,7 +10,7 @@ lang: en
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Related Document**: [BYO Alertmanager Integration Guide](byo-alertmanager-integration.en.md) (ConfigMap Path)
-> **Related ADR**: [ADR-008 — Operator CRD Path](adr/008-operator-native-integration-path.en.md)
+> **Related ADR**: [ADR-008 — Operator CRD Path](../adr/008-operator-native-integration-path.en.md)
 
 ---
 
@@ -349,4 +349,4 @@ Ensure Secret and AlertmanagerConfig are in the same namespace.
 | [Operator Prometheus Integration](operator-prometheus-integration.en.md) | ServiceMonitor + PrometheusRule |
 | [Operator GitOps Deployment](operator-gitops-deployment.en.md) | ArgoCD / Flux integration |
 | [BYO Alertmanager Integration](byo-alertmanager-integration.en.md) | ConfigMap path (Path A) |
-| [ADR-008](adr/008-operator-native-integration-path.en.md) | Architecture Decision Record |
+| [ADR-008](../adr/008-operator-native-integration-path.en.md) | Architecture Decision Record |

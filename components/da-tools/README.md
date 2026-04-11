@@ -87,7 +87,7 @@ docker run --rm ghcr.io/vencil/da-tools:v2.6.0 --version
 
 ### 場景一：BYOP 整合後驗證
 
-完成 [BYOP 整合指南](../../docs/byo-prometheus-integration.md) 三個步驟後，用 `da-tools` 驗證：
+完成 [BYOP 整合指南](../../docs/integration/byo-prometheus-integration.md) 三個步驟後，用 `da-tools` 驗證：
 
 ```bash
 # 設定 Prometheus 位址（避免每次都打 --prometheus）

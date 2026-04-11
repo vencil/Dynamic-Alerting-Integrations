@@ -25,10 +25,10 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | [核心架構](architecture-and-design.md) | 系統設計、三態運營、告警路由、去重機制、HA 設計、未來藍圖 |
 | [性能基準](benchmarks.md) | 負載測試結果、吞吐量、延遲、資源消耗分析 |
 | [治理與安全](governance-security.md) | RBAC、稽核日誌、Schema 驗證、Cardinality Guard、安全合規 |
-| [GitOps 部署](gitops-deployment.md) | ArgoCD/Flux 整合、CODEOWNERS RBAC、漂移檢測 |
-| [Federation 集成](federation-integration.md) | 多叢集場景、邊緣 Prometheus、中央監控架構 |
-| [BYO Prometheus](byo-prometheus-integration.md) | 自帶 Prometheus 整合指引 |
-| [BYO Alertmanager](byo-alertmanager-integration.md) | 自帶 Alertmanager 整合指引 |
+| [GitOps 部署](integration/gitops-deployment.md) | ArgoCD/Flux 整合、CODEOWNERS RBAC、漂移檢測 |
+| [Federation 集成](integration/federation-integration.md) | 多叢集場景、邊緣 Prometheus、中央監控架構 |
+| [BYO Prometheus](integration/byo-prometheus-integration.md) | 自帶 Prometheus 整合指引 |
+| [BYO Alertmanager](integration/byo-alertmanager-integration.md) | 自帶 Alertmanager 整合指引 |
 
 ### 📊 Domain Expert（域專家）— DBA、Database Engineer
 

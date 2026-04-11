@@ -343,8 +343,8 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 
 - [Architecture & Design](../architecture-and-design.md) — Core concepts deep dive
 - [CLI Reference](../cli-reference.md) — All da-tools commands
-- [BYO Prometheus Integration](../byo-prometheus-integration.md) — Bring your existing Prometheus
-- [BYO Alertmanager Integration](../byo-alertmanager-integration.md) — Bring your existing Alertmanager
+- [BYO Prometheus Integration](../integration/byo-prometheus-integration.md) — Bring your existing Prometheus
+- [BYO Alertmanager Integration](../integration/byo-alertmanager-integration.md) — Bring your existing Alertmanager
 - [Tenant Lifecycle](tenant-lifecycle.en.md) — Full onboarding to offboarding flow
 
 ---

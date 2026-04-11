@@ -135,7 +135,7 @@ For detailed architecture, see [Architecture & Design](architecture-and-design.m
 | [Migration Guide](migration-guide.md) | DevOps, Tenants | Onboarding flow, AST engine |
 | [Governance & Security](governance-security.md) | Compliance, Leads | Three-layer governance, audit |
 | [Benchmarks](benchmarks.md) | Platform Engineers | Performance data & methodology |
-| Integration guides | Platform Engineers | [BYO Prometheus](byo-prometheus-integration.md) · [BYO Alertmanager](byo-alertmanager-integration.md) · [Federation](federation-integration.md) · [GitOps](gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
+| Integration guides | Platform Engineers | [BYO Prometheus](integration/byo-prometheus-integration.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.md) · [Federation](integration/federation-integration.md) · [GitOps](integration/gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
 | [Rule Packs](rule-packs/README.md) | All | 15 packs + [Alert Reference](rule-packs/ALERT-REFERENCE.md) |
 | [Scenarios](scenarios/) | All | 9 hands-on scenarios |
 | [Troubleshooting](troubleshooting.md) | All | Common issues & solutions |

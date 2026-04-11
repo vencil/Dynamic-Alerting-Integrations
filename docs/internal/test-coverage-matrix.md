@@ -235,5 +235,5 @@ flowchart TD
 | [場景：Shadow Monitoring 全自動切換](../scenarios/shadow-monitoring-cutover.md) | ⭐⭐ |
 | [Threshold Exporter API Reference](../api/README.md) | ⭐⭐ |
 | [性能分析與基準測試](../benchmarks.md) | ⭐⭐ |
-| [BYO Alertmanager 整合指南](../byo-alertmanager-integration.md) | ⭐⭐ |
-| [BYO Prometheus 整合指南](../byo-prometheus-integration.md) | ⭐⭐ |
+| [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md) | ⭐⭐ |
+| [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md) | ⭐⭐ |
