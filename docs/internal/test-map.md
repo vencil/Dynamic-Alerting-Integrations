@@ -1,3 +1,11 @@
+---
+title: "測試架構導覽 (Test Map)"
+tags: [testing, navigation, internal]
+audience: [maintainers, ai-agent]
+version: v2.6.0
+lang: zh
+---
+
 # 測試架構導覽 (Test Map)
 
 > 測試基礎設施結構與慣例速查，供 AI Agent 與開發者快速掌握測試配置。

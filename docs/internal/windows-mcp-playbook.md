@@ -247,6 +247,77 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 36 | pre-commit 產生的 `.git/hooks/pre-push` 硬寫死 Linux python 路徑 | `INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3` 在 Windows 不存在 → fallback 去找 `pre-commit` on PATH，但 Python 通常沒裝 console script shim。解法：把 hook 的第 6 行改成 `INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe`（Git Bash 吃 POSIX 路徑），或 `pip install --force-reinstall pre-commit` 重建 entry point |
 | 37 | `~/.ssh/` 無 private key 但 `credential.helper=manager` 有存 token | Windows 使用者常走 Git Credential Manager 不走 SSH。push 前臨時把 remote URL 切 HTTPS，讓 GCM 自動帶 stored token；push 完切回 SSH：`git remote set-url origin https://github.com/<o>/<r>.git; git push origin main; git remote set-url origin git@github.com:<o>/<r>.git` |
 | 38 | pre-commit 範圍模式 `--from-ref A --to-ref B` 的觸發 glob 只看範圍內改動檔案 | 要避免 hook 掃到整個 repo 的累積 drift（例如 `bilingual-structure-check` 對整個 repo 的 `.en.md`），把 trigger glob 會命中的檔案從 commit 範圍內拿掉就夠。例：把 `docs/internal/doc-map.en.md` 以 `git rm --cached` 移出 commit，hook 就 Skipped |
+| 39 | Windows clone 的 `rule-packs/` 和 `docs/CHANGELOG.md` 變成 ~13 byte 純文字檔 | Git 物化 symlink 為 target 字串。非 bug，是權限問題——Windows 10+ 預設不允許非 admin 建立 symlink。**解法**：開啟 Developer Mode（見 [§Windows Clone 初次設定](#windows-clone-初次設定-symlink-支援)）|
+
+## Windows Clone 初次設定 — Symlink 支援
+
+`vibe-k8s-lab` repo 裡有數個重要的 symlink，在 **Windows clone 端** 必須啟用 symlink
+支援才能正確 checkout。症狀是某些 `.md` / YAML 檔案變成 ~13 byte 的純文字，
+內容是 target 字串（例如 `docs/CHANGELOG.md` 會變成含 `"../CHANGELOG.md"` 的
+純文字檔）。
+
+### 已知會被影響的 symlink
+
+| Repo 路徑 | Target | 作用 |
+|----------|--------|------|
+| `docs/CHANGELOG.md` | `../CHANGELOG.md` | 讓 MkDocs 能 serve repo root 的 CHANGELOG |
+| `docs/README-root.md` | `../README.md` | 中文版 README 的 docs-tree 鏡像 |
+| `docs/README-root.en.md` | `../README.en.md` | 英文版 README 的 docs-tree 鏡像 |
+| `rule-packs/*.yaml`（部分） | `../conf.d/...` | Rule pack hot-reload 來源 |
+
+### 推薦方案：開啟 Windows Developer Mode（一次性設定）
+
+Windows 10 1703+ / Windows 11 內建「開發人員模式」，啟用後 symlink 建立
+**不再需要 admin 權限**，對所有工具透明。
+
+```powershell
+# 方法 A — Windows Settings UI
+# 設定 → 隱私權與安全性 → 開發人員專用 → 「開發人員模式」ON
+
+# 方法 B — Registry（需 admin 一次；啟用後永久）
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
+  /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1
+```
+
+啟用後，在 Windows clone 端設定 Git 並重新 checkout：
+
+```bash
+# 在 Windows Git Bash / MSYS2 / WSL 的 clone 目錄下
+git config core.symlinks true
+
+# 強制重建 working tree（已物化的純文字檔會變回真 symlink）
+git rm --cached -r .
+git reset --hard HEAD
+```
+
+### 退路方案：Symlink 物化檢測腳本
+
+如果 Developer Mode 不能開（例如公司 IT 鎖管制原則），至少要偵測物化
+情形，避免不小心把 `"../CHANGELOG.md"` 當成真實內容 commit 回去。
+建議把下列檢測加到 pre-commit 或 CI：
+
+```bash
+for f in docs/CHANGELOG.md docs/README-root.md docs/README-root.en.md; do
+  # 真 symlink：git ls-files -s 前綴 120000
+  mode=$(git ls-files -s "$f" | awk '{print $1}')
+  if [ "$mode" != "120000" ]; then
+    echo "ERROR: $f 已物化為一般檔案 (mode=$mode)，將損壞 MkDocs serve"
+    exit 1
+  fi
+done
+```
+
+### 工具層配合（已完成）
+
+專案內的文件品質工具都已經知道要跳過這些 symlink proxy，避免在 FUSE 側
+或誤物化時覆蓋 target 字串：
+
+- `scripts/tools/dx/doc_coverage.py` — `EXCLUDE_RELATIVE_PATHS`
+- `scripts/tools/dx/add_frontmatter.py` — `EXCLUDE_RELATIVE_PATHS` + `os.path.islink` 跳過
+- `scripts/tools/dx/generate_doc_map.py` — `SKIP_FILES` / `SKIP_FILENAME_PREFIXES`
+
+寫新的 doc-scanning 工具時**請沿用同一套清單**，否則會在 FUSE 側踩雷
+（見 `archive/lessons-learned.md` 的 add_frontmatter.py 事件）。
 
 ## FUSE Phantom Lock 防治
 
@@ -462,43 +533,4 @@ git push origin main
 git remote set-url origin git@github.com:<owner>/<repo>.git
 ```
 
-**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路徑（陷阱 #36）。兩種修法擇一：
-
-```bash
-# 修法 A：把 hook 的 INSTALL_PYTHON 改成 Windows POSIX 路徑（Git Bash 吃這個格式）
-INSTALL_PYTHON=/c/Users/<USER>/AppData/Local/Python/bin/python.exe
-
-# 修法 B：把 pre-commit 裝成 console script shim
-pip install --force-reinstall pre-commit
-# 然後確保 Scripts 目錄在 PATH 上
-```
-
-> **什麼時候該走 Fallback C？** (1) `make git-preflight` + Level 2/3 都清過還是 lock；(2) pre-commit 在 FUSE mount 上跑得異常慢（> 10 倍平常）；(3) 檔案改了但 git 看不到 diff（FUSE metadata 不同步）。平常走 Cowork VM 的 bash/git 就好，Fallback C 是**應急路徑，不是常態**。
-
-## 指令快速參考
-
-```bash
-# Pod 狀態
-docker exec vibe-dev-container bash -c "kubectl get pods -A > /workspaces/vibe-k8s-lab/_out.txt 2>&1"
-# Go build/vet
-docker exec -w /workspaces/vibe-k8s-lab/components/threshold-exporter/app vibe-dev-container go build -o /dev/null .
-# Go micro-benchmark
-docker exec -w /workspaces/vibe-k8s-lab/components/threshold-exporter/app vibe-dev-container go test -bench=. -benchmem -count=5 ./...
-# Shell tests
-docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash tests/test-migrate-tool.sh
-# 負載注入
-docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --tenant db-a --type composite
-docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container ./scripts/run_load.sh --cleanup
-# 暫存檔清理
-docker exec vibe-dev-container rm -f /workspaces/vibe-k8s-lab/_*.txt /workspaces/vibe-k8s-lab/_*.json
-# 版號一致性
-docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container bash -c "python3 ./scripts/tools/dx/bump_docs.py --check > /workspaces/vibe-k8s-lab/_ver.txt 2>&1"
-```
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| ["GitHub Release — 操作手冊 (Playbook)"](github-release-playbook.md) | ⭐⭐ |
-| ["測試注意事項 — 排錯手冊 (Testing Playbook)"](testing-playbook.md) | ⭐⭐ |
-| ["Windows-MCP — Dev Container 操作手冊 (Playbook)"](windows-mcp-playbook.md) | ⭐⭐ |
+**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路

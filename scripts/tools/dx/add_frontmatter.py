@@ -15,10 +15,27 @@ Supports --check and --dry-run modes.
 import os
 import re
 import sys
+import fnmatch
 import argparse
 import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+
+# Files/paths excluded from front matter scanning.
+# Must stay aligned with doc_coverage.py EXCLUDE_* constants so drift
+# between the two tools does not leave coverage gaps or cause
+# accidental writes through FUSE symlink proxies (see dev-rules #11).
+EXCLUDE_RELATIVE_PATHS = {
+    "docs/CHANGELOG.md",       # symlink -> ../CHANGELOG.md
+    "docs/README-root.md",     # symlink -> ../README.md
+    "docs/README-root.en.md",  # symlink -> ../README.en.md
+}
+EXCLUDE_PATH_PREFIXES = (
+    "docs/includes/",          # snippet fragments, not full docs
+)
+EXCLUDE_PATH_GLOBS = (
+    "docs/internal/_resume-*.md",  # session resume drafts
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -280,8 +297,33 @@ def process_file(filepath: str, base_dir: str, dry_run: bool = False) -> Tuple[b
         return True, f"Added front matter to: {filepath}"
 
 
+def _is_excluded(rel_path: str) -> bool:
+    """Return True if this relative path should be skipped entirely.
+
+    Uses forward-slash form for cross-platform glob matching so behaviour
+    matches doc_coverage.py (which normalizes to POSIX-style paths).
+    """
+    rel_posix = rel_path.replace(os.sep, "/")
+    if rel_posix in EXCLUDE_RELATIVE_PATHS:
+        return True
+    for prefix in EXCLUDE_PATH_PREFIXES:
+        if rel_posix.startswith(prefix):
+            return True
+    for pattern in EXCLUDE_PATH_GLOBS:
+        if fnmatch.fnmatchcase(rel_posix, pattern):
+            return True
+    return False
+
+
 def find_markdown_files(base_dir: str) -> List[str]:
-    """Find all .md files in docs/, rule-packs/, and root"""
+    """Find all .md files in docs/, rule-packs/, and root.
+
+    Skips:
+    - Symlinks (which on FUSE mounts may be materialized as plain-text
+      proxy files containing the target path; writing through them
+      would corrupt the proxy without affecting the real file).
+    - Files in EXCLUDE_* lists, for parity with doc_coverage.py.
+    """
     md_files = []
 
     scan_dirs = [
@@ -299,16 +341,35 @@ def find_markdown_files(base_dir: str) -> List[str]:
             dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'node_modules']
 
             for file in files:
-                if file.endswith('.md'):
-                    filepath = os.path.join(root, file)
-                    # Only include if in expected locations
-                    if (filepath.startswith(os.path.join(base_dir, 'docs')) or
-                        filepath.startswith(os.path.join(base_dir, 'rule-packs')) or
-                        (os.path.dirname(filepath) == base_dir and
-                         file in ['README.md', 'README.en.md', 'CHANGELOG.md'])):
-                        md_files.append(filepath)
+                if not file.endswith('.md'):
+                    continue
+                filepath = os.path.join(root, file)
 
-    return sorted(md_files)
+                # Skip symlinks — never write through them.
+                if os.path.islink(filepath):
+                    continue
+
+                # Only include if in expected locations
+                in_scope = (
+                    filepath.startswith(os.path.join(base_dir, 'docs')) or
+                    filepath.startswith(os.path.join(base_dir, 'rule-packs')) or
+                    (os.path.dirname(filepath) == base_dir and
+                     file in ['README.md', 'README.en.md', 'CHANGELOG.md'])
+                )
+                if not in_scope:
+                    continue
+
+                # Apply shared exclusion list.
+                rel_path = os.path.relpath(filepath, base_dir)
+                if _is_excluded(rel_path):
+                    continue
+
+                md_files.append(filepath)
+
+    # Dedup: base_dir scan walks into docs/ and rule-packs/ too, so the
+    # same file can be collected multiple times. Use a set keyed on the
+    # canonical path, then re-sort.
+    return sorted(set(os.path.realpath(p) for p in md_files))
 
 
 def main():
@@ -338,19 +399,22 @@ def main():
         logger.warning("No markdown files found")
         return 0
 
-    # Process files
+    # Process files.
+    # NOTE: --check is a *reporting* mode: it must never write.
+    # We coerce dry_run=True whenever --check is set, so process_file()
+    # takes the read-only branch regardless of --dry-run.
+    read_only = args.dry_run or args.check
     modified_count = 0
     missing_frontmatter = []
 
     for filepath in md_files:
-        was_modified, message = process_file(filepath, base_dir, dry_run=args.dry_run)
+        was_modified, message = process_file(filepath, base_dir, dry_run=read_only)
 
         if was_modified:
             modified_count += 1
-            if args.dry_run:
-                logger.info(message)
-            else:
-                logger.info(message)
+            # In read-only mode (check/dry-run), process_file returns
+            # "Would add..." message and does not touch disk.
+            logger.info(message)
         else:
             if args.check:
                 # For check mode, only report files missing frontmatter

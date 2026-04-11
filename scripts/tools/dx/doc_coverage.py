@@ -46,6 +46,42 @@ class DocCoverageAnalyzer:
 
     REQUIRED_FRONTMATTER_FIELDS = {"title", "tags", "audience", "version", "lang"}
 
+    # 排除清單：不計入覆蓋率統計
+    # 規則：
+    # - symlink 到 repo-root 的檔案（docs/CHANGELOG.md, docs/README-root*）
+    #   → 本尊已經在 root_md_files 掃到，symlink 只是 GitHub 瀏覽輔助
+    # - mkdocs-material snippets 的 include 檔（docs/includes/**）
+    #   → 這些是被其他 doc embed 的 fragment，加 YAML frontmatter 會破壞 host doc
+    # - transient resume notes（docs/internal/_resume-*.md）
+    #   → 每個 session 生滅的 AI agent note，不是正式 doc
+    EXCLUDE_RELATIVE_PATHS = {
+        "docs/CHANGELOG.md",
+        "docs/README-root.md",
+        "docs/README-root.en.md",
+    }
+    EXCLUDE_PATH_PREFIXES = (
+        "docs/includes/",
+    )
+    EXCLUDE_PATH_GLOBS = (
+        "docs/internal/_resume-*.md",
+    )
+
+    # Bilingual 專屬 exclusion：這些檔案仍計入 frontmatter 覆蓋率，
+    # 但不列入 bilingual coverage 分母（不強制雙語）。
+    # 規則：
+    # - docs/internal/** → maintainer 內部文件，zh-only by policy
+    # - rule-packs/**     → auto-generated from rule-pack metadata
+    # - CHANGELOG.md      → root prose changelog, zh-only
+    # - CLAUDE.md         → AI agent 指引，zh-only
+    BILINGUAL_EXCLUDE_PATH_PREFIXES = (
+        "docs/internal/",
+        "rule-packs/",
+    )
+    BILINGUAL_EXCLUDE_RELATIVE_PATHS = {
+        "CHANGELOG.md",
+        "CLAUDE.md",
+    }
+
     def __init__(self, repo_root: str):
         self.repo_root = Path(repo_root).resolve()
         self.scan_dirs = ["docs", "rule-packs"]
@@ -58,13 +94,45 @@ class DocCoverageAnalyzer:
         self.files_with_complete_frontmatter = 0
         self.total_links_checked = 0
         self.broken_links: List[Dict] = []
+        # 從 bilingual 分母中排除的 .md 檔案（相對路徑）
+        self.bilingual_excluded_paths: Set[str] = set()
 
         # 已知的 section 參考集合
         self.known_sections: Set[str] = set()
         self.section_pattern = re.compile(r'§(\d+)\.(\d+)')
 
+    def _is_excluded(self, file_path: Path) -> bool:
+        """判斷檔案是否應該從覆蓋率掃描中完全排除"""
+        import fnmatch
+
+        try:
+            rel = file_path.resolve().relative_to(self.repo_root).as_posix()
+        except ValueError:
+            return False
+
+        if rel in self.EXCLUDE_RELATIVE_PATHS:
+            return True
+        if any(rel.startswith(p) for p in self.EXCLUDE_PATH_PREFIXES):
+            return True
+        if any(fnmatch.fnmatch(rel, g) for g in self.EXCLUDE_PATH_GLOBS):
+            return True
+        return False
+
+    def _is_bilingual_excluded(self, file_path: Path) -> bool:
+        """判斷檔案是否應該從 bilingual 覆蓋率分母中排除（但仍計入 frontmatter 分母）"""
+        try:
+            rel = file_path.resolve().relative_to(self.repo_root).as_posix()
+        except ValueError:
+            return False
+
+        if rel in self.BILINGUAL_EXCLUDE_RELATIVE_PATHS:
+            return True
+        if any(rel.startswith(p) for p in self.BILINGUAL_EXCLUDE_PATH_PREFIXES):
+            return True
+        return False
+
     def _get_all_md_files(self) -> List[Path]:
-        """取得所有要掃描的 Markdown 文件"""
+        """取得所有要掃描的 Markdown 文件（套用 exclusion 規則）"""
         md_files = []
 
         # 掃描 docs/ 和 rule-packs/
@@ -78,6 +146,9 @@ class DocCoverageAnalyzer:
             file_path = self.repo_root / md_file
             if file_path.exists():
                 md_files.append(file_path)
+
+        # 套用 exclusion 規則（symlinks / includes / resume notes）
+        md_files = [f for f in md_files if not self._is_excluded(f)]
 
         return sorted(list(set(md_files)))
 
@@ -272,6 +343,12 @@ class DocCoverageAnalyzer:
                     base_name = file_path.stem
                     base_names_with_en.add(base_name)
 
+                # 記錄從 bilingual 分母排除的檔案
+                if self._is_bilingual_excluded(file_path):
+                    self.bilingual_excluded_paths.add(
+                        str(file_path.relative_to(self.repo_root))
+                    )
+
             # 創建覆蓋率記錄
             coverage = FileCoverage(
                 path=str(file_path.relative_to(self.repo_root)),
@@ -296,8 +373,20 @@ class DocCoverageAnalyzer:
         total_md_files = len([f for f in self.file_coverage if not f.path.endswith(".en.md")])
 
         # 排除 .en.md 檔案用於雙語覆蓋率計算
-        non_en_files = [f for f in self.file_coverage if not f.path.endswith(".en.md")]
-        bilingual_coverage = self.bilingual_pairs / len(non_en_files) * 100 if non_en_files else 0
+        # 同時排除 bilingual-excluded 檔案（internal / auto-generated / root zh-only）
+        non_en_files = [
+            f for f in self.file_coverage
+            if not f.path.endswith(".en.md")
+            and f.path not in self.bilingual_excluded_paths
+        ]
+        # 從 pairs 計數中也扣掉 bilingual-excluded 檔案（若它們剛好有 .en.md 對）
+        effective_bilingual_pairs = sum(
+            1 for f in non_en_files if f.has_bilingual
+        )
+        bilingual_coverage = (
+            effective_bilingual_pairs / len(non_en_files) * 100
+            if non_en_files else 0
+        )
 
         frontmatter_coverage = self.files_with_complete_frontmatter / len(self.file_coverage) * 100 if self.file_coverage else 0
 
@@ -308,8 +397,9 @@ class DocCoverageAnalyzer:
             "files_with_frontmatter": self.files_with_frontmatter,
             "files_with_complete_frontmatter": self.files_with_complete_frontmatter,
             "frontmatter_coverage_percent": round(frontmatter_coverage, 1),
-            "bilingual_pairs": self.bilingual_pairs,
-            "non_bilingual_files": total_md_files - self.bilingual_pairs,
+            "bilingual_pairs": effective_bilingual_pairs,
+            "non_bilingual_files": len(non_en_files) - effective_bilingual_pairs,
+            "bilingual_excluded_files": len(self.bilingual_excluded_paths),
             "bilingual_coverage_percent": round(bilingual_coverage, 1),
             "total_links_checked": self.total_links_checked,
             "broken_links": len(self.broken_links),

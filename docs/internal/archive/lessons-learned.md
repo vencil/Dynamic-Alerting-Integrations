@@ -1,6 +1,9 @@
 ---
 title: Lessons Learned Archive
+tags: [archive, lessons-learned, internal]
 audience: [platform-engineers, sres, contributor]
+version: v2.6.0
+lang: zh
 ---
 
 # Lessons Learned Archive

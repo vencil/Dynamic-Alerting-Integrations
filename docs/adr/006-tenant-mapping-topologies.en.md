@@ -1,4 +1,5 @@
 ---
+title: "ADR-006: Tenant Mapping Topologies (1:1, N:1, 1:N)"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.6.0

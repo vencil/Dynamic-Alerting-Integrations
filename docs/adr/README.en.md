@@ -1,4 +1,5 @@
 ---
+title: "Architecture Decision Records (ADR)"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.6.0
@@ -130,5 +131,4 @@ Extends commit-on-write with `_write_mode: pr` option: UI operations generate Gi
 
 - [`docs/architecture-and-design.en.md`](../architecture-and-design.md) — Complete architecture design
 - [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.md) — Platform engineer quick start guide
-- [`CLAUDE.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) — AI development context guide
-
+- [`CLAUDE.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) — AI development context gui

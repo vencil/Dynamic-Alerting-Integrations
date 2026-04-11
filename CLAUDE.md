@@ -1,3 +1,11 @@
+---
+title: "CLAUDE.md — AI 開發上下文指引"
+tags: [ai-agent, onboarding, internal]
+audience: [ai-agent, maintainers]
+version: v2.6.0
+lang: zh
+---
+
 # CLAUDE.md — AI 開發上下文指引
 
 ## ⛔ Agent 起手式（每次 Session 必執行）
