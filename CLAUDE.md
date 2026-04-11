@@ -21,7 +21,7 @@ Session 結束或異常終止後：`make session-cleanup`
 ### 最常踩的 5 個坑（不用每次讀完整 Playbook）
 
 1. **docker exec stdout 為空** → 用 `> /workspaces/.../_out.txt 2>&1` 重導向再 `cat`（[windows-mcp-playbook §核心原則](docs/internal/windows-mcp-playbook.md)）
-2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1--5)）。FUSE 側 git 操作反覆卡住時，[§修復層 C](docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) 提供 Windows 原生 git fallback
+2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1-5)）。FUSE 側 git 操作反覆卡住時，[§修復層 C](docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) 提供 Windows 原生 git fallback
 3. **PowerShell JSON 中文亂碼** → `[Text.UTF8Encoding]::new($false)` 寫無 BOM（[windows-mcp-playbook #32](docs/internal/windows-mcp-playbook.md)）
 4. **pre-commit hook 中斷留下 .git lock** → `make git-lock ARGS="--clean"`，**不要** `--no-verify`
 5. **port-forward 殘留佔用端口** → `pkill -f "port-forward.*prometheus"` 或 `make session-cleanup`
@@ -56,7 +56,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **143 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（含受眾、內容摘要、Change Impact Matrix）
-- **96 個 Python 工具**（ops 45 / dx 20 / lint 31）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
+- **98 個 Python 工具**（ops 46 / dx 20 / lint 32）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
 - **39 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
 - **Makefile** 完整列表：`make help`。必記 Top 4：
   - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs）

@@ -38,6 +38,10 @@ class DocLinkChecker:
             "docs/includes/",
             "docs/tags.md",
             "docs/getting-started/README.md",
+            # Navigation index pages (zh-only landing pages with Language switch banners)
+            "docs/scenarios/README.md",
+            # TODO(v2.7.0): translate vcs-integration-guide to .en.md
+            "docs/vcs-integration-guide.md",
         }
 
         # Load ignore patterns from .doclinkignore
@@ -280,28 +284,57 @@ class DocLinkChecker:
     def _resolve_link_path(self, source_file: Path, link: str) -> Tuple[Path, bool]:
         """
         解析相對連結為絕對路徑。
-        
+
         Returns:
             (resolved_path, is_valid) - resolved_path 可能不存在，is_valid 表示路徑是否有效
         """
-        # 移除 anchor
-        file_part = link.split("#")[0]
-        
+        import os as _os
+
+        # 移除 anchor 和 query string (e.g. jsx-loader.html?component=...)
+        file_part = link.split("#")[0].split("?")[0]
+
         if not file_part:
             # 純 anchor，指向同一檔案
             return source_file, True
-        
-        # 相對於來源檔案的目錄
-        source_dir = source_file.parent
-        target_path = (source_dir / file_part).resolve()
-        
+
+        # 相對於來源檔案的目錄 — resolve() 讓 symlink (如 docs/README-root.md
+        # → ../README.md) 產生的相對連結能正確指向 repo root。
+        try:
+            source_dir = source_file.resolve().parent
+        except OSError:
+            source_dir = source_file.parent
+        joined = source_dir / file_part
+
+        # 用 lexical normpath 先做一次路徑計算（不 follow symlink），
+        # 這樣才能偵測 docs/rule-packs/... 這種跨 symlink 的路徑。
+        lexical = Path(_os.path.normpath(str(joined)))
+        lexical_rel = ""
+        try:
+            lexical_rel = lexical.relative_to(self.repo_root).as_posix()
+        except ValueError:
+            pass
+
+        # FUSE fallback: docs/rule-packs 是指向 ../rule-packs 的 symlink，
+        # 但 WSL/Cowork FUSE 會把它材料化成絕對 Windows 路徑導致 broken link。
+        # 在 resolve 之前用 lexical 路徑判斷：只要命中 docs/rule-packs/... 就直接
+        # 轉到 rule-packs/...，避開 broken symlink 查找。
+        if (lexical_rel.startswith("docs/rule-packs/")
+                or lexical_rel == "docs/rule-packs"):
+            alt_rel = lexical_rel.replace("docs/rule-packs", "rule-packs", 1)
+            return self.repo_root / alt_rel, True
+
+        try:
+            target_path = joined.resolve()
+        except OSError:
+            target_path = lexical
+
         # 檢查是否在 repo 範圍內
         try:
             target_path.relative_to(self.repo_root)
         except ValueError:
             # 超出 repo 範圍
             return target_path, False
-        
+
         return target_path, True
 
     def _find_suggestions(self, broken_link: str, source_file: Path) -> str:

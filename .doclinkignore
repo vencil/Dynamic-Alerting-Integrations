@@ -1,107 +1,15 @@
 # .doclinkignore — Known false positives for check_doc_links.py
 #
-# docs/README-root.md is a symlink to ../README.md.
-# Links use docs/ prefix (correct for GitHub repo root) but check_doc_links.py
-# resolves them relative to docs/ (producing docs/docs/...).
-# These are NOT broken on GitHub — only a tool limitation.
+# Each line is a `<source-file>:<link-target>` pair (or just `<link-target>`
+# to match anywhere). Keep this file as small as possible — every entry
+# should have a comment explaining why it cannot be fixed at the source.
+#
+# Last audited: 2026-04-10 (docs/harness-hardening branch)
 
-# zh README symlink (docs/README-root.md → ../README.md)
-docs/README-root.md:docs/getting-started/for-platform-engineers.md
-docs/README-root.md:docs/getting-started/for-domain-experts.md
-docs/README-root.md:docs/getting-started/for-tenants.md
-docs/README-root.md:docs/benchmarks.md#1-向量匹配複雜度分析
-docs/README-root.md:docs/benchmarks.md#3-空向量零成本-empty-vector-zero-cost
-docs/README-root.md:docs/gitops-deployment.md
-docs/README-root.md:docs/byo-prometheus-integration.md
-docs/README-root.md:docs/cli-reference.md
-docs/README-root.md:docs/cheat-sheet.md
-docs/README-root.md:docs/architecture-and-design.md
-docs/README-root.md:docs/migration-guide.md
-docs/README-root.md:docs/byo-prometheus-integration.md
-docs/README-root.md:docs/byo-alertmanager-integration.md
-docs/README-root.md:docs/federation-integration.md
-docs/README-root.md:docs/gitops-deployment.md
-docs/README-root.md:docs/custom-rule-governance.md
-docs/README-root.md:docs/shadow-monitoring-sop.md
-docs/README-root.md:docs/benchmarks.md
-docs/README-root.md:docs/scenarios/
-docs/README-root.md:docs/internal/doc-map.md
-docs/README-root.md:docs/internal/tool-map.md
-docs/README-root.md:docs/adr/001-severity-dedup-via-inhibit.md
-docs/README-root.md:docs/adr/003-sentinel-alert-pattern.md
-docs/README-root.md:docs/adr/005-projected-volume-for-rule-packs.md
-docs/README-root.md:docs/adr/007-cross-domain-routing-profiles.md
-docs/README-root.md:docs/scenarios/hands-on-lab.md
-docs/README-root.md:docs/scenarios/incremental-migration-playbook.md
-
-# en README symlink (docs/README-root.en.md → ../README.en.md)
-docs/README-root.en.md:docs/getting-started/for-platform-engineers.en.md
-docs/README-root.en.md:docs/getting-started/for-domain-experts.en.md
-docs/README-root.en.md:docs/getting-started/for-tenants.en.md
-docs/README-root.en.md:docs/benchmarks.md#1-向量匹配複雜度分析
-docs/README-root.en.md:docs/benchmarks.md#3-空向量零成本-empty-vector-zero-cost
-docs/README-root.en.md:docs/gitops-deployment.en.md
-docs/README-root.en.md:docs/byo-prometheus-integration.en.md
-docs/README-root.en.md:docs/cli-reference.en.md
-docs/README-root.en.md:docs/cheat-sheet.en.md
-docs/README-root.en.md:docs/architecture-and-design.en.md
-docs/README-root.en.md:docs/migration-guide.en.md
-docs/README-root.en.md:docs/byo-prometheus-integration.en.md
-docs/README-root.en.md:docs/byo-alertmanager-integration.en.md
-docs/README-root.en.md:docs/federation-integration.en.md
-docs/README-root.en.md:docs/gitops-deployment.en.md
-docs/README-root.en.md:docs/custom-rule-governance.en.md
-docs/README-root.en.md:docs/shadow-monitoring-sop.en.md
-docs/README-root.en.md:docs/benchmarks.md
-docs/README-root.en.md:docs/scenarios/
-docs/README-root.en.md:docs/internal/doc-map.md
-docs/README-root.en.md:docs/internal/tool-map.md
-docs/README-root.en.md:docs/adr/001-severity-dedup-via-inhibit.en.md
-docs/README-root.en.md:docs/adr/003-sentinel-alert-pattern.en.md
-docs/README-root.en.md:docs/adr/005-projected-volume-for-rule-packs.en.md
-docs/README-root.en.md:docs/adr/007-cross-domain-routing-profiles.en.md
-docs/README-root.en.md:docs/scenarios/hands-on-lab.en.md
-docs/README-root.en.md:docs/scenarios/incremental-migration-playbook.en.md
-
-# components/ path — works from GitHub repo root, not from docs/
-docs/README-root.md:components/threshold-exporter/README.md#部署-helm
-docs/README-root.en.md:components/threshold-exporter/README.md#部署-helm
-
-# JSX loader links with query parameters (checker doesn't handle ?component=)
-docs/scenarios/gitops-ci-integration.md:../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx
-docs/scenarios/gitops-ci-integration.en.md:../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx
-
-# CHANGELOG archive (placeholder for future split)
-CHANGELOG-archive.md
-
-# rule-packs/README.md — MkDocs-only relative paths (../index.md etc.)
+# rule-packs/README.md uses MkDocs-relative paths that work when MkDocs
+# mounts rule-packs/ under docs/rule-packs/ via symlink, but break on plain
+# filesystem traversal from rule-packs/. The same content renders correctly
+# on GitHub (via the symlink) and in the MkDocs build.
 rule-packs/README.md:../index.md
 rule-packs/README.md:../migration-guide.md
 rule-packs/README.md:../architecture-and-design.md
-
-# docs/internal/design-system-guide.md — MkDocs-relative paths from mkdocs.yml site_dir
-# (../../ pattern works under MkDocs build but not as plain filesystem relative path)
-docs/internal/design-system-guide.md:../../assets/design-tokens.css
-docs/internal/design-system-guide.md:../../assets/tool-registry.yaml
-docs/internal/design-system-guide.md:../../interactive/index.html
-docs/internal/design-system-guide.md:../../jsx-loader.html
-
-# Pre-existing broken anchors — MkDocs-extension heading normalization differs from
-# our GFM-style checker (e.g. em-dash handling, slug collisions).
-# These render correctly on both GitHub and MkDocs; tool limitation only.
-docs/adr/001-severity-dedup-via-inhibit.md:../architecture-and-design.md#附錄-a角色與工具速查
-docs/adr/002-oci-registry-over-chartmuseum.md:../architecture-and-design.md#附錄-a角色與工具速查
-docs/adr/003-sentinel-alert-pattern.md:../architecture-and-design.md#附錄-a角色與工具速查
-docs/adr/005-projected-volume-for-rule-packs.md:../architecture-and-design.md#附錄-a角色與工具速查
-docs/adr/006-tenant-mapping-topologies.md:../architecture-and-design.md#附錄-a角色與工具速查
-docs/adr/007-cross-domain-routing-profiles.md:../architecture-and-design.md#附錄-a角色與工具速查
-docs/adr/README.en.md:#004-federation-architecture--central-exporter-first
-docs/adr/README.en.md:#011-pr-based-write-back
-docs/README.en.md:../README.en.md#quick-start
-docs/README.md:../README.md#快速開始
-docs/scenarios/advanced-scenarios.en.md:../internal/test-coverage-matrix.md#e2e-scenario-testsmake-test-scenario-
-docs/scenarios/advanced-scenarios.en.md:../internal/test-coverage-matrix.md#unitintegration-testsmake-test--pytest
-docs/scenarios/advanced-scenarios.md:../internal/test-coverage-matrix.md#e2e-scenario-testsmake-test-scenario-
-docs/scenarios/advanced-scenarios.md:../internal/test-coverage-matrix.md#unitintegration-testsmake-test--pytest
-README.en.md:docs/architecture-and-design.en.md#21-config-driven-核心架構
-README.md:docs/architecture-and-design.md#21-config-driven-核心架構

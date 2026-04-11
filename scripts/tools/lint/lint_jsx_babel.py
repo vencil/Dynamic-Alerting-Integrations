@@ -17,12 +17,20 @@ Requirements:
 
 Usage:
     python3 scripts/tools/lint/lint_jsx_babel.py             # report mode
-    python3 scripts/tools/lint/lint_jsx_babel.py --ci         # exit 1 on failures
+    python3 scripts/tools/lint/lint_jsx_babel.py --ci         # exit 1 on parse errors (fatal)
+    python3 scripts/tools/lint/lint_jsx_babel.py --ci --strict # also fail on static pattern warnings
     python3 scripts/tools/lint/lint_jsx_babel.py --fix        # hint-only (no auto-fix)
+
+Severity split (added in docs/harness-hardening):
+    - Babel parse errors → ALWAYS fatal under --ci (catches NUL bytes,
+      broken syntax, the architecture-quiz.jsx regression)
+    - Static pattern warnings (style={{ }} etc.) → only fatal under --strict;
+      pre-commit stays on default so commits are not blocked by pre-existing
+      drift, while CI runs --strict to surface everything.
 
 Exit codes:
     0 = all files parse OK
-    1 = one or more failures (--ci mode)
+    1 = Babel parse failure (always) or static warning (under --strict)
 """
 from __future__ import annotations
 
@@ -186,7 +194,12 @@ def _ensure_babel(node_modules: Path) -> bool:
 def main() -> int:
     """CLI entry point: Validate JSX files parse correctly via Babel standalone."""
     parser = argparse.ArgumentParser(description="Lint JSX files with Babel standalone")
-    parser.add_argument("--ci", action="store_true", help="Exit 1 on failures")
+    parser.add_argument("--ci", action="store_true", help="Exit 1 on Babel parse errors")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Also fail on static pattern warnings (style={{ }} etc.)",
+    )
     args = parser.parse_args()
 
     # Check Node.js
@@ -274,7 +287,15 @@ def main() -> int:
     print(f"Summary: {passed}/{total_files} files OK, "
           f"{len(unique_failing)} file(s) have issues")
 
-    return 1 if args.ci else 0
+    # Parse errors are always fatal under --ci; static warnings need --strict.
+    fatal = bool(babel_failures) or (args.strict and bool(static_failures))
+    if args.ci and fatal:
+        return 1
+    if args.ci and static_failures and not args.strict:
+        print(
+            f"\nNote: {len(static_failures)} static warning(s) — use --strict to fail on these."
+        )
+    return 0
 
 
 if __name__ == "__main__":

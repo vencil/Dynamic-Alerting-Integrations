@@ -292,4 +292,4 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 | [007-cross-domain-routing-profiles](007-cross-domain-routing-profiles.md) | ⭐⭐⭐ |
 | [README](README.md) | ⭐⭐⭐ |
 | ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["架構與設計 — 附錄 A"](../architecture-and-design.md#附錄-a角色與工具速查) | ⭐⭐ |
+| ["架構與設計 — 附錄 A"](../architecture-and-design.md#附錄角色與工具速查) | ⭐⭐ |

@@ -187,37 +187,113 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
     if include_adr:
         effective_skip_dirs.discard("adr")
 
-    # Build set of gitignored paths to exclude untracked local-only files
+    # Build set of gitignored paths to exclude untracked local-only files.
+    # Primary source: `git ls-files --others --ignored --exclude-standard`.
+    # Fallback: parse docs-related patterns directly from .gitignore using
+    # fnmatch — used when git is unavailable or the index is corrupt
+    # (e.g. FUSE-mounted Cowork VMs).
     _gitignored: set[str] = set()
+    _gitignore_patterns: list[str] = []
     try:
         out = subprocess.run(
             ["git", "ls-files", "--others", "--ignored", "--exclude-standard",
              "--directory", "docs/"],
             capture_output=True, text=True, cwd=str(REPO_ROOT),
         )
-        for line in out.stdout.splitlines():
-            _gitignored.add(line.rstrip("/"))
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                _gitignored.add(line.rstrip("/"))
+        else:
+            raise RuntimeError("git ls-files failed")
     except Exception:
-        pass  # git not available — skip check
+        # Fallback: read .gitignore patterns that target docs/
+        gi = REPO_ROOT / ".gitignore"
+        if gi.exists():
+            for raw in gi.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith("!"):
+                    continue
+                # Only keep patterns that could match inside docs/
+                if line.startswith("docs/") or "/" not in line:
+                    _gitignore_patterns.append(line)
 
-    # Collect all .md and .jsx files, skip .en.md for zh scan
+    # Collect all .md and .jsx files, skip .en.md for zh scan.
+    #
+    # We use os.walk with manual pruning (instead of Path.rglob) for two
+    # reasons:
+    #   1. Prune SKIP_DIRS early so we never descend into them — critical
+    #      for avoiding broken/phantom symlinks like `docs/rule-packs`
+    #      which raise OSError: [Errno 5] on FUSE-mounted Cowork VMs.
+    #   2. Enforce a deterministic, case-insensitive sort that matches on
+    #      both Linux (CI) and Windows (local dev). Python's `Path.__lt__`
+    #      uses `_str_normcase` which differs by OS (lowercased on Windows,
+    #      verbatim on Linux), producing inconsistent drift when the file
+    #      was last regenerated on a different platform.
     all_files = []
-    for f in sorted(docs_dir.rglob("*")):
-        if not f.is_file():
-            continue
-        if f.suffix not in (".md", ".jsx"):
-            continue
-        if f.name.endswith(".en.md"):
-            continue
-        rel = f.relative_to(REPO_ROOT).as_posix()
-        parts = Path(rel).parts
-        if any(d in effective_skip_dirs for d in parts):
-            continue
-        if rel in SKIP_FILES:
-            continue
-        if rel in _gitignored:
-            continue
-        all_files.append(f)
+    for root, dirs, files in os.walk(str(docs_dir), followlinks=False):
+        # Prune skip dirs and broken symlinks before descending
+        pruned = []
+        for d in dirs:
+            if d in effective_skip_dirs:
+                continue
+            dp = os.path.join(root, d)
+            try:
+                if os.path.islink(dp) and not os.path.exists(dp):
+                    continue
+            except OSError:
+                continue
+            pruned.append(d)
+        dirs[:] = pruned
+
+        for name in files:
+            if not (name.endswith(".md") or name.endswith(".jsx")):
+                continue
+            if name.endswith(".en.md"):
+                continue
+            p = Path(root) / name
+            rel = p.relative_to(REPO_ROOT).as_posix()
+            parts = Path(rel).parts
+            if any(d in effective_skip_dirs for d in parts):
+                continue
+            if rel in SKIP_FILES:
+                continue
+            if rel in _gitignored:
+                continue
+            # Fallback gitignore match (when git subprocess unavailable)
+            if _gitignore_patterns:
+                import fnmatch as _fn
+                matched = False
+                for pat in _gitignore_patterns:
+                    if pat.startswith("docs/"):
+                        if _fn.fnmatch(rel, pat):
+                            matched = True
+                            break
+                    else:
+                        # Basename pattern (e.g. "*.tmp")
+                        if _fn.fnmatch(name, pat):
+                            matched = True
+                            break
+                if matched:
+                    continue
+            try:
+                if not p.is_file():
+                    continue
+            except OSError:
+                continue
+            all_files.append(p)
+
+    # Deterministic case-insensitive sort by path components (stable across
+    # Linux and Windows). We sort by Path.parts tuples rather than the flat
+    # string so directory boundaries are respected — e.g.
+    # `docs/interactive/tools/foo.jsx` sorts before `docs/interactive-tools.md`
+    # because tuple comparison treats `interactive` < `interactive-tools.md`.
+    # This matches the historic Path.__lt__ behaviour that the old
+    # `sorted(rglob())` relied on.
+    all_files.sort(
+        key=lambda p: tuple(
+            part.lower() for part in p.relative_to(REPO_ROOT).parts
+        )
+    )
 
     for f in all_files:
         rel = f.relative_to(REPO_ROOT).as_posix()
@@ -329,7 +405,11 @@ def main():
             continue
 
         if args.generate:
-            map_path.write_text(content, encoding="utf-8")
+            # Force LF line endings on all platforms so Windows and Linux
+            # regens produce byte-identical output (prevents CRLF ping-pong
+            # drift in `--check`).
+            with open(map_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(content)
             os.chmod(map_path,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)

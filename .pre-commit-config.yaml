@@ -106,6 +106,24 @@ repos:
         pass_filenames: false
         files: ^docs/.*\.md$
 
+      - id: html-doc-links-check
+        name: Raw HTML doc-link validation (MkDocs-aware)
+        entry: python3 scripts/tools/lint/lint_html_doc_links.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.html$
+
+      - id: head-blob-hygiene
+        name: HEAD blob hygiene (NUL bytes / truncated structured files)
+        entry: python3 scripts/tools/lint/check_head_blob_hygiene.py --ci
+        language: python
+        pass_filenames: false
+        # Runs once per commit regardless of which files are staged —
+        # scans the full HEAD tree for NUL bytes and truncated YAML/JSON.
+        # Lightweight (<1s for the whole repo). Strict-mode EOF newline
+        # scan runs only in CI to avoid blocking commits on pre-existing drift.
+        always_run: true
+
       - id: routing-profiles-check
         name: Routing profiles & domain policies lint
         entry: python3 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
@@ -190,7 +208,10 @@ repos:
         language: python
         pass_filenames: false
         files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
-        stages: [manual]
+        # Promoted from manual → auto (docs/harness-hardening):
+        # catches NUL bytes, browser-mode Babel incompatibilities, and
+        # broken JSX syntax before they reach HEAD. Skips silently if
+        # Node.js unavailable (~0s), otherwise ~2-4s against cached @babel/standalone.
 
       - id: i18n-coverage-check
         name: i18n coverage report
