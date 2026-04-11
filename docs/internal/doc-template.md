@@ -10,7 +10,7 @@ lang: zh
 
 > **受眾**：所有貢獻者 (All Contributors)
 > **版本**：v2.3.0
-> **相關文件**：[文件導航地圖](doc-map.md) · [開發規範](../../CLAUDE.md)
+> **相關文件**：[文件導航地圖](doc-map.md) · [開發規範](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)
 
 本文件定義 Dynamic Alerting 平台所有 Markdown 文檔的標準結構與撰寫規範。遵循本模板能確保文件風格一致、可維護性高、易於自動化檢查。
 
@@ -370,7 +370,7 @@ lang: zh
 | 資源 | 說明 |
 |------|------|
 | [文件導航地圖](./doc-map.md) | 所有 83 個文檔的完整列表與分類 |
-| [開發規範](../../CLAUDE.md) | 平台整體開發指引與架構速查 |
+| [開發規範](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) | 平台整體開發指引與架構速查 |
 | [文件維護 Playbook](./testing-playbook.md#文件敘述風格) | 文件更新與版本管理的實務指南 |
 | [Lint 工具使用](../cli-reference.md) | 文件 Lint 工具詳細用法 |
 | [GitHub Release Playbook](./github-release-playbook.md) | 文件版本更新與 Release 流程 |

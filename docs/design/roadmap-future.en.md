@@ -71,4 +71,4 @@ Tag push → auto-generate GitHub Release Notes (from CHANGELOG sections) → OC
 | v2.2.0 | Adoption Pipeline × CLI Extension | init, config-history, gitops-check |
 | v2.1.0 | Routing Profiles × Domain Policy | ADR-007, four-layer routing merge |
 
-Full version history: [CHANGELOG.md](../../CHANGELOG.md).
+Full version history: [CHANGELOG.md](../CHANGELOG.md).
