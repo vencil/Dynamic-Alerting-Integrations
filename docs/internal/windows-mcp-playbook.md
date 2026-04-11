@@ -135,9 +135,9 @@ ConfigMap 被 `kubectl patch` 修改過 → Helm field-manager conflict：
 ```bash
 # Step 1: server-side apply 取回 ownership
 kubectl apply --server-side --force-conflicts --field-manager=helm \
-  -f <(helm template threshold-exporter components/threshold-exporter/ -n monitoring)
+  -f <(helm template threshold-exporter helm/threshold-exporter/ -n monitoring)
 # Step 2: 正常 helm upgrade
-helm upgrade threshold-exporter components/threshold-exporter/ -n monitoring
+helm upgrade threshold-exporter helm/threshold-exporter/ -n monitoring
 ```
 
 ## PowerShell REST API（GitHub 等）

@@ -283,7 +283,7 @@ helm upgrade threshold-exporter \
 
 > **已 clone 專案？** 也可指向本地 chart 目錄：
 > ```bash
-> helm install threshold-exporter ./components/threshold-exporter \
+> helm install threshold-exporter ./helm/threshold-exporter \
 >   -n monitoring --create-namespace -f values-override.yaml
 > ```
 

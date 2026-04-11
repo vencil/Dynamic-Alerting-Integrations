@@ -353,7 +353,7 @@ test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20)
 # ----------------------------------------------------------
 # Helm Chart 發佈
 # ----------------------------------------------------------
-CHART_DIR  := components/threshold-exporter
+CHART_DIR  := helm/threshold-exporter
 CHART_VER  := $(shell grep '^version:' $(CHART_DIR)/Chart.yaml | awk '{print $$2}')
 
 .PHONY: chart-package

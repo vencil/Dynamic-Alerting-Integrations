@@ -231,13 +231,13 @@ def _build_exporter_rules():
     """
     return [
         {
-            "file": "components/threshold-exporter/Chart.yaml",
+            "file": "helm/threshold-exporter/Chart.yaml",
             "desc": "Chart.yaml version (chart release)",
             "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"version: {v}",
         },
         {
-            "file": "components/threshold-exporter/Chart.yaml",
+            "file": "helm/threshold-exporter/Chart.yaml",
             "desc": "Chart.yaml appVersion",
             "pattern": r'^appVersion:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
             "replacement": lambda v: f'appVersion: "{v}"',

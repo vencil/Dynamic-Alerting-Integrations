@@ -383,7 +383,7 @@ git push origin --delete ci/fix-docs-workflow-cli-drift  # 事後手動刪 paren
     # Dockerfile base image 必須在 Docker Hub 存在（CI build 階段才會 fail，太遲了）
     docker manifest inspect <每個 Dockerfile 的 FROM tag> > /dev/null
     # Chart.yaml version 必須與即將推的 exporter/v* tag 一致
-    grep "^version:" components/threshold-exporter/Chart.yaml
+    grep "^version:" helm/threshold-exporter/Chart.yaml
     ```
 
 16. **推送 + 等 CI 全綠 + Release**
