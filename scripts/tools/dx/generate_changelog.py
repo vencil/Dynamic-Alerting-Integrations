@@ -119,6 +119,50 @@ def get_commits_since(since_ref: Optional[str]) -> List[Tuple[str, str]]:
     return commits
 
 
+def load_ignored_commits() -> List[str]:
+    """Load the changelog-lint ignore list from .changelog-lint-ignore.
+
+    The file is optional and lives at repo root. Each non-comment,
+    non-blank line is a commit SHA prefix (typically 12 chars, matching
+    the abbreviated hash produced by get_commits_since()). Lines
+    starting with '#' are comments. Trailing whitespace is stripped.
+
+    This exists because GitHub squash-merges can land commits on main
+    whose subject doesn't follow conventional commits (e.g. when a PR
+    title was never corrected). Rewriting main history is dangerous,
+    and the offending commit would otherwise block every subsequent
+    `--check` run until a new tag is cut. Listing the SHA here is the
+    least-destructive escape hatch.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        if result.returncode != 0:
+            return []
+        root = result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    ignore_path = os.path.join(root, ".changelog-lint-ignore")
+    if not os.path.exists(ignore_path):
+        return []
+    prefixes: List[str] = []
+    try:
+        with open(ignore_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Allow inline comments after whitespace
+                token = line.split()[0]
+                if token:
+                    prefixes.append(token.lower())
+    except OSError:
+        return []
+    return prefixes
+
+
 # ── Parsing ──────────────────────────────────────────────────────────
 
 def parse_commit(subject: str) -> Optional[Dict]:
@@ -333,9 +377,35 @@ def main() -> int:
 
     # Check mode
     if args.check:
-        if non_conventional:
-            print(f"\n❌ {len(non_conventional)} non-conventional commits:", file=sys.stderr)
-            for sha, subject in non_conventional:
+        # Filter out commits listed in .changelog-lint-ignore (if any).
+        # This is the escape hatch for squash-merge artifacts on main
+        # that can't be rewritten without dangerous history rewrite.
+        ignored_prefixes = load_ignored_commits()
+        ignored_found: List[Tuple[str, str]] = []
+        real_failures: List[Tuple[str, str]] = []
+        for sha, subject in non_conventional:
+            sha_lower = sha.lower()
+            if any(
+                sha_lower.startswith(p) or p.startswith(sha_lower)
+                for p in ignored_prefixes
+            ):
+                ignored_found.append((sha, subject))
+            else:
+                real_failures.append((sha, subject))
+        if ignored_found:
+            print(
+                f"ℹ️  {len(ignored_found)} non-conventional commit(s) "
+                f"skipped via .changelog-lint-ignore:",
+                file=sys.stderr,
+            )
+            for sha, subject in ignored_found:
+                print(f"  {sha} {subject}", file=sys.stderr)
+        if real_failures:
+            print(
+                f"\n❌ {len(real_failures)} non-conventional commits:",
+                file=sys.stderr,
+            )
+            for sha, subject in real_failures:
                 print(f"  {sha} {subject}", file=sys.stderr)
             return 1
         print(f"✅ All {len(commits)} commits follow conventional format", file=sys.stderr)

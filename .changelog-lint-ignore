@@ -1,0 +1,25 @@
+# Changelog-lint ignore list
+#
+# Each non-comment, non-blank line is a commit SHA (full or prefix) to
+# skip when running `generate_changelog.py --check`. The abbreviated
+# hash is 12 characters by default; listing at least the first 7 works.
+#
+# This file is the escape hatch for GitHub squash-merge commits whose
+# subjects don't follow conventional commits, where rewriting main
+# history would be more disruptive than living with the exception.
+#
+# Lines starting with '#' are comments. Inline comments after a SHA
+# (separated by whitespace) are also ignored.
+#
+# When possible, PREFER fixing the PR title BEFORE squash-merging
+# instead of adding the SHA here. See lesson #32 in
+# docs/internal/github-release-playbook.md for background.
+
+# 601f6320b413 — "Docs/harness hardening (#2)"
+#   PR #2 was squash-merged with a non-conventional title. The fix
+#   ("docs: harness hardening") was not applied before merge, so the
+#   commit landed on main with an invalid subject. Rewriting this
+#   commit on main is destructive; listing it here keeps the lint green
+#   for all downstream PRs until the next tag cut moves the `<tag>..HEAD`
+#   window past it.
+601f6320b413
