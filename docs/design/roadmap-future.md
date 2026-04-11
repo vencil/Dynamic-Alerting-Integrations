@@ -8,8 +8,8 @@ lang: zh
 ---
 # 未來擴展路線
 
-> **Language / 語言：** | **中文（當前）** | [English](roadmap-future.en.md)
->
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
+
 > ← [返回主文件](../architecture-and-design.md)
 
 DX 工具改善追蹤見 [dx-tooling-backlog.md](../internal/dx-tooling-backlog.md)。

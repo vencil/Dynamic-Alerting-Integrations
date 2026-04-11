@@ -8,8 +8,8 @@ parent: architecture-and-design.md
 ---
 # Config-Driven 架構設計
 
-> **Language / 語言：** | **中文（當前）** | [English](config-driven.en.md)
->
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
+
 > ← [返回主文件](../architecture-and-design.md)
 
 ## 2. 核心設計：Config-Driven 架構

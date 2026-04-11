@@ -8,8 +8,8 @@ parent: architecture-and-design.md
 ---
 # Rule Packs 與 Projected Volume 架構
 
-> **Language / 語言：** | **中文（當前）** | [English](rule-packs.en.md)
->
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
+
 > ← [返回主文件](../architecture-and-design.md)
 
 ## 3. Projected Volume 架構 (Rule Packs)

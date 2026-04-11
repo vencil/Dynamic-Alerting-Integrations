@@ -113,7 +113,7 @@ Playbooks and development plans for AI agents and internal development.
 
 ## Feedback & Contribution
 
-Found documentation issues or improvements? Please submit an issue or PR. For development commands and version management, see the [root README](../README.en.md#getting-started).
+Found documentation issues or improvements? Please submit an issue or PR. For development commands and version management, see the [root README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.en.md#getting-started).
 
 ## Related Resources
 
