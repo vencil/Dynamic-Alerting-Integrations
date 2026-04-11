@@ -88,6 +88,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Kafka exporter target missing"
           summary_zh: "Kafka exporter 目標缺失"
@@ -111,6 +112,7 @@ groups:
         labels:
           severity: warning
           metric_group: "kafka_consumer_lag"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High Kafka consumer lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Kafka 消費者延遲過高"
@@ -140,6 +142,7 @@ groups:
         labels:
           severity: critical
           metric_group: "kafka_consumer_lag"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical Kafka consumer lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Kafka 消費者延遲嚴重"
@@ -168,6 +171,7 @@ groups:
         labels:
           severity: warning
           metric_group: "kafka_under_replicated_partitions"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Under-replicated partitions detected on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 偵測到複製不足的分割區"
@@ -197,6 +201,7 @@ groups:
         labels:
           severity: critical
           metric_group: "kafka_under_replicated_partitions"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical under-replicated partitions on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的複製不足分割區情況嚴重"
@@ -225,6 +230,7 @@ groups:
         labels:
           severity: critical
           metric_group: "kafka_active_controllers"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "No active Kafka controller on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上沒有活躍的 Kafka controller"
@@ -253,6 +259,7 @@ groups:
         labels:
           severity: warning
           metric_group: "kafka_broker_count"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Low Kafka broker count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Kafka broker 數量過少"
@@ -281,6 +288,7 @@ groups:
         labels:
           severity: warning
           metric_group: "kafka_request_rate"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High Kafka request rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Kafka 請求率過高"
@@ -310,6 +318,7 @@ groups:
         labels:
           severity: critical
           metric_group: "kafka_request_rate"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical Kafka request rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Kafka 請求率嚴重過高"

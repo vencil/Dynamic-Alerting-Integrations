@@ -99,6 +99,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch cluster RED on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 RED"
@@ -117,6 +118,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch cluster YELLOW on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 YELLOW"
@@ -144,6 +146,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch high heap usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch JVM heap 使用率過高"
@@ -171,6 +174,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch high disk usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 磁碟使用率過高"
@@ -198,6 +202,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch high search latency on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 搜尋延遲過高"
@@ -221,6 +226,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch has unassigned shards on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 有未分配的分片"
@@ -248,6 +254,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch pending cluster tasks on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 有待處理的叢集工作"

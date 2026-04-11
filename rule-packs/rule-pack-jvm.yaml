@@ -94,6 +94,7 @@ groups:
         labels:
           severity: warning
           metric_group: "jvm_gc_pause"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMHighGCPause on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 過高"
@@ -122,6 +123,7 @@ groups:
         labels:
           severity: critical
           metric_group: "jvm_gc_pause"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMHighGCPauseCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 嚴重過高"
@@ -151,6 +153,7 @@ groups:
         labels:
           severity: warning
           metric_group: "jvm_memory"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMMemoryPressure on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM 記憶體壓力"
@@ -179,6 +182,7 @@ groups:
         labels:
           severity: critical
           metric_group: "jvm_memory"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMMemoryPressureCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM 記憶體壓力嚴重"
@@ -208,6 +212,7 @@ groups:
         labels:
           severity: warning
           metric_group: "jvm_threads"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMThreadPoolExhaustion on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM thread pool 耗盡"
@@ -236,6 +241,7 @@ groups:
         labels:
           severity: critical
           metric_group: "jvm_threads"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMThreadPoolExhaustionCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM thread pool 嚴重耗盡"
@@ -265,6 +271,7 @@ groups:
         labels:
           severity: critical
           metric_group: "jvm_performance"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMPerformanceDegraded on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM 效能降級"

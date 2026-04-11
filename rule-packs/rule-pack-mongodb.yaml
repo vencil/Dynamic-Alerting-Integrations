@@ -84,6 +84,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB instance {{ $labels.instance }} is DOWN"
           summary_zh: "MongoDB 實例 {{ $labels.instance }} 已停機"
@@ -104,6 +105,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB high connection count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線數過高"
@@ -131,6 +133,7 @@ groups:
         for: 2m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB replication lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 複製延遲"
@@ -158,6 +161,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB high operation rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 作業率過高"
@@ -181,6 +185,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB high page faults on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB Page Fault 過多"
@@ -204,6 +209,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線池接近飽和"

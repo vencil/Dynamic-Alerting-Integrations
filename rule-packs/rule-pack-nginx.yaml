@@ -91,6 +91,7 @@ groups:
         labels:
           severity: warning
           metric_group: "nginx_connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "NginxHighConnections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Nginx 連線數過高"
@@ -119,6 +120,7 @@ groups:
         labels:
           severity: critical
           metric_group: "nginx_connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "NginxHighConnectionsCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Nginx 連線飽和嚴重"
@@ -148,6 +150,7 @@ groups:
         labels:
           severity: warning
           metric_group: "nginx_request_rate"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "NginxRequestRateSpike on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Nginx request 速率尖峰"
@@ -176,6 +179,7 @@ groups:
         labels:
           severity: critical
           metric_group: "nginx_request_rate"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "NginxRequestRateSpikeCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Nginx request 速率尖峰嚴重"
@@ -205,6 +209,7 @@ groups:
         labels:
           severity: warning
           metric_group: "nginx_waiting"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "NginxConnectionBacklog on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Nginx 連線積壓"
@@ -233,6 +238,7 @@ groups:
         labels:
           severity: critical
           metric_group: "nginx_waiting"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "NginxConnectionBacklogCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Nginx 連線積壓嚴重"

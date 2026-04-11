@@ -123,6 +123,7 @@ groups:
         for: 2m
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse instance is DOWN"
           summary_zh: "ClickHouse 實例已關閉"
@@ -143,6 +144,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse query rate exceeds threshold"
           summary_zh: "ClickHouse 查詢率超出閾值"
@@ -170,6 +172,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse active connections exceed threshold"
           summary_zh: "ClickHouse 活動連線超出閾值"
@@ -197,6 +200,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse max part count per partition exceeds threshold (merge pressure)"
           summary_zh: "ClickHouse partition 最大 part 數超出閾值（merge 壓力）"
@@ -224,6 +228,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse replication queue size exceeds threshold"
           summary_zh: "ClickHouse 複寫隊列大小超出閾值"
@@ -251,6 +256,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse memory tracking exceeds threshold"
           summary_zh: "ClickHouse 記憶體追蹤超出閾值"
@@ -269,6 +275,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse failed query rate > 10/s"
           summary_zh: "ClickHouse 查詢失敗率 > 10/秒"

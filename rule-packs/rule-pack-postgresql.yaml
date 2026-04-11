@@ -91,6 +91,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "PostgreSQL instance {{ $labels.instance }} is DOWN"
           summary_zh: "PostgreSQL 實例 {{ $labels.instance }} 已關閉"
@@ -102,6 +103,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "postgres_exporter target missing"
           summary_zh: "postgres_exporter 目標缺失"
@@ -125,6 +127,7 @@ groups:
         labels:
           severity: warning
           metric_group: "pg_connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High connection usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 連線使用率過高"
@@ -154,6 +157,7 @@ groups:
         labels:
           severity: critical
           metric_group: "pg_connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical connection usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 連線使用率嚴重過高"
@@ -182,6 +186,7 @@ groups:
         labels:
           severity: warning
           metric_group: "pg_replication_lag"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High replication lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 複寫延遲過高"
@@ -211,6 +216,7 @@ groups:
         labels:
           severity: critical
           metric_group: "pg_replication_lag"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical replication lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 複寫延遲嚴重"
@@ -235,6 +241,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Deadlocks detected on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 偵測到死鎖"
@@ -259,6 +266,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High rollback ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 回滾比率過高"
@@ -276,6 +284,7 @@ groups:
         for: 0s
         labels:
           severity: info
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "{{ $labels.instance }} restarted recently"
           summary_zh: "{{ $labels.instance }} 最近已重新啟動"
