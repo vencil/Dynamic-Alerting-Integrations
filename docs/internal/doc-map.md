@@ -28,23 +28,21 @@
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
 | `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
-| `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer 快速入門指南 |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant 快速入門指南 |
+| `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
 | `docs/getting-started/wizard.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Getting Started Wizard |
 | `docs/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps 部署指南 |
 | `docs/glossary.md` (.en.md) | All | 術語表 |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, 安全合規 | 治理、稽核與安全合規 |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard 導覽 |
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — 首頁 |
-| `docs/interactive/tools/AlertPreviewTab.jsx` | Platform Engineers, Tenants | Alert Preview Tab |
-| `docs/interactive/tools/RoutingTraceTab.jsx` | Platform Engineers, Tenants | Routing Trace Tab |
-| `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
 | `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
 | `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
+| `docs/interactive/tools/AlertPreviewTab.jsx` | Platform Engineers, Tenants | Alert Preview Tab |
 | `docs/interactive/tools/architecture-quiz.jsx` | Platform Engineers | Architecture Decision Quiz |
 | `docs/interactive/tools/capacity-planner.jsx` | Platform Engineers | Capacity Planner |
 | `docs/interactive/tools/cicd-setup-wizard.jsx` | Platform Engineers | CI/CD Setup Wizard |
@@ -70,6 +68,7 @@
 | `docs/interactive/tools/rbac-setup-wizard.jsx` | Platform Engineers, SREs | RBAC Setup Wizard |
 | `docs/interactive/tools/release-notes-generator.jsx` | Platform Engineers, SREs | Release Notes Generator |
 | `docs/interactive/tools/roi-calculator.jsx` | Platform Engineers | ROI Calculator |
+| `docs/interactive/tools/RoutingTraceTab.jsx` | Platform Engineers, Tenants | Routing Trace Tab |
 | `docs/interactive/tools/rule-pack-detail.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Detail Viewer |
 | `docs/interactive/tools/rule-pack-matrix.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Comparison Matrix |
 | `docs/interactive/tools/rule-pack-selector.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Selector |
@@ -80,6 +79,7 @@
 | `docs/interactive/tools/tenant-manager.jsx` | Platform Engineers, SREs | Tenant Manager |
 | `docs/interactive/tools/threshold-calculator.jsx` | Domain Experts (DBA), Tenants | Threshold Calculator |
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
+| `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
@@ -101,13 +101,13 @@
 | `docs/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus 整合指南 |
 | `docs/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring 策略 |
 | `docs/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊（Hub） |
-| `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |
 | `docs/scenarios/hands-on-lab.md` (.en.md) | Platform Engineers, Tenants | 動手實驗：從零到生產告警 |
 | `docs/scenarios/incremental-migration-playbook.md` (.en.md) | Platform Engineers, SREs | 場景：漸進式遷移 Playbook |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標 |
+| `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | 場景：Shadow Audit — 告警品質評估 |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | 場景：Shadow Monitoring — 從告警健康評估到全自動切換 |
 | `docs/scenarios/tenant-lifecycle.md` (.en.md) | All | 場景：租戶完整生命週期管理 |
