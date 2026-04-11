@@ -149,6 +149,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # make lint-docs runs validate_all.py --only ...,changelog,...
+          # which calls generate_changelog.py --check, which walks
+          # `<latest-tag>..HEAD` via git-describe. The default
+          # fetch-depth: 1 shallow clone has no tags, so it falls
+          # back to reading the single PR merge commit (auto-generated
+          # by GitHub, not a conventional commit) and fails. Same root
+          # cause as the Lint job fix in #9 — apply it here too.
+          fetch-depth: 0
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
