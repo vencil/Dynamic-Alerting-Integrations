@@ -9,9 +9,9 @@
   VS Code 會即時 hot-reload settings.json，不需重啟。
 
 用法：
-  python scripts/ops/vscode_git_toggle.py off   # 關閉 Git（Agent 模式）
-  python scripts/ops/vscode_git_toggle.py on    # 打開 Git（手動模式）
-  python scripts/ops/vscode_git_toggle.py       # 顯示目前狀態
+  python scripts/session-guards/vscode_git_toggle.py off   # 關閉 Git（Agent 模式）
+  python scripts/session-guards/vscode_git_toggle.py on    # 打開 Git（手動模式）
+  python scripts/session-guards/vscode_git_toggle.py       # 顯示目前狀態
 
 設計原則：
   - 只動 git.enabled / git.autoRepositoryDetection / git.autofetch
@@ -45,7 +45,7 @@ def find_repo_root() -> Path:
     for parent in [current, *current.parents]:
         if (parent / ".git").exists():
             return parent
-    # fallback: 用腳本自己的位置推算 (scripts/ops/ → repo root)
+    # fallback: 用腳本自己的位置推算 (scripts/session-guards/ → repo root)
     script_dir = Path(__file__).resolve().parent
     return script_dir.parent.parent
 
@@ -98,8 +98,8 @@ def apply_toggle(settings_path: Path, action: str) -> None:
         print(f"  git.autofetch = {settings.get('git.autofetch', '(預設 True)')}")
         print()
         print("用法：")
-        print("  python scripts/ops/vscode_git_toggle.py off  # 關閉")
-        print("  python scripts/ops/vscode_git_toggle.py on   # 打開")
+        print("  python scripts/session-guards/vscode_git_toggle.py off  # 關閉")
+        print("  python scripts/session-guards/vscode_git_toggle.py on   # 打開")
 
 
 def main() -> None:

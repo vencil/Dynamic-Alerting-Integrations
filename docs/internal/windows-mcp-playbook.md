@@ -235,7 +235,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
 | 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
 | 26 | PAT 查 GHCR packages 回 403 | GitHub Packages API 需要 `packages:read` scope；PAT 沒此 scope 時 GET `/users/{owner}/packages` 回 403，但 **CI 用 `GITHUB_TOKEN` 有 `packages:write` 所以 push 成功**。驗證 image 是否存在最快的方式是瀏覽器開 `github.com/{owner}?tab=packages`，不繞 API |
-| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/ops/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1-5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
+| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/session-guards/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1-5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
 | 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
 | 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |
 | 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
@@ -331,13 +331,13 @@ FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind moun
 
 ```bash
 # Agent session 開始時 — 關閉 VS Code 背景 Git
-python scripts/ops/vscode_git_toggle.py off
+python scripts/session-guards/vscode_git_toggle.py off
 
 # Session 結束或手動開發時 — 打開
-python scripts/ops/vscode_git_toggle.py on
+python scripts/session-guards/vscode_git_toggle.py on
 
 # 查看目前狀態
-python scripts/ops/vscode_git_toggle.py
+python scripts/session-guards/vscode_git_toggle.py
 ```
 
 原理：VS Code 即時 hot-reload `.vscode/settings.json`，切換後立即生效。檔案已在 `.gitignore` 排除。
@@ -346,11 +346,11 @@ python scripts/ops/vscode_git_toggle.py
 
 **2. Git Config FUSE 調校（路徑條件式，只影響本 repo）**
 
-安裝 `scripts/ops/gitconfig-fuse-tuning.sample`：
+安裝 `scripts/session-guards/gitconfig-fuse-tuning.sample`：
 
 ```bash
 # Windows 端：
-copy scripts\ops\gitconfig-fuse-tuning.sample %USERPROFILE%\gitconfig-fuse-tuning
+copy scripts\session-guards\gitconfig-fuse-tuning.sample %USERPROFILE%\gitconfig-fuse-tuning
 ```
 
 然後在 `%USERPROFILE%\.gitconfig` 加入：
@@ -375,10 +375,10 @@ Add-MpPreference -ExclusionPath "C:\Users\<USERNAME>\vibe-k8s-lab\.git"
 
 ```bash
 # 診斷（不刪除，只報告）
-bash scripts/ops/git_check_lock.sh
+bash scripts/session-guards/git_check_lock.sh
 
 # 診斷 + 清理（只清 >30s 且無活躍 git process 的 stale lock）
-bash scripts/ops/git_check_lock.sh --clean
+bash scripts/session-guards/git_check_lock.sh --clean
 ```
 
 若 Cowork VM 無法刪除（`Operation not permitted`），腳本會輸出對應的 Windows MCP 指令。
@@ -410,10 +410,10 @@ echo 2 | sudo tee /proc/sys/vm/drop_caches   # 需要 sudo；Cowork VM 常沒給
 
 ```powershell
 # (a) 關 VS Code 背景 Git 掃描
-python scripts/ops/vscode_git_toggle.py off
+python scripts/session-guards/vscode_git_toggle.py off
 
 # (b) 清 stale .git/*.lock
-bash scripts/ops/git_check_lock.sh --clean
+bash scripts/session-guards/git_check_lock.sh --clean
 
 # (c) 砍殘留的 port-forward / helm / kubectl / git process
 Get-Process Code, git, pre-commit -ErrorAction SilentlyContinue | Stop-Process -Force

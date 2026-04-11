@@ -131,25 +131,25 @@ inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant T
 
 .PHONY: git-lock
 git-lock: ## 診斷 .git lock 殘留 (加 ARGS="--clean" 安全清理)
-	@bash scripts/ops/git_check_lock.sh $(ARGS)
+	@bash scripts/session-guards/git_check_lock.sh $(ARGS)
 
 .PHONY: git-preflight
 git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale lock）
-	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
-	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
+	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 
 .PHONY: vscode-git-off
 vscode-git-off: ## 關閉 VS Code Git（Agent session 用）
-	@python3 scripts/ops/vscode_git_toggle.py off
+	@python3 scripts/session-guards/vscode_git_toggle.py off
 
 .PHONY: vscode-git-on
 vscode-git-on: ## 開啟 VS Code Git（手動開發用）
-	@python3 scripts/ops/vscode_git_toggle.py on
+	@python3 scripts/session-guards/vscode_git_toggle.py on
 
 .PHONY: session-cleanup
 session-cleanup: ## Session 結束或異常終止後的清理
-	@python3 scripts/ops/vscode_git_toggle.py on 2>/dev/null || true
-	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@python3 scripts/session-guards/vscode_git_toggle.py on 2>/dev/null || true
+	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
 	@rm -f _out.txt _err.txt 2>/dev/null || true
 	@echo "✅ Session cleanup 完成"
@@ -167,10 +167,10 @@ fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘
 	fi
 	@echo ""
 	@echo "[Level 3a] 關 VS Code Git 背景掃描"
-	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
+	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
 	@echo ""
 	@echo "[Level 3b] 清 stale .git/*.lock"
-	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@echo ""
 	@echo "[Level 3c] Kill 殘留 port-forward"
 	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true

@@ -5,8 +5,8 @@
 #       先診斷 lock 是「活的」還是「殘留的」，再決定是否清理。
 #
 # 用法：
-#   bash scripts/ops/git_check_lock.sh          # 診斷
-#   bash scripts/ops/git_check_lock.sh --clean   # 診斷 + 清理 stale locks
+#   bash scripts/session-guards/git_check_lock.sh          # 診斷
+#   bash scripts/session-guards/git_check_lock.sh --clean   # 診斷 + 清理 stale locks
 #
 # 設計原則：
 #   - 不盲目刪除 — 先檢查 lock 年齡和是否有活躍 git 程序
@@ -98,5 +98,5 @@ elif [ "$CLEAN_MODE" = "--clean" ] && [ "$HAS_ACTIVE_GIT" = true ]; then
     echo "⛔ 有活躍 git 程序，跳過清理。請先終止相關程序。"
 elif [ "$CLEAN_MODE" != "--clean" ] && [ "$HAS_STALE" = true ]; then
     echo "💡 若確認是殘留，可執行："
-    echo "   bash scripts/ops/git_check_lock.sh --clean"
+    echo "   bash scripts/session-guards/git_check_lock.sh --clean"
 fi
