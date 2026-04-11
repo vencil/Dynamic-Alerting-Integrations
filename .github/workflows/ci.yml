@@ -57,6 +57,54 @@ jobs:
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
 
+  lint-rule-packs:
+    # Custom Prometheus rule-pack governance linter.
+    #
+    # Until v2.6.0 this only ran in validate.yaml, which is path-filtered
+    # and NOT in the branch-protection required-check list. That left a
+    # hole: a PR not touching any validate.yaml path could still merge
+    # rule-pack YAML via unrelated codepaths (refactors, cross-file moves,
+    # etc.) without running the deny-list / required-labels / max-range
+    # checks. PR #11 surfaced the cost of that hole — 14 rule-packs had
+    # accumulated 95 alerts missing the required `tenant` label because
+    # the gate was advisory, not enforcing. See release-playbook lesson
+    # #29 for the full governance-debt pattern.
+    #
+    # Hoisting the step into ci.yml (no path filter, runs on every PR
+    # and push to main) guarantees the deny-list is enforced against the
+    # actual HEAD tree on every PR, not just PRs whose diff happens to
+    # land on a watched path. Add "Lint Rule Packs" to branch protection
+    # required checks to lock it in.
+    name: Lint Rule Packs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-rule-packs-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-rule-packs-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Lint custom rules (deny-list + required labels)
+        run: |
+          python scripts/tools/ops/lint_custom_rules.py \
+            rule-packs/ \
+            --policy .github/custom-rule-policy.yaml \
+            --ci
+
   python-tests:
     name: Python Tests (${{ matrix.python }})
     runs-on: ubuntu-latest
