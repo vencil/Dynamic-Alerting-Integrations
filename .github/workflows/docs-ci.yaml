@@ -306,6 +306,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history required: generate_changelog.py --check walks
+          # commits from the latest vX.Y.Z tag to HEAD. The default
+          # shallow fetch (depth=1) on refs/pull/N/merge left the tag
+          # unreachable, which caused changelog to exit 1 with no
+          # detail on every PR (observed on PRs #17 and #18).
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
