@@ -96,6 +96,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 | 任務類型 | 必讀 | 選讀 | 為什麼要讀 |
 |---------|------|------|-----------|
 | 跑 pytest / 新增測試 | [testing-playbook](docs/internal/testing-playbook.md) 全文 + [test-map](docs/internal/test-map.md) §Factory/Markers | — | 不讀會踩到 fixture 格式、marker 選擇、conftest import 慣例 |
+| 修 Go test race / flake | testing-playbook §v2.6.x Go 並發測試 flake | — | CI `FAIL` + coverage 同時出現 = `t.Errorf` flake；初始狀態斷言 + 時間戳 bounds 是兩個常見陷阱 |
 | 跑 benchmark / 效能分析 | [benchmark-playbook](docs/internal/benchmark-playbook.md) 全文 | testing-playbook §負載注入 | 不讀會用錯統計方法或 port-forward 不穩導致數據無效 |
 | docker exec / K8s 操作 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §核心原則 + §已知陷阱 | — | docker exec stdout 在 Windows MCP 下為空，不讀此節會浪費 30 分鐘排錯 |
 | Release / 推 tag | [github-release-playbook](docs/internal/github-release-playbook.md) 全文 | windows-mcp-playbook §PowerShell REST API | Re-tag 三輪的教訓全在這裡 |

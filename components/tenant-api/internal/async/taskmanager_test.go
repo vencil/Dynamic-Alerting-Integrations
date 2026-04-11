@@ -31,12 +31,29 @@ func TestNewManagerDefaultWorkerCount(t *testing.T) {
 }
 
 // TestSubmitAndGet verifies task submission and retrieval.
+//
+// Uses a barrier channel to gate the worker goroutine in a non-terminal
+// state while the main goroutine observes it. Without the barrier, a
+// zero-cost TaskFunc can race to TaskCompleted before Get returns,
+// which makes the "pending or running" assertion flaky under -race in CI.
 func TestSubmitAndGet(t *testing.T) {
 	m := NewManager(1)
 	defer m.Close()
 
+	// barrier is closed at test teardown to release the worker.
+	// The defers run LIFO, so close(barrier) fires before m.Close(),
+	// letting the worker drain cleanly before Close() waits on wg.
+	barrier := make(chan struct{})
+	defer close(barrier)
+
 	taskID := "batch-20260406-0001"
 	fn := func(ctx context.Context) ([]TaskResult, error) {
+		// Block until the test releases us (or the manager cancels).
+		select {
+		case <-barrier:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		return []TaskResult{
 			{TenantID: "tenant-a", Status: "ok"},
 		}, nil
@@ -52,6 +69,7 @@ func TestSubmitAndGet(t *testing.T) {
 	if retrieved.ID != taskID {
 		t.Errorf("expected ID=%s, got %s", taskID, retrieved.ID)
 	}
+	// The worker is pinned by the barrier, so status must be non-terminal.
 	if retrieved.Status != TaskPending && retrieved.Status != TaskRunning {
 		t.Errorf("expected status=pending or running, got %v", retrieved.Status)
 	}
@@ -85,14 +103,12 @@ func TestWorkerCompletion(t *testing.T) {
 
 	m.Submit(taskID, fn)
 
-	// Use Get() (returns a snapshot) to avoid racing with the worker goroutine.
-	initTask, ok := m.Get(taskID)
-	if !ok {
-		t.Fatal("task not found after submit")
-	}
-	if initTask.Status != TaskPending && initTask.Status != TaskRunning {
-		t.Errorf("expected initial status=pending or running, got %v", initTask.Status)
-	}
+	// Note: we intentionally do NOT assert on the initial status here.
+	// With a zero-cost TaskFunc and a single worker, the task can
+	// legitimately race from pending → running → completed before the
+	// main goroutine returns from Get(), which made this assertion
+	// flaky under -race in CI. The poll loop below is the source of
+	// truth for completion behavior.
 
 	// Poll until completion (with timeout).
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -316,6 +332,11 @@ func TestContextCancellation(t *testing.T) {
 }
 
 // TestTaskTimestamps verifies CreatedAt and UpdatedAt are set correctly.
+//
+// The "after" timestamp is measured *after* Get() returns a snapshot so
+// that any UpdatedAt mutation the worker writes (via setStatus/setCompleted)
+// is guaranteed to happen-before the snapshot — otherwise the worker could
+// race past the test and write a newer UpdatedAt than the test's bound.
 func TestTaskTimestamps(t *testing.T) {
 	m := NewManager(1)
 	defer m.Close()
@@ -327,10 +348,13 @@ func TestTaskTimestamps(t *testing.T) {
 	}
 
 	m.Submit(taskID, fn)
-	after := time.Now().UTC()
 
 	// Use Get() (returns a snapshot) to avoid racing with the worker goroutine.
 	task, ok := m.Get(taskID)
+	// Only bound "after" once the snapshot is in hand. The snapshot captures
+	// whatever UpdatedAt the worker has written up to this moment under the
+	// manager's mutex; anything it writes afterwards is invisible here.
+	after := time.Now().UTC()
 	if !ok {
 		t.Fatal("task not found after submit")
 	}

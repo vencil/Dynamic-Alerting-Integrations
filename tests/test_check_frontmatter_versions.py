@@ -257,6 +257,71 @@ class TestFixDrift:
 
 
 # ============================================================
+# Unit Tests — read_platform_version
+# ============================================================
+
+
+class TestReadPlatformVersion:
+    """Tests for read_platform_version supporting both CLAUDE.md header formats."""
+
+    def test_inline_format(self, tmp_path, monkeypatch):
+        """Inline format: ``## 專案概覽 (v2.0.0)`` — the early format."""
+        claude = tmp_path / "CLAUDE.md"
+        claude.write_text("## 專案概覽 (v2.0.0)\n", encoding="utf-8")
+        monkeypatch.setattr(cfv, "CLAUDE_MD", claude)
+        assert cfv.read_platform_version() == "2.0.0"
+
+    def test_body_format(self, tmp_path, monkeypatch):
+        """Body format: ``## 專案概覽`` + bold tagline with version on next line.
+
+        This mirrors the current CLAUDE.md (v2.6.0+) layout where the
+        heading is separated from the version-bearing tagline by a blank
+        line, e.g.::
+
+            ## 專案概覽
+
+            **Multi-Tenant Dynamic Alerting 平台 (v2.6.0)** — ...
+        """
+        claude = tmp_path / "CLAUDE.md"
+        claude.write_text(
+            "## 專案概覽\n\n"
+            "**Multi-Tenant Dynamic Alerting 平台 (v2.6.0)** — Config-driven.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cfv, "CLAUDE_MD", claude)
+        assert cfv.read_platform_version() == "2.6.0"
+
+    def test_missing_file(self, tmp_path, monkeypatch):
+        """Missing CLAUDE.md returns None (caller decides how to error)."""
+        monkeypatch.setattr(cfv, "CLAUDE_MD", tmp_path / "nonexistent.md")
+        assert cfv.read_platform_version() is None
+
+    def test_no_anchor(self, tmp_path, monkeypatch):
+        """File exists but has no 專案概覽 anchor → None."""
+        claude = tmp_path / "CLAUDE.md"
+        claude.write_text("# Some other content\n(v9.9.9)\n", encoding="utf-8")
+        monkeypatch.setattr(cfv, "CLAUDE_MD", claude)
+        # Must not match the stray (v9.9.9) — anchor-less.
+        assert cfv.read_platform_version() is None
+
+    def test_version_beyond_window(self, tmp_path, monkeypatch):
+        """Version too far from the 專案概覽 anchor is ignored.
+
+        Prevents accidentally picking up an unrelated ``(vX.Y.Z)`` that
+        appears much later in the file (e.g. in a changelog snippet).
+        """
+        claude = tmp_path / "CLAUDE.md"
+        claude.write_text(
+            "## 專案概覽\n"
+            + ("\n" * 10)
+            + "(v9.9.9)\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cfv, "CLAUDE_MD", claude)
+        assert cfv.read_platform_version() is None
+
+
+# ============================================================
 # Unit Tests — format_text_report / format_json_report
 # ============================================================
 

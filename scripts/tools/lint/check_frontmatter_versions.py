@@ -69,13 +69,41 @@ class DriftItem:
 
 
 def read_platform_version() -> Optional[str]:
-    """Read the platform version from CLAUDE.md frontmatter / header."""
+    """Read the platform version from CLAUDE.md.
+
+    Supports two header formats seen across the project's history:
+
+    1. Inline (early format, still used in unit tests)::
+
+           ## 專案概覽 (v2.0.0)
+
+    2. Body (current format, see CLAUDE.md v2.6.0+)::
+
+           ## 專案概覽
+
+           **Multi-Tenant Dynamic Alerting 平台 (v2.6.0)** — ...
+
+    The function anchors on the first line containing ``專案概覽`` and
+    scans that line plus up to 5 following lines for a ``(vX.Y.Z[...])``
+    token, returning the first match. Matching a few lines beyond the
+    heading keeps the inline case trivial while supporting the body case
+    where the version sits in a bold-wrapped tagline under the heading.
+    """
     if not CLAUDE_MD.exists():
         return None
-    content = CLAUDE_MD.read_text(encoding="utf-8")
-    m = re.search(r"專案概覽 \(v([0-9]+\.[0-9]+\.[0-9]+[^)]*)\)", content)
-    if m:
-        return m.group(1)
+    lines = CLAUDE_MD.read_text(encoding="utf-8").splitlines()
+    version_re = re.compile(r"\(v([0-9]+\.[0-9]+\.[0-9]+[^)]*)\)")
+    for i, line in enumerate(lines):
+        if "專案概覽" in line:
+            # Scan the anchor line and the next 5 lines.
+            for scan_line in lines[i:i + 6]:
+                m = version_re.search(scan_line)
+                if m:
+                    return m.group(1)
+            # Anchor found but no version nearby — do not keep scanning
+            # the rest of the file; bail out so we don't pick up an
+            # unrelated `(vX.Y.Z)` elsewhere in the document.
+            return None
     return None
 
 
