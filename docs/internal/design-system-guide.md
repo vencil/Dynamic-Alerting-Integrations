@@ -560,7 +560,7 @@ docs/
 - [`docs/interactive/index.html`](../interactive/index.html) — Tools Hub
 - [`docs/assets/jsx-loader.html`](../assets/jsx-loader.html) — JSX 工具載入器
 - [`docs/internal/tool-map.md`](tool-map.md) — 所有工具清單
-- [`CHANGELOG.md`](../../CHANGELOG.md) — 版本歷程
+- [`CHANGELOG.md`](../CHANGELOG.md) — 版本歷程
 
 ---
 

@@ -7,7 +7,7 @@ lang: zh
 ---
 # VCS 整合指南 — GitHub / GitLab / 自託管實例
 
-> **v2.6.0** | 相關文件：[ADR-011 PR-based Write-back](adr/011-pr-based-write-back.md) · [tenant-api README](../components/tenant-api/README.md) · [GitOps 部署指南](gitops-deployment.md)
+> **v2.6.0** | 相關文件：[ADR-011 PR-based Write-back](adr/011-pr-based-write-back.md) · [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md) · [GitOps 部署指南](gitops-deployment.md)
 
 ## 概覽
 
@@ -128,5 +128,5 @@ tenantApi:
 | 資源 | 相關性 |
 |------|--------|
 | [ADR-011 PR-based Write-back](adr/011-pr-based-write-back.md) | ⭐⭐⭐ |
-| [tenant-api README](../components/tenant-api/README.md) | ⭐⭐⭐ |
+| [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md) | ⭐⭐⭐ |
 | [GitOps 部署指南](gitops-deployment.md) | ⭐⭐ |

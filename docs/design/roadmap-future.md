@@ -71,4 +71,4 @@ tag push → GitHub Release Notes 自動產生（基於 CHANGELOG section）→ 
 | v2.2.0 | Adoption Pipeline × CLI 擴展 | init、config-history、gitops-check |
 | v2.1.0 | Routing Profiles × Domain Policy | ADR-007、四層路由合併 |
 
-完整版本歷程見 [CHANGELOG.md](../../CHANGELOG.md)。
+完整版本歷程見 [CHANGELOG.md](../CHANGELOG.md)。
