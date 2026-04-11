@@ -150,10 +150,10 @@ grep -A5 "helm upgrade" "$DEMO_DIR/scaffold/scaffold-report.txt" || true
 # -----------------------------------------------
 step "3" "Migrate Legacy Rules (migrate_rule.py)"
 # -----------------------------------------------
-if [ -f "tests/legacy-dummy.yml" ]; then
+if [ -f "tests/fixtures/legacy-dummy.yml" ]; then
   info "轉換傳統 alert rules..."
   python3 scripts/tools/migrate_rule.py \
-    tests/legacy-dummy.yml \
+    tests/fixtures/legacy-dummy.yml \
     -o "$DEMO_DIR/migration" \
     2>/dev/null || true
   echo ""
@@ -163,20 +163,20 @@ if [ -f "tests/legacy-dummy.yml" ]; then
   info "生成的 migration-report.txt:"
   cat "$DEMO_DIR/migration/migration-report.txt" 2>/dev/null || echo "  (skipped)"
 else
-  warn "tests/legacy-dummy.yml 不存在，跳過遷移示範"
+  warn "tests/fixtures/legacy-dummy.yml 不存在，跳過遷移示範"
 fi
 
 # -----------------------------------------------
 step "4" "Dry-Run Migration (migrate_rule.py --dry-run)"
 # -----------------------------------------------
-if [ -f "tests/legacy-dummy.yml" ]; then
+if [ -f "tests/fixtures/legacy-dummy.yml" ]; then
   info "Dry-run 模式預覽..."
   python3 scripts/tools/migrate_rule.py \
-    tests/legacy-dummy.yml \
+    tests/fixtures/legacy-dummy.yml \
     --dry-run \
     2>/dev/null || true
 else
-  warn "tests/legacy-dummy.yml 不存在，跳過 dry-run 示範"
+  warn "tests/fixtures/legacy-dummy.yml 不存在，跳過 dry-run 示範"
 fi
 
 # -----------------------------------------------

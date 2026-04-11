@@ -11,15 +11,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "${SCRIPT_DIR}/../scripts/_lib.sh"
+source "${SCRIPT_DIR}/../../scripts/_lib.sh"
 
 info "=========================================="
 info "Scenario D: Composite Priority Logic Test"
 info "=========================================="
 
 TENANT=${1:-db-a}
-PATCH_CMD="python3 ${SCRIPT_DIR}/../scripts/tools/patch_config.py"
-CHECK_ALERT="python3 ${SCRIPT_DIR}/../scripts/tools/check_alert.py"
+PATCH_CMD="python3 ${SCRIPT_DIR}/../../scripts/tools/patch_config.py"
+CHECK_ALERT="python3 ${SCRIPT_DIR}/../../scripts/tools/check_alert.py"
 
 # ============================================================
 # Phase 1: 環境檢查

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # test-migrate-tool.sh — migrate_rule.py v2 驗證腳本
 # 測試 dry-run 模式 + 檔案化輸出 + 智能猜測
-# 用法: bash tests/test-migrate-tool.sh
+# 用法: bash tests/scenarios/test-migrate-tool.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 TOOL="${ROOT_DIR}/scripts/tools/migrate_rule.py"
-INPUT="${SCRIPT_DIR}/legacy-dummy.yml"
+INPUT="${ROOT_DIR}/tests/fixtures/legacy-dummy.yml"
 OUTPUT_DIR="${SCRIPT_DIR}/_test_output"
 
 PASS=0; FAIL=0; TOTAL=0

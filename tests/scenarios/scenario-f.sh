@@ -19,8 +19,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="${SCRIPT_DIR}/.."
-source "${SCRIPT_DIR}/../scripts/_lib.sh"
+ROOT_DIR="${SCRIPT_DIR}/../.."
+source "${ROOT_DIR}/scripts/_lib.sh"
 
 TENANT=${1:-db-a}
 PATCH_CMD="python3 ${ROOT_DIR}/scripts/tools/patch_config.py"

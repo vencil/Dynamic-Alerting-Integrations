@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test-migrate-multidb.sh — migrate_rule.py v2 Multi-DB + Dimensional 測試
-# 用法: bash tests/test-migrate-multidb.sh
+# 用法: bash tests/scenarios/test-migrate-multidb.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 TOOL="${ROOT_DIR}/scripts/tools/migrate_rule.py"
-INPUT="${SCRIPT_DIR}/legacy-multidb.yml"
+INPUT="${ROOT_DIR}/tests/fixtures/legacy-multidb.yml"
 OUTPUT_DIR="${SCRIPT_DIR}/_test_multidb_output"
 
 PASS=0; FAIL=0; TOTAL=0

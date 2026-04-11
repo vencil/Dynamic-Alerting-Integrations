@@ -1,6 +1,6 @@
 #!/bin/bash
 # test-scaffold.sh — scaffold_tenant.py 自動化測試
-# 用法: bash tests/test-scaffold.sh
+# 用法: bash tests/scenarios/test-scaffold.sh
 set -euo pipefail
 
 PASS=0
