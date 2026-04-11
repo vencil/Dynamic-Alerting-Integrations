@@ -535,4 +535,55 @@ git push origin main
 git remote set-url origin git@github.com:<owner>/<repo>.git
 ```
 
-**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路
+**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路徑（例：`INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3`），在 Windows 原生 git 下 `exec` 這個 hook 會直接 `cannot spawn .git/hooks/pre-push: No such file or directory`。這時有三個選擇：
+
+1. **臨時 `--no-verify`**（最快）：`git push --no-verify origin <branch>`。僅適用 pre-push；CLAUDE.md 規範 #Top4 的「不要 `--no-verify`」指的是 **pre-commit 留下 `.git/index.lock`** 的情境，pre-push hook 在 Windows 下 spawn 失敗是不同根因，繞過 OK。
+2. **regenerate hook 走 Windows Python**：`pre-commit uninstall --hook-type pre-push && pre-commit install --hook-type pre-push` 會把 `INSTALL_PYTHON` 重寫成當下 `$(which python)` 的路徑。缺點：切回 Linux 側（Dev Container / WSL / CI）又得 regenerate 一次。
+3. **改走 §替代路線 D：Dev Container Push**（推薦）：Dev Container 內的 `/usr/local/python/3.13.12/bin/python3` 真的存在，hook 可以正常 spawn，pre-commit checks 會跑，不需要 `--no-verify`。credential 用下面的 one-liner 解決。
+
+### 修復層 C · 替代路線 D：Dev Container Push
+
+當 pre-push hook 必須跑（例如專案規範不允許 `--no-verify`、或 pre-push 掛的 check 很關鍵），應該優先走 Dev Container push：
+
+| 面向 | Windows 原生 git（路線 A-C 主幹） | Dev Container push（路線 D） |
+|---|---|---|
+| pre-push hook spawn | ✗ 失敗（Linux python 路徑寫死） | ✓ 正常（容器內 `/usr/local/python/3.13.12/bin/python3` 存在） |
+| pre-commit checks 跑不跑 | ✗ 只能 `--no-verify` 跳過 | ✓ 正常執行 |
+| 和 CI 的環境一致性 | 低（Windows + Git for Windows） | 高（ubuntu-latest 等價） |
+| credential helper | Git Credential Manager 自動處理 | 要手動注入 token（見下） |
+| MCP 呼叫路徑 | `cmd /c <batch>` → `git.exe` → 各種 PATH / DLL 陷阱 | `docker exec vibe-dev-container bash -c '...'` |
+
+**credential 注入 one-liner**（不動 `git config`、不寫 token 進 remote URL）：
+
+```bash
+# 1. 先從 Windows 側把 gh token 落到容器可讀的檔案（必須在掛載目錄下）
+#    Windows cmd:
+#    "C:\Program Files\GitHub CLI\gh.exe" auth token > C:\Users\<USER>\vibe-k8s-lab\.dev_push_token
+#    注意 gh auth 的 scope 必須包含 workflow（gh auth refresh -s workflow）
+
+# 2. 容器內 push（TOKEN 只活在該次 git process 的 env，不寫檔不入 log）
+cd /workspaces/vibe-k8s-lab
+TOKEN=$(tr -d '\r\n' < .dev_push_token)
+git -c credential.helper='' \
+    -c credential.helper="!f() { echo username=x-access-token; echo password=$TOKEN; }; f" \
+    push origin <branch>
+
+# 3. 完成後立即刪掉 token 檔
+rm -f .dev_push_token
+```
+
+**注意事項**：
+
+- `credential.helper=''` 在前面是把既有 helper 清掉（避免 GCM / cache helper 先問 username 就失敗），然後才附加 script helper。順序反過來無效。
+- `tr -d '\r\n'` 是因為 Windows gh 寫出的 token 可能帶 `\r\n`，留著會讓 `password=` 那行壞掉。
+- token 檔放 `.dev_push_token`（前綴點）並**一定要加進 `.gitignore`**（專案已 ignore `.dev_*`，臨時檔名以 `.dev_` 開頭即可）。push 完立刻 `rm`。
+- 走這條路徑後 `git push` 的 MCP runtime / exit code 仍然不可信，一樣用 §修復層 C 裡的 `git ls-remote origin HEAD` 對比 SHA 驗證成功。
+- `--dry-run` 下 pre-push hook 還是會跑（不發 pack 而已），可以先用 dry-run 驗證 credential 和 hook 都 OK 再做真正 push。
+
+**何時該走 D vs A-C**：
+
+- **走 D**：任何 commit 經過 pre-push hook 有實質檢查、或要跟 CI 環境對齊做 reproducibility check 時
+- **走 A-C**：Dev Container 沒起來、credential 注入臨時不方便、或純粹 ad-hoc 緊急 push（接受 `--no-verify` 的代價）
+
+**實證紀錄**（2026-04-12，verified-at-version v2.6.0）：`chore/structure-cleanup-2026-04-11` branch 的 playbook 更新 commit 就是從 Dev Container 走路線 D push 的，`git ls-remote origin` SHA 比對通過；Windows 原生 git 路徑則在 P2b 的六個 commits 走過一次，兩條路線都已通過實證。
+

@@ -68,3 +68,8 @@ docs/internal/*-plan-draft.md
 .validation-baseline.json
 .validation-profile.csv
 .release-please-manifest.json
+
+# --- Session helper / temp files (Windows MCP Playbook §修復層 C / D) ---
+# Ad-hoc batch scripts, logs and token drops used by Dev Container push path.
+# Any file prefixed with .dev_ is expected to be ephemeral and MUST NOT be committed.
+.dev_*
