@@ -8,6 +8,14 @@ edit_uri: edit/main/
 
 copyright: Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
 
+# Exclude repo-root README symlinks from the MkDocs site build.
+# docs/README-root.md and docs/README-root.en.md are symlinks to the
+# repo-root README files, intended for GitHub display only. Their
+# `docs/foo.md` style links don't resolve when built inside docs_dir.
+exclude_docs: |
+  README-root.md
+  README-root.en.md
+
 theme:
   name: material
   language: zh
