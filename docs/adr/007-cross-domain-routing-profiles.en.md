@@ -1,4 +1,5 @@
 ---
+title: "ADR-007: Cross-Domain Routing Profiles and Domain Policies"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.6.0

@@ -1,4 +1,5 @@
 ---
+title: "架構決策記錄 (ADR)"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.6.0

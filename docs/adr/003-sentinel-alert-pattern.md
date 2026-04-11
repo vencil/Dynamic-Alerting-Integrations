@@ -1,4 +1,5 @@
 ---
+title: "ADR-003: Sentinel Alert 模式"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.6.0
