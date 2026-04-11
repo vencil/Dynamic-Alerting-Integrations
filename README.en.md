@@ -80,6 +80,28 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 
 ---
 
+## Repository Map
+
+| Directory | Contents | When to visit |
+|-----------|----------|---------------|
+| [`components/`](components/) | Component sources: `threshold-exporter` (Go), `tenant-api` (Go), `da-tools` (Python CLI), `da-portal` (frontend container), `backstage-plugin` (TS) | Application logic changes |
+| [`helm/`](helm/) | Helm charts: `da-portal`, `tenant-api`, `mariadb-instance`; plus `values-db-*.yaml` | Deployment / chart templates |
+| [`k8s/`](k8s/) | Raw K8s manifests: namespaces, monitoring (Prometheus/Alertmanager/Grafana), tenant-api, CRD | Spin up the demo environment |
+| [`rule-packs/`](rule-packs/) | 15 rule-pack source YAMLs (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
+| [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
+| [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
+| [`scripts/`](scripts/) | Shell entrypoints + 97 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
+| [`tests/`](tests/) | Python pytest (`test_*.py`), shell scenarios (`scenario-*.sh`), `e2e/` Playwright, `snapshots/` | Run / add tests |
+| [`docs/`](docs/) | 145 bilingual documents. Lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
+| [`operator-output/`](operator-output/) | `operator_generate.py` output samples (14 PrometheusRule rule-packs) | Reference output for operator mode |
+| [`CLAUDE.md`](CLAUDE.md) | AI Agent bootstrap + task-routing table | Required before starting an agent session |
+| [`docs/internal/`](docs/internal/) | Internal playbooks (testing / benchmark / windows-mcp / github-release) and maps | Debugging, releases, benchmarks |
+
+> Newcomer path: `README.en.md` → [`docs/getting-started/`](docs/getting-started/) → Choose BYO / Operator → Follow the relevant integration guide.
+> Agent path: `CLAUDE.md` → task-routing table → relevant playbook.
+
+---
+
 ## Getting Started
 
 ### Local Experience (5 minutes)

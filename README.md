@@ -80,6 +80,28 @@ graph TD
 
 ---
 
+## 專案結構導覽
+
+| 目錄 | 內容 | 何時會來這裡 |
+|------|------|--------------|
+| [`components/`](components/) | 各元件程式碼：`threshold-exporter`（Go）、`tenant-api`（Go）、`da-tools`（Python CLI）、`da-portal`（前端容器）、`backstage-plugin`（TS） | 改應用程式邏輯 |
+| [`helm/`](helm/) | Helm charts：`da-portal`、`tenant-api`、`mariadb-instance`；values 檔 `values-db-*.yaml` | 調整部署與 chart 模板 |
+| [`k8s/`](k8s/) | 原生 K8s manifests：namespaces、monitoring（Prometheus/Alertmanager/Grafana）、tenant-api、CRD | 部署示範環境 |
+| [`rule-packs/`](rule-packs/) | 15 份 Rule Pack 來源 YAML（`rule-pack-<tech>.yaml`）+ [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) | 新增/修改告警規則 |
+| [`policies/`](policies/) | OPA Rego 政策範例（naming、routing、threshold-bounds） | 治理層規則 |
+| [`environments/`](environments/) | CI / local 環境 profile | 跨環境差異配置 |
+| [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 97 個 Python 工具 | 跑工具、lint、開發者體驗 |
+| [`tests/`](tests/) | Python pytest（`test_*.py`）、shell scenario（`scenario-*.sh`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
+| [`docs/`](docs/) | 145 份文件（雙語），對照表見 [doc-map](docs/internal/doc-map.md) | 讀設計/整合/運維文件 |
+| [`operator-output/`](operator-output/) | `operator_generate.py` 產出的 PrometheusRule 範例（14 個 rule-pack） | 參考 operator 模式的輸出樣板 |
+| [`CLAUDE.md`](CLAUDE.md) | AI Agent 起手式與任務分流表 | agent session 開始前必讀 |
+| [`docs/internal/`](docs/internal/) | 內部 playbook（testing / benchmark / windows-mcp / github-release）與 maps | 排錯、release、跑 benchmark |
+
+> 新人路徑：`README.md` → [`docs/getting-started/`](docs/getting-started/) → 決定 BYO / Operator → 對應整合手冊。
+> Agent 路徑：`CLAUDE.md` → 任務分流表 → 對應 playbook。
+
+---
+
 ## 開始使用
 
 ### 本地體驗（5 分鐘）
