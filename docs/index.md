@@ -11,7 +11,7 @@ lang: zh
 
 <!-- 這是 MkDocs 站台首頁。GitHub repo README 見 ../README.md -->
 
-> **Language / 語言：** [English](index.en.md) | **中文（當前）**
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 Config-driven 多租戶告警平台，基於 Prometheus `group_left` 向量匹配。規則數量固定為 O(M)，不隨租戶數增長——租戶只寫 YAML，不碰 PromQL。
 
@@ -123,7 +123,7 @@ graph TB
 
 **工具鏈：** `da-tools` CLI（scaffold → migrate → validate → cutover → diagnose）· [CLI 參考](cli-reference.md) · [速查表](cheat-sheet.md)
 
-**部署層級：** Tier 1（Git-Native / GitOps）或 Tier 2（Portal + API，含 RBAC）。對比詳見 [README](../README.md#部署層級)。
+**部署層級：** Tier 1（Git-Native / GitOps）或 Tier 2（Portal + API，含 RBAC）。對比詳見 [README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md#部署層級)。
 
 ---
 

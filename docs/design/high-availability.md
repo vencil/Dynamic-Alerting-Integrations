@@ -8,8 +8,8 @@ parent: architecture-and-design.md
 ---
 # 高可用性 (HA) 設計
 
-> **Language / 語言：** | **中文（當前）** | [English](high-availability.en.md)
->
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
+
 > ← [返回主文件](../architecture-and-design.md)
 
 ## 4. 高可用性設計 (High Availability)

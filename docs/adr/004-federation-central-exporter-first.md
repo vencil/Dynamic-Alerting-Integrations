@@ -7,7 +7,7 @@ lang: zh
 
 # ADR-004: Federation 架構——中央 Exporter 優先
 
-> **Language / 語言：** [English](004-federation-central-exporter-first.en.md) | **中文（當前）**
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 ## 狀態
 

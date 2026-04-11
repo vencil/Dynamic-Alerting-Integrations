@@ -11,7 +11,7 @@ lang: en
 
 <!-- This is the MkDocs site homepage (EN). For the GitHub repo README, see ../README.en.md -->
 
-> **Language / 語言：** **English (Current)** | [中文](index.md)
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 Config-driven multi-tenant alerting for Prometheus. Rule count stays fixed at O(M) regardless of tenant count — tenants write YAML, not PromQL.
 
@@ -123,7 +123,7 @@ For detailed architecture, see [Architecture & Design](architecture-and-design.m
 
 **Toolchain:** `da-tools` CLI (scaffold → migrate → validate → cutover → diagnose) · [CLI Reference](cli-reference.md) · [Cheat Sheet](cheat-sheet.md)
 
-**Deployment Tiers:** Tier 1 (Git-Native / GitOps) or Tier 2 (Portal + API with RBAC). See [root README](../README.en.md#deployment-tiers) for comparison.
+**Deployment Tiers:** Tier 1 (Git-Native / GitOps) or Tier 2 (Portal + API with RBAC). See [root README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.en.md#deployment-tiers) for comparison.
 
 ---
 
