@@ -93,6 +93,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 instance {{ $labels.instance }} is DOWN"
           summary_zh: "DB2 實例 {{ $labels.instance }} 已關閉"
@@ -115,6 +116,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high active connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 連線數過高"
@@ -142,6 +144,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 bufferpool 命中率偏低"
@@ -169,6 +172,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 交易日誌使用率過高"
@@ -196,6 +200,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 死鎖率過高"
@@ -223,6 +228,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 tablespace 即將滿容"
@@ -246,6 +252,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 sort overflow 比率過高"

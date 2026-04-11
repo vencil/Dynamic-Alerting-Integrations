@@ -46,6 +46,7 @@ groups:
         expr: user_silent_mode{target_severity="warning"} == 1
         labels:
           severity: none
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Silent mode (warning) active for {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的靜默模式（警告級別）已啟用"
@@ -58,6 +59,7 @@ groups:
         expr: user_silent_mode{target_severity="critical"} == 1
         labels:
           severity: none
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Silent mode (critical) active for {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的靜默模式（嚴重級別）已啟用"
@@ -72,6 +74,7 @@ groups:
         expr: user_severity_dedup{mode="enable"} == 1
         labels:
           severity: none
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Severity dedup enabled for {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 已啟用嚴重等級去重"
@@ -88,6 +91,7 @@ groups:
         for: 0s
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Config expired for {{ $labels.tenant }}: {{ $labels.event }}"
           summary_zh: "{{ $labels.tenant }} 的組態已過期：{{ $labels.event }}"

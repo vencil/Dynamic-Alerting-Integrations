@@ -79,6 +79,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB instance {{ $labels.instance }} is DOWN"
           summary_zh: "MariaDB 實例 {{ $labels.instance }} 已關閉"
@@ -90,6 +91,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "mysqld-exporter target missing"
           summary_zh: "mysqld-exporter 目標缺失"
@@ -113,6 +115,7 @@ groups:
         labels:
           severity: warning
           metric_group: "connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 連線數過高"
@@ -142,6 +145,7 @@ groups:
         labels:
           severity: critical
           metric_group: "connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 連線數嚴重過高"
@@ -178,6 +182,7 @@ groups:
         for: 60s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "System bottleneck on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 系統瓶頸"
@@ -194,6 +199,7 @@ groups:
         for: 0s
         labels:
           severity: info
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "{{ $labels.instance }} restarted recently"
           summary_zh: "{{ $labels.instance }} 最近已重新啟動"
@@ -213,6 +219,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High slow query rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 慢查詢率過高"
@@ -237,6 +244,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High aborted connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 中止的連線數過高"

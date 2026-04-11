@@ -87,6 +87,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "RabbitMQ exporter target missing"
           summary_zh: "RabbitMQ exporter 目標缺失"
@@ -110,6 +111,7 @@ groups:
         labels:
           severity: warning
           metric_group: "rabbitmq_queue_messages"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High RabbitMQ queue depth on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 佇列深度過高"
@@ -139,6 +141,7 @@ groups:
         labels:
           severity: critical
           metric_group: "rabbitmq_queue_messages"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical RabbitMQ queue depth on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 佇列深度嚴重過高"
@@ -167,6 +170,7 @@ groups:
         labels:
           severity: warning
           metric_group: "rabbitmq_node_mem_percent"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High RabbitMQ memory usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 記憶體使用率過高"
@@ -196,6 +200,7 @@ groups:
         labels:
           severity: critical
           metric_group: "rabbitmq_node_mem_percent"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical RabbitMQ memory usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 記憶體使用率嚴重過高"
@@ -224,6 +229,7 @@ groups:
         labels:
           severity: warning
           metric_group: "rabbitmq_connections"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High RabbitMQ connection count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 連線數過高"
@@ -252,6 +258,7 @@ groups:
         labels:
           severity: warning
           metric_group: "rabbitmq_consumers"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Low RabbitMQ consumer count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 消費者數量過少"
@@ -280,6 +287,7 @@ groups:
         labels:
           severity: warning
           metric_group: "rabbitmq_unacked_messages"
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High unacknowledged messages on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 未確認訊息過多"

@@ -93,6 +93,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis instance {{ $labels.instance }} is DOWN"
           summary_zh: "Redis 實例 {{ $labels.instance }} 已停機"
@@ -113,6 +114,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis high memory usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 記憶體使用率過高"
@@ -140,6 +142,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis high connection count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 連線數過高"
@@ -167,6 +170,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis high key eviction rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis Key 驅逐率過高"
@@ -194,6 +198,7 @@ groups:
         for: 2m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis replication lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 複製延遲"
@@ -217,6 +222,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis low hit ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 快取命中率過低"

@@ -89,6 +89,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle instance {{ $labels.instance }} is DOWN"
           summary_zh: "Oracle 實例 {{ $labels.instance }} 已關閉"
@@ -111,6 +112,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle high active sessions on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Oracle 活動 session 數過高"
@@ -138,6 +140,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle tablespace nearing capacity on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Oracle tablespace 即將滿容"
@@ -165,6 +168,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle high wait time on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Oracle 等待時間過高"
@@ -192,6 +196,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle high process count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Oracle process 數過高"
@@ -219,6 +224,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle high PGA usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Oracle PGA 使用率過高"
@@ -242,6 +248,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle session limit approaching on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 Oracle session 限制即將達到"
