@@ -62,7 +62,15 @@ def check_file(path: str) -> list[str]:
 
 
 def main() -> int:
-    files = [f for f in sys.argv[1:] if not f.startswith("--")]
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Detect sed -i damage on staged files",
+    )
+    parser.add_argument("files", nargs="*", help="Files to check")
+    args = parser.parse_args()
+
+    files = args.files
     if not files:
         return 0
 

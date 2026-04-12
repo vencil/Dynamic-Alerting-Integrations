@@ -82,6 +82,7 @@ lang: zh
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
+| `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |

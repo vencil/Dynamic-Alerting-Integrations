@@ -23,3 +23,9 @@
 #   for all downstream PRs until the next tag cut moves the `<tag>..HEAD`
 #   window past it.
 601f6320b413
+
+# 9dae239e7941 — 'Revert "docs(audit): add execution log..."'
+#   Git auto-generated revert commit from playbook audit session.
+#   Revert subjects use Git's built-in "Revert ..." format which
+#   doesn't match conventional commits.
+9dae239e7941
