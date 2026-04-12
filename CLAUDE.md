@@ -13,7 +13,7 @@ lang: zh
 > 以下指令在每次 Cowork / Claude Code session 開始時執行，**不分任務類型**。
 
 ```bash
-python scripts/ops/vscode_git_toggle.py off   # 關閉 VS Code Git 背景操作（防 FUSE phantom lock）
+python scripts/session-guards/vscode_git_toggle.py off   # 關閉 VS Code Git 背景操作（防 FUSE phantom lock）
 ```
 
 如需使用 Dev Container（K8s / Go test / Helm）：

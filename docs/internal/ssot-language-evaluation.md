@@ -3,7 +3,7 @@ title: SSOT 切換影響評估
 short: SSOT 語言切換影響分析
 audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
-status: draft
+status: decided
 lang: zh
 version: v2.6.0
 ---

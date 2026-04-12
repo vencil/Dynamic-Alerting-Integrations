@@ -94,6 +94,7 @@ lang: zh
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
 | `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
+| `docs/internal/_project-structure-audit-2026-04-12.md` | All | Project Structure Audit — 2026-04-12 |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
