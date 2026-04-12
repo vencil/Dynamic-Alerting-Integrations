@@ -376,3 +376,50 @@ sed() {
 | 用 git hook 禁止 `sed` binary 整體 | 過度限制：`sed`（不帶 `-i`）在 pipe 中是安全的 |
 | 把逃生門工具放 npm package 發佈 | 過度工程：只有這個專案需要，`scripts/ops/` 足矣 |
 | 用 .gitattributes 的 filter driver 攔截 sed | 太隱晦，AI agent 看不到錯誤訊息，不符合 harness 原則 |
+
+---
+
+## 附錄 B：執行紀錄（供後續 Session 接續）
+
+> 最後更新：2026-04-12，Session `upbeat-dreamy-keller`
+
+### 已完成
+
+| Phase | 項目 | Commit | 備註 |
+|-------|------|--------|------|
+| 1.1 | 🔴 撤銷 exposed PAT | N/A | poyu 手動撤銷完成 |
+| 1.2 | 🟡 C:\Users\vencs 清理 | N/A | ~400 檔案已識別分類；PAT 已撤銷；清理指引已給出 |
+| 1.3 | 🟡 `scripts/ops/win_git_escape.bat` | `1a21d11` | 含 status/add/commit/commit-file/push/tag/branch/log/diff/preflight/fix-hooks 子命令 |
+| 1.4 | 🟡 `scripts/ops/win_git_escape.ps1` | `1a21d11` | 含 pr-create/pr-list/pr-view/pr-merge/ci-status/release-create/auth-check |
+| 2.1 | 🔴 `scripts/ops/vibe-sed-guard.sh` | `1a21d11` | 已建立；**尚未安裝到 /etc/profile.d/**（見待辦） |
+| 2.2 | 🟡 `detect_sed_damage.py` + hook | `1a21d11` | 已加入 .pre-commit-config.yaml（sed-damage-guard） |
+| 2.3 | 🟢 `gitconfig-fuse-tuning.sample` + Makefile | `1a21d11` | `make install-fuse-gitconfig` target 已建立 |
+| 4.1 | 🟡 Git 操作決策樹 | `1a21d11` | 文字流程圖已加入 windows-mcp-playbook |
+| 4.2 | 🟡 三層環境職責矩陣 | `1a21d11` | 已加入 windows-mcp-playbook |
+| 4.3 | 🟡 CLAUDE.md 主路徑/逃生門聲明 | `1a21d11` | Top 5 坑重排、分流表新增逃生門行 |
+| 5.1 | sed -i wrapper 測試 | `1a21d11` | ✅ 已在 Cowork VM 實測攔截成功 |
+| 5.2 | Windows 逃生門實測 | `e5e1b49` | ✅ 實際用逃生門完成 commit，發現 6 個新 LL |
+| — | LL #42-#47 回寫 playbook | `e5e1b49` | pre-commit CRLF/stash deadlock/薛丁格 lock/batch encoding/UTF-8 commit/PS timeout |
+| — | win_git_escape.bat 改善 | `e5e1b49` | +commit-file、+fix-hooks、+auto lock cleanup |
+
+### 待辦（下個 Session 接續）
+
+| Phase | 項目 | 優先級 | 說明 |
+|-------|------|--------|------|
+| 2.1 補完 | `vibe-sed-guard.sh` 安裝到 VM | 🟡 P1 | 腳本在 repo 內但還未 `cp` 到 `/etc/profile.d/`；需要確認 Cowork VM 是否有寫入權限，或需在 Dockerfile/entrypoint 處理 |
+| 3.1 | windows-mcp-playbook 去重複 | 🟡 P1 | docker exec stdout 重複 4→1、PAT 矩陣去重、PS JSON 統一 |
+| 3.2 | testing-playbook 歸檔低效益 LL | 🟢 P2 | v2.1.0 Backstage LL ×2、DX Enhancement LL、Lint Tool Patterns → archive/ |
+| 3.3 | 統一 PS JSON 推薦做法 | 🟢 P2 | 跨 windows-mcp + github-release playbook |
+| 3.4 | 各 Playbook 頂部加 Quick Action Index | 🟡 P1 | 用錨點連結直接跳到可執行步驟，跳過敘事 |
+| 3.5 | CLAUDE.md 分流表加 "跳過條件" | 🟡 P1 | 減少 AI agent 不必要的 Playbook 讀取 |
+| 5.3 | pre-commit hook 全量測試 | 🟢 P2 | `pre-commit run --all-files` 驗證 31 auto + 13 manual hooks |
+| 5.4 | Playbook 錨點連結完整性 | 🟢 P2 | 確認新增的決策樹、職責矩陣錨點都能被正確引用 |
+| — | C:\Users\vencs 實際清理 | 🟢 P2 | 已有分類清單（§5.4），需 poyu 確認後執行批次刪除 |
+
+### 本次 Session 意外收穫
+
+本次 commit 過程本身成為逃生門的壓力測試：
+1. FUSE 側 git index 損壞（`unknown extension` error）→ 從 Windows 側 `del index` + `git reset` 修復
+2. PowerShell MCP 對大型 working tree timeout → 切 Desktop Commander cmd 成功
+3. 6 個實戰 LL 全部回寫（#42-#47），win_git_escape.bat 同步強化
+4. 驗證了 "主路徑失敗 → 逃生門接手 → 不讓 session 卡死" 的設計哲學確實可行
