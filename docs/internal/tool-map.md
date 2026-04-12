@@ -119,6 +119,7 @@ lang: zh
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_translation.py` | 自動化翻譯品質檢查 |
+| `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
 | `lint_html_doc_links.py` | Raw HTML doc-link validator for MkDocs output. |

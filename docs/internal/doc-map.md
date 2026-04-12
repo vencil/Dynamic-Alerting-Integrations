@@ -26,6 +26,8 @@ lang: zh
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |
+| `docs/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager 整合指南 |
+| `docs/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南 |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | 多租戶客製化規則治理規範 (Custom Rule Governance Model) |
@@ -33,25 +35,18 @@ lang: zh
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | 高可用性 (HA) 設計 — 副本、PDB、防雙倍計算 |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | 未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等 |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs 與 Projected Volume 架構 |
+| `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) 快速入門指南 |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer 快速入門指南 |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant 快速入門指南 |
 | `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
 | `docs/getting-started/wizard.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Getting Started Wizard |
+| `docs/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps 部署指南 |
 | `docs/glossary.md` (.en.md) | All | 術語表 |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, 安全合規 | 治理、稽核與安全合規 |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard 導覽 |
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — 首頁 |
-| `docs/integration/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager 整合指南 |
-| `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南 |
-| `docs/integration/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
-| `docs/integration/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps 部署指南 |
-| `docs/integration/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager 整合指南 |
-| `docs/integration/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps 部署指南 |
-| `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus 整合指南 |
-| `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring 策略 |
-| `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊（Hub） |
 | `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
 | `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
 | `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
@@ -94,6 +89,7 @@ lang: zh
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
 | `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
+| `docs/internal/_project-structure-audit-2026-04-12.md` | All | Project Structure Audit — 2026-04-12 |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
@@ -102,6 +98,7 @@ lang: zh
 | `docs/internal/doc-template.md` | All | 文件模板規範 |
 | `docs/internal/dx-tooling-backlog.md` | maintainers, contributors | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
+| `docs/internal/playbook-audit-2026-04.md` | All | Playbook 審核報告與實作計畫 (2026-04-12) |
 | `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
 | `docs/internal/test-map.md` | maintainers, AI Agent | 測試架構導覽 (Test Map) |
@@ -109,6 +106,11 @@ lang: zh
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |
+| `docs/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager 整合指南 |
+| `docs/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps 部署指南 |
+| `docs/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus 整合指南 |
+| `docs/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring 策略 |
+| `docs/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊（Hub） |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |

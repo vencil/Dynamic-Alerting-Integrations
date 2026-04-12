@@ -28,6 +28,14 @@ repos:
         types: [text]
         files: \.(md|yaml|yml|py|jsx|json)$
 
+      # --- sed -i damage detection (after hygiene fixer) ---
+      - id: sed-damage-guard
+        name: "Guard: detect sed -i damage"
+        entry: python3 scripts/tools/lint/detect_sed_damage.py
+        language: python
+        types: [text]
+        files: \.(md|yaml|yml|py|jsx|json)$
+
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage
