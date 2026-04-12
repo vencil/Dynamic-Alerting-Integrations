@@ -10,7 +10,7 @@
   python3 scripts/tools/generate_doc_map.py --check       # CI drift 偵測
   python3 scripts/tools/generate_doc_map.py --lang en     # 英文版
   python3 scripts/tools/generate_doc_map.py --generate --lang all  # 中英文
-  python3 scripts/tools/generate_doc_map.py --generate --include-adr  # 含 ADR
+  python3 scripts/tools/generate_doc_map.py --generate --no-adr      # 排除 ADR
 """
 import argparse
 import os
@@ -414,9 +414,14 @@ def main():
                         default="zh",
                         help="Language: zh (default), en, or all")
     parser.add_argument("--include-adr", action="store_true",
-                        help="Include ADR entries from docs/adr/")
+                        default=True,
+                        help="Include ADR entries from docs/adr/ (default: True)")
+    parser.add_argument("--no-adr", action="store_true",
+                        help="Exclude ADR entries from docs/adr/")
 
     args = parser.parse_args()
+    if args.no_adr:
+        args.include_adr = False
 
     langs = ["zh", "en"] if args.lang == "all" else [args.lang]
 
