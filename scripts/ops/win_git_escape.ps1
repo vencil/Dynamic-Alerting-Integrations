@@ -23,7 +23,7 @@
 param(
     [Parameter(Position = 0, Mandatory)]
     [ValidateSet('pr-create', 'pr-list', 'pr-view', 'pr-merge',
-                 'ci-status', 'release-create', 'auth-check')]
+                 'ci-status', 'release-create', 'auth-check', 'pr-preflight')]
     [string]$Command,
 
     [Parameter(Position = 1)]
@@ -131,6 +131,14 @@ try {
 
             Write-Host "Creating release: $Tag" -ForegroundColor Cyan
             & gh @args_list
+        }
+
+        'pr-preflight' {
+            # PR 收尾前六項檢查 — 呼叫 pr_preflight.py
+            $preflight_args = @('scripts/tools/dx/pr_preflight.py', '--skip-hooks')
+            if ($Arg1) { $preflight_args += @('--pr', $Arg1) }
+            Write-Host "=== PR Preflight Check ===" -ForegroundColor Cyan
+            & python @preflight_args
         }
     }
 } finally {

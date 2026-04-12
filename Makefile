@@ -138,6 +138,14 @@ git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale 
 	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
 	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
 
+.PHONY: pr-preflight
+pr-preflight: ## PR 收尾前檢查（conflict / CI / hooks / mergeable）
+	@python3 scripts/tools/dx/pr_preflight.py $(ARGS)
+
+.PHONY: pr-preflight-quick
+pr-preflight-quick: ## PR 快速檢查（跳過 local hooks）
+	@python3 scripts/tools/dx/pr_preflight.py --skip-hooks $(ARGS)
+
 .PHONY: vscode-git-off
 vscode-git-off: ## 關閉 VS Code Git（Agent session 用）
 	@python3 scripts/ops/vscode_git_toggle.py off

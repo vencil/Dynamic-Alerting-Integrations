@@ -80,7 +80,8 @@ if /i "%CMD%"=="tag"         goto :do_tag
 if /i "%CMD%"=="branch"      goto :do_branch
 if /i "%CMD%"=="log"         goto :do_log
 if /i "%CMD%"=="diff"        goto :do_diff
-if /i "%CMD%"=="preflight"   goto :do_preflight
+if /i "%CMD%"=="preflight"    goto :do_preflight
+if /i "%CMD%"=="pr-preflight" goto :do_pr_preflight
 if /i "%CMD%"=="fix-hooks"   goto :do_fix_hooks
 goto :usage
 
@@ -250,6 +251,17 @@ echo.
 echo === Preflight complete ===
 goto :done
 
+:do_pr_preflight
+REM pr-preflight: PR 收尾前六項檢查（conflict / CI / hooks / mergeable）
+echo === PR Preflight Check ===
+set "PR_NUM=%~2"
+if "%PR_NUM%"=="" (
+    python scripts/tools/dx/pr_preflight.py --skip-hooks
+) else (
+    python scripts/tools/dx/pr_preflight.py --skip-hooks --pr %PR_NUM%
+)
+goto :done
+
 :do_fix_hooks
 REM fix-hooks: 修復 pre-commit hooks 的跨平台問題
 REM 問題 1: Windows 端 pre-commit install 產生 CRLF shebang → Linux 找不到 /bin/sh\r
@@ -283,6 +295,7 @@ echo   branch [name]       List or create+switch branch
 echo   log                 Show recent commits
 echo   diff                Show diff stats
 echo   preflight           Pre-operation health check
+echo   pr-preflight [PR#]  PR closing check (conflict/CI/mergeable)
 echo   fix-hooks           Fix CRLF/shebang in git hooks (cross-platform)
 echo.
 goto :done_err

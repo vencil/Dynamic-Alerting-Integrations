@@ -158,6 +158,33 @@ cp scripts/ops/protect_main_push.sh .git/hooks/pre-push
 chmod +x .git/hooks/pre-push
 ```
 
+**PR 收尾 SOP（Branch Closing Checklist）**：
+
+merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local hooks），自動檢查六項：
+
+```
+┌─ 1. Branch 身份    確認在 feature branch，非 main
+├─ 2. Behind main    落後幾個 commit → 建議先 merge main
+├─ 3. Conflict       dry-run merge 偵測衝突
+├─ 4. Local hooks    pre-commit run --all-files
+├─ 5. CI 狀態        gh pr checks（含 A/B 分類：pre-existing vs this-PR）
+└─ 6. PR mergeable   GitHub mergeable + review 狀態
+```
+
+各 status 的處理方式：
+
+| Status | 意義 | 處理 |
+|--------|------|------|
+| ✅ PASS | 檢查通過 | 無需動作 |
+| ⚠️ WARN | 可合併但有風險 | behind main → merge main；CI pending → 等 |
+| ❌ FAIL | 必須修復 | conflict → merge main 解衝突；CI fail → 看 A/B 分類決定是否需修 |
+| ⏭️ SKIP | 檢查被跳過 | gh 不可用 → 在 Windows 跑；hooks 跳過 → 改跑完整版 |
+
+**執行入口**（三條等價路徑）：
+- Cowork VM / Dev Container：`make pr-preflight` 或 `make pr-preflight-quick`
+- Windows 逃生門 (bat)：`win_git_escape.bat pr-preflight [PR#]`
+- Windows 逃生門 (ps1)：`win_git_escape.ps1 pr-preflight [PR#]`
+
 **例外**：若確實需要直推 main（例如 hotfix），必須在 commit message 或 push 命令中明確標記理由，並事後補 PR review。
 
 ## 互動工具變更 SOP

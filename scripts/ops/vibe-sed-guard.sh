@@ -34,7 +34,8 @@ sed() {
         esac
         # 偵測 FUSE 掛載路徑模式
         case "$arg" in
-            /sessions/*/mnt/*|./mnt/*|*/mnt/vibe-k8s-lab/*)
+            /sessions/*/mnt/*|./mnt/*|*/mnt/*/*)
+                # 泛化 FUSE 掛載路徑偵測（不 hardcode repo 名稱）
                 has_mount_path=true
                 ;;
         esac

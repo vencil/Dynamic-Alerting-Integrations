@@ -268,6 +268,10 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 45 | Desktop Commander `start_process` 執行 `.bat` 檔案時編碼損壞 | Desktop Commander 的 `start_process` 直接執行 `.bat` 會對 `@echo off`、`setlocal` 等關鍵字產生亂碼，batch 無法正確解析。**繞道**：不直接執行 `.bat`，改用 inline `cmd /c "..."` 命令，或透過 PowerShell `& cmd /c script.bat args` 間接呼叫 |
 | 46 | cmd `git commit -m` 無法處理 UTF-8 特殊字元（em-dash、CJK） | `git commit -m "feat(ops): playbook audit — harness"` 中的 em-dash（U+2014）不在 cmd codepage 內，導致引號解析崩潰，每個空格後的單字都被當成獨立 pathspec，產生大量 `fatal: pathspec 'xxx' did not match any file` 錯誤。**正解**：永遠用 `git commit -F file.txt` 檔案傳遞 commit message。已內建到 `win_git_escape.bat commit-file` 子命令。UTF-8 檔案用 `[IO.File]::WriteAllText($path, $msg, [Text.UTF8Encoding]::new($false))` 或 `echo msg > file` 產生 |
 | 47 | Windows MCP PowerShell 對大型 working tree 的 git 操作 timeout | 當 working tree 有 ~90+ unstaged files 時，透過 Windows MCP PowerShell 執行 `git add` 和 `git status` 會反覆超過 60s timeout（連續 3 次失敗）。原因是 Git 需要 stat 大量檔案 + PowerShell MCP 模組初始化開銷。**繞道**：改用 Desktop Commander 的 cmd shell（`cmd /c "git add file1 file2"`），或用 `win_git_escape.bat` 直接操作 |
+| 48 | Desktop Commander cmd shell 拆解 `--title` 引號 | `gh pr create --title "multi word title"` 在 cmd 內被拆成獨立 arguments。**正解**：把完整命令寫入 `.bat` 檔再執行（bat 內引號正常解析）。PowerShell 可正確處理引號，但有 PATH (#49) 和 timeout (#47) 問題 |
+| 49 | `gh` 不在 Desktop Commander PowerShell PATH | Desktop Commander 的 PowerShell shell 找不到 `C:\Program Files\GitHub CLI\gh.exe`，但 cmd 可以。原因：PowerShell MCP 的 PATH 繼承與 cmd 不同。**正解**：用 cmd shell + bat 檔；或在 PowerShell 用全路徑 `& "C:\Program Files\GitHub CLI\gh.exe"` |
+| 50 | `gh pr checks --json` 沒有 `conclusion` 欄位 | 可用欄位：`name, state, bucket, description, event, link, startedAt, completedAt, workflow`。`bucket` 值為 `pass/fail/pending/skipping`。很多網路範例用 `conclusion` 是錯的 |
+| 51 | Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError | Python `print()` 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。**正解**：script 開頭偵測 `cp*` encoding 時強制 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')` |
 
 ## Windows Clone 初次設定 — Symlink 支援
 
@@ -682,45 +686,4 @@ git worktree remove "$WT"
 同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）:
 
 ```bash
-grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
-```
-
-#### Layer 2 — 決策樹（明確 if-else）
-
-pre-push hook 失敗後，按順序回答:
-
-```
-Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
-    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
-    └─ 是（pre-existing drift）→ 走 Q2
-Q2. CI 有叫這個 hook by name 嗎？（grep .github/workflows/）
-    ├─ 有 → 修掉 drift 或把 hook 切 stages: [manual]；不要用 --no-verify 繞過 CI 關卡
-    └─ 沒有 → 走 Q3
-
-Q3. 這個 hook 是「掃全 repo」還是「掃 staged files」？
-    ├─ 掃 staged files（pass_filenames: true 或 files: 精準 match）→ 不該擋這次 push，去 hook 的 files regex 找 bug
-    └─ 掃全 repo（pass_filenames: false 且 always_run 或廣 files regex）→ 確認是 pre-commit v3 default_stages 行為（走 Q4）
-
-Q4. .pre-commit-config.yaml 有沒有 default_stages: [pre-commit]？
-    ├─ 有 → 這個 hook 顯式設了 stages 包含 pre-push，去問作者意圖
-    └─ 沒有 → 這是陷阱本體（default 會跑 pre-push），本次 git push --no-verify 過關，
-             然後「另開 PR」套用 Layer 3 根治
-```
-
-關鍵：`--no-verify` 只在 Q1+Q2+Q4 同時指向「pre-existing + CI 沒看 + config default 陷阱」時才安全。任何一個分支走偏都該停下來修，不該硬push。
-
-#### Layer 3 — 配置層根治（最重要）
-
-在 `.pre-commit-config.yaml` 頂層加：
-
-```yaml
-default_stages: [pre-commit]
-```
-
-原理：pre-commit v3 若未設 `default_stages`，hook 預設會跑在**所有** git stage（pre-commit + pre-push + pre-merge-commit + ...）。鎖定 `[pre-commit]` 之後，`git push` 就不會被掃全 repo 的 drift hook 擋住，CI 仍然照跑（因為 CI 是 `pre-commit run <id>` 按名字叫，不受 `stages` 限制）。需要特定 hook 跑在其他 stage 時，在該 hook 顯式加 `stages: [pre-push]` 或 `stages: [manual]` 即可。
-
-這個修法已於 2026-04-12 commit 套用到本 repo（PR #21 後續 DX 改善）。**如果你發現這個設定被拿掉，不要接受 force-push `--no-verify` 的救援路線，先還原設定再說。**
-
-#### Layer 3 的配套：reword_chain.py
-
-若 Layer 2 決策樹結論是「這次 commits 有問題要修 commit message（不是 tree 內容）」，但又不想跑 `git rebase -i`（會觸發 commit-msg hook、改掉 committer date、需要 interactive editor），用 `scripts/tools/dx/reword_chain.py`：純 `git commit-tree` plumbing，保留 tree SHA + author/committer 身份 + 時間戳，失敗有 backup tag 一鍵復原。適合 agent/CI 環境批次改寫 N 個 commit subject。
+grep -r "
