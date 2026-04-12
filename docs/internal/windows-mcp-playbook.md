@@ -587,3 +587,82 @@ rm -f .dev_push_token
 
 **實證紀錄**（2026-04-12，verified-at-version v2.6.0）：`chore/structure-cleanup-2026-04-11` branch 的 playbook 更新 commit 就是從 Dev Container 走路線 D push 的，`git ls-remote origin` SHA 比對通過；Windows 原生 git 路徑則在 P2b 的六個 commits 走過一次，兩條路線都已通過實證。
 
+
+### 修復層 D · pre-push drift 三層改進（Layer 1-3）
+
+與 §修復層 C · 替代路線 D 互補但不同根因：§替代路線 D 處理「pre-push hook spawn 失敗（Linux python 路徑寫死）」，本節處理「pre-push hook 跑起來了、但掃到**非本次 commits 的 pre-existing drift**」。Windows 原生 git + 容器 git 兩條路徑都可能遇到。
+
+**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
+
+⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
+
+#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
+
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
+
+```bash
+# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
+BASE=$(git merge-base HEAD origin/main)
+WT=/tmp/wt-$BASE
+
+git worktree add "$WT" "$BASE" 2>/dev/null || true
+cd "$WT"
+pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
+ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
+
+cd - >/dev/null
+pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
+ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
+
+echo "base=$ERR_BASE head=$ERR_HEAD"
+# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
+# head > base → 這次引入了新問題，不要 --no-verify
+git worktree remove "$WT"
+```
+
+同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）:
+
+```bash
+grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
+```
+
+#### Layer 2 — 決策樹（明確 if-else）
+
+pre-push hook 失敗後，按順序回答:
+
+```
+Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
+    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
+    └─ 是（pre-existing drift）→ 走 Q2
+
+Q2. CI 有叫這個 hook by name 嗎？（grep .github/workflows/）
+    ├─ 有 → 修掉 drift 或把 hook 切 stages: [manual]；不要用 --no-verify 繞過 CI 關卡
+    └─ 沒有 → 走 Q3
+
+Q3. 這個 hook 是「掃全 repo」還是「掃 staged files」？
+    ├─ 掃 staged files（pass_filenames: true 或 files: 精準 match）→ 不該擋這次 push，去 hook 的 files regex 找 bug
+    └─ 掃全 repo（pass_filenames: false 且 always_run 或廣 files regex）→ 確認是 pre-commit v3 default_stages 行為（走 Q4）
+
+Q4. .pre-commit-config.yaml 有沒有 default_stages: [pre-commit]？
+    ├─ 有 → 這個 hook 顯式設了 stages 包含 pre-push，去問作者意圖
+    └─ 沒有 → 這是陷阱本體（default 會跑 pre-push），本次 git push --no-verify 過關，
+             然後「另開 PR」套用 Layer 3 根治
+```
+
+關鍵：`--no-verify` 只在 Q1+Q2+Q4 同時指向「pre-existing + CI 沒看 + config default 陷阱」時才安全。任何一個分支走偏都該停下來修，不該硬push。
+
+#### Layer 3 — 配置層根治（最重要）
+
+在 `.pre-commit-config.yaml` 頂層加:
+
+```yaml
+default_stages: [pre-commit]
+```
+
+原理：pre-commit v3 若未設 `default_stages`，hook 預設會跑在**所有** git stage（pre-commit + pre-push + pre-merge-commit + ...）。鎖定 `[pre-commit]` 之後，`git push` 就不會被掃全 repo 的 drift hook 擋住，CI 仍然照跑（因為 CI 是 `pre-commit run <id>` 按名字叫，不受 `stages` 限制）。需要特定 hook 跑在其他 stage 時，在該 hook 顯式加 `stages: [pre-push]` 或 `stages: [manual]` 即可。
+
+這個修法已於 2026-04-12 commit 套用到本 repo（PR #21 後續 DX 改善）。**如果你發現這個設定被拿掉，不要接受 force-push `--no-verify` 的救援路線，先還原設定再說。**
+
+#### Layer 3 的配套：reword_chain.py
+
+若 Layer 2 決策樹結論是「這次 commits 有問題要修 commit message（不是 tree 內容）」，但又不想跑 `git rebase -i`（會觸發 commit-msg hook、改掉 committer date、需要 interactive editor），用 `scripts/tools/dx/reword_chain.py`：純 `git commit-tree` plumbing，保留 tree SHA + author/committer 身份 + 時間戳，失敗有 backup tag 一鍵復原。適合 agent/CI 環境批次改寫 N 個 commit subject。

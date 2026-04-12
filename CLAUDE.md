@@ -64,7 +64,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **145 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（含受眾、內容摘要、Change Impact Matrix）
-- **97 個 Python 工具**（ops 45 / dx 20 / lint 32）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
+- **98 個 Python 工具**（ops 46 / dx 21 / lint 31）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
 - **38 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
 - **Makefile** 完整列表：`make help`。必記 Top 4：
   - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs）
