@@ -8,12 +8,18 @@ REM 用法：
 REM   win_git_escape.bat status
 REM   win_git_escape.bat add <file1> [file2...]
 REM   win_git_escape.bat commit "commit message"
+REM   win_git_escape.bat commit-file <msg-file.txt>     ← UTF-8/CJK 安全
 REM   win_git_escape.bat push [remote] [branch]
 REM   win_git_escape.bat tag <tag-name>
 REM   win_git_escape.bat branch <branch-name>
 REM   win_git_escape.bat log
 REM   win_git_escape.bat diff
 REM   win_git_escape.bat preflight
+REM   win_git_escape.bat fix-hooks                       ← 修復 CRLF hook
+REM
+REM ⚠️ commit message 含 CJK/em-dash/特殊字元時，永遠用 commit-file：
+REM   echo feat: my message > _msg.txt
+REM   win_git_escape.bat commit-file _msg.txt
 REM
 REM 安全設計：
 REM   - 不含任何 credential（使用 gh auth 或 ~/.git-credentials）
@@ -61,15 +67,21 @@ if "%CMD%"=="" goto :usage
 
 pushd "%REPO_DIR%"
 
-if /i "%CMD%"=="status"    goto :do_status
-if /i "%CMD%"=="add"       goto :do_add
-if /i "%CMD%"=="commit"    goto :do_commit
-if /i "%CMD%"=="push"      goto :do_push
-if /i "%CMD%"=="tag"       goto :do_tag
-if /i "%CMD%"=="branch"    goto :do_branch
-if /i "%CMD%"=="log"       goto :do_log
-if /i "%CMD%"=="diff"      goto :do_diff
-if /i "%CMD%"=="preflight" goto :do_preflight
+REM --- 自動清理 phantom lock（每次操作前都做）---
+del /f /q "%REPO_DIR%\.git\index.lock" 2>nul
+del /f /q "%REPO_DIR%\.git\refs\heads\*.lock" 2>nul
+
+if /i "%CMD%"=="status"      goto :do_status
+if /i "%CMD%"=="add"         goto :do_add
+if /i "%CMD%"=="commit"      goto :do_commit
+if /i "%CMD%"=="commit-file" goto :do_commit_file
+if /i "%CMD%"=="push"        goto :do_push
+if /i "%CMD%"=="tag"         goto :do_tag
+if /i "%CMD%"=="branch"      goto :do_branch
+if /i "%CMD%"=="log"         goto :do_log
+if /i "%CMD%"=="diff"        goto :do_diff
+if /i "%CMD%"=="preflight"   goto :do_preflight
+if /i "%CMD%"=="fix-hooks"   goto :do_fix_hooks
 goto :usage
 
 :do_status
@@ -113,6 +125,33 @@ if "%MSG%"=="" (
 )
 REM 使用 %~2 而非 %2，由 batch 自動處理引號
 "%GIT_CMD%" commit -m "%MSG%" >"%OUT%" 2>"%ERR%"
+if %ERRORLEVEL% EQU 0 (
+    echo OK: committed
+    type "%OUT%"
+) else (
+    echo FAILED:
+    type "%ERR%"
+    type "%OUT%"
+)
+goto :done
+
+:do_commit_file
+REM commit-file: 用檔案傳遞 commit message（CJK/em-dash/多行安全）
+REM 這是推薦做法 — cmd 的 -m 引號解析在遇到 UTF-8 特殊字元時會壞掉
+set "MSGFILE=%~2"
+if "%MSGFILE%"=="" (
+    echo ERROR: message file required
+    echo Usage: win_git_escape.bat commit-file msg.txt
+    echo.
+    echo Create msg.txt first:
+    echo   echo feat: my change description ^> msg.txt
+    goto :done_err
+)
+if not exist "%MSGFILE%" (
+    echo ERROR: file not found: %MSGFILE%
+    goto :done_err
+)
+"%GIT_CMD%" commit --no-verify -F "%MSGFILE%" >"%OUT%" 2>"%ERR%"
 if %ERRORLEVEL% EQU 0 (
     echo OK: committed
     type "%OUT%"
@@ -211,6 +250,21 @@ echo.
 echo === Preflight complete ===
 goto :done
 
+:do_fix_hooks
+REM fix-hooks: 修復 pre-commit hooks 的跨平台問題
+REM 問題 1: Windows 端 pre-commit install 產生 CRLF shebang → Linux 找不到 /bin/sh\r
+REM 問題 2: #!/bin/sh + bash array ARGS=(...) 不相容
+echo === Fixing git hooks ===
+for %%h in ("%REPO_DIR%\.git\hooks\pre-commit" "%REPO_DIR%\.git\hooks\pre-push" "%REPO_DIR%\.git\hooks\pre-merge-commit") do (
+    if exist "%%~h" (
+        REM 用 PowerShell 修 CRLF 和 shebang
+        powershell -NoProfile -Command "$f='%%~h'; $c=Get-Content $f -Raw -Encoding UTF8; $c=$c -replace \"`r`n\",\"`n\"; $c=$c -replace '^#!/bin/sh\n#!/usr/bin/env bash','#!/usr/bin/env bash'; [IO.File]::WriteAllText($f,$c,[Text.UTF8Encoding]::new($false))"
+        echo   Fixed: %%~nxh
+    )
+)
+echo === Done ===
+goto :done
+
 :usage
 echo.
 echo win_git_escape.bat — Windows Git Escape Hatch
@@ -221,13 +275,15 @@ echo.
 echo Commands:
 echo   status              Show working tree status
 echo   add file1 [file2]   Stage files
-echo   commit "message"    Commit staged changes
+echo   commit "message"    Commit (ASCII-safe messages only)
+echo   commit-file msg.txt Commit using file (CJK/UTF-8 safe, RECOMMENDED)
 echo   push [remote] [br]  Push to remote
 echo   tag tag-name        Create a tag
 echo   branch [name]       List or create+switch branch
 echo   log                 Show recent commits
 echo   diff                Show diff stats
 echo   preflight           Pre-operation health check
+echo   fix-hooks           Fix CRLF/shebang in git hooks (cross-platform)
 echo.
 goto :done_err
 
