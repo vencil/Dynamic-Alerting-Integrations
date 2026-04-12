@@ -4,6 +4,18 @@
 #
 # These hooks run the lightweight CI checks locally before each commit,
 # catching drift issues early (tool-map, rule-pack stats, glossary, etc.).
+#
+# Stage policy: default to pre-commit only. pre-commit v3 without
+# `default_stages` runs every hook at ALL git stages (pre-commit, pre-push,
+# pre-merge-commit, ...), which meant `git push` triggered full drift checks
+# and blocked pushes on pre-existing drift unrelated to the current commits
+# (observed on PR #21: bilingual-structure-check firing during pre-push).
+# Locking default to `[pre-commit]` keeps CI parity (CI invokes hooks by name)
+# while keeping `git push` fast and non-blocking. Hooks that legitimately
+# need a different stage must opt in explicitly via `stages: [manual]` or
+# `stages: [pre-push]`.
+
+default_stages: [pre-commit]
 
 repos:
   - repo: local
