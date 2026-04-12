@@ -646,6 +646,53 @@ Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
     ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
     └─ 是（pre-existing drift）→ 走 Q2
 
+
+### 修復層 D · pre-push drift 三層改進（Layer 1-3）
+
+與 §修復層 C · 替代路線 D 互補但不同根因：§替代路線 D 處理「pre-push hook spawn 失敗（Linux python 路徑寫死）」，本節處理「pre-push hook 跑起來了、但掃到**非本次 commits 的 pre-existing drift**」。Windows 原生 git + 容器 git 兩條路徑都可能遇到。
+
+**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
+
+⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
+
+#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
+
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
+
+```bash
+# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
+BASE=$(git merge-base HEAD origin/main)
+WT=/tmp/wt-$BASE
+
+git worktree add "$WT" "$BASE" 2>/dev/null || true
+cd "$WT"
+pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
+ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
+
+cd - >/dev/null
+pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
+ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
+
+echo "base=$ERR_BASE head=$ERR_HEAD"
+# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
+# head > base → 這次引入了新問題，不要 --no-verify
+git worktree remove "$WT"
+```
+
+同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）:
+
+```bash
+grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
+```
+
+#### Layer 2 — 決策樹（明確 if-else）
+
+pre-push hook 失敗後，按順序回答:
+
+```
+Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
+    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
+    └─ 是（pre-existing drift）→ 走 Q2
 Q2. CI 有叫這個 hook by name 嗎？（grep .github/workflows/）
     ├─ 有 → 修掉 drift 或把 hook 切 stages: [manual]；不要用 --no-verify 繞過 CI 關卡
     └─ 沒有 → 走 Q3
