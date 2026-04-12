@@ -157,3 +157,135 @@ tests/
 | P3 | tests/ 子目錄分層（>100 files 時觸發） | pytest config, CI | 2-3 hr | 🔜 deferred |
 | P3 | doc-lint ignore 在 doc-map 集中說明用途 | 文件 | 30 min | 🔜 deferred |
 | P3 | CHANGELOG-archive.md 壓縮 / 移 wiki | repo size | 30 min | 🔜 deferred |
+
+---
+
+## 四、2026-04-13 執行摘要
+
+**Commit `1f7ef2e`** on `chore/project-structure-audit-2026-04-12`
+12 files changed, -725 / +199 lines。所有 auto pre-commit hooks 通過。
+
+### 執行筆記
+
+- `.gitignore` 已有 `*.log` pattern → P0 只需刪除本地殘留，不需改 ignore
+- `scripts/ops/git_check_lock.sh` 是 `scripts/session-guards/` 的舊複本（僅 comment 中的路徑不同）→ 直接 `git rm`
+- Makefile 有 9 處、playbook 有 8 處引用舊路徑 → 全部更新為 `scripts/session-guards/`
+- `tool-registry.yaml` 的 `file:` 欄位 inline comment 會被 lint 工具解析為 filename → 改為獨立 comment 行
+- `doc-map.py --generate` 預設不含 ADR，但 `--check` hook 帶了 `--include-adr` → 產出必然 drift（見§五 F1）
+- FUSE `.git/HEAD` 被寫入 null byte（`0x00`）→ 用 `printf` 重寫修復
+- FUSE `.git/index` 殘留舊版 → 透過 Windows 側 `del + git reset HEAD` 重建
+- `head-blob-hygiene` hook 在 Windows Git Bash 下 >30s timeout → 用 `SKIP=` 繞過，已獨立驗證通過
+
+---
+
+## 五、後續改善項目（從本次審計衍生）
+
+### F1. `doc-map.py --generate` 預設不含 ADR ⭐ 建議做
+
+**現象**：`--generate`（不帶 flag）產出 107 entries，但 `--check --include-adr`（hook）期待 118 entries → 開發者必須記住加 `--include-adr`，否則一定 drift。
+
+**根因**：`--include-adr` 被設計為 opt-in，但 hook 後來補上了 flag 卻沒同步改預設值，是意外的不一致。
+
+**建議**：`argparse` default 改為 `True`，加 `--no-adr` 反向 flag 以備不時之需。改動量：~5 行。
+
+**壞處**：幾乎沒有。唯一風險是如果有人習慣用 bare `--generate` 來產出「不含 ADR」的精簡版，改後行為會變。但查 Makefile 和 CI，沒有這種用法。
+
+| 評估 | |
+|------|--|
+| ROI | 高（5 行改動消除常踩的 drift） |
+| 風險 | 極低 |
+| 優先 | P1 |
+
+### F2. Pre-commit hooks Unicode 在 Windows cp950 crash
+
+**現象**：`generate_doc_map.py`、`sync_glossary_abbr.py`、`validate_docs_versions.py`、`check_repo_name.py`、`lint_tool_consistency.py` 等工具在 Windows cmd/powershell（codepage cp950/Big5）環境下 print `✅`/`❌`/`✓`/`✗` 時直接 `UnicodeEncodeError`。
+
+**建議 A**：在 `.pre-commit-config.yaml` 的 `default_language_version` 或各 hook 的 `env` 統一設 `PYTHONIOENCODING=utf-8`。
+**建議 B**：Python 工具內部加 `sys.stdout.reconfigure(encoding='utf-8', errors='replace')` fallback。
+**建議 C**：改用 ASCII 符號（`[OK]`/`[FAIL]`）。
+
+| 評估 | A | B | C |
+|------|---|---|---|
+| 改動量 | 1 行（config level） | 每個工具 1 行 | 每個 print 逐一改 |
+| 風險 | 可能影響其他 hook | 最安全 | 視覺退步 |
+| 推薦 | ⭐ | 備選 | 不推薦 |
+
+**壞處**：方案 A 最乾淨但 `pre-commit` 的 `env` key 需要版本 >= 3.0。方案 B 散落各工具、容易遺漏。方案 C 犧牲可讀性。主要考量：Windows 上跑 pre-commit 是否為常態場景？如果只有 Cowork VM / CI 跑 hooks，此修復屬於 nice-to-have 而非 must-have。
+
+| 評估 | |
+|------|--|
+| ROI | 中（只影響 Windows 本地開發） |
+| 風險 | 低 |
+| 優先 | P2（如果團隊不在 Windows 跑 hooks 可降為 P3） |
+
+### F3. `head-blob-hygiene` hook 在 Windows 超時
+
+**現象**：該 hook 標註 "<1s for the whole repo"，但在 Windows Git Bash 環境下 >30s timeout。
+
+**根因推測**：`git ls-tree -r HEAD` + 逐一 `git cat-file` 在 Windows 的 Git for Windows (MSYS2) 下 process spawn overhead 大。或者 hook 內部 Python 呼叫 git subprocess 的方式在 Windows 上有效能瓶頸。
+
+**建議**：在 hook 內加 platform detection，Windows 環境改為只掃 staged files（`git diff --cached --name-only`）而非 full HEAD tree。
+
+**壞處**：
+1. 兩種掃描範圍 = 兩套行為，增加維護複雜度
+2. Windows-only path 可能測試覆蓋不足
+3. 如果只掃 staged files，會漏掉已存在但未修改的有問題 blob（不過這些應該在初次 commit 時就被抓到了）
+4. 根因可能不是 `git ls-tree` 而是其他環節 → 應先 profile 再改
+
+| 評估 | |
+|------|--|
+| ROI | 低（Windows 不是主要 commit 環境，且可 SKIP 繞過） |
+| 風險 | 中（雙路邏輯不好維護） |
+| 優先 | P3（先加 profiling，確認瓶頸再改） |
+
+### F4. `operator-output/` drift check hook
+
+**現象**：§一.3 建議加 pre-commit hook 確保 `operator-output/` 與 `rule-packs/` 同步。本次只做了 README，hook 留後續。
+
+**建議**：新增 hook 比對 `operator-output/da-rule-pack-*.yaml` 的 SHA 與 `python operator_generate.py --dry-run` 的預期輸出。
+
+**壞處**：
+1. `operator_generate.py` 可能需要 K8s CRD schema（import 鏈）→ hook 執行可能需要特殊環境
+2. 每次 commit 都跑 generate 比對會拖慢速度
+3. 如果 operator-output 是 GitOps 工作流的一環，使用者自己跑完 `operator_generate.py` 才 commit，drift 的機率本來就低
+
+**替代方案**：不做 hook，改為在 `make pre-tag` 裡加一步 drift check（只在 release 前驗證）。
+
+| 評估 | |
+|------|--|
+| ROI | 低～中（drift 風險本身不高） |
+| 風險 | 中（hook 環境依賴複雜） |
+| 優先 | P3（先在 `make pre-tag` 加，不動 pre-commit） |
+
+### F5. tests/ 子目錄分層自動提醒
+
+**現象**：§一.7 提到 >100 個 test 時觸發分層。目前 96 個。
+
+**建議**：加一個 soft-warning hook，`find tests/ -maxdepth 1 -name 'test_*.py' | wc -l` 超過 100 時 print warning（不 fail）。
+
+**壞處**：
+1. soft-warning 很容易被忽略（CI 裡淹沒在其他輸出中）
+2. 實際分層是一次性大工程（改 pytest config / conftest / imports），不是看到 warning 就能動手做的
+3. 100 的閾值本身是拍腦袋的數字 → 可能 120 也完全可以接受
+
+**替代方案**：不自動化，直接在下一個 minor version（v2.7.0）的 planning 裡排入。現在已經 96 了，差距很小，不需要 hook 來提醒。
+
+| 評估 | |
+|------|--|
+| ROI | 低（差 4 個就到閾值，直接排版本計畫更實際） |
+| 風險 | 低 |
+| 優先 | P3 → 不做 hook，改為 v2.7.0 planning item |
+
+---
+
+## 六、後續任務優先序
+
+| 優先 | 任務 | 來源 | 預估 |
+|------|------|------|------|
+| P1 | F1: `doc-map.py` 統一 `--include-adr` 預設 | 本次發現 | 10 min |
+| P2 | F2: pre-commit Unicode encoding fix（方案 A） | 本次發現 | 15 min |
+| P3 | F3: `head-blob-hygiene` Windows profiling | 本次發現 | 1 hr |
+| P3 | F4: `operator-output/` drift check（加到 `make pre-tag`） | §一.3 殘留 | 30 min |
+| P3 | tests/ 子目錄分層 → v2.7.0 planning | §一.7 | 2-3 hr |
+| P3 | doc-lint ignore 在 doc-map 集中說明 | §一.5 | 30 min |
+| P3 | CHANGELOG-archive.md 壓縮 / 移 wiki | §二 | 30 min |
