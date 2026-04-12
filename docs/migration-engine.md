@@ -74,5 +74,5 @@ flowchart LR
 | ["Migration Guide — 遷移指南"](./migration-guide.md) | ⭐⭐ |
 | ["Shadow Monitoring SRE SOP"](./shadow-monitoring-sop.md) | ⭐⭐ |
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
-| ["GitOps 部署指南"](./gitops-deployment.md) | ⭐⭐ |
+| ["GitOps 部署指南"](integration/gitops-deployment.md) | ⭐⭐ |
 | ["Grafana Dashboard 導覽"](./grafana-dashboards.md) | ⭐⭐ |

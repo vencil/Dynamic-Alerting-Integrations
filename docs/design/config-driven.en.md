@@ -200,7 +200,7 @@ relabel_configs:
 
 **Automation**: `scaffold_tenant.py --namespaces ns1,ns2` auto-generates N:1 relabel_configs snippet and writes a `_namespaces` metadata field in the tenant YAML for tool reference (does not affect metric logic).
 
-**Design principle**: The platform core (threshold-exporter + Rule Packs) is completely namespace-agnostic. Mapping flexibility is entirely provided by Prometheus scrape config — no platform component changes needed. See [BYO Prometheus Integration Guide](../byo-prometheus-integration.en.md).
+**Design principle**: The platform core (threshold-exporter + Rule Packs) is completely namespace-agnostic. Mapping flexibility is entirely provided by Prometheus scrape config — no platform component changes needed. See [BYO Prometheus Integration Guide](../integration/byo-prometheus-integration.en.md).
 
 ### 2.4 Multi-tier Severity
 
@@ -604,7 +604,7 @@ _routing_enforced:
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 
-`generate_alertmanager_routes.py` inserts platform route before tenant routes. Mode A generates a single shared route; Mode B generates N per-tenant routes (each with `tenant="<name>"` matcher + `continue: true`). Disabled by default; Platform Team enables as needed. See [BYO Alertmanager Integration Guide §8](../byo-alertmanager-integration.en.md#8-platform-enforced-routing).
+`generate_alertmanager_routes.py` inserts platform route before tenant routes. Mode A generates a single shared route; Mode B generates N per-tenant routes (each with `tenant="<name>"` matcher + `continue: true`). Disabled by default; Platform Team enables as needed. See [BYO Alertmanager Integration Guide §8](../integration/byo-alertmanager-integration.en.md#8-platform-enforced-routing).
 
 ### 2.12 Routing Profiles & Domain Policies (ADR-007)
 

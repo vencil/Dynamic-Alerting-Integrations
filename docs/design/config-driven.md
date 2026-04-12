@@ -201,7 +201,7 @@ relabel_configs:
 
 **自動化工具（ADR-006）**：`discover_instance_mappings.py` 可自動偵測 Prometheus 中的實例拓撲，`generate_tenant_mapping_rules.py` 從 `_instance_mapping.yaml` 產生 1:N 映射所需的 Recording Rules。詳見 [ADR-006](../adr/006-tenant-mapping-topologies.md)。
 
-**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 和 Recording Rules 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](../byo-prometheus-integration.md)。
+**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 和 Recording Rules 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md)。
 
 ### 2.4 多層嚴重度 (Multi-tier Severity)
 
@@ -583,7 +583,7 @@ _routing_enforced:
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 
-`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](../byo-alertmanager-integration.md#8-platform-enforced-routing)。
+`generate_alertmanager_routes.py` 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用，Platform Team 按需開啟。詳見 [BYO Alertmanager 整合指南 §8](../integration/byo-alertmanager-integration.md#8-platform-enforced-routing)。
 
 ### 2.12 Routing Profiles 與 Domain Policies（ADR-007）
 

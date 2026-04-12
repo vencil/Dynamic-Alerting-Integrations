@@ -80,6 +80,28 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 
 ---
 
+## Repository Map
+
+| Directory | Contents | When to visit |
+|-----------|----------|---------------|
+| [`components/`](components/) | Component sources: `threshold-exporter` (Go), `tenant-api` (Go), `da-tools` (Python CLI), `da-portal` (frontend container), `backstage-plugin` (TS) | Application logic changes |
+| [`helm/`](helm/) | Helm charts: `da-portal`, `tenant-api`, `mariadb-instance`; plus `values-db-*.yaml` | Deployment / chart templates |
+| [`k8s/`](k8s/) | Raw K8s manifests: namespaces, monitoring (Prometheus/Alertmanager/Grafana), tenant-api, CRD | Spin up the demo environment |
+| [`rule-packs/`](rule-packs/) | 15 rule-pack source YAMLs (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
+| [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
+| [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
+| [`scripts/`](scripts/) | Shell entrypoints + 97 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
+| [`tests/`](tests/) | Python pytest (`test_*.py`), shell scenarios (`scenario-*.sh`), `e2e/` Playwright, `snapshots/` | Run / add tests |
+| [`docs/`](docs/) | 145 bilingual documents. Lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
+| [`operator-output/`](operator-output/) | `operator_generate.py` output samples (14 PrometheusRule rule-packs) | Reference output for operator mode |
+| [`CLAUDE.md`](CLAUDE.md) | AI Agent bootstrap + task-routing table | Required before starting an agent session |
+| [`docs/internal/`](docs/internal/) | Internal playbooks (testing / benchmark / windows-mcp / github-release) and maps | Debugging, releases, benchmarks |
+
+> Newcomer path: `README.en.md` → [`docs/getting-started/`](docs/getting-started/) → Choose BYO / Operator → Follow the relevant integration guide.
+> Agent path: `CLAUDE.md` → task-routing table → relevant playbook.
+
+---
+
 ## Getting Started
 
 ### Local Experience (5 minutes)
@@ -94,9 +116,9 @@ make setup && make verify && make test-alert
 
 | Environment | Recommended Path | Guide |
 |-------------|-----------------|-------|
-| Existing Prometheus Operator | Helm + `rules.mode=operator` | [Operator Integration](docs/prometheus-operator-integration.en.md) |
-| Self-managed Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/byo-prometheus-integration.en.md) |
-| GitOps (ArgoCD / Flux) | Helm + Git repo | [GitOps Deployment](docs/gitops-deployment.en.md) |
+| Existing Prometheus Operator | Helm + `rules.mode=operator` | [Operator Integration](docs/integration/prometheus-operator-integration.en.md) |
+| Self-managed Prometheus | Helm + ConfigMap | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) |
+| GitOps (ArgoCD / Flux) | Helm + Git repo | [GitOps Deployment](docs/integration/gitops-deployment.en.md) |
 | Not sure? | Interactive Decision Matrix | [Decision Matrix](docs/getting-started/decision-matrix.en.md) |
 
 All paths support [OCI Registry installation](components/threshold-exporter/README.md#部署-helm).
@@ -182,7 +204,7 @@ Full ADR index: [docs/adr/](docs/adr/README.en.md)
 | [Architecture & Design](docs/architecture-and-design.en.md) | Core design, HA, Rule Pack architecture |
 | Getting Started (by role) | [Platform Engineer](docs/getting-started/for-platform-engineers.en.md) · [Domain Expert](docs/getting-started/for-domain-experts.en.md) · [Tenant](docs/getting-started/for-tenants.en.md) |
 | [Migration Guide](docs/migration-guide.en.md) | Onboarding flow, AST engine, Shadow Monitoring |
-| Integration guides | [BYO Prometheus](docs/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/byo-alertmanager-integration.en.md) · [Federation](docs/federation-integration.en.md) · [GitOps](docs/gitops-deployment.en.md) |
+| Integration guides | [BYO Prometheus](docs/integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](docs/integration/byo-alertmanager-integration.en.md) · [Federation](docs/integration/federation-integration.en.md) · [GitOps](docs/integration/gitops-deployment.en.md) |
 | [Custom Rule Governance](docs/custom-rule-governance.en.md) | Three-tier governance, CI linting |
 | [Benchmarks](docs/benchmarks.md) | Full benchmark data and methodology |
 | [Scenarios](docs/scenarios/) | 9 hands-on scenarios (Routing · Shadow · Federation · Lifecycle · GitOps · Lab) |

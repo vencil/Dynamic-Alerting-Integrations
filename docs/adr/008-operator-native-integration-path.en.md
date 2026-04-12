@@ -209,8 +209,8 @@ Any new Operator-related tool or feature must pass these three questions:
 
 | Resource | Description |
 |----------|-------------|
-| [`docs/prometheus-operator-integration.md`](../prometheus-operator-integration.md) | Full Operator integration guide |
-| [`docs/byo-prometheus-integration.md`](../byo-prometheus-integration.md) | Path A: Existing BYO Prometheus integration |
-| [`docs/byo-alertmanager-integration.md`](../byo-alertmanager-integration.md) | Path A: Existing BYO Alertmanager integration |
+| [`docs/prometheus-operator-integration.md`](../integration/prometheus-operator-integration.md) | Full Operator integration guide |
+| [`docs/byo-prometheus-integration.md`](../integration/byo-prometheus-integration.md) | Path A: Existing BYO Prometheus integration |
+| [`docs/byo-alertmanager-integration.md`](../integration/byo-alertmanager-integration.md) | Path A: Existing BYO Alertmanager integration |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | Upstream Helm chart |
 | [Prometheus Operator CRD Reference](https://prometheus-operator.dev/docs/api-reference/api/) | CRD API documentation |

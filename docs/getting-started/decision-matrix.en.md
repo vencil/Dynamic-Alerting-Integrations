@@ -55,7 +55,7 @@ Does your cluster have kube-prometheus-stack installed?
 - Team unfamiliar with Kubernetes CRDs
 - Need to support non-K8s environments (VMs, Docker Compose)
 
-→ Get started: [BYO Prometheus Integration Guide](../byo-prometheus-integration.en.md)
+→ Get started: [BYO Prometheus Integration Guide](../integration/byo-prometheus-integration.en.md)
 
 ### When to Choose Operator Path
 
@@ -65,7 +65,7 @@ Does your cluster have kube-prometheus-stack installed?
 - Need CRD-level RBAC control
 - Enterprise environments requiring secrets not in plaintext YAML
 
-→ Get started: [Operator Prometheus Integration Guide](../operator-prometheus-integration.en.md)
+→ Get started: [Operator Prometheus Integration Guide](../integration/operator-prometheus-integration.en.md)
 
 ---
 
@@ -81,4 +81,4 @@ Does your cluster have kube-prometheus-stack installed?
 |----------|-------------|
 | [Platform Engineer Getting Started](for-platform-engineers.en.md) | Complete onboarding guide |
 | [ADR-008](../adr/008-operator-native-integration-path.en.md) | Dual-path architecture decision |
-| [Operator Integration Guide (Hub)](../prometheus-operator-integration.en.md) | Operator path navigation |
+| [Operator Integration Guide (Hub)](../integration/prometheus-operator-integration.en.md) | Operator path navigation |

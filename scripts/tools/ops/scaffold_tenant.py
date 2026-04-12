@@ -689,7 +689,7 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
 
     lines.append("```bash")
     lines.append("# 部署/更新 threshold-exporter (Rule Packs 已內建，無需額外 -f)")
-    lines.append("helm upgrade --install threshold-exporter ./components/threshold-exporter \\")
+    lines.append("helm upgrade --install threshold-exporter ./helm/threshold-exporter \\")
     lines.append("  -n monitoring \\")
     lines.append("  -f environments/local/threshold-exporter.yaml")
     lines.append("```")

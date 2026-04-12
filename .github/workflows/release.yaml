@@ -53,7 +53,7 @@ jobs:
 
       - name: Verify Chart.yaml version matches tag
         run: |
-          CHART_VER=$(grep '^version:' components/threshold-exporter/Chart.yaml | awk '{print $2}')
+          CHART_VER=$(grep '^version:' helm/threshold-exporter/Chart.yaml | awk '{print $2}')
           if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
             echo "ERROR: Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
             echo "Run: make bump-docs EXPORTER=${{ steps.version.outputs.VERSION }}"
@@ -87,7 +87,7 @@ jobs:
       - name: Package Helm chart
         run: |
           mkdir -p .build
-          helm package components/threshold-exporter -d .build/
+          helm package helm/threshold-exporter -d .build/
 
       - name: Push Helm chart to OCI registry
         run: |

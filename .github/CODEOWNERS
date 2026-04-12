@@ -13,8 +13,8 @@
 # Platform-level config (requires Platform Team approval)
 # ============================================================
 components/threshold-exporter/config/conf.d/_defaults.yaml  @platform-team
-components/threshold-exporter/Chart.yaml                     @platform-team
-components/threshold-exporter/values.yaml                    @platform-team
+helm/threshold-exporter/Chart.yaml                           @platform-team
+helm/threshold-exporter/values.yaml                          @platform-team
 .github/custom-rule-policy.yaml                              @platform-team
 
 # ============================================================

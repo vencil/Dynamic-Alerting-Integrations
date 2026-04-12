@@ -209,8 +209,8 @@ graph LR
 
 | 資源 | 說明 |
 |------|------|
-| [`docs/prometheus-operator-integration.md`](../prometheus-operator-integration.md) | Operator 整合完整手冊 |
-| [`docs/byo-prometheus-integration.md`](../byo-prometheus-integration.md) | Path A: 既有 BYO Prometheus 整合 |
-| [`docs/byo-alertmanager-integration.md`](../byo-alertmanager-integration.md) | Path A: 既有 BYO Alertmanager 整合 |
+| [`docs/prometheus-operator-integration.md`](../integration/prometheus-operator-integration.md) | Operator 整合完整手冊 |
+| [`docs/byo-prometheus-integration.md`](../integration/byo-prometheus-integration.md) | Path A: 既有 BYO Prometheus 整合 |
+| [`docs/byo-alertmanager-integration.md`](../integration/byo-alertmanager-integration.md) | Path A: 既有 BYO Alertmanager 整合 |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | 上游 Helm chart |
 | [Prometheus Operator CRD Reference](https://prometheus-operator.dev/docs/api-reference/api/) | CRD API 文件 |

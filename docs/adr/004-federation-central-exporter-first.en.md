@@ -55,7 +55,7 @@ Based on the 80-20 principle: most enterprises adopt centralized monitoring arch
 
 ### Time and Resource Considerations
 
-Core development for Central Exporter was completed in v1.12.0: `remote_read` integration testing, documentation ([federation-integration.md](../federation-integration.md)), typical deployment time 2-3 hours. In contrast, the Edge Exporter architecture requires an additional 6-8 weeks (instance management framework, aggregation logic, multi-tier configuration validation).
+Core development for Central Exporter was completed in v1.12.0: `remote_read` integration testing, documentation ([federation-integration.md](../integration/federation-integration.md)), typical deployment time 2-3 hours. In contrast, the Edge Exporter architecture requires an additional 6-8 weeks (instance management framework, aggregation logic, multi-tier configuration validation).
 
 ## Consequences
 
@@ -97,7 +97,7 @@ Smooth upgrade from central to edge architecture: API compatibility guaranteed (
 
 ## References
 
-- [`docs/federation-integration.en.md`](../federation-integration.en.md) — Federation detailed integration guide
+- [`docs/federation-integration.en.md`](../integration/federation-integration.en.md) — Federation detailed integration guide
 - [`docs/scenarios/multi-cluster-federation.en.md`](../scenarios/multi-cluster-federation.en.md) — Multi-cluster scenario examples
 - `CHANGELOG.md` — v1.12.0 Federation initial implementation notes
 

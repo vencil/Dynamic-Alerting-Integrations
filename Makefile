@@ -50,27 +50,27 @@ test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outa
 
 .PHONY: test-scenario-a
 test-scenario-a: ## Scenario A 測試: 動態閾值 (ARGS=--with-load 使用真實負載)
-	@./tests/scenario-a.sh $(TENANT) $(ARGS)
+	@./tests/scenarios/scenario-a.sh $(TENANT) $(ARGS)
 
 .PHONY: test-scenario-b
 test-scenario-b: ## Scenario B 測試: 弱環節檢測 (ARGS=--with-load 使用真實負載)
-	@./tests/scenario-b.sh $(TENANT) $(ARGS)
+	@./tests/scenarios/scenario-b.sh $(TENANT) $(ARGS)
 
 .PHONY: test-scenario-c
 test-scenario-c: ## Scenario C 測試: 狀態字串比對
-	@./tests/scenario-c.sh $(TENANT)
+	@./tests/scenarios/scenario-c.sh $(TENANT)
 
 .PHONY: test-scenario-d
 test-scenario-d: ## Scenario D 測試: 維護模式 / 複合警報 / 多層嚴重度
-	@./tests/scenario-d.sh $(TENANT)
+	@./tests/scenarios/scenario-d.sh $(TENANT)
 
 .PHONY: test-scenario-e
 test-scenario-e: ## Scenario E 測試: 多租戶隔離 (ARGS=--with-load 使用真實負載)
-	@./tests/scenario-e.sh $(ARGS)
+	@./tests/scenarios/scenario-e.sh $(ARGS)
 
 .PHONY: test-scenario-f
 test-scenario-f: ## Scenario F 測試: HA 故障切換 (Kill Pod → 恢復 → 閾值不翻倍)
-	@./tests/scenario-f.sh $(TENANT)
+	@./tests/scenarios/scenario-f.sh $(TENANT)
 
 .PHONY: demo
 demo: ## 端對端示範 — 快速模式 (scaffold + migrate + diagnose + check_alert)
@@ -131,25 +131,25 @@ inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant T
 
 .PHONY: git-lock
 git-lock: ## 診斷 .git lock 殘留 (加 ARGS="--clean" 安全清理)
-	@bash scripts/ops/git_check_lock.sh $(ARGS)
+	@bash scripts/session-guards/git_check_lock.sh $(ARGS)
 
 .PHONY: git-preflight
 git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale lock）
-	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
-	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
+	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 
 .PHONY: vscode-git-off
 vscode-git-off: ## 關閉 VS Code Git（Agent session 用）
-	@python3 scripts/ops/vscode_git_toggle.py off
+	@python3 scripts/session-guards/vscode_git_toggle.py off
 
 .PHONY: vscode-git-on
 vscode-git-on: ## 開啟 VS Code Git（手動開發用）
-	@python3 scripts/ops/vscode_git_toggle.py on
+	@python3 scripts/session-guards/vscode_git_toggle.py on
 
 .PHONY: session-cleanup
 session-cleanup: ## Session 結束或異常終止後的清理
-	@python3 scripts/ops/vscode_git_toggle.py on 2>/dev/null || true
-	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@python3 scripts/session-guards/vscode_git_toggle.py on 2>/dev/null || true
+	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
 	@rm -f _out.txt _err.txt 2>/dev/null || true
 	@echo "✅ Session cleanup 完成"
@@ -167,10 +167,10 @@ fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘
 	fi
 	@echo ""
 	@echo "[Level 3a] 關 VS Code Git 背景掃描"
-	@python3 scripts/ops/vscode_git_toggle.py off 2>/dev/null || true
+	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
 	@echo ""
 	@echo "[Level 3b] 清 stale .git/*.lock"
-	@bash scripts/ops/git_check_lock.sh --clean 2>/dev/null || true
+	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@echo ""
 	@echo "[Level 3c] Kill 殘留 port-forward"
 	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
@@ -353,7 +353,7 @@ test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20)
 # ----------------------------------------------------------
 # Helm Chart 發佈
 # ----------------------------------------------------------
-CHART_DIR  := components/threshold-exporter
+CHART_DIR  := helm/threshold-exporter
 CHART_VER  := $(shell grep '^version:' $(CHART_DIR)/Chart.yaml | awk '{print $$2}')
 
 .PHONY: chart-package

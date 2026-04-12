@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](governance-security.md)
 
-> Related docs: [Architecture](architecture-and-design.en.md) · [GitOps Deployment](gitops-deployment.md) · [Custom Rule Governance](custom-rule-governance.en.md)
+> Related docs: [Architecture](architecture-and-design.en.md) · [GitOps Deployment](integration/gitops-deployment.md) · [Custom Rule Governance](custom-rule-governance.en.md)
 
 ---
 
@@ -55,7 +55,7 @@ conf.d/db-a.yaml                     @db-a-team
 rule-packs/rule-pack-mariadb.yaml    @dba-team
 ```
 
-See [GitOps Deployment Guide](gitops-deployment.en.md) for tenant self-service scope.
+See [GitOps Deployment Guide](integration/gitops-deployment.en.md) for tenant self-service scope.
 
 ### API RBAC (v2.5.0+)
 
@@ -228,5 +228,5 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 | Resource | Relevance |
 |----------|-----------|
 | [Governance, Audit & Security Compliance](./governance-security.md) | Full Chinese version |
-| [GitOps Deployment](./gitops-deployment.en.md) | Deployment security, RBAC |
+| [GitOps Deployment](integration/gitops-deployment.en.md) | Deployment security, RBAC |
 | [Testing Playbook](./internal/testing-playbook.md) | SAST test execution |

@@ -55,7 +55,7 @@ Federation 存在兩種主要架構：
 
 ### 時間與資源考量
 
-中央 Exporter 的核心開發工作在 v1.12.0 已完成：`remote_read` 整合測試、文件記錄（[federation-integration.md](../federation-integration.md)）、典型部署時間 2-3 小時。相比之下，邊緣 Exporter 架構需額外 6-8 週開發時間（實例管理框架、聚合邏輯、多層配置驗證）。
+中央 Exporter 的核心開發工作在 v1.12.0 已完成：`remote_read` 整合測試、文件記錄（[federation-integration.md](../integration/federation-integration.md)）、典型部署時間 2-3 小時。相比之下，邊緣 Exporter 架構需額外 6-8 週開發時間（實例管理框架、聚合邏輯、多層配置驗證）。
 
 ## 後果
 
@@ -97,7 +97,7 @@ Federation 存在兩種主要架構：
 
 ## 參考資料
 
-- [`docs/federation-integration.md`](../federation-integration.md) — Federation 詳細整合指南
+- [`docs/federation-integration.md`](../integration/federation-integration.md) — Federation 詳細整合指南
 - [`docs/scenarios/multi-cluster-federation.md`](../scenarios/multi-cluster-federation.md) — 多叢集場景案例
 - `CHANGELOG.md` — v1.12.0 Federation 初始實現記錄
 

@@ -236,10 +236,10 @@ nav:
       - ADR-004 Federation Central Exporter First: adr/004-federation-central-exporter-first.md
       - ADR-005 Projected Volume: adr/005-projected-volume-for-rule-packs.md
   - 整合指南:
-    - BYO Prometheus: byo-prometheus-integration.md
-    - BYO Alertmanager: byo-alertmanager-integration.md
-    - Federation: federation-integration.md
-    - GitOps 部署: gitops-deployment.md
+    - BYO Prometheus: integration/byo-prometheus-integration.md
+    - BYO Alertmanager: integration/byo-alertmanager-integration.md
+    - Federation: integration/federation-integration.md
+    - GitOps 部署: integration/gitops-deployment.md
   - 遷移:
     - 遷移指南: migration-guide.md
     - 遷移引擎: migration-engine.md

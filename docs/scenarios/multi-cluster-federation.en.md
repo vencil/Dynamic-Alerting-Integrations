@@ -7,7 +7,7 @@ lang: en
 ---
 # Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics
 
-> **Quick Guide** — Full architecture design and rationale: [Federation Integration Guide](../federation-integration.en.md). This document focuses on deployment steps.
+> **Quick Guide** — Full architecture design and rationale: [Federation Integration Guide](../integration/federation-integration.en.md). This document focuses on deployment steps.
 
 ## Problem
 
@@ -21,7 +21,7 @@ Organizations operating multiple Kubernetes clusters face scattered thresholds, 
 | Latency | ~60–90s (federation) / ~30s (remote-write) | ~5–15s |
 | Complexity | Low (single-point deployment) | High (Rule Packs need partitioning) |
 
-Detailed comparison: [Federation Guide §1.2](../federation-integration.en.md#12-architecture-choice-central-evaluation-vs-edge-evaluation).
+Detailed comparison: [Federation Guide §1.2](../integration/federation-integration.en.md#12-architecture-choice-central-evaluation-vs-edge-evaluation).
 
 ## Deployment Steps (Central Evaluation)
 
@@ -59,7 +59,7 @@ da-tools federation-check edge --prometheus http://edge-prometheus:9090
 
 **2.1 Choose Transport**
 
-Federation (< 10 edges) or Remote Write (10+ edges). Config examples: [Federation Guide §4](../federation-integration.en.md#4-central-cluster-configuration).
+Federation (< 10 edges) or Remote Write (10+ edges). Config examples: [Federation Guide §4](../integration/federation-integration.en.md#4-central-cluster-configuration).
 
 **2.2 Deploy threshold-exporter HA**
 
@@ -114,7 +114,7 @@ da-tools diagnose db-a --prometheus http://central-prometheus:9090
 
 | Resource | Relevance |
 |----------|-----------|
-| [Federation Integration Guide](../federation-integration.en.md) | ⭐⭐⭐ |
+| [Federation Integration Guide](../integration/federation-integration.en.md) | ⭐⭐⭐ |
 | [ADR-004 Federation Central Exporter First](../adr/004-federation-central-exporter-first.en.md) | ⭐⭐ |
 | [Advanced Scenarios & Test Coverage](../internal/test-coverage-matrix.md) | ⭐⭐ |
 | [Shadow Monitoring Cutover Workflow](shadow-monitoring-cutover.en.md) | ⭐⭐ |

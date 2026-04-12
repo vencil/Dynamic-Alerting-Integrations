@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** | **中文（當前）**
 
-> 相關文件：[Architecture](architecture-and-design.md) · [GitOps Deployment](gitops-deployment.md) · [Custom Rule Governance](custom-rule-governance.md)
+> 相關文件：[Architecture](architecture-and-design.md) · [GitOps Deployment](integration/gitops-deployment.md) · [Custom Rule Governance](custom-rule-governance.md)
 
 ---
 
@@ -55,7 +55,7 @@ conf.d/db-a.yaml                     @db-a-team
 rule-packs/rule-pack-mariadb.yaml    @dba-team
 ```
 
-詳見 [GitOps 部署指南](gitops-deployment.md) 的 tenant 自助設定範圍。
+詳見 [GitOps 部署指南](integration/gitops-deployment.md) 的 tenant 自助設定範圍。
 
 ### API RBAC (v2.5.0+)
 
@@ -228,5 +228,5 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | 資源 | 相關性 |
 |------|--------|
 | [Custom Rule Governance](./custom-rule-governance.md) | 規則治理模型 |
-| [GitOps Deployment](./gitops-deployment.md) | 部署安全、RBAC |
+| [GitOps Deployment](integration/gitops-deployment.md) | 部署安全、RBAC |
 | [Testing Playbook](./internal/testing-playbook.md) | SAST 測試執行 |

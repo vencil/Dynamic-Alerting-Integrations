@@ -385,15 +385,15 @@ da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
-Platform has guardrails for timing parameters (group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h), with out-of-range values automatically clamped. Complete receiver type examples and Go template message customization details see [BYO Alertmanager Integration Guide §5](byo-alertmanager-integration.md#5-receiver-類型).
+Platform has guardrails for timing parameters (group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h), with out-of-range values automatically clamped. Complete receiver type examples and Go template message customization details see [BYO Alertmanager Integration Guide §5](integration/byo-alertmanager-integration.md#5-receiver-類型).
 
 ### Advanced Routing Features
 
 | Feature | Description | Details |
 |---------|-------------|---------|
-| Per-rule Routing Overrides | `_routing.overrides[]` specify different receiver for specific alertname/metric_group | [BYO Alertmanager §7](byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
+| Per-rule Routing Overrides | `_routing.overrides[]` specify different receiver for specific alertname/metric_group | [BYO Alertmanager §7](integration/byo-alertmanager-integration.md#7-per-rule-routing-overrides) |
 | Silent / Maintenance Mode | `_silent_mode` / `_state_maintenance` + `expires` auto-expiry | [Architecture §2.7](architecture-and-design.md) |
-| Platform Enforced Routing | `_routing_enforced` ensures NOC receives all alerts (dual-channel) | [BYO Alertmanager §8](byo-alertmanager-integration.md#8-platform-enforced-routing) |
+| Platform Enforced Routing | `_routing_enforced` ensures NOC receives all alerts (dual-channel) | [BYO Alertmanager §8](integration/byo-alertmanager-integration.md#8-platform-enforced-routing) |
 
 ---
 
@@ -431,7 +431,7 @@ After migration completes, Tenants can self-manage the following in their own YA
 | `_state_maintenance` | Maintenance mode (completely no firing) | Same as above, supports `expires` auto-expiry |
 | `_severity_dedup` | Severity deduplication | `enabled: true` |
 
-Platform Team controlled settings (in `_defaults.yaml`) include global defaults, `_routing_defaults`, `_routing_enforced`. See [GitOps Deployment Guide §7](gitops-deployment.en.md#7-tenant-self-service-configuration-scope).
+Platform Team controlled settings (in `_defaults.yaml`) include global defaults, `_routing_defaults`, `_routing_enforced`. See [GitOps Deployment Guide §7](integration/gitops-deployment.en.md#7-tenant-self-service-configuration-scope).
 
 ---
 

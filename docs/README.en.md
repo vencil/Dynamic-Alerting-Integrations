@@ -25,10 +25,10 @@ Responsible for deploying, scaling, and maintaining the Dynamic Alerting platfor
 | [Architecture & Design](architecture-and-design.en.md) | System design, three-state operations, alert routing, deduplication, HA design, future roadmap |
 | [Benchmarks](benchmarks.en.md) | Load test results, throughput, latency, resource consumption analysis |
 | [Governance & Security](governance-security.en.md) | RBAC, audit logs, schema validation, cardinality guards, security compliance |
-| [GitOps Deployment](gitops-deployment.md) | ArgoCD/Flux integration, CODEOWNERS RBAC, drift detection |
-| [Federation Integration](federation-integration.md) | Multi-cluster scenarios, edge Prometheus, centralized monitoring architecture |
-| [BYO Prometheus](byo-prometheus-integration.md) | Bring-your-own Prometheus integration guide |
-| [BYO Alertmanager](byo-alertmanager-integration.md) | Bring-your-own Alertmanager integration guide |
+| [GitOps Deployment](integration/gitops-deployment.md) | ArgoCD/Flux integration, CODEOWNERS RBAC, drift detection |
+| [Federation Integration](integration/federation-integration.md) | Multi-cluster scenarios, edge Prometheus, centralized monitoring architecture |
+| [BYO Prometheus](integration/byo-prometheus-integration.md) | Bring-your-own Prometheus integration guide |
+| [BYO Alertmanager](integration/byo-alertmanager-integration.md) | Bring-your-own Alertmanager integration guide |
 
 ### 📊 Domain Expert — DBA, Database Engineer
 

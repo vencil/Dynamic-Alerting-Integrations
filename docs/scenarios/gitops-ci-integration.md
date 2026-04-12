@@ -343,8 +343,8 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 - [架構與設計](../architecture-and-design.md) — 核心概念深入
 - [CLI 參考](../cli-reference.md) — 所有 da-tools 命令
-- [BYO Prometheus 整合](../byo-prometheus-integration.md) — 帶入既有 Prometheus
-- [BYO Alertmanager 整合](../byo-alertmanager-integration.md) — 帶入既有 Alertmanager
+- [BYO Prometheus 整合](../integration/byo-prometheus-integration.md) — 帶入既有 Prometheus
+- [BYO Alertmanager 整合](../integration/byo-alertmanager-integration.md) — 帶入既有 Alertmanager
 - [租戶生命週期](tenant-lifecycle.md) — 上線到下架完整流程
 
 ---

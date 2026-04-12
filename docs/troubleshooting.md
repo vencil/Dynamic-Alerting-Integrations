@@ -144,7 +144,7 @@ kubectl get configmap -n monitoring -l app.kubernetes.io/part-of=dynamic-alertin
 da-tools validate-config --config-dir ./conf.d/
 ```
 
-> 詳見：[Operator Prometheus 整合](operator-prometheus-integration.md) · [Operator Alertmanager 整合](operator-alertmanager-integration.md) · [Operator GitOps 部署](operator-gitops-deployment.md)
+> 詳見：[Operator Prometheus 整合](integration/operator-prometheus-integration.md) · [Operator Alertmanager 整合](integration/operator-alertmanager-integration.md) · [Operator GitOps 部署](integration/operator-gitops-deployment.md)
 
 ## 相關資源
 
@@ -155,9 +155,9 @@ da-tools validate-config --config-dir ./conf.d/
 | ["da-tools CLI Reference"](./cli-reference.md) | ⭐⭐ |
 | ["Threshold Exporter API Reference"](api/README.md) | ⭐⭐ |
 | ["性能分析與基準測試 (Performance Analysis & Benchmarks)"](./benchmarks.md) | ⭐⭐ |
-| ["BYO Alertmanager 整合指南"](./byo-alertmanager-integration.md) | ⭐⭐ |
-| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](./byo-prometheus-integration.md) | ⭐⭐ |
-| ["Operator Prometheus 整合"](prometheus-operator-integration.md) | ⭐⭐ |
-| ["Operator Alertmanager 整合"](operator-alertmanager-integration.md) | ⭐⭐ |
-| ["Operator GitOps 部署"](operator-gitops-deployment.md) | ⭐⭐ |
+| ["BYO Alertmanager 整合指南"](integration/byo-alertmanager-integration.md) | ⭐⭐ |
+| ["Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"](integration/byo-prometheus-integration.md) | ⭐⭐ |
+| ["Operator Prometheus 整合"](integration/prometheus-operator-integration.md) | ⭐⭐ |
+| ["Operator Alertmanager 整合"](integration/operator-alertmanager-integration.md) | ⭐⭐ |
+| ["Operator GitOps 部署"](integration/operator-gitops-deployment.md) | ⭐⭐ |
 | ["進階場景與測試覆蓋"](internal/test-coverage-matrix.md) | ⭐⭐ |

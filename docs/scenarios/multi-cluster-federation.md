@@ -7,7 +7,7 @@ lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標
 
-> **快速指引** — 完整架構設計與原理見 [Federation Integration Guide](../federation-integration.md)。本文件聚焦部署步驟。
+> **快速指引** — 完整架構設計與原理見 [Federation Integration Guide](../integration/federation-integration.md)。本文件聚焦部署步驟。
 
 ## 問題
 
@@ -21,7 +21,7 @@ lang: zh
 | 延遲 | ~60–90s（federation）/ ~30s（remote-write） | ~5–15s |
 | 複雜度 | 低（單點部署） | 高（Rule Pack 需拆分） |
 
-詳細比較見 [Federation Guide §1.2](../federation-integration.md#12-架構選擇中央評估-vs-邊緣評估)。
+詳細比較見 [Federation Guide §1.2](../integration/federation-integration.md#12-架構選擇中央評估-vs-邊緣評估)。
 
 ## 部署步驟（中央評估架構）
 
@@ -59,7 +59,7 @@ da-tools federation-check edge --prometheus http://edge-prometheus:9090
 
 **2.1 選擇傳輸方案**
 
-Federation（< 10 邊緣）或 Remote Write（10+ 邊緣）。配置範例見 [Federation Guide §4](../federation-integration.md#4-中央叢集配置)。
+Federation（< 10 邊緣）或 Remote Write（10+ 邊緣）。配置範例見 [Federation Guide §4](../integration/federation-integration.md#4-中央叢集配置)。
 
 **2.2 部署 threshold-exporter HA**
 
@@ -114,7 +114,7 @@ da-tools diagnose db-a --prometheus http://central-prometheus:9090
 
 | 資源 | 相關性 |
 |------|--------|
-| [Federation Integration Guide](../federation-integration.md) | ⭐⭐⭐ |
+| [Federation Integration Guide](../integration/federation-integration.md) | ⭐⭐⭐ |
 | [ADR-004 Federation 中央 Exporter 優先](../adr/004-federation-central-exporter-first.md) | ⭐⭐ |
 | [進階場景與測試覆蓋](../internal/test-coverage-matrix.md) | ⭐⭐ |
 | [Shadow Monitoring 切換工作流](shadow-monitoring-cutover.md) | ⭐⭐ |

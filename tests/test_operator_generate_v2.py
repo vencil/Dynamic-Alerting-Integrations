@@ -292,7 +292,9 @@ class TestHelmChartThresholdExporter:
 
     @pytest.fixture(scope="class")
     def chart_dir(self) -> Path:
-        return _REPO_ROOT / "components" / "threshold-exporter"
+        # P2b consolidation: Helm chart moved from components/threshold-exporter/
+        # to helm/threshold-exporter/ (see commit cd357a3).
+        return _REPO_ROOT / "helm" / "threshold-exporter"
 
     @pytest.fixture(scope="class")
     def chart_yaml(self, chart_dir: Path) -> dict:
