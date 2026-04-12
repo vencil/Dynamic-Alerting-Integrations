@@ -1,4 +1,4 @@
-# operator-output/
+# operator-manifests/
 
 > **此目錄為 `operator_generate.py` 自動產出，勿手動編輯。**
 
@@ -7,8 +7,8 @@
 ## 工作流
 
 ```bash
-python scripts/tools/ops/operator_generate.py --output-dir operator-output/
-kubectl apply -f operator-output/
+python scripts/tools/ops/operator_generate.py --output-dir operator-manifests/
+kubectl apply -f operator-manifests/
 ```
 
 詳見 [migration-guide.md](../docs/migration-guide.md) 及 [cli-reference.md](../docs/cli-reference.md)。

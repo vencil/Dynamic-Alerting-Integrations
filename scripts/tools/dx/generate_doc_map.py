@@ -72,10 +72,11 @@ SKIP_FILES = {
     "docs/adr/README.en.md",
 }
 
-# Skip transient AI-agent resume notes (match by filename prefix).
-# These are session-scoped scratchpads under docs/internal/_resume-*.md and are
-# expected to be deleted at the end of each session.
-SKIP_FILENAME_PREFIXES = ("_resume-",)
+# Skip transient/internal files whose names start with "_".
+# Convention: _resume-*.md are session-scoped AI-agent scratchpads,
+# _project-structure-audit-*.md are local-only planning docs (.gitignore'd).
+# Using a single "_" prefix catches both patterns and any future variants.
+SKIP_FILENAME_PREFIXES = ("_",)
 
 # Directories to skip entirely (adr is conditionally included via --include-adr)
 # rule-packs is skipped because it's a junction/symlink on Windows/Linux pointing

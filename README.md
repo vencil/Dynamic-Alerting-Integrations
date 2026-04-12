@@ -93,7 +93,7 @@ graph TD
 | [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 97 個 Python 工具 | 跑工具、lint、開發者體驗 |
 | [`tests/`](tests/) | Python pytest（`test_*.py`）、shell scenario（`scenario-*.sh`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
 | [`docs/`](docs/) | 145 份文件（雙語），對照表見 [doc-map](docs/internal/doc-map.md) | 讀設計/整合/運維文件 |
-| [`operator-output/`](operator-output/) | `operator_generate.py` 產出的 PrometheusRule 範例（14 個 rule-pack） | 參考 operator 模式的輸出樣板 |
+| [`operator-manifests/`](operator-manifests/) | `operator_generate.py` 產出的 PrometheusRule 範例（14 個 rule-pack） | 參考 operator 模式的輸出樣板 |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent 起手式與任務分流表 | agent session 開始前必讀 |
 | [`docs/internal/`](docs/internal/) | 內部 playbook（testing / benchmark / windows-mcp / github-release）與 maps | 排錯、release、跑 benchmark |
 
