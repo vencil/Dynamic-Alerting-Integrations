@@ -107,6 +107,44 @@ def minor_version_diff(current: Tuple[int, int, int],
     return current[1] - verified[1]
 
 
+def scan_ll_entries(filepath: Path, current: Tuple[int, int, int]) -> list:
+    """掃描 Playbook 內個別 LL 條目的版本標記。
+
+    LL 條目的 heading 格式通常為：
+      ## vX.Y.Z Lessons Learned — <topic>（YYYY-MM-DD）
+      ## vX.Y.x Lessons Learned — <topic>（YYYY-MM-DD）
+
+    回傳 list of (heading_text, version_str, drift) 即將到期或已過期的條目。
+    """
+    try:
+        text = filepath.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    # Match LL section headings with version: ## vX.Y.Z ... Lessons Learned ...
+    ll_pattern = re.compile(
+        r"^##\s+v?(\d+\.\d+\.(?:\d+|x))\s+.*[Ll]essons?\s+[Ll]earned",
+        re.MULTILINE,
+    )
+
+    results = []
+    for match in ll_pattern.finditer(text):
+        version_str = match.group(1)
+        heading = match.group(0).strip()
+
+        # Handle "x" patch version (e.g., v2.6.x → treat as v2.6.0)
+        normalized = version_str.replace("x", "0")
+        ver = parse_version(normalized)
+        if not ver:
+            continue
+
+        drift = minor_version_diff(current, ver)
+        if drift >= 1:  # Report anything 1+ minor behind
+            results.append((heading, version_str, drift))
+
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="檢查 Playbook verified-at-version 是否需要知識退火"
@@ -114,6 +152,10 @@ def main() -> None:
     parser.add_argument(
         "--check", action="store_true",
         help="CI 模式：若有落後的 Playbook 則 exit 1"
+    )
+    parser.add_argument(
+        "--scan-ll", action="store_true",
+        help="同時掃描個別 LL 條目的版本（適合 pre-tag 使用）"
     )
     args = parser.parse_args()
 
@@ -137,6 +179,8 @@ def main() -> None:
     stale_count = 0
     missing_count = 0
 
+    # --- Phase 1: Playbook 層級 verified-at-version 檢查 ---
+    print("=== Playbook 版本檢查 ===")
     for rel_path in PLAYBOOK_PATHS:
         filepath = repo_root / rel_path
         name = Path(rel_path).stem
@@ -170,10 +214,33 @@ def main() -> None:
         else:
             print(f"  ✅ {name}: 驗證於 {verified_str}（最新）")
 
+    # --- Phase 2: 個別 LL 條目掃描（--scan-ll 或 pre-tag 時） ---
+    ll_stale_count = 0
+    if args.scan_ll:
+        print()
+        print("=== LL 條目退火掃描 ===")
+        for rel_path in PLAYBOOK_PATHS:
+            filepath = repo_root / rel_path
+            if not filepath.exists():
+                continue
+
+            entries = scan_ll_entries(filepath, current)
+            name = Path(rel_path).stem
+            if entries:
+                for heading, ver_str, drift in entries:
+                    icon = "🔴" if drift >= MAX_MINOR_DRIFT else "🟡"
+                    action = " → 退火三選一" if drift >= MAX_MINOR_DRIFT else ""
+                    print(f"  {icon} {name}: {heading} "
+                          f"(落後 {drift} minor){action}")
+                    if drift >= MAX_MINOR_DRIFT:
+                        ll_stale_count += 1
+
     print()
 
-    if stale_count > 0:
-        print(f"⛔ {stale_count} 個 Playbook 需要知識退火 review")
+    total_stale = stale_count + ll_stale_count
+    if total_stale > 0:
+        print(f"⛔ {total_stale} 項需要知識退火 review"
+              f"（{stale_count} Playbook + {ll_stale_count} LL 條目）")
         print("   退火三選一：固化為正式規範 / 標記 🛡️ 已自動化 / 歸檔至 archive/")
         if args.check:
             sys.exit(1)

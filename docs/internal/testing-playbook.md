@@ -11,6 +11,21 @@ lang: zh
 > K8s 環境排錯、負載注入陷阱、程式碼品質規範。
 > **相關文件：** [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [Windows-MCP Playbook](windows-mcp-playbook.md)（docker exec 模式）· [GitHub Release Playbook](github-release-playbook.md)（push + release 流程）
 
+### Quick Action Index
+
+> AI agent 直接跳到需要的操作步驟，跳過敘事。
+
+| 我要做什麼 | 跳到 |
+|-----------|------|
+| 跑測試前準備 | [§測試前置準備](#測試前置準備) |
+| K8s 環境問題排錯 | [§K8s 環境問題](#k8s-環境問題) |
+| 負載注入（connections/cpu） | [§負載注入](#負載注入-load-injection) |
+| conf.d/ YAML 格式問題 | [§conf.d/ YAML 格式陷阱](#confd-yaml-格式陷阱) |
+| SAST 規則合規 | [§SAST 合規](#sast-合規) |
+| Playwright E2E | [§Playwright E2E](#playwright-e2e-測試portal-smoke-tests) |
+| Go 並發 flake 修法 | [§v2.6.x Go 並發測試 flake](#v26x-lessons-learned-go-並發測試-flake2026-04-11) |
+| 程式碼品質規範 | [§程式碼品質規範](#程式碼品質規範) |
+
 ## 測試前置準備
 
 1. **Dev Container**: `docker ps` → `vibe-dev-container` 運行中
@@ -309,8 +324,7 @@ for keyword, db_type in JOB_DB_MAP.items():
 
 ### Backstage Plugin 整合模式
 
-4. **Entity annotation 是 Backstage ↔ 外部系統的慣例橋樑**：`dynamic-alerting.io/tenant` annotation 標註在 Backstage entity 上，plugin 讀取此 annotation 自動映射到對應 tenant 的 Prometheus 查詢
-5. **Backstage proxy 避免 CORS 問題**：PrometheusClient 透過 `/api/proxy/prometheus/` 路徑查詢，不直接從前端連 Prometheus。proxy 配置在 `app-config.yaml`
+> 🗄️ #4-5 已歸檔至 [archive/lessons-learned.md](archive/lessons-learned.md)（Backstage 整合已穩定）
 
 ### 覆蓋率攻略技巧
 
@@ -368,13 +382,11 @@ for keyword, db_type in JOB_DB_MAP.items():
 
 ### Lint 工具模式
 
-5. 🛡️ **反向驗證 > 正向驗證**：以 COMMAND_MAP 為 single source of truth，反向檢查 4 份文件是否涵蓋，比在每份文件中各自維護清單更可靠 `[已自動化於 hook: cli-coverage-check]`
-6. **Warning vs Error 分級**：docs 裡多出的命令（已規劃但未整合）是 warning 非 error，避免 CI 假陽性
+> 🗄️ #5-6 已歸檔至 [archive/lessons-learned.md](archive/lessons-learned.md)（反向驗證已固化為 `cli-coverage-check` hook）
 
 ### DX 增強模式
 
-7. **`--diff-report` 實作要注意 git restore**：fix → diff → `git checkout .` 三步驟，timeout 時仍須執行 restore
-8. **`--format summary` badge 風格**：一行輸出適合嵌入 CI badge 或 Makefile target echo
+> 🗄️ #7-8 已歸檔至 [archive/lessons-learned.md](archive/lessons-learned.md)（純功能記錄，不是陷阱）
 
 ## Playwright E2E 測試（Portal Smoke Tests）
 

@@ -295,12 +295,16 @@ version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag）
+pre-tag: version-check lint-docs playbook-freshness-ll ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag）
 	@echo ""
 	@echo "============================================================"
-	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅"
+	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness ✅"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
+
+.PHONY: playbook-freshness-ll
+playbook-freshness-ll: ## 檢查 Playbook + LL 條目知識退火狀態（pre-tag 時自動執行）
+	@python3 scripts/tools/lint/check_playbook_freshness.py --scan-ll
 
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose

@@ -11,6 +11,21 @@ lang: zh
 > AI Agent 透過 Windows-MCP Shell / Desktop Commander / Cowork VM 操作 Dev Container 的最佳實踐與已知陷阱。
 > **相關文件：** [Testing Playbook](testing-playbook.md)（K8s/測試排錯）· [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [GitHub Release Playbook](github-release-playbook.md)（push + release 流程）
 
+### Quick Action Index
+
+> AI agent 直接跳到需要的操作步驟，跳過敘事。
+
+| 我要做什麼 | 跳到 |
+|-----------|------|
+| docker exec 拿輸出 | [§核心原則](#核心原則docker-exec-stdout-為空) |
+| port-forward Prometheus/AM | [§Port-Forward 模式](#port-forward-模式) |
+| Helm upgrade 衝突 | [§Helm Upgrade 防衝突](#helm-upgrade-防衝突) |
+| GitHub API (PS) | [§PowerShell REST API](#powershell-rest-apigithub-等) |
+| git 卡住 / FUSE lock | [§Git 操作決策樹](#git-操作決策樹) |
+| Windows 逃生門 | [§修復層 C](#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) |
+| 環境職責快查 | [§三層環境職責矩陣](#三層環境職責矩陣) |
+| 已知陷阱查表 | [§已知陷阱速查](#已知陷阱速查) |
+
 ## 環境概覽
 
 | 元件 | 位置 | 備註 |
@@ -144,20 +159,17 @@ helm upgrade threshold-exporter components/threshold-exporter/ -n monitoring
 
 Windows MCP PowerShell 是 Cowork VM 無法直連的 API（如 `api.github.com`）的橋樑。
 
-**JSON body 兩種可靠做法：**
+**JSON body 統一做法（ConvertTo-Json + UTF8 Bytes）：**
 
 ```powershell
-# 方法 A：單行字串 — 適合短 body、純 ASCII
-$b = '{"tag_name":"v1.8.0","name":"v1.8.0","body":"notes","draft":false}'
-Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $b
-
-# 方法 B：ConvertTo-Json + UTF8 Bytes — 適合長 body、CJK 字元
+# ✅ 唯一推薦做法 — 同時支援 ASCII 和 CJK
 $payload = @{ tag_name = "v1.9.0"; name = "title"; body = $longText } | ConvertTo-Json -Depth 3
 Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
     -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
     -ContentType "application/json; charset=utf-8"
 # ⚠️ 必須用 UTF8.GetBytes()，否則 CJK 字元亂碼
 
+# ❌ 單行 JSON 字串 — 不支援 CJK，容易手滑引號配對，不推薦
 # ❌ 外部 .ps1 腳本 — OneDrive 路徑含空格找不到
 ```
 
@@ -222,7 +234,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 11 | `set -euo pipefail` + 未初始化變數 | 所有條件路徑都要有 default 值 |
 | 12 | 彩色輸出 / ANSI 碼污染 JSON | `--json` 模式避免 source `_lib.sh`，或 `2>/dev/null` + 過濾 ANSI |
 | 13 | 版號 drift | `make version-check`；修正用 `make bump-docs` |
-| 14 | PS JSON body CJK 亂碼 | `ConvertTo-Json` + `[System.Text.Encoding]::UTF8.GetBytes()` + `charset=utf-8` |
+| 14 | PS JSON body CJK 亂碼 | 統一用 `ConvertTo-Json` + `UTF8.GetBytes()` + `charset=utf-8`（見 [§PowerShell REST API](#powershell-rest-apigithub-等)） |
 | 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline |
 | 16 | PAT push `.github/workflows/` 被 reject | PAT 需含 Workflows scope（詳見 [GitHub Release Playbook](github-release-playbook.md)） |
 | 17 | Windows MCP Shell 長 REST body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 完成後 `Remove-Item` |
@@ -233,8 +245,8 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 22 | `Get-Content -Raw` 是 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata；用 `[string]` cast 或改用 here-string `@"..."@` |
 | 23 | 刪除再重建 GitHub tag 導致 Release 消失 | `git push origin :refs/tags/v*` 會連帶刪除關聯 Release；重推 tag 後須重新 create release |
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
-| 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
-| 26 | PAT 查 GHCR packages 回 403 | GitHub Packages API 需要 `packages:read` scope；PAT 沒此 scope 時 GET `/users/{owner}/packages` 回 403，但 **CI 用 `GITHUB_TOKEN` 有 `packages:write` 所以 push 成功**。驗證 image 是否存在最快的方式是瀏覽器開 `github.com/{owner}?tab=packages`，不繞 API |
+| 25 | Fine-grained PAT 權限不足建立 Release | 詳見 [GitHub Release Playbook §PAT 權限](github-release-playbook.md)。摘要：需 **Contents: Read and Write** scope |
+| 26 | PAT 查 GHCR packages 回 403 | 需 `packages:read` scope；驗證 image 最快用瀏覽器開 `github.com/{owner}?tab=packages` |
 | 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/ops/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1-5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
 | 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
 | 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |

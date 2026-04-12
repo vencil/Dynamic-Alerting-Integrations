@@ -11,6 +11,17 @@ lang: zh
 > AI Agent 透過 Cowork VM + Windows MCP 執行 git push、建立 GitHub Release 的流程與限制。
 > **相關文件：** [Testing Playbook](testing-playbook.md) | [Windows-MCP Playbook](windows-mcp-playbook.md)
 
+### Quick Action Index
+
+| 我要做什麼 | 跳到 |
+|-----------|------|
+| Release 標準流程 | [§Release 標準流程](#release-標準流程) |
+| da-tools 獨立 Release | [§da-tools 獨立 Release](#da-tools-獨立-release) |
+| tenant-api 獨立 Release | [§tenant-api 獨立 Release](#tenant-api-獨立-release) |
+| 認證設定 (git/gh) | [§認證設定](#認證設定) |
+| Pre-release Checklist | [§上版前品質驗證清單](#上版前品質驗證清單pre-release-checklist) |
+| 已知陷阱 | [§已知陷阱](#已知陷阱) |
+
 ## ⚠️ 安全規則
 
 **絕對禁止將 GitHub token 寫入任何 repo 檔案。** 包含但不限於：
@@ -383,7 +394,7 @@ git push origin --delete ci/fix-docs-workflow-cli-drift  # 事後手動刪 paren
     # Dockerfile base image 必須在 Docker Hub 存在（CI build 階段才會 fail，太遲了）
     docker manifest inspect <每個 Dockerfile 的 FROM tag> > /dev/null
     # Chart.yaml version 必須與即將推的 exporter/v* tag 一致
-    grep "^version:" helm/threshold-exporter/Chart.yaml
+    grep "^version:" components/threshold-exporter/Chart.yaml
     ```
 
 16. **推送 + 等 CI 全綠 + Release**

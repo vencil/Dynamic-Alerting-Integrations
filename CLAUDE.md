@@ -50,13 +50,14 @@ Session 結束或異常終止後：`make session-cleanup`
 
 ## 開發規範
 
-11 條專案規範 + 互動工具變更 SOP 見 [`docs/internal/dev-rules.md`](docs/internal/dev-rules.md)。
+12 條專案規範 + 互動工具變更 SOP 見 [`docs/internal/dev-rules.md`](docs/internal/dev-rules.md)。
 
-**最常被違反 Top 3**（其餘請讀完整文件）：
+**最常被違反 Top 4**（其餘請讀完整文件）：
 
-1. **#11 檔案衛生** — 禁止對掛載路徑用 `sed -i`（會截斷缺少 EOF 換行的檔案）。用 Read+Edit 或 `git show HEAD:file | sed | tr -d '\0' > file` pipe
-2. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`，連動規則見 [doc-map.md § Change Impact Matrix](docs/internal/doc-map.md)
-3. **#2 Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）
+1. **#12 Branch + PR** — ⛔ **禁止直推 main**。一律開 branch → PR → owner 同意後 merge。已有 pre-push hook 攔截（`scripts/ops/protect_main_push.sh`）
+2. **#11 檔案衛生** — 禁止對掛載路徑用 `sed -i`（會截斷缺少 EOF 換行的檔案）。用 Read+Edit 或 `git show HEAD:file | sed | tr -d '\0' > file` pipe
+3. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`，連動規則見 [doc-map.md § Change Impact Matrix](docs/internal/doc-map.md)
+4. **#2 Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）
 
 ## Pre-commit 品質閘門
 
@@ -99,21 +100,23 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 
 不讀 Playbook 直接動手是踩坑的主因。以下表格把任務類型映射到必讀的 Playbook **具體章節**（不是整份文件），讓你在 30 秒內找到需要的上下文。
 
-| 任務類型 | 必讀 | 選讀 | 為什麼要讀 |
-|---------|------|------|-----------|
-| 跑 pytest / 新增測試 | [testing-playbook](docs/internal/testing-playbook.md) 全文 + [test-map](docs/internal/test-map.md) §Factory/Markers | — | 不讀會踩到 fixture 格式、marker 選擇、conftest import 慣例 |
-| 修 Go test race / flake | testing-playbook §v2.6.x Go 並發測試 flake | — | CI `FAIL` + coverage 同時出現 = `t.Errorf` flake；初始狀態斷言 + 時間戳 bounds 是兩個常見陷阱 |
-| 跑 benchmark / 效能分析 | [benchmark-playbook](docs/internal/benchmark-playbook.md) 全文 | testing-playbook §負載注入 | 不讀會用錯統計方法或 port-forward 不穩導致數據無效 |
-| docker exec / K8s 操作 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §核心原則 + §已知陷阱 | — | docker exec stdout 在 Windows MCP 下為空，不讀此節會浪費 30 分鐘排錯 |
-| Release / 推 tag | [github-release-playbook](docs/internal/github-release-playbook.md) 全文 | windows-mcp-playbook §PowerShell REST API | Re-tag 三輪的教訓全在這裡 |
-| 新增 Python 工具 | testing-playbook §SAST 合規 + §程式碼品質 + test-map | — | SAST 7 rules 會在 commit 時攔截不合規的程式碼 |
-| 修改 conf.d/ 相關邏輯 | testing-playbook §conf.d/ YAML 格式陷阱 | — | wrapped vs flat 格式是最常踩的坑 |
-| 純文件修改 | — | — | pre-commit hooks 自動把關，30 個 hook 涵蓋 drift detection |
-| 負載測試 / Alert 驗證 | testing-playbook §負載注入 + §HA 相關測試 | benchmark-playbook §Under-Load | 連線數上限 95 和清理 trap 不做好會鎖死 exporter |
-| Playwright E2E | testing-playbook §Playwright E2E | — | server root 必須是 `docs/` 不是 `docs/interactive/` |
-| 版號管理 / bump | github-release-playbook §版號驗證 + §da-tools 獨立 Release | — | 五線版號各有各的 tag 格式和 CI 觸發條件 |
-| Cowork session 起手式 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §FUSE Phantom Lock 防治 | — | 不跑 `vscode_git_toggle.py off` 會遭遇 phantom lock，浪費排錯時間 |
-| FUSE 卡死需 Windows 逃生門 | windows-mcp-playbook §修復層 C + §Git 操作決策樹 | — | 直接用 `scripts/ops/win_git_escape.bat`，**不要重新造輪子寫腳本** |
+| 任務類型 | 必讀 | 選讀 | 跳過條件 |
+|---------|------|------|---------|
+| 跑 pytest / 新增測試 | [testing-playbook](docs/internal/testing-playbook.md) 全文 + [test-map](docs/internal/test-map.md) §Factory/Markers | — | 已熟悉 marker/fixture 慣例且非首次 |
+| 修 Go test race / flake | testing-playbook §v2.6.x Go 並發測試 flake | — | — |
+| 跑 benchmark / 效能分析 | [benchmark-playbook](docs/internal/benchmark-playbook.md) 全文 | testing-playbook §負載注入 | — |
+| docker exec / K8s 操作 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §核心原則 + §已知陷阱 | — | 只用 Cowork VM 跑 Python，不碰 docker |
+| Release / 推 tag | [github-release-playbook](docs/internal/github-release-playbook.md) 全文 | windows-mcp-playbook §PowerShell REST API | — |
+| 新增 Python 工具 | testing-playbook §SAST 合規 + §程式碼品質 + test-map | — | 純修改現有工具（非新增） |
+| 修改 conf.d/ 相關邏輯 | testing-playbook §conf.d/ YAML 格式陷阱 | — | — |
+| **純文件修改** | **不需讀 Playbook** | — | ✅ pre-commit hooks 自動把關 |
+| **純程式碼邏輯修改** | **不需讀 Playbook** | — | ✅ 不涉及 K8s/docker/release/conf.d |
+| 負載測試 / Alert 驗證 | testing-playbook §負載注入 + §HA 相關測試 | benchmark-playbook §Under-Load | — |
+| Playwright E2E | testing-playbook §Playwright E2E | — | — |
+| 版號管理 / bump | github-release-playbook §版號驗證 + §da-tools 獨立 Release | — | — |
+| Cowork session 起手式 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §FUSE Phantom Lock 防治 | — | ⛔ 不可跳過 |
+| FUSE 卡死需 Windows 逃生門 | windows-mcp-playbook §修復層 C + §Git 操作決策樹 | — | FUSE 正常運作時不需讀 |
+| **git commit / push** | **不需讀 Playbook** | — | ✅ FUSE 正常時直接操作；卡住才查逃生門 |
 
 #### Playbook 索引
 
