@@ -73,3 +73,6 @@ docs/internal/*-plan-draft.md
 # Ad-hoc batch scripts, logs and token drops used by Dev Container push path.
 # Any file prefixed with .dev_ is expected to be ephemeral and MUST NOT be committed.
 .dev_*
+
+# Structure audit (time-bound internal doc)
+docs/internal/_project-structure-audit-*
