@@ -1,0 +1,28 @@
+# gitconfig-fuse-tuning.sample — FUSE 掛載環境的 Git 效能調優
+#
+# 安裝方式：
+#   1. 複製到 home: cp scripts/ops/gitconfig-fuse-tuning.sample ~/.gitconfig-fuse-tuning
+#   2. 在 ~/.gitconfig 加入: [include] path = ~/.gitconfig-fuse-tuning
+#   或使用: make install-fuse-gitconfig
+#
+# 原理：
+#   FUSE 掛載（如 Cowork）的 inode 行為與本地磁碟不同，
+#   以下設定關閉依賴即時 inode 變化偵測的功能，
+#   避免 phantom lock 和 index 不一致。
+
+[core]
+    # 關閉 fsmonitor — 防止 watchman/inotify 在 FUSE 上產生 phantom lock
+    fsmonitor = false
+
+    # 關閉 untrackedCache — FUSE inode 變化不可靠，cache 會誤判
+    untrackedCache = false
+
+    # 關閉 trustctime — FUSE 的 ctime 不一定反映實際變更
+    trustctime = false
+
+    # Lock 超時設定 — FUSE 延遲較高，給 lock 多一點等待時間
+    filesRefLockTimeout = 1500
+
+[gc]
+    # 降低自動 GC 頻率 — 減少 FUSE 上的大量小檔案 I/O
+    auto = 0

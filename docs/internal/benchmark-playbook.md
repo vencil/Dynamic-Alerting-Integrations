@@ -11,6 +11,17 @@ lang: zh
 > Benchmark 方法論、執行環境、已知陷阱與踩坑記錄。與測試排錯分離，便於獨立查閱。
 > **相關文件：** [benchmarks.md](../benchmarks.md)（量測數據）· [Testing Playbook](testing-playbook.md)（K8s/測試排錯）· [Test Map § Benchmark 基線](test-map.md#benchmark-基線)· [Windows-MCP Playbook](windows-mcp-playbook.md)（docker exec 陷阱）
 
+### Quick Action Index
+
+| 我要做什麼 | 跳到 |
+|-----------|------|
+| 跑 benchmark 指令 | [§自動化指令](#自動化指令) |
+| 方法論（輪數/格式） | [§方法論](#方法論) |
+| Dev Container 內執行 | [§在 Dev Container 內執行](#在-dev-container-內執行) |
+| Routing Bench | [§Routing Bench 注意事項](#routing-bench-注意事項) |
+| Under-Load Bench | [§Under-Load Bench 注意事項](#under-load-bench-注意事項) |
+| 踩坑記錄 | [§踩坑記錄](#踩坑記錄-lessons-learned) |
+
 ---
 
 ## 自動化指令

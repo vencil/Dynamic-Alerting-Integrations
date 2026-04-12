@@ -11,6 +11,21 @@ lang: zh
 > AI Agent 透過 Windows-MCP Shell / Desktop Commander / Cowork VM 操作 Dev Container 的最佳實踐與已知陷阱。
 > **相關文件：** [Testing Playbook](testing-playbook.md)（K8s/測試排錯）· [Benchmark Playbook](benchmark-playbook.md)（方法論、踩坑）· [GitHub Release Playbook](github-release-playbook.md)（push + release 流程）
 
+### Quick Action Index
+
+> AI agent 直接跳到需要的操作步驟，跳過敘事。
+
+| 我要做什麼 | 跳到 |
+|-----------|------|
+| docker exec 拿輸出 | [§核心原則](#核心原則docker-exec-stdout-為空) |
+| port-forward Prometheus/AM | [§Port-Forward 模式](#port-forward-模式) |
+| Helm upgrade 衝突 | [§Helm Upgrade 防衝突](#helm-upgrade-防衝突) |
+| GitHub API (PS) | [§PowerShell REST API](#powershell-rest-apigithub-等) |
+| git 卡住 / FUSE lock | [§Git 操作決策樹](#git-操作決策樹) |
+| Windows 逃生門 | [§修復層 C](#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) |
+| 環境職責快查 | [§三層環境職責矩陣](#三層環境職責矩陣) |
+| 已知陷阱查表 | [§已知陷阱速查](#已知陷阱速查) |
+
 ## 環境概覽
 
 | 元件 | 位置 | 備註 |
@@ -135,29 +150,26 @@ ConfigMap 被 `kubectl patch` 修改過 → Helm field-manager conflict：
 ```bash
 # Step 1: server-side apply 取回 ownership
 kubectl apply --server-side --force-conflicts --field-manager=helm \
-  -f <(helm template threshold-exporter helm/threshold-exporter/ -n monitoring)
+  -f <(helm template threshold-exporter components/threshold-exporter/ -n monitoring)
 # Step 2: 正常 helm upgrade
-helm upgrade threshold-exporter helm/threshold-exporter/ -n monitoring
+helm upgrade threshold-exporter components/threshold-exporter/ -n monitoring
 ```
 
 ## PowerShell REST API（GitHub 等）
 
 Windows MCP PowerShell 是 Cowork VM 無法直連的 API（如 `api.github.com`）的橋樑。
 
-**JSON body 兩種可靠做法：**
+**JSON body 統一做法（ConvertTo-Json + UTF8 Bytes）：**
 
 ```powershell
-# 方法 A：單行字串 — 適合短 body、純 ASCII
-$b = '{"tag_name":"v1.8.0","name":"v1.8.0","body":"notes","draft":false}'
-Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $b
-
-# 方法 B：ConvertTo-Json + UTF8 Bytes — 適合長 body、CJK 字元
+# ✅ 唯一推薦做法 — 同時支援 ASCII 和 CJK
 $payload = @{ tag_name = "v1.9.0"; name = "title"; body = $longText } | ConvertTo-Json -Depth 3
 Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
     -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
     -ContentType "application/json; charset=utf-8"
 # ⚠️ 必須用 UTF8.GetBytes()，否則 CJK 字元亂碼
 
+# ❌ 單行 JSON 字串 — 不支援 CJK，容易手滑引號配對，不推薦
 # ❌ 外部 .ps1 腳本 — OneDrive 路徑含空格找不到
 ```
 
@@ -222,7 +234,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 11 | `set -euo pipefail` + 未初始化變數 | 所有條件路徑都要有 default 值 |
 | 12 | 彩色輸出 / ANSI 碼污染 JSON | `--json` 模式避免 source `_lib.sh`，或 `2>/dev/null` + 過濾 ANSI |
 | 13 | 版號 drift | `make version-check`；修正用 `make bump-docs` |
-| 14 | PS JSON body CJK 亂碼 | `ConvertTo-Json` + `[System.Text.Encoding]::UTF8.GetBytes()` + `charset=utf-8` |
+| 14 | PS JSON body CJK 亂碼 | 統一用 `ConvertTo-Json` + `UTF8.GetBytes()` + `charset=utf-8`（見 [§PowerShell REST API](#powershell-rest-apigithub-等)） |
 | 15 | PS 外部 `.ps1` 腳本路徑含空格 | OneDrive 預設路徑含空格；避免外部腳本，用 inline |
 | 16 | PAT push `.github/workflows/` 被 reject | PAT 需含 Workflows scope（詳見 [GitHub Release Playbook](github-release-playbook.md)） |
 | 17 | Windows MCP Shell 長 REST body timeout | 用 Desktop Commander `write_file` 寫暫存檔 → PowerShell `Get-Content -Raw` 讀入 → 完成後 `Remove-Item` |
@@ -233,9 +245,9 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 22 | `Get-Content -Raw` 是 PSObject 非純字串 | 放入 hashtable → `ConvertTo-Json` 會序列化 filesystem metadata；用 `[string]` cast 或改用 here-string `@"..."@` |
 | 23 | 刪除再重建 GitHub tag 導致 Release 消失 | `git push origin :refs/tags/v*` 會連帶刪除關聯 Release；重推 tag 後須重新 create release |
 | 24 | Repo rename 導致 POST API 靜默失敗 | Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 `Invoke-RestMethod` 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 `Dynamic-Alerting-Integrations`）或 repo ID URL（`/repositories/{id}/releases`） |
-| 25 | Fine-grained PAT 權限不足建立 Release | Fine-grained PAT 預設沒有 Release 寫入權限；需在 token 設定加上 **Contents: Read and Write**。`Bearer` vs `token` prefix 皆可用於 GET，但 POST 需確認權限到位 |
-| 26 | PAT 查 GHCR packages 回 403 | GitHub Packages API 需要 `packages:read` scope；PAT 沒此 scope 時 GET `/users/{owner}/packages` 回 403，但 **CI 用 `GITHUB_TOKEN` 有 `packages:write` 所以 push 成功**。驗證 image 是否存在最快的方式是瀏覽器開 `github.com/{owner}?tab=packages`，不繞 API |
-| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/session-guards/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1-5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
+| 25 | Fine-grained PAT 權限不足建立 Release | 詳見 [GitHub Release Playbook §PAT 權限](github-release-playbook.md)。摘要：需 **Contents: Read and Write** scope |
+| 26 | PAT 查 GHCR packages 回 403 | 需 `packages:read` scope；驗證 image 最快用瀏覽器開 `github.com/{owner}?tab=packages` |
+| 27 | `.git/*.lock` 殘留阻擋 git 操作 | **首選**：`bash scripts/ops/git_check_lock.sh --clean`（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP `Remove-Item "path\.git\*.lock" -Force`。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 [§修復層 B Level 6 rename-trick](#修復層-bfuse-cache-重建level-1-5)。詳細背景：[§ FUSE Phantom Lock 防治](#fuse-phantom-lock-防治) |
 | 28 | `Invoke-RestMethod` 對 GitHub API 頻繁 timeout | Windows MCP PowerShell 的 `Invoke-RestMethod` 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 `curl.exe` 替代：寫 JSON 到 temp 檔（`[IO.File]::WriteAllText` 無 BOM）→ `curl.exe --data-binary @file` |
 | 29 | `mkdocs gh-deploy` site/ 權限錯誤 | MkDocs 建置產生 `site/` 後 Cowork VM 無法再次 `clean_directory`；部署前用 Windows MCP `Remove-Item site/ -Recurse -Force`。也可手動 push：temp repo → `gh-pages` branch → `git push --force` |
 | 30 | `ghp_import` TypeError bytes vs str | Python 3.10 + 新版 ghp_import 的 `sys.stdout.write(enc(...))` 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 `site/*`、push 到 `gh-pages` branch |
@@ -250,6 +262,16 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 39 | Windows clone 的 `rule-packs/` 和 `docs/CHANGELOG.md` 變成 ~13 byte 純文字檔 | Git 物化 symlink 為 target 字串。非 bug，是權限問題——Windows 10+ 預設不允許非 admin 建立 symlink。**解法**：開啟 Developer Mode（見 [§Windows Clone 初次設定](#windows-clone-初次設定-symlink-支援)）|
 | 40 | Markdown heading 用 em-dash `—` 時，Python Markdown / MkDocs slugify 產出**單 hyphen** 而非雙 hyphen | 例：`## Windows Clone 初次設定 — Symlink 支援` → slug 是 `windows-clone-初次設定-symlink-支援`（不是 `--symlink-支援`）。em-dash 被當作 space 處理，兩側 space 合併成一個 hyphen。PR #18 因此打到 broken anchor CI fail。**檢測**：本地跑 `python scripts/tools/lint/check_doc_links.py --ci`。**修法**：link 裡的 `--` 改成 `-`，或 heading 改成 ASCII hyphen `-`（會 slugify 成 `--`，但可讀性差） |
 | 41 | `git rebase -i --autosquash` 在 MCP 下無法開編輯器 | 想非互動地跑 `git commit --fixup=<sha> && git rebase -i --autosquash <base>`，但 `GIT_SEQUENCE_EDITOR=rem` 或 `=cmd /c rem` 會被 Git for Windows 的 bundled sh 當成 shell command 解讀，報 `rem: command not found`。**正解**：用 `true`（msys 的內建 no-op），並透過 `-c` 臨時設定避免污染 env：`git -c sequence.editor=true -c core.editor=true rebase -i --autosquash <base>`。autosquash 會在 sequence file 寫入後立即以 `true` 結束編輯器，保留預設順序。驗證：`git log --oneline` 看到 `fixup!` 已被摺進 target commit |
+| 42 | pre-commit hook CRLF shebang + dual shebang 雙重問題 | Windows 端 `pre-commit install` 產生的 `.git/hooks/pre-commit` 有兩個問題：(1) CRLF 行尾導致 Linux/FUSE 找不到 `#!/bin/sh\r`（報 `cannot run .git/hooks/pre-commit: No such file or directory`）；(2) 修完 CRLF 後，`#!/bin/sh` 無法解析 bash array `ARGS=(...)`（報 `Syntax error: "(" unexpected`）。**修法**：`tr -d '\r' < hook > hook.tmp && mv hook.tmp hook && chmod +x hook`，再把 `#!/bin/sh` 改成 `#!/usr/bin/env bash`。已內建到 `win_git_escape.bat fix-hooks` 子命令 |
+| 43 | pre-commit stash + FUSE 交互形成死鎖 | pre-commit 偵測到 unstaged changes → `git stash` → stash 操作在 FUSE 上衝突 → 嘗試 `git checkout -- .` → 建立 `index.lock` → FUSE phantom lock → 整個 git 卡死。**防治**：(1) commit 前先 `git stash` 手動處理 unstaged changes，不要讓 pre-commit 自動 stash；(2) 大量 unstaged files 時改用 Windows 逃生門 commit；(3) 已發生時用 `make git-lock ARGS="--clean"` 或 Windows MCP `Remove-Item` 清鎖 |
+| 44 | Phantom lock 薛丁格態：ls 顯示存在但所有操作都失敗 | FUSE dentry cache 殘留的 `.git/index.lock`，`ls` 同時報 "No such file" 卻又列出檔案。`os.unlink` 報 "Operation not permitted"，`os.rename` 報 "No such file"。Level 1 `drop_caches` 和 Level 6 rename-trick 皆無效。**唯一可靠解法**：放棄從 FUSE 側操作，切換到 Windows 原生 git（`win_git_escape.bat`）完成所有 git 操作。這是「逃生門」設計存在的核心理由 |
+| 45 | Desktop Commander `start_process` 執行 `.bat` 檔案時編碼損壞 | Desktop Commander 的 `start_process` 直接執行 `.bat` 會對 `@echo off`、`setlocal` 等關鍵字產生亂碼，batch 無法正確解析。**繞道**：不直接執行 `.bat`，改用 inline `cmd /c "..."` 命令，或透過 PowerShell `& cmd /c script.bat args` 間接呼叫 |
+| 46 | cmd `git commit -m` 無法處理 UTF-8 特殊字元（em-dash、CJK） | `git commit -m "feat(ops): playbook audit — harness"` 中的 em-dash（U+2014）不在 cmd codepage 內，導致引號解析崩潰，每個空格後的單字都被當成獨立 pathspec，產生大量 `fatal: pathspec 'xxx' did not match any file` 錯誤。**正解**：永遠用 `git commit -F file.txt` 檔案傳遞 commit message。已內建到 `win_git_escape.bat commit-file` 子命令。UTF-8 檔案用 `[IO.File]::WriteAllText($path, $msg, [Text.UTF8Encoding]::new($false))` 或 `echo msg > file` 產生 |
+| 47 | Windows MCP PowerShell 對大型 working tree 的 git 操作 timeout | 當 working tree 有 ~90+ unstaged files 時，透過 Windows MCP PowerShell 執行 `git add` 和 `git status` 會反覆超過 60s timeout（連續 3 次失敗）。原因是 Git 需要 stat 大量檔案 + PowerShell MCP 模組初始化開銷。**繞道**：改用 Desktop Commander 的 cmd shell（`cmd /c "git add file1 file2"`），或用 `win_git_escape.bat` 直接操作 |
+| 48 | Desktop Commander cmd shell 拆解 `--title` 引號 | `gh pr create --title "multi word title"` 在 cmd 內被拆成獨立 arguments。**正解**：把完整命令寫入 `.bat` 檔再執行（bat 內引號正常解析）。PowerShell 可正確處理引號，但有 PATH (#49) 和 timeout (#47) 問題 |
+| 49 | `gh` 不在 Desktop Commander PowerShell PATH | Desktop Commander 的 PowerShell shell 找不到 `C:\Program Files\GitHub CLI\gh.exe`，但 cmd 可以。原因：PowerShell MCP 的 PATH 繼承與 cmd 不同。**正解**：用 cmd shell + bat 檔；或在 PowerShell 用全路徑 `& "C:\Program Files\GitHub CLI\gh.exe"` |
+| 50 | `gh pr checks --json` 沒有 `conclusion` 欄位 | 可用欄位：`name, state, bucket, description, event, link, startedAt, completedAt, workflow`。`bucket` 值為 `pass/fail/pending/skipping`。很多網路範例用 `conclusion` 是錯的 |
+| 51 | Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError | Python `print()` 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。**正解**：script 開頭偵測 `cp*` encoding 時強制 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')` |
 
 ## Windows Clone 初次設定 — Symlink 支援
 
@@ -331,13 +353,13 @@ FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind moun
 
 ```bash
 # Agent session 開始時 — 關閉 VS Code 背景 Git
-python scripts/session-guards/vscode_git_toggle.py off
+python scripts/ops/vscode_git_toggle.py off
 
 # Session 結束或手動開發時 — 打開
-python scripts/session-guards/vscode_git_toggle.py on
+python scripts/ops/vscode_git_toggle.py on
 
 # 查看目前狀態
-python scripts/session-guards/vscode_git_toggle.py
+python scripts/ops/vscode_git_toggle.py
 ```
 
 原理：VS Code 即時 hot-reload `.vscode/settings.json`，切換後立即生效。檔案已在 `.gitignore` 排除。
@@ -346,11 +368,11 @@ python scripts/session-guards/vscode_git_toggle.py
 
 **2. Git Config FUSE 調校（路徑條件式，只影響本 repo）**
 
-安裝 `scripts/session-guards/gitconfig-fuse-tuning.sample`：
+安裝 `scripts/ops/gitconfig-fuse-tuning.sample`：
 
 ```bash
 # Windows 端：
-copy scripts\session-guards\gitconfig-fuse-tuning.sample %USERPROFILE%\gitconfig-fuse-tuning
+copy scripts\ops\gitconfig-fuse-tuning.sample %USERPROFILE%\gitconfig-fuse-tuning
 ```
 
 然後在 `%USERPROFILE%\.gitconfig` 加入：
@@ -375,10 +397,10 @@ Add-MpPreference -ExclusionPath "C:\Users\<USERNAME>\vibe-k8s-lab\.git"
 
 ```bash
 # 診斷（不刪除，只報告）
-bash scripts/session-guards/git_check_lock.sh
+bash scripts/ops/git_check_lock.sh
 
 # 診斷 + 清理（只清 >30s 且無活躍 git process 的 stale lock）
-bash scripts/session-guards/git_check_lock.sh --clean
+bash scripts/ops/git_check_lock.sh --clean
 ```
 
 若 Cowork VM 無法刪除（`Operation not permitted`），腳本會輸出對應的 Windows MCP 指令。
@@ -410,10 +432,10 @@ echo 2 | sudo tee /proc/sys/vm/drop_caches   # 需要 sudo；Cowork VM 常沒給
 
 ```powershell
 # (a) 關 VS Code 背景 Git 掃描
-python scripts/session-guards/vscode_git_toggle.py off
+python scripts/ops/vscode_git_toggle.py off
 
 # (b) 清 stale .git/*.lock
-bash scripts/session-guards/git_check_lock.sh --clean
+bash scripts/ops/git_check_lock.sh --clean
 
 # (c) 砍殘留的 port-forward / helm / kubectl / git process
 Get-Process Code, git, pre-commit -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -475,14 +497,60 @@ os.rename('.git/index.lock', '.git/_old_lock2.tmp')  # 讓 git 可以自己 acqu
 
 為何 rename 可行：FUSE 的 rename 走 `create+unlink` path 的相反操作（由 userspace driver 代為執行 NTFS 層的 `MoveFileEx`），而 Windows 的 `MoveFileEx` 在 phantom dentry 情況下會對齊到真實 NTFS 狀態，等於強制 dentry 重新 validate 一次。同理，`O_CREAT|O_EXCL` 在 phantom dentry 下會 EEXIST，但 rename-over 不會。
 
+### Git 操作決策樹
+
+```
+Git 操作入口
+│
+├─ 1. make git-preflight（每次 git 操作前必跑）
+│  ├─ ✅ 成功 → 在 Cowork VM / Dev Container 正常操作
+│  └─ ❌ 失敗（lock 清不掉）
+│     │
+│     ├─ 2. make fuse-reset（等 10 秒）
+│     │  ├─ ✅ 成功 → 正常操作
+│     │  └─ ❌ 仍失敗
+│     │     │
+│     │     ├─ 3. Windows 逃生門
+│     │     │  └─ scripts/ops/win_git_escape.bat <command>
+│     │     │     不要重新造輪子寫腳本！
+│     │     │
+│     │     └─ 4. 連 Windows 也失敗 → 回報使用者，不要無限重試
+│     │
+│     ⚠️ 嘗試上限：每層最多重試 2 次，總計不超過 5 分鐘
+```
+
+### 三層環境職責矩陣
+
+| 操作 | 主路徑：Dev Container | 備援：Cowork VM | 逃生門：Windows Native |
+|------|---------------------|----------------|---------------------|
+| Code editing | ✅ | ✅ Read+Edit | ❌ |
+| Go test | ✅ | ❌ | ❌ |
+| Python test | ✅ | ✅ | ❌ |
+| git add/commit | ✅ | ⚠️ FUSE 風險 | ✅ `win_git_escape.bat` |
+| git push | ✅ | ⚠️ FUSE 風險 | ✅ `win_git_escape.bat` |
+| git tag | ✅ | ⚠️ FUSE 風險 | ✅ `win_git_escape.bat` |
+| gh pr create | ✅ | ❌ gh 不在 VM | ✅ `win_git_escape.ps1` |
+| pre-commit | ✅ | ✅ | ❌ 環境不完整 |
+| Helm / K8s | ✅ | ❌ | ❌ |
+
+> **設計原則**：Dev Container 是主路徑。FUSE 卡死時 Windows 是逃生門。目標是不讓 session 卡死。
+
 ### 修復層 C：Windows 原生 Git Fallback（FUSE 側卡死時的備援路徑）
 
-FUSE 側 git 操作反覆卡住、或 pre-commit hook 在 FUSE mount 上一直踩到 index lock 時，**Windows 原生 cmd/PowerShell 是第二條可走的路徑**。工作模式：
+FUSE 側 git 操作反覆卡住、或 pre-commit hook 在 FUSE mount 上一直踩到 index lock 時，**Windows 原生 cmd/PowerShell 是第二條可走的路徑**。
+
+**⛔ 重要：已有標準化逃生門工具，不要自己寫腳本！**
+
+- **Git 操作**：`scripts/ops/win_git_escape.bat status|add|commit|push|tag|branch|log|diff|preflight`
+- **GitHub 操作**：`scripts/ops/win_git_escape.ps1 pr-create|pr-list|ci-status|release-create`
+
+工作模式：
 
 | 操作類型 | 走哪邊 | 原因 |
 |---------|-------|------|
 | 檔案 Read/Edit/Write | Claude 的檔案 tool（走 FUSE mount） | 雙向可見、原子寫入 |
-| `git status` / `git add` / `git commit` / `git push` | Desktop Commander MCP → Windows 原生 `C:\Program Files\Git\cmd\git.exe` | git index lock 寫在 Windows NTFS，不走 FUSE metadata |
+| `git status` / `git add` / `git commit` / `git push` | `win_git_escape.bat` → Windows 原生 git | git index lock 寫在 Windows NTFS，不走 FUSE metadata |
+| `gh pr create` / `gh run list` | `win_git_escape.ps1` → Windows 原生 gh | gh CLI 不在 Cowork VM 內 |
 | pre-commit 執行 | Windows 原生 Python (`C:\Users\<USER>\AppData\Local\Python\bin\python.exe`) + `python -m pre_commit` | 避開 FUSE stat 延遲 |
 
 兩端共用同一份工作樹，但 git 的檔案鎖、pre-commit 的 hook cache 都在 NTFS 上，不受 FUSE phantom lock 影響。
@@ -535,57 +603,52 @@ git push origin main
 git remote set-url origin git@github.com:<owner>/<repo>.git
 ```
 
-**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路徑（例：`INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3`），在 Windows 原生 git 下 `exec` 這個 hook 會直接 `cannot spawn .git/hooks/pre-push: No such file or directory`。這時有三個選擇：
+**pre-push hook 相容性**：pre-commit 產生的 `.git/hooks/pre-push` 會寫死 Linux python 路徑，修法見上方陷阱 #36。
 
-1. **臨時 `--no-verify`**（最快）：`git push --no-verify origin <branch>`。僅適用 pre-push；CLAUDE.md 規範 #Top4 的「不要 `--no-verify`」指的是 **pre-commit 留下 `.git/index.lock`** 的情境，pre-push hook 在 Windows 下 spawn 失敗是不同根因，繞過 OK。
-2. **regenerate hook 走 Windows Python**：`pre-commit uninstall --hook-type pre-push && pre-commit install --hook-type pre-push` 會把 `INSTALL_PYTHON` 重寫成當下 `$(which python)` 的路徑。缺點：切回 Linux 側（Dev Container / WSL / CI）又得 regenerate 一次。
-3. **改走 §替代路線 D：Dev Container Push**（推薦）：Dev Container 內的 `/usr/local/python/3.13.12/bin/python3` 真的存在，hook 可以正常 spawn，pre-commit checks 會跑，不需要 `--no-verify`。credential 用下面的 one-liner 解決。
+### 修復層 D：Dev Container Push（pre-push hook 撈到無關 drift 時的備援）
 
-### 修復層 C · 替代路線 D：Dev Container Push
+**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
 
-當 pre-push hook 必須跑（例如專案規範不允許 `--no-verify`、或 pre-push 掛的 check 很關鍵），應該優先走 Dev Container push：
+⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
 
-| 面向 | Windows 原生 git（路線 A-C 主幹） | Dev Container push（路線 D） |
-|---|---|---|
-| pre-push hook spawn | ✗ 失敗（Linux python 路徑寫死） | ✓ 正常（容器內 `/usr/local/python/3.13.12/bin/python3` 存在） |
-| pre-commit checks 跑不跑 | ✗ 只能 `--no-verify` 跳過 | ✓ 正常執行 |
-| 和 CI 的環境一致性 | 低（Windows + Git for Windows） | 高（ubuntu-latest 等價） |
-| credential helper | Git Credential Manager 自動處理 | 要手動注入 token（見下） |
-| MCP 呼叫路徑 | `cmd /c <batch>` → `git.exe` → 各種 PATH / DLL 陷阱 | `docker exec vibe-dev-container bash -c '...'` |
+#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
 
-**credential 注入 one-liner**（不動 `git config`、不寫 token 進 remote URL）：
+pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
 
 ```bash
-# 1. 先從 Windows 側把 gh token 落到容器可讀的檔案（必須在掛載目錄下）
-#    Windows cmd:
-#    "C:\Program Files\GitHub CLI\gh.exe" auth token > C:\Users\<USER>\vibe-k8s-lab\.dev_push_token
-#    注意 gh auth 的 scope 必須包含 workflow（gh auth refresh -s workflow）
+# 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
+BASE=$(git merge-base HEAD origin/main)
+WT=/tmp/wt-$BASE
 
-# 2. 容器內 push（TOKEN 只活在該次 git process 的 env，不寫檔不入 log）
-cd /workspaces/vibe-k8s-lab
-TOKEN=$(tr -d '\r\n' < .dev_push_token)
-git -c credential.helper='' \
-    -c credential.helper="!f() { echo username=x-access-token; echo password=$TOKEN; }; f" \
-    push origin <branch>
+git worktree add "$WT" "$BASE" 2>/dev/null || true
+cd "$WT"
+pre-commit run bilingual-structure-check --all-files > /tmp/wt-base.log 2>&1
+ERR_BASE=$(grep -c "error:" /tmp/wt-base.log || echo 0)
 
-# 3. 完成後立即刪掉 token 檔
-rm -f .dev_push_token
+cd - >/dev/null
+pre-commit run bilingual-structure-check --all-files > /tmp/wt-head.log 2>&1
+ERR_HEAD=$(grep -c "error:" /tmp/wt-head.log || echo 0)
+
+echo "base=$ERR_BASE head=$ERR_HEAD"
+# base==head 且 >0 → 100% pre-existing drift，本次 PR 無辜
+# head > base → 這次引入了新問題，不要 --no-verify
+git worktree remove "$WT"
 ```
 
-**注意事項**：
+同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）：
 
-- `credential.helper=''` 在前面是把既有 helper 清掉（避免 GCM / cache helper 先問 username 就失敗），然後才附加 script helper。順序反過來無效。
-- `tr -d '\r\n'` 是因為 Windows gh 寫出的 token 可能帶 `\r\n`，留著會讓 `password=` 那行壞掉。
-- token 檔放 `.dev_push_token`（前綴點）並**一定要加進 `.gitignore`**（專案已 ignore `.dev_*`，臨時檔名以 `.dev_` 開頭即可）。push 完立刻 `rm`。
-- 走這條路徑後 `git push` 的 MCP runtime / exit code 仍然不可信，一樣用 §修復層 C 裡的 `git ls-remote origin HEAD` 對比 SHA 驗證成功。
-- `--dry-run` 下 pre-push hook 還是會跑（不發 pack 而已），可以先用 dry-run 驗證 credential 和 hook 都 OK 再做真正 push。
+```bash
+grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
+```
 
-**何時該走 D vs A-C**：
+#### Layer 2 — 決策樹（明確 if-else）
 
-- **走 D**：任何 commit 經過 pre-push hook 有實質檢查、或要跟 CI 環境對齊做 reproducibility check 時
-- **走 A-C**：Dev Container 沒起來、credential 注入臨時不方便、或純粹 ad-hoc 緊急 push（接受 `--no-verify` 的代價）
+pre-push hook 失敗後，按順序回答：
 
-**實證紀錄**（2026-04-12，verified-at-version v2.6.0）：`chore/structure-cleanup-2026-04-11` branch 的 playbook 更新 commit 就是從 Dev Container 走路線 D push 的，`git ls-remote origin` SHA 比對通過；Windows 原生 git 路徑則在 P2b 的六個 commits 走過一次，兩條路線都已通過實證。
+```
+Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
+    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
+    └─ 是（pre-existing drift）→ 走 Q2
 
 
 ### 修復層 D · pre-push drift 三層改進（Layer 1-3）
@@ -623,46 +686,4 @@ git worktree remove "$WT"
 同時驗證 CI **是否真的會跑這個 hook**（CI 用 `pre-commit run <id>` 按名字叫，不會自動跑全部）:
 
 ```bash
-grep -r "<hook-id>" .github/workflows/ || echo "CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive"
-```
-
-#### Layer 2 — 決策樹（明確 if-else）
-
-pre-push hook 失敗後，按順序回答:
-
-```
-Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
-    ├─ 否（head > base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
-    └─ 是（pre-existing drift）→ 走 Q2
-
-Q2. CI 有叫這個 hook by name 嗎？（grep .github/workflows/）
-    ├─ 有 → 修掉 drift 或把 hook 切 stages: [manual]；不要用 --no-verify 繞過 CI 關卡
-    └─ 沒有 → 走 Q3
-
-Q3. 這個 hook 是「掃全 repo」還是「掃 staged files」？
-    ├─ 掃 staged files（pass_filenames: true 或 files: 精準 match）→ 不該擋這次 push，去 hook 的 files regex 找 bug
-    └─ 掃全 repo（pass_filenames: false 且 always_run 或廣 files regex）→ 確認是 pre-commit v3 default_stages 行為（走 Q4）
-
-Q4. .pre-commit-config.yaml 有沒有 default_stages: [pre-commit]？
-    ├─ 有 → 這個 hook 顯式設了 stages 包含 pre-push，去問作者意圖
-    └─ 沒有 → 這是陷阱本體（default 會跑 pre-push），本次 git push --no-verify 過關，
-             然後「另開 PR」套用 Layer 3 根治
-```
-
-關鍵：`--no-verify` 只在 Q1+Q2+Q4 同時指向「pre-existing + CI 沒看 + config default 陷阱」時才安全。任何一個分支走偏都該停下來修，不該硬push。
-
-#### Layer 3 — 配置層根治（最重要）
-
-在 `.pre-commit-config.yaml` 頂層加:
-
-```yaml
-default_stages: [pre-commit]
-```
-
-原理：pre-commit v3 若未設 `default_stages`，hook 預設會跑在**所有** git stage（pre-commit + pre-push + pre-merge-commit + ...）。鎖定 `[pre-commit]` 之後，`git push` 就不會被掃全 repo 的 drift hook 擋住，CI 仍然照跑（因為 CI 是 `pre-commit run <id>` 按名字叫，不受 `stages` 限制）。需要特定 hook 跑在其他 stage 時，在該 hook 顯式加 `stages: [pre-push]` 或 `stages: [manual]` 即可。
-
-這個修法已於 2026-04-12 commit 套用到本 repo（PR #21 後續 DX 改善）。**如果你發現這個設定被拿掉，不要接受 force-push `--no-verify` 的救援路線，先還原設定再說。**
-
-#### Layer 3 的配套：reword_chain.py
-
-若 Layer 2 決策樹結論是「這次 commits 有問題要修 commit message（不是 tree 內容）」，但又不想跑 `git rebase -i`（會觸發 commit-msg hook、改掉 committer date、需要 interactive editor），用 `scripts/tools/dx/reword_chain.py`：純 `git commit-tree` plumbing，保留 tree SHA + author/committer 身份 + 時間戳，失敗有 backup tag 一鍵復原。適合 agent/CI 環境批次改寫 N 個 commit subject。
+grep -r "

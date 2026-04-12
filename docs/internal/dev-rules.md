@@ -8,16 +8,16 @@ lang: zh
 ---
 # 開發規範 (Development Rules)
 
-> 本專案的 11 條開發規範 + 互動工具變更 SOP。從 `CLAUDE.md` 搬出，避免 tier 1 context 太肥。
+> 本專案的 12 條開發規範 + 互動工具變更 SOP。從 `CLAUDE.md` 搬出，避免 tier 1 context 太肥。
 > 違反任何一條都會觸發 pre-commit hook / SAST 攔截，或在 review 階段被退回。
 >
 > **相關文件：** [governance-security.md](../governance-security.md)（SAST 規則細節、Schema 驗證）· [doc-map.md](doc-map.md)（Change Impact Matrix）· [testing-playbook.md](testing-playbook.md)（SAST 合規）
 
 ## 為什麼要有這份文件
 
-`CLAUDE.md` 是 tier 1 context，每次 session 都會載入。11 條規範中大部分 Agent 不需要每次都讀完整規則——只需要知道「有這條規則存在，詳細見這裡」。本文件是規範的 Single Source of Truth，CLAUDE.md 只保留 Top 3 最常被違反的條目 + 一個 pointer。
+`CLAUDE.md` 是 tier 1 context，每次 session 都會載入。12 條規範中大部分 Agent 不需要每次都讀完整規則——只需要知道「有這條規則存在，詳細見這裡」。本文件是規範的 Single Source of Truth，CLAUDE.md 只保留 Top 3 最常被違反的條目 + 一個 pointer。
 
-## 11 條開發規範
+## 12 條開發規範
 
 ### 1. ConfigMap 禁止 heredoc 寫入
 
@@ -139,6 +139,54 @@ lang: zh
 
 **自動修復**：`file-hygiene` pre-commit hook 會偵測並修復 null bytes + 缺失 EOF 換行，但最好一開始就不要製造問題。
 
+### 12. Branch + PR 流程：禁止直推 main
+
+**規則**：任何程式碼或文件變更**不得**直接 commit 到 `main`。必須：
+1. 從 `main` 開 feature branch（命名慣例：`feat/xxx`、`fix/xxx`、`chore/xxx`、`docs/xxx`）
+2. 推到 remote → 開 PR
+3. 取得 owner 明確同意後才 merge
+
+**為什麼**：歷史教訓 — 多次 session 未經實質審核就直推 main，事後才發現問題。Branch + PR 強制建立 review 節點，避免未經檢視的變更進入主幹。
+
+**Harness**：`scripts/ops/protect_main_push.sh` 作為 pre-push hook，在 push 到 `main`（或 `master`）時攔截並報錯。安裝方式：
+```bash
+# 自動安裝（pre-commit install --hook-type pre-push 已包含）
+pre-commit install --hook-type pre-push
+
+# 或手動安裝
+cp scripts/ops/protect_main_push.sh .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+**PR 收尾 SOP（Branch Closing Checklist）**：
+
+merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local hooks），自動檢查六項：
+
+```
+┌─ 1. Branch 身份    確認在 feature branch，非 main
+├─ 2. Behind main    落後幾個 commit → 建議先 merge main
+├─ 3. Conflict       dry-run merge 偵測衝突
+├─ 4. Local hooks    pre-commit run --all-files
+├─ 5. CI 狀態        gh pr checks（含 A/B 分類：pre-existing vs this-PR）
+└─ 6. PR mergeable   GitHub mergeable + review 狀態
+```
+
+各 status 的處理方式：
+
+| Status | 意義 | 處理 |
+|--------|------|------|
+| ✅ PASS | 檢查通過 | 無需動作 |
+| ⚠️ WARN | 可合併但有風險 | behind main → merge main；CI pending → 等 |
+| ❌ FAIL | 必須修復 | conflict → merge main 解衝突；CI fail → 看 A/B 分類決定是否需修 |
+| ⏭️ SKIP | 檢查被跳過 | gh 不可用 → 在 Windows 跑；hooks 跳過 → 改跑完整版 |
+
+**執行入口**（三條等價路徑）：
+- Cowork VM / Dev Container：`make pr-preflight` 或 `make pr-preflight-quick`
+- Windows 逃生門 (bat)：`win_git_escape.bat pr-preflight [PR#]`
+- Windows 逃生門 (ps1)：`win_git_escape.ps1 pr-preflight [PR#]`
+
+**例外**：若確實需要直推 main（例如 hotfix），必須在 commit message 或 push 命令中明確標記理由，並事後補 PR review。
+
 ## 互動工具變更 SOP
 
 專案有 **39 個 JSX 互動工具**，Source of Truth 檔案：
@@ -174,13 +222,14 @@ lang: zh
 3. make lint-docs
 ```
 
-## 常被違反 Top 3（CLAUDE.md 會保留這三條）
+## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
-根據歷史 LL 與 pre-commit 攔截記錄，以下三條最容易被違反：
+根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
 
-1. **#11 `sed -i` 在掛載路徑** — 尤其是跨 Windows → VM → Docker 層時，自動補 EOF 的行為不一致
-2. **#4 CHANGELOG / CLAUDE.md 同步** — 小修改很容易忘記連動，被 pre-commit `md-yaml-drift-check` 擋下來
-3. **#2 Hardcode Tenant ID** — 寫單元測試時最容易偷懶把 `db-a` 寫死在 fixture
+1. **#12 直推 main** — AI agent session 最容易犯的錯誤：改完直接 commit + push main，沒開 branch/PR。已有 pre-push hook 攔截
+2. **#11 `sed -i` 在掛載路徑** — 尤其是跨 Windows → VM → Docker 層時，自動補 EOF 的行為不一致
+3. **#4 CHANGELOG / CLAUDE.md 同步** — 小修改很容易忘記連動，被 pre-commit `md-yaml-drift-check` 擋下來
+4. **#2 Hardcode Tenant ID** — 寫單元測試時最容易偷懶把 `db-a` 寫死在 fixture
 
 ## 版本歷史
 

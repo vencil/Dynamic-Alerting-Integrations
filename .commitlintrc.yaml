@@ -12,6 +12,13 @@ rules:
       - ci
       - k8s
       - helm
+      # tool-map sub-categories (ops 46 / dx 22 / lint 35)
+      - ops
+      - dx
+      - lint
+      # doc sub-categories
+      - audit
+      - playbook
   type-enum:
     - 2
     - always
@@ -26,3 +33,4 @@ rules:
       - ci
       - chore
       - revert
+      - merge

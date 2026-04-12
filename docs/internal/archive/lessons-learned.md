@@ -42,6 +42,35 @@ lang: zh
 
 **歷史脈絡**: REST API `POST /releases` 在 tag 已存在時回傳 422 `already_exists`。Workaround：先 `GET /releases/tags/<tag>` 取 id，再 `PATCH /releases/<id>`。此 workaround 已固化為 github-release-playbook.md Re-tag 完整 SOP，不再需要作為 lesson-learned 追蹤。
 
+### Testing Playbook
+
+#### v2.1.0 Backstage Plugin 整合模式（#4-5）
+
+**狀態**: 🗄️ 已歸檔（Backstage 整合已穩定，模式已固化）
+
+**歷史脈絡**: v2.1.0 引入 Backstage plugin 整合。Entity annotation 和 proxy 模式已成為標準做法，不再需要作為 LL 追蹤。
+
+- #4: Entity annotation 是 Backstage ↔ 外部系統的慣例橋樑：`dynamic-alerting.io/tenant` annotation 標註在 Backstage entity 上
+- #5: Backstage proxy 避免 CORS 問題：PrometheusClient 透過 `/api/proxy/prometheus/` 路徑查詢
+
+#### v2.1.0 DX Enhancement — `--diff-report` / `--format` 模式（#7-8）
+
+**狀態**: 🗄️ 已歸檔（純功能記錄，不是陷阱）
+
+**歷史脈絡**: 記錄 `--diff-report` 的 git restore 注意事項和 `--format summary` badge 風格。這是功能設計記錄而非踩坑教訓。
+
+- #7: `--diff-report` 實作要注意 git restore：fix → diff → `git checkout .` 三步驟
+- #8: `--format summary` badge 風格：一行輸出適合 CI badge
+
+#### v2.1.0 Lint Tool — 反向驗證模式（#5-6）
+
+**狀態**: 🛡️ 已歸檔（已固化為 `check_cli_coverage.py` lint rule）
+
+**歷史脈絡**: 反向驗證（以 COMMAND_MAP 為 SOT 反查文件）模式已實作為 pre-commit hook `cli-coverage-check`，每次 commit 自動執行。
+
+- #5: 🛡️ 反向驗證 > 正向驗證：以 COMMAND_MAP 為 single source of truth
+- #6: Warning vs Error 分級：docs 裡多出的命令是 warning 非 error
+
 ## 維護原則
 
 - **不刪除**：歸檔是保留，不是刪除。原條目仍可被搜尋與追溯。

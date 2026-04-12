@@ -13,7 +13,7 @@ lang: zh
 > 以下指令在每次 Cowork / Claude Code session 開始時執行，**不分任務類型**。
 
 ```bash
-python scripts/session-guards/vscode_git_toggle.py off   # 關閉 VS Code Git 背景操作（防 FUSE phantom lock）
+python scripts/ops/vscode_git_toggle.py off   # 關閉 VS Code Git 背景操作（防 FUSE phantom lock）
 ```
 
 如需使用 Dev Container（K8s / Go test / Helm）：
@@ -26,11 +26,17 @@ Session 結束或異常終止後：`make session-cleanup`
 
 > 完整原理見 [windows-mcp-playbook §FUSE Phantom Lock 防治](docs/internal/windows-mcp-playbook.md#fuse-phantom-lock-防治)
 
+### 設計原則：主路徑 / 逃生門
+
+> **主路徑**：Dev Container 層做所有事（code / test / commit / push）。
+> **逃生門**：FUSE 卡死時，用 Windows 原生 git 完成操作（`scripts/ops/win_git_escape.bat`）。
+> **目標**：不讓任何 session 因 FUSE 問題整個卡死。
+
 ### 最常踩的 5 個坑（不用每次讀完整 Playbook）
 
-1. **docker exec stdout 為空** → 用 `> /workspaces/.../_out.txt 2>&1` 重導向再 `cat`（[windows-mcp-playbook §核心原則](docs/internal/windows-mcp-playbook.md)）
-2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1-5)）。FUSE 側 git 操作反覆卡住時，[§修復層 C](docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) 提供 Windows 原生 git fallback
-3. **PowerShell JSON 中文亂碼** → `[Text.UTF8Encoding]::new($false)` 寫無 BOM（[windows-mcp-playbook #32](docs/internal/windows-mcp-playbook.md)）
+1. **⛔ 永遠不要用 Bash 工具執行 `sed -i`** — 改用 Read+Edit 工具。已有 shell wrapper 攔截（`vibe-sed-guard.sh`），違反時會直接報錯阻止。如需批次替換用 pipe：`sed '...' < file > file.tmp && mv file.tmp file`
+2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1-5)）。FUSE 側 git 操作反覆卡住時 → **Windows 逃生門**：`scripts/ops/win_git_escape.bat`（[§修復層 C](docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）
+3. **docker exec stdout 為空** → 用 `> /workspaces/.../_out.txt 2>&1` 重導向再 `cat`（[windows-mcp-playbook §核心原則](docs/internal/windows-mcp-playbook.md)）
 4. **pre-commit hook 中斷留下 .git lock** → `make git-lock ARGS="--clean"`，**不要** `--no-verify`
 5. **port-forward 殘留佔用端口** → `pkill -f "port-forward.*prometheus"` 或 `make session-cleanup`
 
@@ -44,17 +50,18 @@ Session 結束或異常終止後：`make session-cleanup`
 
 ## 開發規範
 
-11 條專案規範 + 互動工具變更 SOP 見 [`docs/internal/dev-rules.md`](docs/internal/dev-rules.md)。
+12 條專案規範 + 互動工具變更 SOP 見 [`docs/internal/dev-rules.md`](docs/internal/dev-rules.md)。
 
-**最常被違反 Top 3**（其餘請讀完整文件）：
+**最常被違反 Top 4**（其餘請讀完整文件）：
 
-1. **#11 檔案衛生** — 禁止對掛載路徑用 `sed -i`（會截斷缺少 EOF 換行的檔案）。用 Read+Edit 或 `git show HEAD:file | sed | tr -d '\0' > file` pipe
-2. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`，連動規則見 [doc-map.md § Change Impact Matrix](docs/internal/doc-map.md)
-3. **#2 Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）
+1. **#12 Branch + PR** — ⛔ **禁止直推 main**。一律開 branch → PR → owner 同意後 merge。已有 pre-push hook 攔截（`scripts/ops/protect_main_push.sh`）
+2. **#11 檔案衛生** — 禁止對掛載路徑用 `sed -i`（會截斷缺少 EOF 換行的檔案）。用 Read+Edit 或 `git show HEAD:file | sed | tr -d '\0' > file` pipe
+3. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`，連動規則見 [doc-map.md § Change Impact Matrix](docs/internal/doc-map.md)
+4. **#2 Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）
 
 ## Pre-commit 品質閘門
 
-30 auto-run + 13 manual-stage hooks。清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
+31 auto-run + 13 manual-stage hooks。清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
 
 ```bash
 pre-commit run --all-files                        # 全跑 auto hooks
@@ -64,9 +71,10 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **145 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（含受眾、內容摘要、Change Impact Matrix）
-- **98 個 Python 工具**（ops 46 / dx 21 / lint 31）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
+- **103 個 Python 工具**（ops 46 / dx 22 / lint 35）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
 - **38 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
-- **Makefile** 完整列表：`make help`。必記 Top 4：
+- **Makefile** 完整列表：`make help`。必記 Top 5：
+  - `make pr-preflight` — ⛔ PR merge 前必跑（conflict / CI / hooks / mergeable 六項檢查）
   - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs）
   - `make session-cleanup` — session 結束清理（vscode-git / lock / port-forward）
   - `make lint-docs` — 一站式文件 lint
@@ -93,20 +101,24 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 
 不讀 Playbook 直接動手是踩坑的主因。以下表格把任務類型映射到必讀的 Playbook **具體章節**（不是整份文件），讓你在 30 秒內找到需要的上下文。
 
-| 任務類型 | 必讀 | 選讀 | 為什麼要讀 |
-|---------|------|------|-----------|
-| 跑 pytest / 新增測試 | [testing-playbook](docs/internal/testing-playbook.md) 全文 + [test-map](docs/internal/test-map.md) §Factory/Markers | — | 不讀會踩到 fixture 格式、marker 選擇、conftest import 慣例 |
-| 修 Go test race / flake | testing-playbook §v2.6.x Go 並發測試 flake | — | CI `FAIL` + coverage 同時出現 = `t.Errorf` flake；初始狀態斷言 + 時間戳 bounds 是兩個常見陷阱 |
-| 跑 benchmark / 效能分析 | [benchmark-playbook](docs/internal/benchmark-playbook.md) 全文 | testing-playbook §負載注入 | 不讀會用錯統計方法或 port-forward 不穩導致數據無效 |
-| docker exec / K8s 操作 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §核心原則 + §已知陷阱 | — | docker exec stdout 在 Windows MCP 下為空，不讀此節會浪費 30 分鐘排錯 |
-| Release / 推 tag | [github-release-playbook](docs/internal/github-release-playbook.md) 全文 | windows-mcp-playbook §PowerShell REST API | Re-tag 三輪的教訓全在這裡 |
-| 新增 Python 工具 | testing-playbook §SAST 合規 + §程式碼品質 + test-map | — | SAST 7 rules 會在 commit 時攔截不合規的程式碼 |
-| 修改 conf.d/ 相關邏輯 | testing-playbook §conf.d/ YAML 格式陷阱 | — | wrapped vs flat 格式是最常踩的坑 |
-| 純文件修改 | — | — | pre-commit hooks 自動把關，30 個 hook 涵蓋 drift detection |
-| 負載測試 / Alert 驗證 | testing-playbook §負載注入 + §HA 相關測試 | benchmark-playbook §Under-Load | 連線數上限 95 和清理 trap 不做好會鎖死 exporter |
-| Playwright E2E | testing-playbook §Playwright E2E | — | server root 必須是 `docs/` 不是 `docs/interactive/` |
-| 版號管理 / bump | github-release-playbook §版號驗證 + §da-tools 獨立 Release | — | 五線版號各有各的 tag 格式和 CI 觸發條件 |
-| Cowork session 起手式 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §FUSE Phantom Lock 防治 | — | 不跑 `vscode_git_toggle.py off` 會遭遇 phantom lock，浪費排錯時間 |
+| 任務類型 | 必讀 | 選讀 | 跳過條件 |
+|---------|------|------|---------|
+| 跑 pytest / 新增測試 | [testing-playbook](docs/internal/testing-playbook.md) 全文 + [test-map](docs/internal/test-map.md) §Factory/Markers | — | 已熟悉 marker/fixture 慣例且非首次 |
+| 修 Go test race / flake | testing-playbook §v2.6.x Go 並發測試 flake | — | — |
+| 跑 benchmark / 效能分析 | [benchmark-playbook](docs/internal/benchmark-playbook.md) 全文 | testing-playbook §負載注入 | — |
+| docker exec / K8s 操作 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §核心原則 + §已知陷阱 | — | 只用 Cowork VM 跑 Python，不碰 docker |
+| Release / 推 tag | [github-release-playbook](docs/internal/github-release-playbook.md) 全文 | windows-mcp-playbook §PowerShell REST API | — |
+| 新增 Python 工具 | testing-playbook §SAST 合規 + §程式碼品質 + test-map | — | 純修改現有工具（非新增） |
+| 修改 conf.d/ 相關邏輯 | testing-playbook §conf.d/ YAML 格式陷阱 | — | — |
+| **純文件修改** | **不需讀 Playbook** | — | ✅ pre-commit hooks 自動把關 |
+| **純程式碼邏輯修改** | **不需讀 Playbook** | — | ✅ 不涉及 K8s/docker/release/conf.d |
+| 負載測試 / Alert 驗證 | testing-playbook §負載注入 + §HA 相關測試 | benchmark-playbook §Under-Load | — |
+| Playwright E2E | testing-playbook §Playwright E2E | — | — |
+| 版號管理 / bump | github-release-playbook §版號驗證 + §da-tools 獨立 Release | — | — |
+| Cowork session 起手式 | [windows-mcp-playbook](docs/internal/windows-mcp-playbook.md) §FUSE Phantom Lock 防治 | — | ⛔ 不可跳過 |
+| FUSE 卡死需 Windows 逃生門 | windows-mcp-playbook §修復層 C + §Git 操作決策樹 | — | FUSE 正常運作時不需讀 |
+| **git commit / push** | **不需讀 Playbook** | — | ✅ FUSE 正常時直接操作；卡住才查逃生門 |
+| **PR merge 前收尾** | **不需讀 Playbook** | — | ✅ `make pr-preflight` 自動六項檢查 |
 
 #### Playbook 索引
 
