@@ -5,6 +5,11 @@
 比對章節結構是否一致。允許翻譯差異但 section count 和 heading hierarchy
 必須匹配。同時檢查雙語導航連結對稱性。
 
+互補工具（三者互不重疊）：
+- 本工具：管「骨架」— heading 數量與層級必須 1:1 對齊
+- check_translation.py：管「內容量」— 元素數量（code blocks/tables）20% 容差
+- check_bilingual_content.py：管「語言純度」— CJK 比例偵測
+
 v2.4.0 新增：解決 v2.3.0 release 過程中 cli-reference.en.md 缺少整個
 "Operator + Federation" 章節和 opa-evaluate 指令的問題。
 現有 check_doc_links.py 只檢查檔案存在性，validate_docs_versions.py

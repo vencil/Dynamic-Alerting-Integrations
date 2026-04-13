@@ -1,20 +1,22 @@
 # .doc-freshness-ignore
 # Paths listed here are excluded from check_doc_freshness.py
 # Format: one path prefix per line, or type:prefix for type-specific ignores
+#
+# v2.7.0 Harness Audit: 每行必須有 reason comment。
+# 不允許為「暫時不想被煩」而排除——應改 threshold 而非排除。
 
-# Example/template paths referenced in documentation
-conf.d/
-rule-packs/custom/
-rule-packs/my-db.yaml
-rule-packs/new-db-type.yaml
-rule-packs/platform-health.yml
+# Example/template paths — 範例檔不會隨版本演進，永遠是 reference
+conf.d/                              # 範例設定目錄，文件中引用的示意路徑
+rule-packs/custom/                   # 使用者自訂 rule pack 範例目錄
+rule-packs/my-db.yaml                # scaffold 範例檔名
+rule-packs/new-db-type.yaml          # 新增 DB type 教學範例
+rule-packs/platform-health.yml       # platform health 範例（.yml 非正式 pack）
 
-# K8s manifests referenced in docs but may not exist locally
-k8s/02-threshold-exporter/
-k8s/03-monitoring/dynamic-alerting-overview.json.old
-k8s/03-monitoring/prometheus-statefulset.yaml
+# K8s manifests — 文件引用但本地不一定存在的部署檔
+k8s/02-threshold-exporter/           # exporter 部署 manifest 目錄
+k8s/03-monitoring/dynamic-alerting-overview.json.old  # 已棄用的舊版 Grafana dashboard
+k8s/03-monitoring/prometheus-statefulset.yaml          # 文件引用的 K8s manifest
 
-# Actual rule-pack YAMLs referenced from docs (exist only in k8s/ as ConfigMaps)
-rule-packs/mariadb.yaml
-rule-packs/*.yaml
-rule-packs/_metric_dictionary.yaml
+# Rule Pack 輔助檔 — metric dictionary 是 reference data，freshness 由
+# check_metric_dictionary.py 另行管理，不適用 git-mtime freshness
+rule-packs/_metric_dictionary.yaml   # metric 字典，由專用 lint 工具管理

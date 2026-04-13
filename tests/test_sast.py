@@ -171,7 +171,24 @@ class TestFileWritePermissions:
 
     注意：此檢查為啟發式（heuristic），採用寬鬆策略——
     只要同一函式體內有 os.chmod 呼叫即視為合規。
+
+    v2.7.0 Harness Audit: 將原本的 advisory skip 改為 explicit exemption。
+    每個豁免必須有文件化原因，新增工具若觸發此規則將硬性失敗。
     """
+
+    # ── 豁免清單（每個項目必須有原因）──────────────────────────
+    # key = 相對於 repo root 的路徑
+    # value = 豁免原因
+    CHMOD_EXEMPT = {
+        "scripts/tools/lint/fix_file_hygiene.py": (
+            "pre-commit auto-fixer：以 open(path, 'wb') 寫回同一檔案，"
+            "應保留原始權限而非強制 0o600（會改變既有檔案的 permission bits）"
+        ),
+        "scripts/tools/ops/generate_rule_pack_split.py": (
+            "寫出 validation-report.json 至使用者指定的 output 目錄，"
+            "為 DX 報告檔非敏感資料，沿用目錄預設 umask 即可"
+        ),
+    }
 
     @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
     def test_write_open_has_chmod(self, py_file):
@@ -182,6 +199,8 @@ class TestFileWritePermissions:
         except SyntaxError:
             pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
             return
+
+        short = _short_path(py_file)
 
         # 收集每個函式中的寫入 open() 和 chmod 呼叫
         violations = []
@@ -226,11 +245,29 @@ class TestFileWritePermissions:
                         f"L{lineno}: {node.name}() 有 write open 但缺少 os.chmod"
                     )
 
-        # 此為 advisory 警告，不做硬性失敗（部分輸出到 stdout 的工具不寫檔案）
         if violations:
-            pytest.skip(
-                f"{_short_path(py_file)} 有 {len(violations)} 個潛在權限問題 "
-                "(advisory):\n" + "\n".join(f"  {v}" for v in violations)
+            if short in self.CHMOD_EXEMPT:
+                # 已審查的豁免：pass 而非 skip，避免虛假的 skip count 膨脹
+                return
+            # 未豁免的新工具：硬性失敗，強制補 chmod 或加入 CHMOD_EXEMPT
+            pytest.fail(
+                f"{short} 有 {len(violations)} 個潛在權限問題:\n"
+                + "\n".join(f"  {v}" for v in violations)
+                + "\n\n如確認不需 os.chmod，請將此檔加入 "
+                "TestFileWritePermissions.CHMOD_EXEMPT 並註明原因。"
+            )
+
+    def test_chmod_exempt_files_exist(self):
+        """確保 CHMOD_EXEMPT 中的檔案仍然存在（dead exemption 偵測）。"""
+        for rel_path, reason in self.CHMOD_EXEMPT.items():
+            full_path = os.path.join(REPO_ROOT, rel_path)
+            assert os.path.isfile(full_path), (
+                f"CHMOD_EXEMPT 中的 {rel_path} 不存在，"
+                "請移除此豁免項目"
+            )
+            assert len(reason) > 10, (
+                f"CHMOD_EXEMPT[{rel_path}] 的原因太短，"
+                "請提供有意義的豁免說明"
             )
 
 
