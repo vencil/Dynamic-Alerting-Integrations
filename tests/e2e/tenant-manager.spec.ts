@@ -163,13 +163,13 @@ test.describe('Tenant Manager @critical', () => {
     // Run accessibility check
     const results = await checkA11y(page);
 
-    // Assert no violations
-    expect(results.violations.length).toBe(0);
+    // Log violations before asserting so CI output contains diagnostics
     if (results.violations.length > 0) {
       const violationDetails = formatA11yViolations(results.violations);
-      throw new Error(
-        `Tenant manager page failed accessibility checks:\n${violationDetails}`
-      );
+      console.error(`Tenant manager a11y violations:\n${violationDetails}`);
     }
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
   });
 });

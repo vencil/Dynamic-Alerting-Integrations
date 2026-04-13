@@ -28,8 +28,8 @@
   --da-color-surface-shadow:  0 1px 3px rgba(0,0,0,0.06);
 
   /* ── Accent / Interactive ── */
-  --da-color-accent:          #3b82f6;
-  --da-color-accent-hover:    #2563eb;
+  --da-color-accent:          #2563eb;
+  --da-color-accent-hover:    #1d4ed8;
   --da-color-accent-soft:     #eff6ff;
   --da-color-accent-fg:       #ffffff;
 
@@ -60,7 +60,7 @@
   --da-color-warning-soft:    #fffbeb;
   --da-color-error:           #ef4444;
   --da-color-error-soft:      #fef2f2;
-  --da-color-info:            #3b82f6;
+  --da-color-info:            #2563eb;
   --da-color-info-soft:       #eff6ff;
 
   /* ── Icon category colors ── */
