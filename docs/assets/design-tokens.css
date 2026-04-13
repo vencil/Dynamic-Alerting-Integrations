@@ -54,7 +54,7 @@
   --da-color-section-border:  #e2e8f0;
 
   /* ── Semantic: Status ── */
-  --da-color-success:         #10b981;
+  --da-color-success:         #047857;
   --da-color-success-soft:    #ecfdf5;
   --da-color-warning:         #f59e0b;
   --da-color-warning-soft:    #fffbeb;
@@ -78,13 +78,13 @@
   --da-color-icon-chart-bg:   #fce7f3;
 
   /* ── Journey Phase Badge ── */
-  --da-color-journey-deploy:          #be185d;
+  --da-color-journey-deploy:          #9d174d;
   --da-color-journey-deploy-bg:       rgba(236, 72, 153, 0.25);
   --da-color-journey-configure:       #1d4ed8;
   --da-color-journey-configure-bg:    rgba(59, 130, 246, 0.2);
-  --da-color-journey-monitor:         #047857;
+  --da-color-journey-monitor:         #065f46;
   --da-color-journey-monitor-bg:      rgba(16, 185, 129, 0.2);
-  --da-color-journey-troubleshoot:    #b45309;
+  --da-color-journey-troubleshoot:    #92400e;
   --da-color-journey-troubleshoot-bg: rgba(245, 158, 11, 0.2);
   --da-color-journey-reference:       #6d28d9;
   --da-color-journey-reference-bg:    rgba(139, 92, 246, 0.2);
