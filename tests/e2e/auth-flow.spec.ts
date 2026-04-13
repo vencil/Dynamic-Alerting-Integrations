@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 /**
  * Auth Flow smoke tests
@@ -251,17 +251,18 @@ test.describe('Authentication Flow @critical', () => {
     // Navigate to page
     await page.goto('./');
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Run accessibility check
     const results = await checkA11y(page);
 
-    // Assert no violations
-    expect(results.violations.length).toBe(0);
+    // Log violations before asserting so CI output contains diagnostics
     if (results.violations.length > 0) {
       const violationDetails = formatA11yViolations(results.violations);
-      throw new Error(
-        `Authentication flow page failed accessibility checks:\n${violationDetails}`
-      );
+      console.error(`Authentication flow a11y violations:\n${violationDetails}`);
     }
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
   });
 });

@@ -207,6 +207,22 @@ repos:
         files: ^(scripts/tools/metric-dictionary\.yaml|rule-packs/.*\.yaml|k8s/03-monitoring/.*\.yaml)$
         additional_dependencies: ['pyyaml']
 
+      # --- v2.7.0 Harness Audit: 啟用原本未掛入的防守工具 ---
+      - id: bilingual-content-check
+        name: Bilingual content purity (CJK ratio in .en.md / zh docs)
+        entry: python3 -X utf8 scripts/tools/lint/check_bilingual_content.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.md$
+
+      - id: bilingual-annotations-check
+        name: Rule Pack bilingual annotation pairs (summary_zh / description_zh)
+        entry: python3 -X utf8 scripts/tools/lint/check_bilingual_annotations.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(rule-packs/.*\.yaml|k8s/03-monitoring/.*\.yaml)$
+        additional_dependencies: ['pyyaml']
+
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
         name: Go→JSON Schema drift

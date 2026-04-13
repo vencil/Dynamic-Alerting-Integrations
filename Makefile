@@ -363,7 +363,7 @@ test: ## 執行 Python 單元測試 (pytest)
 .PHONY: coverage
 coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 HTML)
 	@python3 -m pytest tests/ \
-		--cov --cov-config=setup.cfg --cov-report=term-missing \
+		--cov --cov-report=term-missing \
 		$(if $(findstring --html,$(ARGS)),--cov-report=html:.build/htmlcov) \
 		--tb=short -q
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
@@ -371,6 +371,36 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 .PHONY: test-e2e
 test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20)
 	@cd tests/e2e && npx playwright test $(ARGS)
+
+.PHONY: test-skip-audit
+test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
+	@echo "=== Test Skip Audit ==="
+	@SKIP_COUNT=$$(python3 -m pytest tests/ --tb=no -q 2>&1 \
+		| grep -Eo '[0-9]+ skipped' | grep -Eo '^[0-9]+' || echo 0); \
+	BUDGET=5; \
+	echo "  Skip count: $$SKIP_COUNT / budget: $$BUDGET"; \
+	if [ "$$SKIP_COUNT" -gt "$$BUDGET" ]; then \
+		echo "  ❌ FAIL: skip count ($$SKIP_COUNT) exceeds budget ($$BUDGET)"; \
+		echo "  Run: pytest -v --tb=no | grep SKIPPED  to see which tests are skipped"; \
+		exit 1; \
+	else \
+		echo "  ✅ PASS"; \
+	fi
+
+.PHONY: hook-profile
+hook-profile: ## Pre-commit hook 逐一計時 profiling
+	@echo "=== Pre-commit Hook Profile (--all-files) ==="
+	@echo "Hook                              Time"
+	@echo "--------------------------------  -------"
+	@for hook in $$(grep '^\s*- id:' .pre-commit-config.yaml | sed 's/.*id: //' | tr -d ' '); do \
+		START=$$(date +%s%N); \
+		pre-commit run "$$hook" --all-files > /dev/null 2>&1; \
+		END=$$(date +%s%N); \
+		MS=$$(( (END - START) / 1000000 )); \
+		printf "%-34s %5d ms\n" "$$hook" "$$MS"; \
+	done
+	@echo "--------------------------------  -------"
+	@echo "(Tip: hooks with files: filter will be faster on real commits)"
 
 # ----------------------------------------------------------
 # Helm Chart 發佈

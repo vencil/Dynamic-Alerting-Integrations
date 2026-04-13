@@ -1,14 +1,28 @@
+# ── pytest ────────────────────────────────────────────────────
+# Single source of truth for pytest config (setup.cfg [tool:pytest] removed)
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 addopts = "-x --tb=short"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: 跨模組整合測試",
+    "benchmark: 效能基線測試（需 pytest-benchmark）",
+    "regression: 已知 bug 回歸測試",
+    "snapshot: 輸出格式穩定性快照測試",
 ]
 
+# ── coverage ──────────────────────────────────────────────────
+# Single source of truth for coverage config (setup.cfg [coverage:*] removed)
 [tool.coverage.run]
-source = ["scripts/tools"]
+source = ["scripts/tools", "components/da-tools/app"]
 omit = [
-    "scripts/tools/_lib_python.py",
+    "tests/*",
+    "*/__pycache__/*",
+    "*/vendor/*",
+    # orchestrator：以 subprocess 呼叫其他工具，需 integration test 而非 unit coverage
     "scripts/tools/validate_all.py",
 ]
 
@@ -16,9 +30,15 @@ omit = [
 fail_under = 75
 show_missing = true
 skip_covered = true
+skip_empty = true
+precision = 1
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",
     "if TYPE_CHECKING:",
     "pass",
+    "raise NotImplementedError",
 ]
+
+[tool.coverage.html]
+directory = ".build/htmlcov"

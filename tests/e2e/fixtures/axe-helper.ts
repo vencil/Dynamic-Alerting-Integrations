@@ -12,6 +12,26 @@ export interface A11yCheckOptions {
 }
 
 /**
+ * Wait for the page to be meaningfully loaded before running a11y checks.
+ * In CI, Python http.server can be slow, causing networkidle to timeout
+ * and axe to run against an empty page (yielding false document-title /
+ * html-has-lang violations).
+ */
+export async function waitForPageReady(page: Page, selector?: string) {
+  const target = selector || 'title';
+  // Wait for the <title> element to exist and be non-empty, or wait for a
+  // specific selector that indicates the page content has rendered.
+  if (target === 'title') {
+    await page.waitForFunction(
+      () => document.title.length > 0,
+      { timeout: 15000 }
+    );
+  } else {
+    await page.waitForSelector(target, { state: 'visible', timeout: 15000 });
+  }
+}
+
+/**
  * Run axe-core accessibility checks on a page
  * @param page - Playwright page object
  * @param options - Optional configuration (exclude selectors, tags)

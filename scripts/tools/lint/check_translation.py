@@ -2,7 +2,12 @@
 """check_translation.py — 自動化翻譯品質檢查
 
 比對中英文文件的結構一致性（標題、程式碼區塊、表格、圖表數量），
-偵測翻譯遺漏或結構偏移。
+偵測翻譯遺漏或結構偏移。允許 20% 數量容差。
+
+互補工具（三者互不重疊）：
+- check_bilingual_structure.py：管「骨架」— heading 數量與層級必須 1:1 對齊
+- 本工具：管「內容量」— 元素數量（code blocks/tables/links）20% 容差
+- check_bilingual_content.py：管「語言純度」— CJK 比例偵測
 
 用法:
   python3 scripts/tools/check_translation.py              # 顯示報告

@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 /**
  * Batch Operations smoke tests
@@ -311,17 +311,18 @@ test.describe('Batch Operations @critical', () => {
     // Navigate to tenant-manager for batch operations testing
     await navigateToTenantManager(page);
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Run accessibility check
     const results = await checkA11y(page);
 
-    // Assert no violations
-    expect(results.violations.length).toBe(0);
+    // Log violations before asserting so CI output contains diagnostics
     if (results.violations.length > 0) {
       const violationDetails = formatA11yViolations(results.violations);
-      throw new Error(
-        `Batch operations page failed accessibility checks:\n${violationDetails}`
-      );
+      console.error(`Batch operations a11y violations:\n${violationDetails}`);
     }
+
+    // Assert no violations
+    expect(results.violations.length).toBe(0);
   });
 });

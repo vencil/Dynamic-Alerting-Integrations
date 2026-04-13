@@ -521,6 +521,8 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
             onClick={() => setShowCreate(!showCreate)}
             style={{ ...styles.button, ...styles.buttonSmall }}
             title={t('建立新群組 — 用於批量操作和分組篩選', 'Create new group — for batch operations and group filtering')}
+            aria-label={showCreate ? t('取消建立群組', 'Cancel create group') : t('建立新群組', 'Create new group')}
+            aria-expanded={showCreate}
           >
             {showCreate ? '−' : '+'}
           </button>
@@ -529,15 +531,17 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
 
       {showCreate && (
         <div style={{ marginBottom: 'var(--da-space-3)', padding: 'var(--da-space-2)', backgroundColor: 'var(--da-color-bg)', borderRadius: 'var(--da-radius-md)' }}>
-          <label style={styles.formLabel}>{t('群組 ID', 'Group ID')}</label>
+          <label htmlFor="new-group-id" style={styles.formLabel}>{t('群組 ID', 'Group ID')}</label>
           <input
+            id="new-group-id"
             style={styles.inputField}
             placeholder="e.g., production-dba"
             value={newGroupId}
             onChange={e => setNewGroupId(e.target.value)}
           />
-          <label style={styles.formLabel}>{t('顯示名稱', 'Display Label')}</label>
+          <label htmlFor="new-group-label" style={styles.formLabel}>{t('顯示名稱', 'Display Label')}</label>
           <input
+            id="new-group-label"
             style={styles.inputField}
             placeholder="e.g., Production DBA"
             value={newGroupLabel}
@@ -555,14 +559,19 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
           ...styles.groupItem,
           ...(activeGroupId === null ? styles.groupItemActive : styles.groupItemDefault),
         }}
+        role="button"
+        tabIndex={0}
+        aria-label={t('所有租戶', 'All Tenants')}
+        aria-pressed={activeGroupId === null}
         onClick={() => onSelectGroup(null)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectGroup(null); } }}
       >
         {t('所有租戶', 'All Tenants')}
       </div>
 
       {groupEntries.length === 0 && (
         <div style={styles.emptyState}>
-          <div style={{ fontSize: '24px', marginBottom: '8px' }}>📁</div>
+          <div style={{ fontSize: '24px', marginBottom: '8px' }} aria-hidden="true">📁</div>
           <div>{t('尚無群組', 'No groups yet')}</div>
           <div style={{ fontSize: '11px', marginTop: '4px' }}>
             {t('建立群組以批量管理租戶', 'Create a group to batch-manage tenants')}
@@ -580,20 +589,26 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
             justifyContent: 'space-between',
             alignItems: 'center',
           }}
+          role="button"
+          tabIndex={0}
+          aria-label={`${t('選擇群組', 'Select group')}: ${group.label || id}`}
+          aria-pressed={activeGroupId === id}
           onClick={() => onSelectGroup(id)}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectGroup(id); } }}
         >
           <span>
             {group.label || id}
             <span style={styles.groupMemberCount}>({(group.members || []).length})</span>
           </span>
           {canWrite && (
-            <span
-              style={{ ...styles.chipClose, fontSize: '14px', color: 'var(--da-color-muted)' }}
+            <button
+              style={{ ...styles.chipClose, fontSize: '14px', color: 'var(--da-color-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
               title={t('刪除此群組', 'Delete this group')}
+              aria-label={`${t('刪除群組', 'Delete group')}: ${group.label || id}`}
               onClick={(e) => { e.stopPropagation(); onDeleteGroup(id); }}
             >
               ✕
-            </span>
+            </button>
           )}
         </div>
       ))}
@@ -898,7 +913,7 @@ export default function TenantManager() {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#8987;</div>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }} aria-hidden="true">&#8987;</div>
           <div style={{ color: 'var(--da-color-muted)' }}>{t('載入租戶數據中...', 'Loading tenant data...')}</div>
         </div>
       </div>
@@ -909,7 +924,7 @@ export default function TenantManager() {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', backgroundColor: 'white', padding: '24px', borderRadius: '12px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#10060;</div>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }} aria-hidden="true">&#10060;</div>
           <div style={{ color: 'var(--da-color-error)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
           <div style={{ color: 'var(--da-color-muted)', marginTop: 'var(--da-space-2)' }}>{error}</div>
         </div>
@@ -963,7 +978,7 @@ export default function TenantManager() {
   }, [modalType]);
 
   return (
-    <div style={styles.container}>
+    <main role="main" style={styles.container}>
       {/* API notification toast */}
       {apiNotification && (
         <div role="alert" aria-live="assertive" style={{
@@ -1437,6 +1452,6 @@ export default function TenantManager() {
           </style>
         </div>
       )}
-    </div>
+    </main>
   );
 }
