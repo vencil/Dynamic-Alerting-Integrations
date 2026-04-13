@@ -3,6 +3,7 @@ tools:
   title:
     en: Getting Started Wizard
     zh: 入門精靈
+  # 刻意放在 getting-started/ 旁（非 interactive/tools/），與入門文件 co-locate
   file: getting-started/wizard.jsx
   audience:
   - platform

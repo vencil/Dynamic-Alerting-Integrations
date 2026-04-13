@@ -248,8 +248,8 @@ make component-deploy COMP=threshold-exporter ENV=local
 
 ```bash
 da-tools operator-generate --config-dir conf.d/ --rule-packs rule-packs/ \
-  --output-dir operator-output/ --gitops
-kubectl apply -f operator-output/
+  --output-dir operator-manifests/ --gitops
+kubectl apply -f operator-manifests/
 ```
 
 兩種路徑的詳細比較與決策指引見 [Deployment Decision Matrix](getting-started/decision-matrix.md)。

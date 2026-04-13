@@ -15,6 +15,8 @@
 # need a different stage must opt in explicitly via `stages: [manual]` or
 # `stages: [pre-push]`.
 
+# Python UTF-8 mode: all python3 entries below use -X utf8 (PEP 540) to
+# prevent UnicodeEncodeError on Windows consoles (cp950/cp932/cp1252).
 default_stages: [pre-commit]
 
 repos:
@@ -23,7 +25,7 @@ repos:
       # --- File hygiene auto-fixer (runs first) ---
       - id: file-hygiene
         name: Fix null bytes & EOF newline
-        entry: python3 scripts/tools/lint/fix_file_hygiene.py
+        entry: python3 -X utf8 scripts/tools/lint/fix_file_hygiene.py
         language: python
         types: [text]
         files: \.(md|yaml|yml|py|jsx|json)$
@@ -40,7 +42,7 @@ repos:
       # --- sed -i damage detection (after hygiene fixer) ---
       - id: sed-damage-guard
         name: "Guard: detect sed -i damage"
-        entry: python3 scripts/tools/lint/detect_sed_damage.py
+        entry: python3 -X utf8 scripts/tools/lint/detect_sed_damage.py
         language: python
         types: [text]
         files: \.(md|yaml|yml|py|jsx|json)$
@@ -48,21 +50,21 @@ repos:
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage
-        entry: python3 scripts/tools/dx/generate_tool_map.py --check
+        entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check
         language: python
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
 
       - id: doc-map-check
         name: Doc map coverage
-        entry: python3 scripts/tools/dx/generate_doc_map.py --check --include-adr
+        entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check
         language: python
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
 
       - id: rule-pack-stats-check
         name: Rule Pack stats drift
-        entry: python3 scripts/tools/dx/generate_rule_pack_stats.py --check
+        entry: python3 -X utf8 scripts/tools/dx/generate_rule_pack_stats.py --check
         language: python
         pass_filenames: false
         files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$
@@ -70,7 +72,7 @@ repos:
 
       - id: glossary-check
         name: Glossary abbreviation sync
-        entry: python3 scripts/tools/dx/sync_glossary_abbr.py --check
+        entry: python3 -X utf8 scripts/tools/dx/sync_glossary_abbr.py --check
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -78,7 +80,7 @@ repos:
 
       - id: changelog-lint
         name: Changelog format
-        entry: python3 scripts/tools/dx/generate_changelog.py --check
+        entry: python3 -X utf8 scripts/tools/dx/generate_changelog.py --check
         language: python
         pass_filenames: false
         files: ^CHANGELOG.*\.md$
@@ -86,7 +88,7 @@ repos:
 
       - id: version-consistency
         name: Version/count consistency
-        entry: python3 scripts/tools/lint/validate_docs_versions.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/validate_docs_versions.py --ci
         language: python
         pass_filenames: false
         files: \.(md|yaml|jsx)$
@@ -94,14 +96,14 @@ repos:
 
       - id: includes-sync
         name: Include snippet zh/en sync
-        entry: python3 scripts/tools/lint/check_includes_sync.py --check
+        entry: python3 -X utf8 scripts/tools/lint/check_includes_sync.py --check
         language: python
         pass_filenames: false
         files: ^docs/includes/
 
       - id: platform-data-check
         name: Platform data drift (platform-data.json vs YAML source)
-        entry: python3 scripts/tools/dx/generate_platform_data.py --check
+        entry: python3 -X utf8 scripts/tools/dx/generate_platform_data.py --check
         language: python
         pass_filenames: false
         files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py)
@@ -109,42 +111,42 @@ repos:
 
       - id: repo-name-check
         name: Repo name guard (no vibe-k8s-lab in GitHub URLs)
-        entry: python3 scripts/tools/lint/check_repo_name.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_repo_name.py --ci
         language: python
         pass_filenames: false
         files: \.(md|yaml|yml|py|jsx|html|json)$
 
       - id: tool-consistency-check
         name: Tool registry ↔ Hub ↔ TOOL_META ↔ JSX ↔ Markdown links
-        entry: python3 scripts/tools/lint/lint_tool_consistency.py
+        entry: python3 -X utf8 scripts/tools/lint/lint_tool_consistency.py
         language: python
         pass_filenames: false
         files: ^docs/(assets/(tool-registry\.yaml|jsx-loader\.html)|interactive/(index\.html|tools/.*\.jsx)|getting-started/wizard\.jsx|.*\.md)$
 
       - id: structure-check
         name: Project structure enforcement
-        entry: python3 scripts/tools/lint/check_structure.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_structure.py --ci
         language: python
         pass_filenames: false
         files: \.(py|jsx|yaml)$
 
       - id: doc-links-check
         name: Documentation link validation
-        entry: python3 scripts/tools/lint/check_doc_links.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_links.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
 
       - id: html-doc-links-check
         name: Raw HTML doc-link validation (MkDocs-aware)
-        entry: python3 scripts/tools/lint/lint_html_doc_links.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/lint_html_doc_links.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.html$
 
       - id: head-blob-hygiene
         name: HEAD blob hygiene (NUL bytes / truncated structured files)
-        entry: python3 scripts/tools/lint/check_head_blob_hygiene.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_head_blob_hygiene.py --ci
         language: python
         pass_filenames: false
         # Runs once per commit regardless of which files are staged —
@@ -155,7 +157,7 @@ repos:
 
       - id: routing-profiles-check
         name: Routing profiles & domain policies lint
-        entry: python3 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
+        entry: python3 -X utf8 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles)
@@ -164,42 +166,42 @@ repos:
       # --- v2.4.0 Phase A: 防守工具補強 ---
       - id: build-completeness-check
         name: build.sh ↔ COMMAND_MAP bidirectional sync
-        entry: python3 scripts/tools/lint/check_build_completeness.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_build_completeness.py --ci
         language: python
         pass_filenames: false
         files: ^components/da-tools/app/(entrypoint\.py|build\.sh)$
 
       - id: cli-coverage-check
         name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ COMMAND_MAP)
-        entry: python3 scripts/tools/lint/check_cli_coverage.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_cli_coverage.py --ci
         language: python
         pass_filenames: false
         files: ^(components/da-tools/app/entrypoint\.py|docs/(cheat-sheet|cli-reference)(\.en)?\.md)$
 
       - id: bilingual-structure-check
         name: ZH/EN document structure sync
-        entry: python3 scripts/tools/lint/check_bilingual_structure.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_bilingual_structure.py --ci
         language: python
         pass_filenames: false
         files: \.en\.md$
 
       - id: jsx-i18n-check
         name: JSX TOOL_META ↔ CUSTOM_FLOW_MAP ↔ i18n sync
-        entry: python3 scripts/tools/lint/check_jsx_i18n.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_jsx_i18n.py --ci
         language: python
         pass_filenames: false
         files: ^docs/(assets/jsx-loader\.html|interactive/tools/.*\.jsx|getting-started/wizard\.jsx)$
 
       - id: makefile-targets-check
         name: DX tools ↔ Makefile/pre-commit reachability
-        entry: python3 scripts/tools/lint/check_makefile_targets.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_makefile_targets.py --ci
         language: python
         pass_filenames: false
         files: ^(Makefile|scripts/tools/dx/.*\.py|\.pre-commit-config\.yaml)$
 
       - id: metric-dictionary-check
         name: Metric Dictionary ↔ Rule Pack cross-validation
-        entry: python3 scripts/tools/lint/check_metric_dictionary.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_metric_dictionary.py --ci
         language: python
         pass_filenames: false
         files: ^(scripts/tools/metric-dictionary\.yaml|rule-packs/.*\.yaml|k8s/03-monitoring/.*\.yaml)$
@@ -208,7 +210,7 @@ repos:
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
         name: Go→JSON Schema drift
-        entry: python3 scripts/tools/dx/sync_schema.py --check
+        entry: python3 -X utf8 scripts/tools/dx/sync_schema.py --check
         language: python
         pass_filenames: false
         files: ^(components/|docs/)
@@ -216,7 +218,7 @@ repos:
 
       - id: translation-check
         name: Bilingual structure consistency
-        entry: python3 scripts/tools/lint/check_translation.py
+        entry: python3 -X utf8 scripts/tools/lint/check_translation.py
         language: python
         pass_filenames: false
         files: \.en\.md$
@@ -224,7 +226,7 @@ repos:
 
       - id: flow-e2e-check
         name: Guided Flow E2E smoke test
-        entry: python3 tests/test_flows_e2e.py
+        entry: python3 -X utf8 tests/test_flows_e2e.py
         language: python
         pass_filenames: false
         files: ^docs/(assets/(flows\.json|jsx-loader\.html)|interactive/index\.html)
@@ -233,7 +235,7 @@ repos:
 
       - id: jsx-babel-check
         name: JSX Babel standalone parse validation
-        entry: python3 scripts/tools/lint/lint_jsx_babel.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci
         language: python
         pass_filenames: false
         files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
@@ -244,7 +246,7 @@ repos:
 
       - id: i18n-coverage-check
         name: i18n coverage report
-        entry: python3 scripts/tools/lint/check_i18n_coverage.py
+        entry: python3 -X utf8 scripts/tools/lint/check_i18n_coverage.py
         language: python
         pass_filenames: false
         files: ^(docs/(interactive/tools|getting-started)/.*\.jsx|rule-packs/.*\.yaml|scripts/tools/.*\.py|components/da-tools/app/entrypoint\.py)$
@@ -253,7 +255,7 @@ repos:
 
       - id: check-doc-reading-time
         name: Check document reading time (>15 min = needs split)
-        entry: python3 scripts/tools/lint/check_doc_reading_time.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_reading_time.py --ci
         language: system
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -261,7 +263,7 @@ repos:
 
       - id: check-doc-freshness
         name: Check document freshness (>90 days = stale)
-        entry: python3 scripts/tools/lint/check_doc_freshness.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_freshness.py --ci
         language: system
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -269,7 +271,7 @@ repos:
 
       - id: check-doc-template
         name: Check document template compliance
-        entry: python3 scripts/tools/lint/check_doc_template.py
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_template.py
         language: system
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -277,7 +279,7 @@ repos:
 
       - id: check-portal-i18n
         name: Check Portal JSX i18n coverage
-        entry: python3 scripts/tools/lint/check_portal_i18n.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_portal_i18n.py --ci
         language: system
         pass_filenames: false
         files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
@@ -285,7 +287,7 @@ repos:
 
       - id: orphan-doc-check
         name: Orphan document detection
-        entry: python3 scripts/tools/lint/check_orphan_docs.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_orphan_docs.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -293,7 +295,7 @@ repos:
 
       - id: glossary-coverage-check
         name: Glossary coverage for frequent terms
-        entry: python3 scripts/tools/lint/check_glossary_coverage.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_glossary_coverage.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.md$
@@ -301,7 +303,7 @@ repos:
 
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift
-        entry: python3 scripts/tools/lint/check_md_yaml_drift.py --ci
+        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.(md|yaml)$

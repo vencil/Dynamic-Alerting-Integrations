@@ -10,7 +10,7 @@
   python3 scripts/tools/generate_doc_map.py --check       # CI drift 偵測
   python3 scripts/tools/generate_doc_map.py --lang en     # 英文版
   python3 scripts/tools/generate_doc_map.py --generate --lang all  # 中英文
-  python3 scripts/tools/generate_doc_map.py --generate --include-adr  # 含 ADR
+  python3 scripts/tools/generate_doc_map.py --generate --no-adr      # 排除 ADR
 """
 import argparse
 import os
@@ -72,10 +72,11 @@ SKIP_FILES = {
     "docs/adr/README.en.md",
 }
 
-# Skip transient AI-agent resume notes (match by filename prefix).
-# These are session-scoped scratchpads under docs/internal/_resume-*.md and are
-# expected to be deleted at the end of each session.
-SKIP_FILENAME_PREFIXES = ("_resume-",)
+# Skip transient/internal files whose names start with "_".
+# Convention: _resume-*.md are session-scoped AI-agent scratchpads,
+# _project-structure-audit-*.md are local-only planning docs (.gitignore'd).
+# Using a single "_" prefix catches both patterns and any future variants.
+SKIP_FILENAME_PREFIXES = ("_",)
 
 # Directories to skip entirely (adr is conditionally included via --include-adr)
 # rule-packs is skipped because it's a junction/symlink on Windows/Linux pointing
@@ -414,9 +415,14 @@ def main():
                         default="zh",
                         help="Language: zh (default), en, or all")
     parser.add_argument("--include-adr", action="store_true",
-                        help="Include ADR entries from docs/adr/")
+                        default=True,
+                        help="Include ADR entries from docs/adr/ (default: True)")
+    parser.add_argument("--no-adr", action="store_true",
+                        help="Exclude ADR entries from docs/adr/")
 
     args = parser.parse_args()
+    if args.no_adr:
+        args.include_adr = False
 
     langs = ["zh", "en"] if args.lang == "all" else [args.lang]
 

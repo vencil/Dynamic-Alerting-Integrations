@@ -52,7 +52,7 @@ _HELP = {
         "desc": "生成 Prometheus + Alertmanager CRD YAML（PrometheusRule、AlertmanagerConfig、ServiceMonitor）",
         "rule_packs_dir": "Rule packs 目錄（預設 rule-packs/）",
         "config_dir": "租户配置目錄（預設 conf.d/）",
-        "output_dir": "輸出 CRD 目錄（預設 operator-output/）",
+        "output_dir": "輸出 CRD 目錄（預設 operator-manifests/）",
         "namespace": "目標命名空間（預設 monitoring）",
         "api_version": "AlertmanagerConfig API 版本（預設 v1beta1）",
         "gitops": "啟用 GitOps 模式（排序鍵、無時間戳）",
@@ -68,7 +68,7 @@ _HELP = {
         "desc": "Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)",
         "rule_packs_dir": "Rule packs directory (default rule-packs/)",
         "config_dir": "Tenant config directory (default conf.d/)",
-        "output_dir": "Output CRD directory (default operator-output/)",
+        "output_dir": "Output CRD directory (default operator-manifests/)",
         "namespace": "Target namespace (default monitoring)",
         "api_version": "AlertmanagerConfig API version (default v1beta1)",
         "gitops": "Enable GitOps mode (sorted keys, no timestamps)",
@@ -712,7 +712,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("operator-output"),
+        default=Path("operator-manifests"),
         help=i18n_text(_HELP["zh"]["output_dir"], _HELP["en"]["output_dir"]),
     )
     parser.add_argument(

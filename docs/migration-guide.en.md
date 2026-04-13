@@ -250,8 +250,8 @@ For environments with kube-prometheus-stack already installed, use `operator-gen
 
 ```bash
 da-tools operator-generate --config-dir conf.d/ --rule-packs rule-packs/ \
-  --output-dir operator-output/ --gitops
-kubectl apply -f operator-output/
+  --output-dir operator-manifests/ --gitops
+kubectl apply -f operator-manifests/
 ```
 
 For detailed comparison and decision guidance between the two paths, see [Deployment Decision Matrix](getting-started/decision-matrix.md).

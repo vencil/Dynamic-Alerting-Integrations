@@ -2,7 +2,7 @@
 
 > **核心 Component** — config-driven 的 Prometheus metric exporter，將 YAML 閾值設定轉換為 Prometheus metrics。相比硬寫 PromQL 規則（修改需重啟 Prometheus、規則數隨 tenant × metric 線性增長），threshold-exporter 以 YAML 驅動實現零停機更新、租戶級隔離、固定 O(M) 規則複雜度。
 >
-> **其他文件：** [README](../../README.md) (概覽) · [Migration Guide](../../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../../docs/architecture-and-design.md) (技術深度) · [Rule Packs](../../rule-packs/README.md) (規則包目錄)
+> **其他文件：** [README](../../README.md) (概覽) · [Helm Chart](../../helm/threshold-exporter/) (部署用 chart) · [Migration Guide](../../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../../docs/architecture-and-design.md) (技術深度) · [Rule Packs](../../rule-packs/README.md) (規則包目錄)
 
 ## 架構
 

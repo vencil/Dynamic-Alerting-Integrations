@@ -93,7 +93,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`scripts/`](scripts/) | Shell entrypoints + 97 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
 | [`tests/`](tests/) | Python pytest (`test_*.py`), shell scenarios (`scenario-*.sh`), `e2e/` Playwright, `snapshots/` | Run / add tests |
 | [`docs/`](docs/) | 145 bilingual documents. Lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
-| [`operator-output/`](operator-output/) | `operator_generate.py` output samples (14 PrometheusRule rule-packs) | Reference output for operator mode |
+| [`operator-manifests/`](operator-manifests/) | `operator_generate.py` output samples (14 PrometheusRule rule-packs) | Reference output for operator mode |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent bootstrap + task-routing table | Required before starting an agent session |
 | [`docs/internal/`](docs/internal/) | Internal playbooks (testing / benchmark / windows-mcp / github-release) and maps | Debugging, releases, benchmarks |
 

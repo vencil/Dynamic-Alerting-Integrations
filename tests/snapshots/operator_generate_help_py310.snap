@@ -17,7 +17,7 @@ options:
   --config-dir CONFIG_DIR
                         Tenant config directory (default conf.d/)
   --output-dir OUTPUT_DIR
-                        Output CRD directory (default operator-output/)
+                        Output CRD directory (default operator-manifests/)
   --namespace NAMESPACE
                         Target namespace (default monitoring)
   --api-version {v1alpha1,v1beta1}

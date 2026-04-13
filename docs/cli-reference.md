@@ -1117,7 +1117,7 @@ da-tools operator-generate [options]
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 | `rule-packs/` |
 | `--config-dir <DIR>` | 租戶配置目錄路徑 | `conf.d/` |
-| `--output-dir <DIR>` | 輸出 CRD 目錄 | `operator-output/` |
+| `--output-dir <DIR>` | 輸出 CRD 目錄 | `operator-manifests/` |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--api-version <VER>` | AlertmanagerConfig API 版本（`v1alpha1` / `v1beta1`） | `v1beta1` |
 | `--components <COMP>` | 要生成的元件（`all` / `rules` / `alertmanager` / `servicemonitor`） | `all` |
@@ -1233,7 +1233,7 @@ da-tools drift-check --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
-> ⚠️ Rollback 後 Operator 產出的 CRD 檔案仍保留在 `operator-output/` 目錄，可隨時重新 apply。
+> ⚠️ Rollback 後 Operator 產出的 CRD 檔案仍保留在 `operator-manifests/` 目錄，可隨時重新 apply。
 
 ---
 
