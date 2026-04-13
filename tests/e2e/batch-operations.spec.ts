@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 /**
  * Batch Operations smoke tests
@@ -311,6 +311,7 @@ test.describe('Batch Operations @critical', () => {
     // Navigate to tenant-manager for batch operations testing
     await navigateToTenantManager(page);
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Run accessibility check
     const results = await checkA11y(page);

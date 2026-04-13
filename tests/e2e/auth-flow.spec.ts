@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 /**
  * Auth Flow smoke tests
@@ -251,6 +251,7 @@ test.describe('Authentication Flow @critical', () => {
     // Navigate to page
     await page.goto('./');
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Run accessibility check
     const results = await checkA11y(page);

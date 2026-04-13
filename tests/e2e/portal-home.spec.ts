@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 test.describe('Portal Home Page @critical', () => {
   test('should load portal home page and render tool list', async ({ page }) => {
@@ -102,6 +102,7 @@ test.describe('Portal Home Page @critical', () => {
     // Navigate to portal home
     await page.goto('./');
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Run accessibility check
     const results = await checkA11y(page);

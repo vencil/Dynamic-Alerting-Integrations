@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { checkA11y, formatA11yViolations } from './fixtures/axe-helper';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 /**
  * Tenant Manager smoke tests - verifies core filtering and data display
@@ -158,6 +158,7 @@ test.describe('Tenant Manager @critical', () => {
     // Load tenant-manager tool
     await loadTenantManager(page);
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Run accessibility check
     const results = await checkA11y(page);

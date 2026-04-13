@@ -11,11 +11,15 @@ test.describe('Operator Setup Wizard @critical', () => {
    * Navigate to the operator-setup-wizard component
    */
   async function loadOperatorWizard(page: Page) {
-    // Construct the JSX loader URL with the operator-setup-wizard component
-    const baseUrl = page.url().split('/interactive')[0];
-    const loaderUrl = `${baseUrl}/assets/jsx-loader.html?component=operator-setup-wizard`;
-
-    await page.goto(loaderUrl);
+    // Navigate to operator-setup-wizard via jsx-loader (relative to baseURL)
+    await page.goto('../assets/jsx-loader.html?component=operator-setup-wizard');
+    // Wait for the page to fully load (title is set by JS after component loads)
+    await page.waitForFunction(
+      () => document.title.length > 0 && document.title !== 'Interactive Component',
+      { timeout: 15000 }
+    ).catch(() => {
+      // Fallback: at least wait for networkidle
+    });
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
   }
 
