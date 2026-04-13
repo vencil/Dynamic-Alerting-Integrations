@@ -171,6 +171,8 @@ function StepEnvironment({ config, onChange, helpOpen, setHelpOpen }) {
         </div>
         <button
           onClick={() => setHelpOpen(!helpOpen)}
+          aria-label={t('顯示幫助資訊', 'Show help information')}
+          aria-expanded={helpOpen}
           style={{
             background: 'none',
             border: 'none',
@@ -334,6 +336,8 @@ function StepCRDConfig({ config, onChange, helpOpen, setHelpOpen }) {
         </div>
         <button
           onClick={() => setHelpOpen(!helpOpen)}
+          aria-label={t('顯示幫助資訊', 'Show help information')}
+          aria-expanded={helpOpen}
           style={{
             background: 'none',
             border: 'none',
@@ -480,6 +484,8 @@ function StepReceiver({ config, onChange, helpOpen, setHelpOpen }) {
         </div>
         <button
           onClick={() => setHelpOpen(!helpOpen)}
+          aria-label={t('顯示幫助資訊', 'Show help information')}
+          aria-expanded={helpOpen}
           style={{
             background: 'none',
             border: 'none',
@@ -640,6 +646,8 @@ function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
         </div>
         <button
           onClick={() => setHelpOpen(!helpOpen)}
+          aria-label={t('顯示幫助資訊', 'Show help information')}
+          aria-expanded={helpOpen}
           style={{
             background: 'none',
             border: 'none',
@@ -1085,7 +1093,7 @@ export default function OperatorSetupWizard() {
   };
 
   return (
-    <div style={{
+    <main role="main" className="wizard" style={{
       minHeight: '100vh',
       background: 'var(--da-color-bg)',
       padding: 'var(--da-space-8)',
@@ -1113,6 +1121,10 @@ export default function OperatorSetupWizard() {
               <button
                 key={step.id}
                 onClick={() => setCurrentStep(idx)}
+                data-testid={`step-${step.id}`}
+                className="wizard-step"
+                aria-current={idx === currentStep ? 'step' : undefined}
+                aria-label={`${t('步驟', 'Step')} ${idx + 1}: ${step.label()}`}
                 style={{
                   flex: 1,
                   padding: 'var(--da-space-2)',
@@ -1235,6 +1247,6 @@ export default function OperatorSetupWizard() {
           💡 {t('提示：本精靈會產生 da-tools 命令和 Kubernetes CRD YAML。複製指令到你的 CI/CD 流程中執行。詳見文件。', 'Tip: This wizard generates da-tools commands and Kubernetes CRD YAML. Copy commands to your CI/CD pipeline. See docs for details.')}
         </div>
       </div>
-    </div>
+    </main>
   );
 }
