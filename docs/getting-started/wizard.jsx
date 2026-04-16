@@ -9,6 +9,15 @@ related: [onboarding-checklist, architecture-quiz, rule-pack-selector]
 
 import { useState } from "react";
 
+// Style tokens (v2.7.0 Phase .a0 DEC-A Option A migration):
+// - Core gray/blue/focus palette migrated to Tailwind arbitrary values
+//   (bg-[color:var(--da-color-*)] / text-[color:...] / border-[color:...])
+//   so theme switching via [data-theme="dark"] works automatically.
+// - State-specific colors (green = completed/success, amber = priority,
+//   indigo/purple = path comparison) remain as Tailwind utilities pending
+//   introduction of domain-specific semantic tokens in a future audit.
+// - See design-critique notes in docs/internal/design-reviews/v2.7.0/wizard.md.
+
 // i18n helper — picks zh or en based on jsx-loader's detected language
 const t = window.__t || ((zh, en) => en);
 
@@ -51,12 +60,12 @@ const GlossaryTip = ({ term }) => {
       <button
         type="button"
         onClick={() => setShow(!show)}
-        className="font-semibold text-blue-600 underline decoration-dotted underline-offset-4 cursor-help"
+        className="font-semibold text-[color:var(--da-color-accent)] underline decoration-dotted underline-offset-4 cursor-help"
       >
         {term}
       </button>
       {show && (
-        <span className="absolute z-10 left-0 top-full mt-1 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
+        <span className="absolute z-10 left-0 top-full mt-1 w-64 p-3 bg-[color:var(--da-color-toast-bg)] text-white text-xs rounded-lg shadow-lg leading-relaxed">
           {def}
           <button type="button" onClick={() => setShow(false)} className="block mt-1 text-blue-300 text-xs hover:underline">close</button>
         </span>
@@ -266,10 +275,10 @@ const ProgressIndicator = ({ step, totalSteps }) => {
         key={`circle-${i}`}
         className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full font-bold transition-all ${
           i < step
-            ? "bg-blue-600 text-white"
+            ? "bg-[color:var(--da-color-accent)] text-white"
             : i === step
-              ? "bg-blue-500 text-white ring-4 ring-blue-200"
-              : "bg-gray-200 text-gray-500"
+              ? "bg-[color:var(--da-color-accent)] text-white ring-4 ring-[color:var(--da-color-focus-ring)]"
+              : "bg-[color:var(--da-color-surface-border)] text-[color:var(--da-color-muted)]"
         }`}
       >
         {i < step ? "✓" : i + 1}
@@ -280,7 +289,7 @@ const ProgressIndicator = ({ step, totalSteps }) => {
         <div
           key={`bar-${i}`}
           className={`flex-1 h-1 mx-2 rounded transition-all ${
-            i < step ? "bg-blue-600" : "bg-gray-200"
+            i < step ? "bg-[color:var(--da-color-accent)]" : "bg-[color:var(--da-color-surface-border)]"
           }`}
         />
       );
@@ -295,14 +304,14 @@ const RoleCard = ({ role, isSelected, onClick }) => {
       onClick={onClick}
       className={`p-6 rounded-lg border-2 transition-all text-left hover:shadow-lg ${
         isSelected
-          ? "border-blue-600 bg-blue-50 shadow-lg"
-          : "border-gray-200 bg-white hover:border-blue-300"
+          ? "border-[color:var(--da-color-accent)] bg-[color:var(--da-color-accent-soft)] shadow-lg"
+          : "border-[color:var(--da-color-surface-border)] bg-white hover:border-[color:var(--da-color-accent)]"
       }`}
     >
       <div className="text-3xl mb-3">{role.icon}</div>
-      <h3 className="text-lg font-bold text-gray-900 mb-2">{role.label}</h3>
-      <p className="text-sm text-gray-600 mb-2">{role.desc}</p>
-      {role.hint && <p className="text-xs text-gray-400 italic">{role.hint}</p>}
+      <h3 className="text-lg font-bold text-[color:var(--da-color-fg)] mb-2">{role.label}</h3>
+      <p className="text-sm text-[color:var(--da-color-muted)] mb-2">{role.desc}</p>
+      {role.hint && <p className="text-xs text-[color:var(--da-color-muted)] italic">{role.hint}</p>}
     </button>
   );
 };
@@ -313,16 +322,16 @@ const OptionCard = ({ option, isSelected, onClick, icon = null }) => {
       onClick={onClick}
       className={`p-4 rounded-lg border-2 transition-all text-left hover:shadow-md ${
         isSelected
-          ? "border-blue-600 bg-blue-50"
-          : "border-gray-200 bg-white hover:border-blue-300"
+          ? "border-[color:var(--da-color-accent)] bg-[color:var(--da-color-accent-soft)]"
+          : "border-[color:var(--da-color-surface-border)] bg-white hover:border-[color:var(--da-color-accent)]"
       }`}
     >
       {icon && <div className="text-2xl mb-2">{icon}</div>}
-      <h3 className="text-base font-semibold text-gray-900 mb-1">
+      <h3 className="text-base font-semibold text-[color:var(--da-color-fg)] mb-1">
         {option.label}
       </h3>
       {option.desc && (
-        <p className="text-sm text-gray-600">{option.desc}</p>
+        <p className="text-sm text-[color:var(--da-color-muted)]">{option.desc}</p>
       )}
     </button>
   );
@@ -333,13 +342,13 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
   const href = docUrl(doc.path);
   return (
     <div className={`flex items-center gap-3 p-4 rounded-lg border transition-all hover:shadow-md ${
-      isRead ? "border-green-300 bg-green-50" : isPriority ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : "border-gray-200 bg-white hover:bg-gray-50"
+      isRead ? "border-green-300 bg-green-50" : isPriority ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : "border-[color:var(--da-color-surface-border)] bg-white hover:bg-[color:var(--da-color-surface-hover)]"
     }`}>
       <button
         type="button"
         onClick={(e) => { e.preventDefault(); onToggleRead(doc.path); }}
         className={`flex-shrink-0 w-6 h-6 rounded border-2 flex items-center justify-center transition-colors ${
-          isRead ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-blue-400"
+          isRead ? "bg-green-500 border-green-500 text-white" : "border-[color:var(--da-color-surface-border)] hover:border-[color:var(--da-color-accent)]"
         }`}
         title={isRead ? t("標記為未讀", "Mark as unread") : t("標記為已讀", "Mark as read")}
       >
@@ -348,7 +357,7 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
       <a href={href} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <h4 className={`font-semibold text-sm ${isRead ? "text-green-800 line-through" : "text-gray-900"}`}>
+            <h4 className={`font-semibold text-sm ${isRead ? "text-green-800 line-through" : "text-[color:var(--da-color-fg)]"}`}>
               {doc.name}
               {isPriority && !isRead && (
                 <span className="ml-2 inline-block px-2 py-1 bg-amber-200 text-amber-900 text-xs font-bold rounded">
@@ -357,7 +366,7 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
               )}
             </h4>
             {doc.summary && (
-              <p className="text-xs text-gray-500 mt-1 leading-relaxed">{doc.summary}</p>
+              <p className="text-xs text-[color:var(--da-color-muted)] mt-1 leading-relaxed">{doc.summary}</p>
             )}
           </div>
           <div className="ml-3 text-lg">→</div>
@@ -387,15 +396,15 @@ const PathCompare = ({ currentKey, onClose }) => {
   return (
     <div className="bg-white rounded-lg shadow-sm border border-indigo-200 p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-gray-900">{t('路徑比較', 'Compare Paths')}</h3>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm">✕ {t('關閉', 'Close')}</button>
+        <h3 className="text-lg font-bold text-[color:var(--da-color-fg)]">{t('路徑比較', 'Compare Paths')}</h3>
+        <button onClick={onClose} className="text-[color:var(--da-color-muted)] hover:text-[color:var(--da-color-muted)] text-sm">✕ {t('關閉', 'Close')}</button>
       </div>
       <div>
-        <label className="text-sm font-medium text-gray-700 block mb-2">{t('選擇另一條路徑比較：', 'Compare with another path:')}</label>
+        <label className="text-sm font-medium text-[color:var(--da-color-fg)] block mb-2">{t('選擇另一條路徑比較：', 'Compare with another path:')}</label>
         <select
           value={compareKey || ''}
           onChange={(e) => setCompareKey(e.target.value || null)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
         >
           <option value="">{t('-- 選擇路徑 --', '-- Select a path --')}</option>
           {ALL_PATHS.filter(p => p.key !== currentKey).map(p => (
@@ -406,24 +415,24 @@ const PathCompare = ({ currentKey, onClose }) => {
       {compareRec && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <div>
-            <h4 className="font-semibold text-blue-700 mb-2">{t('僅在當前路徑', 'Only in your path')} ({onlyA.length})</h4>
+            <h4 className="font-semibold text-[color:var(--da-color-accent-hover)] mb-2">{t('僅在當前路徑', 'Only in your path')} ({onlyA.length})</h4>
             {onlyA.map(d => (
-              <div key={d.path} className="py-1 text-gray-700">{d.name}</div>
+              <div key={d.path} className="py-1 text-[color:var(--da-color-fg)]">{d.name}</div>
             ))}
-            {onlyA.length === 0 && <div className="text-gray-400 italic">{t('無', 'None')}</div>}
+            {onlyA.length === 0 && <div className="text-[color:var(--da-color-muted)] italic">{t('無', 'None')}</div>}
           </div>
           <div>
             <h4 className="font-semibold text-green-700 mb-2">{t('共同文件', 'Shared')} ({sharedDocs.length})</h4>
             {sharedDocs.map(d => (
-              <div key={d.path} className="py-1 text-gray-700">{d.name}</div>
+              <div key={d.path} className="py-1 text-[color:var(--da-color-fg)]">{d.name}</div>
             ))}
           </div>
           <div>
             <h4 className="font-semibold text-purple-700 mb-2">{t('僅在比較路徑', 'Only in compared path')} ({onlyB.length})</h4>
             {onlyB.map(d => (
-              <div key={d.path} className="py-1 text-gray-700">{d.name}</div>
+              <div key={d.path} className="py-1 text-[color:var(--da-color-fg)]">{d.name}</div>
             ))}
-            {onlyB.length === 0 && <div className="text-gray-400 italic">{t('無', 'None')}</div>}
+            {onlyB.length === 0 && <div className="text-[color:var(--da-color-muted)] italic">{t('無', 'None')}</div>}
           </div>
         </div>
       )}
@@ -437,18 +446,18 @@ const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => 
   const progressStyle = { width: (total > 0 ? (done / total) * 100 : 0) + '%' };
   return (
     <div className="space-y-6">
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+      <div className="bg-[color:var(--da-color-accent-soft)] border border-[color:var(--da-color-accent)] rounded-lg p-6">
+        <h2 className="text-2xl font-bold text-[color:var(--da-color-fg)] mb-2">
           {recommendations.title}
         </h2>
-        <p className="text-gray-600">
+        <p className="text-[color:var(--da-color-muted)]">
           {t('點擊任一文件開始閱讀，優先從「START HERE」開始。', 'Click any document to read. Start with "START HERE" first.')}
         </p>
         <div className="mt-3 flex items-center gap-3">
-          <div className="flex-1 h-2 bg-blue-100 rounded-full overflow-hidden">
+          <div className="flex-1 h-2 bg-[color:var(--da-color-accent-soft)] rounded-full overflow-hidden">
             <div className="h-full bg-green-500 rounded-full transition-all" style={progressStyle}></div>
           </div>
-          <span className="text-sm font-medium text-gray-600">{done}/{total}</span>
+          <span className="text-sm font-medium text-[color:var(--da-color-muted)]">{done}/{total}</span>
         </div>
       </div>
 
@@ -556,14 +565,14 @@ export default function GettingStartedWizard() {
       <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-3">
+          <h1 className="text-4xl sm:text-5xl font-bold text-[color:var(--da-color-fg)] mb-3">
             {t("動態警報平台", "Dynamic Alerting Platform")}
           </h1>
-          <p className="text-lg text-gray-600 mb-4">
+          <p className="text-lg text-[color:var(--da-color-muted)] mb-4">
             {t("幾秒內找到你的專屬學習路徑", "Find your personalized learning path in seconds")}
           </p>
           {step === 0 && (
-            <div className="inline-flex flex-wrap justify-center gap-2 text-xs text-gray-500">
+            <div className="inline-flex flex-wrap justify-center gap-2 text-xs text-[color:var(--da-color-muted)]">
               <span>{t("第一次接觸？點擊術語了解更多：", "New to the platform? Tap any term to learn more:")}</span>
               {Object.keys(GLOSSARY).map(term => (
                 <GlossaryTip key={term} term={term} />
@@ -579,7 +588,7 @@ export default function GettingStartedWizard() {
         {step === 0 && (
           <div className="space-y-6">
             <div className="bg-white rounded-lg shadow-sm p-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-8">
+              <h2 className="text-2xl font-bold text-[color:var(--da-color-fg)] mb-8">
                 {t("你的角色是？", "Who are you?")}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -600,15 +609,15 @@ export default function GettingStartedWizard() {
         {step === 1 && selectedRoleObj && (
           <div className="space-y-6">
             <div className="bg-white rounded-lg shadow-sm p-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              <h2 className="text-2xl font-bold text-[color:var(--da-color-fg)] mb-2">
                 {selectedRoleObj.label}
               </h2>
-              <p className="text-gray-600 mb-8">
+              <p className="text-[color:var(--da-color-muted)] mb-8">
                 {selectedRoleObj.desc}
               </p>
 
               <div className="mb-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                <h3 className="text-lg font-semibold text-[color:var(--da-color-fg)] mb-4">
                   {selectedRole === "platform" && t("你的目標是？", "What's your goal?")}
                   {selectedRole === "domain" && t("你管理哪種資料庫？", "What database do you manage?")}
                   {selectedRole === "tenant" && t("你需要什麼幫助？", "What do you need help with?")}
@@ -628,7 +637,7 @@ export default function GettingStartedWizard() {
 
               <button
                 onClick={handleStartOver}
-                className="w-full px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                className="w-full px-4 py-2 text-sm font-medium text-[color:var(--da-color-fg)] bg-[color:var(--da-color-surface-hover)] rounded-lg hover:bg-[color:var(--da-color-surface-border)] transition-colors"
               >
                 Back
               </button>
@@ -648,7 +657,7 @@ export default function GettingStartedWizard() {
             <div className="flex flex-col sm:flex-row gap-3">
               <button
                 onClick={() => setStep(1)}
-                className="flex-1 px-4 py-3 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                className="flex-1 px-4 py-3 text-sm font-medium text-[color:var(--da-color-fg)] bg-[color:var(--da-color-surface-hover)] rounded-lg hover:bg-[color:var(--da-color-surface-border)] transition-colors"
               >
                 Back
               </button>
@@ -662,7 +671,7 @@ export default function GettingStartedWizard() {
               </button>
               <button
                 onClick={handleStartOver}
-                className="flex-1 px-4 py-3 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                className="flex-1 px-4 py-3 text-sm font-medium text-white bg-[color:var(--da-color-accent)] rounded-lg hover:bg-[color:var(--da-color-accent-hover)] transition-colors"
               >
                 Start Over
               </button>
@@ -671,14 +680,14 @@ export default function GettingStartedWizard() {
         )}
 
         {/* Footer */}
-        <div className="mt-12 pt-8 border-t border-gray-200">
-          <p className="text-center text-sm text-gray-600">
+        <div className="mt-12 pt-8 border-t border-[color:var(--da-color-surface-border)]">
+          <p className="text-center text-sm text-[color:var(--da-color-muted)]">
             Questions? Check the{" "}
-            <a href={docUrl("../troubleshooting.md")} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+            <a href={docUrl("../troubleshooting.md")} target="_blank" rel="noopener noreferrer" className="text-[color:var(--da-color-accent)] hover:underline">
               Troubleshooting Guide
             </a>
             {" "}or{" "}
-            <a href={docUrl("../context-diagram.md")} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+            <a href={docUrl("../context-diagram.md")} target="_blank" rel="noopener noreferrer" className="text-[color:var(--da-color-accent)] hover:underline">
               Context Diagram
             </a>
           </p>
