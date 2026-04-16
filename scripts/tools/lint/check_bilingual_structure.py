@@ -214,21 +214,36 @@ def compare_structure(
             ),
         })
 
-    # Detect missing technical sections
-    # Only flag headings that contain CLI-like patterns (da-tools, --flag, file.py)
+    # Detect missing technical sections.
+    # Flag headings that contain CLI-like patterns (da-tools, --flag, file.py)
     # or version patterns (v2.x.x) — these are language-independent identifiers
     # that MUST appear in both versions. Pure prose headings differ by translation.
     cli_pattern = re.compile(
-        r"(da-tools|--[a-z]|\.py\b|\.yaml\b|\.jsx\b|v\d+\.\d+|"
-        r"configmap|prometheus|alertmanager|helm|kubectl|opa|crd|api)"
+        r"(da-tools|--[a-z][a-z0-9-]*|\.py\b|\.yaml\b|\.jsx\b|v\d+\.\d+(?:\.\d+)?|"
+        r"configmap|prometheus|alertmanager|helm|kubectl|opa|crd|api|"
+        r"servicemonitor|prometheusrule|alertmanagerconfig|"
+        r"_[a-z_]+\.(?:yaml|yml|json)|tenant-api|threshold-exporter|rule.?pack)"
     )
 
-    zh_cli = {k for _, k in zh_skel if cli_pattern.search(k)}
-    en_cli = {k for _, k in en_skel if cli_pattern.search(k)}
+    # Token-based matching: two headings are "equivalent" if they share at
+    # least one CLI/tech token. This is robust to translation variance
+    # (e.g., "API Response 格式" vs "API Response Format" both emit token
+    # "api" and "response") while still catching real structural drift.
+    def _tokens(key: str) -> frozenset:
+        # Collect every cli_pattern match as a token; strip trailing
+        # fullwidth/ASCII punctuation that can leak in after CJK removal.
+        return frozenset(
+            m.group(0).rstrip("?？!！.,、:：;；")
+            for m in cli_pattern.finditer(key)
+        )
 
-    # Only flag if one side has CLI-specific headings the other doesn't
-    zh_only_cli = zh_cli - en_cli
-    en_only_cli = en_cli - zh_cli
+    zh_cli_items = [(k, _tokens(k)) for _, k in zh_skel if cli_pattern.search(k)]
+    en_cli_items = [(k, _tokens(k)) for _, k in en_skel if cli_pattern.search(k)]
+    en_token_union = frozenset().union(*(t for _, t in en_cli_items)) if en_cli_items else frozenset()
+    zh_token_union = frozenset().union(*(t for _, t in zh_cli_items)) if zh_cli_items else frozenset()
+
+    zh_only_cli = {k for k, toks in zh_cli_items if not (toks & en_token_union)}
+    en_only_cli = {k for k, toks in en_cli_items if not (toks & zh_token_union)}
 
     if zh_only_cli:
         samples = sorted(zh_only_cli)[:5]

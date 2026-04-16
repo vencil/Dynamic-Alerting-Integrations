@@ -139,6 +139,14 @@ groups:
 - Pros: Fully decoupled
 - Cons: Introduces new component, increased latency, high operational complexity
 
+## v2.1.0 Implementation Summary
+
+- `generate_tenant_mapping_rules.py` — auto-generates Recording Rules from `_instance_mapping.yaml`, supporting Oracle/DB2/generic filter syntax (36 tests)
+- `discover_instance_mappings.py` — auto-detects instance topology in Prometheus (1:1/N:1/1:N) and outputs suggested mapping configuration
+- `scaffold_tenant.py --topology=1:N` — Onboarding integration (with `--mapping-instance`, `--mapping-filter`)
+- Example config `conf.d/examples/_instance_mapping.yaml`
+- Go/Python dual-side reserved key sync
+
 ## Evolution Status
 
 - **v2.1.0** (completed): Core toolchain (`generate_tenant_mapping_rules.py` / `discover_instance_mappings.py` / `scaffold_tenant.py --topology=1:N`), Federation Scenario B support via `rule-pack-split` with edge/central layered mapping behavior
