@@ -62,6 +62,7 @@ site/
 
 # --- Planning (internal, time-bound) ---
 docs/internal/v*-planning.md
+docs/internal/v*-day*-*.md
 docs/internal/*-plan-draft.md
 docs/internal/known-regressions.md
 docs/internal/component-health-snapshot.json

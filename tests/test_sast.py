@@ -188,6 +188,10 @@ class TestFileWritePermissions:
             "寫出 validation-report.json 至使用者指定的 output 目錄，"
             "為 DX 報告檔非敏感資料，沿用目錄預設 umask 即可"
         ),
+        "scripts/tools/dx/generate_tenant_fixture.py": (
+            "產生測試用 conf.d/ fixture YAML 至使用者指定的 --output 目錄，"
+            "為開發者 DX 工具非敏感資料，沿用目錄預設 umask 即可"
+        ),
     }
 
     @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)

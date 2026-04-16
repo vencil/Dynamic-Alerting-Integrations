@@ -2,7 +2,7 @@
 title: "ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體"
 tags: [adr, design-tokens, dark-mode, phase-a0, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
-version: v2.7.0
+version: v2.6.0
 lang: zh
 ---
 
