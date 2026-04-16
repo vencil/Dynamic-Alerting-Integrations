@@ -1,6 +1,22 @@
 /**
  * Getting Started Wizard — E2E smoke test (Phase .a A-6, v2.7.0)
  *
+ * SCOPE DISCLAIMER (Day 5 retrospective review, 2026-04-16):
+ *   This is SMOKE coverage, not comprehensive E2E. It proves:
+ *     - the tool loads without 404 / JS error
+ *     - the first visible contract (role cards, Start-Here badge) renders
+ *     - REG-004-style absolute hrefs don't leak
+ *     - 0 Critical axe violations (with a budget of 2 non-Critical for the
+ *       known amber Start-Here badge borderline contrast — see wizard.md §A11y)
+ *   It does NOT cover:
+ *     - full multi-step traversal (role → scenario → config generation)
+ *     - the 19 state-specific color waivers from ADR-017 (DEC-A)
+ *     - token-layer contrast issues on wizard (Day 5 retrospective runtime
+ *       axe showed wizard itself has 0 violations — ADR-017 Option A
+ *       validated in this spec's axe coverage)
+ *   For broader Phase .a0 a11y picture across all migrated tools, see
+ *   `_axe-audit-day1to3.spec.ts` and `_axe-audit-day4.spec.ts`.
+ *
  * Validates:
  *   - jsx-loader.html?component=wizard loads without 404
  *   - Page title matches expected pattern

@@ -3,6 +3,7 @@
 
 掃描 tool-registry.yaml 中註冊的 JSX 工具，產出結構化健康資料：
 Tier 分級（多訊號加權，DEC-08）、i18n 覆蓋、Design Token 遵循、
+Token Density / Migration Group 自動分群（v2.7.0 Day 4 DEC-M 新增）、
 Playwright 覆蓋、git 活躍度。
 
 **純讀取，不修改任何檔案。**
@@ -53,6 +54,15 @@ DEFAULT_OUTPUT = REPO / "docs/internal/component-health-snapshot.json"
 # --- Regex / 常數 ---
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 _PX_RE = re.compile(r"\b([1-9]\d*)px\b")
+_TOKEN_RE = re.compile(r"var\(\s*--da-[\w-]+\s*\)")
+# Tailwind palette utilities (for measuring "unmigrated" Tailwind usage that
+# competes with design tokens). Matches slate / blue / gray / neutral palette.
+_TAILWIND_PALETTE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:bg|text|border|ring|from|to|via|fill|stroke)-"
+    r"(?:slate|gray|zinc|neutral|blue|sky|indigo|red|green|emerald|amber|yellow|orange)-"
+    r"(?:50|100|200|300|400|500|600|700|800|900|950)"
+    r"(?![A-Za-z0-9_-])"
+)
 _I18N_DECL_RE = re.compile(r"=\s*window\.__t\b")
 _I18N_CALL_RE = re.compile(r"(?<![A-Za-z0-9_\.])t\(\s*['\"`]")
 _CJK_PATTERNS = [
@@ -91,6 +101,41 @@ def git_log(fmt: str, path: Path, reverse: bool = False) -> str:
         return ""
 
 
+def build_git_mtime_cache(paths: list[Path]) -> tuple[dict, dict]:
+    """Batch-fetch first/last modified date for every path in a single
+    ``git log --name-only`` pass. Much faster than N per-file calls
+    on FUSE mounts (where each process spawn costs ~2-3s).
+
+    Returns (last_mtime_map, first_mtime_map) keyed by posix path.
+    """
+    wanted = {p.relative_to(REPO).as_posix() for p in paths}
+    last_map: dict[str, str] = {}
+    first_map: dict[str, str] = {}
+    try:
+        out = subprocess.check_output(
+            ["git", "log", "--name-only", "--format=__COMMIT__%x00%ai"],
+            cwd=REPO, text=True, stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return last_map, first_map
+
+    current_date = ""
+    for line in out.splitlines():
+        if line.startswith("__COMMIT__"):
+            # line format: __COMMIT__\x002026-04-16 12:34:56 +0800
+            parts = line.split("\x00", 1)
+            current_date = parts[1] if len(parts) > 1 else ""
+            continue
+        if not line or line not in wanted:
+            continue
+        # git log iterates newest → oldest, so first hit = last_mtime,
+        # subsequent hits keep overwriting first_mtime until we reach the end.
+        if line not in last_map:
+            last_map[line] = current_date
+        first_map[line] = current_date
+    return last_map, first_map
+
+
 def count_hex_colors(content: str) -> tuple[int, int]:
     total = hardcoded = 0
     for line in content.splitlines():
@@ -107,6 +152,35 @@ def count_hex_colors(content: str) -> tuple[int, int]:
 
 def count_cjk_strings(content: str) -> int:
     return sum(len(p.findall(content)) for p in _CJK_PATTERNS)
+
+
+def count_design_tokens(content: str) -> int:
+    """Count `var(--da-*)` token occurrences (Phase .a0 migration progress)."""
+    return len(_TOKEN_RE.findall(content))
+
+
+def count_tailwind_palette(content: str) -> int:
+    """Count hardcoded Tailwind palette utility classes (unmigrated legacy)."""
+    return len(_TAILWIND_PALETTE_RE.findall(content))
+
+
+def classify_token_group(
+    tokens: int, tailwind_palette: int, hex_hardcoded: int
+) -> str:
+    """Classify into design-token migration groups (DEC-J Day 3 finding).
+
+    Group A: mature / model tool — high token density, no competing Tailwind palette.
+    Group B: migration in progress — some tokens AND some Tailwind or hex.
+    Group C: not started — zero or near-zero tokens.
+    N/A:     content too small or no styling signals.
+    """
+    if tokens >= 80 and tailwind_palette <= 5 and hex_hardcoded <= 5:
+        return "A"  # mature
+    if tokens >= 20:
+        return "B"  # in-progress
+    if tailwind_palette == 0 and hex_hardcoded == 0 and tokens == 0:
+        return "N/A"  # stylistically trivial
+    return "C"  # unmigrated
 
 
 # --- Tier 評分 ---
@@ -199,6 +273,11 @@ def scan(today: datetime | None = None) -> dict:
     tools = registry["tools"]
     spec_names = {p.stem.replace(".spec", "") for p in E2E_DIR.glob("*.spec.ts")}
 
+    # Batch git log (single subprocess) — orders of magnitude faster than
+    # per-file calls on FUSE mounts.
+    tool_paths = [JSX_ROOT / t["file"] for t in tools if (JSX_ROOT / t["file"]).exists()]
+    last_mtime_map, first_mtime_map = build_git_mtime_cache(tool_paths)
+
     results = []
     for tool in tools:
         file_path = JSX_ROOT / tool["file"]
@@ -224,9 +303,16 @@ def scan(today: datetime | None = None) -> dict:
         cjk_hardcoded = max(0, cjk_strings - i18n_calls)
         hex_total, hex_hardcoded = count_hex_colors(content)
         px_count = len(_PX_RE.findall(content))
+        design_tokens = count_design_tokens(content)
+        tailwind_palette = count_tailwind_palette(content)
+        token_density_per_100_loc = (
+            round(design_tokens / loc * 100, 1) if loc > 0 else 0.0
+        )
+        token_group = classify_token_group(design_tokens, tailwind_palette, hex_hardcoded)
         has_spec = tool["key"] in spec_names
-        last_modified = git_log("%ai", file_path)
-        first_commit = git_log("%ai", file_path, reverse=True)
+        rel_posix = file_path.relative_to(REPO).as_posix()
+        last_modified = last_mtime_map.get(rel_posix, "")
+        first_commit = first_mtime_map.get(rel_posix, "")
         tier, tier_score, tier_breakdown = derive_tier(
             tool, content, loc, last_modified, today
         )
@@ -245,6 +331,10 @@ def scan(today: datetime | None = None) -> dict:
             "hex_colors_total": hex_total,
             "hex_colors_hardcoded": hex_hardcoded,
             "px_hardcoded": px_count,
+            "design_tokens": design_tokens,
+            "tailwind_palette": tailwind_palette,
+            "token_density_per_100_loc": token_density_per_100_loc,
+            "token_group": token_group,
             "playwright_spec": has_spec,
             "last_modified": last_modified,
             "first_commit": first_commit,
@@ -262,6 +352,19 @@ def scan(today: datetime | None = None) -> dict:
     )
     hex_offenders = sum(1 for r in results if r.get("hex_colors_hardcoded", 0) > 0)
     px_offenders = sum(1 for r in results if r.get("px_hardcoded", 0) > 0)
+    token_group_dist = Counter(
+        r.get("token_group", "N/A") for r in results if r["status"] == "OK"
+    )
+    tier1_group_c = [
+        r["key"]
+        for r in results
+        if r.get("tier") == "Tier 1" and r.get("token_group") == "C"
+    ]
+    tier1_group_a = [
+        r["key"]
+        for r in results
+        if r.get("tier") == "Tier 1" and r.get("token_group") == "A"
+    ]
     i18n_vals = [
         r["i18n_coverage_ratio"]
         for r in results
@@ -283,6 +386,9 @@ def scan(today: datetime | None = None) -> dict:
         "tier1_without_spec": tier1_nospec,
         "tools_with_hardcoded_hex": hex_offenders,
         "tools_with_hardcoded_px": px_offenders,
+        "token_group_distribution": dict(token_group_dist),
+        "tier1_token_group_a_mature": sorted(tier1_group_a),
+        "tier1_token_group_c_unmigrated": sorted(tier1_group_c),
         "i18n_coverage_distribution": {
             "samples": len(i18n_vals),
             "min": min(i18n_vals) if i18n_vals else None,
