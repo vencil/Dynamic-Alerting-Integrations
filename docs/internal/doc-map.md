@@ -23,9 +23,14 @@ lang: zh
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API 架構 |
 | `docs/adr/010-multi-tenant-grouping.md` (.en.md) | Platform Engineers, developers | ADR-010: Multi-Tenant Grouping Architecture |
 | `docs/adr/011-pr-based-write-back.md` (.en.md) | Platform Engineers, developers | ADR-011: PR-based Write-back 模式 |
+| `docs/adr/012-colorblind-hotfix-structured-severity-return.md` (.en.md) | frontend-developers, design-system-maintainers | ADR-012: threshold-heatmap 色盲補丁 — 結構化 severity 返回值 |
 | `docs/adr/013-colorblind-hotfix-structured-severity-return.md` | frontend-developers, design-system-maintainers | ADR-013: threshold-heatmap 色盲補丁 — 結構化 severity 返回值 |
+| `docs/adr/013-component-health-token-density-metric.md` (.en.md) | frontend-developers, Platform Engineers, maintainers | ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標 |
 | `docs/adr/014-component-health-token-density-metric.md` | frontend-developers, Platform Engineers, maintainers | ADR-014: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標 |
+| `docs/adr/014-tech-debt-category-budget-isolation.md` (.en.md) | Platform Engineers, tech-leads | ADR-014: TECH-DEBT 類別與 REG Budget 隔離 |
 | `docs/adr/015-tech-debt-category-budget-isolation.md` | Platform Engineers, tech-leads | ADR-015: TECH-DEBT 類別與 REG Budget 隔離 |
+| `docs/adr/015-wizard-arbitrary-value-token-migration.md` (.en.md) | frontend-developers, maintainers | ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） |
+| `docs/adr/016-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 |
 | `docs/adr/017-wizard-arbitrary-value-token-migration.md` | frontend-developers, maintainers | ADR-017: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） |
 | `docs/adr/018-data-theme-single-track-dark-mode.md` | frontend-developers, designers, maintainers | ADR-018: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
@@ -65,6 +70,7 @@ lang: zh
 | `docs/interactive/tools/capacity-planner.jsx` | Platform Engineers | Capacity Planner |
 | `docs/interactive/tools/cicd-setup-wizard.jsx` | Platform Engineers | CI/CD Setup Wizard |
 | `docs/interactive/tools/cli-playground.jsx` | Platform Engineers | da-tools CLI Playground |
+| `docs/interactive/tools/component-health.jsx` | Platform Engineers, Contributors | Component Health Dashboard |
 | `docs/interactive/tools/config-diff.jsx` | Platform Engineers | Config Version Diff |
 | `docs/interactive/tools/config-lint.jsx` | Platform Engineers, Tenants | Config Lint Report |
 | `docs/interactive/tools/cost-estimator.jsx` | Platform Engineers, SREs, management | Cost Estimator |
@@ -101,6 +107,7 @@ lang: zh
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
+| `docs/internal/benchmark-v2.7.0-baseline.md` | All | v2.7.0 Benchmark Baseline Report |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
 | `docs/internal/design-system-guide.md` | maintainers | Design System Guide |
 | `docs/internal/dev-rules.md` | All | 開發規範 (Development Rules) |

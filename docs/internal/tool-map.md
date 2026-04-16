@@ -81,6 +81,7 @@ lang: zh
 | `generate_platform_data.py` | 共用平台資料產生器 |
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |

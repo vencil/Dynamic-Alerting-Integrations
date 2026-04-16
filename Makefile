@@ -317,6 +317,10 @@ playbook-freshness-ll: ## 檢查 Playbook + LL 條目知識退火狀態（pre-ta
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
+.PHONY: generate-fixtures
+generate-fixtures: ## 產生合成 Tenant Fixture 供基準測試用 (使用: make generate-fixtures ARGS="--count 100 --layout flat")
+	@python3 ./scripts/tools/dx/generate_tenant_fixture.py $(ARGS)
+
 .PHONY: generate-alert-reference
 generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md (使用: make generate-alert-reference 或 --update)
 	@python3 ./scripts/tools/dx/generate_alert_reference.py
