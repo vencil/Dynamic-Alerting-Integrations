@@ -1,12 +1,12 @@
 ---
-title: "ADR-014: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標"
+title: "ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標"
 tags: [adr, metrics, component-health, design-tokens, tier-scoring, v2.7.0]
 audience: [frontend-developers, platform-engineers, maintainers]
 version: v2.7.0
 lang: zh
 ---
 
-# ADR-014: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標
+# ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標
 
 > 合併了兩個決策：
 > - **DEC-08**（Day 1, planning §10）：Tier 分級改用五維加權替代 `appears_in` 單訊號

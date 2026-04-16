@@ -1,12 +1,12 @@
 ---
-title: "ADR-015: TECH-DEBT 類別與 REG Budget 隔離"
+title: "ADR-014: TECH-DEBT 類別與 REG Budget 隔離"
 tags: [adr, governance, tech-debt, regressions, budget, v2.7.0]
 audience: [platform-engineers, tech-leads]
 version: v2.7.0
 lang: zh
 ---
 
-# ADR-015: TECH-DEBT 類別與 REG Budget 隔離
+# ADR-014: TECH-DEBT 類別與 REG Budget 隔離
 
 > Originally recorded as **DEC-N** in `docs/internal/v2.7.0-planning.md §19`.
 > 此 ADR 補上 **governance guardrails**，避免 TECH-DEBT 成為 REG Budget 的逃生口。

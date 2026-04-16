@@ -1,12 +1,12 @@
 ---
-title: "ADR-018: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體"
+title: "ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體"
 tags: [adr, design-tokens, dark-mode, phase-a0, v2.7.0]
 audience: [frontend-developers, designers, maintainers]
 version: v2.7.0
 lang: zh
 ---
 
-# ADR-018: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
+# ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
 
 > Originally recorded as **DEC-F = Option C** in `docs/internal/v2.7.0-planning.md §17`
 > (Day 3, 2026-04-16，user round-trip 兩輪後定案)。Back-filled during Day 5
@@ -90,7 +90,7 @@ User 第一輪詢問時要求「仔細比較 A/B/C 優缺」→ 我重出 3-way 
 ## 關聯
 
 - Commit `8634ea2`（Day 3 deployment-wizard 遷移，首次落地）
-- ADR-017（DEC-A / Option A）— 兩者一起構成 Phase .a0 標準遷移套件
+- ADR-015（DEC-A / Option A）— 兩者一起構成 Phase .a0 標準遷移套件
 - DEC-G（`docs/internal/dev-rules.md` §S1，gray 中性色 style rule）— 同日定案的配套慣例
 - TECH-DEBT-005（palette 殘留導致 dark mode 斷層的案例）
 - Retrospective：`docs/internal/v2.7.0-day1to3-retrospective-review.md §3.3`

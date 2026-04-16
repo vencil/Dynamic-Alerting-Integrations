@@ -1,12 +1,12 @@
 ---
-title: "ADR-017: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）"
+title: "ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）"
 tags: [adr, design-tokens, phase-a0, v2.7.0]
 audience: [frontend-developers, maintainers]
 version: v2.7.0
 lang: zh
 ---
 
-# ADR-017: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）
+# ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）
 
 > Originally recorded as **DEC-A** in `docs/internal/v2.7.0-planning.md §15`
 > (Day 2, 2026-04-16 AM). Back-filled during Day 5 retrospective review —
@@ -87,6 +87,6 @@ Phase .a0 必須把它吃進 token 系統，但三種遷移路徑互有取捨：
 
 - `docs/getting-started/wizard.jsx`（實作）
 - Commit `ec07914`（Day 2 landed）
-- DEC-F（ADR-018，配對的 dark mode 單軌決策）
+- DEC-F（ADR-016，配對的 dark mode 單軌決策）
 - DEC-G（`docs/internal/dev-rules.md` §S1，配對的 gray 中性色 style rule）
 - TECH-DEBT-003（Day 5 發現的 token-pair contrast 問題，非本 ADR 直接造成）
