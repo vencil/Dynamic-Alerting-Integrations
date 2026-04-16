@@ -21,7 +21,6 @@ Inference:
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -156,14 +155,14 @@ def generate_git_commands(actions: list[dict], conf_d: Path) -> list[str]:
         target_dirs.add(str(target_path.parent))
 
     for d in sorted(target_dirs):
-        commands.append(f"mkdir -p {d}")
+        commands.append(["mkdir", "-p", d])
 
     for a in actions:
         if a["status"] != "ok":
             continue
-        src = conf_d / a["source"]
-        dst = conf_d / a["target"]
-        commands.append(f"git mv {src} {dst}")
+        src = str(conf_d / a["source"])
+        dst = str(conf_d / a["target"])
+        commands.append(["git", "mv", src, dst])
 
     return commands
 
@@ -231,8 +230,8 @@ def main() -> None:
     if args.apply:
         print("🚀 Executing migration...")
         for cmd in commands:
-            print(f"  $ {cmd}")
-            result = subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+            print(f"  $ {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"  ❌ Failed: {result.stderr.strip()}", file=sys.stderr)
                 sys.exit(1)
@@ -242,7 +241,7 @@ def main() -> None:
         print("📋 Dry-run — commands that would be executed:")
         print()
         for cmd in commands:
-            print(f"  {cmd}")
+            print(f"  {' '.join(cmd)}")
         print()
         print(f"Run with --apply to execute. ({len(ok)} files will be moved)")
 

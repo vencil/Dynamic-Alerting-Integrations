@@ -188,40 +188,40 @@ def scan_unlabeled_inputs(src: str) -> list[tuple[int, str]]:
             if not parsed:
                 continue
             _, attrs = parsed
-        if "type=" in attrs and re.search(
-            r'type\s*=\s*["\'](hidden|submit|button|checkbox|radio)["\']', attrs
-        ):
-            continue
-        has_label_hint = any(
-            a in attrs
-            for a in (
-                "aria-label",
-                "aria-labelledby",
-                "placeholder",
-                "title=",
+            if "type=" in attrs and re.search(
+                r'type\s*=\s*["\'](hidden|submit|button|checkbox|radio)["\']', attrs
+            ):
+                continue
+            has_label_hint = any(
+                a in attrs
+                for a in (
+                    "aria-label",
+                    "aria-labelledby",
+                    "placeholder",
+                    "title=",
+                )
             )
-        )
-        if has_label_hint:
-            continue
-        # Element MAY be labeled by a sibling <label htmlFor=...>. We use a
-        # coarse check: if the same file has a <label htmlFor="X"> AND this
-        # element has id="X", call it labeled.
-        id_m = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', attrs)
-        if id_m:
-            the_id = id_m.group(1)
-            if re.search(
-                r'<label\b[^>]*htmlFor\s*=\s*["\']' + re.escape(the_id) + r'["\']',
-                src,
-            ):
+            if has_label_hint:
                 continue
-            # Also accept {id} template form
-            if re.search(
-                r'<label\b[^>]*htmlFor\s*=\s*\{[^}]*' + re.escape(the_id),
-                src,
-            ):
-                continue
-        line = src.count("\n", 0, m.start()) + 1
-        out.append((line, f"<{tag}> has no accessible label"))
+            # Element MAY be labeled by a sibling <label htmlFor=...>. We use a
+            # coarse check: if the same file has a <label htmlFor="X"> AND this
+            # element has id="X", call it labeled.
+            id_m = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', attrs)
+            if id_m:
+                the_id = id_m.group(1)
+                if re.search(
+                    r'<label\b[^>]*htmlFor\s*=\s*["\']' + re.escape(the_id) + r'["\']',
+                    src,
+                ):
+                    continue
+                # Also accept {id} template form
+                if re.search(
+                    r'<label\b[^>]*htmlFor\s*=\s*\{[^}]*' + re.escape(the_id),
+                    src,
+                ):
+                    continue
+            line = src.count("\n", 0, m.start()) + 1
+            out.append((line, f"<{tag}> has no accessible label"))
     return out
 
 
