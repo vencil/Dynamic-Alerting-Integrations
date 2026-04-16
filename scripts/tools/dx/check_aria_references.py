@@ -186,9 +186,11 @@ def matches_any(ref_kind: str, ref_val: str, ids) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: check_aria_references.py <file.jsx> [...]", file=sys.stderr)
-        return 2
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print("usage: check_aria_references.py <file.jsx> [...]")
+        print("\nStatic ARIA id/reference cross-checker for JSX portal tools.")
+        print("Exit 0 = clean; 1 = dangling refs found; 2 = usage error.")
+        return 0 if len(argv) >= 2 else 2
     overall_ok = True
     for p in argv[1:]:
         path = Path(p)
