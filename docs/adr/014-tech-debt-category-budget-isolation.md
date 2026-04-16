@@ -2,7 +2,7 @@
 title: "ADR-014: TECH-DEBT 類別與 REG Budget 隔離"
 tags: [adr, governance, tech-debt, regressions, budget, v2.7.0]
 audience: [platform-engineers, tech-leads]
-version: v2.7.0
+version: v2.6.0
 lang: zh
 ---
 

@@ -2,7 +2,7 @@
 title: "ADR-012: threshold-heatmap Colorblind Accessibility Hotfix — Structured Severity Return Value"
 tags: [adr, accessibility, wcag, portal, v2.7.0]
 audience: [frontend-developers, design-system-maintainers]
-version: v2.7.0
+version: v2.6.0
 lang: en
 ---
 
