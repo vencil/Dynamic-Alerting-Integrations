@@ -115,6 +115,8 @@ lang: zh
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
 | `docs/internal/test-map.md` | maintainers, AI Agent | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
+| `docs/internal/v2.7.0-day1to3-retrospective-review.md` | All | v2.7.0 Day 1–3 Retrospective Review（以 Day 4–5 標準重審） |
+| `docs/internal/v2.7.0-day5-verification-triage.md` | All | v2.7.0 Day 5 — Pre-PR 驗證補丁 Triage |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |

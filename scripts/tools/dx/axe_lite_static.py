@@ -295,9 +295,11 @@ def check_file(path: Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: axe_lite_static.py <file.jsx> [...]", file=sys.stderr)
-        return 2
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print("usage: axe_lite_static.py <file.jsx> [...]")
+        print("\nStatic WCAG heuristic scanner for JSX portal tools.")
+        print("Exit 0 = clean; 1 = violations found; 2 = usage error.")
+        return 0 if len(argv) >= 2 else 2
     bad = 0
     for p in argv[1:]:
         bad += check_file(Path(p))

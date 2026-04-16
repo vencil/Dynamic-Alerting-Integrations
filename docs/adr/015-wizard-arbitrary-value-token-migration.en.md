@@ -2,7 +2,7 @@
 title: "ADR-015: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite)"
 tags: [adr, design-tokens, phase-a0, v2.7.0]
 audience: [frontend-developers, maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 

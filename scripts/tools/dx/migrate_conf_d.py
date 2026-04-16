@@ -21,7 +21,6 @@ Inference:
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -232,7 +231,7 @@ def main() -> None:
         print("🚀 Executing migration...")
         for cmd in commands:
             print(f"  $ {cmd}")
-            result = subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"  ❌ Failed: {result.stderr.strip()}", file=sys.stderr)
                 sys.exit(1)

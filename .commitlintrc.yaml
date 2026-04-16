@@ -19,23 +19,6 @@ rules:
       # doc sub-categories
       - audit
       - playbook
-      # development phases & cross-cutting scopes
-      - adr
-      - e2e
-      - jsx
-      - phase-a
-      - phase-b
-      # compound scopes (multi-area changes)
-      - dx+e2e
-      - lint+tooling
-  # Allow sentence-case subjects (conventional default forbids it)
-  subject-case:
-    - 0
-  # Relax body line length for Co-Authored-By and detailed descriptions
-  body-max-line-length:
-    - 1
-    - always
-    - 200
   type-enum:
     - 2
     - always
