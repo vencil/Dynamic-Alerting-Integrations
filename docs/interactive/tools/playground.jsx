@@ -11,6 +11,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 
 const t = window.__t || ((zh, en) => en);
 
+// [ADR-015 / DEC-A] Migrated from hardcoded Tailwind palette colors (gray-50, blue-500, etc.)
+// to design tokens using arbitrary-value pattern (bg-[color:var(--da-color-*)])
+// This enables consistent theming and dark mode support via CSS variables.
+
 const YAML_TEMPLATES = {
   minimal: `# This is ALL a tenant needs to write — just 3 lines!
 tenants:
@@ -537,19 +541,19 @@ export default function TenantYAMLPlayground() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen bg-[color:var(--da-color-surface)]">
       {/* Header */}
-      <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 p-4 shadow-sm z-10">
+      <div className="fixed top-0 left-0 right-0 bg-[color:var(--da-color-card-bg)] border-b border-[color:var(--da-color-surface-border)] p-4 shadow-sm z-10">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{t('租戶 YAML 驗證器', 'Tenant YAML Validator')}</h1>
-            <p className="text-sm text-gray-500 mt-1">{t('用於租戶配置驗證的互動式遊樂場', 'Interactive playground for tenant configuration validation')}</p>
+            <h1 className="text-2xl font-bold text-[color:var(--da-color-fg)]">{t('租戶 YAML 驗證器', 'Tenant YAML Validator')}</h1>
+            <p className="text-sm text-[color:var(--da-color-muted)] mt-1">{t('用於租戶配置驗證的互動式遊樂場', 'Interactive playground for tenant configuration validation')}</p>
           </div>
           <div className="flex gap-3">
             <select
               value={selectedTemplate}
               onChange={handleTemplateChange}
-              className="px-3 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-3 py-2 bg-[color:var(--da-color-card-bg)] border border-[color:var(--da-color-surface-border)] rounded-md text-sm font-medium text-[color:var(--da-color-fg)] hover:bg-[color:var(--da-color-surface)] focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-accent)]"
             >
               <option value="minimal">{t('最小化 (3行!)', 'Minimal (3 lines!)')}</option>
               <option value="mariadb">{t('MariaDB 示例', 'MariaDB Example')}</option>
@@ -559,14 +563,14 @@ export default function TenantYAMLPlayground() {
             </select>
             <button
               onClick={handleResetExample}
-              className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm font-medium hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              className="px-4 py-2 bg-[color:var(--da-color-fg)] text-[color:var(--da-color-card-bg)] rounded-md text-sm font-medium hover:bg-[color:var(--da-color-accent-hover)] focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-fg)]"
             >
               {t('重置', 'Reset')}
             </button>
             <button
               onClick={() => setShowDiff(!showDiff)}
-              className={`px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-purple-500 ${
-                showDiff ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+              className={`px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-info)] ${
+                showDiff ? 'bg-[color:var(--da-color-info)] text-[color:var(--da-color-card-bg)]' : 'bg-[color:var(--da-color-info-soft)] text-[color:var(--da-color-info)] hover:bg-[color:var(--da-color-info-soft)]'
               }`}
             >
               {showDiff ? t('隱藏差異', 'Hide Diff') : t('差異對比', 'Diff')}
@@ -575,14 +579,14 @@ export default function TenantYAMLPlayground() {
             <button
               onClick={handleExport}
               disabled={!validation.valid}
-              className="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="px-4 py-2 bg-[color:var(--da-color-success)] text-[color:var(--da-color-card-bg)] rounded-md text-sm font-medium hover:bg-[color:var(--da-color-success)] disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-success)]"
             >
               {t('匯出 .yaml', 'Export .yaml')}
             </button>
             <button
               onClick={handleShareLink}
-              className={`px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                shareCopied ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+              className={`px-4 py-2 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-accent)] ${
+                shareCopied ? 'bg-[color:var(--da-color-accent)] text-[color:var(--da-color-card-bg)]' : 'bg-[color:var(--da-color-accent-soft)] text-[color:var(--da-color-accent)] hover:bg-[color:var(--da-color-accent-soft)]'
               }`}
             >
               {shareCopied ? t('✓ 已複製', '✓ Link Copied') : t('分享連結', 'Share Link')}
@@ -594,31 +598,31 @@ export default function TenantYAMLPlayground() {
       {/* Main Content */}
       <div className="flex w-full pt-24">
         {/* Left Pane: YAML Editor */}
-        <div className="w-1/2 border-r border-gray-200 flex flex-col bg-white">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">{t('租戶 YAML', 'Tenant YAML')}</h2>
-            <p className="text-xs text-gray-500 mt-1">{t('在下方編輯 YAML。驗證實時更新。', 'Edit YAML below. Validation updates in real-time.')}</p>
+        <div className="w-1/2 border-r border-[color:var(--da-color-surface-border)] flex flex-col bg-[color:var(--da-color-card-bg)]">
+          <div className="px-6 py-4 border-b border-[color:var(--da-color-surface-border)]">
+            <h2 className="text-lg font-semibold text-[color:var(--da-color-fg)]">{t('租戶 YAML', 'Tenant YAML')}</h2>
+            <p className="text-xs text-[color:var(--da-color-muted)] mt-1">{t('在下方編輯 YAML。驗證實時更新。', 'Edit YAML below. Validation updates in real-time.')}</p>
           </div>
           {showDiff && (
-            <div className="border-b border-gray-200 bg-gray-50 px-6 py-3 max-h-48 overflow-y-auto">
-              <div className="text-xs font-semibold text-gray-600 mb-2">{t('相對於範本的變化:', 'Changes vs. template:')}</div>
+            <div className="border-b border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-surface)] px-6 py-3 max-h-48 overflow-y-auto">
+              <div className="text-xs font-semibold text-[color:var(--da-color-fg)] mb-2">{t('相對於範本的變化:', 'Changes vs. template:')}</div>
               <pre className="font-mono text-xs leading-relaxed">
                 {diff.map((d, i) => {
                   if (d.type === 'same') return null;
-                  const color = d.type === 'added' ? 'text-green-700 bg-green-50' : d.type === 'removed' ? 'text-red-700 bg-red-50' : 'text-amber-700 bg-amber-50';
+                  const color = d.type === 'added' ? 'text-[color:var(--da-color-success)] bg-[color:var(--da-color-success-soft)]' : d.type === 'removed' ? 'text-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]' : 'text-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)]';
                   return (
                     <div key={i} className={`${color} px-2 py-0.5 rounded`}>
-                      <span className="text-gray-400 mr-2">{d.num}</span>
+                      <span className="text-[color:var(--da-color-muted)] mr-2">{d.num}</span>
                       {d.type === 'removed' ? '- ' : d.type === 'added' ? '+ ' : '~ '}{d.line}
                     </div>
                   );
                 })}
-                {!hasChanges && <div className="text-gray-400">{t('相對於範本沒有更改。', 'No changes from template.')}</div>}
+                {!hasChanges && <div className="text-[color:var(--da-color-muted)]">{t('相對於範本沒有更改。', 'No changes from template.')}</div>}
               </pre>
             </div>
           )}
           <div className="flex-1 overflow-hidden flex">
-            <div className="w-12 bg-gray-100 border-r border-gray-200 flex flex-col items-center py-4 text-xs text-gray-500 font-mono">
+            <div className="w-12 bg-[color:var(--da-color-tag-bg)] border-r border-[color:var(--da-color-surface-border)] flex flex-col items-center py-4 text-xs text-[color:var(--da-color-muted)] font-mono">
               {yaml.split('\n').map((_, i) => (
                 <div key={i} className="h-6 flex items-center justify-center">
                   {i + 1}
@@ -628,20 +632,20 @@ export default function TenantYAMLPlayground() {
             <textarea
               value={yaml}
               onChange={(e) => setYaml(e.target.value)}
-              className="flex-1 p-4 font-mono text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 resize-none"
+              className="flex-1 p-4 font-mono text-sm text-[color:var(--da-color-fg)] bg-[color:var(--da-color-card-bg)] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--da-color-accent)] resize-none"
               spellCheck="false"
             />
           </div>
         </div>
 
         {/* Right Pane: Validation Results */}
-        <div className="w-1/2 flex flex-col bg-gray-50 overflow-hidden">
+        <div className="w-1/2 flex flex-col bg-[color:var(--da-color-surface)] overflow-hidden">
           {/* Validation Summary */}
-          <div className="px-6 py-4 border-b border-gray-200 bg-white">
+          <div className="px-6 py-4 border-b border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-card-bg)]">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">{t('驗證結果', 'Validation Results')}</h2>
-                <p className="text-xs text-gray-500 mt-1">
+                <h2 className="text-lg font-semibold text-[color:var(--da-color-fg)]">{t('驗證結果', 'Validation Results')}</h2>
+                <p className="text-xs text-[color:var(--da-color-muted)] mt-1">
                   {validation.errors.length === 0
                     ? t('所有檢查都通過了!', 'All checks passed!')
                     : t(`找到 ${validation.errors.length} 個錯誤`, `${validation.errors.length} error(s) found`)}
@@ -650,9 +654,9 @@ export default function TenantYAMLPlayground() {
               <div className="text-right">
                 <div className="text-3xl font-bold">
                   {validation.valid ? (
-                    <span className="text-green-600">✓</span>
+                    <span className="text-[color:var(--da-color-success)]">✓</span>
                   ) : (
-                    <span className="text-red-600">✗</span>
+                    <span className="text-[color:var(--da-color-error)]">✗</span>
                   )}
                 </div>
               </div>
@@ -663,28 +667,28 @@ export default function TenantYAMLPlayground() {
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             {/* Summary Stats */}
             <div className="grid grid-cols-3 gap-4">
-              <div className="bg-white rounded-lg p-4 border border-gray-200">
-                <div className="text-2xl font-bold text-blue-600">{validation.summary.thresholds}</div>
-                <div className="text-xs text-gray-600 mt-1">{t('已配置的閾值', 'Thresholds Configured')}</div>
+              <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
+                <div className="text-2xl font-bold text-[color:var(--da-color-accent)]">{validation.summary.thresholds}</div>
+                <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('已配置的閾值', 'Thresholds Configured')}</div>
               </div>
-              <div className="bg-white rounded-lg p-4 border border-gray-200">
-                <div className="text-2xl font-bold text-purple-600">{validation.summary.specialKeys}</div>
-                <div className="text-xs text-gray-600 mt-1">{t('特殊鍵', 'Special Keys')}</div>
+              <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
+                <div className="text-2xl font-bold text-[color:var(--da-color-info)]">{validation.summary.specialKeys}</div>
+                <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('特殊鍵', 'Special Keys')}</div>
               </div>
-              <div className="bg-white rounded-lg p-4 border border-gray-200">
+              <div className="bg-[color:var(--da-color-card-bg)] rounded-lg p-4 border border-[color:var(--da-color-surface-border)]">
                 <div
                   className={`text-2xl font-bold ${
                     validation.summary.routing === 'configured'
-                      ? 'text-green-600'
+                      ? 'text-[color:var(--da-color-success)]'
                       : validation.summary.routing === 'error'
-                      ? 'text-red-600'
-                      : 'text-gray-400'
+                      ? 'text-[color:var(--da-color-error)]'
+                      : 'text-[color:var(--da-color-muted)]'
                   }`}
                 >
                   {validation.summary.routing === 'configured' ? '✓' : '○'}
                 </div>
-                <div className="text-xs text-gray-600 mt-1">{t('路由狀態', 'Routing Status')}</div>
-                <div className="text-xs text-gray-500 mt-2">
+                <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('路由狀態', 'Routing Status')}</div>
+                <div className="text-xs text-[color:var(--da-color-muted)] mt-2">
                   {validation.summary.routing === 'configured' ? t('已配置', 'configured') : validation.summary.routing === 'error' ? t('錯誤', 'error') : t('未配置', 'not configured')}
                 </div>
               </div>
@@ -693,16 +697,16 @@ export default function TenantYAMLPlayground() {
             {/* Errors */}
             {validation.errors.length > 0 && (
               <div>
-                <h3 className="font-semibold text-red-700 mb-3 flex items-center gap-2">
+                <h3 className="font-semibold text-[color:var(--da-color-error)] mb-3 flex items-center gap-2">
                   <span className="text-lg">✗</span> {t('錯誤', 'Errors')} ({validation.errors.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.errors.map((err, i) => (
                     <div
                       key={i}
-                      className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-800"
+                      className="bg-[color:var(--da-color-error-soft)] border border-[color:var(--da-color-error)] rounded-md p-3 text-sm text-[color:var(--da-color-error)]"
                     >
-                      <div className="font-mono text-xs text-red-700 mb-1">{err.rule}</div>
+                      <div className="font-mono text-xs text-[color:var(--da-color-error)] mb-1">{err.rule}</div>
                       <div>{err.message}</div>
                     </div>
                   ))}
@@ -713,16 +717,16 @@ export default function TenantYAMLPlayground() {
             {/* Warnings */}
             {validation.warnings.length > 0 && (
               <div>
-                <h3 className="font-semibold text-amber-700 mb-3 flex items-center gap-2">
+                <h3 className="font-semibold text-[color:var(--da-color-warning)] mb-3 flex items-center gap-2">
                   <span className="text-lg">⚠</span> {t('警告', 'Warnings')} ({validation.warnings.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.warnings.map((warn, i) => (
                     <div
                       key={i}
-                      className="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-800"
+                      className="bg-[color:var(--da-color-warning-soft)] border border-[color:var(--da-color-warning)] rounded-md p-3 text-sm text-[color:var(--da-color-warning)]"
                     >
-                      <div className="font-mono text-xs text-amber-700 mb-1">{warn.rule}</div>
+                      <div className="font-mono text-xs text-[color:var(--da-color-warning)] mb-1">{warn.rule}</div>
                       <div>{warn.message}</div>
                     </div>
                   ))}
@@ -733,17 +737,17 @@ export default function TenantYAMLPlayground() {
             {/* Metrics Preview */}
             {validation.metrics.length > 0 && (
               <div>
-                <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <h3 className="font-semibold text-[color:var(--da-color-fg)] mb-3 flex items-center gap-2">
                   <span className="text-lg">📊</span> {t('匯出的指標', 'Exported Metrics')} ({validation.metrics.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.metrics.map((metric, i) => (
                     <div
                       key={i}
-                      className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm font-mono text-gray-800"
+                      className="bg-[color:var(--da-color-accent-soft)] border border-[color:var(--da-color-accent)] rounded-md p-3 text-sm font-mono text-[color:var(--da-color-fg)]"
                     >
-                      <div className="text-blue-700 font-semibold">{metric.name}</div>
-                      <div className="text-xs text-gray-600 mt-1">
+                      <div className="text-[color:var(--da-color-accent)] font-semibold">{metric.name}</div>
+                      <div className="text-xs text-[color:var(--da-color-muted)] mt-1">
                         tenant="{metric.tenant}" severity="warning" value={metric.value}
                       </div>
                     </div>
@@ -754,10 +758,10 @@ export default function TenantYAMLPlayground() {
 
             {/* All Valid */}
             {validation.valid && validation.errors.length === 0 && (
-              <div className="bg-green-50 border border-green-200 rounded-md p-4 text-center">
+              <div className="bg-[color:var(--da-color-success-soft)] border border-[color:var(--da-color-success)] rounded-md p-4 text-center">
                 <div className="text-2xl mb-2">✓</div>
-                <div className="text-green-800 font-semibold">{t('配置有效!', 'Configuration is valid!')}</div>
-                <div className="text-xs text-green-700 mt-2">
+                <div className="text-[color:var(--da-color-success)] font-semibold">{t('配置有效!', 'Configuration is valid!')}</div>
+                <div className="text-xs text-[color:var(--da-color-success)] mt-2">
                   {validation.summary.thresholds} {t('閾值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊鍵', 'special keys')} •
                   {validation.summary.routing === 'configured' ? t(' 已配置路由', ' routing configured') : t(' 未配置路由', ' no routing')}
                 </div>
