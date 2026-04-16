@@ -67,7 +67,9 @@ lang: zh
 | 工具 | 用途 |
 |------|------|
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
+| `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
+| `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |

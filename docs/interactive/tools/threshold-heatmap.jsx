@@ -15,21 +15,52 @@ const __PD = window.__PLATFORM_DATA || {};
 const RULE_PACKS = __PD.rulePacks || {};
 const PACK_ORDER = __PD.packOrder || [];
 
-// Color scale: green (low) -> yellow (medium) -> orange/red (high)
-function getColorClass(value, min, max, percentile95) {
-  if (value === null || value === undefined) return 'bg-slate-100';
-
-  const ratio = (value - min) / (max - min);
-
-  // Flag outliers (>2 std deviations)
-  if (value > percentile95) {
-    return 'bg-red-500 text-white font-bold';
+// Color scale + non-color symbol encoding (WCAG 1.4.1 — don't rely on color alone).
+// Returns { colorClass, symbol, tier } so each cell carries dual encoding:
+// Unicode symbol is readable by screen readers and colorblind users (~8% male).
+// Ranges match legend in UI (0-33 / 33-66 / 66-85 / >P95).
+function getCellSeverity(value, min, max, percentile95) {
+  if (value === null || value === undefined) {
+    return { colorClass: 'bg-slate-100', symbol: '', tier: 'none' };
   }
 
-  if (ratio < 0.33) return 'bg-green-200 text-green-900';
-  if (ratio < 0.66) return 'bg-yellow-200 text-yellow-900';
-  if (ratio < 0.85) return 'bg-orange-200 text-orange-900';
-  return 'bg-red-200 text-red-900';
+  // Flag outliers first (>P95)
+  if (value > percentile95) {
+    return {
+      colorClass: 'bg-red-500 text-white font-bold',
+      symbol: '\u274C', // ❌
+      tier: 'outlier',
+    };
+  }
+
+  const ratio = max === min ? 0 : (value - min) / (max - min);
+
+  if (ratio < 0.33) {
+    return { colorClass: 'bg-green-200 text-green-900', symbol: '\u2713', tier: 'low' }; // ✓
+  }
+  if (ratio < 0.66) {
+    return { colorClass: 'bg-yellow-200 text-yellow-900', symbol: '\u26A0', tier: 'medium' }; // ⚠
+  }
+  if (ratio < 0.85) {
+    return { colorClass: 'bg-orange-200 text-orange-900', symbol: '\u26A0\u26A0', tier: 'high' }; // ⚠⚠
+  }
+  return { colorClass: 'bg-red-200 text-red-900', symbol: '\u26A0\u26A0', tier: 'high' };
+}
+
+// Back-compat wrapper (preserves existing call-sites).
+function getColorClass(value, min, max, percentile95) {
+  return getCellSeverity(value, min, max, percentile95).colorClass;
+}
+
+// Human-readable tier label for aria-label / screen-reader announcements.
+function tierLabel(tier) {
+  switch (tier) {
+    case 'low': return t('低', 'Low');
+    case 'medium': return t('中', 'Medium');
+    case 'high': return t('高', 'High');
+    case 'outlier': return t('異常值', 'Outlier');
+    default: return '';
+  }
 }
 
 /**
@@ -301,7 +332,7 @@ export default function ThresholdHeatmap() {
           <div className="xl:col-span-3 bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-auto" role="region" aria-live="polite" aria-label={t('閾值熱力圖', 'Threshold heatmap grid')}>
             <div className="inline-block min-w-full">
               {/* Heatmap Table */}
-              <table className="border-collapse">
+              <table className="border-collapse" role="table" aria-label={t('閾值分佈表格', 'Threshold distribution table')}>
                 <thead>
                   <tr>
                     <th className="border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-900 sticky left-0 z-10 text-left min-w-20">
@@ -326,16 +357,28 @@ export default function ThresholdHeatmap() {
                       </td>
                       {metrics.map(metric => {
                         const value = tenantData[tenant]?.[metric];
-                        const colorClass = getColorClass(value, stats.min, stats.max, stats.p95);
+                        const { colorClass, symbol, tier } = getCellSeverity(
+                          value, stats.min, stats.max, stats.p95
+                        );
+                        const valueText = value ? value.toFixed(0) : '—';
+                        const tierText = tierLabel(tier);
+                        const ariaLabel = value
+                          ? `${tenant} ${metric}: ${value.toFixed(2)}${tierText ? ', ' + tierText : ''}`
+                          : `${tenant} ${metric}: ${t('無資料', 'no data')}`;
 
                         return (
                           <td
                             key={`${tenant}-${metric}`}
                             className={`border border-slate-300 px-2 py-2 text-xs font-mono text-center cursor-pointer transition-opacity hover:opacity-75 ${colorClass}`}
                             onClick={() => setDetailCell({ tenant, metric, value })}
-                            title={value ? `${metric} = ${value.toFixed(2)}` : 'No data'}
+                            title={value ? `${metric} = ${value.toFixed(2)} (${tierText})` : 'No data'}
+                            aria-label={ariaLabel}
+                            role="gridcell"
                           >
-                            {value ? value.toFixed(0) : '—'}
+                            {symbol && (
+                              <span aria-hidden="true" className="mr-1 opacity-90">{symbol}</span>
+                            )}
+                            {valueText}
                           </td>
                         );
                       })}
@@ -345,25 +388,25 @@ export default function ThresholdHeatmap() {
               </table>
             </div>
 
-            {/* Legend */}
-            <div className="mt-6 flex gap-4 items-center text-xs">
+            {/* Legend: symbol + color dual encoding (WCAG 1.4.1 — not color alone). */}
+            <div className="mt-6 flex flex-wrap gap-4 items-center text-xs" role="list" aria-label={t('圖例', 'Legend')}>
               <span className="font-semibold text-slate-900">{t('圖例', 'Legend')}:</span>
-              <div className="flex gap-3">
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 bg-green-200 border border-slate-300"></div>
-                  <span className="text-slate-600">{t('低', 'Low')}</span>
+              <div className="flex flex-wrap gap-3">
+                <div className="flex items-center gap-1" role="listitem">
+                  <div className="w-4 h-4 bg-green-200 border border-slate-300 flex items-center justify-center text-green-900 font-bold" aria-hidden="true">✓</div>
+                  <span className="text-slate-600">{t('低 (0–33%)', 'Low (0–33%)')}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 bg-yellow-200 border border-slate-300"></div>
-                  <span className="text-slate-600">{t('中', 'Medium')}</span>
+                <div className="flex items-center gap-1" role="listitem">
+                  <div className="w-4 h-4 bg-yellow-200 border border-slate-300 flex items-center justify-center text-yellow-900 font-bold" aria-hidden="true">⚠</div>
+                  <span className="text-slate-600">{t('中 (33–66%)', 'Medium (33–66%)')}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 bg-orange-200 border border-slate-300"></div>
-                  <span className="text-slate-600">{t('高', 'High')}</span>
+                <div className="flex items-center gap-1" role="listitem">
+                  <div className="w-4 h-4 bg-orange-200 border border-slate-300 flex items-center justify-center text-orange-900 font-bold text-[10px]" aria-hidden="true">⚠⚠</div>
+                  <span className="text-slate-600">{t('高 (66–85%)', 'High (66–85%)')}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 bg-red-500 border border-slate-300"></div>
-                  <span className="text-slate-600 font-semibold">{t('異常值', 'Outlier')}</span>
+                <div className="flex items-center gap-1" role="listitem">
+                  <div className="w-4 h-4 bg-red-500 border border-slate-300 flex items-center justify-center text-white font-bold" aria-hidden="true">❌</div>
+                  <span className="text-slate-600 font-semibold">{t('異常值 (> P95)', 'Outlier (> P95)')}</span>
                 </div>
               </div>
             </div>

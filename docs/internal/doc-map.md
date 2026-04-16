@@ -23,6 +23,11 @@ lang: zh
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API 架構 |
 | `docs/adr/010-multi-tenant-grouping.md` (.en.md) | Platform Engineers, developers | ADR-010: Multi-Tenant Grouping Architecture |
 | `docs/adr/011-pr-based-write-back.md` (.en.md) | Platform Engineers, developers | ADR-011: PR-based Write-back 模式 |
+| `docs/adr/013-colorblind-hotfix-structured-severity-return.md` | frontend-developers, design-system-maintainers | ADR-013: threshold-heatmap 色盲補丁 — 結構化 severity 返回值 |
+| `docs/adr/014-component-health-token-density-metric.md` | frontend-developers, Platform Engineers, maintainers | ADR-014: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標 |
+| `docs/adr/015-tech-debt-category-budget-isolation.md` | Platform Engineers, tech-leads | ADR-015: TECH-DEBT 類別與 REG Budget 隔離 |
+| `docs/adr/017-wizard-arbitrary-value-token-migration.md` | frontend-developers, maintainers | ADR-017: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） |
+| `docs/adr/018-data-theme-single-track-dark-mode.md` | frontend-developers, designers, maintainers | ADR-018: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |
@@ -106,6 +111,8 @@ lang: zh
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
 | `docs/internal/test-map.md` | maintainers, AI Agent | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
+| `docs/internal/v2.7.0-day1to3-retrospective-review.md` | All | v2.7.0 Day 1–3 Retrospective Review（以 Day 4–5 標準重審） |
+| `docs/internal/v2.7.0-day5-verification-triage.md` | All | v2.7.0 Day 5 — Pre-PR 驗證補丁 Triage |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |

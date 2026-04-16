@@ -222,6 +222,28 @@ merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local
 3. make lint-docs
 ```
 
+## Phase .a0 Style Rules（v2.7.0 新增）
+
+Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
+
+### S1. 中性色禁 slate，用 `--da-neutral-*` 或 `gray-*`
+
+**規則**：`docs/interactive/tools/` 下的 JSX 禁止使用 Tailwind `slate-*` 類別。中性色統一走 `--da-neutral-*` token 或對應的 `gray-*` shade。
+
+**為什麼**：`design-tokens.css` 的 `--da-neutral-*` 色值是 Tailwind `gray` scale（暖中性灰）。`slate` 是冷藍灰，兩者色調不同。混用會導致同頁面兩種中性灰色調。Day 3 deployment-wizard 遷移時確立（commit `8634ea2`）。
+
+**Waiver**：IDE / code preview 情境可保留 `bg-slate-900 text-slate-100`（深底等寬字型視覺），需在 JSX 註解中標明。
+
+**收束驗收**：`grep -rE '(bg|text|border)-slate-[0-9]+' docs/interactive/tools/` 僅剩 waiver。
+
+### S2. Playwright spec 含 `assertNoAbsoluteRootHrefs` 守門
+
+**規則**：每個新 Playwright spec 須呼叫 `assertNoAbsoluteRootHrefs(page)`（`tests/e2e/fixtures/portal-tool-smoke.ts` 提供），防止 REG-004 類型的硬編碼絕對根路徑（`href="/xxx"`）再犯。
+
+**為什麼**：portal 透過 `jsx-loader.html?component=<key>` 載入工具，絕對根路徑全部 404（REG-004 root cause）。長期解是 `jsx-loader.navigate(key)` helper（規畫 v2.8.0 Portal Navigation Refactor），短期靠 test-layer guard 防退化。
+
+**實作**：`assertNoAbsoluteRootHrefs` 掃描所有 `<a href>` 是否為 portal-safe 路徑（相對 / external / fragment）。Day 3 首次落地（commit `ca48275`），`deployment-wizard.spec.ts` 和 `wizard.spec.ts` 已採用。
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
