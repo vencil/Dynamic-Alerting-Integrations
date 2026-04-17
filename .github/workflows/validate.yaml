@@ -39,7 +39,7 @@ jobs:
       # ignores are applied to match ci.yml's test collection and
       # keep the two workflows in sync.
       - run: pip install pyyaml croniter pytest pytest-cov promql-parser hypothesis
-      - run: python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --ignore=tests/test_pipeline_integration.py -v
+      - run: python -m pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py -v
 
   go-tests:
     name: Go Tests
