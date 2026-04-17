@@ -144,6 +144,7 @@ These tools operate on local YAML files and don't require network.
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics, ADR-006) | `--endpoint <url>` or `--prometheus <url>` |
 | `describe-tenant` | Display tenant effective config (with defaults inheritance) | `<tenant-id>` |
 | `migrate-conf-d` | Migrate flat conf.d/ to hierarchical layout | `--conf-d <path>` |
+| `blast-radius` | Diff two effective config snapshots, classify impact (Tier A/B/C) | `--base <json> --pr <json>` |
 
 ---
 
@@ -1260,6 +1261,64 @@ da-tools migrate-conf-d --conf-d ./conf.d/ --output-plan migration-plan.json
 |------|-------------|
 | `0` | Success (dry-run or apply) |
 | `1` | Invalid config directory or migration conflict |
+
+---
+
+#### blast-radius
+
+Compare two `describe-tenant --all` JSON outputs and classify per-tenant changes into Tier A (threshold/routing), Tier B (other alerting), or Tier C (format-only). Designed for CI bot PR comments showing blast radius.
+
+```bash
+python3 scripts/tools/ops/blast_radius.py --base <base.json> --pr <pr.json> [options]
+```
+
+**Required Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `--base`, `-b` | Base branch effective config JSON (from `describe-tenant --all --output`) |
+| `--pr`, `-p` | PR branch effective config JSON |
+
+**Optional Parameters**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--output`, `-o` | Output file path (default: stdout) | — |
+| `--format`, `-f` | Output format: `json` or `markdown` | `json` |
+| `--changed-files` | Changed conf.d/ files list (for PR comment header) | — |
+
+**Tier Classification Logic**
+
+| Tier | Matching Fields | Description |
+|------|----------------|-------------|
+| **A** | `alerts.threshold.*`, `_routing.receiver.*`, `receivers` | Threshold or routing receiver changes (highlighted) |
+| **B** | `alerts.*`, `_routing.*`, `rules`, `severity`, `notification` | Other alerting field changes (listed) |
+| **C** | `_metadata`, `_comment`, `timezone`, etc. | Format-only or non-alerting fields (count only) |
+
+**Examples**
+
+```bash
+# JSON format report
+python3 scripts/tools/ops/blast_radius.py \
+  --base /tmp/base.json --pr /tmp/pr.json
+
+# Markdown format (for PR comment)
+python3 scripts/tools/ops/blast_radius.py \
+  --base /tmp/base.json --pr /tmp/pr.json \
+  --format markdown --changed-files "finance/_defaults.yaml"
+
+# Output to file
+python3 scripts/tools/ops/blast_radius.py \
+  --base /tmp/base.json --pr /tmp/pr.json \
+  --output report.json
+```
+
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | Success |
+| `1` | Invalid input file or parse error |
 
 ---
 

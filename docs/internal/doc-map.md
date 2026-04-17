@@ -123,6 +123,7 @@ lang: zh
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |
 | `docs/scenarios/hands-on-lab.md` (.en.md) | Platform Engineers, Tenants | 動手實驗：從零到生產告警 |
 | `docs/scenarios/incremental-migration-playbook.md` (.en.md) | Platform Engineers, SREs | 場景：漸進式遷移 Playbook |
+| `docs/scenarios/manage-at-scale.md` (.en.md) | Platform Engineers, operator, DevOps | 場景：千租戶規模管理 |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標 |
 | `docs/scenarios/multi-domain-conf-layout.md` (.en.md) | Platform Engineers, operator, DevOps | 場景：多域名階層式配置 — conf.d/ 目錄結構重構（v2.7.0） |
 | `docs/scenarios/README.md` | All | 場景指南導覽 |

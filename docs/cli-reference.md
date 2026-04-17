@@ -130,6 +130,7 @@ da-tools <command> --help
 |------|------|----------|
 | `describe-tenant` | 顯示租戶有效配置（含預設值繼承） | `<tenant-id>` |
 | `migrate-conf-d` | 將平坦 conf.d/ 遷移至階層式佈局 | `--conf-d <path>` |
+| `blast-radius` | 比對兩份有效配置快照，分類影響範圍（Tier A/B/C） | `--base <json> --pr <json>` |
 | `scaffold` | 產生 tenant 配置 | `--tenant <name> --db <types>` |
 | `migrate` | 傳統規則 → 動態格式轉換（AST 引擎） | `<input_file>` |
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
@@ -1157,6 +1158,64 @@ da-tools migrate-conf-d --conf-d ./conf.d/ --output-plan migration-plan.json
 |------|------|
 | `0` | 成功（dry-run 或 apply） |
 | `1` | 配置目錄無效或遷移衝突 |
+
+---
+
+#### blast-radius
+
+比對兩份 `describe-tenant --all` 產出的有效配置 JSON，逐租戶分類變動為 Tier A（閾值/路由）、Tier B（其他告警欄位）、Tier C（純格式）。供 CI bot 在 PR comment 中展示影響範圍。
+
+```bash
+python3 scripts/tools/ops/blast_radius.py --base <base.json> --pr <pr.json> [options]
+```
+
+**必要參數**
+
+| 參數 | 說明 |
+|------|------|
+| `--base`, `-b` | 基準分支有效配置 JSON（`describe-tenant --all --output` 產出） |
+| `--pr`, `-p` | PR 分支有效配置 JSON |
+
+**選用參數**
+
+| 參數 | 說明 | 預設 |
+|------|------|------|
+| `--output`, `-o` | 輸出檔案路徑（預設 stdout） | — |
+| `--format`, `-f` | 輸出格式：`json` 或 `markdown` | `json` |
+| `--changed-files` | 變更的 conf.d/ 檔案清單（用於 PR comment 標題） | — |
+
+**Tier 分類邏輯**
+
+| Tier | 匹配欄位 | 說明 |
+|------|---------|------|
+| **A** | `alerts.threshold.*`、`_routing.receiver.*`、`receivers` | 閾值或路由 receiver 變動（高亮） |
+| **B** | `alerts.*`、`_routing.*`、`rules`、`severity`、`notification` | 其他告警相關欄位變動（列表） |
+| **C** | `_metadata`、`_comment`、`timezone` 等 | 純格式或非告警欄位（僅計數） |
+
+**範例**
+
+```bash
+# JSON 格式報告
+python3 scripts/tools/ops/blast_radius.py \
+  --base /tmp/base.json --pr /tmp/pr.json
+
+# Markdown 格式（供 PR comment）
+python3 scripts/tools/ops/blast_radius.py \
+  --base /tmp/base.json --pr /tmp/pr.json \
+  --format markdown --changed-files "finance/_defaults.yaml"
+
+# 輸出至檔案
+python3 scripts/tools/ops/blast_radius.py \
+  --base /tmp/base.json --pr /tmp/pr.json \
+  --output report.json
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功 |
+| `1` | 輸入檔案無效或解析錯誤 |
 
 ---
 
