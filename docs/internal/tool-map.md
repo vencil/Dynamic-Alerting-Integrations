@@ -88,6 +88,7 @@ lang: zh
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
+| `migrate_ssot_language.py` | SSOT 語言切換遷移工具 |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
