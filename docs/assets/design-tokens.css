@@ -19,7 +19,7 @@
   /* ── Base ── */
   --da-color-bg:              #fafbfc;
   --da-color-fg:              #1a1a2e;
-  --da-color-muted:           #64748b;
+  --da-color-muted:           #475569;  /* Slate 600 — WCAG AA compliant on #fafbfc/white */
 
   /* ── Surface (cards, panels) ── */
   --da-color-surface:         #ffffff;
