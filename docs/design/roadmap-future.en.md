@@ -2,7 +2,7 @@
 title: "Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More"
 tags: [architecture, roadmap, design]
 audience: [platform-engineer, devops]
-version: v2.6.0
+version: v2.7.0
 lang: en
 parent: architecture-and-design.en.md
 ---

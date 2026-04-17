@@ -2,12 +2,12 @@
 title: "Scenario: Managing at Scale — Thousand-Tenant Operations"
 tags: [scenario, scale, blast-radius, search, management]
 audience: [platform-engineer, operator, devops]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Scenario: Managing at Scale — Thousand-Tenant Operations
 
-> **v2.6.0** | Related docs: [multi-domain-conf-layout](multi-domain-conf-layout.en.md), [ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md), [ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.en.md), [tenant-lifecycle](tenant-lifecycle.en.md)
+> **v2.7.0** | Related docs: [multi-domain-conf-layout](multi-domain-conf-layout.en.md), [ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md), [ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.en.md), [tenant-lifecycle](tenant-lifecycle.en.md)
 
 ## Overview
 

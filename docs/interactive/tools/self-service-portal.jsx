@@ -2,7 +2,7 @@
 title: "Tenant Self-Service Portal"
 tags: [self-service, validation, routing, alerts, tenant]
 audience: ["platform-engineer", "domain-expert", "tenant"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [playground, config-lint, alert-simulator, schema-explorer]
 dependencies: [portal-shared.jsx, YamlValidatorTab.jsx, AlertPreviewTab.jsx, RoutingTraceTab.jsx]

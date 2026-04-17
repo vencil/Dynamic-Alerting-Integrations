@@ -2,7 +2,7 @@
 title: "Operator GitOps 部署指南"
 tags: [operator, gitops, argocd, flux]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # Operator GitOps 部署指南

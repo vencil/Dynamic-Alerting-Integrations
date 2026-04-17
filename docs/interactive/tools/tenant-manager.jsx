@@ -2,7 +2,7 @@
 title: "Tenant Manager"
 tags: [tenants, management, operations, batch, groups]
 audience: [platform-engineer, sre]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [config-diff, playground, threshold-calculator, alert-simulator]
 dependencies: []

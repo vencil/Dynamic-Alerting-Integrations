@@ -2,7 +2,7 @@
 title: "ADR-013: Component Health Scanner — Tier Scoring Algorithm and token_density Auxiliary Metric"
 tags: [adr, metrics, component-health, design-tokens, tier-scoring, v2.7.0]
 audience: [frontend-developers, platform-engineers, maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 

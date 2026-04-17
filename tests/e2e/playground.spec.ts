@@ -26,16 +26,13 @@ test.describe('Playground @critical', () => {
   });
 
   test('renders YAML editor region', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
     await loadPortalTool(page, 'playground');
 
-    // Playground should present a YAML editing area and a preview/result panel.
-    // The editor may be a textarea, code-mirror, or a labeled region.
-    const editor = page.locator(
-      'textarea, [role="textbox"], [aria-label*="YAML" i], [aria-label*="Config" i], [data-testid*="editor"]'
-    );
-    await expect(editor.first()).toBeVisible({ timeout: 10000 });
+    // v2.7.0 calibration (§8.11.4): playground.jsx:633-636 renders a
+    // <textarea aria-label={t('租戶 YAML 編輯器', 'Tenant YAML editor')}>.
+    // getByRole('textbox', { name: /YAML/i }) matches both locales.
+    const editor = page.getByRole('textbox', { name: /YAML/i });
+    await expect(editor).toBeVisible({ timeout: 10000 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
@@ -43,15 +40,16 @@ test.describe('Playground @critical', () => {
     await assertNoAbsoluteRootHrefs(page);
   });
 
-  test('validate button or action is present', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+  test('primary action (Export .yaml) is present', async ({ page }) => {
     await loadPortalTool(page, 'playground');
 
-    // Playground should have a primary action button to validate/run the config.
-    const action = page.locator(
-      'button:text-matches("Validate|Run|Check|Apply|Submit", "i")'
-    );
-    await expect(action.first()).toBeVisible({ timeout: 10000 });
+    // v2.7.0 calibration (§8.11.4): Playground validation is reactive
+    // (runs on every keystroke / template change — see playground.jsx:331)
+    // so there is no "Validate" / "Run" / "Apply" button. The primary
+    // user-triggered action is "Export .yaml" (playground.jsx:581-585).
+    // Secondary actions: Reset / Diff / Share Link. We assert Export
+    // since it's the terminal user action of the workflow.
+    const exportBtn = page.getByRole('button', { name: /Export|匯出/i });
+    await expect(exportBtn).toBeVisible({ timeout: 10000 });
   });
 });

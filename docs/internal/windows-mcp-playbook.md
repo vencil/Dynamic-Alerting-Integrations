@@ -2,8 +2,8 @@
 title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.6.0
-verified-at-version: v2.6.0
+version: v2.7.0
+verified-at-version: v2.7.0
 lang: zh
 ---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
@@ -346,6 +346,20 @@ done
 ## FUSE Phantom Lock 防治
 
 FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind mount）是 `.git/*.lock` 殘留的根本原因。以下是分層防治措施（預防 → 偵測 → 修復 → 驗證）：
+
+### ⛔ 明確禁止清單（v2.7.0 Phase .e LL 固化）
+
+以下操作在 FUSE 環境下**確認會壞事**，一律禁用：
+
+| 禁用 | 根因 | 正確做法 |
+|------|------|---------|
+| `cp .git/index /tmp/xxx` + `GIT_INDEX_FILE=/tmp/xxx git commit-tree` | FUSE 側 `.git/index` 永遠是 stale 的；temp index + commit-tree 產出的 tree 物件不含真實修改 → push 後遠端看到空 commit | 所有 git add/commit/push **必須從 Windows 側執行**：`scripts/ops/win_git_escape.bat` 或 `cd C:\Users\<USER>\vibe-k8s-lab && git add ... && git commit --no-verify -F _msg.txt && git push` |
+| `docker exec vibe-dev-container git add ...`（在 FUSE mount 上） | Dev Container bind-mount 看到的是 FUSE 側的 `.git/`，index 讀取在 stat cache 層可能不一致；與 Windows 側併用時會互踩 index lock | git write 操作全集中在 **Windows 原生 git**；Dev Container 只做 `git log` / `git status` / Go test / pre-commit 等唯讀或可重跑的操作 |
+| `.bat` 檔案內含 CJK 註解或字串（e.g. 中文的 `rem`） | Desktop Commander `start_process` 讀取 `.bat` 的 encoding 不一致 → batch parser 看到截斷指令；`cmd /c` 間接呼叫同樣失敗 | `.bat` 內**全 ASCII 註解與字串**；CJK 內容只放對應 `.md` playbook。範例：`win_git_escape.bat` 在 commit `e55d9af` 已改全英文註解 🛡️（詳見 [陷阱 #45](#已知陷阱速查)） |
+| 任何 git 子命令的 `-i` / `--interactive` flag | MCP shell 無法開啟編輯器；rebase/add/commit 會 hang 直到 timeout | 用非互動替代：`git -c sequence.editor=true -c core.editor=true rebase --autosquash`、`git commit -F file.txt`、`git rm --cached` 直接下 path（詳見 [陷阱 #41](#已知陷阱速查)） |
+| 從 FUSE 側用 `rm -f .git/*.lock` 清 phantom lock | FUSE dentry cache 薛丁格態：`ls` 看得到、`unlink` 回 EPERM；清了也只是假象 | 用 `bash scripts/session-guards/git_check_lock.sh --clean`（會自動偵測並給出正確動作建議）；真正清不掉時走 Windows MCP `Remove-Item` 或 §修復層 B Level 6 rename-trick |
+
+> **決策助記**：FUSE 側可以 **read** (stat/cat/diff)，但一切會**寫 NTFS metadata** 的操作（commit / add / lock acquire / 清 lock）都走 Windows 原生 git。
 
 ### 預防層：降低 Lock 發生機率
 

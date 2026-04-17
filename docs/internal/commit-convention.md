@@ -4,7 +4,7 @@ sidebar_label: Commit Convention
 description: How to write Conventional Commits for automated changelog generation
 tags: [commits, conventions, internal]
 audience: [contributors, maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

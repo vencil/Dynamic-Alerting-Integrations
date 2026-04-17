@@ -2,7 +2,7 @@
 title: "AST 遷移引擎架構"
 tags: [migration, ast-engine]
 audience: [platform-engineer, devops]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # AST 遷移引擎架構

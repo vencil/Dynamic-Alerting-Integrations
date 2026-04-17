@@ -2,7 +2,7 @@
 title: "CLAUDE.md — AI 開發上下文指引"
 tags: [ai-agent, onboarding, internal]
 audience: [ai-agent, maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 
@@ -43,7 +43,7 @@ Session 結束或異常終止後：`make session-cleanup`
 
 ## 專案概覽
 
-**Multi-Tenant Dynamic Alerting 平台 (v2.6.0)** — Config-driven, SHA-256 hot-reload, Directory Scanner。完整架構速覽見 [architecture-and-design.md](docs/architecture-and-design.md)；版本歷程見 [CHANGELOG.md](CHANGELOG.md)。
+**Multi-Tenant Dynamic Alerting 平台 (v2.7.0)** — Config-driven, SHA-256 hot-reload, Directory Scanner。完整架構速覽見 [architecture-and-design.md](docs/architecture-and-design.md)；版本歷程見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 架構速查
 
@@ -86,8 +86,8 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **129 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（含受眾、內容摘要、Change Impact Matrix）
-- **112 個 Python 工具**（ops 46 / dx 29 / lint 36）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
-- **38 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
+- **117 個 Python 工具**（ops 46 / dx 29 / lint 36 / 共享 6，含 `validate_all.py`）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
+- **39 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
 - **Makefile** 完整列表：`make help`。必記 Top 5：
   - `make pr-preflight` — ⛔ PR merge 前必跑（conflict / CI / hooks / mergeable 六項檢查）
   - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs）

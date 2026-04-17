@@ -2,7 +2,7 @@
 title: "ADR-011: PR-based Write-back Mode"
 tags: [adr, architecture, gitops, pr, write-back]
 audience: [platform-engineers, developers]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 

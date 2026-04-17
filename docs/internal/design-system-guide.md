@@ -2,7 +2,7 @@
 title: "Design System Guide"
 tags: [documentation, internal, design]
 audience: [maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 
@@ -471,7 +471,7 @@ CSS 中應包含：
 
 ## 10. 舊工具遷移指引
 
-對於 v2.6.0 遺留的 hardcoded CSS 工具，遷移步驟如下：
+對於 v2.7.0 遺留的 hardcoded CSS 工具，遷移步驟如下：
 
 ### 10.1 色彩遷移
 

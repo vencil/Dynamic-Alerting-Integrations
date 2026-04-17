@@ -47,16 +47,14 @@ test.describe('Getting Started Wizard @critical', () => {
   });
 
   test('renders role selector as entry step', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
     await loadPortalTool(page, 'wizard');
 
-    // The wizard's canonical first-step UI is a role picker with 3 cards
-    // (platform-engineer / sre / domain-owner — see docs/getting-started/wizard.jsx).
-    // We accept any of several role-like strings to keep the assertion resilient
-    // to copy changes.
+    // v2.7.0 calibration (§8.11.4): wizard.jsx:80-94 defines 3 roles:
+    //   Platform Engineer / Domain Expert (DBA) / Tenant Team
+    // (Historical names "SRE / Domain Owner / Tenant Operator" were renamed
+    // in v2.6.x — regex updated accordingly.)
     const roleCard = page.locator(
-      ':text-matches("Platform Engineer|SRE|Domain Owner|Tenant Operator", "i")'
+      ':text-matches("Platform Engineer|Domain Expert|Tenant Team", "i")'
     );
     await expect(roleCard.first()).toBeVisible({ timeout: 10000 });
   });
@@ -68,16 +66,27 @@ test.describe('Getting Started Wizard @critical', () => {
     await assertNoAbsoluteRootHrefs(page);
   });
 
-  test('Start-Here badge is visible and announced', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+  test('Start-Here badge is visible after role + goal selection', async ({ page }) => {
     await loadPortalTool(page, 'wizard');
 
-    // v2.5.0 Phase F added `role="status"` + `aria-label` to the amber badge
-    // to make it screen-reader-announced. Guard that regression.
-    const startHere = page
-      .locator('[role="status"], [aria-label*="Start" i], :text-matches("Start Here", "i")')
-      .first();
+    // v2.7.0 calibration (§8.11.4): wizard.jsx:364 renders the badge as plain
+    // text inside `<span className="... bg-amber-200">START HERE</span>` —
+    // no role="status" / aria-label is applied. The badge only becomes
+    // visible at step 2 (after role + goal selection).
+    //
+    // Adding `role="status"` is out of scope for this regression guard — it
+    // would be a behaviour change. We match on the canonical uppercase text
+    // "START HERE" emitted by the JSX. A11y enhancement is tracked in the
+    // frontend-quality backlog (wizard.md §A11y).
+
+    // Step 1: click a role card (Platform Engineer is the canonical first role).
+    await page.getByRole('button', { name: /Platform Engineer/i }).click();
+
+    // Step 2: click the first goal ("Initial Setup" for Platform role).
+    await page.getByRole('button', { name: /Initial Setup/i }).click();
+
+    // Step 3: START HERE badge on the first recommended doc must be visible.
+    const startHere = page.getByText('START HERE', { exact: true }).first();
     await expect(startHere).toBeVisible({ timeout: 10000 });
   });
 });

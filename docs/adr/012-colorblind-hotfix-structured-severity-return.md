@@ -2,7 +2,7 @@
 title: "ADR-012: threshold-heatmap 色盲補丁 — 結構化 severity 返回值"
 tags: [adr, accessibility, wcag, portal, v2.7.0]
 audience: [frontend-developers, design-system-maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

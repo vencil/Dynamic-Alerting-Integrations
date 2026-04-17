@@ -2,7 +2,7 @@
 title: "Operator Shadow Monitoring 策略"
 tags: [operator, shadow-monitoring, migration]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # Operator Shadow Monitoring 策略
@@ -103,7 +103,7 @@ spec:
     spec:
       containers:
         - name: collector
-          image: ghcr.io/vencil/da-tools:v2.6.0
+          image: ghcr.io/vencil/da-tools:v2.7.0
           command:
             - python3
             - -c

@@ -2,7 +2,7 @@
 title: "測試架構導覽 (Test Map)"
 tags: [testing, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

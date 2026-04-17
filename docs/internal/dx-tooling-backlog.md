@@ -3,7 +3,7 @@ title: DX Tooling Backlog
 tags: [dx, tooling, backlog, internal]
 audience: [maintainers, contributors]
 lang: zh
-version: v2.6.0
+version: v2.7.0
 ---
 
 # DX Tooling Backlog

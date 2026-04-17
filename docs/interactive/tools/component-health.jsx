@@ -2,7 +2,7 @@
 title: "Component Health Dashboard"
 tags: [health, dashboard, tier, coverage, tokens, quality]
 audience: ["platform-engineer", "contributor"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [threshold-heatmap, config-lint]
 ---

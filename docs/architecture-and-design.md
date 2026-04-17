@@ -2,7 +2,7 @@
 title: "架構與設計 — 動態多租戶警報平台技術白皮書"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
@@ -150,7 +150,7 @@ graph TB
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
-| **繼承引擎 (Inheritance Engine)** | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設、深合併與覆寫語義 (ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載、平坦與階層式 conf.d/ 共存 (ADR-017) | [design/config-driven.md](design/config-driven.md) |
+| **繼承引擎 (Inheritance Engine)** 🟡 *基礎完成、Go 生產路徑 pending* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設、深合併與覆寫語義 (ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載、平坦與階層式 conf.d/ 共存 (ADR-017)。**目前狀態**：ADR-017/018 + Python `describe-tenant` CLI + `--what-if` 模擬工具已完成；Go Directory Scanner 遞迴掃描 + dual-hash hot-reload + 300ms debounce 排 `v2.7.0-final` Dev Container session（見 v2.7.0-planning §8.7） | [design/config-driven.md](design/config-driven.md) |
 | **未來路線** | 國際化 × 權限 × 可觀測性閉環 × 智慧化 | EN-first SSOT、Field-level RBAC、Auto-Discovery、DaC | [design/roadmap-future.md](design/roadmap-future.md) |
 
 ---
@@ -257,10 +257,11 @@ spec:
 
 | 時程 | 主題 | 重點方向 |
 |------|------|---------|
-| **v2.7.0 計畫中** | 國際化 × 權限 × 自動化 | EN-first SSOT、Field-level RBAC、Tenant Auto-Discovery、Grafana DaC、Release Automation |
+| **v2.7.0 進行中** | Scale Foundation + 元件健壯化 | `conf.d/` 目錄分層 + `_defaults.yaml` 繼承引擎（ADR-017/018，**基礎完成、Go 生產路徑 pending**）、Blast Radius CI bot ✅、Tier 1 元件健康度快照 ✅、1000-tenant synthetic fixture ✅、SSOT 語言 Phase 1 試點 ✅ |
+| **v2.8.0 計畫中** | 千租戶上線 × 控制台整合 | Scale Foundation II（server-side search、Tenant Manager virtualized）、SSOT EN-first 全量遷移、Master Onboarding Journey、Field-level RBAC、v2.7.0 未完 Go 工作認領（B-2/B-3/C-1/C-3） |
 | **長期探索** | 智慧化 × 去耦合 | Anomaly-Aware Threshold、Log-to-Metric Bridge、Multi-Format Export、CRD、ChatOps |
 
-**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md)
+**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 執行紀錄見 [v2.7.0-planning.md](internal/v2.7.0-planning.md)
 
 ---
 

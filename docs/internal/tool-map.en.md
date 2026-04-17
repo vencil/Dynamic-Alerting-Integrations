@@ -2,7 +2,7 @@
 title: "Tool Map"
 tags: [tooling, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 
@@ -22,6 +22,7 @@ lang: en
 | `backtest_threshold.py` | Backtest threshold changes against historical Prometheus data. |
 | `baseline_discovery.py` | Baseline Discovery 工具。 |
 | `batch_diagnose.py` | Post-cutover multi-tenant health report. |
+| `blast_radius.py` | Blast Radius diff engine — compare base vs PR effective tenant configs. |
 | `blind_spot_discovery.py` | Scan Prometheus targets and cross-reference tenant configs |
 | `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |
@@ -67,8 +68,11 @@ lang: en
 | Tool | Description |
 |------|------|
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
+| `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
+| `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
+| `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `doc_impact.py` | 文件變更影響分析 |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
@@ -79,9 +83,12 @@ lang: en
 | `generate_platform_data.py` | 共用平台資料產生器 |
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
+| `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
+| `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
+| `migrate_ssot_language.py` | SSOT 語言切換遷移工具 |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
@@ -101,6 +108,7 @@ lang: en
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
+| `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |

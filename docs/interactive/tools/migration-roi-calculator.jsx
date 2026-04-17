@@ -2,7 +2,7 @@
 title: "Migration ROI Calculator"
 tags: [migration, roi, promql, conversion]
 audience: [platform-engineer, sre]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [roi-calculator, operator-setup-wizard, migration-simulator]
 ---

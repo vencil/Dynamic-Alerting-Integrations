@@ -2,7 +2,7 @@
 title: "場景指南導覽"
 tags: [scenario, navigation]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

@@ -26,15 +26,13 @@ test.describe('Cost Estimator @critical', () => {
   });
 
   test('renders input controls for estimation parameters', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
     await loadPortalTool(page, 'cost-estimator');
 
-    // Cost estimator should have numeric inputs (tenant count, resources, etc.)
-    const input = page.locator(
-      'input[type="number"], input[type="range"], select, [role="slider"], [role="spinbutton"]'
-    );
-    await expect(input.first()).toBeVisible({ timeout: 10000 });
+    // v2.7.0 calibration (§8.11.4): cost-estimator.jsx:462-470 renders
+    // multiple <input type="range" role="slider" aria-label=...> controls
+    // for tenant count, packs-per-tenant, scrape interval, retention, replicas.
+    const slider = page.getByRole('slider').first();
+    await expect(slider).toBeVisible({ timeout: 10000 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
@@ -42,15 +40,14 @@ test.describe('Cost Estimator @critical', () => {
     await assertNoAbsoluteRootHrefs(page);
   });
 
-  test('cost output or summary section is present', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+  test('Recommendation region is present', async ({ page }) => {
     await loadPortalTool(page, 'cost-estimator');
 
-    // Should display a cost summary, breakdown, or estimate after loading.
-    const output = page.locator(
-      ':text-matches("\\$|cost|total|estimate|month|resource", "i")'
-    );
-    await expect(output.first()).toBeVisible({ timeout: 10000 });
+    // v2.7.0 calibration (§8.11.4): cost-estimator.jsx:778 emits
+    // <div role="region" aria-live="polite" aria-label="Recommendation">
+    // which holds the computed monthly-cost summary. The region is
+    // always rendered (reactive), so it is visible on initial load.
+    const region = page.getByRole('region', { name: /Recommendation/i });
+    await expect(region).toBeVisible({ timeout: 10000 });
   });
 });

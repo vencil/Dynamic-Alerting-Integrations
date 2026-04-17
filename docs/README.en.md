@@ -2,7 +2,7 @@
 title: "Documentation Guide"
 tags: [overview, introduction]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Documentation Guide

@@ -2,7 +2,7 @@
 title: "未來擴展路線 — K8s Operator、Design System、Auto-Discovery 等"
 tags: [architecture, roadmap, design]
 audience: [platform-engineer, devops]
-version: v2.6.0
+version: v2.7.0
 parent: architecture-and-design.md
 lang: zh
 ---

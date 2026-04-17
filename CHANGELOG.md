@@ -9,6 +9,106 @@ lang: zh
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
+## [v2.7.0-rc] — Scale Foundation × 元件健壯化 × 測試基礎設施（draft — tag-day 再補 final 日期）
+
+> ⚠️ 本條目為 `v2.7.0-final` tag 前草稿（2026-04-17 Cowork Phase .e E-5 草擬）。實際發布前需補：SLO 最終數字（B-1 1000-tenant benchmark 跑完）、Go 實作 commit SHA、final release 日期。
+
+v2.7.0 的核心是「讓既有 38 個 JSX 工具真正可靠可擴展，並為千租戶管理鋪好資料結構與基礎設施」。三個支柱：元件健壯化（Design Token 遷移 + Tier 分級 + Known Regressions 治理）、Scale Foundation I（`conf.d/` 分層 + `_defaults.yaml` 繼承引擎 + 混合模式）、測試與基礎設施（`tests/` 子目錄分層、1000-tenant fixture、Blast Radius CI bot）。
+
+### 元件健壯化
+
+v2.6.0 完成設計系統統一，v2.7.0 把債務從「token 定義」推進到「全面採用」，並加入元件健康治理機制。
+
+- **Design Token 全面遷移**：`wizard.jsx` / `deployment-wizard.jsx` / `alert-timeline.jsx` / `dependency-graph.jsx` / `config-lint.jsx` / `rbac.jsx` / `cicd-setup-wizard.jsx` / `tenant-manager.jsx` / `multi-tenant-comparison.jsx` 共 9 個工具完成 Tailwind → arbitrary value token 改寫（剩 wizard.jsx 部分 + 7 個 px-only 工具延至 v2.8.0）
+- **`[data-theme]` 單軌 dark mode**（ADR-016）：移除 Tailwind `dark:` 前綴的雙軌橋接，全 Portal 改用單一 `[data-theme="dark"]` attribute。解決 v2.6.0 引入的 dark mode 誤用陷阱
+- **Component Health Snapshot**（新增）：`scripts/tools/lint/scan_component_health.py` 掃描 39 個 JSX 互動工具 → 產出 `docs/internal/component-health-snapshot.json`（5 維度評分：LOC + Audience + Phase + Writer + Recency）+ `component-health.jsx` dashboard。Tier 分級 Tier 1 = 11 / Tier 2 = 25 / Tier 3 deprecation_candidate = 2 / Tier 3 = 1
+- **Token density metric**（ADR-013）：scan_component_health 新增 `token_density = design_token_refs / (design_token_refs + hardcoded_px + hardcoded_hex)` 指標，量化 Token 採用進度
+- **TECH-DEBT 類別獨立 budget**（ADR-014）：從 REG budget 分出 TECH-DEBT 類別（`--da-color-muted` → `--da-color-tag-fg` 色對比修復、cicd-setup-wizard 0-aria、axe_lite_static 漏 color-contrast 等），不佔 REG P2/P3 配額
+- **Colorblind hotfix**（ADR-012）：threshold-heatmap 結構化 severity 返回（不只靠顏色），WCAG AA 合規
+- **4 個新工具**：`check_aria_references.py`、`axe_lite_static.py`、`check_design_token_usage.py`（pre-commit manual stage）、`scan_component_health.py`
+- **Known Regressions 登記**：REG-001~004 治理；REG-003 changelog.html 修復延至 v2.8.0
+
+### Scale Foundation I：千租戶配置資料結構
+
+v2.6.0 為單一大 YAML 與 Operator 路徑建立了穩定基礎；v2.7.0 把租戶配置的資料結構本身升級為可支撐千租戶規模。
+
+- **`conf.d/` 階層目錄**（ADR-017）：支援 `conf.d/<domain>/<region>/<tenant>.yaml` 多層路徑，domain / region / environment 任一層可放 `_defaults.yaml` 提供繼承基礎
+- **`_defaults.yaml` 繼承引擎**（ADR-018）：L0（頂層 defaults）→ L1（domain）→ L2（region）→ L3（tenant override）四層 deep merge；array 替換語義 + null-as-delete + 明確優先序
+- **Dual-hash 熱重載**（ADR-018）：`source_hash`（原始文件 SHA-256）+ `merged_hash`（套完繼承後的 canonical JSON SHA-256）並行追蹤，merged_hash 變化才觸發 reload，避免無效變動重啟；300ms debounce window 吸收連續寫入
+- **Mixed-mode 支援**：舊扁平 `tenants/*.yaml` 與新 `conf.d/` 分層可並存，平滑 migration 不強制一次切
+- **Tenant API `/effective` endpoint**（B-3，Go 實作 Dev Container pending）：`GET /api/v1/tenants/{id}/effective` 返回套完繼承的 merged config + 來源鏈
+- **新 CLI `da-tools describe-tenant`**（新增）：展示 defaults chain + merge 結果 + effective config；`--what-if <file>` 模式模擬 `_defaults.yaml` 變動 → diff baseline vs what-if merged_hash + per-key diff。20 tests pass（含 5 個 --what-if 測試）
+- **新 CLI `da-tools migrate-conf-d`**（新增）：從扁平 `tenants/` 到 `conf.d/` 分層的 automated migration tool，含 dry-run 與 rollback。19 tests pass
+- **Schema v2.7.0**：`tenant-config.schema.json` 新增 `definitions/defaultsConfig`（_defaults.yaml 結構）+ `_metadata $comment`；版號欄位於 `bump_docs --platform 2.7.0` tag-day batch 統一 bump
+- **6 個新 scenario guide**：`multi-domain-conf-layout.md` / `incremental-migration-playbook.md` / `manage-at-scale.md` / `tenant-lifecycle.md`（各含 ZH + EN）
+- **Python tool 數 112 → 117**（+5：`scan_component_health` / `check_aria_references` / `axe_lite_static` / `check_design_token_usage` / `describe_tenant` / `migrate_conf_d`；計數含 `ops 46 / dx 29 / lint 36 / 共享 6`）
+
+### 測試與基礎設施
+
+把測試與 CI 從「能跑」升級為「可規模化」與「能看出 regressions」。
+
+- **`tests/` 子目錄分層**：依 scope 重組為 `tests/dx/` / `tests/ops/` / `tests/lint/` / `tests/shared/`，匹配 `scripts/tools/` 的分層
+- **1000-tenant synthetic fixture**（新增）：`scripts/tools/dx/generate_synthetic_tenants.py` 產出可重現的千租戶 fixture，供 scan / reload benchmark 與 B-1 Scale Gate 驗證
+- **SSOT 語言 Phase 1（工具就緒）**：`migrate_ssot_language.py` + lint hooks 雙模式（`.en.md` / `.zh.md` auto-detect）+ 試點 3-5 檔遷移驗證。全量 66 對檔案 + mkdocs.yml 原子翻轉排 v2.8.0
+- **Blast Radius CI bot**（Phase .c C-2）：PR 變更觸發自動計算影響範圍（tenants / rules / thresholds），comment 到 PR。GitHub Actions workflow + Python script
+- **JSX 互動工具數 38 → 39**（+1：`component-health.jsx`；`operator-setup-wizard` 已於 v2.6.0 納入）
+- **Pre-commit hooks**：31 auto + 13 manual-stage；新增 `check_design_token_usage`（manual stage）追蹤 token 採用進度
+- **Makefile `make pre-tag` 閘門**：`version-check` + `lint-docs` + `playbook-freshness-ll` 三項必過才能打 tag
+- **Playwright locator calibration**（Tier 1 A-6 smoke）：wizard / playground / config-lint / cost-estimator 4 檔 × 2 `test.fixme()` = 8/8 全部 unlock；優先級 `getByRole > testid`（對齊 testing-playbook §v2.7.0 LL）；未動一個 `data-testid`；剩 4 檔（notification-previewer / threshold-heatmap / rbac-setup-wizard / cicd-setup-wizard）延至 v2.8.0
+
+### ADR 新增（7 條，ADR-012~018）
+
+| # | 主題 | 範圍 |
+|---|------|------|
+| ADR-012 | Colorblind hotfix：結構化 severity 返回 | Accessibility |
+| ADR-013 | Component Health + token_density metric | Frontend 品質治理 |
+| ADR-014 | TECH-DEBT 類別 budget 獨立（不佔 REG 配額） | 品質治理 |
+| ADR-015 | wizard.jsx arbitrary value token 遷移策略 | Frontend 品質治理 |
+| ADR-016 | `[data-theme]` 單軌 dark mode（移除 Tailwind `dark:` 雙軌） | Frontend 品質治理 |
+| ADR-017 | `conf.d/` 階層目錄 + Mixed-mode migration | Scale / Config 管理 |
+| ADR-018 | `_defaults.yaml` 繼承引擎 + dual-hash 熱重載 | Scale / Config 管理 |
+
+### Benchmark & 數字
+
+> ⚠️ 1000-tenant 真實 SLO 數字（scan P99 / reload P99 / `/effective` P99）留待 B-1 Scale Gate 跑完後補。
+
+- **Scanner FUSE 最佳化**：Day 4 測得 FUSE + dev container 環境下 scan 速度 21x 改善（相對 v2.6.0 baseline）
+- **describe-tenant --what-if**：20 測試全 pass，包含 substitute / insert / append 三種 what-if 情境 + merged_hash 對比
+
+### 文件體系
+
+- **129 份文件**（v2.6.0 → v2.7.0：+約 12 份，主要在 ADR + scenario guide）
+- **新增 `design/roadmap-future.md` §5 v2.8.0 進行中**：千租戶上線 + UI 二期 + SSOT 全量遷移路線
+- **`docs/internal/v2.8.0-planning.md` 骨架**：10 個主章節 + backlog 搬遷映射 + 風險初稿；待 v2.7.0-final tag 後進入三方定版
+
+### 治理與 LL（v2.7.0 Phase .e 產出，已固化至 Playbook）
+
+- **windows-mcp-playbook** §FUSE Phantom Lock 防治：新增「⛔ 明確禁止清單」5-row 表（FUSE temp index + `GIT_INDEX_FILE` / `docker exec git add` FUSE 側 / `.bat` CJK 內容 / `git -i` interactive / FUSE-side rm lock）
+- **testing-playbook** §Playwright E2E：新增 v2.7.0 LL 5 章節（headed 校準規則 / `test.fixme()` 治理 / locator 穩定性優先序 / Cowork vs Dev Container 分工 / 清倉 checklist）
+- **v2.7.0-planning.md §8 + §8.11**：Phase .e review 與 5 份 Ship Blocker pre-plan 全部合併為 SSOT 單檔（§8.11.1 bump_docs 補洞 / §8.11.2 B-2 Go Scanner / §8.11.3 B-3 `/effective` / §8.11.4 Playwright calibration / §8.11.5 Playbook pre-audit）；原 6 份散落的 `v2.7.0-*.md` 已刪除
+
+### 版號
+
+- platform: v2.6.0 → v2.7.0（**Ship Blocker #1 已執行 2026-04-18 Cowork**：`bump_docs --platform/exporter/tools/tenant-api 2.7.0` 批次 281 檔 + Category B 手動 5 檔 × 8 處（含 CLAUDE.md front-matter、helm README L5/L46、interactive/index.html L904、design-tokens.css L2、generate_doc_map.py L368/L386、generate_tool_map.py L130/L147）+ `doc-map` / `tool-map` 生成器 zh+en 重跑；`bump_docs.py --check` → ✅ All version references are consistent）
+- exporter: v2.6.0 → v2.7.0（與 platform 同步翻轉；本版無 exporter 功能變更）
+- tools: v2.6.0 → v2.7.0（新增 `describe-tenant` / `migrate-conf-d` CLI）
+- tenant-api: v2.6.0 → v2.7.0（front-matter 翻轉；B-3 `/effective` endpoint 留待 Dev Container 實作後算本版交付）
+- portal: 沿用
+- **4 份 Playbook（Ship Blocker #10 已執行 2026-04-18）**：testing / benchmark / windows-mcp / github-release 的 `version` + `verified-at-version` 雙欄位 v2.6.0→v2.7.0；github-release-playbook L376-377 pre-commit hook 數 drift 同步修正 30/10→31/13（對齊 CLAUDE.md §Pre-commit 品質閘門）
+
+### Breaking changes
+
+- **無 API breaking**：`conf.d/` 分層與繼承引擎為新增能力，舊扁平 `tenants/*.yaml` 完全向後相容
+- **Schema 新增而非改動**：`definitions/defaultsConfig` 是新定義；既有 tenant config 欄位不變
+
+### Upgrade notes
+
+- 既有使用者：不需任何變更，v2.7.0 完全向後相容
+- 想採用 `conf.d/` 分層：參考新 scenario guide `docs/scenarios/multi-domain-conf-layout.md` + `incremental-migration-playbook.md`，或用 `da-tools migrate-conf-d --dry-run`
+- 熱重載：dual-hash 預設啟用，無額外設定；debounce window 預設 300ms
+
+---
+
 ## [v2.6.0] — Operator 遷移路徑 × PR Write-back × 設計系統統一 (2026-04-07)
 
 v2.6.0 的核心是「讓 enterprise 客戶能信賴地在 Operator 環境下運營」：建立完整的 ConfigMap → Operator 遷移工具鏈與對稱文件（ADR-008 addendum），引入 PR-based 非同步寫入支援 GitHub 與 GitLab 雙平台（ADR-011），統一設計系統消除三套平行 CSS 的技術債，並新增 4 個互動工具強化價值傳達。

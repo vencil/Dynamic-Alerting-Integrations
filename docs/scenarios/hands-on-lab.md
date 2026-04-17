@@ -2,13 +2,13 @@
 title: "動手實驗：從零到生產告警"
 tags: [scenario, hands-on, lab, adoption, tutorial]
 audience: [platform-engineer, tenant]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 
 # 動手實驗：從零到生產告警
 
-> **v2.6.0** | 預計時間：30–45 分鐘 | 前置需求：已安裝 Docker
+> **v2.7.0** | 預計時間：30–45 分鐘 | 前置需求：已安裝 Docker
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 

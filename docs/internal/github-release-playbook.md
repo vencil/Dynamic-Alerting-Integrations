@@ -2,8 +2,8 @@
 title: "GitHub Release — 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.6.0
-verified-at-version: v2.6.0
+version: v2.7.0
+verified-at-version: v2.7.0
 lang: zh
 ---
 # GitHub Release — 操作手冊 (Playbook)
@@ -373,8 +373,8 @@ git push origin --delete ci/fix-docs-workflow-cli-drift  # 事後手動刪 paren
 
 11. **品質閘門**
     ```bash
-    pre-commit run --all-files                           # 30 auto hooks
-    pre-commit run --hook-stage manual --all-files        # 10 manual hooks
+    pre-commit run --all-files                           # 31 auto hooks
+    pre-commit run --hook-stage manual --all-files        # 13 manual hooks
     python -m pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py -q
     ```
 

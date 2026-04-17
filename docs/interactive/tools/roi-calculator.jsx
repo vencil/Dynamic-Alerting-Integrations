@@ -2,7 +2,7 @@
 title: "ROI Calculator"
 tags: [roi, cost, adoption, evaluation]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [capacity-planner, health-dashboard, alert-simulator]
 ---

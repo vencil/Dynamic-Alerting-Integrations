@@ -2,7 +2,7 @@
 title: "開發規範 (Development Rules)"
 tags: [documentation, governance]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 verified-at-version: v2.6.0
 lang: zh
 ---

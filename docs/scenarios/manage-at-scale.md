@@ -2,12 +2,12 @@
 title: "場景：千租戶規模管理"
 tags: [scenario, scale, blast-radius, search, management]
 audience: [platform-engineer, operator, devops]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # 場景：千租戶規模管理
 
-> **v2.6.0** | 相關文件：[multi-domain-conf-layout](multi-domain-conf-layout.md)、[ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.md)、[tenant-lifecycle](tenant-lifecycle.md)
+> **v2.7.0** | 相關文件：[multi-domain-conf-layout](multi-domain-conf-layout.md)、[ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.md)、[tenant-lifecycle](tenant-lifecycle.md)
 
 ## 概述
 

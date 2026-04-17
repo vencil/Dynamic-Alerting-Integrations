@@ -2,7 +2,7 @@
 title: "ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）"
 tags: [adr, design-tokens, phase-a0, v2.7.0]
 audience: [frontend-developers, maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

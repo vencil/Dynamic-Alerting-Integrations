@@ -2,7 +2,7 @@
 title: "ADR-008: Operator-Native Integration Path"
 tags: [adr, architecture, operator]
 audience: [platform-engineers]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 

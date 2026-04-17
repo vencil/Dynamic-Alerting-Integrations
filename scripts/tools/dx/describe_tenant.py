@@ -243,7 +243,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--what-if", "-w", type=str, default=None, metavar="DEFAULTS_PATH",
-        help="Simulate effect of a modified _defaults.yaml (not yet implemented)",
+        help="Simulate effect of a modified _defaults.yaml: diff baseline vs what-if effective config + merged_hash change",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -319,10 +319,92 @@ def main() -> None:
         print(_output(result))
         return
 
-    # --what-if mode (stub)
+    # --what-if mode: simulate modified _defaults.yaml
     if args.what_if:
-        print("⚠️  --what-if is not yet implemented. Coming in Phase .b B-2.", file=sys.stderr)
-        sys.exit(0)
+        what_if_path = Path(args.what_if).resolve()
+        if not what_if_path.exists():
+            print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)
+            sys.exit(1)
+
+        # Baseline: current effective config
+        baseline_effective = scanner.effective_config(tid)
+        baseline_merged_hash = _canonical_hash(baseline_effective)
+
+        # Load the simulated defaults content
+        try:
+            what_if_data = _load_yaml(what_if_path)
+        except Exception as e:  # pragma: no cover — defensive
+            print(f"❌ Failed to parse --what-if file: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Simulate: substitute if path matches existing chain entry; else append as lowest-priority override
+        chain = scanner.defaults_chain[tid]
+        chain_strs = [str(p) for p in chain]
+        simulated_defaults_data = dict(scanner.defaults_data)
+        simulated_defaults_data[str(what_if_path)] = what_if_data
+
+        if str(what_if_path) in chain_strs:
+            simulated_chain = list(chain)
+            substitution_type = "substitute"  # Override existing defaults at same path
+        else:
+            # Insert according to directory depth if path is inside conf.d/, else append
+            try:
+                what_if_rel = what_if_path.relative_to(scanner.conf_d)
+                what_if_depth = len(what_if_rel.parts) - 1  # minus filename
+                # Insert sorted by depth so that outer (L0) precedes inner (L3)
+                inserted = False
+                simulated_chain = []
+                for dp in chain:
+                    dp_depth = len(dp.relative_to(scanner.conf_d).parts) - 1
+                    if not inserted and what_if_depth < dp_depth:
+                        simulated_chain.append(what_if_path)
+                        inserted = True
+                    simulated_chain.append(dp)
+                if not inserted:
+                    simulated_chain.append(what_if_path)
+                substitution_type = "insert"
+            except ValueError:
+                # what-if path outside conf.d/ → append at end (highest override)
+                simulated_chain = list(chain) + [what_if_path]
+                substitution_type = "append-external"
+
+        # Recompute effective config with simulated chain
+        simulated = {}
+        for dp in simulated_chain:
+            ddata = simulated_defaults_data.get(str(dp), {})
+            defaults_block = ddata.get("defaults", ddata) if isinstance(ddata, dict) else {}
+            simulated = deep_merge(simulated, defaults_block)
+        simulated = deep_merge(simulated, scanner.tenants[tid])
+        what_if_merged_hash = _canonical_hash(simulated)
+
+        # Compute per-key diff
+        only_baseline: dict = {}
+        only_what_if: dict = {}
+        changed: dict = {}
+        all_keys = set(baseline_effective.keys()) | set(simulated.keys())
+        for k in sorted(all_keys):
+            if k not in simulated:
+                only_baseline[k] = baseline_effective[k]
+            elif k not in baseline_effective:
+                only_what_if[k] = simulated[k]
+            elif baseline_effective[k] != simulated[k]:
+                changed[k] = {"baseline": baseline_effective[k], "what_if": simulated[k]}
+
+        hash_changed = baseline_merged_hash != what_if_merged_hash
+        result = {
+            "tenant_id": tid,
+            "what_if_file": str(what_if_path),
+            "substitution_type": substitution_type,
+            "baseline_merged_hash": baseline_merged_hash,
+            "what_if_merged_hash": what_if_merged_hash,
+            "merged_hash_changed": hash_changed,
+            "would_trigger_reload": hash_changed,  # per ADR-018 dual-hash logic
+            "removed_keys": only_baseline,
+            "added_keys": only_what_if,
+            "changed_keys": changed,
+        }
+        print(_output(result))
+        return
 
     # Default: show effective config
     if args.show_sources:

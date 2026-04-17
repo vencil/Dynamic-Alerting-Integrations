@@ -2,7 +2,7 @@
 title: "ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload"
 tags: [adr, defaults, inheritance, hot-reload, dual-hash, phase-b, v2.7.0]
 audience: [platform-engineers, sre, contributors]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 

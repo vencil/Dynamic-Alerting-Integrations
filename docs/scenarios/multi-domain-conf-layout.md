@@ -2,12 +2,12 @@
 title: "場景：多域名階層式配置 — conf.d/ 目錄結構重構（v2.7.0）"
 tags: [scenario, configuration, conf.d, hierarchy, multi-domain]
 audience: [platform-engineer, operator, devops]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # 場景：多域名階層式配置 — conf.d/ 目錄結構重構（v2.7.0）
 
-> **v2.6.0** | 相關文件：[ADR-017（架構決策）](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018（繼承機制）](../adr/018-defaults-yaml-inheritance-dual-hash.md)
+> **v2.7.0** | 相關文件：[ADR-017（架構決策）](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018（繼承機制）](../adr/018-defaults-yaml-inheritance-dual-hash.md)
 
 ## 背景與問題
 

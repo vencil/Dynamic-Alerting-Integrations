@@ -2,7 +2,7 @@
 title: "Release Notes Generator"
 tags: [release, changelog, automation, communication]
 audience: [platform-engineer, sre]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [deployment-wizard, health-dashboard, platform-health]
 ---

@@ -2,7 +2,7 @@
 title: "Migration Guide — 遷移指南"
 tags: [migration, getting-started]
 audience: [tenant, devops]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # Migration Guide — 遷移指南
@@ -14,7 +14,7 @@ lang: zh
 
 > **⚠️ 遷移安全保證：** 本平台的遷移流程設計為**漸進式且可回退**。你的舊規則不需要一次性切換 — 新規則透過 `custom_` Prefix 與現有規則完全隔離，可在 Shadow Monitoring 並行驗證數週後再決定切換。任何階段都可以安全退回：Projected Volume 的 `optional: true` 機制確保刪除任何規則包不會影響 Prometheus 運行。
 >
-> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.6.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
+> **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.7.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
 
 ## 你在哪個階段？(Where Are You?)
 
@@ -129,7 +129,7 @@ scaffold 產出的檔案需注入 `threshold-config` ConfigMap，threshold-expor
 # 方式 A (推薦): Helm values 覆寫 — OCI registry
 #   將產出的 tenant config 合併至 values-override.yaml，再 helm upgrade
 helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
   -n monitoring -f values-override.yaml
 
 # 方式 B: 直接重建 ConfigMap (適合非 Helm 環境)
@@ -226,7 +226,7 @@ kubectl create configmap prometheus-rules-custom \
 ```bash
 # 生產部署 — 從 OCI registry 安裝 chart，搭配自訂 values-override 注入租戶設定
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 ```
@@ -264,7 +264,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ### Use da-tools in K8s Cluster
 
-da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v2.6.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
+da-tools 也可以直接作為 K8s Job 運行（`image: ghcr.io/vencil/da-tools:v2.7.0`），省去 port-forward 設定。叢集內 da-tools 可透過 K8s Service 直接存取 Prometheus（`http://prometheus.monitoring.svc.cluster.local:9090`），適合 `check-alert`、`validate`、`baseline` 等需要 Prometheus API 的命令。
 
 > Job 產出可透過 `kubectl cp` 取回，再注入 `threshold-config` ConfigMap。長期運行的 Shadow Monitoring Job 範例參見 [§11 企業級遷移 Phase B](#11-企業級遷移-大型租戶-1000-條規則)。
 

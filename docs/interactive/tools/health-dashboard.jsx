@@ -2,7 +2,7 @@
 title: "Tenant Health Dashboard"
 tags: [dashboard, health, demo]
 audience: [tenant, platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [alert-simulator, runbook-viewer, alert-timeline]
 ---

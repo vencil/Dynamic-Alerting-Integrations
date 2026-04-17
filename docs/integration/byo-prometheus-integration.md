@@ -2,7 +2,7 @@
 title: "Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南"
 tags: [integration, prometheus, byop]
 audience: [platform-engineer, sre]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
@@ -343,7 +343,7 @@ da-tools diagnose db-a
 da-tools validate-config --config-dir /data/conf.d
 ```
 
-> **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull ghcr.io/vencil/da-tools:v2.6.0` 即可使用。
+> **提示**：`da-tools` 不需要 clone 整個專案，只需 `docker pull ghcr.io/vencil/da-tools:v2.7.0` 即可使用。
 
 ---
 

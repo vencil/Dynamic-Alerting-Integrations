@@ -2,7 +2,7 @@
 title: "文件導覽 (Documentation Map)"
 tags: [documentation, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

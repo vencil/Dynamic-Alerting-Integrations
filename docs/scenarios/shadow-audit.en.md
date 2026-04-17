@@ -2,7 +2,7 @@
 title: "Scenario: Shadow Audit — Evaluate Alert Health Without Migration"
 tags: [scenario, evaluation, shadow-audit, alert-quality]
 audience: [platform-engineer, tenant]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Shadow Audit — Merged into Shadow Monitoring Guide

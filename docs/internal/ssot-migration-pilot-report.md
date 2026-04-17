@@ -5,7 +5,7 @@ audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
 status: completed
 lang: zh
-version: v2.6.0
+version: v2.7.0
 ---
 
 # SSOT 語言遷移 Phase 1 Pilot Report

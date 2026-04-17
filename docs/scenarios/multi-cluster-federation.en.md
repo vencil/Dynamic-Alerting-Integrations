@@ -2,7 +2,7 @@
 title: "Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics
@@ -65,7 +65,7 @@ Federation (< 10 edges) or Remote Write (10+ edges). Config examples: [Federatio
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
   -n monitoring --create-namespace -f values-override.yaml
 ```
 

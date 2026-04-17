@@ -2,7 +2,7 @@
 title: "ADR-004: Federation Architecture — Central Exporter First"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 

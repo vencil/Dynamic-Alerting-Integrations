@@ -2,7 +2,7 @@
 title: "場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標"
 tags: [scenario, federation, multi-cluster]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標
@@ -65,7 +65,7 @@ Federation（< 10 邊緣）或 Remote Write（10+ 邊緣）。配置範例見 [F
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.6.0 \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
   -n monitoring --create-namespace -f values-override.yaml
 ```
 

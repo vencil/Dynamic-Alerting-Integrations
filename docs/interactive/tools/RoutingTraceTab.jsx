@@ -2,7 +2,7 @@
 title: "Routing Trace Tab"
 tags: [self-service, routing, internal]
 audience: ["platform-engineer", "tenant"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 
