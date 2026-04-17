@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """check_bilingual_content.py — 雙語內容一致性 lint
 
-掃描 docs/**/*.en.md 偵測 CJK 字元比例，確保英文文件不含過多中文內容。
-同時掃描 docs/**/*.md (非 .en.md) 偵測是否有純英文而無中文的情況。
+掃描英文文件偵測 CJK 字元比例，確保英文文件不含過多中文內容。
+同時掃描中文文件偵測是否有純英文而無中文的情況。
+
+支援兩種命名慣例（v2.7.0 SSOT 遷移期間共存）：
+- Legacy: *.en.md = English, *.md (without .en/.zh) = Chinese
+- New:    *.md (without .en/.zh) = English, *.zh.md = Chinese
 
 Usage:
     python3 scripts/tools/lint/check_bilingual_content.py
@@ -49,16 +53,49 @@ def count_cjk_ratio(text: str) -> float:
     return cjk_count / len(non_ws)
 
 
+def _is_english_doc(filepath: Path) -> bool:
+    """Determine if a file is an English document.
+
+    Supports both legacy (.en.md) and new (bare .md with .zh.md sibling) patterns.
+    """
+    if filepath.name.endswith(".en.md"):
+        return True
+    # New pattern: bare .md file that has a .zh.md sibling
+    if not filepath.name.endswith(".zh.md"):
+        zh_sibling = filepath.parent / (filepath.stem + ".zh.md")
+        if zh_sibling.is_file():
+            return True
+    return False
+
+
+def _is_chinese_doc(filepath: Path) -> bool:
+    """Determine if a file is a Chinese document.
+
+    Supports both legacy (bare .md with .en.md sibling) and new (.zh.md) patterns.
+    """
+    if filepath.name.endswith(".zh.md"):
+        return True
+    # Legacy pattern: bare .md file that has an .en.md sibling
+    if not filepath.name.endswith(".en.md"):
+        en_sibling = filepath.parent / (filepath.stem + ".en.md")
+        if en_sibling.is_file():
+            return True
+    return False
+
+
 def scan_en_docs(
     docs_dir: Path,
     threshold: float = DEFAULT_CJK_THRESHOLD,
 ) -> list:
-    """Scan .en.md files for excessive CJK content.
+    """Scan English docs for excessive CJK content.
 
+    Detects both legacy (.en.md) and new pattern (bare .md with .zh.md sibling).
     Returns list of (severity, message, filepath, ratio) tuples.
     """
     findings = []
-    for f in sorted(docs_dir.rglob("*.en.md")):
+    for f in sorted(docs_dir.rglob("*.md")):
+        if not _is_english_doc(f):
+            continue
         text = f.read_text(encoding="utf-8")
         ratio = count_cjk_ratio(text)
         if ratio > threshold:
@@ -77,13 +114,14 @@ def scan_zh_docs(
     docs_dir: Path,
     min_threshold: float = DEFAULT_ZH_MIN_THRESHOLD,
 ) -> list:
-    """Scan non-.en.md files for potentially untranslated content.
+    """Scan Chinese docs for potentially untranslated content.
 
+    Detects both legacy (bare .md with .en.md sibling) and new (.zh.md) patterns.
     Returns list of (severity, message, filepath, ratio) tuples.
     """
     findings = []
     for f in sorted(docs_dir.rglob("*.md")):
-        if f.name.endswith(".en.md"):
+        if not _is_chinese_doc(f):
             continue
         # Skip internal/generated files
         if "includes" in f.parts:

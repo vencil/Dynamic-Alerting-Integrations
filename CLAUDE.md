@@ -60,6 +60,20 @@ Session 結束或異常終止後：`make session-cleanup`
 3. **#4 Doc-as-Code** — 影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`，連動規則見 [doc-map.md § Change Impact Matrix](docs/internal/doc-map.md)
 4. **#2 Tenant-Agnostic** — Go / PromQL / fixture 禁止 hardcode tenant id（例如 `db-a`）
 
+## 語言策略（SSOT Language）
+
+**現況（v2.7.0）**：中文為主 SSOT + 英文為輔。文件對為 `foo.md`（ZH）+ `foo.en.md`（EN）。
+
+**目標（v2.8.0）**：英文為主 SSOT + 中文為輔。文件對將為 `foo.md`（EN）+ `foo.zh.md`（ZH）。
+
+**遷移狀態**：Phase 1（工具準備）已完成，Phase 2（全量遷移）排定 v2.8.0。
+
+- 遷移腳本：`scripts/tools/dx/migrate_ssot_language.py`（`--dry-run` 預覽 / `--execute --git` 執行）
+- Lint hooks 已支援 `.en.md` 和 `.zh.md` 雙模式（auto-detect）
+- MkDocs 全量遷移需原子性操作（66 對檔案 + mkdocs.yml 同一 commit）
+- 完整評估：[`docs/internal/ssot-migration-pilot-report.md`](docs/internal/ssot-migration-pilot-report.md)
+- 背景分析：[`docs/internal/ssot-language-evaluation.md`](docs/internal/ssot-language-evaluation.md)
+
 ## Pre-commit 品質閘門
 
 31 auto-run + 13 manual-stage hooks。清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
@@ -72,7 +86,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **128 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（含受眾、內容摘要、Change Impact Matrix）
-- **111 個 Python 工具**（ops 46 / dx 28 / lint 36）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
+- **112 個 Python 工具**（ops 46 / dx 29 / lint 36）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
 - **38 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
 - **Makefile** 完整列表：`make help`。必記 Top 5：
   - `make pr-preflight` — ⛔ PR merge 前必跑（conflict / CI / hooks / mergeable 六項檢查）

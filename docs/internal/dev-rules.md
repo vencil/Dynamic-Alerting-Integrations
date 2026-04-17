@@ -116,6 +116,19 @@ lang: zh
 
 **檢查方式**：pre-commit hook `check_bilingual_annotations`。
 
+### 9b. SSOT 語言遷移（v2.7.0+）
+
+**規則**：v2.7.0 起開始從「中文為主 SSOT」遷移至「英文為主 SSOT」。遷移期間 lint hooks 同時支援兩種檔案對命名：
+
+- **Legacy**：`foo.md`（ZH）+ `foo.en.md`（EN）— 中文為主
+- **New**：`foo.md`（EN）+ `foo.zh.md`（ZH）— 英文為主
+
+**遷移工具**：`python3 scripts/tools/dx/migrate_ssot_language.py --dry-run`
+
+**全量遷移時程**：v2.8.0（需 mkdocs.yml 原子性修改，不可漸進式遷移）
+
+**評估文件**：[`ssot-language-evaluation.md`](ssot-language-evaluation.md) + [`ssot-migration-pilot-report.md`](ssot-migration-pilot-report.md)
+
 ### 10. 雙語政策：internal docs 不需英文版
 
 **規則**：`docs/internal/`、工具性檔案（CHANGELOG、tags、includes、plan docs）**一律不需英文版**。僅外部面向文件（`docs/*.md` 頂層、`docs/scenarios/`、`docs/design/`、README）需維持 ZH/EN 雙語對。

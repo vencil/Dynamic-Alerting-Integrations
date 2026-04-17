@@ -191,7 +191,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_bilingual_structure.py --ci
         language: python
         pass_filenames: false
-        files: \.en\.md$
+        files: \.(en|zh)\.md$
 
       - id: jsx-i18n-check
         name: JSX TOOL_META ↔ CUSTOM_FLOW_MAP ↔ i18n sync
@@ -245,7 +245,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_translation.py
         language: python
         pass_filenames: false
-        files: \.en\.md$
+        files: \.(en|zh)\.md$
         stages: [manual]
 
       - id: flow-e2e-check
