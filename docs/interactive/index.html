@@ -920,7 +920,6 @@
     en: {
       'hero-title': 'Dynamic Alerting — Interactive Tools Hub',
       'hero-desc': 'Explore 32 tools organized by your user journey. Build, configure, monitor, and troubleshoot with guided flows and interactive utilities.',
-      'hero-desc': 'Explore 32 tools organized by your user journey. Build, configure, monitor, and troubleshoot with guided flows and interactive utilities.',
       'qa-wizard': 'Getting Started',
       'qa-playground': 'YAML Validator',
       'qa-platform-health': 'Platform Health',
@@ -982,6 +981,27 @@
     var lang = window.__DA_HUB_LANG || 'en';
     return (i18n[lang] && i18n[lang][key]) || (i18n.en && i18n.en[key]) || key;
   }
+
+  // Apply i18n to all static elements with matching IDs (REG-001 fix)
+  // Exposed globally so the lang-toggle init script can call it after setting __DA_HUB_LANG
+  window.__applyHubI18n = function() {
+    var lang = window.__DA_HUB_LANG || 'en';
+    var strings = i18n[lang] || i18n.en;
+    Object.keys(strings).forEach(function(key) {
+      var el = document.getElementById(key);
+      if (el) {
+        // For footer-text, preserve structure (contains child elements)
+        if (key === 'footer-text') {
+          var textNode = el.firstChild;
+          if (textNode && textNode.nodeType === 3) {
+            textNode.textContent = strings[key] + ' \u2014 ';
+          }
+        } else {
+          el.textContent = strings[key];
+        }
+      }
+    });
+  };
 
   // Load tools from tool-registry (embedded data)
   var TOOLS_DATA = []; // Will be populated by script below
@@ -1357,6 +1377,11 @@
   try { storedLang = localStorage.getItem('__da_lang_pref'); } catch(e) {}
   var initialLang = storedLang || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en');
   window.__DA_HUB_LANG = initialLang;
+
+  // Apply i18n to static elements now that language is determined (REG-001 fix)
+  if (typeof window.__applyHubI18n === 'function') {
+    window.__applyHubI18n();
+  }
 
   window.__setHubLanguage = function(newLang) {
     window.__DA_HUB_LANG = newLang;
