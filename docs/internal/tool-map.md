@@ -106,6 +106,7 @@ lang: zh
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
+| `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |

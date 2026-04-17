@@ -73,6 +73,7 @@ const EDGES = [
 ];
 
 const CATEGORY_COLORS = {
+  /* token-exempt: category visualization colors (domain-specific palette) */
   infra: { bg: '#3b82f6', light: '#dbeafe', text: '#1e40af' },
   database: { bg: '#10b981', light: '#d1fae5', text: '#065f46' },
   middleware: { bg: '#f59e0b', light: '#fef3c7', text: '#92400e' },
@@ -143,10 +144,10 @@ export default function DependencyGraph() {
             <svg viewBox={'0 0 ' + svgW + ' ' + svgH} className="w-full" style={svgStyle}>
               <defs>
                 <marker id="arrow-req" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
-                  <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
+                  <polygon points="0 0, 10 3.5, 0 7" fill="var(--da-color-error)" />
                 </marker>
                 <marker id="arrow-sug" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
-                  <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+                  <polygon points="0 0, 10 3.5, 0 7" fill="var(--da-color-info)" />
                 </marker>
               </defs>
 
@@ -174,14 +175,14 @@ export default function DependencyGraph() {
                     onMouseLeave={() => setHoveredEdge(null)}
                     style={pointerStyle} className="cursor-pointer">
                     <line x1={fx} y1={fy} x2={tx} y2={ty}
-                      stroke={edge.type === 'requires' ? '#ef4444' : '#3b82f6'}
+                      stroke={edge.type === 'requires' ? 'var(--da-color-error)' : 'var(--da-color-info)'}
                       strokeWidth={isHighlighted || isHovered ? 3 : 1.5}
                       strokeDasharray={edge.type === 'suggests' ? '6 4' : 'none'}
                       opacity={isDimmed ? 0.15 : isHighlighted || isHovered ? 1 : 0.5}
                       markerEnd={edge.type === 'requires' ? 'url(#arrow-req)' : 'url(#arrow-sug)'} />
                     {isHovered && (
                       <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 8}
-                        textAnchor="middle" fontSize="10" fill="#475569"
+                        textAnchor="middle" fontSize="10" fill="var(--da-color-tag-fg)"
                         className="pointer-events-none">
                         {edge.reason}
                       </text>
@@ -211,7 +212,7 @@ export default function DependencyGraph() {
                       fill={isSelected ? '#fff' : color.text}>
                       {pack.label}
                     </text>
-                    <text x={pos.x} y={pos.y + 42} textAnchor="middle" fontSize="9" fill="#94a3b8">
+                    <text x={pos.x} y={pos.y + 42} textAnchor="middle" fontSize="9" fill="var(--da-color-hero-muted)">
                       {pack.alerts}a / {pack.metrics}m
                     </text>
                   </g>

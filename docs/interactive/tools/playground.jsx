@@ -553,6 +553,7 @@ export default function TenantYAMLPlayground() {
             <select
               value={selectedTemplate}
               onChange={handleTemplateChange}
+              aria-label={t('選擇範本', 'Select template')}
               className="px-3 py-2 bg-[color:var(--da-color-card-bg)] border border-[color:var(--da-color-surface-border)] rounded-md text-sm font-medium text-[color:var(--da-color-fg)] hover:bg-[color:var(--da-color-surface)] focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-accent)]"
             >
               <option value="minimal">{t('最小化 (3行!)', 'Minimal (3 lines!)')}</option>
@@ -622,7 +623,7 @@ export default function TenantYAMLPlayground() {
             </div>
           )}
           <div className="flex-1 overflow-hidden flex">
-            <div className="w-12 bg-[color:var(--da-color-tag-bg)] border-r border-[color:var(--da-color-surface-border)] flex flex-col items-center py-4 text-xs text-[color:var(--da-color-muted)] font-mono">
+            <div className="w-12 bg-[color:var(--da-color-tag-bg)] border-r border-[color:var(--da-color-surface-border)] flex flex-col items-center py-4 text-xs text-[color:var(--da-color-tag-fg)] font-mono">
               {yaml.split('\n').map((_, i) => (
                 <div key={i} className="h-6 flex items-center justify-center">
                   {i + 1}
@@ -632,6 +633,7 @@ export default function TenantYAMLPlayground() {
             <textarea
               value={yaml}
               onChange={(e) => setYaml(e.target.value)}
+              aria-label={t('租戶 YAML 編輯器', 'Tenant YAML editor')}
               className="flex-1 p-4 font-mono text-sm text-[color:var(--da-color-fg)] bg-[color:var(--da-color-card-bg)] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--da-color-accent)] resize-none"
               spellCheck="false"
             />

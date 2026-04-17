@@ -150,6 +150,7 @@ graph TB
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
+| **繼承引擎 (Inheritance Engine)** | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設、深合併與覆寫語義 (ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載、平坦與階層式 conf.d/ 共存 (ADR-017) | [design/config-driven.md](design/config-driven.md) |
 | **未來路線** | 國際化 × 權限 × 可觀測性閉環 × 智慧化 | EN-first SSOT、Field-level RBAC、Auto-Discovery、DaC | [design/roadmap-future.md](design/roadmap-future.md) |
 
 ---

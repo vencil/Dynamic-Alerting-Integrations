@@ -558,7 +558,7 @@ export default function DeploymentWizard() {
                       ? 'bg-[color:var(--da-color-accent)] text-white'
                       : i < stepIndex
                       ? 'bg-green-500 text-white'
-                      : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-muted)] '
+                      : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)] '
                   }`}
                 >
                   {i < stepIndex ? '✓' : i + 1} {s.label()}

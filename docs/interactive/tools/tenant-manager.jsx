@@ -351,7 +351,7 @@ const styles = {
   tierBadge: {
     'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning)' },
     'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
-    'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-muted)' },
+    'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
   },
   pills: {
     display: 'flex',

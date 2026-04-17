@@ -80,27 +80,27 @@ function MiniChart({ points, warn, crit, currentIdx, unit }) {
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full max-h-[220px]">
       {/* grid */}
-      <line x1={pad} y1={warnY} x2={w - pad} y2={warnY} stroke="#f59e0b" strokeDasharray="6 4" strokeWidth="1.5" />
-      <line x1={pad} y1={critY} x2={w - pad} y2={critY} stroke="#ef4444" strokeDasharray="6 4" strokeWidth="1.5" />
-      <text x={pad - 4} y={warnY + 4} textAnchor="end" className="text-xs" fill="#f59e0b" fontSize="11">warn {warn}{unit}</text>
-      <text x={pad - 4} y={critY + 4} textAnchor="end" className="text-xs" fill="#ef4444" fontSize="11">crit {crit}{unit}</text>
+      <line x1={pad} y1={warnY} x2={w - pad} y2={warnY} stroke="var(--da-color-warning)" strokeDasharray="6 4" strokeWidth="1.5" />
+      <line x1={pad} y1={critY} x2={w - pad} y2={critY} stroke="var(--da-color-error)" strokeDasharray="6 4" strokeWidth="1.5" />
+      <text x={pad - 4} y={warnY + 4} textAnchor="end" className="text-xs" fill="var(--da-color-warning)" fontSize="11">warn {warn}{unit}</text>
+      <text x={pad - 4} y={critY + 4} textAnchor="end" className="text-xs" fill="var(--da-color-error)" fontSize="11">crit {crit}{unit}</text>
       {/* metric line */}
-      <path d={pathD} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinejoin="round" />
+      <path d={pathD} fill="none" stroke="var(--da-color-accent)" strokeWidth="2.5" strokeLinejoin="round" />
       {/* current point */}
       {currentIdx >= 0 && currentIdx < points.length && (
         <>
           <circle cx={pad + currentIdx * xStep} cy={yScale(points[currentIdx])} r="6"
-            fill={classifyState(points[currentIdx], warn, crit) === 'critical' ? '#ef4444' : classifyState(points[currentIdx], warn, crit) === 'warning' ? '#f59e0b' : '#22c55e'}
-            stroke="#fff" strokeWidth="2" />
+            fill={classifyState(points[currentIdx], warn, crit) === 'critical' ? 'var(--da-color-error)' : classifyState(points[currentIdx], warn, crit) === 'warning' ? 'var(--da-color-warning)' : 'var(--da-color-success)'}
+            stroke="var(--da-color-surface)" strokeWidth="2" />
           <text x={pad + currentIdx * xStep} y={yScale(points[currentIdx]) - 12} textAnchor="middle" fontSize="12" fontWeight="bold"
-            fill={classifyState(points[currentIdx], warn, crit) === 'critical' ? '#ef4444' : classifyState(points[currentIdx], warn, crit) === 'warning' ? '#f59e0b' : '#22c55e'}>
+            fill={classifyState(points[currentIdx], warn, crit) === 'critical' ? 'var(--da-color-error)' : classifyState(points[currentIdx], warn, crit) === 'warning' ? 'var(--da-color-warning)' : 'var(--da-color-success)'}>
             {points[currentIdx]}{unit}
           </text>
         </>
       )}
       {/* x-axis labels */}
       {points.map((_, i) => i % 5 === 0 ? (
-        <text key={i} x={pad + i * xStep} y={h - 8} textAnchor="middle" fontSize="10" fill="#94a3b8">{i}s</text>
+        <text key={i} x={pad + i * xStep} y={h - 8} textAnchor="middle" fontSize="10" fill="var(--da-color-muted)">{i}s</text>
       ) : null)}
     </svg>
   );
@@ -115,13 +115,13 @@ function EventLog({ events, currentIdx }) {
   }, [visible.length]);
 
   return (
-    <div ref={ref} className="h-48 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-3 font-mono text-xs space-y-1">
-      {visible.length === 0 && <div className="text-slate-400 italic">{t('等待事件...', 'Waiting for events...')}</div>}
+    <div ref={ref} className="h-48 overflow-y-auto border rounded-lg p-3 font-mono text-xs space-y-1" style={{borderColor: 'var(--da-color-surface-border)', backgroundColor: 'var(--da-color-surface-hover)'}}>
+      {visible.length === 0 && <div className="italic" style={{color: 'var(--da-color-muted)'}}>{t('等待事件...', 'Waiting for events...')}</div>}
       {visible.map((ev, i) => (
         <div key={i} className="flex gap-2">
-          <span className="text-slate-400 w-8 text-right flex-shrink-0">{ev.tick}s</span>
+          <span className="w-8 text-right flex-shrink-0" style={{color: 'var(--da-color-muted)'}}>{ev.tick}s</span>
           <span className={`font-bold flex-shrink-0 ${ev.color}`}>{ev.badge}</span>
-          <span className="text-slate-700">{ev.text}</span>
+          <span style={{color: 'var(--da-color-fg)'}}>{ev.text}</span>
         </div>
       ))}
     </div>
@@ -221,28 +221,29 @@ export default function AlertTimeline() {
   const stateText = currentState === 'critical' ? 'text-red-700' : currentState === 'warning' ? 'text-amber-700' : 'text-green-700';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
+    <div className="min-h-screen p-8" style={{background: 'linear-gradient(to bottom right, var(--da-color-surface-hover), var(--da-color-bg))'}}>
       <div className="max-w-5xl mx-auto">
-        <h1 className="text-3xl font-bold text-slate-900 mb-2">{t('告警時間軸重播', 'Alert Timeline Replay')}</h1>
-        <p className="text-slate-600 mb-6">{t('選擇場景，觀看 metric 變化如何觸發告警、dedup、和恢復', 'Pick a scenario and watch how metric changes trigger alerts, dedup, and recovery')}</p>
+        <h1 className="text-3xl font-bold mb-2" style={{color: 'var(--da-color-fg)'}}>{t('告警時間軸重播', 'Alert Timeline Replay')}</h1>
+        <p className="mb-6" style={{color: 'var(--da-color-muted)'}}>{t('選擇場景，觀看 metric 變化如何觸發告警、dedup、和恢復', 'Pick a scenario and watch how metric changes trigger alerts, dedup, and recovery')}</p>
 
         {/* Scenario selector */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           {SCENARIOS.map(s => (
             <button key={s.id} onClick={() => handleScenarioChange(s.id)}
-              className={`text-left p-3 rounded-xl border transition-all ${s.id === scenarioId ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-blue-300'}`}>
-              <div className="font-semibold text-sm text-slate-900">{s.name}</div>
-              <div className="text-xs text-slate-500 mt-1">{s.desc}</div>
+              className="text-left p-3 rounded-xl border transition-all"
+              style={s.id === scenarioId ? {borderColor: 'var(--da-color-accent)', backgroundColor: 'var(--da-color-accent-soft)', boxShadow: '0 1px 2px rgba(0,0,0,0.05)'} : {borderColor: 'var(--da-color-surface-border)', backgroundColor: 'var(--da-color-surface)'}}>
+              <div className="font-semibold text-sm" style={{color: 'var(--da-color-fg)'}}>{s.name}</div>
+              <div className="text-xs mt-1" style={{color: 'var(--da-color-muted)'}}>{s.desc}</div>
             </button>
           ))}
         </div>
 
         {/* Chart */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
+        <div className="rounded-xl shadow-sm border p-6 mb-6" style={{backgroundColor: 'var(--da-color-surface)', borderColor: 'var(--da-color-surface-border)'}}>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <span className="font-mono text-sm text-slate-600">{scenario.metric}</span>
-              <span className="ml-3 text-xs text-slate-400">warn={scenario.warn}{scenario.unit} crit={scenario.crit}{scenario.unit}</span>
+              <span className="font-mono text-sm" style={{color: 'var(--da-color-muted)'}}>{scenario.metric}</span>
+              <span className="ml-3 text-xs" style={{color: 'var(--da-color-muted)'}}>{`warn=${scenario.warn}${scenario.unit} crit=${scenario.crit}${scenario.unit}`}</span>
             </div>
             <div className={`px-3 py-1 rounded-full border text-xs font-bold ${stateBg} ${stateText}`}>
               {tick < 0 ? t('就緒', 'READY') : currentState.toUpperCase()}
@@ -254,22 +255,23 @@ export default function AlertTimeline() {
         {/* Controls */}
         <div className="flex items-center gap-3 mb-6 flex-wrap">
           {!playing ? (
-            <button onClick={handlePlay} className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+            <button onClick={handlePlay} className="px-5 py-2 rounded-lg text-sm font-medium text-white" style={{backgroundColor: 'var(--da-color-accent)'}} onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--da-color-accent-hover)'} onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--da-color-accent)'}>
               {tick < 0 ? '▶ Play' : '▶ Resume'}
             </button>
           ) : (
-            <button onClick={handlePause} className="px-5 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600">
+            <button onClick={handlePause} className="px-5 py-2 rounded-lg text-sm font-medium text-white" style={{backgroundColor: 'var(--da-color-warning)'}} onMouseEnter={(e) => e.target.style.opacity = '0.9'} onMouseLeave={(e) => e.target.style.opacity = '1'}>
               ⏸ Pause
             </button>
           )}
-          <button onClick={handleReset} className="px-5 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300">
+          <button onClick={handleReset} className="px-5 py-2 rounded-lg text-sm font-medium" style={{backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-fg)'}} onMouseEnter={(e) => e.target.style.opacity = '0.8'} onMouseLeave={(e) => e.target.style.opacity = '1'}>
             ⏮ Reset
           </button>
           <div className="flex items-center gap-2 ml-auto">
-            <span className="text-xs text-slate-500">{t('速度', 'Speed')}:</span>
+            <span className="text-xs" style={{color: 'var(--da-color-muted)'}}>{t('速度', 'Speed')}:</span>
             {[0.5, 1, 2, 4].map(s => (
               <button key={s} onClick={() => setSpeed(s)}
-                className={`px-2 py-1 rounded text-xs font-medium ${speed === s ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                className="px-2 py-1 rounded text-xs font-medium"
+                style={speed === s ? {backgroundColor: 'var(--da-color-accent)', color: 'var(--da-color-accent-fg)'} : {backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-fg)'}}>
                 {s}x
               </button>
             ))}
@@ -281,10 +283,10 @@ export default function AlertTimeline() {
         </div>
 
         {/* Event log */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <h2 className="text-sm font-semibold text-slate-700 mb-3">{t('事件日誌', 'Event Log')}</h2>
+        <div className="rounded-xl shadow-sm border p-6" style={{backgroundColor: 'var(--da-color-surface)', borderColor: 'var(--da-color-surface-border)'}}>
+          <h2 className="text-sm font-semibold mb-3" style={{color: 'var(--da-color-fg)'}}>{t('事件日誌', 'Event Log')}</h2>
           <EventLog events={events} currentIdx={tick} />
-          <div className="mt-3 flex gap-4 text-xs text-slate-500">
+          <div className="mt-3 flex gap-4 text-xs" style={{color: 'var(--da-color-muted)'}}>
             <span><span className="inline-block w-2 h-2 bg-amber-500 rounded-full mr-1"></span>{t('Warning 觸發/待定', 'Warning fire/pending')}</span>
             <span><span className="inline-block w-2 h-2 bg-red-500 rounded-full mr-1"></span>{t('Critical 觸發', 'Critical fire')}</span>
             <span><span className="inline-block w-2 h-2 bg-purple-500 rounded-full mr-1"></span>{t('Severity Dedup', 'Severity Dedup')}</span>

@@ -6,34 +6,7 @@
 <title>Dynamic Alerting — Interactive Tools</title>
 <link rel="stylesheet" href="../assets/design-tokens.css">
 <style>
-  /* Legacy aliases — map old variable names to design tokens.
-     New code should use --da-* tokens directly. */
-  :root {
-    --bg: var(--da-color-bg);
-    --fg: var(--da-color-fg);
-    --hero-bg: var(--da-color-hero-bg);
-    --hero-fg: var(--da-color-hero-fg);
-    --hero-muted: var(--da-color-hero-muted);
-    --hero-accent: var(--da-color-hero-accent);
-    --card-bg: var(--da-color-card-bg);
-    --card-border: var(--da-color-card-border);
-    --card-hover-border: var(--da-color-card-hover-border);
-    --card-shadow: var(--da-color-card-shadow);
-    --card-hover-shadow: var(--da-color-card-hover-shadow);
-    --accent: var(--da-color-accent);
-    --accent-soft: var(--da-color-accent-soft);
-    --muted: var(--da-color-muted);
-    --tag-bg: var(--da-color-tag-bg);
-    --tag-fg: var(--da-color-tag-fg);
-    --section-border: var(--da-color-section-border);
-    --icon-validation: var(--da-color-icon-validation);
-    --icon-cli: var(--da-color-icon-cli);
-    --icon-rules: var(--da-color-icon-rules);
-    --icon-wizard: var(--da-color-icon-wizard);
-    --stat-bg: var(--da-color-stat-bg);
-    --stat-border: var(--da-color-stat-border);
-    --mermaid-bg: rgba(255,255,255,0.05);
-  }
+  /* All styles use --da-* tokens directly (design-tokens.css). */
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -647,7 +620,7 @@
 <!-- Hero -->
 <header class="hero" role="banner">
   <div class="hero-inner">
-    <div class="hero-badge" id="version-badge">INTERACTIVE TOOLS HUB v2.5</div>
+    <div class="hero-badge" id="version-badge">INTERACTIVE TOOLS HUB v2.6</div>
     <h1>
       <span id="hero-title">Dynamic Alerting — Interactive Tools Hub</span>
     </h1>
@@ -928,7 +901,7 @@
 
 <footer>
   <p id="footer-text">
-    Dynamic Alerting Platform — <a href="../CHANGELOG/">v2.5.0</a> |
+    Dynamic Alerting Platform — <a href="../CHANGELOG/">v2.6.0</a> |
     <a href="../getting-started/for-platform-engineers/" id="footer-link">Platform Setup</a>
   </p>
 </footer>

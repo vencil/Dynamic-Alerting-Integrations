@@ -643,7 +643,7 @@ export default function RBACSetupWizard() {
                     ? 'bg-[color:var(--da-color-accent)] text-white'
                     : idx < currentStep
                     ? 'bg-[color:var(--da-color-success)]/15 text-[color:var(--da-color-success)]'
-                    : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-muted)]'
+                    : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)]'
                 }`}
               >
                 {idx < currentStep && '✓ '}{step.label()}
@@ -678,7 +678,7 @@ export default function RBACSetupWizard() {
               disabled={currentStep === 0}
               className={`px-4 py-2 rounded-lg text-sm font-medium ${
                 currentStep === 0
-                  ? 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-muted)] cursor-not-allowed'
+                  ? 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)] cursor-not-allowed'
                   : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-fg)] hover:bg-[color:var(--da-color-surface-hover)]'
               }`}
             >
@@ -689,7 +689,7 @@ export default function RBACSetupWizard() {
               disabled={!canProceed || currentStep === STEPS.length - 1}
               className={`px-4 py-2 rounded-lg text-sm font-medium ${
                 !canProceed || currentStep === STEPS.length - 1
-                  ? 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-muted)] cursor-not-allowed'
+                  ? 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)] cursor-not-allowed'
                   : 'bg-[color:var(--da-color-accent)] text-white hover:bg-[color:var(--da-color-accent-hover)]'
               }`}
             >

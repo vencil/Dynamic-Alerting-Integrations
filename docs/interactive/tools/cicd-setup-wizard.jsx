@@ -591,7 +591,7 @@ export default function CICDSetupWizard() {
             >
               <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
                 i < step ? 'bg-[color:var(--da-color-accent-soft)] text-[color:var(--da-color-accent)]' :
-                i === step ? 'bg-[color:var(--da-color-surface)] text-[color:var(--da-color-accent)]' : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-muted)]'
+                i === step ? 'bg-[color:var(--da-color-surface)] text-[color:var(--da-color-accent)]' : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)]'
               }`} aria-hidden="true">
                 {i < step ? '✓' : i + 1}
               </span>

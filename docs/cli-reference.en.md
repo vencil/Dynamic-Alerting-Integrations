@@ -142,6 +142,8 @@ These tools operate on local YAML files and don't require network.
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | Routing merge pipeline debugger (four-layer expansion + profile, ADR-007) | `--config-dir <dir>` |
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics, ADR-006) | `--endpoint <url>` or `--prometheus <url>` |
+| `describe-tenant` | Display tenant effective config (with defaults inheritance) | `<tenant-id>` |
+| `migrate-conf-d` | Migrate flat conf.d/ to hierarchical layout | `--conf-d <path>` |
 
 ---
 
@@ -1131,6 +1133,133 @@ da-tools config-history --config-dir conf.d/ log --limit 5
 # Compare snapshots 1 and 2
 da-tools config-history --config-dir conf.d/ diff 1 2
 ```
+
+---
+
+#### describe-tenant
+
+Display a tenant's effective configuration (including defaults inheritance, source tracking, diff, and what-if analysis).
+
+**Purpose**: Inspect the final effective config for a tenant; trace where each setting comes from; compare multiple tenants; simulate "what if I change X".
+
+**Syntax**
+
+```bash
+da-tools describe-tenant <tenant-id> [options]
+```
+
+**Required Parameters**
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `<tenant-id>` | Tenant ID | `db-a` |
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--show-sources` | Show the source of each setting (_defaults.yaml / tenant YAML) | false |
+| `--diff <id1> <id2>` | Compare with another tenant, showing differences | (none) |
+| `--all` | List all tenants (for batch inspection) | false |
+| `--output <file>` | Write output to file (YAML or JSON) | stdout |
+| `--format json\|yaml` | Output format | `yaml` |
+| `--what-if <path>` | Preview result of applying a config fragment (v2.7.0 stub) | (none) |
+
+**Output**
+
+Merged configuration in YAML/JSON format, showing all effective settings.
+
+**Examples**
+
+```bash
+# Inspect tenant effective config
+da-tools describe-tenant db-a
+
+# With source tracking
+da-tools describe-tenant db-a --show-sources
+
+# Compare with db-b
+da-tools describe-tenant db-a --diff db-a db-b
+
+# List all tenants summary
+da-tools describe-tenant --all
+
+# Output to file
+da-tools describe-tenant db-a --output /tmp/db-a-config.yaml
+
+# JSON output
+da-tools describe-tenant db-a --format json
+```
+
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | Success |
+| `1` | Tenant does not exist or config is invalid |
+
+---
+
+#### migrate-conf-d
+
+Migrate a flat conf.d/ directory to a hierarchical layout (domain / region / env levels).
+
+**Purpose**: Large-scale config restructuring; enable config reuse and inheritance; move toward ADR-017/018 mixed mode.
+
+**Syntax**
+
+```bash
+da-tools migrate-conf-d --conf-d <path> [options]
+```
+
+**Required Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `--conf-d <PATH>` | Existing flat conf.d/ directory |
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--dry-run` | Preview migration plan without writing files (default) | true |
+| `--apply` | Execute migration | false |
+| `--infer-from metadata` | Infer domain / region / env from tenant YAML metadata | false |
+| `--output-plan <file>` | Save migration plan to JSON file | stdout |
+
+**Migration Flow**
+
+1. **Discovery**: Scan all tenant YAMLs, check `metadata.domain` / `metadata.region` / `metadata.env`
+2. **Classification**: If metadata is missing, prompt user or use heuristic inference
+3. **Planning**: Generate migration plan (e.g. `db-a.yaml` → `production/us-west/main/db-a.yaml`)
+4. **Apply** (`--apply`): Create new directory structure, copy and restructure files, generate `_defaults.yaml` drafts
+
+**Output**
+
+Migration plan JSON (or applied directly to filesystem). Includes:
+- New path for each tenant
+- Recommended `_defaults.yaml` hierarchy
+- Validation steps (backward compat check)
+
+**Examples**
+
+```bash
+# Preview migration plan
+da-tools migrate-conf-d --conf-d ./conf.d/ --dry-run
+
+# Execute migration (with metadata inference)
+da-tools migrate-conf-d --conf-d ./conf.d/ --apply --infer-from metadata
+
+# Output plan to file
+da-tools migrate-conf-d --conf-d ./conf.d/ --output-plan migration-plan.json
+```
+
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | Success (dry-run or apply) |
+| `1` | Invalid config directory or migration conflict |
 
 ---
 

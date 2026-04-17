@@ -128,6 +128,8 @@ da-tools <command> --help
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
+| `describe-tenant` | 顯示租戶有效配置（含預設值繼承） | `<tenant-id>` |
+| `migrate-conf-d` | 將平坦 conf.d/ 遷移至階層式佈局 | `--conf-d <path>` |
 | `scaffold` | 產生 tenant 配置 | `--tenant <name> --db <types>` |
 | `migrate` | 傳統規則 → 動態格式轉換（AST 引擎） | `<input_file>` |
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
@@ -1028,6 +1030,133 @@ da-tools config-history --config-dir conf.d/ log --limit 5
 # 比較快照 1 和 2
 da-tools config-history --config-dir conf.d/ diff 1 2
 ```
+
+---
+
+#### describe-tenant
+
+顯示租戶的有效配置（包含預設值繼承、來源追蹤、對比與假設分析）。
+
+**用途**：檢查租戶最終生效的配置；追蹤設定來源；比對多租戶差異；「如果修改 X 會怎樣」模擬。
+
+**語法**
+
+```bash
+da-tools describe-tenant <tenant-id> [options]
+```
+
+**必需參數**
+
+| 參數 | 說明 | 範例 |
+|------|------|------|
+| `<tenant-id>` | Tenant ID | `db-a` |
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--show-sources` | 顯示每個設定值的來源（_defaults.yaml / tenant YAML） | false |
+| `--diff <id1> <id2>` | 與另一租戶比對，顯示差異 | （無） |
+| `--all` | 列出所有租戶（用於批次檢查） | false |
+| `--output <file>` | 輸出至檔案（YAML 或 JSON） | stdout |
+| `--format json\|yaml` | 輸出格式 | `yaml` |
+| `--what-if <path>` | 假設應用配置片段，預覽結果 (v2.7.0 stub) | （無） |
+
+**輸出**
+
+YAML/JSON 格式的合併後配置，顯示所有有效的設定值。
+
+**範例**
+
+```bash
+# 檢查租戶有效配置
+da-tools describe-tenant db-a
+
+# 含來源追蹤
+da-tools describe-tenant db-a --show-sources
+
+# 與 db-b 比對
+da-tools describe-tenant db-a --diff db-a db-b
+
+# 列出所有租戶的簡要摘要
+da-tools describe-tenant --all
+
+# 輸出至檔案
+da-tools describe-tenant db-a --output /tmp/db-a-config.yaml
+
+# JSON 輸出
+da-tools describe-tenant db-a --format json
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功 |
+| `1` | Tenant 不存在或配置無效 |
+
+---
+
+#### migrate-conf-d
+
+將平坦 conf.d/ 遷移至階層式佈局（domain / region / env 層級）。
+
+**用途**：大規模配置重組；實現配置重用與繼承；邁向 ADR-017/018 混合模式。
+
+**語法**
+
+```bash
+da-tools migrate-conf-d --conf-d <path> [options]
+```
+
+**必需參數**
+
+| 參數 | 說明 |
+|------|------|
+| `--conf-d <PATH>` | 現有平坦 conf.d/ 目錄 |
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--dry-run` | 預覽遷移計畫，不寫入檔案（預設） | true |
+| `--apply` | 正式執行遷移 | false |
+| `--infer-from metadata` | 從 tenant YAML 的 metadata 推斷 domain / region / env | false |
+| `--output-plan <file>` | 將遷移計畫存至 JSON 檔案 | stdout |
+
+**遷移流程**
+
+1. **發現階段**：掃描所有 tenant YAML，檢查 `metadata.domain` / `metadata.region` / `metadata.env`
+2. **分類階段**：若 metadata 缺失，逐個提示使用者或使用啟發式推斷
+3. **規劃階段**：產出遷移計畫（例如 `db-a.yaml` → `production/us-west/main/db-a.yaml`）
+4. **應用階段**（`--apply`）：建立新目錄結構、複製與重構檔案、產出 `_defaults.yaml` 草稿
+
+**輸出**
+
+遷移計畫 JSON（或直接應用至檔案系統）。包含：
+- 每個 tenant 的新路徑
+- 推薦的 `_defaults.yaml` 階層結構
+- 驗證步驟（backward compat check）
+
+**範例**
+
+```bash
+# 預覽遷移計畫
+da-tools migrate-conf-d --conf-d ./conf.d/ --dry-run
+
+# 正式執行遷移（含 metadata 推斷）
+da-tools migrate-conf-d --conf-d ./conf.d/ --apply --infer-from metadata
+
+# 輸出計畫至檔案
+da-tools migrate-conf-d --conf-d ./conf.d/ --output-plan migration-plan.json
+```
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功（dry-run 或 apply） |
+| `1` | 配置目錄無效或遷移衝突 |
 
 ---
 
