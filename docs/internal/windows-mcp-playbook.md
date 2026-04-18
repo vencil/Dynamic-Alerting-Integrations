@@ -745,12 +745,11 @@ bash scripts/ops/run_hooks_sandbox.sh scripts/ops/run_hooks_sandbox.sh docs/inte
 make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/internal/windows-mcp-playbook.md"
 ```
 
-**執行順序（四階段，每階段失敗即 abort）**：
+**執行順序（三階段，每階段失敗即 abort；log 實際印的 label 就是 `[1/3]` / `[2/3]` / `[3/3]`）**：
 
 1. **[1/3] Sandbox hook gate** — 呼叫 `run_hooks_sandbox.sh $(FILES)`，失敗就停；緊急繞道：`SKIP_HOOKS=1`
-2. **[2/3a] Windows stage** — `cmd /c win_git_escape.bat add $(FILES)`
-3. **[2/3b] Windows commit** — `cmd /c win_git_escape.bat commit-file $(MSG)`（內部 `--no-verify`，因 Windows 端 hook 本來就無法執行）
-4. **[3/3] Windows push** — `cmd /c win_git_escape.bat push`（內部 `--no-verify` 避開陷阱 #36 的 pre-push hook）
+2. **[2/3] Windows stage + commit** — `cmd /c win_git_escape.bat add $(FILES)` 後接 `commit-file $(MSG)`（內部 `--no-verify`，因 Windows 端 hook 本來就無法執行；add + commit 合併為同一階段、同一 label，不拆 `[2/3a]` / `[2/3b]`）
+3. **[3/3] Windows push** — `cmd /c win_git_escape.bat push`（內部 `--no-verify` 避開陷阱 #36 的 pre-push hook）
 
 必填：`MSG=<message-file>`（UTF-8 without BOM）
 選填：

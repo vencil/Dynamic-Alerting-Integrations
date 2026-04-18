@@ -20,6 +20,19 @@ version: v2.7.0
 
 ## 候選 — DX 工具改善
 
+### win-escape-helpers PR #29 follow-ups
+
+**來源**：PR #29（`chore/sandbox-hook-runner`）code review 的七點建議裡，除了 #1/#2（已在同 PR 內修完 doc label 對齊）以外的五個非阻擋項目。全部屬於 polish / 韌性增強，不影響當前 `make win-commit` 正確性。
+
+1. **`win_async_exec.ps1` `IsPathRooted "Illegal characters in path"` bug** — PR #29 dogfood 階段發現，傳入相對或絕對 `LogFile` 路徑都會觸發此錯。當下 workaround 是直接跑 `scripts/ops/win_git_escape.bat push`（小 push 秒殺，MCP timeout 風險低）。修法方向：helper 內 `Resolve-Path -LiteralPath`，並明確規定呼叫方用 forward slash 或規範化路徑。
+2. **Makefile `win-commit` 的 `$(FILES)` 未 quote**（Makefile L196）— 檔名含空格會斷在 cmd.exe 字串裡。repo 目前路徑沒有空格所以沒炸過，但不是 regression-safe。解法：在呼叫 `win_git_escape.bat add` 前先組 array 或用 `printf %q`。
+3. **`_sandbox_hooks.log` 加 explicit `.gitignore` entry**（`run_hooks_sandbox.sh` L79）— 目前靠 `*.log` wildcard 涵蓋，未來若 `.gitignore` 重構把 wildcard 拿掉就會裸奔。補一條 explicit 的防守線；或者把 log 改寫到 `$REPO_ROOT/.git/_sandbox_hooks.log`（永不會被 track）。
+4. **`run_hooks_sandbox.sh` repo-外絕對路徑的友善錯誤訊息**（L74）— 目前 `case /* → FILES+=("$f")` 直接丟給 pre-commit，回的錯誤訊息不太直覺。加一個前置檢查 `warn if ! -e "$REPO_ROOT/$rel"` 能提升 UX。
+5. **`run_hooks_sandbox.sh` REPO_ROOT 解析韌性**（L57）— 目前硬寫 `$SCRIPT_DIR/../..`，script 若以後移出 `scripts/ops/` 會默默壞掉。加 `git rev-parse --show-toplevel` fallback。
+6. **Makefile `SKIP` env var 雙重設定**（L198）— `SKIP="$(SKIP)" $$CMD_EXE /c "set SKIP=$(SKIP)&& ..."` 一次在 Linux shell、一次在 cmd 字串內。belt-and-suspenders，留 inline `set SKIP=` 即可（Linux→cmd 邊界的 env 繼承不一定穩）。
+
+**時程**：無 urgency，可搭下一次 win-escape 相關的 session 一起處理。`#1`（`win_async_exec.ps1` bug）實際使用時會再撞到，優先級略高於其他。
+
 ### check_doc_freshness.py Helm chart 版號檢查
 
 目前只檢查 Docker image 版號，擴展到 `helm install/upgrade` 命令中的 `--version` flag 比對。
