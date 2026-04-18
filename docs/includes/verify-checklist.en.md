@@ -1,3 +1,5 @@
+<!-- Bilingual pair: verify-checklist.md -->
+
 **Standard Verification Checklist:**
 
 - [ ] threshold-exporter `/ready` responds 200

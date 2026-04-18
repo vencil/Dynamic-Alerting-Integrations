@@ -7,6 +7,8 @@ lang: zh
 ---
 # Operator Alertmanager 整合指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./operator-alertmanager-integration.en.md)
+
 > **受眾**：Platform Engineers、SREs
 > **版本**：v2.6.0
 > **對應文件**：[BYO Alertmanager 整合指南](byo-alertmanager-integration.md)（ConfigMap 路徑）

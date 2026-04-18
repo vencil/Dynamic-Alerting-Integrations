@@ -8,6 +8,8 @@ lang: en
 
 # ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload
 
+> **Language / 語言：** **English (Current)** | [中文](./018-defaults-yaml-inheritance-dual-hash.md)
+
 > Phase .b B-1 (v2.7.0 Scale Foundation I).
 > Paired with [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy).
 
@@ -183,5 +185,5 @@ Replace semantics are more intuitive and consistent with Helm values merge behav
 ## Related
 
 - [ADR-017: conf.d/ Directory Hierarchy + Mixed Mode](017-conf-d-directory-hierarchy-mixed-mode.en.md)
-- [benchmark-v2.7.0-baseline.md](../internal/benchmark-v2.7.0-baseline.md)
+- [Benchmark Report §12 «Incremental Hot-Reload + B-1 Scale Gate»](../benchmarks.en.md#12-incremental-hot-reload-b-1-scale-gate) — dual-hash 1000-tenant measurements + SLO interpretation
 - [architecture-and-design.md §Design Concepts](../architecture-and-design.md#設計概念總覽)

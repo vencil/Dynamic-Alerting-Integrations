@@ -8,6 +8,8 @@ lang: en
 
 # ADR-014: Tech-Debt Category and REG Budget Isolation
 
+> **Language / 語言：** **English (Current)** | [中文](./014-tech-debt-category-budget-isolation.md)
+
 > Originally recorded as **DEC-N** in `docs/internal/v2.7.0-planning.md §19`.
 > This ADR supplements **governance guardrails** to prevent TECH-DEBT from becoming a loophole for the REG Budget.
 

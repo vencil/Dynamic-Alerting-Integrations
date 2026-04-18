@@ -8,7 +8,7 @@ lang: zh
 
 # da-tools 快速參考
 
-> **Language / 語言：** | **中文（當前）**
+> **Language / 語言：** | **中文（當前）** | [English](./cheat-sheet.en.md)
 
 da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)。
 

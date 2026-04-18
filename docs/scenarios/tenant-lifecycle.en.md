@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
 
+> **Language / 語言：** **English (Current)** | [中文](./tenant-lifecycle.md)
+
 > **v2.7.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Overview

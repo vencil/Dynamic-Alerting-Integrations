@@ -7,6 +7,8 @@ lang: en
 ---
 # Operator Alertmanager Integration Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./operator-alertmanager-integration.md)
+
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Related Document**: [BYO Alertmanager Integration Guide](byo-alertmanager-integration.en.md) (ConfigMap Path)

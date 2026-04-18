@@ -8,6 +8,8 @@ parent: architecture-and-design.md
 ---
 # Rule Packs 與 Projected Volume 架構
 
+> **Language / 語言：** **中文 (Current)** | [English](./rule-packs.en.md)
+
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 > ← [返回主文件](../architecture-and-design.md)
@@ -95,7 +97,7 @@ groups:
           platform_summary_zh: "[Tier: {{ $labels.tier }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
 ```
 
-#### 雙語 Annotation (i18n)
+#### v2.0.0 雙語 Annotation (Bilingual Annotations / i18n) for Alerts
 
 Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 
@@ -125,4 +127,3 @@ Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 4. **獨立測試** — 每個包可獨立驗證和發布
 
 ---
-

@@ -7,6 +7,8 @@ lang: zh
 ---
 # Deployment Decision Matrix
 
+> **Language / 語言：** **中文 (Current)** | [English](./decision-matrix.en.md)
+
 > **受眾**：Platform Engineers
 > **版本**：v2.6.0
 > **用途**：幫助你在 5 分鐘內決定使用 ConfigMap（Path A）或 Operator CRD（Path B）部署 Dynamic Alerting

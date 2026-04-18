@@ -7,6 +7,8 @@ lang: en
 ---
 # Platform Engineer Quick Start Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./for-platform-engineers.md)
+
 > **v2.7.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
 > Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../integration/gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../integration/prometheus-operator-integration.en.md) · [Deployment Decision Matrix](decision-matrix.md)

@@ -1,3 +1,5 @@
+<!-- Bilingual pair: verify-checklist.en.md -->
+
 **標準驗證清單：**
 
 - [ ] threshold-exporter `/ready` 回應 200

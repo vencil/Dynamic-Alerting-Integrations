@@ -8,6 +8,8 @@ lang: en
 
 # Threshold Exporter API Reference
 
+> **Language / 語言：** **English (Current)** | [中文](./README.md)
+
 Threshold Exporter is the core component of the Multi-Tenant Dynamic Alerting platform, responsible for converting tenant configurations into Prometheus metrics, state filters, and severity deduplication flags. This document details all API endpoints, request/response formats, examples, and Kubernetes integration methods.
 
 ## Service Specifications

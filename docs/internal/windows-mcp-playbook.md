@@ -302,6 +302,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 49 | `gh` 不在 Desktop Commander PowerShell PATH | Desktop Commander 的 PowerShell shell 找不到 `C:\Program Files\GitHub CLI\gh.exe`，但 cmd 可以。原因：PowerShell MCP 的 PATH 繼承與 cmd 不同。**正解**：用 cmd shell + bat 檔；或在 PowerShell 用全路徑 `& "C:\Program Files\GitHub CLI\gh.exe"` |
 | 50 | `gh pr checks --json` 沒有 `conclusion` 欄位 | 可用欄位：`name, state, bucket, description, event, link, startedAt, completedAt, workflow`。`bucket` 值為 `pass/fail/pending/skipping`。很多網路範例用 `conclusion` 是錯的 |
 | 51 | Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError | Python `print()` 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。**正解**：script 開頭偵測 `cp*` encoding 時強制 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')` |
+| 52 | Bash 工具傳 Windows 絕對路徑（`C:\...`）產生 FUSE phantom 檔案 | 當 Bash/Shell 工具接收到 `C:\Users\...\_bench.bat` 這類 Windows 絕對路徑作為**位置參數**，FUSE 層會把 `:` 翻成 U+F03A、`\` 翻成 U+F05C（PUA 區碼位），在 Linux 側建出路徑合法但在 Windows 側看到的是 `CUsersvencsvibe-k8s-lab_bench.bat` 這種「中間夾隱形字元」的殘檔。殘檔會被 `git status` 當 untracked 列出但 wildcard（如 `*vibe-k8s-lab*`）匹配不到，須用 regex 比對 `_bench_f1b\|_bench_poll\|_poll\.bat` 等片段。**正解**：(1) 任何跨 Windows 路徑的寫入操作用 Write 工具或 Windows MCP PowerShell，不要塞給 Bash 工具；(2) `.gitignore` 已加 `CUsersvencs*` + `/C:\*` 雙重防守（PR #v2.7.1-doc-hygiene）；(3) 清理用 Windows 側 `Remove-Item -LiteralPath` + regex match，非從 FUSE 側 `rm`（會 `Operation not permitted`） |
 
 ## Windows Clone 初次設定 — Symlink 支援
 

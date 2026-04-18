@@ -7,6 +7,8 @@ lang: zh
 ---
 # Federation Integration Guide
 
+> **Language / 語言：** **中文 (Current)** | [English](./federation-integration.en.md)
+
 > **v2.6.0** — 多叢集聯邦部署指南：中央評估與邊緣評估兩種架構
 
 ## 1. 概覽

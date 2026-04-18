@@ -7,6 +7,8 @@ lang: en
 ---
 # Operator GitOps Deployment Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./operator-gitops-deployment.md)
+
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Related Document**: [GitOps Deployment Guide](gitops-deployment.en.md) (ConfigMap Path)

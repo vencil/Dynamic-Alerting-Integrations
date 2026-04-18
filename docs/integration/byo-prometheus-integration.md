@@ -7,6 +7,8 @@ lang: zh
 ---
 # Bring Your Own Prometheus (BYOP) — 現有監控架構整合指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./byo-prometheus-integration.en.md)
+
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](../architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
 > **版本**：v2.6.0

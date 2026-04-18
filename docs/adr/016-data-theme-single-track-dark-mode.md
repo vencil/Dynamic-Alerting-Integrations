@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
 
+> **Language / 語言：** **中文 (Current)** | [English](./016-data-theme-single-track-dark-mode.en.md)
+
 > Originally recorded as **DEC-F = Option C** in `docs/internal/v2.7.0-planning.md §17`
 > (Day 3, 2026-04-16，user round-trip 兩輪後定案)。Back-filled during Day 5
 > retrospective review — DEC-F 是 Phase .a0 所有後續 token 遷移都仰賴的前提，

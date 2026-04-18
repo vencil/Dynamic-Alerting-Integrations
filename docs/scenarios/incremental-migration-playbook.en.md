@@ -8,6 +8,8 @@ lang: en
 
 # Scenario: Incremental Migration Playbook
 
+> **Language / 語言：** **English (Current)** | [中文](./incremental-migration-playbook.md)
+
 > **v2.7.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
 
 ## Overview

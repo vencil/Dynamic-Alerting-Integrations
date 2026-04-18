@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-010: Multi-Tenant Grouping Architecture
 
+> **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v2.5.0) — 自定義群組以 `_groups.yaml` 儲存於 conf.d/，透過 tenant-api CRUD endpoints 管理

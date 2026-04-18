@@ -7,6 +7,8 @@ lang: en
 ---
 # Prometheus Operator Integration Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./prometheus-operator-integration.md)
+
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Related ADR**: [ADR-008 — Operator CRD Path](../adr/008-operator-native-integration-path.en.md)

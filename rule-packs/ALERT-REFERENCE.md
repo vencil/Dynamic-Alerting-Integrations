@@ -7,6 +7,8 @@ lang: zh
 ---
 # Rule Pack 告警參考指南 (Alert Reference Guide)
 
+> **Language / 語言：** **中文 (Current)** | [English](./ALERT-REFERENCE.en.md)
+
 本文件為租戶提供各 Rule Pack 中所有告警的統一參考，包括告警含義、觸發條件和建議動作。
 
 **注意**: 本指南僅涵蓋**使用者導向的閾值告警** (threshold alerts)。Operational Rule Pack 的 sentinel 告警為平台內部控制機制，不需要租戶操作。

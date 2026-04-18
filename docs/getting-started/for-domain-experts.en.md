@@ -7,6 +7,8 @@ lang: en
 ---
 # Domain Expert (DBA) Quick Start Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./for-domain-experts.md)
+
 > **v2.7.0** | Audience: DBAs, Database Administrators, Domain Experts
 >
 > Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4

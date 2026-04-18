@@ -1,3 +1,5 @@
+<!-- Bilingual pair: three-state-summary.md -->
+
 **Three-State Operational Model:**
 
 | Mode | Setting | Effect |

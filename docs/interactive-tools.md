@@ -8,6 +8,8 @@ lang: zh
 
 # 互動式工具
 
+> **Language / 語言：** **中文 (Current)** | [English](./interactive-tools.en.md)
+
 本平台提供四個互動式 React 元件，可在支援 React 的環境中執行（如 Claude Artifacts、CodeSandbox、或自建頁面）。
 
 ## 入門精靈 (Wizard)

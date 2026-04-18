@@ -7,6 +7,8 @@ lang: zh
 ---
 # 場景：千租戶規模管理
 
+> **Language / 語言：** **中文 (Current)** | [English](./manage-at-scale.en.md)
+
 > **v2.7.0** | 相關文件：[multi-domain-conf-layout](multi-domain-conf-layout.md)、[ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.md)、[tenant-lifecycle](tenant-lifecycle.md)
 
 ## 概述

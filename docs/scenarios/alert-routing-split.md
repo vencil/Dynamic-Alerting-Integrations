@@ -7,6 +7,8 @@ lang: zh
 ---
 # 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知
 
+> **Language / 語言：** **中文 (Current)** | [English](./alert-routing-split.en.md)
+
 > **v2.7.0** | 相關文件：[`architecture-and-design.md` §2.9](../architecture-and-design.md)、[`byo-alertmanager-integration.md`](../integration/byo-alertmanager-integration.md)
 
 ## 問題

@@ -7,6 +7,8 @@ lang: en
 ---
 # Tenant Quick Start Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./for-tenants.md)
+
 > **v2.7.0** | Audience: Tenant administrators, DBAs, SREs
 >
 > Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)

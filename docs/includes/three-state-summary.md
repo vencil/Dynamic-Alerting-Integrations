@@ -1,3 +1,5 @@
+<!-- Bilingual pair: three-state-summary.en.md -->
+
 **三態運營模式：**
 
 | 模式 | 設定 | 效果 |

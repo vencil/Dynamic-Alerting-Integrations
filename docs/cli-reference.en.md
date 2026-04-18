@@ -8,6 +8,8 @@ lang: en
 
 # da-tools CLI Reference
 
+> **Language / 語言：** **English (Current)** | [中文](./cli-reference.md)
+
 > **Audience**: Platform Engineers, SREs, DevOps, Tenants
 > **Container Image**: `ghcr.io/vencil/da-tools:v2.7.0`
 > **Version**: (synced with platform version)

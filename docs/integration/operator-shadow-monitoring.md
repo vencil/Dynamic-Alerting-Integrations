@@ -7,6 +7,8 @@ lang: zh
 ---
 # Operator Shadow Monitoring 策略
 
+> **Language / 語言：** **中文 (Current)** | [English](./operator-shadow-monitoring.en.md)
+
 > **受眾**：Platform Engineers、SREs
 > **版本**：v2.6.0
 > **前置閱讀**：[Operator Alertmanager 整合](operator-alertmanager-integration.md)

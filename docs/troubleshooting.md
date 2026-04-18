@@ -7,7 +7,7 @@ lang: zh
 ---
 # 故障排查與邊界情況
 
-> **Language / 語言：** | **中文（當前）**
+> **Language / 語言：** | **中文（當前）** | [English](./troubleshooting.en.md)
 
 > 相關文件：[Architecture](architecture-and-design.md) · [HA Design](architecture-and-design.md#4-高可用性設計-high-availability)
 

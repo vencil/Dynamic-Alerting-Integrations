@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-012: threshold-heatmap 色盲補丁 — 結構化 severity 返回值
 
+> **Language / 語言：** **中文 (Current)** | [English](./012-colorblind-hotfix-structured-severity-return.en.md)
+
 > Originally recorded as **DEC-L (Sprint 0)** in `docs/internal/v2.7.0-planning.md §19`.
 > Hotfix 已於 Day 4 AM 落地；本 ADR 保存決策脈絡以便未來 generalize 到其他
 > 顏色敏感工具（platform-demo mode badges, health dashboard tier badges 等）。

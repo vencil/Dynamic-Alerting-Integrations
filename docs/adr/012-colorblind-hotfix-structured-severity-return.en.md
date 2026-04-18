@@ -8,6 +8,8 @@ lang: en
 
 # ADR-012: threshold-heatmap Colorblind Accessibility Hotfix — Structured Severity Return Value
 
+> **Language / 語言：** **English (Current)** | [中文](./012-colorblind-hotfix-structured-severity-return.md)
+
 > Originally recorded as **DEC-L (Sprint 0)** in `docs/internal/v2.7.0-planning.md §19`.
 > The hotfix was deployed on Day 4 AM; this ADR preserves the decision context for future
 > generalization to other color-dependent tools (platform-demo mode badges, health dashboard tier badges, etc.).

@@ -104,8 +104,8 @@ lang: en
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
-| `docs/internal/benchmark-v2.7.0-baseline.md` | All | v2.7.0 Benchmark Baseline Report |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
+| `docs/internal/component-health-snapshot.md` | maintainer, ui-engineer | Component Health Snapshot (v2.7.0 Phase .a baseline) |
 | `docs/internal/design-system-guide.md` | maintainers | Design System Guide |
 | `docs/internal/dev-rules.md` | All | 開發規範 (Development Rules) |
 | `docs/internal/doc-template.md` | All | 文件模板規範 |

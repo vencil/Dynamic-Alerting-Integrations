@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: GitOps CI/CD Integration Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./gitops-ci-integration.md)
+
 > **v2.7.0** | Related: [`architecture-and-design.md`](../architecture-and-design.md), [`for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`cli-reference.md`](../cli-reference.md) · Interactive: [CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
 
 ## Overview

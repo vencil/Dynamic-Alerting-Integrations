@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: Managing at Scale — Thousand-Tenant Operations
 
+> **Language / 語言：** **English (Current)** | [中文](./manage-at-scale.md)
+
 > **v2.7.0** | Related docs: [multi-domain-conf-layout](multi-domain-conf-layout.en.md), [ADR-017](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md), [ADR-018](../adr/018-defaults-yaml-inheritance-dual-hash.en.md), [tenant-lifecycle](tenant-lifecycle.en.md)
 
 ## Overview

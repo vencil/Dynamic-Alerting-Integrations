@@ -7,6 +7,8 @@ lang: zh
 ---
 # Shadow Monitoring SRE SOP
 
+> **Language / 語言：** **中文 (Current)** | [English](./shadow-monitoring-sop.en.md)
+
 > **受眾**: SRE / Platform Engineer / DevOps
 > **前提**: 已完成 `da-tools migrate` 轉換，新舊 Recording Rule 同時在 Prometheus 運行
 > **工具**: `da-tools validate`（`--watch` 持續模式 / 單次模式）、`da-tools diagnose`（健康檢查）

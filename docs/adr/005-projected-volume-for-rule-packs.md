@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-005: 投影卷掛載 Rule Pack
 
+> **Language / 語言：** **中文 (Current)** | [English](./005-projected-volume-for-rule-packs.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v1.0.0)

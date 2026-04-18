@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-013: Component Health Scanner — Tier 評分演算法與 token_density 輔助指標
 
+> **Language / 語言：** **中文 (Current)** | [English](./013-component-health-token-density-metric.en.md)
+
 > 合併了兩個決策：
 > - **DEC-08**（Day 1, planning §10）：Tier 分級改用五維加權替代 `appears_in` 單訊號
 > - **DEC-M**（Day 4, planning §19）：新增 `token_density` 輔助指標

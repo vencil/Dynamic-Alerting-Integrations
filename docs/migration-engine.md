@@ -7,7 +7,7 @@ lang: zh
 ---
 # AST 遷移引擎架構
 
-> **Language / 語言：** | **中文（當前）**
+> **Language / 語言：** | **中文（當前）** | [English](./migration-engine.en.md)
 
 > 相關文件：[Migration Guide](migration-guide.md) · [Architecture](architecture-and-design.md)
 

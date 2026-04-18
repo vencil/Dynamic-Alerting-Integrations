@@ -8,6 +8,8 @@ lang: zh
 
 # Threshold Exporter API 參考
 
+> **Language / 語言：** **中文 (Current)** | [English](./README.en.md)
+
 Threshold Exporter 是 Multi-Tenant Dynamic Alerting 平台的核心元件，負責將租戶配置轉換為 Prometheus 指標、狀態過濾器和嚴重度去重標誌。本文件詳細說明所有 API 端點、請求/回應格式、範例和 Kubernetes 整合方式。
 
 ## 服務規格

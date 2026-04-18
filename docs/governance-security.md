@@ -7,7 +7,7 @@ lang: zh
 ---
 # 治理、稽核與安全合規
 
-> **Language / 語言：** | **中文（當前）**
+> **Language / 語言：** | **中文（當前）** | [English](./governance-security.en.md)
 
 > 相關文件：[Architecture](architecture-and-design.md) · [GitOps Deployment](integration/gitops-deployment.md) · [Custom Rule Governance](custom-rule-governance.md)
 

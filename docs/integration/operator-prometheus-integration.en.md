@@ -7,6 +7,8 @@ lang: en
 ---
 # Operator Prometheus Integration Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./operator-prometheus-integration.md)
+
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Related Document**: [BYO Prometheus Integration Guide](byo-prometheus-integration.en.md) (ConfigMap Path)

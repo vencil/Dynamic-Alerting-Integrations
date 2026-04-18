@@ -8,6 +8,8 @@ lang: zh
 
 # da-tools CLI Reference
 
+> **Language / 語言：** **中文 (Current)** | [English](./cli-reference.en.md)
+
 > **受眾**：Platform Engineers、SREs、DevOps、Tenants
 > **容器映像**：`ghcr.io/vencil/da-tools:v2.7.0`
 > **版本**：v2.7.0（與平台版本同步）

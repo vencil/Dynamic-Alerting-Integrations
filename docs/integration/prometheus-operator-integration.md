@@ -7,6 +7,8 @@ lang: zh
 ---
 # Prometheus Operator 整合手冊
 
+> **Language / 語言：** **中文 (Current)** | [English](./prometheus-operator-integration.en.md)
+
 > **受眾**：Platform Engineers、SREs
 > **版本**：v2.6.0
 > **相關 ADR**：[ADR-008 — Operator CRD 路徑](../adr/008-operator-native-integration-path.md)
