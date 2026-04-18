@@ -1,0 +1,4 @@
+tenants:
+  tenant-meta:
+    threshold:
+      cpu: 80

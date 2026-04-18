@@ -1,0 +1,4 @@
+tenants:
+  tenant-flat:
+    threshold:
+      cpu: 55

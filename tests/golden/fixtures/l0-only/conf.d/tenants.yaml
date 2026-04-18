@@ -1,0 +1,4 @@
+tenants:
+  tenant-b:
+    threshold:
+      cpu: 85

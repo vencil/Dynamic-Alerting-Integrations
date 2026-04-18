@@ -1,0 +1,4 @@
+tenants:
+  tenant-arr:
+    receivers:
+      - pagerduty-custom

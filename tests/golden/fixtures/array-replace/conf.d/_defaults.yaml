@@ -1,0 +1,6 @@
+defaults:
+  receivers:
+    - email-default
+    - slack-default
+  threshold:
+    cpu: 70

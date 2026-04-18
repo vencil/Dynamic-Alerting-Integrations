@@ -1,0 +1,146 @@
+[
+  {
+    "defaults_chain": [],
+    "effective_config": {
+      "alert_group": "default",
+      "threshold": {
+        "cpu": 80,
+        "memory": 75
+      }
+    },
+    "fixture_dir": "flat",
+    "merged_hash": "44e866a34cc1952d",
+    "scenario": "flat",
+    "source_file": "tenants.yaml",
+    "source_hash": "a2621e73f61c64b5",
+    "tenant_id": "tenant-a"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "alert_group": "baseline",
+      "threshold": {
+        "cpu": 85,
+        "memory": 65
+      }
+    },
+    "fixture_dir": "l0-only",
+    "merged_hash": "4b008f7b9fda4406",
+    "scenario": "l0-only",
+    "source_file": "tenants.yaml",
+    "source_hash": "52f0dd0f686f023b",
+    "tenant_id": "tenant-b"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml",
+      "db/_defaults.yaml",
+      "db/mariadb/_defaults.yaml",
+      "db/mariadb/prod/_defaults.yaml"
+    ],
+    "effective_config": {
+      "custom_tag": "leaf",
+      "level": "L3",
+      "pages": [
+        "b"
+      ],
+      "region": "us-east",
+      "threshold": {
+        "connections": 90,
+        "cpu": 95,
+        "memory": 75
+      }
+    },
+    "fixture_dir": "full-l0-l3",
+    "merged_hash": "3c2c91dee380107e",
+    "scenario": "full-l0-l3",
+    "source_file": "db/mariadb/prod/tenant-x.yaml",
+    "source_hash": "aa7e83b8f3a9e54f",
+    "tenant_id": "tenant-x"
+  },
+  {
+    "defaults_chain": [],
+    "effective_config": {
+      "threshold": {
+        "cpu": 55
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "68b4b9dd1459249f",
+    "scenario": "mixed-mode-flat",
+    "source_file": "flat-tenant.yaml",
+    "source_hash": "ff75f9a2c8e2ae09",
+    "tenant_id": "tenant-flat"
+  },
+  {
+    "defaults_chain": [
+      "db/_defaults.yaml"
+    ],
+    "effective_config": {
+      "threshold": {
+        "cpu": 88,
+        "memory": 60
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "e19b693a4f240ff4",
+    "scenario": "mixed-mode-hier",
+    "source_file": "db/hier-tenant.yaml",
+    "source_hash": "07eca3196845365e",
+    "tenant_id": "tenant-hier"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "receivers": [
+        "pagerduty-custom"
+      ],
+      "threshold": {
+        "cpu": 70
+      }
+    },
+    "fixture_dir": "array-replace",
+    "merged_hash": "092a4881e80c7ce4",
+    "scenario": "array-replace",
+    "source_file": "tenants.yaml",
+    "source_hash": "675786b05a655234",
+    "tenant_id": "tenant-arr"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "threshold": {
+        "connections": 50,
+        "cpu": 70
+      }
+    },
+    "fixture_dir": "opt-out-null",
+    "merged_hash": "f751df13d0aa2d19",
+    "scenario": "opt-out-null",
+    "source_file": "tenants.yaml",
+    "source_hash": "d0d42110c018826d",
+    "tenant_id": "tenant-optout"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "threshold": {
+        "cpu": 80
+      }
+    },
+    "fixture_dir": "metadata-skipped",
+    "merged_hash": "d1f689e79d8c8b5a",
+    "scenario": "metadata-skipped",
+    "source_file": "tenants.yaml",
+    "source_hash": "a45e4f69518f27dd",
+    "tenant_id": "tenant-meta"
+  }
+]

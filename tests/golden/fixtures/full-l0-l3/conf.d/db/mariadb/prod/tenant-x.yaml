@@ -1,0 +1,5 @@
+tenants:
+  tenant-x:
+    threshold:
+      cpu: 95
+    custom_tag: leaf

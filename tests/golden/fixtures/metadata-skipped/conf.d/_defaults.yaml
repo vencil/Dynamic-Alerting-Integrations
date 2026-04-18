@@ -1,0 +1,6 @@
+defaults:
+  _metadata:
+    domain: db
+    region: global
+  threshold:
+    cpu: 70
