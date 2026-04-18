@@ -152,6 +152,8 @@ lang: zh
 
 **自動修復**：`file-hygiene` pre-commit hook 會偵測並修復 null bytes + 缺失 EOF 換行，但最好一開始就不要製造問題。
 
+> **⚠️ v2.7.1 LL — Symlink blob + EOF newline**：bulk「補 EOF newline」cleanup（Windows-side commit 尤甚）會把 symlink 的 blob 從 `../target.md` 變成 `../target.md\n`，Linux CI 的 `readlink()` 就解不了。`file-hygiene` hook 的 `os.path.islink()` 在 Linux/FUSE 側會擋下，但 Windows clone 若 `core.symlinks=false`，symlink 被物化成純文字檔、runtime guard 失效。防線：`.pre-commit-config.yaml` 把所有 symlink proxy md 加進 `exclude` 正則。完整事件與 repo symlink 清單見 [windows-mcp-playbook §v2.7.1 LL：`end-of-file-fixer` 會把 symlink blob 弄壞](windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞)。
+
 ### 12. Branch + PR 流程：禁止直推 main
 
 **規則**：任何程式碼或文件變更**不得**直接 commit 到 `main`。必須：
