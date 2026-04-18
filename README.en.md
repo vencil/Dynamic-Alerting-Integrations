@@ -2,7 +2,7 @@
 title: "Dynamic Alerting Integrations"
 tags: [overview, introduction]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Dynamic Alerting Integrations

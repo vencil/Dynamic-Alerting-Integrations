@@ -50,10 +50,13 @@ test.describe('Config Lint @critical', () => {
     // Both are always rendered (findings region is just empty when no issues),
     // so we assert the presence of either region. This doubles as a
     // TECH-DEBT-002 regression guard (the role="alert" fix).
-    const summary = page.getByRole('status').first();
-    const findings = page.getByRole('alert').first();
+    const summary = page.getByRole('status');
+    const findings = page.getByRole('alert');
     // Either region being attached to the DOM proves the a11y contract holds.
-    const anyRegion = summary.or(findings);
+    // Note: `.or()` must wrap whole locators (not `.first()`-narrowed ones) and
+    // the `.first()` call has to come AFTER `.or()` — otherwise strict-mode
+    // fires on the outer union when multiple matches exist (v2.7.0 hotfix).
+    const anyRegion = summary.or(findings).first();
     await expect(anyRegion).toBeVisible({ timeout: 10000 });
   });
 });

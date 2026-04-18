@@ -308,9 +308,9 @@ class TestHelmChartThresholdExporter:
         with open(chart_dir / "values.yaml") as f:
             return yaml.safe_load(f)
 
-    def test_chart_version_260(self, chart_yaml: dict):
-        """Chart version is 2.6.0."""
-        assert chart_yaml["version"] == "2.6.0"
+    def test_chart_version_270(self, chart_yaml: dict):
+        """Chart version is 2.7.0."""
+        assert chart_yaml["version"] == "2.7.0"
 
     def test_values_has_rules_mode(self, values_yaml: dict):
         """values.yaml has rules.mode field."""

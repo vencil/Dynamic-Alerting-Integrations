@@ -43,7 +43,7 @@ lang: zh
 | [015](#015-wizard-token-arbitrary-value-遷移策略) | Wizard Token Arbitrary-Value 遷移策略 (Option A) | ✅ Accepted | `bg-[color:var(--da-color-*)]` arbitrary-value 改寫 legacy `bg-slate-200`，避免 Tailwind config 擴充 + 同 commit 完成全替換 |
 | [016](#016-data-theme-單軌-dark-mode) | `[data-theme]` 單軌 Dark Mode（移除 `dark:` 變體） | ✅ Accepted | 統一以 `[data-theme="dark"]` attribute 管理 dark mode，禁用 Tailwind `dark:` 變體，消除 token/class 雙軌問題 |
 | [017](#017-confd-目錄分層-混合模式) | conf.d/ 目錄分層 + 混合模式 + 遷移策略 | 🟡 Proposed | Directory Scanner 同時支援 flat 與 domain/region/env 3 層結構；零中斷升級 + `migrate-conf-d` 可選工具 |
-| [018](#018-defaults-yaml-繼承語意--dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | 🟡 Proposed | Deep merge with override（array replace、null-as-delete）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
+| [018](#018-defaultsyaml-繼承語意-dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | 🟡 Proposed | Deep merge with override（array replace、null-as-delete）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
 
 ---
 

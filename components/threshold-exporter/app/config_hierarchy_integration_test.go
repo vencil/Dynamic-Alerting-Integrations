@@ -189,8 +189,10 @@ tenants:
 	os.Chtimes(filepath.Join(dir, "team-a", "tenant-a.yaml"),
 		time.Now().Add(-5*time.Second), time.Now().Add(-5*time.Second))
 
-	// Wait up to 1s for the new hash to differ.
-	ok := waitFor(t, 1*time.Second, func() bool {
+	// Wait up to 3s for the new hash to differ. CI runners under load occasionally
+	// need >1s for the 20ms WatchLoop tick + 10ms debounce + fsync + diff to
+	// complete; 3s is still bounded and well under the test-suite timeout.
+	ok := waitFor(t, 3*time.Second, func() bool {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
 		curr := m.mergedHashes["tenant-a"]

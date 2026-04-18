@@ -28,6 +28,12 @@ rules:
       # compound scopes (multi-area changes)
       - dx+e2e
       - lint+tooling
+      # component / sub-area scopes
+      - scanner          # hierarchical dir scanner (exporter subsystem)
+      - golden           # golden fixture parity tests
+      - tooling          # generic tooling / infrastructure changes
+      # release-version scopes (used by release-wrap commits)
+      - v2.7.0
   # Allow sentence-case subjects (conventional default forbids it)
   subject-case:
     - 0

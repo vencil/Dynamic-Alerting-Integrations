@@ -261,7 +261,7 @@ spec:
 | **v2.8.0 計畫中** | 千租戶上線 × 控制台整合 | Scale Foundation II（server-side search、Tenant Manager virtualized）、SSOT EN-first 全量遷移、Master Onboarding Journey、Field-level RBAC、v2.7.0 未完 Go 工作認領（B-2/B-3/C-1/C-3） |
 | **長期探索** | 智慧化 × 去耦合 | Anomaly-Aware Threshold、Log-to-Metric Bridge、Multi-Format Export、CRD、ChatOps |
 
-**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 執行紀錄見 [v2.7.0-planning.md](internal/v2.7.0-planning.md)
+**完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 執行紀錄見 `internal/v2.7.0-planning.md`（internal-only planning doc，GitHub 上直接瀏覽此路徑）
 
 ---
 
