@@ -7,13 +7,82 @@
 ## 架構
 
 - **HA 架構**: 預設 2 Replicas，具備 PodAntiAffinity 與 PodDisruptionBudget，確保高可用性
-- **Directory Scanner 模式** (`-config-dir`): ConfigMap 拆分為多檔，掛載至 `/etc/threshold-exporter/conf.d/`，按檔名排序合併
+- **Directory Scanner 模式** (`-config-dir`): ConfigMap 拆分為多檔，掛載至 `/etc/threshold-exporter/conf.d/`，按檔名排序合併；v2.7.0 支援 **階層式** `conf.d/<domain>/<region>/<tenant>.yaml` (ADR-017)
+- **_defaults.yaml 繼承引擎 (v2.7.0, ADR-018)**: L0（頂層 defaults）→ L1（domain）→ L2（region）→ L3（tenant override）四層深合併；array 替換語義 + null-as-delete
 - **三態設計**: custom value / default / disable
 - **多層嚴重度**: `"40:critical"` 後綴覆寫 severity
-- **Hot-reload**: SHA-256 hash 比對，自動偵測 K8s ConfigMap symlink rotation
+- **Hot-reload**: v2.6.x 為 SHA-256 單一 hash；**v2.7.0 升級為 Dual-Hash**——`source_hash`（原始文件）+ `merged_hash`（套完繼承後的 canonical JSON）並行追蹤，僅 merged_hash 變化才觸發 reload
+- **300ms Debounce (v2.7.0)**: `time.AfterFunc` + `sync.Mutex` 雙保護吸收 K8s ConfigMap symlink rotation 的連續寫入；可用 `--scan-debounce` flag 調整
 - **Cardinality Guard**: 每租戶最多 500 個 metric（超限自動截斷 + ERROR log），防止 TSDB 爆炸
 - **Schema Validation**: `ValidateTenantKeys()` 自動偵測 typo 和非法 key，支援保留前綴 (`_state_*`, `_routing*`)
 - **SAST 合規**: ReadHeaderTimeout (Gosec G112)、檔案權限 0o600 (CWE-276)
+
+## v2.7.0：conf.d/ 階層 + 繼承引擎 + Dual-Hash 熱重載
+
+**ADR-017 / ADR-018** 把 Directory Scanner 從「扁平多檔」升級為「多層目錄 + `_defaults.yaml` 繼承」，讓 1000+ 租戶場景的配置重複度降到最低，且 ConfigMap symlink rotation 不會觸發假 reload。
+
+**四層繼承 (L0→L3)**：
+
+```
+conf.d/
+├── _defaults.yaml             # L0 平台預設
+├── mysql/
+│   ├── _defaults.yaml         # L1 domain 預設
+│   ├── us-east/
+│   │   ├── _defaults.yaml     # L2 region 預設
+│   │   ├── db-a.yaml          # L3 tenant override
+│   │   └── db-b.yaml
+│   └── ap-northeast/
+│       └── db-c.yaml
+└── redis/
+    ├── _defaults.yaml
+    └── cache-1.yaml
+```
+
+**合併語義**（ADR-018）：
+
+- **Deep merge**: map 遞迴合併，子鍵各自套用下層覆寫
+- **Array 替換**: list 型欄位整包覆寫（不合併），避免繼承鏈造成的意外累加
+- **null-as-delete**: 下層把某個鍵設 `null` → 從 effective 結果中刪除，等同「顯式否決上層預設」
+- **保留前綴**: `_state_*` / `_routing*` / `_metadata` 只允許出現在 `_` 前綴檔案，不會被 L3 tenant 檔案覆寫
+
+**Dual-Hash 熱重載**：
+
+| Hash | 覆蓋範圍 | 觸發 reload 時機 |
+|------|---------|------------------|
+| `source_hash` | 原始 YAML 文件內容（未套繼承） | 只做 diff 觀察，不直接觸發 |
+| `merged_hash` | 套完 L0→L3 繼承後的 canonical JSON | **變化才 reload** |
+
+這解決了 v2.6.x 的痛點：ConfigMap 被 K8s symlink rotation 修改 mtime 但內容沒變 → v2.6.x 會假 reload；v2.7.0 因為 merged_hash 不變，透過 `da_config_defaults_change_noop_total` 計數跳過。
+
+**300ms Debounce**：
+
+```
+fsnotify event ──┐
+                 ├─→ triggerDebouncedReload(reason)
+fsnotify event ──┤       │
+                 │       ├─ time.AfterFunc(300ms)
+fsnotify event ──┘       │
+                         └─→ fireDebounced() → single reload
+```
+
+5 種 reload reason 被 `da_config_reload_trigger_total{reason}` counter 追蹤：`source` / `defaults` / `new_tenant` / `delete` / `forced`。
+
+**新增 Prometheus Metrics (v2.7.0)**：
+
+| Metric | 類型 | 說明 |
+|--------|------|------|
+| `da_config_scan_duration_seconds` | Histogram | 每次 fullDirLoad 的耗時分佈 |
+| `da_config_reload_trigger_total{reason}` | Counter | 按 reason 分的 reload 觸發次數 |
+| `da_config_defaults_change_noop_total` | Counter | merged_hash 未變的 noop 次數（symlink rotation 吸收驗證） |
+
+**相關 CLI (`da-tools` package)**：
+
+- `da-tools describe-tenant <tenant_id> [--conf-d <dir>] [--show-sources]` — 展示 L0→L3 繼承鏈 + effective config
+- `da-tools describe-tenant <tenant_id> --what-if <defaults.yaml>` — 模擬 `_defaults.yaml` 變動 → `merged_hash` 對比 + per-key diff
+- `da-tools migrate-conf-d --conf-d <dir> [--dry-run|--apply] [--infer-from metadata]` — 扁平 → 階層 automated migration，`git mv` 保留歷史
+
+**Mixed-mode 共存**：舊的扁平 `tenants/*.yaml` 與新的 `conf.d/` 分層可並存於同一次 load，平滑遷移不強制一次切。
 
 ## Config 與 Image 分離原則
 

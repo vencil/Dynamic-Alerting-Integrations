@@ -349,5 +349,5 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 
 ---
 
-**Document version:** v2.2.0 — 2026-03-17
+**Document version:** v2.7.0 — 2026-04-18
 **Maintainer:** Platform Engineering Team

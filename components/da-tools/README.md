@@ -81,6 +81,13 @@ docker run --rm ghcr.io/vencil/da-tools:v2.7.0 --version
 | `evaluate-policy` | Policy-as-Code 策略評估（宣告式 DSL，10 運算子） | `--config-dir <dir>` |
 | `cardinality-forecast` | 基數趨勢預測（線性回歸，三級風險，觸頂天數） | `--tenant <name>` 或 `--all` |
 
+### 配置繼承工具（v2.7.0 新增，對應 ADR-017 / ADR-018）
+
+| 命令 | 用途 | 最小參數 |
+|------|------|----------|
+| `describe-tenant` | 展示 tenant 的 defaults chain (L0→L3) + 逐層 merge 結果 + effective config；`--show-sources` 標註每個 key 來自哪層；`--diff <other>` 比對兩 tenant；`--what-if <defaults.yaml>` 模擬 `_defaults.yaml` 變動 → diff baseline vs what-if `merged_hash` + per-key diff；`--all` 批量 dump | `<tenant_id> [--conf-d <dir>]`；可選 `--show-sources` / `--diff <tenant2>` / `--what-if <file>` / `--all` |
+| `migrate-conf-d` | 從扁平 `conf.d/` 到階層式 `conf.d/<domain>/<region>/<env>/` 的 automated migration tool；產出 `git mv` 計畫保留檔案歷史；由 `_metadata` 欄位推斷目標路徑 | `--conf-d <dir>`；`--dry-run` 預設列計畫、`--apply` 執行 `git mv`、`--infer-from metadata`、`--output-plan <file.json>` |
+
 ---
 
 ## 使用範例

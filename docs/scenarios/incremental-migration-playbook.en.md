@@ -150,7 +150,7 @@ helm repo update
 
 helm install threshold-exporter-redis vencil/threshold-exporter \
   --namespace monitoring \
-  --set image.tag=v2.6.0 \
+  --set image.tag=v2.7.0 \
   --set config.dir=/etc/threshold-exporter/conf.d \
   --set replicaCount=2 \
   --values - << 'EOF'

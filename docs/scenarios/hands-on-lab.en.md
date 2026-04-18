@@ -301,5 +301,5 @@ cd ~ && rm -rf ~/da-lab
 
 ---
 
-**Document version:** v2.2.0 — 2026-03-17
+**Document version:** v2.7.0 — 2026-04-18
 **Maintainer:** Platform Engineering Team

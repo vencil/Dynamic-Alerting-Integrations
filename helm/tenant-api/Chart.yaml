@@ -5,7 +5,7 @@ type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 version: 2.7.0
 # appVersion: Go binary 版本
-appVersion: "2.5.0"
+appVersion: "2.7.0"
 keywords:
   - dynamic-alerting
   - tenant-management

@@ -157,6 +157,120 @@ Phase 4: Incremental Merge
 
 **Fallback**: If cache is empty or corrupted, automatically fall back to `fullDirLoad()` (full load).
 
+#### Hierarchical conf.d/ + Inheritance Engine (v2.7.0, ADR-017 / ADR-018)
+
+v2.7.0 upgrades `conf.d/` from a flat layout to a four-level hierarchical directory, introducing `_defaults.yaml` inheritance semantics, dual-hash hot-reload, and 300ms debounce. The flat mode (v2.1.0) remains fully compatible; hierarchical and flat layouts can be mixed freely.
+
+**Four-Level Hierarchy (L0 → L3)**
+
+```
+conf.d/
+├── _defaults.yaml                         # L0 — platform-wide defaults (Platform Team owned)
+├── db-legacy.yaml                         # flat mode (L3 single file, backward compatible)
+└── mariadb/                               # L1 — domain group
+    ├── _defaults.yaml                     # L1 domain defaults
+    ├── prod/                              # L2 — environment cohort
+    │   ├── _defaults.yaml                 # L2 environment defaults
+    │   ├── db-a.yaml                      # L3 — tenant override (deep merge)
+    │   └── db-b.yaml
+    └── staging/
+        └── db-c.yaml
+```
+
+**Inheritance Semantics (deep merge, L0 → L1 → L2 → L3, later overrides earlier)**
+
+| Rule | Behavior | Typical Use |
+|------|----------|-------------|
+| Scalar / Map deep merge | Same-key deep merge; child overrides parent | Most defaults override cases |
+| Array full replace (non-merge) | Child array fully replaces parent (no concat) | `state_filters.reasons` / `_routing.group_by` |
+| `null` means delete | Child `key: null` removes the key from inheritance chain | Disable a parent-layer default threshold |
+| `_` prefix preserved | Meta fields `_silent_mode` / `_state_maintenance` / `_routing` / `_severity_dedup` / `_namespaces` pass through untouched | Tenant lifecycle metadata |
+
+**Dual-Hash Hot-Reload**
+
+v2.7.0 upgrades from a single SHA-256 to dual hashes distinguishing "source change" from "merged change":
+
+| Hash | Input | Purpose |
+|------|-------|---------|
+| `source_hash` | Raw YAML contents of a single file | Detect actual user write operations |
+| `merged_hash` | Post-inheritance + canonical-JSON-normalized merged config | Detect "changes with real impact on this tenant" (filters formatter noise) |
+
+**Merge-noop detection**: If `_defaults.yaml` changes but merged_hash stays identical (pure comment/whitespace/ordering diff), the exporter skips reload and increments `da_config_defaults_change_noop_total`.
+
+**300ms Debounce**
+
+`_defaults.yaml`-level changes typically trigger merged_hash recomputation for every tenant. To avoid repeated full reloads from batch edits (e.g. `kubectl apply` over multiple files), the Go engine aggregates events within a 300ms debounce window:
+
+```
+t0    _defaults.yaml written → timer started 300ms
+t+50  db-a.yaml written      → timer reset
+t+120 db-b.yaml written      → timer reset
+t+420 timer fires             → one reload handles all three changes
+```
+
+Debounce is tunable via `--scan-debounce=<duration>`; recommended 100ms-500ms under load.
+
+**New Prometheus Metrics (v2.7.0)**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `da_config_scan_duration_seconds` | histogram | Latency distribution of one directory scan + merge (`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`) |
+| `da_config_reload_trigger_total{reason}` | counter | Reload trigger attribution, `reason ∈ {source, defaults, new_tenant, delete, forced}` |
+| `da_config_defaults_change_noop_total` | counter | Count of `_defaults.yaml` changes where merged_hash is unchanged (pure formatter noise) |
+
+**Tenant API `/effective` Endpoint (v2.7.0, B-3 delivery)**
+
+```
+GET /api/v1/tenants/{id}/effective
+→ 200 OK
+{
+  "tenant_id": "db-a",
+  "merged": { /* full L0 + L1 + L2 + L3 merged config */ },
+  "source_chain": [
+    "conf.d/_defaults.yaml",
+    "conf.d/mariadb/_defaults.yaml",
+    "conf.d/mariadb/prod/_defaults.yaml",
+    "conf.d/mariadb/prod/db-a.yaml"
+  ],
+  "source_hash": "abc123...",
+  "merged_hash": "def456..."
+}
+```
+
+- `404 ErrTenantNotFound` — tenant does not exist
+- `400` — tenant_id validation failure (length, charset)
+- Handler calls `pkg/config.ResolveEffective(tenantID)` directly, 100% identical to exporter inheritance logic (shared validation logic)
+
+**Debug / Migration CLI (da-tools)**
+
+```bash
+# View a tenant's merged config after inheritance + source chain
+da-tools describe-tenant db-a --conf-d conf.d/
+
+# Show per-layer L0→L3 contributions
+da-tools describe-tenant db-a --conf-d conf.d/ --show-sources
+
+# Compare merged diff between two tenants
+da-tools describe-tenant db-a --conf-d conf.d/ --diff db-b
+
+# Preview impact of a pending file change (no write)
+da-tools describe-tenant db-a --conf-d conf.d/ --what-if conf.d/_defaults.yaml.new
+
+# List all tenants' merged hashes (drift audit)
+da-tools describe-tenant --all --conf-d conf.d/
+
+# Migrate from flat to hierarchical layout (dry-run by default)
+da-tools migrate-conf-d --conf-d conf.d/ --dry-run
+da-tools migrate-conf-d --conf-d conf.d/ --apply
+da-tools migrate-conf-d --conf-d conf.d/ --infer-from metadata        # derive hierarchy from _domain/_env metadata
+da-tools migrate-conf-d --conf-d conf.d/ --output-plan migration.json # output migration plan for reviewer
+```
+
+**ADR References**
+
+- [ADR-017: `conf.d/` hierarchical directory + mixed-mode migration](../adr/017-conf-d-directory-hierarchy-mixed-mode.en.md)
+- [ADR-018: `_defaults.yaml` inheritance + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.en.md)
+
 ### 2.3 Tenant-Namespace Mapping
 
 The platform's `tenant` is a **logical identity** determined by two independent sources:

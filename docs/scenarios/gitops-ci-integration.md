@@ -349,5 +349,5 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 ---
 
-**文件版本：** v2.2.0 — 2026-03-17
+**文件版本：** v2.7.0 — 2026-04-18
 **維護者：** Platform Engineering Team

@@ -183,7 +183,7 @@ thresholdExporter:
   replicaCount: ${size?.replicas.exporter || 2}
   image:
     repository: ghcr.io/vencil/threshold-exporter
-    tag: v2.5.0
+    tag: v2.7.0
     pullPolicy: IfNotPresent
 
   resources:
@@ -293,7 +293,7 @@ daPortal:
   replicaCount: ${environment === 'local' ? 1 : size?.replicas.exporter || 2}
   image:
     repository: ghcr.io/vencil/da-portal
-    tag: v2.5.0
+    tag: v2.7.0
 
   resources:
     requests:
@@ -318,7 +318,7 @@ tenantAPI:
   replicaCount: ${environment === 'local' ? 1 : 2}
   image:
     repository: ghcr.io/vencil/tenant-api
-    tag: v2.5.0
+    tag: v2.7.0
 
   resources:
     requests:

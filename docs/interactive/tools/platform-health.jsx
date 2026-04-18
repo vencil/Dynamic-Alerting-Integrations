@@ -22,7 +22,7 @@ const PLATFORM_DATA = {
     configHash: 'a3f2c1d8e9b7',
     metricsPerTenant: { 'prod-mariadb': 8, 'prod-redis': 5, 'prod-kafka': 12, 'staging-pg': 4, 'prod-oracle': 6 },
     totalMetrics: 35,
-    version: 'v2.3.0',
+    version: 'v2.7.0',
   },
   prometheus: {
     status: 'healthy',

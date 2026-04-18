@@ -141,16 +141,16 @@ graph TB
 
 | 設計概念 | 業務影響 | 技術機制 | 詳見 |
 |--------|---------|---------|------|
-| **Config-Driven 架構** | 新增租戶零額外規則成本，Onboard 從 2hr 降至 5min | 三態配置、Directory Scanner、SHA-256 hot-reload | [design/config-driven.md](design/config-driven.md) |
+| **Config-Driven 架構** | 新增租戶零額外規則成本，Onboard 從 2hr 降至 5min | 三態配置、Directory Scanner、階層式 `conf.d/`（ADR-017）、`_defaults.yaml` L0→L3 繼承（ADR-018）、Dual-hash hot-reload | [design/config-driven.md](design/config-driven.md) |
 | **多層嚴重度** | 消除告警重複通知，團隊只收到最高優先級 | `_critical` 後綴、Severity Dedup、Alertmanager inhibit | [design/config-driven.md](design/config-driven.md) |
 | **Regex 與排程式閾值** | 非工作時段自動調寬閾值，減少夜間假告警 | Regex 維度匹配、時間窗口排程 (UTC)、ResolveAt | [design/config-driven.md](design/config-driven.md) |
 | **三態運營模式** | 維護窗口期間零告警干擾，自動恢復不遺忘 | Normal / Silent / Maintenance + expires 自動失效 | [design/config-driven.md](design/config-driven.md) |
 | **Alert Routing** | 多通道通知確保關鍵告警必達正確人員 | 6 種 receiver、Timing Guardrails、Enforced Routing | [design/config-driven.md](design/config-driven.md) |
-| **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back (v2.6.0) | [design/config-driven.md](design/config-driven.md) |
+| **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back (v2.6.0) + `GET /tenants/{id}/effective` 套完繼承的 merged config + dual hashes (v2.7.0) | [design/config-driven.md](design/config-driven.md) |
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [design/rule-packs.md](design/rule-packs.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [design/config-driven.md](design/config-driven.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [design/high-availability.md](design/high-availability.md) |
-| **繼承引擎 (Inheritance Engine)** 🟡 *基礎完成、Go 生產路徑 pending* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設、深合併與覆寫語義 (ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載、平坦與階層式 conf.d/ 共存 (ADR-017)。**目前狀態**：ADR-017/018 + Python `describe-tenant` CLI + `--what-if` 模擬工具已完成；Go Directory Scanner 遞迴掃描 + dual-hash hot-reload + 300ms debounce 排 `v2.7.0-final` Dev Container session（見 v2.7.0-planning §8.7） | [design/config-driven.md](design/config-driven.md) |
+| **繼承引擎 (Inheritance Engine)** 🟢 *v2.7.0 已發布* | 配置乾淨化、減少重複、多層次預設管理 | `_defaults.yaml` 於 domain/region/env 層提供可繼承的預設（L0→L1→L2→L3 深合併、array 替換、null-as-delete）(ADR-018)、雙雜湊 (source_hash + merged_hash) 精確熱重載 + 300ms debounce 防 ConfigMap symlink rotation 連動、平坦與階層式 conf.d/ 共存 (ADR-017)。**v2.7.0 交付**：Go 生產路徑 (`config_debounce.go` + `config_metrics.go` + `populateHierarchyState()` + `--scan-debounce` flag) + 3 個新 Prometheus metric (`da_config_scan_duration_seconds` / `da_config_reload_trigger_total{reason}` / `da_config_defaults_change_noop_total`) + Tenant API `GET /tenants/{id}/effective` + `da-tools describe-tenant` / `migrate-conf-d` CLI | [design/config-driven.md](design/config-driven.md) |
 | **未來路線** | 國際化 × 權限 × 可觀測性閉環 × 智慧化 | EN-first SSOT、Field-level RBAC、Auto-Discovery、DaC | [design/roadmap-future.md](design/roadmap-future.md) |
 
 ---
@@ -257,8 +257,8 @@ spec:
 
 | 時程 | 主題 | 重點方向 |
 |------|------|---------|
-| **v2.7.0 進行中** | Scale Foundation + 元件健壯化 | `conf.d/` 目錄分層 + `_defaults.yaml` 繼承引擎（ADR-017/018，**基礎完成、Go 生產路徑 pending**）、Blast Radius CI bot ✅、Tier 1 元件健康度快照 ✅、1000-tenant synthetic fixture ✅、SSOT 語言 Phase 1 試點 ✅ |
-| **v2.8.0 計畫中** | 千租戶上線 × 控制台整合 | Scale Foundation II（server-side search、Tenant Manager virtualized）、SSOT EN-first 全量遷移、Master Onboarding Journey、Field-level RBAC、v2.7.0 未完 Go 工作認領（B-2/B-3/C-1/C-3） |
+| **v2.7.0 已發布** | Scale Foundation + 元件健壯化 | `conf.d/` 目錄分層 + `_defaults.yaml` 繼承引擎（ADR-017/018）、Go 生產路徑完成（`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash 熱重載）、Blast Radius CI bot ✅、Tier 1 元件健康度快照 ✅、1000-tenant synthetic fixture ✅、SSOT 語言 Phase 1 試點 ✅ |
+| **v2.8.0 計畫中** | 千租戶上線 × 控制台整合 | Scale Foundation II（server-side search、Tenant Manager virtualized）、SSOT EN-first 全量遷移、Master Onboarding Journey、Field-level RBAC、剩餘 24 個 Playwright `test.fixme()` 清倉（C-1/C-3/C-4） |
 | **長期探索** | 智慧化 × 去耦合 | Anomaly-Aware Threshold、Log-to-Metric Bridge、Multi-Format Export、CRD、ChatOps |
 
 **完整路線圖與技術規劃見** [design/roadmap-future.md](design/roadmap-future.md) · DX 工具改善見 [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 執行紀錄見 `internal/v2.7.0-planning.md`（internal-only planning doc，GitHub 上直接瀏覽此路徑）

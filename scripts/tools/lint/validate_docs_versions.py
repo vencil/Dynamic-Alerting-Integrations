@@ -58,6 +58,7 @@ from _version_patterns import (
     SKIP_BILINGUAL_NUMBER_FILES,
     DOC_MAP_SKIP_DIRS,
     DOC_MAP_SKIP_NAMES,
+    DOC_MAP_SKIP_NAME_PATTERNS,
     TOOL_MAP_SKIP_PREFIXES,
     ROADMAP_SECTIONS,
     SKIP_FEATURE_HEADINGS,
@@ -599,11 +600,14 @@ def check_doc_map_coverage() -> List[Issue]:
         rel = f.relative_to(REPO_ROOT)
         rel_str = str(rel).replace("\\", "/")
 
-        # Skip includes/, adr/ individual files, and known exclusions
+        # Skip includes/, adr/, design-reviews/ individual files, and known exclusions
         parts = rel.parts
         if any(d in parts for d in DOC_MAP_SKIP_DIRS):
             continue
         if f.name in DOC_MAP_SKIP_NAMES:
+            continue
+        # Skip gitignored planning / draft files (see .gitignore patterns)
+        if any(p.match(f.name) for p in DOC_MAP_SKIP_NAME_PATTERNS):
             continue
 
         # doc-map uses backtick-quoted paths or plain filenames
