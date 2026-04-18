@@ -75,7 +75,14 @@ docs/internal/design-reviews/
 
 # --- Session helper / temp files (Windows MCP Playbook §修復層 C / D) ---
 # Ad-hoc batch scripts, logs and token drops used by Dev Container push path.
-# Any file prefixed with .dev_ is expected to be ephemeral and MUST NOT be committed.
+# Any file prefixed with _ or .dev_ is expected to be ephemeral and MUST NOT be committed.
+_*.bat
+_*.txt
+_*.md
+_*.json
+_*.out
+_*.err
+_ci_logs/
 .dev_*
 
 # Structure audit (time-bound internal doc)
