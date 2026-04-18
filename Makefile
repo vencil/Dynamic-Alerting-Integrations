@@ -163,11 +163,32 @@ session-cleanup: ## Session 結束或異常終止後的清理
 	@echo "✅ Session cleanup 完成"
 
 .PHONY: win-commit
-win-commit: ## Windows 逃生門：stage → commit → push（FUSE 卡死時用）。用：make win-commit MSG=_msg.txt FILES="a b" SKIP=head-blob-hygiene
+win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/push。用：make win-commit MSG=_msg.txt FILES="a b" [SKIP=hook1,hook2] [SKIP_HOOKS=1]
 	@if [ -z "$(MSG)" ]; then echo "❌ MSG is required. e.g. make win-commit MSG=_msg.txt"; exit 1; fi
 	@if [ ! -f "$(MSG)" ]; then echo "❌ Message file not found: $(MSG)"; exit 1; fi
-	@echo "=== Windows Escape Hatch: commit + push ==="
-	@echo "  MSG=$(MSG)  FILES=$(FILES)  SKIP=$(SKIP)"
+	@echo "=== Windows Escape Hatch: hook-gate + commit + push ==="
+	@echo "  MSG=$(MSG)  FILES=$(FILES)  SKIP=$(SKIP)  SKIP_HOOKS=$(SKIP_HOOKS)"
+	@# --- [1/3] Sandbox hook gate -----------------------------------------
+	@# Windows-side git uses --no-verify internally (trap #36: pre-commit
+	@# hooks hardcode Linux python path). We close that gap HERE by running
+	@# pre-commit in the Cowork VM against the FILES list, which has no FUSE
+	@# staleness and a complete Python+pyyaml env. SKIP_HOOKS=1 bypasses for
+	@# emergencies (e.g. runner crash); use sparingly.
+	@if [ -z "$(FILES)" ]; then \
+		echo "--- [1/3] Hook gate SKIPPED (FILES empty) ---"; \
+	elif [ "$(SKIP_HOOKS)" = "1" ]; then \
+		echo "--- [1/3] Hook gate BYPASSED (SKIP_HOOKS=1) ---"; \
+	else \
+		echo "--- [1/3] Sandbox hook gate ---"; \
+		SKIP="$(SKIP)" bash scripts/ops/run_hooks_sandbox.sh $(FILES) || { \
+			echo ""; \
+			echo "❌ Sandbox hooks failed. Fix the issues above, then retry."; \
+			echo "   Emergency bypass: make win-commit ... SKIP_HOOKS=1"; \
+			exit 1; \
+		}; \
+	fi
+	@echo ""
+	@echo "--- [2/3] Windows stage + commit ---"
 	@if [ "$(OS)" = "Windows_NT" ] || [ -x /mnt/c/Windows/System32/cmd.exe ]; then \
 		CMD_EXE="cmd.exe"; \
 		if [ -x /mnt/c/Windows/System32/cmd.exe ]; then CMD_EXE="/mnt/c/Windows/System32/cmd.exe"; fi; \
@@ -175,12 +196,14 @@ win-commit: ## Windows 逃生門：stage → commit → push（FUSE 卡死時用
 			$$CMD_EXE /c "scripts\\ops\\win_git_escape.bat add $(FILES)" || exit 1; \
 		fi; \
 		SKIP="$(SKIP)" $$CMD_EXE /c "set SKIP=$(SKIP)&& scripts\\ops\\win_git_escape.bat commit-file $(MSG)" || exit 1; \
+		echo ""; \
+		echo "--- [3/3] Windows push ---"; \
 		$$CMD_EXE /c "scripts\\ops\\win_git_escape.bat push" || exit 1; \
-		echo "✅ Done"; \
+		echo "✅ Done (hook-gated + committed + pushed)"; \
 	else \
 		echo ""; \
 		echo "⚠  Sandbox (Linux) side: cannot exec Windows batch directly."; \
-		echo "   Copy/paste the following into a Windows cmd.exe (repo root):"; \
+		echo "   Hooks already ran above. Copy/paste the following into Windows cmd.exe (repo root):"; \
 		echo ""; \
 		if [ -n "$(FILES)" ]; then \
 			echo "     scripts\\ops\\win_git_escape.bat add $(FILES)"; \
