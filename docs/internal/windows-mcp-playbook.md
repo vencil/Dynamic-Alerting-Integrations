@@ -374,6 +374,52 @@ done
 寫新的 doc-scanning 工具時**請沿用同一套清單**，否則會在 FUSE 側踩雷
 （見 `archive/lessons-learned.md` 的 add_frontmatter.py 事件）。
 
+### v2.7.1 LL：`end-of-file-fixer` 會把 symlink blob 弄壞
+
+**事件**（PR #30 / commit `e148cd9` → fix `e697fec`）：跨 session 清理「FUSE EOF
+newline drift」36 檔時，把 `docs/CHANGELOG.md` 這個 symlink 也一起 sweep，
+結果 blob 從 15 bytes `../CHANGELOG.md` 變成 16 bytes `../CHANGELOG.md\n`。
+Linux CI 的 `readlink()` 解不了 `../CHANGELOG.md\n` 這個路徑，四個 CI job 同時爆：
+
+- **Check Documentation Links**：三處 `../CHANGELOG.md` 反向引用全壞（`docs/design/roadmap-future{,.en}.md` + `docs/internal/design-system-guide.md`）
+- **Lint**（Repo name guard）/ **Drift Detection**（repo_name）：`FileNotFoundError: docs/CHANGELOG.md`
+- **Go Tests**：watcher 掃描 config dir 時 walk error（symlink loop 失敗）
+
+**根因**：`fix_file_hygiene.py` 本身有 `os.path.islink()` runtime guard，Linux 側
+會被擋下；但 Windows clone 若 `core.symlinks=false`（Developer Mode 未開），
+symlink 被物化成純文字檔，`os.path.islink()` 回傳 False → 換行照寫進 blob。
+
+**防線**（此事件後固化，two-layer）：
+
+1. **pre-commit `file-hygiene` exclude 正則**（Windows-side safety net）
+   ```yaml
+   # .pre-commit-config.yaml
+   exclude: '^docs/(README-root(\.en)?|CHANGELOG)\.md$'
+   ```
+   涵蓋 repo 所有 symlink proxy md 檔。新增 symlink 時必須同步擴充這個
+   regex，否則下次 Windows-side commit 會重演同樣劇本。
+2. **runtime `os.path.islink()` guard**（Linux/FUSE-side 原有防線，仍保留）
+
+**Rule of thumb — 做 bulk cleanup 前先過濾 120000 blob**：
+
+```bash
+# 任何「掃全 repo 補換行 / 改 encoding / 做 find-replace」的 bulk commit
+# 前，都要先把 symlink 排除：
+git ls-files | while read f; do
+  mode=$(git ls-files -s "$f" | awk '{print $1}')
+  [ "$mode" != "120000" ] && echo "$f"
+done > _bulk_candidates.txt
+```
+
+**現況確認**（repo 有 4 個 symlink）：
+
+| 路徑 | 類型 | 防線 |
+|------|------|------|
+| `docs/README-root.md` | file symlink | `file-hygiene` exclude regex ✅ |
+| `docs/README-root.en.md` | file symlink | `file-hygiene` exclude regex ✅ |
+| `docs/CHANGELOG.md` | file symlink | `file-hygiene` exclude regex ✅（v2.7.1 補） |
+| `docs/rule-packs` | dir symlink | 目錄不走 `file-hygiene`，天然安全 |
+
 ## FUSE Phantom Lock 防治
 
 FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind mount）是 `.git/*.lock` 殘留的根本原因。以下是分層防治措施（預防 → 偵測 → 修復 → 驗證）：
