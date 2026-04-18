@@ -95,7 +95,7 @@ cd /d C:\Users\vencs\vibe-k8s-lab
 - 只信任 PowerShell 端的 `$env:PATH` — cmd 子 shell 不繼承
 - 跳過 `PATHEXT` — Windows 仍會判 `git.exe` 找不到
 
-**相關**：PR #26 Day 9 Session 3（2026-04-18）驗證此 LL；見 [v2.7.0-planning.md §8.13](v2.7.0-planning.md#813-cowork-2026-04-18-day-9-session-3--pr-26-ci-修復--final-gate)。
+**相關**：v2.7.0 PR [#26](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/26) Day 9 Session 3（2026-04-18）final-gate loop 驗證此 LL。詳細 session 記錄見 v2.7.0-planning.md §8.13（internal planning doc，`.gitignore` 排除）。
 
 ## 黃金法則：複雜指令寫成獨立腳本
 
