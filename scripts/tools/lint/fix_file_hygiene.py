@@ -8,11 +8,22 @@ Usage:
     python3 fix_file_hygiene.py [files...]
     python3 fix_file_hygiene.py --check [files...]   # report only, no fix
 """
+import os
 import sys
 
 
 def fix_file(path: str, check_only: bool) -> bool:
     """Return True if file had issues."""
+    # Skip symlinks: their "content" is the target path string; appending
+    # an EOF newline would corrupt the target (e.g. turn `../README.md`
+    # into `../README.md\n`, which readlink() then resolves as a broken
+    # path). docs/README-root.md is the canonical example.
+    try:
+        if os.path.islink(path):
+            return False
+    except OSError:
+        pass
+
     try:
         raw = open(path, "rb").read()
     except (OSError, IsADirectoryError):

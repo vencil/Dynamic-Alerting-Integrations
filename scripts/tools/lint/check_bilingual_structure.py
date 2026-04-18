@@ -293,6 +293,11 @@ def discover_bilingual_pairs() -> List[Tuple[Path, Path]]:
 
     def _is_exempt(filepath: Path) -> bool:
         rel_path = filepath.relative_to(REPO_ROOT)
+        # Symlinks are aliases to other files (e.g. docs/README-root.md → ../README.md).
+        # They don't carry content of their own; any nav banner inserted into them
+        # would actually corrupt the symlink target string. Always exempt.
+        if filepath.is_symlink():
+            return True
         return any(
             str(rel_path).startswith(exempt_dir)
             for exempt_dir in BILINGUAL_EXEMPT_DIRS
@@ -306,13 +311,13 @@ def discover_bilingual_pairs() -> List[Tuple[Path, Path]]:
         # Legacy pattern: *.en.md files
         for en_file in sorted(scan_dir.rglob("*.en.md")):
             zh_file = en_file.parent / en_file.name.replace(".en.md", ".md")
-            if zh_file.is_file() and not _is_exempt(zh_file):
+            if zh_file.is_file() and not _is_exempt(zh_file) and not _is_exempt(en_file):
                 pairs.append((zh_file, en_file))
 
         # New pattern: *.zh.md files (SSOT switch — EN is now *.md)
         for zh_file in sorted(scan_dir.rglob("*.zh.md")):
             en_file = zh_file.parent / zh_file.name.replace(".zh.md", ".md")
-            if en_file.is_file() and not _is_exempt(en_file):
+            if en_file.is_file() and not _is_exempt(en_file) and not _is_exempt(zh_file):
                 # Avoid duplicate if somehow both .en.md and .zh.md exist
                 if (zh_file, en_file) not in pairs and (en_file, zh_file) not in pairs:
                     pairs.append((zh_file, en_file))

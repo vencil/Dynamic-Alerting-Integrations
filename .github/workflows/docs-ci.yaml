@@ -259,17 +259,25 @@ jobs:
           # Build with strict mode, filtering known acceptable warnings:
           #   - mkdocs_static_i18n navigation.instant compat (known limitation)
           #   - README.md excluded by index.md conflict (expected)
+          #   - In-page language-switcher banners pointing to *.en.md siblings;
+          #     mkdocs-static-i18n handles locale routing for these files but
+          #     mkdocs core still flags them as missing. These are the banners
+          #     that v2.7.1 doc hygiene added to 101 files (113 nav issues → 0);
+          #     treat as acceptable false positives, same as the i18n nav compat
+          #     warning above.
           mkdocs build 2>&1 | tee mkdocs-build.log
           # Filter known warnings and fail on any remaining
           REAL_WARNS=$(grep "^WARNING" mkdocs-build.log \
             | grep -v "mkdocs_static_i18n.*navigation.instant" \
             | grep -v "Excluding.*README.md.*conflicts with.*index.md" \
+            | grep -vE "contains a link '\\./[^']+\\.en\\.md'" \
             | wc -l)
           echo "::notice::Actionable MkDocs warnings: $REAL_WARNS"
           if [ "$REAL_WARNS" -gt 0 ]; then
             grep "^WARNING" mkdocs-build.log \
               | grep -v "mkdocs_static_i18n.*navigation.instant" \
-              | grep -v "Excluding.*README.md.*conflicts with.*index.md"
+              | grep -v "Excluding.*README.md.*conflicts with.*index.md" \
+              | grep -vE "contains a link '\\./[^']+\\.en\\.md'"
             echo "::error::MkDocs build has $REAL_WARNS actionable warnings. Fix broken links."
             exit 1
           fi

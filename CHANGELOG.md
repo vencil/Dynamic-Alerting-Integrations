@@ -16,7 +16,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 > **v2.7.0 code-complete commits**（chore/v2.7.0-phase-a-kickoff branch）：
 > - `0b903d5` — B-2 hierarchical scan + deep merge + merged_hash（scanner / ADR-017 + ADR-018 基礎）
 > - `a87ce2c` — B-3/4/5 debounced reload + metrics + tenant `/effective`（exporter `config_debounce.go` + `config_metrics.go` + tenant-api `pkg/config/hierarchy.go` + 21 tests）
-> - `e14fe5f` — Backfill B-1 1000-tenant benchmark 實測數字 + SLO 判讀（CHANGELOG + [benchmarks.md §12](docs/benchmarks.md#12-incremental-hot-reload-b-1-scale-gate)；原 `benchmark-v2.7.0-baseline.md` 於 v2.7.1 合併進 benchmarks.md）
+> - `e14fe5f` — Backfill B-1 1000-tenant benchmark 實測數字 + SLO 判讀（CHANGELOG + [benchmarks.md §12](docs/benchmarks.md#12-incremental-hot-reload-b-1-scale-gate)；原 `benchmark-v2.7.0-baseline.md` 於本輪 doc hygiene 合併進 benchmarks.md）
 
 v2.7.0 的核心是「讓既有 38 個 JSX 工具真正可靠可擴展，並為千租戶管理鋪好資料結構與基礎設施」。三個支柱：元件健壯化（Design Token 遷移 + Tier 分級 + Known Regressions 治理）、Scale Foundation I（`conf.d/` 分層 + `_defaults.yaml` 繼承引擎 + 混合模式）、測試與基礎設施（`tests/` 子目錄分層、1000-tenant fixture、Blast Radius CI bot）。
 

@@ -29,6 +29,14 @@ repos:
         language: python
         types: [text]
         files: \.(md|yaml|yml|py|jsx|json)$
+        # Exclude git symlinks (mode 120000) whose "content" is literally
+        # the target path — appending an EOF newline turns `../README.md`
+        # into `../README.md\n`, which readlink() then cannot resolve on
+        # Linux CI. The fixer also has an os.path.islink() guard, but on
+        # Windows clones (core.symlinks=false) the symlink is a plain text
+        # file so the runtime guard doesn't fire; the exclude pattern below
+        # is the Windows-side safety net.
+        exclude: '^docs/README-root(\.en)?\.md$'
 
       # --- Protect main branch (pre-push only) ---
       - id: protect-main-push

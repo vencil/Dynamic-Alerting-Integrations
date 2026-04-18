@@ -13,3 +13,8 @@
 rule-packs/README.md:../index.md
 rule-packs/README.md:../migration-guide.md
 rule-packs/README.md:../architecture-and-design.md
+
+# component-health-snapshot.json is gitignored (regenerated locally by
+# component-health.jsx dashboard, not committed to the repo). The link in
+# the .md is a SSOT pointer for local users, not a CI artifact.
+docs/internal/component-health-snapshot.md:./component-health-snapshot.json
