@@ -162,6 +162,38 @@ session-cleanup: ## Session 結束或異常終止後的清理
 	@rm -f _out.txt _err.txt 2>/dev/null || true
 	@echo "✅ Session cleanup 完成"
 
+.PHONY: win-commit
+win-commit: ## Windows 逃生門：stage → commit → push（FUSE 卡死時用）。用：make win-commit MSG=_msg.txt FILES="a b" SKIP=head-blob-hygiene
+	@if [ -z "$(MSG)" ]; then echo "❌ MSG is required. e.g. make win-commit MSG=_msg.txt"; exit 1; fi
+	@if [ ! -f "$(MSG)" ]; then echo "❌ Message file not found: $(MSG)"; exit 1; fi
+	@echo "=== Windows Escape Hatch: commit + push ==="
+	@echo "  MSG=$(MSG)  FILES=$(FILES)  SKIP=$(SKIP)"
+	@if [ "$(OS)" = "Windows_NT" ] || [ -x /mnt/c/Windows/System32/cmd.exe ]; then \
+		CMD_EXE="cmd.exe"; \
+		if [ -x /mnt/c/Windows/System32/cmd.exe ]; then CMD_EXE="/mnt/c/Windows/System32/cmd.exe"; fi; \
+		if [ -n "$(FILES)" ]; then \
+			$$CMD_EXE /c "scripts\\ops\\win_git_escape.bat add $(FILES)" || exit 1; \
+		fi; \
+		SKIP="$(SKIP)" $$CMD_EXE /c "set SKIP=$(SKIP)&& scripts\\ops\\win_git_escape.bat commit-file $(MSG)" || exit 1; \
+		$$CMD_EXE /c "scripts\\ops\\win_git_escape.bat push" || exit 1; \
+		echo "✅ Done"; \
+	else \
+		echo ""; \
+		echo "⚠  Sandbox (Linux) side: cannot exec Windows batch directly."; \
+		echo "   Copy/paste the following into a Windows cmd.exe (repo root):"; \
+		echo ""; \
+		if [ -n "$(FILES)" ]; then \
+			echo "     scripts\\ops\\win_git_escape.bat add $(FILES)"; \
+		else \
+			echo "     REM (skip add — assumes files already staged)"; \
+		fi; \
+		echo "     set SKIP=$(SKIP)"; \
+		echo "     scripts\\ops\\win_git_escape.bat commit-file $(MSG)"; \
+		echo "     scripts\\ops\\win_git_escape.bat push"; \
+		echo ""; \
+		echo "   (從 MCP 環境：用 Desktop Commander 的 cmd shell 執行上面三行。)"; \
+	fi
+
 .PHONY: fuse-reset
 fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘影時用
 	@echo "=== FUSE Cache Reset: Level 1 → Level 3 ==="
