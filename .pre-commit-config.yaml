@@ -36,7 +36,7 @@ repos:
         # Windows clones (core.symlinks=false) the symlink is a plain text
         # file so the runtime guard doesn't fire; the exclude pattern below
         # is the Windows-side safety net.
-        exclude: '^docs/README-root(\.en)?\.md$'
+        exclude: '^docs/(README-root(\.en)?|CHANGELOG)\.md$'
 
       # --- Protect main branch (pre-push only) ---
       - id: protect-main-push
