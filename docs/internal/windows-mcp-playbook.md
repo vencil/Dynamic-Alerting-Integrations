@@ -67,6 +67,36 @@ docker exec vibe-dev-container bash /workspaces/vibe-k8s-lab/scripts/_task.sh
 docker exec vibe-dev-container bash -c "echo '{\"key\": \"value\"}'"
 ```
 
+### v2.7.0 LL：`cmd.exe /c batfile` 執行時 PATH 與 PATHEXT 要同時 set
+
+Cowork session 從 PowerShell 呼叫 `cmd.exe /c batfile.bat` 時，子程序**繼承一個最精簡的 Windows PATH**（有時連 `where.exe` 都找不到），且 `PATHEXT` 環境變數會被稀釋。這對 `gh.exe` 特別致命 — `gh` 需要呼叫 `git.exe` 做本地操作，`git.exe` 透過 PATH 查找但 lookup 被 `PATHEXT` 的成員決定。
+
+**症狀**：`gh pr checks 26` 回報 `unable to find git executable in PATH; please install Git for Windows before retrying`，但 Git for Windows 其實裝好。
+
+**根因**：
+- 只 `set PATH=...` 不夠：新 PATH 有指向 `git.exe`，但 `PATHEXT` 被子 shell 稀釋（預設可能只剩 `.COM;.EXE`），Windows command resolution 還是漏
+- 用 PowerShell 的 `$env:PATH` 在 `Start-Process` 下不會被子 cmd.exe 繼承
+- inline `cmd /c "set PATH=...;command"` 也有同樣問題（cmd 會把 set 和 command 當同一行解析）
+
+**正確做法**：寫成 `.bat` 檔，**同時** set `PATH` 和 `PATHEXT`：
+
+```bat
+@echo off
+set "PATHEXT=.COM;.EXE;.BAT;.CMD"
+set "PATH=C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd;C:\Program Files\Git\bin"
+cd /d C:\Users\vencs\vibe-k8s-lab
+"C:\Program Files\GitHub CLI\gh.exe" pr checks 26 > output.log 2>&1
+```
+
+**驗收**：`gh.exe` 會透過增強的 PATH 找到 `git.exe`，`gh pr checks` / `gh pr view` / `gh pr merge` 全部可用。
+
+**不要做**：
+- `cmd /c "set PATH=...&& gh pr checks 26"` — set 不會真的寫入環境
+- 只信任 PowerShell 端的 `$env:PATH` — cmd 子 shell 不繼承
+- 跳過 `PATHEXT` — Windows 仍會判 `git.exe` 找不到
+
+**相關**：PR #26 Day 9 Session 3（2026-04-18）驗證此 LL；見 [v2.7.0-planning.md §8.13](v2.7.0-planning.md#813-cowork-2026-04-18-day-9-session-3--pr-26-ci-修復--final-gate)。
+
 ## 黃金法則：複雜指令寫成獨立腳本
 
 只要指令含引號嵌套、管道、JSON 處理、多步邏輯，一律：
