@@ -9,13 +9,14 @@ lang: zh
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
-## [v2.7.0-rc] — Scale Foundation × 元件健壯化 × 測試基礎設施（draft — tag-day 再補 final 日期）
+## [v2.7.0] — 2026-04-18 — Scale Foundation × 元件健壯化 × 測試基礎設施
 
-> ⚠️ 本條目為 `v2.7.0-final` tag 前草稿（2026-04-17 Cowork Phase .e E-5 草擬；2026-04-18 Cowork Phase .b B-1 實測數字 backfill）。實際發布前仍需補：final release 日期 + PR URL。
+> 條目於 `chore/v2.7.0-phase-a-kickoff` 完工定稿（2026-04-17 Phase .e E-5 草擬；2026-04-18 Phase .b B-1 實測數字 backfill + release 定稿）。PR URL 於 tag-day 合併後補於本段。
 >
 > **v2.7.0 code-complete commits**（chore/v2.7.0-phase-a-kickoff branch）：
+> - `0b903d5` — B-2 hierarchical scan + deep merge + merged_hash（scanner / ADR-017 + ADR-018 基礎）
 > - `a87ce2c` — B-3/4/5 debounced reload + metrics + tenant `/effective`（exporter `config_debounce.go` + `config_metrics.go` + tenant-api `pkg/config/hierarchy.go` + 21 tests）
-> - `0b903d5` — `Load()` 呼叫 `populateHierarchyState()` for dir mode（hierarchical state init fix）
+> - `e14fe5f` — Backfill B-1 1000-tenant benchmark 實測數字 + SLO 判讀（CHANGELOG + benchmark-v2.7.0-baseline §4）
 
 v2.7.0 的核心是「讓既有 38 個 JSX 工具真正可靠可擴展，並為千租戶管理鋪好資料結構與基礎設施」。三個支柱：元件健壯化（Design Token 遷移 + Tier 分級 + Known Regressions 治理）、Scale Foundation I（`conf.d/` 分層 + `_defaults.yaml` 繼承引擎 + 混合模式）、測試與基礎設施（`tests/` 子目錄分層、1000-tenant fixture、Blast Radius CI bot）。
 
