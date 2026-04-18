@@ -43,15 +43,77 @@ type ConfigManager struct {
 	// Config info metric state (v2.3.0)
 	configSource string // "configmap", "operator", or "git-sync"
 	gitCommit    string // git commit hash from .git-revision file, or ""
+
+	// Hierarchical scan state (v2.7.0, ADR-017/018 — Phase 3+5)
+	//
+	// hierarchical mode is auto-detected on first load: if scanDirHierarchical
+	// finds at least one _defaults.yaml at any depth AND the top-level scan
+	// path is a directory, we keep hierarchical state populated alongside the
+	// flat fileHashes above. A reload always produces both views so a legacy
+	// flat caller (fullDirLoad) stays correct.
+	//
+	// When hierarchicalMode is false, all three maps/graph are nil and
+	// diffAndReload falls back to IncrementalLoad (flat path).
+	hierarchicalMode bool
+	// tenantSources maps tenantID → absolute tenant file path. Updated on
+	// every hierarchical scan; used by Resolve(tenantID) for /effective.
+	tenantSources map[string]string
+	// hierarchyHashes is keyed by absolute Clean path and stores the full
+	// 64-char SHA-256 hex of each scanned YAML (tenant + defaults). Used to
+	// diff which files changed between scans in Phase 3.
+	hierarchyHashes map[string]string
+	// hierarchyMtimes parallels hierarchyHashes for mtime-based fast path
+	// (forward-compat with scanDirHierarchical's priorMtimes arg).
+	hierarchyMtimes map[string]fileStat
+	// mergedHashes is the user-facing 16-char merged_hash per tenant, keyed
+	// by tenantID. Computed by diffAndReload on every dirty tenant. The
+	// /effective handler reads this to avoid recomputing on each request.
+	mergedHashes map[string]string
+	// inheritanceGraph records defaults↔tenants dependencies. Swapped
+	// atomically on reload (pointer swap; the graph itself is immutable
+	// once built). nil when hierarchicalMode is false.
+	inheritanceGraph *InheritanceGraph
+
+	// Debounce state (v2.7.0 Phase 3)
+	//
+	// debounceWindow bundles multiple fsnotify-ish bursts (tick-initiated
+	// diffs, manual SIGHUP, etc.) into a single reload. 0 disables debouncing
+	// and restores the v2.6.0 behavior (immediate reload on detected diff).
+	debounceWindow time.Duration
+	debounceTimer  *time.Timer // current pending reload; nil when idle
+	debounceMu     sync.Mutex  // guards debounceTimer + pendingReasons
+	// pendingReasons accumulates reload triggers during a debounce window so
+	// the terminal diffAndReload can emit counter increments per-reason (see
+	// collector.go da_config_reload_trigger_total). Cleared on fire + Close.
+	pendingReasons []string
+	// debounceFired is bumped by the timer goroutine each time a debounce
+	// fires. Tests read this via DebounceFiredCount() to assert batching.
+	debounceFired uint64
 }
 
+// DefaultDebounceWindow is the default burst-coalescing window applied by
+// NewConfigManager. Chosen to match fsnotify storms from K8s ConfigMap volume
+// symlink rotation (~50-200ms) with a safety margin; tunable via the
+// --scan-debounce flag (see main.go) and overridable for tests via
+// NewConfigManagerWithDebounce.
+const DefaultDebounceWindow = 300 * time.Millisecond
+
 func NewConfigManager(path string) *ConfigManager {
+	return NewConfigManagerWithDebounce(path, DefaultDebounceWindow)
+}
+
+// NewConfigManagerWithDebounce constructs a ConfigManager with a custom
+// debounce window. Pass 0 to disable debouncing (WatchLoop reloads
+// synchronously on every detected diff, matching v2.6.0 behavior). Used by
+// tests to inject a 1ms window for deterministic batch assertions.
+func NewConfigManagerWithDebounce(path string, debounceWindow time.Duration) *ConfigManager {
 	info, err := os.Stat(path)
 	isDir := err == nil && info.IsDir()
 
 	return &ConfigManager{
-		path:  path,
-		isDir: isDir,
+		path:           path,
+		isDir:          isDir,
+		debounceWindow: debounceWindow,
 	}
 }
 
@@ -104,6 +166,17 @@ func (m *ConfigManager) Load() error {
 
 	// Detect config source mode and git commit (v2.3.0)
 	m.detectConfigSource()
+
+	// v2.7.0 Phase 5: populate hierarchical state on the very first Load
+	// so /effective works at startup (before any file mutation triggers
+	// IncrementalLoad). Flat-mode callers cost ~one extra scanDir pass;
+	// hierarchicalMode stays false if no _defaults.yaml is present. A
+	// scan failure is logged-and-ignored — the flat path is already live.
+	if m.isDir {
+		if err := m.populateHierarchyState(); err != nil {
+			log.Printf("WARN: hierarchical scan during Load failed: %v", err)
+		}
+	}
 
 	logConfigStats(&cfg, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 
@@ -569,8 +642,68 @@ func (m *ConfigManager) fullDirLoad() error {
 	// Detect config source mode and git commit (v2.3.0)
 	m.detectConfigSource()
 
+	// v2.7.0 Phase 5: populate hierarchical state alongside the flat view.
+	// This lets /effective and the debounced reload path work from the
+	// very first load. On failure we log and continue — hierarchical mode
+	// is opt-in, a bad tree should not break the flat collector path.
+	if err := m.populateHierarchyState(); err != nil {
+		log.Printf("WARN: hierarchical scan during fullDirLoad failed: %v", err)
+	}
+
 	logConfigStats(&merged, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 
+	return nil
+}
+
+// populateHierarchyState runs scanDirHierarchical against m.path and
+// installs the resulting graph + per-tenant merged_hash onto the
+// ConfigManager. Safe to call after any fullDirLoad or IncrementalLoad.
+//
+// The function returns nil if no _defaults.yaml is anywhere in the tree
+// (flat mode — hierarchicalMode stays false; nothing to populate). A
+// non-nil error means the scan or merge pipeline hit a real failure; the
+// caller logs and leaves prior state untouched.
+//
+// Memory: the hashes map may be large at 1000 tenants (roughly
+// tenants × 64-char strings = ~100KB). We swap the pointer rather than
+// merging in place so a failed scan doesn't leave torn state visible to
+// the /effective read path.
+func (m *ConfigManager) populateHierarchyState() error {
+	tenants, defaults, hashes, mtimes, graph, err := scanDirHierarchical(m.path, nil)
+	if err != nil {
+		return err
+	}
+	if len(defaults) == 0 && len(tenants) == 0 {
+		// Empty tree or flat layout with no files we recognize. Don't
+		// flip hierarchicalMode — a later add-a-_defaults-file event will
+		// flip it via diffAndReload.
+		return nil
+	}
+
+	newMergedHashes := make(map[string]string, len(tenants))
+	for tid, srcPath := range tenants {
+		chain := graph.TenantDefaults[tid]
+		mh, mergeErr := m.recomputeMergedHash(tid, srcPath, chain)
+		if mergeErr != nil {
+			logMergeSkip(tid, "initial-hierarchy-scan", mergeErr)
+			continue
+		}
+		newMergedHashes[tid] = mh
+	}
+
+	m.mu.Lock()
+	// Only flip hierarchicalMode on once we've seen a _defaults.yaml
+	// somewhere. Pure-flat trees keep hierarchicalMode=false, letting
+	// WatchLoop take the v2.6.0 IncrementalLoad path.
+	if len(defaults) > 0 {
+		m.hierarchicalMode = true
+	}
+	m.tenantSources = tenants
+	m.hierarchyHashes = hashes
+	m.hierarchyMtimes = mtimes
+	m.mergedHashes = newMergedHashes
+	m.inheritanceGraph = graph
+	m.mu.Unlock()
 	return nil
 }
 
@@ -719,6 +852,7 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 			oldH := m.fileHashes
 			oldM := m.fileMtimes
 			prevHash := m.lastHash
+			hierarchical := m.hierarchicalMode
 			m.mu.RUnlock()
 
 			_, compositeHash, _, _, err := scanDirFileHashes(m.path, oldH, oldM)
@@ -728,10 +862,21 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 			}
 
 			if compositeHash != prevHash {
-				log.Printf("Config changed, incremental reloading...")
-				if err := m.IncrementalLoad(); err != nil {
-					log.Printf("ERROR: failed to reload config: %v", err)
+				log.Printf("Config changed, scheduling debounced reload...")
+				// v2.7.0: route through debounce even for flat mode so an
+				// ops tool that rapidly rewrites multiple files coalesces
+				// into a single reload. When hierarchicalMode is already
+				// on, diffAndReload handles everything; when still off,
+				// triggerDebouncedReload falls through to IncrementalLoad
+				// via the diffAndReload → IncrementalLoad branch.
+				reason := ReloadReasonSource
+				if hierarchical {
+					// We don't yet know *which* file changed from the
+					// composite hash alone; the actual categorization
+					// happens inside diffAndReload.
+					reason = ReloadReasonForced
 				}
+				m.triggerDebouncedReload(reason)
 			}
 		} else {
 			// Single-file mode: full reload (no incremental benefit)
@@ -759,6 +904,104 @@ func (m *ConfigManager) GetConfig() *ThresholdConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config
+}
+
+// EffectiveConfig is the result of resolving one tenant's full config
+// chain (L0→Ln defaults merged + tenant override applied) with both the
+// raw-source and canonical-merged hashes. Surfaced via
+// ConfigManager.Resolve and the /api/v1/tenants/{id}/effective endpoint
+// (§8.11.3 Phase 6).
+//
+// Field naming matches describe_tenant.py JSON output + tenant-api Go
+// shape to keep cross-language consumers drop-in compatible.
+type EffectiveConfig struct {
+	TenantID      string            // tenant identifier
+	SourceFile    string            // absolute path to tenant YAML
+	SourceHash    string            // SHA-256[:16] of raw tenant bytes
+	MergedHash    string            // SHA-256[:16] of canonical merged JSON
+	DefaultsChain []string          // L0→Ln defaults file paths (root first)
+	Config        map[string]any    // merged tenant config (full dict)
+	Warnings      []string          // merge-time warnings (currently empty)
+}
+
+// Resolve returns the effective config for one tenant, computed on
+// demand from the cached hierarchy state. Returns (nil, false) when the
+// tenant is not currently known (404 signal for the /effective handler).
+//
+// The returned Config is a freshly-allocated map owned by the caller —
+// safe to serialize concurrently with future reloads.
+//
+// Error semantics: merge failures (unreadable file, bad YAML) return
+// (nil, true) with a single warning. This lets the API respond with a
+// structured error body instead of 404/500.
+func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
+	m.mu.RLock()
+	srcPath, known := m.tenantSources[tenantID]
+	var chain []string
+	if m.inheritanceGraph != nil {
+		chain = append(chain, m.inheritanceGraph.TenantDefaults[tenantID]...)
+	}
+	cachedHash := m.mergedHashes[tenantID]
+	m.mu.RUnlock()
+
+	if !known {
+		return nil, false
+	}
+
+	tenantBytes, err := os.ReadFile(srcPath)
+	if err != nil {
+		return &EffectiveConfig{
+			TenantID:      tenantID,
+			SourceFile:    srcPath,
+			DefaultsChain: chain,
+			Warnings:      []string{fmt.Sprintf("read tenant file: %v", err)},
+		}, true
+	}
+
+	// Re-read each defaults file. This is intentional: the cached
+	// merged_hash is valid under the last scan, but we want the /effective
+	// response to contain the live effective_config map, not just the
+	// hash. Future optimization: cache the merged map alongside the hash.
+	chainBytes := make([][]byte, 0, len(chain))
+	var warnings []string
+	for _, dp := range chain {
+		b, rerr := os.ReadFile(dp)
+		if rerr != nil {
+			warnings = append(warnings, fmt.Sprintf("read defaults %s: %v", dp, rerr))
+			continue
+		}
+		chainBytes = append(chainBytes, b)
+	}
+
+	merged, err := computeEffectiveConfig(tenantBytes, tenantID, chainBytes)
+	if err != nil {
+		return &EffectiveConfig{
+			TenantID:      tenantID,
+			SourceFile:    srcPath,
+			DefaultsChain: chain,
+			Warnings:      append(warnings, fmt.Sprintf("merge: %v", err)),
+		}, true
+	}
+
+	sourceHash := computeSourceHash(tenantBytes)
+	mergedHash := cachedHash
+	if mergedHash == "" {
+		// Cold path: cache miss (first /effective before any reload).
+		// Compute on the fly.
+		if mh, mErr := computeMergedHash(tenantBytes, tenantID, chainBytes); mErr == nil {
+			mergedHash = mh
+		}
+	}
+
+	return &EffectiveConfig{
+		TenantID:      tenantID,
+		SourceFile:    srcPath,
+		SourceHash:    sourceHash,
+		MergedHash:    mergedHash,
+		DefaultsChain: chain,
+		Config:        merged,
+		Warnings:      warnings,
+	}, true
 }
 
 func (m *ConfigManager) IsLoaded() bool {

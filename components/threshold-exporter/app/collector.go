@@ -237,6 +237,13 @@ func (c *ThresholdCollector) MetricsHandler() http.Handler {
 	// Also register default Go collector for process metrics
 	reg.MustRegister(prometheus.NewGoCollector())
 
+	// v2.7.0 Phase 4: register hierarchical scan / reload metrics on the
+	// same registry so /metrics serves them alongside everything else.
+	// getConfigMetrics lazily instantiates the singleton so the first
+	// metric increment from a scan goroutine does not race with
+	// registration (registration itself takes a mutex internally).
+	registerConfigMetrics(reg, getConfigMetrics())
+
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{
 		EnableOpenMetrics: false,
 	})

@@ -129,7 +129,13 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	graph *InheritanceGraph,
 	err error,
 ) {
-	_ = priorMtimes // reserved for Phase 3
+	_ = priorMtimes // reserved for Phase 3 (mtime-skip optimization)
+
+	// v2.7.0 Phase 4: record wall-clock duration for the scan so operators
+	// can alert on slow scans (e.g., >1s = filesystem regression). Done
+	// first so even error returns are observed — a scan that errors out
+	// fast is itself useful signal.
+	defer ObserveScanDuration()()
 
 	tenants = make(map[string]string)
 	defaults = make(map[string]bool)

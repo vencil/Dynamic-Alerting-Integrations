@@ -270,10 +270,26 @@ def _read_cached(filepath: Path) -> str:
 
 
 def check_da_tools_version(expected: str) -> List[Issue]:
-    """Check all da-tools image tag references match VERSION file."""
+    """Check all da-tools image tag references match VERSION file.
+
+    Skips historical planning docs (Category A per v2.7.0-planning §8.11.1),
+    CHANGELOG entries, and test fixture/docstring bodies that intentionally
+    record past-version strings. These are reference-style mentions that must
+    not be rewritten on version bumps — doing so would rewrite history.
+    """
+    # Historical-reference exemptions. Align with check_bare_tags' skip_names
+    # pattern. Keep the list narrow: each entry represents an SSOT decision
+    # that the file's prior-version strings are load-bearing.
+    skip_names = {
+        "CHANGELOG.md", "CHANGELOG.en.md",
+        "v2.5.0-v2.6.0-planning.md",
+        "known-regressions.md",
+    }
     issues = []
 
     for f in _collect_scannable_files():
+        if f.name in skip_names:
+            continue
         content = _read_cached(f)
         for i, line in enumerate(content.splitlines(), 1):
             for m in re.finditer(DA_TOOLS_TAG_PATTERN, line):

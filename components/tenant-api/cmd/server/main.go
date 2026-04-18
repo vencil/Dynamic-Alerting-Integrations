@@ -203,6 +203,10 @@ func main() {
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Post("/validate", handler.ValidateTenant(*configDir))
+
+			// v2.7.0 B-3 (ADR-017/018): merged effective config + dual hashes.
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Get("/effective", handler.GetTenantEffective(*configDir))
 		})
 
 		// Batch operations — route-level middleware checks read (authenticated),
