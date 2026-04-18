@@ -2,7 +2,7 @@
 title: "ADR-008: Operator-Native 整合路徑"
 tags: [adr, architecture, operator]
 audience: [platform-engineers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 
@@ -143,7 +143,7 @@ v2.2.0 BYO 文件的 Operator Appendix 僅是 CRD 範例翻譯，用戶反映：
 
 ## Addendum: 架構邊界宣言 (v2.6.0)
 
-> **新增於 v2.6.0 Phase .a** — 正式記錄核心元件的職責邊界，防止功能蔓延。
+> **新增於 v2.7.0 Phase .a** — 正式記錄核心元件的職責邊界，防止功能蔓延。
 
 ### 不可違反的邊界
 

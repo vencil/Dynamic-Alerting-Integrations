@@ -141,13 +141,13 @@ jobs:
         #   test_benchmark.py    — Performance baselines (@benchmark @slow)
         #   test_pipeline_integration.py — End-to-end pipeline test
         # These run locally via `make test` and are tracked in test-map.md.
-        run: pytest tests/ scripts/tools/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --ignore=tests/test_pipeline_integration.py --tb=short -q --co -q
+        run: pytest tests/ scripts/tools/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --tb=short -q --co -q
 
       - name: Run pytest with coverage
         # Coverage source is defined in pyproject.toml [tool.coverage.run]
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
         # and would silently exclude components/da-tools/app from measurement.
-        run: pytest tests/ --ignore=tests/test_property.py --ignore=tests/test_benchmark.py --ignore=tests/test_pipeline_integration.py -x --tb=short --cov --cov-report=xml --cov-fail-under=75
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py -x --tb=short --cov --cov-report=xml --cov-fail-under=75
 
       - name: Upload coverage artifact
         if: always()

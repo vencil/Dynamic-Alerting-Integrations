@@ -127,7 +127,7 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
             'title: "Tool Map"',
             "tags: [tooling, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.6.0",
+            "version: v2.7.0",
             "lang: en",
             "---",
             "",
@@ -144,7 +144,7 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
             'title: "工具導覽 (Tool Map)"',
             "tags: [tooling, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.6.0",
+            "version: v2.7.0",
             "lang: zh",
             "---",
             "",
@@ -175,18 +175,25 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
 
         lines.append("")
 
-    # Shared libraries footer
+    # Shared libraries footer (dynamically list all _lib*.py files)
+    shared_libs = sorted(
+        f for f in TOOLS_ROOT.glob("_lib*.py") if f.is_file()
+    )
+
     if lang == "en":
         lines.append("## Shared Libraries")
         lines.append("")
-        lines.append("- `scripts/tools/_lib_python.py`: Shared across "
-                     "Python tools")
+        for lib in shared_libs:
+            desc = extract_tool_description(lib) or "Shared across Python tools"
+            lines.append(f"- `scripts/tools/{lib.name}`: {desc}")
         lines.append("- `scripts/_lib.sh`: Shared across shell "
                      "scenario/benchmark scripts")
     else:
         lines.append("## 共用函式庫")
         lines.append("")
-        lines.append("- `scripts/tools/_lib_python.py`：Python 工具間共用")
+        for lib in shared_libs:
+            desc = extract_tool_description(lib) or "Python 工具間共用"
+            lines.append(f"- `scripts/tools/{lib.name}`：{desc}")
         lines.append("- `scripts/_lib.sh`：Shell scenario/benchmark 共用")
     lines.append("")
 

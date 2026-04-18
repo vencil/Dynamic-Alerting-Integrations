@@ -2,8 +2,8 @@
 title: "Windows-MCP — Dev Container 操作手冊 (Playbook)"
 tags: [documentation]
 audience: [all]
-version: v2.6.0
-verified-at-version: v2.6.0
+version: v2.7.0
+verified-at-version: v2.7.0
 lang: zh
 ---
 # Windows-MCP — Dev Container 操作手冊 (Playbook)
@@ -66,6 +66,36 @@ docker exec vibe-dev-container bash /workspaces/vibe-k8s-lab/scripts/_task.sh
 # ❌ PowerShell 下巢狀引號被拆解
 docker exec vibe-dev-container bash -c "echo '{\"key\": \"value\"}'"
 ```
+
+### v2.7.0 LL：`cmd.exe /c batfile` 執行時 PATH 與 PATHEXT 要同時 set
+
+Cowork session 從 PowerShell 呼叫 `cmd.exe /c batfile.bat` 時，子程序**繼承一個最精簡的 Windows PATH**（有時連 `where.exe` 都找不到），且 `PATHEXT` 環境變數會被稀釋。這對 `gh.exe` 特別致命 — `gh` 需要呼叫 `git.exe` 做本地操作，`git.exe` 透過 PATH 查找但 lookup 被 `PATHEXT` 的成員決定。
+
+**症狀**：`gh pr checks 26` 回報 `unable to find git executable in PATH; please install Git for Windows before retrying`，但 Git for Windows 其實裝好。
+
+**根因**：
+- 只 `set PATH=...` 不夠：新 PATH 有指向 `git.exe`，但 `PATHEXT` 被子 shell 稀釋（預設可能只剩 `.COM;.EXE`），Windows command resolution 還是漏
+- 用 PowerShell 的 `$env:PATH` 在 `Start-Process` 下不會被子 cmd.exe 繼承
+- inline `cmd /c "set PATH=...;command"` 也有同樣問題（cmd 會把 set 和 command 當同一行解析）
+
+**正確做法**：寫成 `.bat` 檔，**同時** set `PATH` 和 `PATHEXT`：
+
+```bat
+@echo off
+set "PATHEXT=.COM;.EXE;.BAT;.CMD"
+set "PATH=C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd;C:\Program Files\Git\bin"
+cd /d C:\Users\vencs\vibe-k8s-lab
+"C:\Program Files\GitHub CLI\gh.exe" pr checks 26 > output.log 2>&1
+```
+
+**驗收**：`gh.exe` 會透過增強的 PATH 找到 `git.exe`，`gh pr checks` / `gh pr view` / `gh pr merge` 全部可用。
+
+**不要做**：
+- `cmd /c "set PATH=...&& gh pr checks 26"` — set 不會真的寫入環境
+- 只信任 PowerShell 端的 `$env:PATH` — cmd 子 shell 不繼承
+- 跳過 `PATHEXT` — Windows 仍會判 `git.exe` 找不到
+
+**相關**：v2.7.0 PR [#26](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/26) Day 9 Session 3（2026-04-18）final-gate loop 驗證此 LL。詳細 session 記錄見 v2.7.0-planning.md §8.13（internal planning doc，`.gitignore` 排除）。
 
 ## 黃金法則：複雜指令寫成獨立腳本
 
@@ -265,7 +295,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 42 | pre-commit hook CRLF shebang + dual shebang 雙重問題 | Windows 端 `pre-commit install` 產生的 `.git/hooks/pre-commit` 有兩個問題：(1) CRLF 行尾導致 Linux/FUSE 找不到 `#!/bin/sh\r`（報 `cannot run .git/hooks/pre-commit: No such file or directory`）；(2) 修完 CRLF 後，`#!/bin/sh` 無法解析 bash array `ARGS=(...)`（報 `Syntax error: "(" unexpected`）。**修法**：`tr -d '\r' < hook > hook.tmp && mv hook.tmp hook && chmod +x hook`，再把 `#!/bin/sh` 改成 `#!/usr/bin/env bash`。已內建到 `win_git_escape.bat fix-hooks` 子命令 |
 | 43 | pre-commit stash + FUSE 交互形成死鎖 | pre-commit 偵測到 unstaged changes → `git stash` → stash 操作在 FUSE 上衝突 → 嘗試 `git checkout -- .` → 建立 `index.lock` → FUSE phantom lock → 整個 git 卡死。**防治**：(1) commit 前先 `git stash` 手動處理 unstaged changes，不要讓 pre-commit 自動 stash；(2) 大量 unstaged files 時改用 Windows 逃生門 commit；(3) 已發生時用 `make git-lock ARGS="--clean"` 或 Windows MCP `Remove-Item` 清鎖 |
 | 44 | Phantom lock 薛丁格態：ls 顯示存在但所有操作都失敗 | FUSE dentry cache 殘留的 `.git/index.lock`，`ls` 同時報 "No such file" 卻又列出檔案。`os.unlink` 報 "Operation not permitted"，`os.rename` 報 "No such file"。Level 1 `drop_caches` 和 Level 6 rename-trick 皆無效。**唯一可靠解法**：放棄從 FUSE 側操作，切換到 Windows 原生 git（`win_git_escape.bat`）完成所有 git 操作。這是「逃生門」設計存在的核心理由 |
-| 45 | Desktop Commander `start_process` 執行 `.bat` 檔案時編碼損壞 | Desktop Commander 的 `start_process` 直接執行 `.bat` 會對 `@echo off`、`setlocal` 等關鍵字產生亂碼，batch 無法正確解析。**繞道**：不直接執行 `.bat`，改用 inline `cmd /c "..."` 命令，或透過 PowerShell `& cmd /c script.bat args` 間接呼叫 |
+| 45 | Desktop Commander `start_process` 執行 `.bat` 檔案時編碼損壞 | Desktop Commander 的 `start_process` 直接執行 `.bat` 會對 `@echo off`、`setlocal` 等關鍵字產生亂碼，batch 無法正確解析。**根因**（v2.7.0 Day 6 確認）：`.bat` 檔案內含 CJK 字元（中文註解）時，Desktop Commander 讀取解析過程中 encoding 不一致，導致 batch parser 看到截斷的指令。`cmd /c` 間接呼叫**同樣失敗**，不是呼叫方式的問題。**正解**：`.bat` 檔案的所有註解和字串**必須全為 ASCII**，CJK 內容只放在對應的 `.md` playbook 中。`win_git_escape.bat` 已在 `e55d9af` 改為全英文註解 🛡️ |
 | 46 | cmd `git commit -m` 無法處理 UTF-8 特殊字元（em-dash、CJK） | `git commit -m "feat(ops): playbook audit — harness"` 中的 em-dash（U+2014）不在 cmd codepage 內，導致引號解析崩潰，每個空格後的單字都被當成獨立 pathspec，產生大量 `fatal: pathspec 'xxx' did not match any file` 錯誤。**正解**：永遠用 `git commit -F file.txt` 檔案傳遞 commit message。已內建到 `win_git_escape.bat commit-file` 子命令。UTF-8 檔案用 `[IO.File]::WriteAllText($path, $msg, [Text.UTF8Encoding]::new($false))` 或 `echo msg > file` 產生 |
 | 47 | Windows MCP PowerShell 對大型 working tree 的 git 操作 timeout | 當 working tree 有 ~90+ unstaged files 時，透過 Windows MCP PowerShell 執行 `git add` 和 `git status` 會反覆超過 60s timeout（連續 3 次失敗）。原因是 Git 需要 stat 大量檔案 + PowerShell MCP 模組初始化開銷。**繞道**：改用 Desktop Commander 的 cmd shell（`cmd /c "git add file1 file2"`），或用 `win_git_escape.bat` 直接操作 |
 | 48 | Desktop Commander cmd shell 拆解 `--title` 引號 | `gh pr create --title "multi word title"` 在 cmd 內被拆成獨立 arguments。**正解**：把完整命令寫入 `.bat` 檔再執行（bat 內引號正常解析）。PowerShell 可正確處理引號，但有 PATH (#49) 和 timeout (#47) 問題 |
@@ -346,6 +376,20 @@ done
 ## FUSE Phantom Lock 防治
 
 FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind mount）是 `.git/*.lock` 殘留的根本原因。以下是分層防治措施（預防 → 偵測 → 修復 → 驗證）：
+
+### ⛔ 明確禁止清單（v2.7.0 Phase .e LL 固化）
+
+以下操作在 FUSE 環境下**確認會壞事**，一律禁用：
+
+| 禁用 | 根因 | 正確做法 |
+|------|------|---------|
+| `cp .git/index /tmp/xxx` + `GIT_INDEX_FILE=/tmp/xxx git commit-tree` | FUSE 側 `.git/index` 永遠是 stale 的；temp index + commit-tree 產出的 tree 物件不含真實修改 → push 後遠端看到空 commit | 所有 git add/commit/push **必須從 Windows 側執行**：`scripts/ops/win_git_escape.bat` 或 `cd C:\Users\<USER>\vibe-k8s-lab && git add ... && git commit --no-verify -F _msg.txt && git push` |
+| `docker exec vibe-dev-container git add ...`（在 FUSE mount 上） | Dev Container bind-mount 看到的是 FUSE 側的 `.git/`，index 讀取在 stat cache 層可能不一致；與 Windows 側併用時會互踩 index lock | git write 操作全集中在 **Windows 原生 git**；Dev Container 只做 `git log` / `git status` / Go test / pre-commit 等唯讀或可重跑的操作 |
+| `.bat` 檔案內含 CJK 註解或字串（e.g. 中文的 `rem`） | Desktop Commander `start_process` 讀取 `.bat` 的 encoding 不一致 → batch parser 看到截斷指令；`cmd /c` 間接呼叫同樣失敗 | `.bat` 內**全 ASCII 註解與字串**；CJK 內容只放對應 `.md` playbook。範例：`win_git_escape.bat` 在 commit `e55d9af` 已改全英文註解 🛡️（詳見 [陷阱 #45](#已知陷阱速查)） |
+| 任何 git 子命令的 `-i` / `--interactive` flag | MCP shell 無法開啟編輯器；rebase/add/commit 會 hang 直到 timeout | 用非互動替代：`git -c sequence.editor=true -c core.editor=true rebase --autosquash`、`git commit -F file.txt`、`git rm --cached` 直接下 path（詳見 [陷阱 #41](#已知陷阱速查)） |
+| 從 FUSE 側用 `rm -f .git/*.lock` 清 phantom lock | FUSE dentry cache 薛丁格態：`ls` 看得到、`unlink` 回 EPERM；清了也只是假象 | 用 `bash scripts/session-guards/git_check_lock.sh --clean`（會自動偵測並給出正確動作建議）；真正清不掉時走 Windows MCP `Remove-Item` 或 §修復層 B Level 6 rename-trick |
+
+> **決策助記**：FUSE 側可以 **read** (stat/cat/diff)，但一切會**寫 NTFS metadata** 的操作（commit / add / lock acquire / 清 lock）都走 Windows 原生 git。
 
 ### 預防層：降低 Lock 發生機率
 

@@ -2,12 +2,12 @@
 title: "場景：GitOps CI/CD 整合指南"
 tags: [scenario, gitops, ci-cd, adoption]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # 場景：GitOps CI/CD 整合指南
 
-> **v2.6.0** | 相關文件：[`architecture-and-design.md`](../architecture-and-design.md)、[`for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`cli-reference.md`](../cli-reference.md) · 互動工具：[CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
+> **v2.7.0** | 相關文件：[`architecture-and-design.md`](../architecture-and-design.md)、[`for-platform-engineers.md`](../getting-started/for-platform-engineers.md)、[`cli-reference.md`](../cli-reference.md) · 互動工具：[CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
 
 ## 概述
 
@@ -349,5 +349,5 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 ---
 
-**文件版本：** v2.2.0 — 2026-03-17
+**文件版本：** v2.7.0 — 2026-04-18
 **維護者：** Platform Engineering Team

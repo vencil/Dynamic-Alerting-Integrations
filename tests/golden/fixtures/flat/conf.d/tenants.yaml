@@ -1,0 +1,6 @@
+tenants:
+  tenant-a:
+    threshold:
+      cpu: 80
+      memory: 75
+    alert_group: default

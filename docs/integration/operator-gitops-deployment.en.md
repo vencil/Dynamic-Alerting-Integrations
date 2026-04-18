@@ -2,7 +2,7 @@
 title: "Operator GitOps Deployment Guide"
 tags: [operator, gitops, argocd, flux]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Operator GitOps Deployment Guide
@@ -106,7 +106,7 @@ jobs:
             -v ${{ github.workspace }}/conf.d:/conf.d:ro \
             -v ${{ github.workspace }}/rule-packs:/rule-packs:ro \
             -v ${{ github.workspace }}/prometheus-operator-crds:/output \
-            ghcr.io/vencil/da-tools:v2.6.0 \
+            ghcr.io/vencil/da-tools:v2.7.0 \
             operator-generate --gitops --output-dir /output
       - name: Commit & Push
         run: |

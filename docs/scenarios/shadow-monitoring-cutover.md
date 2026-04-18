@@ -2,12 +2,12 @@
 title: "場景：Shadow Monitoring — 從告警健康評估到全自動切換"
 tags: [scenario, shadow-monitoring, cutover, alert-quality]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # 場景：Shadow Monitoring — 從告警健康評估到全自動切換
 
-> **v2.6.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`migration-guide.md`](../migration-guide.md)、[`CLI Reference`](../cli-reference.md)
+> **v2.7.0** | 相關文件：[`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md)、[`migration-guide.md`](../migration-guide.md)、[`CLI Reference`](../cli-reference.md)
 
 本指南涵蓋從告警品質評估到完整遷移切換的端對端流程：Phase 0（評估）→ Phase 1–6（遷移 & 切換）。
 
@@ -29,7 +29,7 @@ lang: zh
 ```bash
 # 掃描全部 tenant，分析過去 30 天
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.6.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.7.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 

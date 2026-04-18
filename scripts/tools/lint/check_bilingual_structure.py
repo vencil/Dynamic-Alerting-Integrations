@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """check_bilingual_structure.py — ZH/EN 文件結構同步 lint
 
-對每組 *.md / *.en.md pair 提取 ## / ### / #### 標題骨架，
+對每組雙語 pair 提取 ## / ### / #### 標題骨架，
 比對章節結構是否一致。允許翻譯差異但 section count 和 heading hierarchy
 必須匹配。同時檢查雙語導航連結對稱性。
+
+支援兩種命名慣例（v2.7.0 SSOT 遷移期間共存）：
+- Legacy: *.md (ZH) + *.en.md (EN) — 中文為主
+- New:    *.md (EN) + *.zh.md (ZH) — 英文為主（SSOT 目標）
+自動偵測檔案命名以判斷使用哪種模式。
 
 互補工具（三者互不重疊）：
 - 本工具：管「骨架」— heading 數量與層級必須 1:1 對齊
@@ -131,6 +136,7 @@ def check_nav_links(zh_path: Path, en_path: Path) -> List[str]:
     """Check bidirectional navigation links between zh/en pairs.
 
     Each file's first 20 lines should contain a link to its counterpart.
+    Supports both legacy (.en.md) and new (.zh.md) naming conventions.
     """
     issues = []
 
@@ -214,21 +220,36 @@ def compare_structure(
             ),
         })
 
-    # Detect missing technical sections
-    # Only flag headings that contain CLI-like patterns (da-tools, --flag, file.py)
+    # Detect missing technical sections.
+    # Flag headings that contain CLI-like patterns (da-tools, --flag, file.py)
     # or version patterns (v2.x.x) — these are language-independent identifiers
     # that MUST appear in both versions. Pure prose headings differ by translation.
     cli_pattern = re.compile(
-        r"(da-tools|--[a-z]|\.py\b|\.yaml\b|\.jsx\b|v\d+\.\d+|"
-        r"configmap|prometheus|alertmanager|helm|kubectl|opa|crd|api)"
+        r"(da-tools|--[a-z][a-z0-9-]*|\.py\b|\.yaml\b|\.jsx\b|v\d+\.\d+(?:\.\d+)?|"
+        r"configmap|prometheus|alertmanager|helm|kubectl|opa|crd|api|"
+        r"servicemonitor|prometheusrule|alertmanagerconfig|"
+        r"_[a-z_]+\.(?:yaml|yml|json)|tenant-api|threshold-exporter|rule.?pack)"
     )
 
-    zh_cli = {k for _, k in zh_skel if cli_pattern.search(k)}
-    en_cli = {k for _, k in en_skel if cli_pattern.search(k)}
+    # Token-based matching: two headings are "equivalent" if they share at
+    # least one CLI/tech token. This is robust to translation variance
+    # (e.g., "API Response 格式" vs "API Response Format" both emit token
+    # "api" and "response") while still catching real structural drift.
+    def _tokens(key: str) -> frozenset:
+        # Collect every cli_pattern match as a token; strip trailing
+        # fullwidth/ASCII punctuation that can leak in after CJK removal.
+        return frozenset(
+            m.group(0).rstrip("?？!！.,、:：;；")
+            for m in cli_pattern.finditer(key)
+        )
 
-    # Only flag if one side has CLI-specific headings the other doesn't
-    zh_only_cli = zh_cli - en_cli
-    en_only_cli = en_cli - zh_cli
+    zh_cli_items = [(k, _tokens(k)) for _, k in zh_skel if cli_pattern.search(k)]
+    en_cli_items = [(k, _tokens(k)) for _, k in en_skel if cli_pattern.search(k)]
+    en_token_union = frozenset().union(*(t for _, t in en_cli_items)) if en_cli_items else frozenset()
+    zh_token_union = frozenset().union(*(t for _, t in zh_cli_items)) if zh_cli_items else frozenset()
+
+    zh_only_cli = {k for k, toks in zh_cli_items if not (toks & en_token_union)}
+    en_only_cli = {k for k, toks in en_cli_items if not (toks & zh_token_union)}
 
     if zh_only_cli:
         samples = sorted(zh_only_cli)[:5]
@@ -261,35 +282,57 @@ def compare_structure(
 def discover_bilingual_pairs() -> List[Tuple[Path, Path]]:
     """Find all zh/en markdown file pairs.
 
-    Skips internal docs (docs/internal/) which are exempt from bilingual
-    requirements per project policy.
+    Supports both naming conventions (auto-detected per directory):
+    - Legacy: *.md (ZH) + *.en.md (EN)
+    - New:    *.md (EN) + *.zh.md (ZH)
+
+    Returns list of (zh_path, en_path) tuples regardless of convention.
+    Skips internal docs (docs/internal/) per project policy.
     """
     pairs = []
+
+    def _is_exempt(filepath: Path) -> bool:
+        rel_path = filepath.relative_to(REPO_ROOT)
+        return any(
+            str(rel_path).startswith(exempt_dir)
+            for exempt_dir in BILINGUAL_EXEMPT_DIRS
+        )
 
     # docs/ and rule-packs/
     for scan_dir in SCAN_DIRS:
         if not scan_dir.is_dir():
             continue
+
+        # Legacy pattern: *.en.md files
         for en_file in sorted(scan_dir.rglob("*.en.md")):
             zh_file = en_file.parent / en_file.name.replace(".en.md", ".md")
-            if zh_file.is_file():
-                # Skip if in exempt directory
-                rel_path = zh_file.relative_to(REPO_ROOT)
-                is_exempt = any(
-                    str(rel_path).startswith(exempt_dir)
-                    for exempt_dir in BILINGUAL_EXEMPT_DIRS
-                )
-                if is_exempt:
-                    continue
+            if zh_file.is_file() and not _is_exempt(zh_file):
                 pairs.append((zh_file, en_file))
 
-    # Root READMEs
+        # New pattern: *.zh.md files (SSOT switch — EN is now *.md)
+        for zh_file in sorted(scan_dir.rglob("*.zh.md")):
+            en_file = zh_file.parent / zh_file.name.replace(".zh.md", ".md")
+            if en_file.is_file() and not _is_exempt(en_file):
+                # Avoid duplicate if somehow both .en.md and .zh.md exist
+                if (zh_file, en_file) not in pairs and (en_file, zh_file) not in pairs:
+                    pairs.append((zh_file, en_file))
+
+    # Root READMEs — legacy pattern
     for zh_file in SCAN_ROOT_FILES:
         if zh_file.is_file():
             en_name = zh_file.stem + ".en" + zh_file.suffix
             en_file = zh_file.parent / en_name
             if en_file.is_file():
                 pairs.append((zh_file, en_file))
+
+    # Root READMEs — new pattern
+    for en_file in SCAN_ROOT_FILES:
+        if en_file.is_file():
+            zh_name = en_file.stem + ".zh" + en_file.suffix
+            zh_file = en_file.parent / zh_name
+            if zh_file.is_file():
+                if (zh_file, en_file) not in pairs:
+                    pairs.append((zh_file, en_file))
 
     return pairs
 

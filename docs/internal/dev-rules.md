@@ -2,7 +2,7 @@
 title: "開發規範 (Development Rules)"
 tags: [documentation, governance]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 verified-at-version: v2.6.0
 lang: zh
 ---
@@ -116,6 +116,19 @@ lang: zh
 
 **檢查方式**：pre-commit hook `check_bilingual_annotations`。
 
+### 9b. SSOT 語言遷移（v2.7.0+）
+
+**規則**：v2.7.0 起開始從「中文為主 SSOT」遷移至「英文為主 SSOT」。遷移期間 lint hooks 同時支援兩種檔案對命名：
+
+- **Legacy**：`foo.md`（ZH）+ `foo.en.md`（EN）— 中文為主
+- **New**：`foo.md`（EN）+ `foo.zh.md`（ZH）— 英文為主
+
+**遷移工具**：`python3 scripts/tools/dx/migrate_ssot_language.py --dry-run`
+
+**全量遷移時程**：v2.8.0（需 mkdocs.yml 原子性修改，不可漸進式遷移）
+
+**評估文件**：[`ssot-language-evaluation.md`](ssot-language-evaluation.md) + [`ssot-migration-pilot-report.md`](ssot-migration-pilot-report.md)
+
 ### 10. 雙語政策：internal docs 不需英文版
 
 **規則**：`docs/internal/`、工具性檔案（CHANGELOG、tags、includes、plan docs）**一律不需英文版**。僅外部面向文件（`docs/*.md` 頂層、`docs/scenarios/`、`docs/design/`、README）需維持 ZH/EN 雙語對。
@@ -221,6 +234,28 @@ merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local
 2. 新工具需同步 jsx-loader.html 的 CUSTOM_FLOW_MAP
 3. make lint-docs
 ```
+
+## Phase .a0 Style Rules（v2.7.0 新增）
+
+Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
+
+### S1. 中性色禁 slate，用 `--da-neutral-*` 或 `gray-*`
+
+**規則**：`docs/interactive/tools/` 下的 JSX 禁止使用 Tailwind `slate-*` 類別。中性色統一走 `--da-neutral-*` token 或對應的 `gray-*` shade。
+
+**為什麼**：`design-tokens.css` 的 `--da-neutral-*` 色值是 Tailwind `gray` scale（暖中性灰）。`slate` 是冷藍灰，兩者色調不同。混用會導致同頁面兩種中性灰色調。Day 3 deployment-wizard 遷移時確立（commit `8634ea2`）。
+
+**Waiver**：IDE / code preview 情境可保留 `bg-slate-900 text-slate-100`（深底等寬字型視覺），需在 JSX 註解中標明。
+
+**收束驗收**：`grep -rE '(bg|text|border)-slate-[0-9]+' docs/interactive/tools/` 僅剩 waiver。
+
+### S2. Playwright spec 含 `assertNoAbsoluteRootHrefs` 守門
+
+**規則**：每個新 Playwright spec 須呼叫 `assertNoAbsoluteRootHrefs(page)`（`tests/e2e/fixtures/portal-tool-smoke.ts` 提供），防止 REG-004 類型的硬編碼絕對根路徑（`href="/xxx"`）再犯。
+
+**為什麼**：portal 透過 `jsx-loader.html?component=<key>` 載入工具，絕對根路徑全部 404（REG-004 root cause）。長期解是 `jsx-loader.navigate(key)` helper（規畫 v2.8.0 Portal Navigation Refactor），短期靠 test-layer guard 防退化。
+
+**實作**：`assertNoAbsoluteRootHrefs` 掃描所有 `<a href>` 是否為 portal-safe 路徑（相對 / external / fragment）。Day 3 首次落地（commit `ca48275`），`deployment-wizard.spec.ts` 和 `wizard.spec.ts` 已採用。
 
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 

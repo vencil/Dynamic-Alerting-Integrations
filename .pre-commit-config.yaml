@@ -91,8 +91,16 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/validate_docs_versions.py --ci
         language: python
         pass_filenames: false
-        files: \.(md|yaml|jsx)$
+        files: \.(md|yaml|jsx|html)$
         additional_dependencies: ['pyyaml']
+
+      - id: design-token-usage
+        name: Design token compliance (JSX)
+        entry: python3 -X utf8 scripts/tools/lint/check_design_token_usage.py --ci
+        language: python
+        pass_filenames: false
+        files: \.jsx$
+        stages: [manual]
 
       - id: includes-sync
         name: Include snippet zh/en sync
@@ -183,7 +191,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_bilingual_structure.py --ci
         language: python
         pass_filenames: false
-        files: \.en\.md$
+        files: \.(en|zh)\.md$
 
       - id: jsx-i18n-check
         name: JSX TOOL_META ↔ CUSTOM_FLOW_MAP ↔ i18n sync
@@ -237,7 +245,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_translation.py
         language: python
         pass_filenames: false
-        files: \.en\.md$
+        files: \.(en|zh)\.md$
         stages: [manual]
 
       - id: flow-e2e-check

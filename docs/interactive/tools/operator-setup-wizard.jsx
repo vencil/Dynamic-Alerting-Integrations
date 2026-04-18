@@ -2,7 +2,7 @@
 title: "Operator Setup Wizard"
 tags: [operator, prometheus, crd, migration, setup, wizard]
 audience: [platform-engineer, sre, devops]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [deployment-wizard, cicd-setup-wizard, config-lint]
 dependencies: []

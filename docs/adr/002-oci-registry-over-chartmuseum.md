@@ -2,7 +2,7 @@
 title: "ADR-002: OCI Registry 替代 ChartMuseum"
 tags: [adr, architecture]
 audience: [platform-engineers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

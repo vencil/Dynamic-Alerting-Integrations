@@ -2,12 +2,12 @@
 title: "Scenario: GitOps CI/CD Integration Guide"
 tags: [scenario, gitops, ci-cd, adoption]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Scenario: GitOps CI/CD Integration Guide
 
-> **v2.6.0** | Related: [`architecture-and-design.md`](../architecture-and-design.md), [`for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`cli-reference.md`](../cli-reference.md) · Interactive: [CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
+> **v2.7.0** | Related: [`architecture-and-design.md`](../architecture-and-design.md), [`for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`cli-reference.md`](../cli-reference.md) · Interactive: [CI/CD Setup Wizard](../assets/jsx-loader.html?component=../interactive/tools/cicd-setup-wizard.jsx)
 
 ## Overview
 
@@ -349,5 +349,5 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 
 ---
 
-**Document version:** v2.2.0 — 2026-03-17
+**Document version:** v2.7.0 — 2026-04-18
 **Maintainer:** Platform Engineering Team

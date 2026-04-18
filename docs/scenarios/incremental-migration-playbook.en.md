@@ -2,13 +2,13 @@
 title: "Scenario: Incremental Migration Playbook"
 tags: [scenario, migration, adoption, playbook]
 audience: [platform-engineer, sre]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 
 # Scenario: Incremental Migration Playbook
 
-> **v2.6.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
+> **v2.7.0** | Related docs: [`migration-guide.md`](../migration-guide.md), [`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md), [`architecture-and-design.md` §2](../architecture-and-design.md)
 
 ## Overview
 
@@ -21,7 +21,7 @@ Each phase is **independently valuable**—you can stop at any phase without sys
 - Running Prometheus instance (`http://prometheus:9090`)
 - Running Alertmanager (`http://alertmanager:9093`)
 - Kubernetes cluster (Kind, EKS, GKE, etc.)
-- `da-tools` image pushed to private registry or publicly available (`ghcr.io/vencil/da-tools:v2.6.0`)
+- `da-tools` image pushed to private registry or publicly available (`ghcr.io/vencil/da-tools:v2.7.0`)
 - At least one namespace for monitoring (e.g., `monitoring`, `observability`)
 
 ## Migration Timeline (Typical Case)
@@ -150,7 +150,7 @@ helm repo update
 
 helm install threshold-exporter-redis vencil/threshold-exporter \
   --namespace monitoring \
-  --set image.tag=v2.6.0 \
+  --set image.tag=v2.7.0 \
   --set config.dir=/etc/threshold-exporter/conf.d \
   --set replicaCount=2 \
   --values - << 'EOF'

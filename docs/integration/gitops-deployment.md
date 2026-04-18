@@ -2,7 +2,7 @@
 title: "GitOps 部署指南"
 tags: [gitops, deployment, ci-cd]
 audience: [platform-engineer, devops]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # GitOps 部署指南

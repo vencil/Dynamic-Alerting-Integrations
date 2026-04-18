@@ -8,6 +8,7 @@ Extracted in v2.4.0 Phase B to:
   - Enable reuse across multiple validation tools
   - Reduce cognitive load in the main checker module
 """
+import re
 from pathlib import Path
 from typing import Tuple, List, Dict, Any
 
@@ -157,9 +158,19 @@ SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
 SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md", "CHANGELOG.md"}
 
 # doc-map coverage check skips these directories and files
-DOC_MAP_SKIP_DIRS = {"includes", "adr"}
+DOC_MAP_SKIP_DIRS = {"includes", "adr", "design-reviews"}
 DOC_MAP_SKIP_NAMES = {"tags.md", "CHANGELOG.md", "README-root.md",
-                      "doc-map.md", "tool-map.md"}
+                      "doc-map.md", "tool-map.md",
+                      "known-regressions.md"}
+
+# doc-map coverage also skips gitignored planning / draft files (see .gitignore).
+# These patterns match filenames (not full paths) to keep the lint fast.
+DOC_MAP_SKIP_NAME_PATTERNS = (
+    re.compile(r"^v[0-9][^/]*-planning\.md$"),
+    re.compile(r"^v[0-9][^/]*-day[0-9]+-.*\.md$"),
+    re.compile(r".*-plan-draft\.md$"),
+    re.compile(r"^_project-structure-audit-.*\.md$"),
+)
 
 # Tool map coverage check skips these filename prefixes
 TOOL_MAP_SKIP_PREFIXES = ("_lib", "__init__", "__pycache__")

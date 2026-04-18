@@ -268,6 +268,18 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
                 continue
             if rel in _gitignored:
                 continue
+            # Check ancestor directories (git ls-files --directory reports
+            # whole ignored directories as single entries; child files need
+            # ancestor-chain check to match).
+            _ancestor_ignored = False
+            _ancestor = Path(rel).parent
+            while _ancestor.as_posix() not in {"", "."}:
+                if _ancestor.as_posix() in _gitignored:
+                    _ancestor_ignored = True
+                    break
+                _ancestor = _ancestor.parent
+            if _ancestor_ignored:
+                continue
             # Fallback gitignore match (when git subprocess unavailable)
             if _gitignore_patterns:
                 import fnmatch as _fn
@@ -353,7 +365,7 @@ def generate_doc_map(lang: str = "zh", include_adr: bool = False) -> str:
             'title: "Documentation Map"',
             "tags: [documentation, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.6.0",
+            "version: v2.7.0",
             "lang: en",
             "---",
             "",
@@ -371,7 +383,7 @@ def generate_doc_map(lang: str = "zh", include_adr: bool = False) -> str:
             'title: "文件導覽 (Documentation Map)"',
             "tags: [documentation, navigation, internal]",
             "audience: [maintainers, ai-agent]",
-            "version: v2.6.0",
+            "version: v2.7.0",
             "lang: zh",
             "---",
             "",

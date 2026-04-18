@@ -87,7 +87,7 @@ spec:
       containers:
         # ── Primary: tenant-api ────────────────────────────────────────────────
         - name: tenant-api
-          image: ghcr.io/vencil/tenant-api:2.4.0
+          image: ghcr.io/vencil/tenant-api:2.7.0
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

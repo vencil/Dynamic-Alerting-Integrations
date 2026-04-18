@@ -3,7 +3,7 @@ title: "Dynamic Alerting Platform — 首頁"
 description: "企業級多租戶動態告警平台"
 tags: [home, overview]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 

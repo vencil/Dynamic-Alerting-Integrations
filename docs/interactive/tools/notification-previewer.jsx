@@ -2,7 +2,7 @@
 title: "Notification Template Editor"
 tags: [notification, template, editing, export, receiver, validation]
 audience: ["platform-engineer", "tenant"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [self-service-portal, alert-simulator, template-gallery]
 ---

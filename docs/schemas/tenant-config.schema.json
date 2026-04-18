@@ -3,7 +3,7 @@
   "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/tenant-config.schema.json",
   "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
   "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
-  "version": "v2.6.0",
+  "version": "v2.7.0",
   "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/tenant-config.schema.json\": \"conf.d/*.yaml\" }",
   "type": "object",
   "required": ["tenants"],
@@ -173,6 +173,7 @@
       "type": "object",
       "title": "Tenant Metadata",
       "description": "Optional metadata injected into all alerts from this tenant. Exposed as tenant_metadata_info{tenant, runbook_url, owner, tier} = 1 metric. Supports {{tenant}} placeholder.",
+      "$comment": "v2.7.0 ADR-017: When files are in hierarchical conf.d/ (domain/region/env/), the directory path infers default values for domain, region, and environment. Explicit _metadata fields override path-inferred values. CI may warn when path and field disagree.",
       "properties": {
         "runbook_url": {
           "type": "string",
@@ -876,6 +877,37 @@
         }
       },
       "additionalProperties": false
+    },
+    "defaultsConfig": {
+      "type": "object",
+      "title": "_defaults.yaml Configuration (v2.7.0 ADR-018)",
+      "description": "Schema for _defaults.yaml files placed at domain, region, or environment levels in hierarchical conf.d/. Values are deep-merged into all tenant configs under that directory. Merge semantics: dict=deep merge with child override, array=replace (not concat), null=opt-out (remove inherited key). _metadata fields are skipped during merge.",
+      "$comment": "A _defaults.yaml at conf.d/finance/_defaults.yaml applies to all tenants under finance/. Deeper _defaults.yaml files override shallower ones (env > region > domain).",
+      "properties": {
+        "_metadata": {
+          "$ref": "#/definitions/metadata",
+          "description": "Default metadata inherited by all tenants under this directory. Individual tenant _metadata fields override these defaults."
+        },
+        "_routing": {
+          "$ref": "#/definitions/routing",
+          "description": "Default routing configuration inherited by all tenants under this directory."
+        },
+        "_routing_profile": {
+          "type": "string",
+          "description": "Default routing profile for tenants under this directory.",
+          "minLength": 1
+        },
+        "_silent_mode": {
+          "$ref": "#/definitions/silentMode",
+          "description": "Default silent mode inherited by all tenants under this directory."
+        },
+        "_severity_dedup": {
+          "type": "string",
+          "enum": ["auto", "manual", "disable"],
+          "description": "Default severity dedup mode for tenants under this directory."
+        }
+      },
+      "additionalProperties": true
     }
   }
 }

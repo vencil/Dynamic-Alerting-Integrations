@@ -2,11 +2,38 @@
 title: "Design System Guide"
 tags: [documentation, internal, design]
 audience: [maintainers]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 
 # 設計系統指南 v2.6.0
+
+## TL;DR / Quick Start
+
+**SSOT**: `docs/assets/design-tokens.css` — 所有色彩、間距、字型、陰影統一在此定義。
+
+**新增 JSX 工具必做 3 件事**:
+1. 色彩用 `var(--da-color-*)` token，**禁止 hardcoded hex**（如 `#64748b`）
+2. 間距用 `var(--da-space-*)` 或 8px grid 倍數，**禁止任意 px**（布局常數除外，需頂部註解）
+3. 跑 `python3 scripts/tools/lint/check_design_token_usage.py <file>` 確認 0 violation
+
+**主題切換**: 用 `[data-theme="dark"]` selector，**禁止 Tailwind `dark:` prefix**（DEC-F 決策）
+
+**常用 Token 速查**:
+| 用途 | Token | Light 值 |
+|------|-------|---------|
+| 主文字 | `--da-color-fg` | `#1a1a2e` |
+| 次要文字 | `--da-color-muted` | `#64748b` |
+| Tag 背景文字 | `--da-color-tag-fg` | `#475569` |
+| 強調色 | `--da-color-accent` | `#2563eb` |
+| 卡片背景 | `--da-color-card-bg` | `#ffffff` |
+| 基礎間距 | `--da-space-1` ~ `--da-space-8` | 4px ~ 64px |
+
+**⚠️ 對比度陷阱**: `--da-color-muted` 放在 `--da-color-tag-bg` 上不過 AA（4.2:1），改用 `--da-color-tag-fg`（5.9:1）。
+
+> 完整規範見以下各章節。新工具開發 Checklist → §9，舊工具遷移 → §10。
+
+---
 
 ## 1. 設計系統概覽
 
@@ -444,7 +471,7 @@ CSS 中應包含：
 
 ## 10. 舊工具遷移指引
 
-對於 v2.6.0 遺留的 hardcoded CSS 工具，遷移步驟如下：
+對於 v2.7.0 遺留的 hardcoded CSS 工具，遷移步驟如下：
 
 ### 10.1 色彩遷移
 

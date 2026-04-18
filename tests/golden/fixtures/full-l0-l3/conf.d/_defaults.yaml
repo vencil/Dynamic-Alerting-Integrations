@@ -1,0 +1,6 @@
+defaults:
+  level: L0
+  threshold:
+    cpu: 70
+  pages:
+    - a

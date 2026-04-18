@@ -19,6 +19,7 @@ var (
 	configDir      string
 	listenAddr     string
 	reloadInterval time.Duration
+	scanDebounce   time.Duration
 )
 
 func init() {
@@ -26,6 +27,10 @@ func init() {
 	flag.StringVar(&configDir, "config-dir", "", "Path to threshold config directory (multi-file mode)")
 	flag.StringVar(&listenAddr, "listen", ":8080", "HTTP listen address")
 	flag.DurationVar(&reloadInterval, "reload-interval", 30*time.Second, "Config reload interval")
+	// v2.7.0 (ADR-017/018): coalesce bursts of file changes into a single
+	// hierarchical reload. Set to 0 to disable (synchronous reload per
+	// detected diff, matching v2.6.0 behavior).
+	flag.DurationVar(&scanDebounce, "scan-debounce", DefaultDebounceWindow, "Debounce window for hierarchical conf.d reload (0 disables)")
 }
 
 func main() {
@@ -49,9 +54,10 @@ func main() {
 	log.Printf("  config:   %s", resolvedPath)
 	log.Printf("  listen:   %s", listenAddr)
 	log.Printf("  reload:   %s", reloadInterval)
+	log.Printf("  debounce: %s", scanDebounce)
 
 	// Load initial config
-	manager := NewConfigManager(resolvedPath)
+	manager := NewConfigManagerWithDebounce(resolvedPath, scanDebounce)
 	if err := manager.Load(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -96,6 +102,10 @@ func main() {
 
 	// Stop WatchLoop goroutine
 	close(stopCh)
+
+	// Release debounce timer (v2.7.0 Phase 3, §8.11.2 trap #12). Safe
+	// even on single-file mode — Close is a no-op when debounceTimer is nil.
+	manager.Close()
 
 	// Graceful HTTP shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

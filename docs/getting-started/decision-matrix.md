@@ -2,7 +2,7 @@
 title: "Deployment Decision Matrix"
 tags: [getting-started, decision, operator, configmap]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # Deployment Decision Matrix

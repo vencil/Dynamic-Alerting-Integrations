@@ -2,7 +2,7 @@
 title: "ADR-009: Tenant Manager CRUD API Architecture"
 tags: [adr, architecture, api, tenant-management]
 audience: [platform-engineers, developers]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 
@@ -97,7 +97,7 @@ The Git repo is already the source of truth. Introducing a database creates a bi
 
 oauth2-proxy is a mature CNCF ecosystem tool supporting all major IdPs (GitHub, Google, Azure AD, generic OIDC). After injecting `X-Forwarded-Email` and `X-Forwarded-Groups` headers, the API server only needs to read headers — no token validation code required. This follows the separation of concerns principle and is consistent with K8s ingress auth patterns.
 
-### Why no real-time WebSocket push?
+### Why v2.4.0 doesn't do real-time WebSocket push?
 
 v2.4.0's primary user scenario is low-frequency operations (≥1 second between operations); polling or manual refresh is sufficient. Async batch operations with task_id polling introduced in v2.6.0; SSE server-sent events replaced WebSocket in v2.6.0 for real-time push notifications without persistent connection overhead.
 

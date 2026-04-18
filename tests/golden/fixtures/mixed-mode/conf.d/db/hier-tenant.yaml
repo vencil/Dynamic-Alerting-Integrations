@@ -1,0 +1,4 @@
+tenants:
+  tenant-hier:
+    threshold:
+      cpu: 88

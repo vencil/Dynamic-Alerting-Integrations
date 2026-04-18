@@ -2,7 +2,7 @@
 title: "Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper"
 tags: [architecture, core-design]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper
@@ -150,15 +150,16 @@ The following table summarizes core design concepts, each with a standalone in-d
 
 | Design Concept | Overview | Details |
 |--------|------|------|
-| **Config-Driven Architecture** | Three-state config (Custom/Default/Disable), Directory Scanner, SHA-256 hot-reload, Tenant-Namespace mapping | [design/config-driven.en.md](design/config-driven.en.md) |
+| **Config-Driven Architecture** | Three-state config (Custom/Default/Disable), Directory Scanner, hierarchical `conf.d/` (ADR-017), `_defaults.yaml` L0→L3 inheritance (ADR-018), Dual-hash hot-reload, Tenant-Namespace mapping | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Multi-tier Severity** | `_critical` suffix and `"value:severity"` syntax, Severity Dedup, Alertmanager inhibit | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Regex & Scheduled Thresholds** | Regex dimension matching (`=~`), time-window scheduling (UTC), ResolveAt mechanism | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Three-State Operational Modes** | Normal / Silent / Maintenance, auto-expiry, Sentinel Alert pattern | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Alert Routing & Receivers** | 6 receiver types, Timing Guardrails, Per-rule Overrides, Enforced Routing, Routing Profiles | [design/config-driven.en.md](design/config-driven.en.md) |
-| **Tenant API Architecture** | Commit-on-write, RBAC hot-reload, shared validation, Portal graceful degradation | [design/config-driven.en.md](design/config-driven.en.md) |
+| **Tenant API Architecture** | Commit-on-write, RBAC hot-reload, shared validation, Portal graceful degradation, `GET /tenants/{id}/effective` with merged config + dual hashes (v2.7.0) | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Rule Packs & Projected Volume** | 15 independent rule packs, three-part structure, bilingual annotations | [design/rule-packs.en.md](design/rule-packs.en.md) |
 | **Performance Architecture** | Pre-computed Recording Rules vs Runtime Aggregation, O(M) vs O(M×N), Cardinality Guard | [design/config-driven.en.md](design/config-driven.en.md) |
 | **High Availability (HA)** | 2 replica deployment, RollingUpdate, PodDisruptionBudget, `max by(tenant)` prevents double-counting | [design/high-availability.en.md](design/high-availability.en.md) |
+| **Inheritance Engine** 🟢 *Shipped in v2.7.0* | `_defaults.yaml` at domain/region/env layers providing inheritable defaults (L0→L1→L2→L3 deep merge, array replacement, null-as-delete) (ADR-018); dual-hash (`source_hash` + `merged_hash`) precise hot-reload + 300ms debounce to absorb ConfigMap symlink rotation; flat and hierarchical `conf.d/` coexist (ADR-017). **v2.7.0 deliverables**: Go production path (`config_debounce.go` + `config_metrics.go` + `populateHierarchyState()` + `--scan-debounce` flag) + 3 new Prometheus metrics (`da_config_scan_duration_seconds` / `da_config_reload_trigger_total{reason}` / `da_config_defaults_change_noop_total`) + Tenant API `GET /tenants/{id}/effective` + `da-tools describe-tenant` / `migrate-conf-d` CLIs | [design/config-driven.en.md](design/config-driven.en.md) |
 | **Future Roadmap** | Design System unification, K8s Operator, Async Write-back, Auto-Discovery, Dashboard as Code, etc. | [design/roadmap-future.en.md](design/roadmap-future.en.md) |
 
 ---
@@ -259,10 +260,13 @@ spec:
 
 ## 5. Future Roadmap
 
-- **Planned (v2.7.0)**: EN-first Bilingual SSOT + Field-level RBAC + Tenant Auto-Discovery + Grafana DaC + Release Automation completion
-- **Exploratory**: Anomaly-Aware Dynamic Threshold + Log-to-Metric Bridge + Multi-Format Export + CRD + ChatOps
+| Timeline | Theme | Focus |
+|----------|-------|-------|
+| **v2.7.0 Shipped** | Scale Foundation + Component Robustness | `conf.d/` directory hierarchy + `_defaults.yaml` inheritance engine (ADR-017/018), Go production path complete (`config_debounce.go` + `config_metrics.go` + Tenant API `/effective` endpoint + dual-hash hot-reload), Blast Radius CI bot ✅, Tier 1 component health snapshot ✅, 1000-tenant synthetic fixture ✅, SSOT language Phase 1 pilot ✅ |
+| **v2.8.0 Planned** | Thousand-Tenant Onboarding × Console Integration | Scale Foundation II (server-side search, virtualized Tenant Manager), SSOT EN-first full migration, Master Onboarding Journey, Field-level RBAC, remaining 24 Playwright `test.fixme()` cleanup (C-1/C-3/C-4) |
+| **Long-term Exploration** | Intelligence × Decoupling | Anomaly-Aware Threshold, Log-to-Metric Bridge, Multi-Format Export, CRD, ChatOps |
 
-**Complete reference** [design/roadmap-future.en.md](design/roadmap-future.en.md)
+**Complete roadmap and technical plan** [design/roadmap-future.en.md](design/roadmap-future.en.md) · DX tooling improvements see [dx-tooling-backlog.md](internal/dx-tooling-backlog.md) · v2.7.0 execution records see `internal/v2.7.0-planning.md` (internal-only planning doc, browsable on GitHub)
 
 ---
 

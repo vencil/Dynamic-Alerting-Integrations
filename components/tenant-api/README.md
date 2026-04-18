@@ -1,4 +1,4 @@
-# tenant-api (v2.4.0)
+# tenant-api (v2.7.0)
 
 > **Tenant Management REST API** — config-driven 的租戶管理服務，提供 CRUD + Batch 操作、RBAC 權限控制、GitOps commit-on-write 審計軌跡。搭配 oauth2-proxy sidecar 實現 IdP 整合認證。
 >
@@ -23,6 +23,7 @@
 | `GET` | `/metrics` | Prometheus metrics（text exposition） | 無需認證 |
 | `GET` | `/api/v1/tenants` | 列出所有租戶（含 silent/maintenance 狀態） | read |
 | `GET` | `/api/v1/tenants/{id}` | 取得租戶完整設定（raw YAML + resolved thresholds） | read |
+| `GET` | `/api/v1/tenants/{id}/effective` | **（v2.7.0 新增）** 返回套完繼承的 merged config + 來源鏈 (defaults chain) + dual hashes (`source_hash` + `merged_hash`，16 hex)。底層呼叫 `pkg/config/hierarchy.go` 的 stateless `ResolveEffective()`；404 回 `ErrTenantNotFound` sentinel，400 回 invalid/empty id。搭配 ADR-018 的 L0→L3 繼承語義（深合併 / array 替換 / null-as-delete） | read |
 | `PUT` | `/api/v1/tenants/{id}` | 更新租戶設定（validate → write → git commit） | write |
 | `POST` | `/api/v1/tenants/{id}/validate` | Dry-run 驗證（不寫入） | read |
 | `POST` | `/api/v1/tenants/{id}/diff` | 預覽變更 diff（current vs proposed） | read |
@@ -76,13 +77,13 @@ groups:
 ```bash
 # 安裝
 helm install tenant-api \
-  oci://ghcr.io/vencil/charts/tenant-api --version 2.6.0 \
+  oci://ghcr.io/vencil/charts/tenant-api --version 2.7.0 \
   -n monitoring --create-namespace \
   -f values-override.yaml
 
 # 升級
 helm upgrade tenant-api \
-  oci://ghcr.io/vencil/charts/tenant-api --version 2.6.0 \
+  oci://ghcr.io/vencil/charts/tenant-api --version 2.7.0 \
   -n monitoring -f values-override.yaml
 ```
 
@@ -98,12 +99,12 @@ Helm chart 會自動建立：Deployment + oauth2-proxy sidecar、Service (80 →
 
 ```bash
 # 從 repo root 建構（因 go.mod replace directive 需要 threshold-exporter 模組）
-docker build -t ghcr.io/vencil/tenant-api:2.4.0 \
+docker build -t ghcr.io/vencil/tenant-api:2.7.0 \
   -f components/tenant-api/Dockerfile .
 
 # 執行
 docker run -p 8080:8080 -v $(pwd)/conf.d:/conf.d \
-  ghcr.io/vencil/tenant-api:2.4.0
+  ghcr.io/vencil/tenant-api:2.7.0
 ```
 
 ### 驗證部署

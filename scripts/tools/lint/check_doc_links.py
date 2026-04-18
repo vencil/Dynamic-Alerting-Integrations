@@ -122,9 +122,44 @@ class DocLinkChecker:
         return sections
 
     def _get_all_md_files(self) -> List[Path]:
-        """取得所有要掃描的 Markdown 文件（cached）。"""
+        """取得所有要掃描的 Markdown 文件（cached）。
+
+        Excludes gitignored paths (via `git ls-files --others --ignored`).
+        Internal time-bound docs like v2.*-planning.md live under
+        docs/internal/ and are gitignored — skipping them here avoids
+        scanning files that aren't part of the shipping docs corpus.
+        """
         if self._md_files_cache:
             return self._md_files_cache
+
+        # Build gitignored-path set (mirrors generate_doc_map.py logic).
+        # Uses --directory so whole ignored subdirs show up as single entries;
+        # we then walk ancestor chain when checking each candidate.
+        import subprocess
+        _gitignored: set = set()
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "--others", "--ignored",
+                 "--exclude-standard", "--directory"],
+                capture_output=True, text=True, cwd=str(self.repo_root),
+                timeout=10,
+            )
+            if out.returncode == 0:
+                for line in out.stdout.splitlines():
+                    _gitignored.add(line.rstrip("/"))
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            pass  # git unavailable → no exclusion (safe default)
+
+        def _is_ignored(p: Path) -> bool:
+            rel = p.relative_to(self.repo_root).as_posix()
+            if rel in _gitignored:
+                return True
+            ancestor = Path(rel).parent
+            while ancestor.as_posix() not in {"", "."}:
+                if ancestor.as_posix() in _gitignored:
+                    return True
+                ancestor = ancestor.parent
+            return False
 
         md_files = []
 
@@ -132,12 +167,14 @@ class DocLinkChecker:
         for scan_dir in self.scan_dirs:
             dir_path = self.repo_root / scan_dir
             if dir_path.exists():
-                md_files.extend(dir_path.rglob("*.md"))
+                md_files.extend(
+                    f for f in dir_path.rglob("*.md") if not _is_ignored(f)
+                )
 
         # 掃描根目錄的 Markdown 文件
         for md_file in self.root_md_files:
             file_path = self.repo_root / md_file
-            if file_path.exists():
+            if file_path.exists() and not _is_ignored(file_path):
                 md_files.append(file_path)
 
         self._md_files_cache = sorted(list(set(md_files)))

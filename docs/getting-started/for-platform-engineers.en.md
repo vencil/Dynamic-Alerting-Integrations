@@ -2,12 +2,12 @@
 title: "Platform Engineer Quick Start Guide"
 tags: [getting-started, platform-setup]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Platform Engineer Quick Start Guide
 
-> **v2.6.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
+> **v2.7.0** | Audience: Platform Engineers, SREs, Infrastructure Managers
 >
 > Related docs: [Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../integration/gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator Integration](../integration/prometheus-operator-integration.en.md) · [Deployment Decision Matrix](decision-matrix.md)
 

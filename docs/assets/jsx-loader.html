@@ -353,7 +353,11 @@ window.addEventListener('pageshow', function(e) {
     'deployment-wizard': '../interactive/tools/deployment-wizard.jsx',
     'rbac-setup-wizard': '../interactive/tools/rbac-setup-wizard.jsx',
     'release-notes-generator': '../interactive/tools/release-notes-generator.jsx',
-    'threshold-heatmap': '../interactive/tools/threshold-heatmap.jsx'
+    'threshold-heatmap': '../interactive/tools/threshold-heatmap.jsx',
+    'cost-estimator': '../interactive/tools/cost-estimator.jsx',
+    'migration-roi-calculator': '../interactive/tools/migration-roi-calculator.jsx',
+    'operator-setup-wizard': '../interactive/tools/operator-setup-wizard.jsx',
+    'component-health': '../interactive/tools/component-health.jsx'
   };
 
   // ── Flow mode ──
@@ -797,7 +801,8 @@ window.addEventListener('pageshow', function(e) {
         'cost-estimator': { title: 'Cost Estimator', desc: 'Estimate infrastructure costs based on tenant and pack configuration', path: '../interactive/tools/cost-estimator.jsx' },
         'operator-setup-wizard': { title: 'Operator Setup Wizard', desc: 'Interactive wizard for Prometheus Operator integration setup', path: '../interactive/tools/operator-setup-wizard.jsx' },
         'release-notes-generator': { title: 'Release Notes Generator', desc: 'Automate release notes from commits', path: '../interactive/tools/release-notes-generator.jsx' },
-        'threshold-heatmap': { title: 'Threshold Heatmap', desc: 'Visualize threshold distribution across metrics', path: '../interactive/tools/threshold-heatmap.jsx' }
+        'threshold-heatmap': { title: 'Threshold Heatmap', desc: 'Visualize threshold distribution across metrics', path: '../interactive/tools/threshold-heatmap.jsx' },
+        'component-health': { title: 'Component Health Dashboard', desc: 'Quality, coverage & design token compliance for all interactive tools', path: '../interactive/tools/component-health.jsx' }
       };
       var footer = document.createElement('div');
       footer.style.cssText = 'max-width:72rem;margin:2rem auto;padding:0 2rem';

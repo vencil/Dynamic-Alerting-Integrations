@@ -1,0 +1,6 @@
+tenants:
+  tenant-optout:
+    alert_group: ~
+    threshold:
+      memory: ~
+      connections: 50

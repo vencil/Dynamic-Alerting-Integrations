@@ -2,12 +2,12 @@
 title: "Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover"
 tags: [scenario, shadow-monitoring, cutover, alert-quality]
 audience: [platform-engineer, sre, devops, tenant]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover
 
-> **v2.6.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`migration-guide.md`](../migration-guide.md), [`CLI Reference`](../cli-reference.en.md)
+> **v2.7.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`migration-guide.md`](../migration-guide.md), [`CLI Reference`](../cli-reference.en.md)
 
 This guide covers the end-to-end workflow from alert quality assessment through full migration cutover: Phase 0 (assessment) → Phase 1–6 (migration & cutover).
 
@@ -29,7 +29,7 @@ Before deciding to migrate, use `da-tools alert-quality` to quantify your existi
 ```bash
 # Scan all tenants, analyze past 30 days
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.6.0 alert-quality \
+  ghcr.io/vencil/da-tools:v2.7.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 

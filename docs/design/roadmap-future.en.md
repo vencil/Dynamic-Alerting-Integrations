@@ -2,7 +2,7 @@
 title: "Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More"
 tags: [architecture, roadmap, design]
 audience: [platform-engineer, devops]
-version: v2.6.0
+version: v2.7.0
 lang: en
 parent: architecture-and-design.en.md
 ---
@@ -16,33 +16,37 @@ DX tooling improvements are tracked in [dx-tooling-backlog.md](../internal/dx-to
 
 ---
 
-## Planned (v2.7.0)
+## Planned (v2.8.0)
 
-The v2.7.0 focus is "making the platform easier to adopt globally and expanding automation".
+v2.7.0 delivered Scale Foundation I (`conf.d/` hierarchy + `_defaults.yaml` inheritance + dual-hash + `/effective`), component robustness (Design Token migration across 9 JSX tools, Component Health, dark mode ADR-016), and test infrastructure (1000-tenant fixture, `tests/` reorg, Blast Radius CI bot). v2.8.0 shifts focus to "pushing v2.7.0's foundation toward global adoption and full automation", with one-time debt repayment on the harness blind spots exposed during v2.7.0.
 
-### EN-first Bilingual SSOT
+### EN-first Bilingual SSOT — Full Migration (Phase 2)
 
-Migrating 123 markdown + 32 JSX + 15 Rule Pack + 7 lint hooks. Eliminates the root cause of ZH/EN content drift. (Evaluation doc: `docs/internal/ssot-language-evaluation.md`, `status: draft`)
+v2.7.0 completed Phase 1 (tooling: `migrate_ssot_language.py` dry-run verified; lint hooks support dual-mode auto-detect). Phase 2 executes full migration: 66 markdown pairs + JSX + Rule Pack + lint hooks + mkdocs.yml in a single atomic commit. Prerequisites: locked migration window (align with a minor release), git snapshot backup, staging MkDocs deployment to validate nav + language switcher. Full evaluation: [`docs/internal/ssot-migration-pilot-report.md`](../internal/ssot-migration-pilot-report.md).
 
 ### Field-level RBAC
 
-Split write into `edit-threshold` / `edit-routing` / `edit-state`. Enterprise compliance: different roles modify different fields.
+Split write into `edit-threshold` / `edit-routing` / `edit-state`. Enterprise compliance: different roles modify different fields. Prerequisite: Tenant API laid the RBAC foundation in v2.4.0; need to extend middleware + OpenAPI spec + Portal UI in sync.
 
 ### Tenant Auto-Discovery
 
-For Kubernetes-native environments: auto-register tenants based on namespace labels (`dynamic-alerting.io/tenant: "true"`). Recommended sidecar pattern: periodically scan namespace labels → generate tenant YAML → loaded by existing Directory Scanner. Explicit config always takes precedence. `discover_instance_mappings.py` is reusable.
+For Kubernetes-native environments: auto-register tenants based on namespace labels (`dynamic-alerting.io/tenant: "true"`). Recommended sidecar pattern: periodically scan namespace labels → generate tenant YAML → write into v2.7.0's `conf.d/tenants/<pod>/<tenant>.yaml` path → loaded by existing Directory Scanner. Explicit config always takes precedence. `discover_instance_mappings.py` is reusable.
 
 ### Grafana Dashboard as Code
 
-`scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json` metadata for panel generation. Combined with Grafana provisioning or API for automated deployment.
+`scaffold_tenant.py --grafana` auto-generates per-tenant dashboard JSON. Leverages `platform-data.json` metadata for panel generation. Combined with Grafana provisioning or API for automated deployment. Can use v2.7.0's `/effective` endpoint as a panel variable source for reading the final merged configuration.
 
 ### Playwright E2E Full Coverage
 
-Expand to smoke tests for all 39 JSX tools + real backend integration tests.
+v2.7.0 completed 8/8 core tools locator calibration. Expand to smoke tests for all 39 JSX tools + real backend integration tests.
 
 ### Release Automation Completion
 
-Tag push → auto-generate GitHub Release Notes (from CHANGELOG sections) → OCI image build/push fully automated. Zero human error for five-line version manual releases.
+Tag push → auto-generate GitHub Release Notes (from CHANGELOG sections) → OCI image build/push fully automated. Zero human error for five-line version manual releases. v2.7.0 introduced `make pre-tag` as a manual-check gate; v2.8.0 should integrate these checks into the `release.yml` workflow.
+
+### Harness Debt Repayment (v2.7.0 Session LL)
+
+The v2.7.0 release exposed several "high error-correction cost" systemic issues (Go time-dependent test flakes, ADR filename drift, spoke doc "empty promises", FUSE-side git pitfalls). v2.8.0 harness repayment items are tracked in [dx-tooling-backlog.md §Candidates — Harness Audit v2.8.0 Brainstorm](../internal/dx-tooling-backlog.md) (HA-10 ~ HA-18).
 
 ---
 
@@ -64,6 +68,7 @@ Tag push → auto-generate GitHub Release Notes (from CHANGELOG sections) → OC
 
 | Version | Theme | Milestones |
 |---------|-------|-----------|
+| v2.7.0 | Scale Foundation × Component Robustness × Test Infrastructure | ADR-012~018 (7 new), `conf.d/` hierarchy + `_defaults.yaml` inheritance, dual-hash hot-reload, `/effective` endpoint, 5-dim Component Health, Design Token migration across 9 JSX tools |
 | v2.6.0 | Operator × PR Write-back × Design System | ADR-011, GitLab MR, axe-core WCAG |
 | v2.5.0 | Multi-Tenant Grouping × E2E Testing | Playwright foundation, Saved Views |
 | v2.4.0 | Tenant Management API × pkg/config | REST API RBAC, Portal UI |

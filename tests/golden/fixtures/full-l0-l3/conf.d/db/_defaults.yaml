@@ -1,0 +1,6 @@
+defaults:
+  level: L1
+  threshold:
+    memory: 75
+  pages:
+    - b

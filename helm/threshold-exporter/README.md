@@ -2,7 +2,7 @@
 title: "threshold-exporter Helm Chart"
 tags: [helm, chart, threshold-exporter]
 audience: [platform-engineer, operator]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 
@@ -43,7 +43,7 @@ helm install threshold-exporter ./helm/threshold-exporter \
 | 參數 | 預設 | 說明 |
 |------|------|------|
 | `replicaCount` | `2` | HA 副本數（搭配 PDB） |
-| `image.tag` | `v2.6.0` | threshold-exporter 映像版本 |
+| `image.tag` | `v2.7.0` | threshold-exporter 映像版本 |
 | `rules.mode` | `configmap` | Rule Pack 供應方式（`configmap` / `operator` / `disabled`） |
 | `config.directory` | `/etc/threshold-exporter/conf.d` | Tenant config 掛載路徑 |
 | `podDisruptionBudget.enabled` | `true` | 滾動升級期間保留最少可用副本 |

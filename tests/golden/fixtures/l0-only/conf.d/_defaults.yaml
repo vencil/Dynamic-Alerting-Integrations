@@ -1,0 +1,5 @@
+defaults:
+  threshold:
+    cpu: 70
+    memory: 65
+  alert_group: baseline

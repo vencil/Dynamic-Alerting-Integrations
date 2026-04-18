@@ -2,7 +2,7 @@
 title: "Multi-Tenant Comparison"
 tags: [tenant, comparison, threshold, outlier, analysis]
 audience: ["platform", "domain-expert"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [capacity-planner, roi-calculator, alert-noise-analyzer]
 ---
@@ -10,6 +10,12 @@ related: [capacity-planner, roi-calculator, alert-noise-analyzer]
 import React, { useState, useMemo } from 'react';
 
 const t = window.__t || ((zh, en) => en);
+
+// Style tokens (v2.7.0 Phase .a0 migration):
+// - Colors mapped to var(--da-color-*) tokens where exact hex match exists (9 unique colors replaced, 23 occurrences).
+// - Remaining hex literals (#1e293b primary text ×5; #dc2626/#fecaca/#f0fdf4/#cbd5e1/#8b5cf6/#3b82f6/#16a34a one-offs) kept —
+//   no exact semantic token; pending design:design-system audit to decide: add tokens, normalize, or remove.
+// - px values embedded in CSS shorthand strings (e.g., padding: '6px 12px') intentionally left for v2.7.0 Phase .a0 batch 2.
 
 // ── Sample Data ───────────────────────────────────────────────────
 // Simulates multiple tenant YAML configs with threshold overrides.
@@ -121,10 +127,10 @@ function findDivergent(tenants) {
 // ── Components ────────────────────────────────────────────────────
 
 function MetricCard({ label, value, sub }) {
-  const containerStyle = { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 16px', textAlign: 'center', minWidth: 100 };
-  const labelStyle = { fontSize: 12, color: '#64748b', marginBottom: 4 };
+  const containerStyle = { background: 'var(--da-color-surface-hover)', border: '1px solid var(--da-color-section-border)', borderRadius: 8, padding: '12px 16px', textAlign: 'center', minWidth: 100 };
+  const labelStyle = { fontSize: 12, color: 'var(--da-color-muted)', marginBottom: 4 };
   const valueStyle = { fontSize: 24, fontWeight: 700, color: '#1e293b' };
-  const subStyle = { fontSize: 11, color: '#94a3b8', marginTop: 2 };
+  const subStyle = { fontSize: 11, color: 'var(--da-color-hero-muted)', marginTop: 2 };
   return (
     <div style={containerStyle}>
       <div style={labelStyle}>{label}</div>
@@ -136,7 +142,7 @@ function MetricCard({ label, value, sub }) {
 
 function BarChart({ data, maxVal, label }) {
   const containerStyle = { marginBottom: 8 };
-  const labelStyle = { fontSize: 12, color: '#64748b', marginBottom: 4 };
+  const labelStyle = { fontSize: 12, color: 'var(--da-color-muted)', marginBottom: 4 };
   return (
     <div style={containerStyle}>
       <div style={labelStyle}>{label}</div>
@@ -144,14 +150,14 @@ function BarChart({ data, maxVal, label }) {
         const pct = maxVal > 0 ? (item.value / maxVal) * 100 : 0;
         const isOutlier = item.outlier;
         const rowStyle = { display: 'flex', alignItems: 'center', marginBottom: 3 };
-        const labelSpanStyle = { width: 50, fontSize: 11, color: '#475569', textAlign: 'right', marginRight: 8 };
-        const barContainerStyle = { flex: 1, background: '#f1f5f9', borderRadius: 4, height: 20, position: 'relative' };
+        const labelSpanStyle = { width: 50, fontSize: 11, color: 'var(--da-color-tag-fg)', textAlign: 'right', marginRight: 8 };
+        const barContainerStyle = { flex: 1, background: 'var(--da-color-tag-bg)', borderRadius: 4, height: 20, position: 'relative' };
         const barStyle = {
           width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 4,
-          background: isOutlier ? '#ef4444' : '#3b82f6',
+          background: isOutlier ? 'var(--da-color-error)' : '#3b82f6',
           transition: 'width 0.3s',
         };
-        const valueSpanStyle = { width: 45, fontSize: 11, color: isOutlier ? '#ef4444' : '#475569', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 };
+        const valueSpanStyle = { width: 45, fontSize: 11, color: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-tag-fg)', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 };
         return (
           <div key={i} style={rowStyle}>
             <span style={labelSpanStyle}>{item.label}</span>
@@ -168,8 +174,8 @@ function BarChart({ data, maxVal, label }) {
 
 function HeatmapRow({ metric, tenants, stats }) {
   const range = stats.max - stats.min || 1;
-  const metricCellStyle = { padding: '6px 12px', fontSize: 13, fontWeight: 500, borderBottom: '1px solid #e2e8f0' };
-  const statsCellStyle = { padding: '6px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '1px solid #e2e8f0' };
+  const metricCellStyle = { padding: '6px 12px', fontSize: 13, fontWeight: 500, borderBottom: '1px solid var(--da-color-section-border)' };
+  const statsCellStyle = { padding: '6px 12px', textAlign: 'center', fontSize: 12, color: 'var(--da-color-muted)', borderBottom: '1px solid var(--da-color-section-border)' };
   return (
     <tr>
       <td style={metricCellStyle}>{metric}</td>
@@ -181,11 +187,11 @@ function HeatmapRow({ metric, tenants, stats }) {
         const isDefault = val === DEFAULTS[metric];
         const cellStyle = {
           padding: '6px 12px', textAlign: 'center', fontSize: 13,
-          background: bg, borderBottom: '1px solid #e2e8f0',
+          background: bg, borderBottom: '1px solid var(--da-color-section-border)',
           fontWeight: isDefault ? 400 : 700,
-          color: isDefault ? '#64748b' : '#1e293b',
+          color: isDefault ? 'var(--da-color-muted)' : '#1e293b',
         };
-        const defaultBadgeStyle = { fontSize: 10, color: '#94a3b8' };
+        const defaultBadgeStyle = { fontSize: 10, color: 'var(--da-color-hero-muted)' };
         return (
           <td key={i} style={cellStyle}>
             {val}{isDefault && <span style={defaultBadgeStyle}> (d)</span>}
@@ -241,32 +247,32 @@ function MultiTenantComparison() {
 
   const mainContainerStyle = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', maxWidth: 960, margin: '0 auto', padding: 24 };
   const titleStyle = { fontSize: 22, fontWeight: 700, color: '#1e293b', marginBottom: 4 };
-  const descriptionStyle = { fontSize: 14, color: '#64748b', marginBottom: 24 };
+  const descriptionStyle = { fontSize: 14, color: 'var(--da-color-muted)', marginBottom: 24 };
   const summaryCardsStyle = { display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' };
-  const heatmapContainerStyle = { border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'auto', marginBottom: 24 };
+  const heatmapContainerStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, overflow: 'auto', marginBottom: 24 };
   const tableStyle = { width: '100%', borderCollapse: 'collapse' };
-  const tableHeaderRowStyle = { background: '#f8fafc' };
-  const metricHeaderStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' };
-  const tenantHeaderStyle = { padding: '8px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' };
-  const statsHeaderStyle = { padding: '8px 12px', textAlign: 'center', fontSize: 12, color: '#64748b', borderBottom: '2px solid #e2e8f0' };
+  const tableHeaderRowStyle = { background: 'var(--da-color-surface-hover)' };
+  const metricHeaderStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 12, color: 'var(--da-color-muted)', borderBottom: '2px solid var(--da-color-section-border)' };
+  const tenantHeaderStyle = { padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--da-color-muted)', borderBottom: '2px solid var(--da-color-section-border)' };
+  const statsHeaderStyle = { padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--da-color-muted)', borderBottom: '2px solid var(--da-color-section-border)' };
   const drilldownContainerStyle = { display: 'flex', gap: 24, marginBottom: 24, flexWrap: 'wrap' };
   const drilldownLeftStyle = { flex: 1, minWidth: 300 };
   const drilldownRightStyle = { flex: 1, minWidth: 300 };
   const drilldownTitleStyle = { fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 12 };
   const controlsStyle = { display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center' };
   const selectStyle = { padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13 };
-  const labelStyle = { fontSize: 12, color: '#64748b' };
+  const labelStyle = { fontSize: 12, color: 'var(--da-color-muted)' };
   const inputRangeStyle = { width: 80, marginLeft: 6 };
   const sigmaTextStyle = { marginLeft: 4 };
-  const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: '#fef2f2', borderRadius: 6, border: '1px solid #fecaca' };
+  const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: 'var(--da-color-error-soft)', borderRadius: 6, border: '1px solid #fecaca' };
   const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: '#dc2626' };
   const outlierValueStyle = { fontSize: 12, color: '#dc2626', marginLeft: 8 };
-  const divergenceBoxStyle = { border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' };
-  const commonSettingsBoxStyle = { padding: '8px 12px', background: '#f0fdf4', borderTop: '1px solid #e2e8f0' };
+  const divergenceBoxStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, overflow: 'hidden' };
+  const commonSettingsBoxStyle = { padding: '8px 12px', background: '#f0fdf4', borderTop: '1px solid var(--da-color-section-border)' };
   const commonSettingsTextStyle = { fontSize: 12, color: '#16a34a' };
-  const recommendationsStyle = { border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, background: '#f8fafc' };
+  const recommendationsStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, padding: 16, background: 'var(--da-color-surface-hover)' };
   const recommendationsHeadingStyle = { fontSize: 16, fontWeight: 600, color: '#1e293b', marginBottom: 8 };
-  const recommendationsListStyle = { margin: 0, paddingLeft: 20, fontSize: 13, color: '#475569', lineHeight: 1.8 };
+  const recommendationsListStyle = { margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--da-color-tag-fg)', lineHeight: 1.8 };
 
   return (
     <div style={mainContainerStyle}>
@@ -299,7 +305,7 @@ function MultiTenantComparison() {
                 {t('指標', 'Metric')}
               </th>
               {tenants.map((tenant, i) => {
-                const maintenanceIconStyle = { color: '#f59e0b' };
+                const maintenanceIconStyle = { color: 'var(--da-color-warning)' };
                 const silentIconStyle = { color: '#8b5cf6' };
                 return (
                 <th key={i} style={tenantHeaderStyle}>
@@ -373,9 +379,9 @@ function MultiTenantComparison() {
           </h3>
           <div style={divergenceBoxStyle}>
             {divergent.map((item, i) => {
-              const rowStyle = { display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < divergent.length - 1 ? '1px solid #f1f5f9' : 'none', background: i === 0 ? '#fef2f2' : 'white' };
+              const rowStyle = { display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < divergent.length - 1 ? '1px solid var(--da-color-tag-bg)' : 'none', background: i === 0 ? 'var(--da-color-error-soft)' : 'white' };
               const itemLabelStyle = { fontSize: 13, fontWeight: i === 0 ? 600 : 400 };
-              const itemStatsStyle = { fontSize: 12, color: '#64748b' };
+              const itemStatsStyle = { fontSize: 12, color: 'var(--da-color-muted)' };
               return (
               <div key={i} style={rowStyle}>
                 <span style={itemLabelStyle}>{item.metric}</span>

@@ -1,6 +1,6 @@
 # da-portal Helm Chart
 
-Self-Hosted Interactive Tools Portal for the Dynamic Alerting Platform (v2.5.0).
+Self-Hosted Interactive Tools Portal for the Dynamic Alerting Platform (v2.7.0).
 
 ## Overview
 
@@ -182,7 +182,7 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | replicaCount | int | 1 | Number of portal replicas |
 | image.repository | string | `ghcr.io/vencil/da-portal` | Container image |
-| image.tag | string | `2.5.0` | Image tag |
+| image.tag | string | `2.7.0` | Image tag |
 | image.pullPolicy | string | `IfNotPresent` | Image pull policy |
 
 ### Portal Settings
@@ -343,7 +343,7 @@ This allows Interactive Tools to communicate with the tenant-api without cross-o
 
 - Check ConfigMap: `kubectl -n monitoring get cm da-portal-nginx-config -o yaml`
 - Verify nginx container logs: `kubectl -n monitoring logs -f deployment/da-portal -c nginx`
-- Check image build: `docker inspect ghcr.io/vencil/da-portal:2.5.0`
+- Check image build: `docker inspect ghcr.io/vencil/da-portal:2.7.0`
 
 ## Upgrading
 

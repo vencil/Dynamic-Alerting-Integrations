@@ -1,0 +1,4 @@
+defaults:
+  level: L2
+  threshold:
+    connections: 90

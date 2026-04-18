@@ -2,7 +2,7 @@
 title: "Prometheus Operator 整合手冊（Hub）"
 tags: [operator, integration, kube-prometheus-stack]
 audience: [platform-engineer]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 ---
 # Prometheus Operator 整合手冊

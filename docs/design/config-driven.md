@@ -2,7 +2,7 @@
 title: "Config-Driven 架構設計 — 三態配置、動態路由、Tenant API"
 tags: [architecture, config-driven, design]
 audience: [platform-engineer, devops]
-version: v2.6.0
+version: v2.7.0
 lang: zh
 parent: architecture-and-design.md
 ---
@@ -155,6 +155,120 @@ Phase 4: Incremental Merge
 | 100 tenant，無變更 | ~129µs | per-file stat |
 
 **Fallback**：若快取為空或損壞，自動退回 `fullDirLoad()`（全量載入）。
+
+#### 階層式 conf.d/ + 繼承引擎 (v2.7.0，ADR-017 / ADR-018)
+
+v2.7.0 將 conf.d/ 從扁平結構升級為四層階層目錄，並引入 `_defaults.yaml` 繼承語意、dual-hash 熱重載與 300ms debounce。平面模式（v2.1.0）完全相容，可混用。
+
+**四層階層結構（L0 → L3）**
+
+```
+conf.d/
+├── _defaults.yaml                         # L0 — 平台全局預設值（Platform Team 管理）
+├── db-legacy.yaml                         # 平面模式（L3 單檔，向後相容）
+└── mariadb/                               # L1 — domain 群組
+    ├── _defaults.yaml                     # L1 domain defaults
+    ├── prod/                              # L2 — environment 分群
+    │   ├── _defaults.yaml                 # L2 environment defaults
+    │   ├── db-a.yaml                      # L3 — tenant override（深度覆蓋）
+    │   └── db-b.yaml
+    └── staging/
+        └── db-c.yaml
+```
+
+**繼承語意（deep-merge，L0 → L1 → L2 → L3 後者覆蓋前者）**
+
+| 規則 | 行為 | 典型使用 |
+|------|------|---------|
+| Scalar / Map 深度合併 | 同 key 深度合併；child 覆蓋 parent | 大部分 defaults override |
+| Array 完整取代（non-merge） | Child array 完整替換 parent，不連接 | `state_filters.reasons` / `_routing.group_by` |
+| `null` 即刪除 | Child `key: null` 從繼承鏈移除該 key | 禁用父層某個預設閾值 |
+| `_` 前綴保留 | `_silent_mode` / `_state_maintenance` / `_routing` / `_severity_dedup` / `_namespaces` 等 meta 欄位全程保留 | 租戶生命週期 meta |
+
+**Dual-Hash 熱重載**
+
+v2.7.0 從單一 SHA-256 升級為雙層 hash，區分「source 變更」與「merged 變更」：
+
+| Hash 類型 | 輸入 | 用途 |
+|-----------|------|------|
+| `source_hash` | 單一 YAML 原始內容 | 偵測使用者的實際寫入操作 |
+| `merged_hash` | 繼承 + canonical-JSON-normalized 後的 merged config | 偵測「對該 tenant 有實質影響的變更」（濾除 formatter 噪音） |
+
+**Merge noop 偵測**：若 `_defaults.yaml` 變更但 merged_hash 未改變（純註解/空白/排序差異），exporter 不觸發 reload，僅 +1 `da_config_defaults_change_noop_total`。
+
+**300ms Debounce**
+
+`_defaults.yaml` 層通常觸發所有 tenant 的 merged_hash 重算，為避免批次編輯（如 `kubectl apply` 多個檔案）造成短時間內多次全量 reload，Go engine 以 300ms debounce window 聚合事件：
+
+```
+t0    _defaults.yaml 寫入    → timer 啟動 300ms
+t+50  db-a.yaml 寫入         → 延遲計時重啟
+t+120 db-b.yaml 寫入         → 延遲計時重啟
+t+420 timer fires            → 一次 reload 處理三筆變更
+```
+
+Debounce 可透過 `--scan-debounce=<duration>` 調整；壓測建議 100ms-500ms 區間。
+
+**新增 Prometheus metrics（v2.7.0）**
+
+| Metric | Type | 說明 |
+|--------|------|------|
+| `da_config_scan_duration_seconds` | histogram | 單次 directory scan + merge 的延遲分佈（`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`） |
+| `da_config_reload_trigger_total{reason}` | counter | Reload 觸發原因統計，`reason ∈ {source, defaults, new_tenant, delete, forced}` |
+| `da_config_defaults_change_noop_total` | counter | `_defaults.yaml` 變更但 merged_hash 未變（純 formatter 噪音）的次數 |
+
+**Tenant API `/effective` endpoint（v2.7.0 B-3 delivery）**
+
+```
+GET /api/v1/tenants/{id}/effective
+→ 200 OK
+{
+  "tenant_id": "db-a",
+  "merged": { /* L0 + L1 + L2 + L3 合併後完整配置 */ },
+  "source_chain": [
+    "conf.d/_defaults.yaml",
+    "conf.d/mariadb/_defaults.yaml",
+    "conf.d/mariadb/prod/_defaults.yaml",
+    "conf.d/mariadb/prod/db-a.yaml"
+  ],
+  "source_hash": "abc123...",
+  "merged_hash": "def456..."
+}
+```
+
+- `404 ErrTenantNotFound` — tenant 不存在
+- `400` — tenant_id 驗證失敗（長度、字元集）
+- Handler 直接調用 `pkg/config.ResolveEffective(tenantID)`，與 exporter 繼承邏輯 100% 一致（shared validation logic）
+
+**除錯 / 遷移 CLI（da-tools）**
+
+```bash
+# 檢視某 tenant 套完繼承後的 merged config + source chain
+da-tools describe-tenant db-a --conf-d conf.d/
+
+# 顯示 L0→L3 各層貢獻
+da-tools describe-tenant db-a --conf-d conf.d/ --show-sources
+
+# 比較兩個 tenant 的 merged diff
+da-tools describe-tenant db-a --conf-d conf.d/ --diff db-b
+
+# 預覽某檔變更後的影響（不寫檔）
+da-tools describe-tenant db-a --conf-d conf.d/ --what-if conf.d/_defaults.yaml.new
+
+# 列出所有 tenant 的 merged hash（用於 drift audit）
+da-tools describe-tenant --all --conf-d conf.d/
+
+# 從平面結構遷移至階層結構（dry-run 預設）
+da-tools migrate-conf-d --conf-d conf.d/ --dry-run
+da-tools migrate-conf-d --conf-d conf.d/ --apply
+da-tools migrate-conf-d --conf-d conf.d/ --infer-from metadata        # 以 _domain/_env metadata 推導階層
+da-tools migrate-conf-d --conf-d conf.d/ --output-plan migration.json # 輸出遷移計畫給 reviewer
+```
+
+**ADR 參考**
+
+- [ADR-017：`conf.d/` 階層式目錄 + 混合模式遷移](../adr/017-conf-d-directory-hierarchy-mixed-mode.md)
+- [ADR-018：`_defaults.yaml` 繼承 + Dual-Hash 熱重載](../adr/018-defaults-yaml-inheritance-dual-hash.md)
 
 ### 2.3 Tenant-Namespace 映射模式 (Tenant-Namespace Mapping)
 

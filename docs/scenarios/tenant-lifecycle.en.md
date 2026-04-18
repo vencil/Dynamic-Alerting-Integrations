@@ -2,12 +2,12 @@
 title: "Scenario: Complete Tenant Lifecycle Management"
 tags: [scenario, tenant-lifecycle]
 audience: [all]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 # Scenario: Complete Tenant Lifecycle Management
 
-> **v2.6.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
+> **v2.7.0** | Related docs: [`getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md), [`getting-started/for-tenants.md`](../getting-started/for-tenants.md), [`architecture-and-design.md` §2.1](../architecture-and-design.md)
 
 ## Overview
 

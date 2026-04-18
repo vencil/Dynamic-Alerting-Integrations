@@ -2,7 +2,7 @@
 title: "Tenant Manager"
 tags: [tenants, management, operations, batch, groups]
 audience: [platform-engineer, sre]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [config-diff, playground, threshold-calculator, alert-simulator]
 dependencies: []
@@ -70,6 +70,11 @@ const DEMO_GROUPS = {
 
 // ── Styles using design tokens (--da-*) from design-tokens.css ──
 // All hardcoded colors replaced with CSS variable references for theme support.
+// Style tokens (v2.7.0 Phase .a0 migration):
+// - Spacing / radius / font-size mapped to var(--da-*) tokens where exact match exists.
+// - Remaining literals are intentional: 6/11/14/18/28/48px are irregular values pending
+//   design-system decision (add bridge tokens vs. normalize to grid). See v2.7.0-planning.md §3.
+// - Layout constants (280/140/180/600/420/1400/1600px) stay literal — component-specific dimensions.
 const styles = {
   container: {
     minHeight: '100vh',
@@ -318,8 +323,8 @@ const styles = {
     position: 'absolute',
     top: 'var(--da-space-3)',
     right: 'var(--da-space-3)',
-    width: '20px',
-    height: '20px',
+    width: 'var(--da-space-5)',
+    height: 'var(--da-space-5)',
     cursor: 'pointer',
   },
   cardTitle: {
@@ -346,7 +351,7 @@ const styles = {
   tierBadge: {
     'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning)' },
     'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
-    'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-muted)' },
+    'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
   },
   pills: {
     display: 'flex',
@@ -380,8 +385,8 @@ const styles = {
   },
   modeIndicator: {
     display: 'inline-block',
-    width: '8px',
-    height: '8px',
+    width: 'var(--da-space-2)',
+    height: 'var(--da-space-2)',
     borderRadius: 'var(--da-radius-full)',
     marginRight: 'var(--da-space-1)',
   },
@@ -571,9 +576,9 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
 
       {groupEntries.length === 0 && (
         <div style={styles.emptyState}>
-          <div style={{ fontSize: '24px', marginBottom: '8px' }} aria-hidden="true">📁</div>
+          <div style={{ fontSize: 'var(--da-font-size-xl)', marginBottom: 'var(--da-space-2)' }} aria-hidden="true">📁</div>
           <div>{t('尚無群組', 'No groups yet')}</div>
-          <div style={{ fontSize: '11px', marginTop: '4px' }}>
+          <div style={{ fontSize: '11px', marginTop: 'var(--da-space-1)' }}>
             {t('建立群組以批量管理租戶', 'Create a group to batch-manage tenants')}
           </div>
         </div>
@@ -913,7 +918,7 @@ export default function TenantManager() {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }} aria-hidden="true">&#8987;</div>
+          <div style={{ fontSize: '48px', marginBottom: 'var(--da-space-4)' }} aria-hidden="true">&#8987;</div>
           <div style={{ color: 'var(--da-color-muted)' }}>{t('載入租戶數據中...', 'Loading tenant data...')}</div>
         </div>
       </div>
@@ -923,8 +928,8 @@ export default function TenantManager() {
   if (error) {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', backgroundColor: 'white', padding: '24px', borderRadius: '12px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }} aria-hidden="true">&#10060;</div>
+        <div style={{ textAlign: 'center', backgroundColor: 'white', padding: 'var(--da-space-6)', borderRadius: 'var(--da-radius-lg)' }}>
+          <div style={{ fontSize: '48px', marginBottom: 'var(--da-space-4)' }} aria-hidden="true">&#10060;</div>
           <div style={{ color: 'var(--da-color-error)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
           <div style={{ color: 'var(--da-color-muted)', marginTop: 'var(--da-space-2)' }}>{error}</div>
         </div>
@@ -982,18 +987,18 @@ export default function TenantManager() {
       {/* API notification toast */}
       {apiNotification && (
         <div role="alert" aria-live="assertive" style={{
-          position: 'fixed', top: '16px', right: '16px', zIndex: 10000,
-          padding: '12px 20px', borderRadius: '8px', maxWidth: '420px',
+          position: 'fixed', top: 'var(--da-space-4)', right: 'var(--da-space-4)', zIndex: 10000,
+          padding: 'var(--da-space-3) var(--da-space-5)', borderRadius: 'var(--da-radius-md)', maxWidth: '420px',
           backgroundColor: apiNotification.type === 'error' ? 'var(--da-color-error-soft)' : 'var(--da-color-success-soft)',
           border: `1px solid ${apiNotification.type === 'error' ? 'var(--da-color-error)' : 'var(--da-color-success)'}`,
           color: apiNotification.type === 'error' ? 'var(--da-color-error)' : 'var(--da-color-success)',
           fontSize: '14px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          display: 'flex', alignItems: 'center', gap: '8px',
+          display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)',
         }}>
           <span>{apiNotification.type === 'error' ? '\u26A0\uFE0F' : '\u2705'}</span>
           <span style={{ flex: 1 }}>{apiNotification.message}</span>
           <button onClick={() => setApiNotification(null)} aria-label={t('關閉通知', 'Dismiss notification')}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: 'inherit' }}>&times;</button>
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'var(--da-font-size-md)', color: 'inherit' }}>&times;</button>
         </div>
       )}
       <div style={styles.maxWidth}>
@@ -1035,7 +1040,7 @@ export default function TenantManager() {
             fontSize: 'var(--da-font-size-sm-md)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)' }}>
-              <span style={{ fontSize: '16px' }} aria-hidden="true">{'\uD83D\uDD04'}</span>
+              <span style={{ fontSize: 'var(--da-font-size-md)' }} aria-hidden="true">{'\uD83D\uDD04'}</span>
               <span style={{ color: 'var(--da-color-fg)', fontWeight: 'var(--da-font-weight-medium)' }}>
                 {t(
                   `${pendingPRs.length} 個待審核 PR — 配置變更尚未生效`,
@@ -1081,7 +1086,7 @@ export default function TenantManager() {
               onClick={() => setSearchText('')}
               style={{
                 padding: '8px 12px',
-                marginLeft: '8px',
+                marginLeft: 'var(--da-space-2)',
                 backgroundColor: 'var(--da-color-tag-bg)',
                 border: '1px solid var(--da-color-surface-border)',
                 borderRadius: '6px',
@@ -1352,15 +1357,15 @@ export default function TenantManager() {
         </div>
 
         {filtered.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '48px', backgroundColor: 'white', borderRadius: '12px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
+          <div style={{ textAlign: 'center', padding: 'var(--da-space-12)', backgroundColor: 'white', borderRadius: 'var(--da-radius-lg)' }}>
+            <div style={{ fontSize: '48px', marginBottom: 'var(--da-space-4)' }}>🔍</div>
             <div style={{ color: 'var(--da-color-muted)', fontWeight: 'var(--da-font-weight-medium)' }}>
               {t('未找到符合條件的租戶', 'No tenants match your filters')}
             </div>
             {!activeFilters.length && !searchText && (
               <button
                 onClick={() => setActiveGroupId(null)}
-                style={{ ...styles.button, marginTop: '16px' }}
+                style={{ ...styles.button, marginTop: 'var(--da-space-4)' }}
               >
                 {t('建立群組', 'Create Group')}
               </button>
@@ -1372,7 +1377,7 @@ export default function TenantManager() {
           <div
             style={{
               ...styles.controlsPanel,
-              marginTop: '24px',
+              marginTop: 'var(--da-space-6)',
               backgroundColor: 'var(--da-color-info-soft)',
               borderLeft: '4px solid var(--da-color-accent)',
             }}

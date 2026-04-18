@@ -2,7 +2,7 @@
 title: "Cost Estimator"
 tags: [cost, estimation, resources, capacity]
 audience: ["platform-engineer", "sre", "management"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [roi-calculator, capacity-planner, migration-roi-calculator]
 ---

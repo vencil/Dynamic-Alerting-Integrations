@@ -2,7 +2,7 @@
 title: "Documentation Map"
 tags: [documentation, navigation, internal]
 audience: [maintainers, ai-agent]
-version: v2.6.0
+version: v2.7.0
 lang: en
 ---
 
@@ -23,11 +23,16 @@ lang: en
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API Architecture |
 | `docs/adr/010-multi-tenant-grouping.md` (.en.md) | Platform Engineers, developers | ADR-010: Multi-Tenant Grouping Architecture |
 | `docs/adr/011-pr-based-write-back.md` (.en.md) | Platform Engineers, developers | ADR-011: PR-based Write-back Mode |
+| `docs/adr/012-colorblind-hotfix-structured-severity-return.md` (.en.md) | frontend-developers, design-system-maintainers | ADR-012: threshold-heatmap Colorblind Accessibility Hotfix — Structured Severity Return Value |
+| `docs/adr/013-component-health-token-density-metric.md` (.en.md) | frontend-developers, Platform Engineers, maintainers | ADR-013: Component Health Scanner — Tier Scoring Algorithm and token_density Auxiliary Metric |
+| `docs/adr/014-tech-debt-category-budget-isolation.md` (.en.md) | Platform Engineers, tech-leads | ADR-014: Tech-Debt Category and REG Budget Isolation |
+| `docs/adr/015-wizard-arbitrary-value-token-migration.md` (.en.md) | frontend-developers, maintainers | ADR-015: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite) |
+| `docs/adr/016-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant |
+| `docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy |
+| `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | Performance Analysis & Benchmarks |
-| `docs/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager Integration Guide |
-| `docs/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
@@ -35,18 +40,25 @@ lang: en
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | High Availability (HA) Design — Replicas, PDB, Preventing Double-Counting |
 | `docs/design/roadmap-future.md` (.en.md) | Platform Engineers, DevOps | Future Roadmap — K8s Operator, Design System, Auto-Discovery, and More |
 | `docs/design/rule-packs.md` (.en.md) | Platform Engineers, DevOps | Rule Packs & Projected Volume Architecture |
-| `docs/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
 | `docs/getting-started/decision-matrix.md` (.en.md) | Platform Engineers | Deployment Decision Matrix |
 | `docs/getting-started/for-domain-experts.md` (.en.md) | Domain Experts (DBA) | Domain Expert (DBA) Quick Start Guide |
 | `docs/getting-started/for-platform-engineers.md` (.en.md) | Platform Engineers | Platform Engineer Quick Start Guide |
 | `docs/getting-started/for-tenants.md` (.en.md) | Tenants | Tenant Quick Start Guide |
 | `docs/getting-started/README.md` | All | 快速入門 — 角色導引 |
 | `docs/getting-started/wizard.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Getting Started Wizard |
-| `docs/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps Deployment Guide |
 | `docs/glossary.md` (.en.md) | All | Glossary |
 | `docs/governance-security.md` (.en.md) | Platform Engineers, Security & Compliance | Governance, Audit & Security Compliance |
 | `docs/grafana-dashboards.md` (.en.md) | Platform Engineers, SREs, DevOps | Grafana Dashboard Guide |
 | `docs/index.md` (.en.md) | All | Dynamic Alerting Platform — Home |
+| `docs/integration/byo-alertmanager-integration.md` (.en.md) | Platform Engineers, SREs | BYO Alertmanager Integration Guide |
+| `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
+| `docs/integration/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
+| `docs/integration/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps Deployment Guide |
+| `docs/integration/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager Integration Guide |
+| `docs/integration/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps Deployment Guide |
+| `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus Integration Guide |
+| `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
+| `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
 | `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
 | `docs/interactive/tools/alert-simulator.jsx` | Domain Experts (DBA), Tenants | Alert Simulator |
 | `docs/interactive/tools/alert-timeline.jsx` | Domain Experts (DBA), Tenants | Alert Timeline Replay |
@@ -55,6 +67,7 @@ lang: en
 | `docs/interactive/tools/capacity-planner.jsx` | Platform Engineers | Capacity Planner |
 | `docs/interactive/tools/cicd-setup-wizard.jsx` | Platform Engineers | CI/CD Setup Wizard |
 | `docs/interactive/tools/cli-playground.jsx` | Platform Engineers | da-tools CLI Playground |
+| `docs/interactive/tools/component-health.jsx` | Platform Engineers, Contributors | Component Health Dashboard |
 | `docs/interactive/tools/config-diff.jsx` | Platform Engineers | Config Version Diff |
 | `docs/interactive/tools/config-lint.jsx` | Platform Engineers, Tenants | Config Lint Report |
 | `docs/interactive/tools/cost-estimator.jsx` | Platform Engineers, SREs, management | Cost Estimator |
@@ -91,6 +104,7 @@ lang: en
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
+| `docs/internal/benchmark-v2.7.0-baseline.md` | All | v2.7.0 Benchmark Baseline Report |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
 | `docs/internal/design-system-guide.md` | maintainers | Design System Guide |
 | `docs/internal/dev-rules.md` | All | 開發規範 (Development Rules) |
@@ -98,23 +112,21 @@ lang: en
 | `docs/internal/dx-tooling-backlog.md` | maintainers, contributors | DX Tooling Backlog |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
 | `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
+| `docs/internal/ssot-migration-pilot-report.md` | maintainers | SSOT 語言遷移 Phase 1 Pilot Report |
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
 | `docs/internal/test-map.md` | maintainers, AI Agent | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
-| `docs/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager Integration Guide |
-| `docs/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps Deployment Guide |
-| `docs/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus Integration Guide |
-| `docs/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring Strategy |
-| `docs/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator Integration Guide (Hub) |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | Scenario: GitOps CI/CD Integration Guide |
 | `docs/scenarios/hands-on-lab.md` (.en.md) | Platform Engineers, Tenants | Hands-on Lab: From Zero to Production Alerting |
 | `docs/scenarios/incremental-migration-playbook.md` (.en.md) | Platform Engineers, SREs | Scenario: Incremental Migration Playbook |
+| `docs/scenarios/manage-at-scale.md` (.en.md) | Platform Engineers, operator, DevOps | Scenario: Managing at Scale — Thousand-Tenant Operations |
 | `docs/scenarios/multi-cluster-federation.md` (.en.md) | Platform Engineers | Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics |
+| `docs/scenarios/multi-domain-conf-layout.md` (.en.md) | Platform Engineers, operator, DevOps | Scenario: Multi-Domain Hierarchical Configuration — conf.d/ Directory Restructuring (v2.7.0) |
 | `docs/scenarios/README.md` | All | 場景指南導覽 |
 | `docs/scenarios/shadow-audit.md` (.en.md) | Platform Engineers, Tenants | Scenario: Shadow Audit — Evaluate Alert Health Without Migration |
 | `docs/scenarios/shadow-monitoring-cutover.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover |

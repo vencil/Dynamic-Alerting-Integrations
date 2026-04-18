@@ -943,3 +943,28 @@ tools:
   journey_phase: monitor
   hub_section: advanced
   appears_in: []
+- key: component-health
+  title:
+    en: Component Health Dashboard
+    zh: 元件健康儀表板
+  file: interactive/tools/component-health.jsx
+  audience:
+  - platform
+  - contributor
+  icon: health
+  tags:
+  - health
+  - dashboard
+  - tier
+  - coverage
+  - tokens
+  - quality
+  desc:
+    en: Quality, coverage & design token compliance for all interactive tools
+    zh: 所有互動工具的品質、覆蓋率與設計 Token 合規概覽
+  related:
+  - threshold-heatmap
+  - config-lint
+  journey_phase: monitor
+  hub_section: developer
+  appears_in: []

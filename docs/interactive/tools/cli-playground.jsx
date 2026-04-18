@@ -2,7 +2,7 @@
 title: "da-tools CLI Playground"
 tags: [cli, da-tools, docker]
 audience: ["platform-engineer"]
-version: v2.6.0
+version: v2.7.0
 lang: en
 related: [wizard, onboarding-checklist, glossary]
 ---
@@ -163,7 +163,7 @@ Running validation suite...
 [✓] Threshold format     18 thresholds, all numeric strings
 [✓] Routing validation   2 receivers configured
 [✓] Duration guardrails  group_wait, repeat_interval in range
-[✓] Version consistency  v2.6.0
+[✓] Version consistency  v2.7.0
 
 All checks passed (6/6). Exit code: 0`,
     args: [],
@@ -390,7 +390,7 @@ export default function CLIPlayground() {
       cmd = 'docker run --rm ';
       if (network.network) cmd += network.network + ' ';
       cmd += `-e PROMETHEUS_URL=${network.prometheus} `;
-      cmd += 'ghcr.io/vencil/da-tools:v2.6.0 ';
+      cmd += 'ghcr.io/vencil/da-tools:v2.7.0 ';
     } else {
       cmd = 'da-tools ';
     }
@@ -672,7 +672,7 @@ export default function CLIPlayground() {
                   {isDocker && (
                     <>
                       <div>
-                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.6.0
+                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.7.0
                       </div>
                       <div>
                         <span className="font-medium text-slate-900">{t('網路:', 'Network:')}</span> {network.label}
