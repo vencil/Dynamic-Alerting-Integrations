@@ -9,6 +9,8 @@ lang: en
 
 # Dynamic Alerting Platform
 
+> **Language / 語言：** **English (Current)** | [中文](./index.md)
+
 <!-- This is the MkDocs site homepage (EN). For the GitHub repo README, see ../README.en.md -->
 
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->

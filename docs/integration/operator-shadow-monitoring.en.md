@@ -7,6 +7,8 @@ lang: en
 ---
 # Operator Shadow Monitoring Strategy
 
+> **Language / 語言：** **English (Current)** | [中文](./operator-shadow-monitoring.md)
+
 > **Audience**: Platform Engineers, SREs
 > **Version**: v2.6.0
 > **Prerequisite Reading**: [Operator Alertmanager Integration](operator-alertmanager-integration.en.md)

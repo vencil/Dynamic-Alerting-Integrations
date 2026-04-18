@@ -8,6 +8,8 @@ lang: zh
 
 # 架構決策記錄 (ADR)
 
+> **Language / 語言：** **中文 (Current)** | [English](./README.en.md)
+
 本目錄收錄 Multi-Tenant Dynamic Alerting 平台的架構決策記錄 (Architecture Decision Records)。每份 ADR 記錄特定設計決策的背景、選項評估與長期影響。
 
 ## 快速導讀
@@ -196,4 +198,3 @@ v2.7.0 Phase .b B-1。定義多層 `_defaults.yaml` 的繼承語意（L0 全域 
 - [`docs/architecture-and-design.md`](../architecture-and-design.md) — 完整架構設計
 - [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) — 平台工程師快速入門
 - [`CLAUDE.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md) — 開發上下文指引
-

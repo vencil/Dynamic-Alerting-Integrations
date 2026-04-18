@@ -8,6 +8,8 @@ lang: en
 
 # ADR-011: PR-based Write-back Mode
 
+> **Language / 語言：** **English (Current)** | [中文](./011-pr-based-write-back.md)
+
 ## Status
 
 ✅ **Accepted** (v2.6.0) — Adds `_write_mode: pr` option where UI operations create GitHub PRs instead of direct commits

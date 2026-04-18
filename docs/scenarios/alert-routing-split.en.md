@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications
 
+> **Language / 語言：** **English (Current)** | [中文](./alert-routing-split.md)
+
 > **v2.7.0** | Related docs: [`architecture-and-design.en.md` §2.9](../architecture-and-design.en.md), [`byo-alertmanager-integration.en.md`](../integration/byo-alertmanager-integration.en.md)
 
 ## Problem

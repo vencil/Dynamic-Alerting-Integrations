@@ -7,6 +7,8 @@ lang: zh
 ---
 # 進階場景與測試覆蓋
 
+> **Language / 語言：** **中文 (Current)** | [English](./advanced-scenarios.en.md)
+
 > **本文件已遷移至 [測試覆蓋矩陣](../internal/test-coverage-matrix.md)**。
 > 此檔案為測試矩陣文件，屬 internal 文件，已移至 `docs/internal/`。
 

@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-011: PR-based Write-back 模式
 
+> **Language / 語言：** **中文 (Current)** | [English](./011-pr-based-write-back.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v2.6.0) — 新增 `_write_mode: pr` 選項，UI 操作產生 GitHub PR 而非直接 commit

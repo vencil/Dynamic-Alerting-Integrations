@@ -87,3 +87,13 @@ _ci_logs/
 
 # Structure audit (time-bound internal doc)
 docs/internal/_project-structure-audit-*
+
+# --- FUSE phantom filenames (defense in depth) ---
+# When Bash tool receives absolute Windows paths (C:\...), FUSE translates `:` and `\`
+# to PUA code points (U+F03A / U+F05C). On the Windows side git sees them as files
+# like "CUsersvencsvibe-k8s-lab_bench.bat" (PUA chars render as invisible). All start
+# with capital C followed by "Users" — match that prefix. The literal `C:\` pattern
+# covers the rare case of the raw colon making it into the filename.
+# See docs/internal/windows-mcp-playbook.md §FUSE Phantom Lock 防治.
+CUsersvencs*
+/C:\*

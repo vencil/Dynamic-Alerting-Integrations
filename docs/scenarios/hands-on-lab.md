@@ -8,6 +8,8 @@ lang: zh
 
 # 動手實驗：從零到生產告警
 
+> **Language / 語言：** **中文 (Current)** | [English](./hands-on-lab.en.md)
+
 > **v2.7.0** | 預計時間：30–45 分鐘 | 前置需求：已安裝 Docker
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)

@@ -7,6 +7,8 @@ lang: zh
 ---
 # GitOps 部署指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./gitops-deployment.en.md)
+
 > **版本**：v2.6.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)

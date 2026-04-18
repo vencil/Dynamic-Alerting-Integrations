@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-014: TECH-DEBT 類別與 REG Budget 隔離
 
+> **Language / 語言：** **中文 (Current)** | [English](./014-tech-debt-category-budget-isolation.en.md)
+
 > Originally recorded as **DEC-N** in `docs/internal/v2.7.0-planning.md §19`.
 > 此 ADR 補上 **governance guardrails**，避免 TECH-DEBT 成為 REG Budget 的逃生口。
 

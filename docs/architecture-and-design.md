@@ -7,6 +7,8 @@ lang: zh
 ---
 # 架構與設計 — 動態多租戶警報平台技術白皮書
 
+> **Language / 語言：** **中文 (Current)** | [English](./architecture-and-design.en.md)
+
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 ## 簡介
@@ -282,4 +284,3 @@ spec:
 ## 附錄：角色與工具速查
 
 > 詳細工具用法見 [CLI Reference](cli-reference.md)。
-

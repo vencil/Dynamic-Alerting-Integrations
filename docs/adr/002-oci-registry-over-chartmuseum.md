@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-002: OCI Registry 替代 ChartMuseum
 
+> **Language / 語言：** **中文 (Current)** | [English](./002-oci-registry-over-chartmuseum.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v1.12.0)

@@ -9,6 +9,8 @@ lang: zh
 
 # Dynamic Alerting Platform
 
+> **Language / 語言：** **中文 (Current)** | [English](./index.en.md)
+
 <!-- 這是 MkDocs 站台首頁。GitHub repo README 見 ../README.md -->
 
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->

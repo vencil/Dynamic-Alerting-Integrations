@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-009: Tenant Manager CRUD API 架構
 
+> **Language / 語言：** **中文 (Current)** | [English](./009-tenant-manager-crud-api.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v2.4.0) — Tenant Management API 以 Go HTTP server + oauth2-proxy + commit-on-write 模式實作

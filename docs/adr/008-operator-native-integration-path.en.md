@@ -8,6 +8,8 @@ lang: en
 
 # ADR-008: Operator-Native Integration Path
 
+> **Language / 語言：** **English (Current)** | [中文](./008-operator-native-integration-path.md)
+
 ## Status
 
 ✅ **Accepted** (v2.3.0) — Platform supports both ConfigMap and Operator CRD paths; detection logic auto-selects

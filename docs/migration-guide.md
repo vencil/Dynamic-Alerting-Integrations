@@ -7,6 +7,8 @@ lang: zh
 ---
 # Migration Guide — 遷移指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./migration-guide.en.md)
+
 > 從傳統 Prometheus 警報遷移至動態多租戶閾值架構。
 > **其他文件：** [README](index.md) (概覽) · [Architecture & Design](architecture-and-design.md) (技術深度) · [Rule Packs](rule-packs/README.md) (規則包目錄)
 >

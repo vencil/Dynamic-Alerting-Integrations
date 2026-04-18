@@ -1,3 +1,5 @@
+<!-- Bilingual pair: docker-usage-pattern.en.md -->
+
 > **Docker 使用模式：** 所有 da-tools 指令均可透過 Docker 執行：
 > ```bash
 > docker run --rm --network=host ghcr.io/vencil/da-tools:v2.7.0 <command> [flags]

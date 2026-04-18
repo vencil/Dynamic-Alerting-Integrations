@@ -7,6 +7,8 @@ lang: zh
 ---
 # 多租戶客製化規則治理規範 (Custom Rule Governance Model)
 
+> **Language / 語言：** **中文 (Current)** | [English](./custom-rule-governance.en.md)
+
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
 > **版本**: 
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](rule-packs/README.md)、[遷移指南](migration-guide.md)

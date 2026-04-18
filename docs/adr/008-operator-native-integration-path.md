@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-008: Operator-Native 整合路徑
 
+> **Language / 語言：** **中文 (Current)** | [English](./008-operator-native-integration-path.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷

@@ -7,6 +7,8 @@ lang: en
 ---
 # Rule Pack Alert Reference Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./ALERT-REFERENCE.md)
+
 This document provides tenants with a unified reference for all alerts across Rule Packs, including alert meanings, trigger conditions, and recommended actions.
 
 **Note**: This guide covers only **user-facing threshold alerts**. Sentinel alerts in the Operational Rule Pack are platform-internal control mechanisms and do not require tenant action.

@@ -8,6 +8,8 @@ parent: architecture-and-design.md
 ---
 # Config-Driven 架構設計
 
+> **Language / 語言：** **中文 (Current)** | [English](./config-driven.en.md)
+
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 > ← [返回主文件](../architecture-and-design.md)
@@ -146,7 +148,7 @@ Phase 4: Incremental Merge
 
 **Atomic Swap**：`RWMutex` 保護 config / hash / cache 的原子更新。讀端（Prometheus scrape）用 `RLock()`，reload 用 `Lock()`，確保 scrape 期間不會讀到半更新的狀態。
 
-**效能特性**（benchmark 數據見 [§12](../benchmarks.md#12-incremental-hot-reload-效能)）：
+**效能特性**（benchmark 數據見 [§12](../benchmarks.md#12-incremental-hot-reload-b-1-scale-gate)）：
 
 | 場景 | 延遲 | 程式路徑 |
 |------|------|---------|
@@ -342,7 +344,7 @@ user_threshold{tenant="db-a", component="mysql", metric="connections", severity=
 user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
 ```
 
-#### 自動抑制 (Auto-Suppression) — Severity Dedup
+#### 自動抑制 (Auto-Suppression) — Severity Dedup via Alertmanager Inhibit
 
 v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（詳見 §2.8）。Alert Rule 不再使用 `unless critical` 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由 Alertmanager per-tenant inhibit rule 控制。
 

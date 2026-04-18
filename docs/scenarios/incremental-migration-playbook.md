@@ -8,6 +8,8 @@ lang: zh
 
 # 場景：漸進式遷移 Playbook
 
+> **Language / 語言：** **中文 (Current)** | [English](./incremental-migration-playbook.en.md)
+
 > **v2.7.0** | 相關文件：[`migration-guide.md`](../migration-guide.md)、[`shadow-monitoring-cutover.md`](shadow-monitoring-cutover.md)、[`architecture-and-design.md` §2](../architecture-and-design.md)
 
 ## 概述

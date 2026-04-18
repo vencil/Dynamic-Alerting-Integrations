@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-015: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫）
 
+> **Language / 語言：** **中文 (Current)** | [English](./015-wizard-arbitrary-value-token-migration.en.md)
+
 > Originally recorded as **DEC-A** in `docs/internal/v2.7.0-planning.md §15`
 > (Day 2, 2026-04-16 AM). Back-filled during Day 5 retrospective review —
 > DEC-A shaped the token-migration pattern used by every subsequent Phase .a0

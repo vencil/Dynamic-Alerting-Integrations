@@ -8,6 +8,8 @@ lang: en
 
 # Interactive Tools
 
+> **Language / 語言：** **English (Current)** | [中文](./interactive-tools.md)
+
 The platform provides four interactive React components that can run in any React-compatible environment (Claude Artifacts, CodeSandbox, or self-hosted pages).
 
 ## Getting Started Wizard

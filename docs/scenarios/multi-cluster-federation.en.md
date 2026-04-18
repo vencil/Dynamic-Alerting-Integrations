@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: Multi-Cluster Federation — Central Threshold + Edge Metrics
 
+> **Language / 語言：** **English (Current)** | [中文](./multi-cluster-federation.md)
+
 > **Quick Guide** — Full architecture design and rationale: [Federation Integration Guide](../integration/federation-integration.en.md). This document focuses on deployment steps.
 
 ## Problem

@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-003: Sentinel Alert 模式
 
+> **Language / 語言：** **中文 (Current)** | [English](./003-sentinel-alert-pattern.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v1.0.0)

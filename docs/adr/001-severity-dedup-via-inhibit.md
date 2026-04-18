@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-001: 嚴重度 Dedup 採用 Inhibit 規則
 
+> **Language / 語言：** **中文 (Current)** | [English](./001-severity-dedup-via-inhibit.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v1.0.0)

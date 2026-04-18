@@ -8,6 +8,8 @@ lang: en
 
 # ADR-013: Component Health Scanner — Tier Scoring Algorithm and token_density Auxiliary Metric
 
+> **Language / 語言：** **English (Current)** | [中文](./013-component-health-token-density-metric.md)
+
 > Consolidates two decisions:
 > - **DEC-08** (Day 1, planning §10): Tier classification refactored from single `appears_in` signal to five-dimensional weighted scoring
 > - **DEC-M** (Day 4, planning §19): New `token_density` auxiliary metric introduced

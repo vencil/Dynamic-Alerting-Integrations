@@ -1,3 +1,5 @@
+<!-- Bilingual pair: prometheus-url-config.en.md -->
+
 > **Prometheus 連線設定：**
 > | 環境 | URL |
 > |------|-----|

@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload
 
+> **Language / 語言：** **中文 (Current)** | [English](./018-defaults-yaml-inheritance-dual-hash.en.md)
+
 > Phase .b B-1（v2.7.0 Scale Foundation I）。
 > 與 [ADR-017](017-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）為一組。
 
@@ -184,5 +186,5 @@ Replace 語意更直覺，且與 Helm values merge 行為一致。
 ## 相關
 
 - [ADR-017: conf.d/ 目錄分層 + 混合模式](017-conf-d-directory-hierarchy-mixed-mode.md)
-- [benchmark-v2.7.0-baseline.md](../internal/benchmark-v2.7.0-baseline.md)
+- [Benchmark Report §12 «Incremental Hot-Reload + B-1 Scale Gate»](../benchmarks.md#12-incremental-hot-reload-b-1-scale-gate) — dual-hash 1000-tenant 實測 + SLO 判讀
 - [architecture-and-design.md §設計概念](../architecture-and-design.md#設計概念總覽)

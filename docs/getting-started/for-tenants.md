@@ -7,6 +7,8 @@ lang: zh
 ---
 # Tenant 快速入門指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./for-tenants.en.md)
+
 > **v2.7.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
 >
 > 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)

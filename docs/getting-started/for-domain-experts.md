@@ -7,6 +7,8 @@ lang: zh
 ---
 # Domain Expert (DBA) 快速入門指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./for-domain-experts.en.md)
+
 > **v2.7.0** | 適用對象：DBA、資料庫管理員、領域專家
 >
 > 相關文件：[Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Architecture](../architecture-and-design.md) §2.4

@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)
 
+> **Language / 語言：** **中文 (Current)** | [English](./006-tenant-mapping-topologies.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證

@@ -8,6 +8,8 @@ lang: en
 
 # Hands-on Lab: From Zero to Production Alerting
 
+> **Language / 語言：** **English (Current)** | [中文](./hands-on-lab.md)
+
 > **v2.7.0** | Estimated time: 30–45 minutes | Prerequisites: Docker installed
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)

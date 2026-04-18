@@ -7,6 +7,8 @@ lang: zh
 ---
 # Platform Engineer 快速入門指南
 
+> **Language / 語言：** **中文 (Current)** | [English](./for-platform-engineers.en.md)
+
 > **v2.7.0** | 適用對象：Platform Engineers、SRE、基礎設施管理員
 >
 > 相關文件：[Architecture](../architecture-and-design.md) · [Benchmarks](../architecture-and-design.md) · [GitOps Deployment](../integration/gitops-deployment.md) · [Rule Packs](../rule-packs/README.md) · [Prometheus Operator 整合](../integration/prometheus-operator-integration.md) · [Deployment Decision Matrix](decision-matrix.md)

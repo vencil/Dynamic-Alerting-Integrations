@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: Multi-Domain Hierarchical Configuration — conf.d/ Directory Restructuring (v2.7.0)
 
+> **Language / 語言：** **English (Current)** | [中文](./multi-domain-conf-layout.md)
+
 > **v2.7.0** | Related docs: [ADR-017 (Architecture Decision)](../adr/017-conf-d-directory-hierarchy-mixed-mode.md), [ADR-018 (Inheritance)](../adr/018-defaults-yaml-inheritance-dual-hash.md)
 
 ## Background and Problem

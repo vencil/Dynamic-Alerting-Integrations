@@ -8,6 +8,8 @@ lang: en
 
 # ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant
 
+> **Language / 語言：** **English (Current)** | [中文](./016-data-theme-single-track-dark-mode.md)
+
 > Originally recorded as **DEC-F = Option C** in `docs/internal/v2.7.0-planning.md §17`
 > (Day 3, 2026-04-16, finalized after two rounds of user discussion). Back-filled during Day 5
 > retrospective review — DEC-F is a prerequisite upon which all subsequent Phase .a0 token

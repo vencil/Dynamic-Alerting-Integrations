@@ -7,6 +7,8 @@ lang: zh
 ---
 # 場景：多叢集聯邦架構 — 中央閾值 + 邊緣指標
 
+> **Language / 語言：** **中文 (Current)** | [English](./multi-cluster-federation.en.md)
+
 > **快速指引** — 完整架構設計與原理見 [Federation Integration Guide](../integration/federation-integration.md)。本文件聚焦部署步驟。
 
 ## 問題

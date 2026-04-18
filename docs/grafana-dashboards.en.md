@@ -8,6 +8,8 @@ lang: en
 
 # Grafana Dashboard Guide
 
+> **Language / 語言：** **English (Current)** | [中文](./grafana-dashboards.md)
+
 > **v2.7.0** | Audience: Platform Engineers, SREs, DevOps
 >
 > Related docs: [Architecture] · [Troubleshooting] · [Shadow Monitoring SOP]

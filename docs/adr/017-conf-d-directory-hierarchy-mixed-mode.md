@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
+> **Language / 語言：** **中文 (Current)** | [English](./017-conf-d-directory-hierarchy-mixed-mode.en.md)
+
 > Phase .b B-1（v2.7.0 Scale Foundation I）。
 
 ## 狀態
@@ -112,5 +114,5 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 ## 相關
 
 - [ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload](018-defaults-yaml-inheritance-dual-hash.md)
-- [benchmark-v2.7.0-baseline.md](../internal/benchmark-v2.7.0-baseline.md) — flat vs hierarchical 效能對照
+- [Benchmark Report §10 «Synthetic Fixture Generation»](../benchmarks.md#synthetic-fixture-generation) — flat vs hierarchical 效能對照
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.md)

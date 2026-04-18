@@ -7,6 +7,8 @@ lang: en
 ---
 # Advanced Scenarios & Test Coverage
 
+> **Language / 語言：** **English (Current)** | [中文](./advanced-scenarios.md)
+
 > **This document has been relocated to [Test Coverage Matrix](../internal/test-coverage-matrix.md).**
 > As a test matrix document, it belongs under `docs/internal/`.
 

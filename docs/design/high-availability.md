@@ -8,6 +8,8 @@ parent: architecture-and-design.md
 ---
 # 高可用性 (HA) 設計
 
+> **Language / 語言：** **中文 (Current)** | [English](./high-availability.en.md)
+
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
 > ← [返回主文件](../architecture-and-design.md)
@@ -91,4 +93,3 @@ spec:
 | ThresholdExporterAbsent | Metrics absent > 5m | 警告 → 平台團隊 |
 | ThresholdExporterTooFewReplicas | `count(up{job="threshold-exporter"}) < 2` | 警告 → SRE |
 | ThresholdExporterHighRestarts | `rate(container_last_terminated_reason[5m]) > 0.1` | 調查 |
-

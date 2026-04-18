@@ -7,6 +7,8 @@ lang: en
 ---
 # Deployment Decision Matrix
 
+> **Language / 語言：** **English (Current)** | [中文](./decision-matrix.md)
+
 > **Audience**: Platform Engineers
 > **Version**: v2.6.0
 > **Purpose**: Help you decide between ConfigMap (Path A) and Operator CRD (Path B) for deploying Dynamic Alerting in under 5 minutes

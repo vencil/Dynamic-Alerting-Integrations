@@ -7,7 +7,7 @@ lang: zh
 ---
 # 術語表
 
-> **Language / 語言：** | **中文（當前）**
+> **Language / 語言：** | **中文（當前）** | [English](./glossary.en.md)
 
 本頁列出 Dynamic Alerting 平台文件中常見的專有名詞與縮寫，依字母排序。
 

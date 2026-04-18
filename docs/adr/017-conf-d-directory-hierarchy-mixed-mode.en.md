@@ -8,6 +8,8 @@ lang: en
 
 # ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy
 
+> **Language / 語言：** **English (Current)** | [中文](./017-conf-d-directory-hierarchy-mixed-mode.md)
+
 > Phase .b B-1 (v2.7.0 Scale Foundation I).
 
 ## Status
@@ -112,5 +114,5 @@ Directory Scanner's design philosophy is "filesystem as source of truth."
 ## Related
 
 - [ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload](018-defaults-yaml-inheritance-dual-hash.md)
-- [benchmark-v2.7.0-baseline.md](../internal/benchmark-v2.7.0-baseline.md) — flat vs hierarchical performance comparison
+- [Benchmark Report §10 «Synthetic Fixture Generation»](../benchmarks.en.md#synthetic-fixture-generation) — flat vs hierarchical performance comparison
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.en.md)

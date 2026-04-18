@@ -8,6 +8,8 @@ lang: zh
 
 # ADR-007: 跨域路由設定檔與域策略
 
+> **Language / 語言：** **中文 (Current)** | [English](./007-cross-domain-routing-profiles.en.md)
+
 ## 狀態
 
 ✅ **Accepted** (v2.1.0) — 四層路由 + 域策略驗證已完成，Profile 繼承鏈為 v2.7.0+ 候選

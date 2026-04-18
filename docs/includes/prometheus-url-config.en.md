@@ -1,3 +1,5 @@
+<!-- Bilingual pair: prometheus-url-config.md -->
+
 > **Prometheus Connection Settings:**
 > | Environment | URL |
 > |-------------|-----|

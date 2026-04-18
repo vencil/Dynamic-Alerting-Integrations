@@ -7,6 +7,8 @@ lang: zh
 ---
 # 場景：Shadow Audit — 告警品質評估
 
+> **Language / 語言：** **中文 (Current)** | [English](./shadow-audit.en.md)
+
 > **本文件已合併至 [Shadow Monitoring 完整指南](shadow-monitoring-cutover.md)**。
 > 告警品質評估流程見該指南的 **Phase 0** 章節。
 

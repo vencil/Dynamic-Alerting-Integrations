@@ -7,6 +7,8 @@ lang: en
 ---
 # Scenario: Shadow Monitoring — From Alert Health Assessment to Automated Cutover
 
+> **Language / 語言：** **English (Current)** | [中文](./shadow-monitoring-cutover.md)
+
 > **v2.7.0** | Related docs: [`shadow-monitoring-sop.md`](../shadow-monitoring-sop.md), [`migration-guide.md`](../migration-guide.md), [`CLI Reference`](../cli-reference.en.md)
 
 This guide covers the end-to-end workflow from alert quality assessment through full migration cutover: Phase 0 (assessment) → Phase 1–6 (migration & cutover).
