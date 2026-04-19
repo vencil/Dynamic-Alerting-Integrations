@@ -116,6 +116,7 @@ lang: zh
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
 | `docs/internal/test-map.md` | maintainers, AI Agent | 測試架構導覽 (Test Map) |
 | `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
+| `docs/internal/v2.8.0-tech-debt-decomposition.md` | maintainers | v2.8.0 Phase .a A-1 TECH-DEBT 分解表（DEC-L 定版） |
 | `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |
