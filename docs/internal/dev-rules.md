@@ -394,55 +394,17 @@ tools:
 - `tests/dx/test_scan_component_health.py`：12 個測試覆蓋 tier / archived / candidate 三條路徑
 - 與 Q2 policy 對齊：警告型（不 fail），可在 CI 印出 `archived_tools` + `archive_candidates` 供 PR review
 
-## §P 流程紀律（v2.8.0 Phase .a 新增）
+## §P 流程紀律
 
-§S 管程式碼風格、§T 管工具生命週期，§P 管**寫進 commit 與 planning 的人類流程紀律**——這些不會被既有 lint hook 擋下來，但會讓未來 session 找不到 ground truth 或讓文件爆炸。
+§S 管程式碼風格、§T 管工具生命週期，§P 管**寫進 commit 的人類流程紀律**。規則的「why」敘述放這裡，攔截則由 hook 做。
 
 ### P1. Commit trailer 必含 `Resolves <ID>`（追蹤項目修復時）
 
-**規則**：任何 commit 修復了已登錄的追蹤項目（`docs/internal/known-regressions.md` 的 `TECH-DEBT-XXX` / `REG-XXX`，或 `v2.8.0-planning.md` §12.4 的 `Trap #N`），commit message 必須含 trailer：
+修復已登錄的追蹤項目（`known-regressions.md` 的 `TECH-DEBT-XXX` / `REG-XXX`，或 `v2.8.0-planning.md` §12.4 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves TECH-DEBT-005` / `Fixes Trap #12` / `Closes REG-003`（動詞大小寫不敏感）。
 
-```
-Resolves TECH-DEBT-005
-Resolves REG-003
-Resolves Trap #12
-```
+**原因**：沒有 trailer 時 registry 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
 
-支援的動詞：`Resolves` / `Fixes` / `Closes`（大小寫不敏感）。
-
-**為什麼**：v2.8.0 Phase .a Session #16 發現 8 個 TECH-DEBT phantom（fix 已 merge 但 registry 仍 `open`），原因正是 commit 缺 trailer，registry 與 git log 失聯，下次 session 重複 audit 同一條已修項目燒掉大量 context（`v2.8.0-planning.md` §12.4 Trap #12，maintainer-local 文件）。
-
-**自動化攔截**：`scripts/tools/lint/check_techdebt_drift.py --check`（pre-commit `manual` stage hook id `check-techdebt-drift`）。Class A drift（commit 有 trailer 但 registry 仍 open）會 exit 1 阻擋 commit；Class B drift（registry resolved 但無 trailer）僅資訊性提示，不 fail。
-
-**例外**：純文件、純 refactor、跨多個追蹤項目的批次清理可不寫 trailer（這時改在 commit body 用 prose 列出受影響 IDs；drift checker 不會抓到 prose-only 提及，由 reviewer 把關）。
-
-### P2. `v2.8.0-planning.md` §12.1 Session row ≤ 5 行 / 200 字
-
-**規則**：每筆 session 寫回 `planning.md` §12.1 Session Ledger 的單列**長度上限 5 markdown 行 / 200 字**。長敘述（root cause / Lesson Learned / 詳細 reproduce）改寫進 commit message body 與相關 playbook（`testing-playbook.md` / `windows-mcp-playbook.md` / 本檔 §S/§T/§P）。
-
-**為什麼**：v2.8.0 Phase .a 累積到 Session #16 時 §12.1 單列已膨脹到 1500–4000 字（21 列共 ~50KB），佔 planning.md 總 size 22%。Claude 每個新 session 都被迫重讀，是 context compaction 的最大單一兇手。Session #17（2026-04-19）將 #01-#15 移至 `v2.8.0-planning-archive.md`（maintainer-local；.gitignore L64）並設此上限防復發。
-
-**寫回模板**：
-```
-| #N | YYYY-MM-DD | <觸發 ≤ 1 句> | <交付物列表 ≤ 2 行> | <狀態變更 ≤ 1 行> | <Next ≤ 1 行> |
-```
-
-詳細推理走 commit message；持久學習走 playbook；planning ledger 只管「誰、做了什麼、下一步」。
-
-### P3. 知識退火優先序（既有原則的明文化）
-
-當同一 trap / lesson 在跨 session 重複出現時，按以下順序選擇定型方式（**自動化 > 規範 > 紀錄**）：
-
-1. **Lint / hook 自動化**（pre-commit / CI gate）— 不可被人類繞過的最強形式
-2. **本檔 §S/§T/§P 規則** — 寫入規範，下次 PR review 時可直接引用條號
-3. **Playbook 章節** — 環境/工具陷阱的詳細 reproduce 與 fix step
-4. **planning.md §12.4 Trap 表** — 短期 working log，跨 minor 版本後須升級到上面三種其中之一（`make playbook-freshness` 會檢查 `verified-at-version`）
-
-### 相關自動化（§P）
-
-- `scripts/tools/lint/check_techdebt_drift.py`：registry vs git log 雙向 drift 檢查（P1）
-- `.pre-commit-config.yaml` hook id `check-techdebt-drift`：opt-in manual stage
-- `.github/workflows/commitlint.yaml`：PR title `edited` event 觸發補強（Trap #12 同源；防 PR title 修改後 commitlint 不重跑）
+**自動化攔截**：pre-push hook `check-techdebt-drift`（`scripts/tools/lint/check_techdebt_drift.py`）。Class A（trailer 指向仍 `open` 的 ID）exit 1 擋住 push；Class B（registry 已 resolved 但無 trailer）僅印資訊。純文件 / 純 refactor / 跨多項目的批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
 
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
@@ -459,4 +421,4 @@ Resolves Trap #12
 |------|------|
 | v2.6.0 | 從 `CLAUDE.md` 搬出，作為 11 條規範的 SSOT |
 | v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
-| v2.8.0 Phase .a | 新增 §P 流程紀律（P1 commit trailer / P2 planning row 上限 / P3 知識退火優先序）— Trap #12 三層防禦的「規範層」|
+| v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + pre-push hook `check-techdebt-drift`（Trap #12 三層防禦的「規範層 + 攔截層」）|

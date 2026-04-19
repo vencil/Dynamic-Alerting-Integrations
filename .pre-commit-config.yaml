@@ -347,11 +347,13 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_techdebt_drift.py --check
         language: python
         pass_filenames: false
-        # Registry file is maintainer-local (gitignored); script is the only
-        # tracked trigger. Manual stage — opt-in via pre-commit run --hook-stage manual.
-        # See dev-rules.md §S6 / v2.8.0-planning.md Trap #12.
-        files: ^scripts/tools/lint/check_techdebt_drift\.py$
-        stages: [manual]
+        always_run: true
+        # Class A drift (commit trailer refers to an ID still `open` in registry)
+        # blocks the push; Class B (registry resolved but no trailer) is advisory.
+        # Runs at pre-push only — registry file is maintainer-local (gitignored),
+        # so file-change triggering doesn't work; and scanning git log at every
+        # commit is wasteful. See dev-rules.md §P1 for the rule rationale.
+        stages: [pre-push]
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
