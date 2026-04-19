@@ -9,7 +9,19 @@ lang: zh
 
 All notable changes to the **Dynamic Alerting Integrations** project will be documented in this file.
 
-## [v2.7.0] — 2026-04-18 — Scale Foundation × 元件健壯化 × 測試基礎設施
+## [Unreleased]
+
+### Fixed
+
+- **Blast Radius PR comment length guard**（v2.7.0 defensive patch）：`scripts/tools/ops/blast_radius.py` `generate_pr_comment` 加三層守門，避免 GitHub 65,536 char 硬上限造成 CI 靜默失敗（422 Unprocessable Entity，bot 會「成功」但 comment 不存在）：
+  - 當 Tier A+B affected tenant > 50 時，切 **summary-only mode**（只列 tenant IDs，不展 per-field diff；完整 diff 走 `blast-radius-report` workflow artifact）
+  - Summary-only mode 內部再 cap 200 條，多的收斂為「+N more」
+  - 60,000 char safety limit：即使 fell-through（例如單一 tenant 有上千欄位變動），也會 auto-fallback 到 summary-only 或最後手段硬截斷
+  - 新增 `--artifact-hint` CLI flag，`.github/workflows/blast-radius.yml` 對應 pass workflow run URL，讓 reviewer 看 summary-only comment 時能一鍵跳去 artifact
+  - 9 tests 於 `tests/ops/test_blast_radius.py::TestPRCommentLengthGuard`：1000-tenant、超長 field diff、Tier C count-only、artifact hint rendering 等情境均驗證 output 長度 < 65,536
+  - 發現來源：Gemini R2 cross-review；實測 1000-tenant Tier A 場景原輸出 ~260 KB，超限 4 倍
+
+
 
 > 條目於 `chore/v2.7.0-phase-a-kickoff` 完工定稿（2026-04-17 Phase .e E-5 草擬；2026-04-18 Phase .b B-1 實測數字 backfill + release 定稿）。PR URL 於 tag-day 合併後補於本段。
 >

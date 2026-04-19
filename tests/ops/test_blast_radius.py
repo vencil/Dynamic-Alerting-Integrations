@@ -400,6 +400,158 @@ class TestGeneratePRComment:
 
 
 # ---------------------------------------------------------------------------
+# Test: PR comment length-limit defences
+# ---------------------------------------------------------------------------
+
+def _make_report(
+    *,
+    tier_a: int = 0,
+    tier_b: int = 0,
+    tier_c: int = 0,
+    fields_per_tenant: int = 1,
+    id_prefix: str = "tenant",
+) -> dict:
+    """Factory helper for GitHub comment length tests."""
+    tenants = []
+    for i in range(tier_a):
+        entries = [
+            {
+                "field": f"alerts.threshold.Metric{j}",
+                "action": "changed",
+                "detail": {"base": 80, "pr": 90},
+            }
+            for j in range(fields_per_tenant)
+        ]
+        tenants.append({
+            "tenant_id": f"{id_prefix}-a-{i:04d}",
+            "status": "changed",
+            "highest_tier": "A",
+            "tiers": {"A": entries, "B": [], "C": []},
+        })
+    for i in range(tier_b):
+        tenants.append({
+            "tenant_id": f"{id_prefix}-b-{i:04d}",
+            "status": "changed",
+            "highest_tier": "B",
+            "tiers": {
+                "A": [],
+                "B": [{"field": "severity.default", "action": "changed",
+                       "detail": {"base": "warning", "pr": "critical"}}],
+                "C": [],
+            },
+        })
+    for i in range(tier_c):
+        tenants.append({
+            "tenant_id": f"{id_prefix}-c-{i:04d}",
+            "status": "changed",
+            "highest_tier": "C",
+            "tiers": {"A": [], "B": [], "C": [
+                {"field": "timezone", "action": "changed",
+                 "detail": {"base": "UTC", "pr": "UTC+0"}}
+            ]},
+        })
+    return {
+        "summary": {
+            "total_tenants_scanned": tier_a + tier_b + tier_c,
+            "affected_tenants": tier_a + tier_b + tier_c,
+            "tier_a_tenants": tier_a,
+            "tier_b_tenants": tier_b,
+            "tier_c_only_tenants": tier_c,
+            "new_tenants": 0,
+            "removed_tenants": 0,
+        },
+        "tenants": tenants,
+    }
+
+
+class TestPRCommentLengthGuard:
+    """Defensive behaviour against GitHub's 65,536-char comment limit.
+
+    GitHub silently rejects comments exceeding the hard limit (422 error),
+    so the generator MUST keep output below it in all scenarios. These tests
+    pin the three-layer guard: (1) tenant-count threshold, (2) byte-length
+    safety net, (3) last-resort truncation.
+    """
+
+    def test_small_report_stays_in_full_detail_mode(self):
+        report = _make_report(tier_a=5, tier_b=3)
+        md = br.generate_pr_comment(report)
+        # Full-detail keeps the per-field detail section inside <details>
+        assert "Substantive changes:" in md
+        # Threshold not triggered: no "exceeds the inline-detail threshold" warning
+        assert "inline-detail threshold" not in md
+
+    def test_many_tenants_triggers_summary_mode(self):
+        # 60 Tier A tenants > SUMMARY_MODE_TENANT_THRESHOLD (50) → summary mode
+        report = _make_report(tier_a=60)
+        md = br.generate_pr_comment(report)
+        assert "inline-detail threshold" in md
+        # Per-field diffs should NOT appear in summary mode
+        assert "alerts.threshold.Metric0" not in md
+        # But tenant IDs should
+        assert "tenant-a-0000" in md
+
+    def test_artifact_hint_is_rendered(self):
+        report = _make_report(tier_a=60)
+        hint = "Full diff in the `blast-radius-report` artifact on run #123."
+        md = br.generate_pr_comment(report, artifact_hint=hint)
+        assert hint in md
+
+    def test_artifact_hint_also_in_full_detail_mode(self):
+        report = _make_report(tier_a=3)
+        hint = "See run #456 artifact."
+        md = br.generate_pr_comment(report, artifact_hint=hint)
+        assert hint in md
+
+    def test_1000_tenant_output_stays_under_github_limit(self):
+        # Real-world v2.8.0 target: 1000-tenant PR must produce a valid comment.
+        report = _make_report(tier_a=1000, fields_per_tenant=5)
+        md = br.generate_pr_comment(
+            report,
+            artifact_hint="Full diff in artifact.",
+        )
+        assert len(md) < br.GITHUB_COMMENT_HARD_LIMIT, \
+            f"Comment body is {len(md)} chars, exceeds GitHub's 65,536 limit"
+        assert len(md) <= br.COMMENT_SAFETY_LIMIT, \
+            f"Comment body is {len(md)} chars, exceeds COMMENT_SAFETY_LIMIT"
+
+    def test_summary_mode_caps_listed_tenants(self):
+        # 500 > SUMMARY_MODE_LIST_CAP (200) → should truncate list and show tail
+        report = _make_report(tier_a=500)
+        md = br.generate_pr_comment(report)
+        # First tenant listed
+        assert "tenant-a-0000" in md
+        # Last tenant should NOT be listed individually
+        assert "tenant-a-0499" not in md
+        # Should have "…and N more" tail
+        assert "more (see artifact)" in md
+
+    def test_tier_c_count_only_regardless_of_mode(self):
+        # Tier C never gets itemised (preserves existing behaviour)
+        report = _make_report(tier_a=1, tier_c=5000)
+        md = br.generate_pr_comment(report)
+        assert "5000 tenants" in md
+        # No individual Tier-C tenant IDs in output
+        assert "tenant-c-0000" not in md
+
+    def test_pathological_single_tenant_huge_field_diff_falls_back(self):
+        # Single tenant with so many per-field changes that full-detail blows
+        # past COMMENT_SAFETY_LIMIT — must auto-fall-back to summary mode.
+        report = _make_report(tier_a=1, fields_per_tenant=100_000)
+        md = br.generate_pr_comment(report)
+        assert len(md) < br.GITHUB_COMMENT_HARD_LIMIT
+        # Fall-through produced summary mode (or truncation) — field details
+        # must not be in the output at that volume.
+        assert md.count("alerts.threshold.Metric") < 20  # <<< 100000
+
+    def test_no_changes_returns_stable_short_message(self):
+        report = _make_report()  # all zeros
+        md = br.generate_pr_comment(report)
+        assert "No effective tenant config changes" in md
+        assert len(md) < 200  # sanity: short and stable
+
+
+# ---------------------------------------------------------------------------
 # Test: CLI integration
 # ---------------------------------------------------------------------------
 
