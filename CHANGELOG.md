@@ -13,6 +13,15 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **TECH-DEBT-007 resolved — `--da-color-hero-muted` contrast fail via token-split**（v2.8.0 Phase .a PR#1c）：修復 multi-tenant-comparison / dependency-graph 在 light bg 下 axe-core `color-contrast` 40-node 違規。根因並非 token 色值單純「太淺」，而是**單一 semantic token 被迫服務兩種亮度相差 > 40% 的背景**（hero dark `#0f172a` + tile light `hsl(x,60%,90%)` / SVG white）——任何單值都無法同時滿足 WCAG AA 4.5:1。
+  - `docs/assets/design-tokens.css`：保留 `--da-color-hero-muted: #94a3b8`（hero dark bg 7.2:1 AA pass）；新增 `--da-color-tile-muted: #6b7280`（white 4.83:1 AA pass），light / dark mode 皆同值（consumer 背景不翻色）
+  - `docs/interactive/tools/multi-tenant-comparison.jsx` L194 `defaultBadgeStyle`：`hero-muted` → `tile-muted`（HeatmapRow cell badge 處於 `hsl(hue,60%,90%)` 永遠亮底）
+  - `docs/interactive/tools/dependency-graph.jsx` L215：SVG `<text fill>` `hero-muted` → `tile-muted`（parent `bg-white` SVG 容器）
+  - L133 `MetricCard subStyle` **刻意排除在 PR#1c scope 外**：card bg 隨 `[data-theme="dark"]` 翻色（light `#f8fafc` ↔ dark `#334155`），需 theme-aware override 另案處理 → 登錄 TECH-DEBT-016 追蹤
+  - 新增 `dev-rules.md §S5 單一 semantic token 不可 serve 亮度相差 > 40% 的兩種背景`：固化 token-split 規則 + 命名慣例（`--da-color-<surface>-<intent>`）+ 雙主題翻色 caveat
+  - `known-regressions.md`：TECH-DEBT-007 狀態 open → **resolved**（附 fixed_in 引述本 PR）；TECH-DEBT-016 新登錄
+  - 背景分析：plan.md §12.4 Trap #10（shared-token-across-opposing-backgrounds 反模式）、§12.5 PR#1c spec
+
 - **Blast Radius PR comment length guard**（v2.7.0 defensive patch）：`scripts/tools/ops/blast_radius.py` `generate_pr_comment` 加三層守門，避免 GitHub 65,536 char 硬上限造成 CI 靜默失敗（422 Unprocessable Entity，bot 會「成功」但 comment 不存在）：
   - 當 Tier A+B affected tenant > 50 時，切 **summary-only mode**（只列 tenant IDs，不展 per-field diff；完整 diff 走 `blast-radius-report` workflow artifact）
   - Summary-only mode 內部再 cap 200 條，多的收斂為「+N more」

@@ -191,7 +191,7 @@ function HeatmapRow({ metric, tenants, stats }) {
           fontWeight: isDefault ? 400 : 700,
           color: isDefault ? 'var(--da-color-muted)' : '#1e293b',
         };
-        const defaultBadgeStyle = { fontSize: 10, color: 'var(--da-color-hero-muted)' };
+        const defaultBadgeStyle = { fontSize: 10, color: 'var(--da-color-tile-muted)' };
         return (
           <td key={i} style={cellStyle}>
             {val}{isDefault && <span style={defaultBadgeStyle}> (d)</span>}

@@ -36,8 +36,11 @@
   /* ── Hero (dark header area) ── */
   --da-color-hero-bg:         #0f172a;
   --da-color-hero-fg:         #e2e8f0;
-  --da-color-hero-muted:      #94a3b8; /* TECH-DEBT-007 deferred to PR#1c: hero-bg #0f172a requires >=5.0:1; #6b7280 gives 4.2:1 (FAIL). Needs token-split. See v2.8.0-planning.md section 12. */
+  --da-color-hero-muted:      #94a3b8; /* Hero dark bg (#0f172a) context ONLY: 7.2:1 on dark navy (AA pass). Do NOT use for light-bg text -- see --da-color-tile-muted below. */
   --da-color-hero-accent:     #38bdf8;
+
+  /* ── Tile / Card muted text (light-bg contexts regardless of theme) ── */
+  --da-color-tile-muted:      #6b7280; /* TECH-DEBT-007 resolution (PR#1c): for muted text on always-light backgrounds like table cells with hsl(x, 60%, 90%) or SVG on bg-white. 4.83:1 on white (AA pass). See v2.8.0-planning.md section 12.4 Trap #10 + dev-rules.md token-split clause. */
 
   /* ── Card ── */
   --da-color-card-bg:         #ffffff;
@@ -133,8 +136,11 @@
 
   --da-color-hero-bg:         #0f172a;
   --da-color-hero-fg:         #e2e8f0;
-  --da-color-hero-muted:      #94a3b8; /* TECH-DEBT-007 deferred (see light mode note). Reverting to main value. */
+  --da-color-hero-muted:      #94a3b8; /* Hero dark bg context ONLY (same as light mode; hero bg does not flip themes). See light-mode comment. */
   --da-color-hero-accent:     #38bdf8;
+
+  /* Tile / Card muted text: same value as light mode -- always-light-bg consumers */
+  --da-color-tile-muted:      #6b7280;
 
   --da-color-card-bg:         #1e293b;
   --da-color-card-border:     #334155;
