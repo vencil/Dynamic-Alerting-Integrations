@@ -410,7 +410,7 @@ Resolves Trap #12
 
 支援的動詞：`Resolves` / `Fixes` / `Closes`（大小寫不敏感）。
 
-**為什麼**：v2.8.0 Phase .a Session #16 發現 8 個 TECH-DEBT phantom（fix 已 merge 但 registry 仍 `open`），原因正是 commit 缺 trailer，registry 與 git log 失聯，下次 session 重複 audit 同一條已修項目燒掉大量 context（[v2.8.0-planning.md Trap #12](v2.8.0-planning.md)）。
+**為什麼**：v2.8.0 Phase .a Session #16 發現 8 個 TECH-DEBT phantom（fix 已 merge 但 registry 仍 `open`），原因正是 commit 缺 trailer，registry 與 git log 失聯，下次 session 重複 audit 同一條已修項目燒掉大量 context（`v2.8.0-planning.md` §12.4 Trap #12，maintainer-local 文件）。
 
 **自動化攔截**：`scripts/tools/lint/check_techdebt_drift.py --check`（pre-commit `manual` stage hook id `check-techdebt-drift`）。Class A drift（commit 有 trailer 但 registry 仍 open）會 exit 1 阻擋 commit；Class B drift（registry resolved 但無 trailer）僅資訊性提示，不 fail。
 
@@ -420,7 +420,7 @@ Resolves Trap #12
 
 **規則**：每筆 session 寫回 `planning.md` §12.1 Session Ledger 的單列**長度上限 5 markdown 行 / 200 字**。長敘述（root cause / Lesson Learned / 詳細 reproduce）改寫進 commit message body 與相關 playbook（`testing-playbook.md` / `windows-mcp-playbook.md` / 本檔 §S/§T/§P）。
 
-**為什麼**：v2.8.0 Phase .a 累積到 Session #16 時 §12.1 單列已膨脹到 1500–4000 字（21 列共 ~50KB），佔 planning.md 總 size 22%。Claude 每個新 session 都被迫重讀，是 context compaction 的最大單一兇手。Session #17（2026-04-19）將 #01-#15 移至 [`v2.8.0-planning-archive.md`](v2.8.0-planning-archive.md) 並設此上限防復發。
+**為什麼**：v2.8.0 Phase .a 累積到 Session #16 時 §12.1 單列已膨脹到 1500–4000 字（21 列共 ~50KB），佔 planning.md 總 size 22%。Claude 每個新 session 都被迫重讀，是 context compaction 的最大單一兇手。Session #17（2026-04-19）將 #01-#15 移至 `v2.8.0-planning-archive.md`（maintainer-local；.gitignore L64）並設此上限防復發。
 
 **寫回模板**：
 ```
