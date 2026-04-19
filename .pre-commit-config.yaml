@@ -342,6 +342,19 @@ repos:
         stages: [manual]
         additional_dependencies: ['pyyaml']
 
+      - id: check-techdebt-drift
+        name: TECH-DEBT/REG registry vs git log drift
+        entry: python3 -X utf8 scripts/tools/lint/check_techdebt_drift.py --check
+        language: python
+        pass_filenames: false
+        always_run: true
+        # Class A drift (commit trailer refers to an ID still `open` in registry)
+        # blocks the push; Class B (registry resolved but no trailer) is advisory.
+        # Runs at pre-push only — registry file is maintainer-local (gitignored),
+        # so file-change triggering doesn't work; and scanning git log at every
+        # commit is wasteful. See dev-rules.md §P1 for the rule rationale.
+        stages: [pre-push]
+
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
         entry: bash -c 'cd tests/e2e && npx playwright test'

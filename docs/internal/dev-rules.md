@@ -394,6 +394,18 @@ tools:
 - `tests/dx/test_scan_component_health.py`：12 個測試覆蓋 tier / archived / candidate 三條路徑
 - 與 Q2 policy 對齊：警告型（不 fail），可在 CI 印出 `archived_tools` + `archive_candidates` 供 PR review
 
+## §P 流程紀律
+
+§S 管程式碼風格、§T 管工具生命週期，§P 管**寫進 commit 的人類流程紀律**。規則的「why」敘述放這裡，攔截則由 hook 做。
+
+### P1. Commit trailer 必含 `Resolves <ID>`（追蹤項目修復時）
+
+修復已登錄的追蹤項目（`known-regressions.md` 的 `TECH-DEBT-XXX` / `REG-XXX`，或 `v2.8.0-planning.md` §12.4 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves TECH-DEBT-005` / `Fixes Trap #12` / `Closes REG-003`（動詞大小寫不敏感）。
+
+**原因**：沒有 trailer 時 registry 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
+
+**自動化攔截**：pre-push hook `check-techdebt-drift`（`scripts/tools/lint/check_techdebt_drift.py`）。Class A（trailer 指向仍 `open` 的 ID）exit 1 擋住 push；Class B（registry 已 resolved 但無 trailer）僅印資訊。純文件 / 純 refactor / 跨多項目的批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
@@ -409,3 +421,4 @@ tools:
 |------|------|
 | v2.6.0 | 從 `CLAUDE.md` 搬出，作為 11 條規範的 SSOT |
 | v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
+| v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + pre-push hook `check-techdebt-drift`（Trap #12 三層防禦的「規範層 + 攔截層」）|

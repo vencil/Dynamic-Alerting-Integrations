@@ -2,7 +2,9 @@ name: Commitlint
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `edited` lets PR title amendments re-trigger commitlint without close/reopen.
+    # See dev-rules.md §S6 / v2.8.0-planning.md Trap #12.
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   commitlint:
