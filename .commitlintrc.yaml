@@ -23,6 +23,7 @@ rules:
       - adr
       - e2e
       - jsx
+      - a11y            # accessibility (WCAG / axe fixes, cross-cutting per v2.8.0 Phase .a PR#2)
       - phase-a
       - phase-b
       # compound scopes (multi-area changes)
