@@ -32,6 +32,7 @@ rules:
       - scanner          # hierarchical dir scanner (exporter subsystem)
       - golden           # golden fixture parity tests
       - tooling          # generic tooling / infrastructure changes
+      - blast-radius     # CI bot + scripts/tools/ops/blast_radius.py (PR comment generator)
       # release-version scopes (used by release-wrap commits)
       - v2.7.0
   # Allow sentence-case subjects (conventional default forbids it)
