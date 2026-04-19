@@ -406,6 +406,83 @@ tools:
 
 **自動化攔截**：pre-push hook `check-techdebt-drift`（`scripts/tools/lint/check_techdebt_drift.py`）。Class A（trailer 指向仍 `open` 的 ID）exit 1 擋住 push；Class B（registry 已 resolved 但無 trailer）僅印資訊。純文件 / 純 refactor / 跨多項目的批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
 
+## §A 產出物治理（Planning Artifact Policy，v2.8.0 Phase .a 新增）
+
+§S 管程式碼風格、§T 管工具生命週期、§P 管 commit 紀律；§A 管**產出物（plan / decomposition / scope-discovery 等中繼文件）的歸屬與生命週期**。原始脈絡：v2.8.0 Session #06c maintainer FYI「中繼文件不應該長期在 repo」。
+
+### A1. 三層文件分類
+
+| Layer | 類型 | 範例 | 歸屬 | .gitignore 處置 |
+|---|---|---|---|---|
+| **L1 Persistent** | 定版後長期 SSOT | `CHANGELOG.md` / `dev-rules.md` / `architecture-and-design.md` / `docs/design/` | `docs/` / repo root | tracked |
+| **L2 Pattern-gated ephemeral** | 遵循命名慣例的中繼文件 | `v*-planning.md` / `v*-tech-debt-decomposition.md` / `v*-day*-*.md` / `known-regressions.md` | `docs/internal/` | `.gitignore` pattern catch（見 A3） |
+| **L3 Free-form scratch** | Session 內臨時檔（log / script / message draft） | `_pr33v.txt` / `_merge_msg.txt` / `_ci_*.log` | working dir 根目錄 | `_*.{txt,md,json,out,err}` prefix catch-all |
+
+**L1 ← L2 抄寫義務**：L2 內定版的結論（DEC / 風險登錄 / 分解表欄位）**必須抄寫進 L1**（CHANGELOG / dev-rules / playbook / `docs/design/`），並由本版 planning §12.1 Session Ledger 紀錄抄寫路徑。L2 文件**單機 gitignored，會丟**——只有抄寫進 L1 的內容才有 git 層備份。
+
+### A2. 為什麼 L2 不落 repo
+
+1. **Git 歷史污染**：planning doc 在一個版本週期內被改 10-30 次，commit 汙染 `git log --oneline` / bisect / blame / release-notes 自動抽取。
+2. **Stale 污染下游**：被 doc-map / MkDocs / search index 收錄後讀者踩到「v2.6.x 時代的 plan」誤導。
+3. **決策雙軌化**：CHANGELOG 的 user-facing 敘述 vs planning 的 internal rationale 同步崩壞，SSOT 破壞。
+4. **隱私／戰略外洩**：決策矩陣、Claude × Gemini cross-review 對話脈絡不宜暴露 public repo。
+
+### A3. 現行 pattern 清冊（`.gitignore:63-71`）
+
+| 行 | Pattern | 新增時機 | Class | Retention 觸發 |
+|---|---|---|---|---|
+| 64 | `docs/internal/v*-planning.md` | v2.7.0 | recurring（每 minor 一次） | 跨 2 minor 未匹配 → 檢討 |
+| 65 | `docs/internal/v*-planning-archive.md` | v2.8.0 Phase .a Session #18 | recurring（planning-archive 搭配 planning.md） | 跨 2 minor 未匹配 → 檢討 |
+| 66 | `docs/internal/v*-tech-debt-decomposition.md` | v2.8.0 Session #06c | recurring（技術債密集版） | v3.0.0 前若僅 v2.8.0 唯一匹配 → 考慮轉 single-file |
+| 67 | `docs/internal/v*-day*-*.md` | v2.6.x Cowork day notes | recurring（密集開發版） | 跨 2 minor 未匹配 → 檢討 |
+| 68 | `docs/internal/*-plan-draft.md` | v2.5.x | recurring（草案期暫存） | 跨 2 minor 未匹配 → 檢討 |
+| 69 | `docs/internal/known-regressions.md` | v2.7.0 | single-instance | 該檔永久消失 → 移除 pattern |
+| 70 | `docs/internal/component-health-snapshot.json` | v2.7.0 | single-instance | 同上 |
+| 71 | `docs/internal/design-reviews/` | v2.7.0 | directory-level | dir 永久空 → 移除 pattern |
+
+新增 pattern 時優先用 **recurring-class**（`v*-<class>.md`）而非 single-instance（具體檔名）：未來同類再生時零新增動作；即使日後 dead，pattern 行成本 1 行。
+
+### A4. 新 artifact 決策樹
+
+```
+新 intermediate doc 要進 docs/internal/
+├── 只活一個 session？
+│   └── → L3，放 working dir 根目錄並用 `_` 前綴
+│
+├── 活整個版本週期？
+│   ├── 命名可歸入既有 pattern（v*-planning / v*-day*-*）→ 直接沿用
+│   ├── 新 class 但預期未來版也會出現 → 加 recurring-class pattern `v*-<class>.md`
+│   └── 新 class 確定 one-shot → 加 single-instance pattern + §A3 註記「one-shot」
+│
+└── 需要被 reviewer 看到（PR comment / 外部顧問）？
+    └── → 不屬 L2/L3，重新設計：定版結論進 L1；草案期用 PR description / GitHub comment
+```
+
+### A5. Retention Rule（dead pattern 清除）
+
+**觸發**：某 `.gitignore` pattern 跨 **2 個 minor 版**從未匹配實體檔案。
+**判定**：每次 `v*-final` tag 後在 §A3 加「pattern 使用審計」row，記錄本版各 pattern 是否被使用。
+**三選一處置**：
+
+1. **移除 pattern**（class 確認死亡 → 刪 `.gitignore` 行 + §A3 對應 row strike-through 保留歷史）
+2. **轉 single-instance**（僅唯一一次匹配 → pattern 改寫為具體檔名避免 glob 擴張）
+3. **升 recurring**（反覆跨版出現 → 保留 pattern + 標 stable）
+
+### A6. Session Ledger 退場（v2.9.0+）
+
+v2.8.0 期間發現 planning.md `§12.1 Session Ledger（Working Log）`型 append-only 表會持續膨脹（單一 session row 動輒 2-4 KB），在重複 read 時造成 context 壓力。**v2.9.0+ planning doc 不再保留 Session ledger 表**，改採：
+
+- **完成 PR / commit**：抄入 `CHANGELOG.md` 即足夠（git log 為事實 SSOT）
+- **跨 session 進度追蹤**：用 §12.2 型 Live Tracker（mutate-only，不 append）
+- **環境 trap / Lesson Learned**：直接落對應 playbook（不在 planning 中轉手）
+- **session 內臨時筆記**：L3 `_*.md` working scratch
+
+驗證：`scripts/tools/lint/validate_planning_session_row.py` 可掃描 §12.1 表並 flag 超過 char limit 的 session row（manual hook，因 L2 文件不入 staging）。
+
+### A7. Dissent / 反向觀點
+
+L2 不落 repo 與 retention 門檻有可辯駁餘地（社群化專案 transparent governance 收益 / 單機 gitignored 風險 / 「跨 2 minor」門檻主觀性等）。完整反向論點與 v2.9.0 重新評估觸發條件見 `v2.8.0-planning-archive.md §12.6 Dissent`（archive 為 maintainer-local、gitignored；anchor slug `126-planning-artifact-policy-dissent-archived-2026-04-19`）。
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
@@ -422,3 +499,4 @@ tools:
 | v2.6.0 | 從 `CLAUDE.md` 搬出，作為 11 條規範的 SSOT |
 | v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
 | v2.8.0 Phase .a | 新增 §P1 Commit trailer 紀律 + pre-push hook `check-techdebt-drift`（Trap #12 三層防禦的「規範層 + 攔截層」）|
+| v2.8.0 Phase .a | 新增 §A 產出物治理（L1/L2/L3 taxonomy + retention rule + §A6 v2.9.0+ Session Ledger 退場）：由 `v2.8.0-planning.md §12.6` 搬入 SSOT；compact-pressure 分析催生 §A6 退場政策 |

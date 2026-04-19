@@ -138,6 +138,7 @@ lang: zh
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |
 | `validate_mermaid.py` | Mermaid 圖渲染驗證 |
+| `validate_planning_session_row.py` | Detect bloated §12.1 Session Ledger rows in versioned planning docs. |
 
 ## 共用函式庫
 
