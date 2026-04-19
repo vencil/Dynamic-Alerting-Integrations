@@ -21,6 +21,13 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Changed
 
+- **Doc governance — Planning Artifact Policy 升 SSOT + Session Ledger 退場（Phase .a Session #18）**：v2.8.0 期間反覆觸發 context-compact 的根因分析催生兩項規範化動作。原 `v2.8.0-planning.md §12.6` 的「Planning Artifact Policy」（L1/L2/L3 文件分類 / 決策樹 / retention rule）跨版長期原則升至 `dev-rules.md §A 產出物治理`（`docs/internal/dev-rules.md`）作 SSOT；新增 §A6「v2.9.0+ planning doc 不再保留 §12.1 Session Ledger」（compact-pressure 主因為 append-only Session 表 row 動輒 2-4 KB）。
+  - **新規範**：`dev-rules.md §A1-A7`（taxonomy / 4 條為何不落 repo / pattern 清冊 / 決策樹 / retention rule / Session Ledger 退場 / dissent pointer）
+  - **新工具**：`scripts/tools/lint/validate_planning_session_row.py`（manual-stage：偵測 §12.1 Session row 超過 char limit，預設 2000）
+  - **新 Makefile target**：`make check-planning-bloat`（直接呼叫上述 lint）+ `make session-cleanup` 末尾自動跑（best-effort，不阻擋 cleanup）
+  - **既有 planning.md 瘦身**（Session #18 同步執行）：`v2.8.0-planning.md` 從 ~987 lines → 720 lines；§12.3.1 Q1-Q6 詳細分析 / §12.4 resolved-trap RCA（#3 #9 #10 #11 #12）/ §12.6 政策 dissent / §12.7 PR#1 完整 mapping table 全搬至 `v2.8.0-planning-archive.md`（gitignored，maintainer-local）；§12.5 Active TODO 從 ~15 mixed `[x]/[ ]` 收斂為 5 純 active 項
+  - **CLAUDE.md / 其他 SSOT 不變**：本次遷移為 internal 文件治理，不影響 user-facing API / schema / CLI
+
 - **A-5b scan_component_health `status: archived` opt-in 下架路徑（Phase .a A-5b）**：`scripts/tools/dx/scan_component_health.py` 擴展 Tier policy 以支援 registry 手動標記下架，非破壞性（Q2 warning-only 政策延伸）：
   - **Registry schema 擴展**：`docs/assets/tool-registry.yaml` 工具項可新增 `status: archived` + `archived_reason: "..."`（本版未標任何工具 archived，schema + 邏輯擴展為主）
   - **scan 行為**：archived 工具產出 `tier: "Archived"` / `status: "ARCHIVED"`，保留 LOC / i18n 作 visibility metric，**從所有 aggregates 排除**（`tier_distribution` / `token_group_distribution` / `playwright_coverage` / `i18n_coverage_distribution` / `tools_with_hardcoded_hex` / `tools_with_hardcoded_px` / `tier1_token_group_a/c`）—— aggregates 分母統一改用 `active_results`（`status == "OK"`）

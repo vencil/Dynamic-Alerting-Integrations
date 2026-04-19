@@ -160,7 +160,12 @@ session-cleanup: ## Session 結束或異常終止後的清理
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@-pkill -f "[k]ubectl.*port-forward" 2>/dev/null; true
 	@rm -f _out.txt _err.txt 2>/dev/null || true
+	@python3 scripts/tools/lint/validate_planning_session_row.py 2>/dev/null || true
 	@echo "✅ Session cleanup 完成"
+
+.PHONY: check-planning-bloat
+check-planning-bloat: ## 偵測 §12.1 Session Ledger 膨脹 row（dev-rules §A6；用：ARGS="--limit 1500" 覆寫）
+	@python3 scripts/tools/lint/validate_planning_session_row.py $(ARGS)
 
 .PHONY: win-commit
 win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/push。用：make win-commit MSG=_msg.txt FILES="a b" [SKIP=hook1,hook2] [SKIP_HOOKS=1]

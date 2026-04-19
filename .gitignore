@@ -62,6 +62,7 @@ site/
 
 # --- Planning (internal, time-bound) ---
 docs/internal/v*-planning.md
+docs/internal/v*-planning-archive.md
 docs/internal/v*-tech-debt-decomposition.md
 docs/internal/v*-day*-*.md
 docs/internal/*-plan-draft.md

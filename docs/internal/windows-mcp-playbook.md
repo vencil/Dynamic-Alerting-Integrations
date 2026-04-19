@@ -303,6 +303,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 50 | `gh pr checks --json` 沒有 `conclusion` 欄位 | 可用欄位：`name, state, bucket, description, event, link, startedAt, completedAt, workflow`。`bucket` 值為 `pass/fail/pending/skipping`。很多網路範例用 `conclusion` 是錯的 |
 | 51 | Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError | Python `print()` 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。**正解**：script 開頭偵測 `cp*` encoding 時強制 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')` |
 | 52 | Bash 工具傳 Windows 絕對路徑（`C:\...`）產生 FUSE phantom 檔案 | 當 Bash/Shell 工具接收到 `C:\Users\...\_bench.bat` 這類 Windows 絕對路徑作為**位置參數**，FUSE 層會把 `:` 翻成 U+F03A、`\` 翻成 U+F05C（PUA 區碼位），在 Linux 側建出路徑合法但在 Windows 側看到的是 `CUsersvencsvibe-k8s-lab_bench.bat` 這種「中間夾隱形字元」的殘檔。殘檔會被 `git status` 當 untracked 列出但 wildcard（如 `*vibe-k8s-lab*`）匹配不到，須用 regex 比對 `_bench_f1b\|_bench_poll\|_poll\.bat` 等片段。**正解**：(1) 任何跨 Windows 路徑的寫入操作用 Write 工具或 Windows MCP PowerShell，不要塞給 Bash 工具；(2) `.gitignore` 已加 `CUsersvencs*` + `/C:\*` 雙重防守（PR #v2.7.1-doc-hygiene）；(3) 清理用 Windows 側 `Remove-Item -LiteralPath` + regex match，非從 FUSE 側 `rm`（會 `Operation not permitted`） |
+| 53 | `win_async_exec.ps1` 派 `gh pr create --title "...(v2.9.0+)"` 時 title 尾段被 cmd /c 吞掉（misleading 成功誤判） | `win_async_exec.ps1` 內部走 `cmd.exe /c "<Command> > log 2>&1"`，cmd 的 parenthesis / operator parsing 會把 nested double-quote 中的 `(` / `+` 當成 grouping char / concat operator，導致 `--title` 參數尾段在 cmd 層被吞掉。**典型症狀**：log 只印出 `Creating PR: docs(governance): ... SSOT +` 後就截斷，PR 實際**建立成功**但 title 缺尾綴，operator 誤判失敗去重試，第二次才撞上 "a pull request already exists"，繞一大圈才察覺。**正解（§黃金法則的具體應用）**：把整段命令寫成獨立 `.ps1`，title 用 single-quoted variable 宣告後 `& gh ... --title $title --body-file _pr_body.md`，再以 `win_async_exec.ps1 -Command 'powershell -File _pr_make.ps1'` 派工，cmd /c 就只看到一個外層命令字串，不會吃到內層 `(` / `+`。**差異於 #48**：#48 是 Desktop Commander cmd 把 `--title "x y z"` 拆成空格切開的多參數；#53 是 win_async_exec 的 cmd /c 把完整引號內字元因 `(` / `+` 提早截斷。兩者配方不同，前者用 .bat 包裝，後者用 .ps1 包裝 |
 
 ## Windows Clone 初次設定 — Symlink 支援
 
@@ -744,6 +745,9 @@ Parameters 設計：
 - `-LogFile`：預設 `%TEMP%\vibe-async-<timestamp>.log`；已存在會被覆寫避免舊內容誤導
 - `-PidFile`：選填；寫入 child PID 方便後續 kill / 檢查
 - `-WorkingDirectory`：預設當前目錄，推薦傳絕對路徑（例：`C:\Users\<USER>\vibe-k8s-lab`）
+
+⚠️ **Caveat — nested quote 含 `(` / `+` 會被 cmd /c 吞掉（見陷阱 #53）**：
+`-Command` 最終交給 `cmd.exe /c`，如果你傳的命令內含有**雙層引號** + 括號或運算符號（如 `gh pr create --title "docs: promote X to SSOT + retire Y (v2.9.0+)"`），cmd 的 parenthesis / operator parser 會把 title 尾段吃掉，**PR 其實建成功但 title 缺尾**，log 只看到前半截、operator 誤判失敗去重試。**對症解法**：把複雜命令寫成獨立 `.ps1`，內部用 single-quote variable 宣告完整 title，然後 `win_async_exec.ps1 -Command 'powershell -File _pr_make.ps1'` 派工。這是 §黃金法則「複雜指令寫成獨立腳本」的具體應用場景（gh PR create / git 大批次 add 等皆適用）。
 
 #### 2. `win_read_fresh.ps1` — bypass FUSE cache
 
