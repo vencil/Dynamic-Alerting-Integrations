@@ -34,8 +34,11 @@ rules:
       - golden           # golden fixture parity tests
       - tooling          # generic tooling / infrastructure changes
       - blast-radius     # CI bot + scripts/tools/ops/blast_radius.py (PR comment generator)
+      # planning / paperwork scopes (session-ledger / decomposition commits)
+      - planning        # v*-planning.md authorship commits (DEC-K/L drafts, session ledger)
       # release-version scopes (used by release-wrap commits)
       - v2.7.0
+      - v2.8.0
   # Allow sentence-case subjects (conventional default forbids it)
   subject-case:
     - 0
