@@ -212,7 +212,7 @@ export default function DependencyGraph() {
                       fill={isSelected ? '#fff' : color.text}>
                       {pack.label}
                     </text>
-                    <text x={pos.x} y={pos.y + 42} textAnchor="middle" fontSize="9" fill="var(--da-color-hero-muted)">
+                    <text x={pos.x} y={pos.y + 42} textAnchor="middle" fontSize="9" fill="var(--da-color-tile-muted)">
                       {pack.alerts}a / {pack.metrics}m
                     </text>
                   </g>

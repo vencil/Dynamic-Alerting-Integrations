@@ -310,6 +310,53 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **實作檢查**：互動工具 PR 送審前，手動 `grep -n '<\(input\|select\|textarea\)' <tool>.jsx` 配 `grep -n 'aria-label\|htmlFor' <tool>.jsx`，確認每個 form element 都有對應的 accessible name。
 
+### S5. 單一 semantic token 不可 serve 亮度相差 > 40% 的兩種背景（v2.8.0 Phase .a PR#1c 新增）
+
+**規則**：在 `docs/assets/design-tokens.css` 定義文字色 / foreground token 時，如果 consumer 包含**語意背景亮度差異 > 40%** 的場景（例：hero dark bg `#0f172a` vs tile 白 / 淺灰），**必須 split 為兩個 token**。**禁止**把「hero muted」與「tile muted」用同一 token 服務。
+
+**為什麼**：WCAG 2.1 AA 要求文字對背景達 4.5:1 對比。單一色值在 dark bg 上高對比（白灰系列）→ 同一色值在 light bg 上必然低對比，反之亦然。Phase .a0 PR#1 Day 5 retrospective 踩過這坑（TECH-DEBT-007：`--da-color-hero-muted` 用 `gray-400` 一口氣套在 hero dark bg + card light bg + SVG white bg 上，axe-core 在 multi-tenant-comparison 報出 40 nodes color-contrast 違規）。v2.8.0 Phase .a PR#1c 用 token-split 徹底解決——保留 `--da-color-hero-muted` 給 hero dark bg，新增 `--da-color-tile-muted` 給 tile / card / SVG 永遠亮底的 consumers。
+
+**反例**（TECH-DEBT-007 原始犯案）：
+
+```css
+/* ❌ 一個 token 服務兩種背景 */
+:root {
+  --da-color-hero-muted: #94a3b8;  /* slate-400 */
+}
+```
+
+```jsx
+// ❌ hero dark bg 用（7.2:1 pass）
+<p style={{ color: 'var(--da-color-hero-muted)', background: '#0f172a' }}>subtitle</p>
+
+// ❌ tile light bg 也用（3.12:1 fail）— 同一 token，不同語意
+<td style={{ color: 'var(--da-color-hero-muted)', background: '#fef3c7' }}>label</td>
+```
+
+**正例**（PR#1c 修後 token-split）：
+
+```css
+/* ✅ 按 bg 語意 split */
+:root {
+  --da-color-hero-muted: #94a3b8;  /* Hero dark bg ONLY: 7.2:1 on #0f172a */
+  --da-color-tile-muted: #6b7280;  /* Light bg contexts: 4.83:1 on white */
+}
+```
+
+```jsx
+// ✅ Hero dark bg
+<p style={{ color: 'var(--da-color-hero-muted)', background: '#0f172a' }}>subtitle</p>
+
+// ✅ Tile always-light bg
+<td style={{ color: 'var(--da-color-tile-muted)', background: '#fef3c7' }}>label</td>
+```
+
+**命名慣例**：`--da-color-<surface>-<intent>`，`<surface>` 明示語意背景族群（`hero` / `tile` / `card` / `chip` / `toast` 等），`<intent>` 為 foreground 角色（`muted` / `accent` / `strong` / `danger` 等）。避免 `--da-color-muted`（無 surface scope）這類涵蓋過廣的命名。
+
+**雙主題翻色 caveat**：如果 surface 本身會在 `[data-theme="dark"]` 翻色（例：MetricCard light `#f8fafc` → dark `#334155`），**token-split 仍不夠**，需再 split 為 light / dark mode 各自的值（在 `[data-theme="dark"]` 區塊 override）；或改走 theme-aware JSX conditional（useTheme hook）。此情境見 TECH-DEBT-016（PR#1c 分析衍生，L133 MetricCard subStyle 雙背景問題，另案追蹤）。
+
+**收束驗收**：(1) design-tokens.css 每個 foreground token 須有 JSDoc-style 註解標明「allowed bg contexts + contrast ratio」；(2) axe-core `color-contrast` rule 在 light + dark dual-mode 皆 0 violations；(3) design-system-guide.md §TL;DR 的「Token 速查」應列出 surface scope 分類。
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
