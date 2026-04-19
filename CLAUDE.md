@@ -41,6 +41,18 @@ Session 結束或異常終止後：`make session-cleanup`
 4. **pre-commit hook 中斷留下 .git lock** → `make git-lock ARGS="--clean"`，**不要** `--no-verify`
 5. **port-forward 殘留佔用端口** → `pkill -f "port-forward.*prometheus"` 或 `make session-cleanup`
 
+## Skill 自主使用政策
+
+> Cowork / Claude Code 環境提供的 skills（`docx` / `pptx` / `xlsx` / `pdf` / `engineering:*` / `data:*` / `design:*` / `marketing:*` 等）**Claude 可自主判斷使用，不需逐次徵詢使用者**。
+
+- **預設行為**：判斷任務符合 skill 定義時直接 `Read` 對應 SKILL.md 並執行，**不要先問「我可不可以用 X skill」**。
+- **告知方式**：使用前用單行說明（例：「跑 `engineering:debug` 的 reproduce 步驟」），不需冗長 preamble。
+- **多 skill 組合**：一個任務常需多 skill 協作（例如 docx 任務同時動到 imagegen），自主串接。
+- **不適用時主動拒絕**：如果 skill 對任務沒幫助（例：純文字回答不需 docx），直接做事，不要為了用而用。
+- **新工具發現**：如果發現該裝但沒裝的 skill，**用 `mcp__plugins__search_plugins` / `mcp__mcp-registry__search_mcp_registry` 主動尋找 + 建議**，不需等使用者開口。
+
+設立此節原因：v2.7.0 Phase .e 期間使用者多次明示「skill 自主使用即可」，以此節 codify 為長期規則，免去逐 session 重複告知成本。
+
 ## 專案概覽
 
 **Multi-Tenant Dynamic Alerting 平台 (v2.7.0)** — Config-driven, SHA-256 hot-reload, Directory Scanner。完整架構速覽見 [architecture-and-design.md](docs/architecture-and-design.md)；版本歷程見 [CHANGELOG.md](CHANGELOG.md)。
