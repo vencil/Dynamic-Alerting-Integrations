@@ -472,7 +472,7 @@ hook-profile: ## Pre-commit hook 逐一計時 profiling
 # ----------------------------------------------------------
 # Helm Chart 發佈
 # ----------------------------------------------------------
-CHART_DIR  := components/threshold-exporter
+CHART_DIR  := helm/threshold-exporter
 CHART_VER  := $(shell grep '^version:' $(CHART_DIR)/Chart.yaml | awk '{print $$2}')
 
 .PHONY: chart-package

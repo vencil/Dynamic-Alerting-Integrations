@@ -13,6 +13,22 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Fixed
 
+- **A-5a `make pr-preflight` / `pre-tag` Chart.yaml path bug（Phase .a A-5a）**：Helm chart 從 `components/threshold-exporter/` 遷至 `helm/threshold-exporter/`（parallels `helm/tenant-api/`）時遺漏 3 處 stale reference，導致 `make version-check` 印 `grep: components/threshold-exporter/Chart.yaml: No such file or directory` warning、`make chart-package` / `chart-push` target 失效：
+  - `Makefile:475` — `CHART_DIR := components/threshold-exporter` → `helm/threshold-exporter`
+  - `scripts/tools/dx/bump_docs.py:66` — `CHART_YAML = REPO_ROOT / "components" / "threshold-exporter" / "Chart.yaml"` → `"helm" / "threshold-exporter"`（line 68 `TENANT_API_CHART_YAML` 早已用 `helm/` 為正確範式）
+  - `docs/internal/github-release-playbook.md:397` — release step 15 驗證指令 grep path 同步修正
+  - 驗證：`make version-check` 輸出不再含該 warning；Helm chart 發佈主路徑恢復可用
+
+### Changed
+
+- **A-5b scan_component_health `status: archived` opt-in 下架路徑（Phase .a A-5b）**：`scripts/tools/dx/scan_component_health.py` 擴展 Tier policy 以支援 registry 手動標記下架，非破壞性（Q2 warning-only 政策延伸）：
+  - **Registry schema 擴展**：`docs/assets/tool-registry.yaml` 工具項可新增 `status: archived` + `archived_reason: "..."`（本版未標任何工具 archived，schema + 邏輯擴展為主）
+  - **scan 行為**：archived 工具產出 `tier: "Archived"` / `status: "ARCHIVED"`，保留 LOC / i18n 作 visibility metric，**從所有 aggregates 排除**（`tier_distribution` / `token_group_distribution` / `playwright_coverage` / `i18n_coverage_distribution` / `tools_with_hardcoded_hex` / `tools_with_hardcoded_px` / `tier1_token_group_a/c`）—— aggregates 分母統一改用 `active_results`（`status == "OK"`）
+  - **Summary 新增 4 欄位**：`total_active_tools`（未 archived 計數）、`archived_count`、`archived_tools: [keys]`、`archive_candidates: [{key, reason}]`（自動建議清單供 PR review）
+  - **自動建議 criteria（6 條 AND）**：`tier == "Tier 3 (deprecation_candidate)"` AND `loc < 50` AND `tier_breakdown.recency == -1`（>180 天未動）AND `tier_breakdown.writer == 0` AND `not playwright_spec` AND `first_commit > 365 天`。過於保守（防 false positive）—— 最終下架決策仍需維護者寫入 registry
+  - **新測試**：`tests/dx/test_scan_component_health.py`（12 cases，`_is_archive_candidate` × 8 threshold 測試 + `scan()` × 4 integration，tmp_path + monkeypatch 完全隔離 git/jsx 依賴）
+  - **dev-rules.md 新增 §T 工具生命週期**：四態轉換表（active / deprecation_candidate / archive_candidate / archived）+ 判定來源 + scan_component_health 行為 + opt-in rationale + 排除後仍保留 LOC/i18n 的原因（避免 archived 工具在 registry 中完全消失）
+
 - **TECH-DEBT-007 resolved — `--da-color-hero-muted` contrast fail via token-split**（v2.8.0 Phase .a PR#1c）：修復 multi-tenant-comparison / dependency-graph 在 light bg 下 axe-core `color-contrast` 40-node 違規。根因並非 token 色值單純「太淺」，而是**單一 semantic token 被迫服務兩種亮度相差 > 40% 的背景**（hero dark `#0f172a` + tile light `hsl(x,60%,90%)` / SVG white）——任何單值都無法同時滿足 WCAG AA 4.5:1。
   - `docs/assets/design-tokens.css`：保留 `--da-color-hero-muted: #94a3b8`（hero dark bg 7.2:1 AA pass）；新增 `--da-color-tile-muted: #6b7280`（white 4.83:1 AA pass），light / dark mode 皆同值（consumer 背景不翻色）
   - `docs/interactive/tools/multi-tenant-comparison.jsx` L194 `defaultBadgeStyle`：`hero-muted` → `tile-muted`（HeatmapRow cell badge 處於 `hsl(hue,60%,90%)` 永遠亮底）

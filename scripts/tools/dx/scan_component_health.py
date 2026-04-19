@@ -25,6 +25,13 @@ Tier 判準（多訊號加權，見 v2.7.0-planning.md §10 DEC-08）:
   score = LOC(0-3) + Audience(0-2) + Phase(0-2) + Writer(0-2) + Recency(-1~+1)
   Tier 1: score ≥ 7   Tier 2: 4-6   Tier 3: ≤ 3
   deprecation_candidate override: LOC<100+stale 或 writer=0+audience=narrow
+
+Archived (registry opt-in, v2.8.0 A-5b):
+  若 tool-registry.yaml 項目含 `status: archived`，產生的 entry tier="Archived"、
+  status="ARCHIVED"，並從 tier_distribution / token_group_distribution /
+  playwright_coverage / i18n aggregates / hex|px offenders 分母中排除。
+  scan 仍計算 LOC / i18n 作為 visibility 指標（非評分）。
+  `archive_candidates` 列出自動建議（Tier3 deprecation_candidate + 長期未動 + 極小 LOC）。
 """
 from __future__ import annotations
 import argparse
@@ -266,6 +273,43 @@ def compute_i18n_coverage(i18n_calls: int, cjk_hardcoded: int) -> float | None:
     return round(i18n_calls / total, 3) if total else None
 
 
+def _is_archive_candidate(entry: dict, today: datetime) -> tuple[bool, str]:
+    """Suggest archival for Tier 3 deprecation_candidates that look truly dead.
+
+    Criteria (all required):
+      - Tier == "Tier 3 (deprecation_candidate)"
+      - LOC < 50 (stub-sized)
+      - tier_breakdown.recency == -1 (>180 days since last modified)
+      - tier_breakdown.writer == 0 (no mutation surface)
+      - not playwright_spec
+      - first_commit older than 365 days (not a WIP that just got parked)
+
+    Returns (True, human-readable reason) or (False, "").
+    """
+    if entry.get("tier") != "Tier 3 (deprecation_candidate)":
+        return False, ""
+    loc = entry.get("loc") or 0
+    breakdown = entry.get("tier_breakdown") or {}
+    if loc >= 50:
+        return False, ""
+    if breakdown.get("recency", 0) != -1:
+        return False, ""
+    if breakdown.get("writer", 0) != 0:
+        return False, ""
+    if entry.get("playwright_spec"):
+        return False, ""
+    first_commit = entry.get("first_commit") or ""
+    try:
+        dt = datetime.strptime(first_commit, "%Y-%m-%d %H:%M:%S %z")
+    except ValueError:
+        return False, ""
+    if (today - dt).days <= 365:
+        return False, ""
+    return True, (
+        f"LOC={loc}, recency>180d, writer=0, no-spec, first_commit>365d"
+    )
+
+
 # --- 主流程 ---
 def scan(today: datetime | None = None) -> dict:
     today = today or datetime.now(timezone.utc)
@@ -308,11 +352,38 @@ def scan(today: datetime | None = None) -> dict:
         token_density_per_100_loc = (
             round(design_tokens / loc * 100, 1) if loc > 0 else 0.0
         )
-        token_group = classify_token_group(design_tokens, tailwind_palette, hex_hardcoded)
         has_spec = tool["key"] in spec_names
         rel_posix = file_path.relative_to(REPO).as_posix()
         last_modified = last_mtime_map.get(rel_posix, "")
         first_commit = first_mtime_map.get(rel_posix, "")
+
+        # A-5b: registry-opt-in archive. Archived tools still show LOC / i18n
+        # for visibility but are excluded from tier / token / coverage aggregates.
+        if tool.get("status") == "archived":
+            entry.update({
+                "status": "ARCHIVED",
+                "loc": loc,
+                "tier": "Archived",
+                "i18n_enabled": i18n_enabled,
+                "i18n_calls": i18n_calls,
+                "cjk_strings_total": cjk_strings,
+                "cjk_hardcoded_strings": cjk_hardcoded,
+                "i18n_coverage_ratio": compute_i18n_coverage(i18n_calls, cjk_hardcoded),
+                "hex_colors_total": hex_total,
+                "hex_colors_hardcoded": hex_hardcoded,
+                "px_hardcoded": px_count,
+                "design_tokens": design_tokens,
+                "tailwind_palette": tailwind_palette,
+                "token_density_per_100_loc": token_density_per_100_loc,
+                "playwright_spec": has_spec,
+                "last_modified": last_modified,
+                "first_commit": first_commit,
+                "archived_reason": tool.get("archived_reason", ""),
+            })
+            results.append(entry)
+            continue
+
+        token_group = classify_token_group(design_tokens, tailwind_palette, hex_hardcoded)
         tier, tier_score, tier_breakdown = derive_tier(
             tool, content, loc, last_modified, today
         )
@@ -345,44 +416,64 @@ def scan(today: datetime | None = None) -> dict:
     all_jsx = [p.relative_to(JSX_ROOT).as_posix() for p in JSX_ROOT.rglob("*.jsx")]
     unregistered = sorted(set(all_jsx) - registered)
 
-    tier_dist = Counter(r["tier"] for r in results if r["status"] == "OK")
-    with_spec = sum(1 for r in results if r.get("playwright_spec"))
+    # A-5b: split active vs archived. Archived excluded from all derived metrics
+    # so tier/token/coverage denominators reflect the *live* surface area.
+    active_results = [r for r in results if r["status"] == "OK"]
+    archived_results = [r for r in results if r["status"] == "ARCHIVED"]
+    archived_tools = sorted(r["key"] for r in archived_results)
+
+    tier_dist = Counter(r["tier"] for r in active_results)
+    with_spec = sum(1 for r in active_results if r.get("playwright_spec"))
     tier1_nospec = sum(
-        1 for r in results if r.get("tier") == "Tier 1" and not r.get("playwright_spec")
+        1 for r in active_results
+        if r.get("tier") == "Tier 1" and not r.get("playwright_spec")
     )
-    hex_offenders = sum(1 for r in results if r.get("hex_colors_hardcoded", 0) > 0)
-    px_offenders = sum(1 for r in results if r.get("px_hardcoded", 0) > 0)
-    token_group_dist = Counter(
-        r.get("token_group", "N/A") for r in results if r["status"] == "OK"
+    hex_offenders = sum(
+        1 for r in active_results if r.get("hex_colors_hardcoded", 0) > 0
     )
+    px_offenders = sum(1 for r in active_results if r.get("px_hardcoded", 0) > 0)
+    token_group_dist = Counter(r.get("token_group", "N/A") for r in active_results)
     tier1_group_c = [
         r["key"]
-        for r in results
+        for r in active_results
         if r.get("tier") == "Tier 1" and r.get("token_group") == "C"
     ]
     tier1_group_a = [
         r["key"]
-        for r in results
+        for r in active_results
         if r.get("tier") == "Tier 1" and r.get("token_group") == "A"
     ]
     i18n_vals = [
         r["i18n_coverage_ratio"]
-        for r in results
+        for r in active_results
         if r.get("i18n_coverage_ratio") is not None
     ]
     low_i18n = sorted(
-        [r for r in results if r.get("i18n_coverage_ratio") is not None],
+        [r for r in active_results if r.get("i18n_coverage_ratio") is not None],
         key=lambda r: (r["i18n_coverage_ratio"], -r["cjk_hardcoded_strings"]),
     )[:5]
+
+    # A-5b: auto-suggestion — flag deprecation_candidates that look truly dead.
+    # Warning-only (Q2 policy); maintainers decide whether to opt in to `status: archived`.
+    archive_candidates = []
+    for r in active_results:
+        is_candidate, reason = _is_archive_candidate(r, today)
+        if is_candidate:
+            archive_candidates.append({"key": r["key"], "reason": reason})
+    archive_candidates.sort(key=lambda c: c["key"])
 
     summary = {
         "generated_at": today.strftime("%Y-%m-%d"),
         "phase": "v2.7.0 Phase .a A-1",
         "total_registered_tools": len(tools),
+        "total_active_tools": len(active_results),
+        "archived_count": len(archived_results),
+        "archived_tools": archived_tools,
+        "archive_candidates": archive_candidates,
         "total_jsx_files_on_disk": len(all_jsx),
         "unregistered_jsx_files": unregistered,
         "tier_distribution": dict(tier_dist),
-        "playwright_coverage": f"{with_spec}/{len(tools)}",
+        "playwright_coverage": f"{with_spec}/{len(active_results)}",
         "tier1_without_spec": tier1_nospec,
         "tools_with_hardcoded_hex": hex_offenders,
         "tools_with_hardcoded_px": px_offenders,
