@@ -58,105 +58,105 @@ const styles = {
   container: {
     maxWidth: '1200px',
     margin: '0 auto',
-    padding: 'var(--da-spacing-8)',
+    padding: 'var(--da-space-8)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--da-spacing-6)',
+    gap: 'var(--da-space-6)',
   },
   header: {
-    marginBottom: 'var(--da-spacing-2)',
+    marginBottom: 'var(--da-space-2)',
   },
   title: {
     fontSize: 'var(--da-font-size-2xl)',
     fontWeight: 'var(--da-font-weight-bold)',
-    color: 'var(--da-color-text-primary)',
+    color: 'var(--da-color-fg)',
     margin: 0,
   },
   subtitle: {
     fontSize: 'var(--da-font-size-sm)',
-    color: 'var(--da-color-text-secondary)',
-    marginTop: 'var(--da-spacing-1)',
+    color: 'var(--da-color-muted)',
+    marginTop: 'var(--da-space-1)',
   },
   kpiRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: 'var(--da-spacing-4)',
+    gap: 'var(--da-space-4)',
   },
   kpiCard: {
     background: 'var(--da-color-surface)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-4)',
+    padding: 'var(--da-space-4)',
     textAlign: 'center',
   },
   kpiValue: {
     fontSize: 'var(--da-font-size-2xl)',
     fontWeight: 'var(--da-font-weight-bold)',
-    color: 'var(--da-color-text-primary)',
+    color: 'var(--da-color-fg)',
   },
   kpiLabel: {
     fontSize: 'var(--da-font-size-xs)',
-    color: 'var(--da-color-text-secondary)',
-    marginTop: 'var(--da-spacing-1)',
+    color: 'var(--da-color-muted)',
+    marginTop: 'var(--da-space-1)',
   },
   section: {
     background: 'var(--da-color-surface)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-6)',
+    padding: 'var(--da-space-6)',
   },
   sectionTitle: {
     fontSize: 'var(--da-font-size-lg)',
     fontWeight: 'var(--da-font-weight-semibold)',
-    color: 'var(--da-color-text-primary)',
-    marginBottom: 'var(--da-spacing-4)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-4)',
     margin: 0,
   },
   filterRow: {
     display: 'flex',
-    gap: 'var(--da-spacing-3)',
+    gap: 'var(--da-space-3)',
     flexWrap: 'wrap',
-    marginBottom: 'var(--da-spacing-4)',
+    marginBottom: 'var(--da-space-4)',
   },
   filterBtn: {
-    padding: 'var(--da-spacing-1) var(--da-spacing-3)',
-    border: '1px solid var(--da-color-border)',
+    padding: 'var(--da-space-1) var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-md)',
     background: 'var(--da-color-surface)',
-    color: 'var(--da-color-text-secondary)',
+    color: 'var(--da-color-muted)',
     cursor: 'pointer',
     fontSize: 'var(--da-font-size-sm)',
     transition: 'all 0.15s ease',
   },
   filterBtnActive: {
-    background: 'var(--da-color-primary)',
-    color: 'var(--da-color-text-on-primary)',
-    borderColor: 'var(--da-color-primary)',
+    background: 'var(--da-color-accent)',
+    color: 'var(--da-color-accent-fg)',
+    borderColor: 'var(--da-color-accent)',
   },
   barChart: {
     display: 'flex',
     alignItems: 'flex-end',
-    gap: 'var(--da-spacing-2)',
+    gap: 'var(--da-space-2)',
     height: '120px',
-    padding: 'var(--da-spacing-2) 0',
+    padding: 'var(--da-space-2) 0',
   },
   barGroup: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     flex: 1,
-    gap: 'var(--da-spacing-1)',
+    gap: 'var(--da-space-1)',
   },
   barLabel: {
     fontSize: 'var(--da-font-size-xs)',
-    color: 'var(--da-color-text-secondary)',
+    color: 'var(--da-color-muted)',
     textAlign: 'center',
     whiteSpace: 'nowrap',
   },
   barValue: {
     fontSize: 'var(--da-font-size-xs)',
     fontWeight: 'var(--da-font-weight-semibold)',
-    color: 'var(--da-color-text-primary)',
+    color: 'var(--da-color-fg)',
   },
   table: {
     width: '100%',
@@ -165,9 +165,9 @@ const styles = {
   },
   th: {
     textAlign: 'left',
-    padding: 'var(--da-spacing-2) var(--da-spacing-3)',
-    borderBottom: '2px solid var(--da-color-border)',
-    color: 'var(--da-color-text-secondary)',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    borderBottom: '2px solid var(--da-color-surface-border)',
+    color: 'var(--da-color-muted)',
     fontWeight: 'var(--da-font-weight-semibold)',
     fontSize: 'var(--da-font-size-xs)',
     textTransform: 'uppercase',
@@ -176,9 +176,9 @@ const styles = {
     userSelect: 'none',
   },
   td: {
-    padding: 'var(--da-spacing-2) var(--da-spacing-3)',
-    borderBottom: '1px solid var(--da-color-border)',
-    color: 'var(--da-color-text-primary)',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    borderBottom: '1px solid var(--da-color-surface-border)',
+    color: 'var(--da-color-fg)',
   },
   badge: {
     display: 'inline-block',
@@ -191,7 +191,7 @@ const styles = {
     width: '100%',
     height: '6px',
     borderRadius: 'var(--da-radius-full)',
-    background: 'var(--da-color-bg-secondary)',
+    background: 'var(--da-color-tag-bg)',
     overflow: 'hidden',
   },
   progressFill: {
@@ -251,7 +251,7 @@ function ProgressCell({ ratio }) {
     ? 'var(--da-color-warning)'
     : 'var(--da-color-error)';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--da-spacing-2)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)' }}>
       <div style={styles.progressBar} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`i18n coverage ${pct}%`}>
         <div style={{ ...styles.progressFill, width: `${pct}%`, background: color }} />
       </div>
@@ -353,13 +353,13 @@ export default function ComponentHealth() {
       </div>
 
       {/* Distribution Charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--da-spacing-4)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--da-space-4)' }}>
         <div style={styles.section}>
           <h2 style={styles.sectionTitle}>{t('Tier 分佈', 'Tier Distribution')}</h2>
           <SimpleBar
             items={tierDist}
             maxVal={Math.max(...tierDist.map(d => d.value))}
-            colorFn={(label) => TIER_COLORS[label]?.text || 'var(--da-color-text-secondary)'}
+            colorFn={(label) => TIER_COLORS[label]?.text || 'var(--da-color-muted)'}
           />
         </div>
         <div style={styles.section}>
@@ -367,14 +367,14 @@ export default function ComponentHealth() {
           <SimpleBar
             items={tokenDist}
             maxVal={Math.max(...tokenDist.map(d => d.value))}
-            colorFn={(label) => GROUP_COLORS[label]?.text || 'var(--da-color-text-secondary)'}
+            colorFn={(label) => GROUP_COLORS[label]?.text || 'var(--da-color-muted)'}
           />
         </div>
       </div>
 
       {/* Tool Table */}
       <div style={styles.section}>
-        <h2 style={{ ...styles.sectionTitle, marginBottom: 'var(--da-spacing-4)' }}>
+        <h2 style={{ ...styles.sectionTitle, marginBottom: 'var(--da-space-4)' }}>
           {t('工具明細', 'Tool Details')}
         </h2>
 
@@ -431,7 +431,7 @@ export default function ComponentHealth() {
                 <tr key={tool.key}>
                   <td style={styles.td}>
                     <strong>{tool.title}</strong>
-                    <div style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-text-tertiary)' }}>{tool.key}</div>
+                    <div style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-muted)' }}>{tool.key}</div>
                   </td>
                   <td style={styles.td}><Badge tier={tool.tier} /></td>
                   <td style={styles.td}><TokenBadge group={tool.group} /></td>
@@ -459,7 +459,7 @@ export default function ComponentHealth() {
           </table>
         </div>
 
-        <div style={{ marginTop: 'var(--da-spacing-4)', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-text-tertiary)' }}>
+        <div style={{ marginTop: 'var(--da-space-4)', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-muted)' }}>
           {t(
             `顯示 ${filtered.length} / ${HEALTH_DATA.length} 工具 · 資料來源：scan_component_health.py · 快照日期：2026-04-17`,
             `Showing ${filtered.length} / ${HEALTH_DATA.length} tools · Source: scan_component_health.py · Snapshot: 2026-04-17`
@@ -468,19 +468,19 @@ export default function ComponentHealth() {
       </div>
 
       {/* Legend */}
-      <div style={{ ...styles.section, fontSize: 'var(--da-font-size-sm)', color: 'var(--da-color-text-secondary)' }}>
+      <div style={{ ...styles.section, fontSize: 'var(--da-font-size-sm)', color: 'var(--da-color-muted)' }}>
         <h2 style={{ ...styles.sectionTitle, fontSize: 'var(--da-font-size-base)' }}>{t('圖例', 'Legend')}</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--da-spacing-4)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--da-space-4)' }}>
           <div>
             <strong>{t('Tier 評分 (DEC-08)', 'Tier Scoring (DEC-08)')}</strong>
-            <p style={{ margin: 'var(--da-spacing-1) 0' }}>{t(
+            <p style={{ margin: 'var(--da-space-1) 0' }}>{t(
               '5 維度加權：LOC + Audience + Journey Phase + Writer + Recency。Tier 1 ≥7, Tier 2 4-6, Tier 3 ≤3。',
               '5-dimensional weighted: LOC + Audience + Journey Phase + Writer + Recency. Tier 1 ≥7, Tier 2 4-6, Tier 3 ≤3.'
             )}</p>
           </div>
           <div>
             <strong>{t('Token Group', 'Token Group')}</strong>
-            <p style={{ margin: 'var(--da-spacing-1) 0' }}>{t(
+            <p style={{ margin: 'var(--da-space-1) 0' }}>{t(
               'A = density ≥10/100LOC, 0 palette · B = 部分遷移 · C = 未遷移（density <5, ≥5 palette）',
               'A = density ≥10/100LOC, 0 palette · B = partial migration · C = unmigrated (density <5, ≥5 palette)'
             )}</p>

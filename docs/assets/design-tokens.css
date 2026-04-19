@@ -36,7 +36,7 @@
   /* ── Hero (dark header area) ── */
   --da-color-hero-bg:         #0f172a;
   --da-color-hero-fg:         #e2e8f0;
-  --da-color-hero-muted:      #94a3b8;
+  --da-color-hero-muted:      #94a3b8; /* TECH-DEBT-007 deferred to PR#1c: hero-bg #0f172a requires >=5.0:1; #6b7280 gives 4.2:1 (FAIL). Needs token-split. See v2.8.0-planning.md section 12. */
   --da-color-hero-accent:     #38bdf8;
 
   /* ── Card ── */
@@ -133,7 +133,7 @@
 
   --da-color-hero-bg:         #0f172a;
   --da-color-hero-fg:         #e2e8f0;
-  --da-color-hero-muted:      #94a3b8;
+  --da-color-hero-muted:      #94a3b8; /* TECH-DEBT-007 deferred (see light mode note). Reverting to main value. */
   --da-color-hero-accent:     #38bdf8;
 
   --da-color-card-bg:         #1e293b;
@@ -222,8 +222,9 @@
   --da-font-family:       -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --da-font-mono:         'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 
-  /* Font sizes (8 levels from Developer Handoff Spec) */
+  /* Font sizes (10 levels; extends Developer Handoff Spec with xs-sm bridge + 3xl hero) */
   --da-font-size-xs:      0.7rem;    /* tag / badge */
+  --da-font-size-xs-sm:   0.75rem;   /* compact button labels (bridges xs↔sm; added v2.8.0 PR#1) */
   --da-font-size-sm:      0.78rem;   /* section titles, small labels */
   --da-font-size-sm-md:   0.8125rem; /* compact labels, table cells (bridges sm↔base gap) */
   --da-font-size-base:    0.95rem;   /* body text */
@@ -231,6 +232,7 @@
   --da-font-size-lg:      1.05rem;   /* hero description */
   --da-font-size-xl:      1.5rem;    /* stat values, h2 */
   --da-font-size-2xl:     2rem;      /* hero h1 */
+  --da-font-size-3xl:     2.5rem;    /* landing hero h1 (added v2.8.0 PR#1 for operator-setup-wizard) */
 
   /* Font weights */
   --da-font-weight-normal: 400;

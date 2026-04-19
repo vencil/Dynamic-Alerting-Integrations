@@ -51,54 +51,54 @@ const styles = {
   container: {
     maxWidth: '1200px',
     margin: '0 auto',
-    padding: 'var(--da-spacing-8)',
+    padding: 'var(--da-space-8)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--da-spacing-8)',
+    gap: 'var(--da-space-8)',
   },
   header: {
-    marginBottom: 'var(--da-spacing-2)',
+    marginBottom: 'var(--da-space-2)',
   },
   title: {
     fontSize: 'var(--da-font-size-2xl)',
     fontWeight: 'bold',
     color: 'var(--da-color-fg)',
     margin: 0,
-    marginBottom: 'var(--da-spacing-2)',
+    marginBottom: 'var(--da-space-2)',
   },
   subtitle: {
     fontSize: 'var(--da-font-size-sm)',
     color: 'var(--da-color-muted)',
     margin: 0,
-    marginBottom: 'var(--da-spacing-1)',
+    marginBottom: 'var(--da-space-1)',
   },
   platformInfo: {
     fontSize: 'var(--da-font-size-xs)',
     color: 'var(--da-color-muted)',
-    marginTop: 'var(--da-spacing-1)',
+    marginTop: 'var(--da-space-1)',
   },
   inputGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-    gap: 'var(--da-spacing-6)',
-    marginBottom: 'var(--da-spacing-8)',
+    gap: 'var(--da-space-6)',
+    marginBottom: 'var(--da-space-8)',
   },
   inputCard: {
     backgroundColor: 'var(--da-color-bg)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-6)',
+    padding: 'var(--da-space-6)',
     boxShadow: 'var(--da-shadow-subtle)',
   },
   cardTitle: {
     fontSize: 'var(--da-font-size-sm)',
     fontWeight: '600',
     color: 'var(--da-color-fg)',
-    marginBottom: 'var(--da-spacing-4)',
+    marginBottom: 'var(--da-space-4)',
     margin: 0,
   },
   inputGroup: {
-    marginBottom: 'var(--da-spacing-4)',
+    marginBottom: 'var(--da-space-4)',
   },
   inputGroupLast: {
     marginBottom: 0,
@@ -107,7 +107,7 @@ const styles = {
     fontSize: 'var(--da-font-size-sm)',
     fontWeight: '500',
     color: 'var(--da-color-fg)',
-    marginBottom: 'var(--da-spacing-2)',
+    marginBottom: 'var(--da-space-2)',
     display: 'block',
   },
   labelWithValue: {
@@ -118,14 +118,14 @@ const styles = {
   labelValue: {
     fontSize: 'var(--da-font-size-sm)',
     fontWeight: '600',
-    color: 'var(--da-color-primary)',
+    color: 'var(--da-color-accent)',
     fontFamily: 'monospace',
   },
   sliderInput: {
     width: '100%',
     height: '6px',
     borderRadius: 'var(--da-radius-full)',
-    background: 'var(--da-color-border)',
+    background: 'var(--da-color-surface-border)',
     outline: 'none',
     WebkitAppearance: 'none',
     appearance: 'none',
@@ -136,13 +136,13 @@ const styles = {
     color: 'var(--da-color-muted)',
     display: 'flex',
     justifyContent: 'space-between',
-    marginTop: 'var(--da-spacing-1)',
+    marginTop: 'var(--da-space-1)',
   },
   selectInput: {
     width: '100%',
-    padding: 'var(--da-spacing-2) var(--da-spacing-3)',
+    padding: 'var(--da-space-2) var(--da-space-3)',
     fontSize: 'var(--da-font-size-sm)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-md)',
     backgroundColor: 'var(--da-color-bg)',
     color: 'var(--da-color-fg)',
@@ -151,16 +151,16 @@ const styles = {
   radioGroup: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--da-spacing-3)',
+    gap: 'var(--da-space-3)',
   },
   radioOption: {
     display: 'flex',
     alignItems: 'center',
-    gap: 'var(--da-spacing-2)',
+    gap: 'var(--da-space-2)',
   },
   radioInput: {
     cursor: 'pointer',
-    accentColor: 'var(--da-color-primary)',
+    accentColor: 'var(--da-color-accent)',
   },
   radioLabel: {
     cursor: 'pointer',
@@ -170,21 +170,21 @@ const styles = {
   resultsSection: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
-    gap: 'var(--da-spacing-6)',
-    marginBottom: 'var(--da-spacing-8)',
+    gap: 'var(--da-space-6)',
+    marginBottom: 'var(--da-space-8)',
   },
   resourceTable: {
     backgroundColor: 'var(--da-color-bg)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-6)',
+    padding: 'var(--da-space-6)',
     boxShadow: 'var(--da-shadow-subtle)',
   },
   tableTitle: {
     fontSize: 'var(--da-font-size-md)',
     fontWeight: '600',
     color: 'var(--da-color-fg)',
-    marginBottom: 'var(--da-spacing-4)',
+    marginBottom: 'var(--da-space-4)',
     margin: 0,
   },
   table: {
@@ -193,16 +193,16 @@ const styles = {
     fontSize: 'var(--da-font-size-xs)',
   },
   tableHeader: {
-    backgroundColor: 'var(--da-color-border)',
+    backgroundColor: 'var(--da-color-surface-border)',
     color: 'var(--da-color-fg)',
     fontWeight: '600',
-    padding: 'var(--da-spacing-2) var(--da-spacing-3)',
+    padding: 'var(--da-space-2) var(--da-space-3)',
     textAlign: 'left',
-    borderBottom: '1px solid var(--da-color-border)',
+    borderBottom: '1px solid var(--da-color-surface-border)',
   },
   tableCell: {
-    padding: 'var(--da-spacing-2) var(--da-spacing-3)',
-    borderBottom: '1px solid var(--da-color-border)',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    borderBottom: '1px solid var(--da-color-surface-border)',
     color: 'var(--da-color-fg)',
   },
   tableCellMonospace: {
@@ -211,9 +211,9 @@ const styles = {
   },
   costCard: {
     backgroundColor: 'var(--da-color-bg)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-6)',
+    padding: 'var(--da-space-6)',
     boxShadow: 'var(--da-shadow-subtle)',
   },
   costCardGreen: {
@@ -224,44 +224,44 @@ const styles = {
   costValue: {
     fontSize: 'var(--da-font-size-2xl)',
     fontWeight: 'bold',
-    color: 'var(--da-color-primary)',
+    color: 'var(--da-color-accent)',
     fontFamily: 'monospace',
-    marginTop: 'var(--da-spacing-2)',
+    marginTop: 'var(--da-space-2)',
   },
   costLabel: {
     fontSize: 'var(--da-font-size-sm)',
     color: 'var(--da-color-muted)',
-    marginBottom: 'var(--da-spacing-1)',
+    marginBottom: 'var(--da-space-1)',
   },
   costSubtitle: {
     fontSize: 'var(--da-font-size-xs)',
     color: 'var(--da-color-muted)',
-    marginTop: 'var(--da-spacing-2)',
+    marginTop: 'var(--da-space-2)',
   },
   comparisonSection: {
     backgroundColor: 'var(--da-color-bg)',
-    border: '1px solid var(--da-color-border)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-6)',
+    padding: 'var(--da-space-6)',
     boxShadow: 'var(--da-shadow-subtle)',
     gridColumn: '1 / -1',
   },
   comparisonGrid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr auto',
-    gap: 'var(--da-spacing-4)',
+    gap: 'var(--da-space-4)',
     alignItems: 'center',
   },
   comparisonCard: {
-    padding: 'var(--da-spacing-4)',
-    border: '1px solid var(--da-color-border)',
+    padding: 'var(--da-space-4)',
+    border: '1px solid var(--da-color-surface-border)',
     borderRadius: 'var(--da-radius-md)',
     backgroundColor: 'var(--da-color-bg)',
   },
   comparisonLabel: {
     fontSize: 'var(--da-font-size-sm)',
     color: 'var(--da-color-muted)',
-    marginBottom: 'var(--da-spacing-2)',
+    marginBottom: 'var(--da-space-2)',
   },
   comparisonValue: {
     fontSize: 'var(--da-font-size-lg)',
@@ -277,17 +277,17 @@ const styles = {
   },
   recommendationSection: {
     backgroundColor: 'var(--da-color-bg)',
-    border: '1px solid var(--da-color-primary)',
+    border: '1px solid var(--da-color-accent)',
     borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-spacing-6)',
+    padding: 'var(--da-space-6)',
     boxShadow: 'var(--da-shadow-subtle)',
     gridColumn: '1 / -1',
   },
   recommendationTitle: {
     fontSize: 'var(--da-font-size-md)',
     fontWeight: '600',
-    color: 'var(--da-color-primary)',
-    marginBottom: 'var(--da-spacing-3)',
+    color: 'var(--da-color-accent)',
+    marginBottom: 'var(--da-space-3)',
     margin: 0,
   },
   recommendationText: {
@@ -299,20 +299,20 @@ const styles = {
   methodologySection: {
     fontSize: 'var(--da-font-size-xs)',
     color: 'var(--da-color-muted)',
-    borderTop: '1px solid var(--da-color-border)',
-    paddingTop: 'var(--da-spacing-4)',
-    marginTop: 'var(--da-spacing-8)',
+    borderTop: '1px solid var(--da-color-surface-border)',
+    paddingTop: 'var(--da-space-4)',
+    marginTop: 'var(--da-space-8)',
   },
   summaryTrigger: {
     cursor: 'pointer',
     fontWeight: '500',
-    color: 'var(--da-color-primary)',
+    color: 'var(--da-color-accent)',
   },
   methodologyDetails: {
-    marginTop: 'var(--da-spacing-2)',
+    marginTop: 'var(--da-space-2)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 'var(--da-spacing-2)',
+    gap: 'var(--da-space-2)',
   },
   methodologyP: {
     margin: 0,
@@ -587,7 +587,7 @@ function ResourceTable({ data, replicas, mode }) {
               <td style={styles.tableCell}>—</td>
             </tr>
           )}
-          <tr style={{ backgroundColor: 'var(--da-color-border)' }}>
+          <tr style={{ backgroundColor: 'var(--da-color-surface-border)' }}>
             <td style={{...styles.tableCell, fontWeight: 'bold'}}>Total</td>
             <td style={{...styles.tableCell, ...styles.tableCellMonospace, fontWeight: 'bold'}}>
               {summary.totalCpuCores.toFixed(2)} cores
