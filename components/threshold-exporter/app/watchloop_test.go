@@ -342,6 +342,12 @@ defaults:
 
 // ============================================================
 // WatchLoop — error in scan (dir deleted)
+//
+// TECH-DEBT-017: this test and TestWatchLoop_SingleFile_ErrorOnRead
+// below use time.Sleep as a synchronisation primitive and are
+// flake-prone under `go test -race` on Go 1.26 CI. Planned fix is
+// m.Stop()+sync.WaitGroup so the watcher goroutine is guaranteed
+// to have exited before os.Remove runs.
 // ============================================================
 
 func TestWatchLoop_Dir_ErrorOnScan(t *testing.T) {
