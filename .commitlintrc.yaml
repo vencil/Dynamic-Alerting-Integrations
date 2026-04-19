@@ -59,6 +59,4 @@ rules:
       - test
       - build
       - ci
-      - chore
-      - revert
-      - merge
+  
