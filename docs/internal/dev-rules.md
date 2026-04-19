@@ -175,15 +175,16 @@ chmod +x .git/hooks/pre-push
 
 **PR 收尾 SOP（Branch Closing Checklist）**：
 
-merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local hooks），自動檢查六項：
+merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local hooks），自動檢查七項：
 
 ```
 ┌─ 1. Branch 身份    確認在 feature branch，非 main
 ├─ 2. Behind main    落後幾個 commit → 建議先 merge main
 ├─ 3. Conflict       dry-run merge 偵測衝突
 ├─ 4. Local hooks    pre-commit run --all-files
-├─ 5. CI 狀態        gh pr checks（含 A/B 分類：pre-existing vs this-PR）
-└─ 6. PR mergeable   GitHub mergeable + review 狀態
+├─ 5. Scope drift    check_pr_scope_drift.py（tool-map + working-tree clean，§P2）
+├─ 6. CI 狀態        gh pr checks（含 A/B 分類：pre-existing vs this-PR）
+└─ 7. PR mergeable   GitHub mergeable + review 狀態
 ```
 
 各 status 的處理方式：
@@ -269,30 +270,17 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **為什麼**：axe-core `scrollable-region-focusable` rule 在任何 scrollable 且**無 focusable children** 的元素上觸發，不論是否有 `role="region"`。v2.8.0 Phase .a Day 1 scope check 發現 `notification-previewer.jsx` 雖 Day 5-7 期間移除了 `role="region"`，但 `styles.previewBox` 的 `overflowY: 'auto'` + `maxHeight: '400px'` 仍觸發 axe，印證這是容器本身屬性問題而非 role 問題。
 
-**反例**（v2.7.0 實際踩過）：
+**反 / 正例**（v2.7.0 實際踩過，TECH-DEBT-006 / -009）：
 
 ```jsx
-// ❌ TECH-DEBT-006：threshold-heatmap scrollable heatmap grid 沒有 tabIndex
+// ❌ overflow-auto / overflowY:'auto' 容器無 tabIndex／accessible name
 <div className="... overflow-auto" role="region" aria-label="Heatmap">...</div>
-
-// ❌ TECH-DEBT-009：notification-previewer previewBox 拿掉 role="region" 以為修了，
-//     其實 overflowY:'auto' + maxHeight:'400px' 還是觸發 axe
 <div style={{ overflowY: 'auto', maxHeight: '400px' }} aria-live="polite">...</div>
-```
 
-**正例**（v2.8.0 PR#2 修後）：
-
-```jsx
-// ✅ TECH-DEBT-006 修法
-<div className="... overflow-auto"
-     role="region"
-     aria-label={t('閾值熱力圖', 'Threshold heatmap grid')}
-     tabIndex={0}>...</div>
-
-// ✅ TECH-DEBT-009 修法（雙 previewBox 同模式）
-<div style={{ overflowY: 'auto', maxHeight: '400px' }}
-     aria-live="polite"
-     tabIndex={0}
+// ✅ 補 tabIndex={0} + aria-label (雙語 token)
+<div className="... overflow-auto" role="region" tabIndex={0}
+     aria-label={t('閾值熱力圖', 'Threshold heatmap grid')}>...</div>
+<div style={{ overflowY: 'auto', maxHeight: '400px' }} aria-live="polite" tabIndex={0}
      aria-label={t('通知標題預覽', 'Notification title preview')}>...</div>
 ```
 
@@ -316,26 +304,12 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **為什麼**：WCAG 2.1 AA 要求文字對背景達 4.5:1 對比。單一色值在 dark bg 上高對比（白灰系列）→ 同一色值在 light bg 上必然低對比，反之亦然。Phase .a0 PR#1 Day 5 retrospective 踩過這坑（TECH-DEBT-007：`--da-color-hero-muted` 用 `gray-400` 一口氣套在 hero dark bg + card light bg + SVG white bg 上，axe-core 在 multi-tenant-comparison 報出 40 nodes color-contrast 違規）。v2.8.0 Phase .a PR#1c 用 token-split 徹底解決——保留 `--da-color-hero-muted` 給 hero dark bg，新增 `--da-color-tile-muted` 給 tile / card / SVG 永遠亮底的 consumers。
 
-**反例**（TECH-DEBT-007 原始犯案）：
+**反 / 正例**（TECH-DEBT-007：一 token 服務兩種背景 → PR#1c token-split）：
 
 ```css
 /* ❌ 一個 token 服務兩種背景 */
-:root {
-  --da-color-hero-muted: #94a3b8;  /* slate-400 */
-}
-```
+:root { --da-color-hero-muted: #94a3b8; }  /* slate-400 */
 
-```jsx
-// ❌ hero dark bg 用（7.2:1 pass）
-<p style={{ color: 'var(--da-color-hero-muted)', background: '#0f172a' }}>subtitle</p>
-
-// ❌ tile light bg 也用（3.12:1 fail）— 同一 token，不同語意
-<td style={{ color: 'var(--da-color-hero-muted)', background: '#fef3c7' }}>label</td>
-```
-
-**正例**（PR#1c 修後 token-split）：
-
-```css
 /* ✅ 按 bg 語意 split */
 :root {
   --da-color-hero-muted: #94a3b8;  /* Hero dark bg ONLY: 7.2:1 on #0f172a */
@@ -344,10 +318,12 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 ```
 
 ```jsx
-// ✅ Hero dark bg
+// ❌ 同一 token 給 dark/light 兩背景（後者 3.12:1 fail）
 <p style={{ color: 'var(--da-color-hero-muted)', background: '#0f172a' }}>subtitle</p>
+<td style={{ color: 'var(--da-color-hero-muted)', background: '#fef3c7' }}>label</td>
 
-// ✅ Tile always-light bg
+// ✅ 分 token，各自符合 4.5:1
+<p style={{ color: 'var(--da-color-hero-muted)', background: '#0f172a' }}>subtitle</p>
 <td style={{ color: 'var(--da-color-tile-muted)', background: '#fef3c7' }}>label</td>
 ```
 
@@ -405,6 +381,15 @@ tools:
 **原因**：沒有 trailer 時 registry 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。
 
 **自動化攔截**：pre-push hook `check-techdebt-drift`（`scripts/tools/lint/check_techdebt_drift.py`）。Class A（trailer 指向仍 `open` 的 ID）exit 1 擋住 push；Class B（registry 已 resolved 但無 trailer）僅印資訊。純文件 / 純 refactor / 跨多項目的批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
+
+### P2. PR Scope Drift（由 `check_pr_scope_drift` hook 強制，v2.8.0 Phase .a 新增）
+
+**規則**：本條無文字敘述——由 `scripts/tools/lint/check_pr_scope_drift.py` 於 `make pr-preflight` 強制執行。偵測項：
+
+1. **Tool count drift**：`bump_docs.py --check` 不通過（CLAUDE.md「N 個 Python 工具」與實際 `scripts/tools/**/*.py` count 不一致）
+2. **Working-tree clean**：準備 merge 的 PR branch 存在未 commit 的修改（`git diff --quiet` + `git diff --cached --quiet` 都必須通過）
+
+設計原則：規則本體即為 hook 程式碼，避免「文字規範 → 記性 → 執行」三段 rot。新增 drift 項目時改 code，不改本節。
 
 ## §A 產出物治理（Planning Artifact Policy，v2.8.0 Phase .a 新增）
 
