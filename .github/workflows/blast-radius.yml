@@ -94,11 +94,14 @@ jobs:
             --format json \
             --output /tmp/blast-radius-report.json
 
+          ARTIFACT_HINT="Full per-tenant diff available in the \`blast-radius-report\` artifact on [this workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+
           python3 scripts/tools/ops/blast_radius.py \
             --base /tmp/base-effective.json \
             --pr /tmp/pr-effective.json \
             --format markdown \
             --changed-files "$CHANGED_FILES" \
+            --artifact-hint "$ARTIFACT_HINT" \
             --output /tmp/blast-radius-comment.md
 
           if [ -s /tmp/blast-radius-comment.md ]; then
