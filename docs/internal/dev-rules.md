@@ -259,6 +259,57 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **實作**：`assertNoAbsoluteRootHrefs` 掃描所有 `<a href>` 是否為 portal-safe 路徑（相對 / external / fragment）。Day 3 首次落地（commit `ca48275`），`deployment-wizard.spec.ts` 和 `wizard.spec.ts` 已採用。
 
+### S3. Scrollable container 必附 `tabIndex={0}` + accessible name（v2.8.0 Phase .a 新增）
+
+**規則**：`docs/interactive/tools/` 下任何產生 scrollable overflow 的容器（`overflow-auto` / `overflowY: 'auto'` / `overflow-y-auto` / `overflow-scroll` 並搭配 `max-h` / `maxHeight` 或 flex 限高）**必須**同時滿足：
+
+1. `tabIndex={0}` — 讓鍵盤使用者能 Tab 進容器 → 方向鍵捲動
+2. `aria-label={t('繁體中文標籤', 'English label')}` 或相等的 `aria-labelledby` — 讓 screen reader 宣告容器用途
+3. （建議）`role="region"` — 若內容為邏輯上的獨立區塊
+
+**為什麼**：axe-core `scrollable-region-focusable` rule 在任何 scrollable 且**無 focusable children** 的元素上觸發，不論是否有 `role="region"`。v2.8.0 Phase .a Day 1 scope check 發現 `notification-previewer.jsx` 雖 Day 5-7 期間移除了 `role="region"`，但 `styles.previewBox` 的 `overflowY: 'auto'` + `maxHeight: '400px'` 仍觸發 axe，印證這是容器本身屬性問題而非 role 問題。
+
+**反例**（v2.7.0 實際踩過）：
+
+```jsx
+// ❌ TECH-DEBT-006：threshold-heatmap scrollable heatmap grid 沒有 tabIndex
+<div className="... overflow-auto" role="region" aria-label="Heatmap">...</div>
+
+// ❌ TECH-DEBT-009：notification-previewer previewBox 拿掉 role="region" 以為修了，
+//     其實 overflowY:'auto' + maxHeight:'400px' 還是觸發 axe
+<div style={{ overflowY: 'auto', maxHeight: '400px' }} aria-live="polite">...</div>
+```
+
+**正例**（v2.8.0 PR#2 修後）：
+
+```jsx
+// ✅ TECH-DEBT-006 修法
+<div className="... overflow-auto"
+     role="region"
+     aria-label={t('閾值熱力圖', 'Threshold heatmap grid')}
+     tabIndex={0}>...</div>
+
+// ✅ TECH-DEBT-009 修法（雙 previewBox 同模式）
+<div style={{ overflowY: 'auto', maxHeight: '400px' }}
+     aria-live="polite"
+     tabIndex={0}
+     aria-label={t('通知標題預覽', 'Notification title preview')}>...</div>
+```
+
+**收束驗收**：`tests/e2e/_axe-audit-day1to3.spec.ts` + `_axe-audit-day4.spec.ts` `scrollable-region-focusable` rule 全綠。提案同期啟用 `eslint-plugin-jsx-a11y/scrollable-region-focusable` 於 ESLint config，防止 regression。
+
+### S4. Form control 必附 accessible name（v2.8.0 Phase .a 新增）
+
+**規則**：所有 `<input>` / `<select>` / `<textarea>`（除了 `type="hidden"`）**必須**至少有以下其一：
+
+1. 關聯 `<label>`：`<label htmlFor="foo">Name</label><input id="foo" />`
+2. `aria-label={t('zh', 'en')}` — 雙語 token
+3. `aria-labelledby="<existing-id>"`
+
+**為什麼**：axe-core `label` / `select-name` rule 為 CRITICAL 等級。Placeholder **不是** accessible name（screen reader 只讀 "edit text"），視覺 label 但未 `htmlFor` 關聯也不成。v2.7.0 Day 5 retrospective 單次 runtime axe 掃到 TECH-DEBT-008 / -011 / -012 三個 CRITICAL violation，全源自此規則被忽略。
+
+**實作檢查**：互動工具 PR 送審前，手動 `grep -n '<\(input\|select\|textarea\)' <tool>.jsx` 配 `grep -n 'aria-label\|htmlFor' <tool>.jsx`，確認每個 form element 都有對應的 accessible name。
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
