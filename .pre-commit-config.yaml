@@ -342,6 +342,17 @@ repos:
         stages: [manual]
         additional_dependencies: ['pyyaml']
 
+      - id: check-techdebt-drift
+        name: TECH-DEBT/REG registry vs git log drift
+        entry: python3 -X utf8 scripts/tools/lint/check_techdebt_drift.py --check
+        language: python
+        pass_filenames: false
+        # Registry file is maintainer-local (gitignored); script is the only
+        # tracked trigger. Manual stage — opt-in via pre-commit run --hook-stage manual.
+        # See dev-rules.md §S6 / v2.8.0-planning.md Trap #12.
+        files: ^scripts/tools/lint/check_techdebt_drift\.py$
+        stages: [manual]
+
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
         entry: bash -c 'cd tests/e2e && npx playwright test'
