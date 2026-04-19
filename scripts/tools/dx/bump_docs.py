@@ -63,7 +63,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # scripts/tools/dx/ -> repo root
 # ---------------------------------------------------------------------------
 # Version source-of-truth files
 # ---------------------------------------------------------------------------
-CHART_YAML = REPO_ROOT / "components" / "threshold-exporter" / "Chart.yaml"
+CHART_YAML = REPO_ROOT / "helm" / "threshold-exporter" / "Chart.yaml"
 DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
 TENANT_API_CHART_YAML = REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
 

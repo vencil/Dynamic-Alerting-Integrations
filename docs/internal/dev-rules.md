@@ -357,6 +357,43 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **收束驗收**：(1) design-tokens.css 每個 foreground token 須有 JSDoc-style 註解標明「allowed bg contexts + contrast ratio」；(2) axe-core `color-contrast` rule 在 light + dark dual-mode 皆 0 violations；(3) design-system-guide.md §TL;DR 的「Token 速查」應列出 surface scope 分類。
 
+## §T 工具生命週期（v2.8.0 Phase .a A-5b 新增）
+
+互動工具（`docs/assets/tool-registry.yaml` 註冊的 JSX）在生命週期中會經歷以下四種狀態。
+狀態轉換由 **Tier 評分自動推進**（降階）+ **Registry 手動 opt-in**（下架），避免誤判引發資料毀損。
+
+| 狀態 | 判定來源 | scan_component_health 行為 | 典型動作 |
+|------|----------|----------------------------|----------|
+| **active** | `scan_component_health` Tier 1/2/3 | 完整計分 + 納入所有 aggregates（tier / token / i18n / playwright） | 日常開發、tier 升降視分數 |
+| **deprecation_candidate** | `Tier 3 (deprecation_candidate)` override（LOC<100 + stale，或 writer=0 + audience=narrow） | 仍納入 aggregates，但標記為候選 | 重構 / 合併到其他工具 / opt-in archived |
+| **archive_candidate** | `archive_candidates` 自動建議（Tier3 deprecation_candidate + LOC<50 + 未動 >180d + writer=0 + no-spec + first_commit>365d） | 未變更（active），僅在 summary 額外列出建議 | 維護者評估後決定是否 opt-in `status: archived` |
+| **archived** | Registry 手動 `status: archived`（opt-in） | `tier="Archived"`, `status="ARCHIVED"`；**從所有 aggregates 排除**（tier / token / playwright / i18n / hex / px）；保留 LOC/i18n 作為 visibility | 觀察期 + 後續歸檔或刪除 |
+
+### 為何 archived 是 opt-in（而非自動下架）
+
+**Q2 warning-only 政策延伸**：scan_component_health 不能片面決定一個工具「該下架」，因為判定訊號（LOC / 活躍度 / spec 覆蓋）都是 proxy，不是真實用戶行為。自動化建議會被 `archive_candidates` 標示，但實際下架需維護者寫入 registry，留下明確 audit trail。
+
+### Registry schema（tool-registry.yaml）
+
+```yaml
+tools:
+  - key: legacy-thing
+    file: interactive/tools/LegacyThing.jsx
+    # ...原有欄位...
+    status: archived              # 新增：opt-in 下架
+    archived_reason: "superseded by new-thing (v2.7.0)"   # 強烈建議填寫
+```
+
+### 排除後仍保留 LOC/i18n 的原因
+
+避免 archived 工具在 registry 中「完全消失」──維護者仍可透過 `component-health-snapshot.json` 的 `archived_tools` 清單一眼掌握下架範圍，需要時再決定徹底刪除還是保留為歷史參考。
+
+### 相關自動化
+
+- `scan_component_health.py`：實作於 `scripts/tools/dx/scan_component_health.py`，含 `_is_archive_candidate()` helper
+- `tests/dx/test_scan_component_health.py`：12 個測試覆蓋 tier / archived / candidate 三條路徑
+- 與 Q2 policy 對齊：警告型（不 fail），可在 CI 印出 `archived_tools` + `archive_candidates` 供 PR review
+
 ## 常被違反 Top 4（CLAUDE.md 會保留這四條）
 
 根據歷史 LL 與 pre-commit 攔截記錄，以下四條最容易被違反：
@@ -371,3 +408,4 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 | 版本 | 變更 |
 |------|------|
 | v2.6.0 | 從 `CLAUDE.md` 搬出，作為 11 條規範的 SSOT |
+| v2.8.0 | 新增 §T 工具生命週期（A-5b scan_component_health archived opt-in）|
