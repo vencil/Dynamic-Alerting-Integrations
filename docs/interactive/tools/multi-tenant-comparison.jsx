@@ -339,6 +339,7 @@ function MultiTenantComparison() {
               value={selectedMetric}
               onChange={e => setSelectedMetric(e.target.value)}
               style={selectStyle}
+              aria-label={t('選擇要比較的指標', 'Select metric to compare')}
             >
               {metrics.map(m => <option key={m} value={m}>{m}</option>)}
             </select>

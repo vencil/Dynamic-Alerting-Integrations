@@ -750,6 +750,8 @@ function LivePreview({ receiverType, template }) {
             padding: 'var(--da-space-3)',
           }}
           aria-live="polite"
+          tabIndex={0}
+          aria-label={t('通知標題預覽', 'Notification title preview')}
         >
           {titlePreview || t('（無標題）', '(no title)')}
         </div>
@@ -778,6 +780,8 @@ function LivePreview({ receiverType, template }) {
             fontSize: 'var(--da-font-size-sm)',
           }}
           aria-live="polite"
+          tabIndex={0}
+          aria-label={t('通知內容預覽', 'Notification body preview')}
         >
           {bodyPreview || t('（無內容）', '(no body)')}
         </div>

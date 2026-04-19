@@ -341,7 +341,7 @@ export default function ThresholdHeatmap() {
           </div>
 
           {/* Main: Heatmap */}
-          <div className="xl:col-span-3 bg-[color:var(--da-color-card-bg)] rounded-xl shadow-sm border border-[color:var(--da-color-surface-border)] p-6 overflow-auto" role="region" aria-live="polite" aria-label={t('閾值熱力圖', 'Threshold heatmap grid')}>
+          <div className="xl:col-span-3 bg-[color:var(--da-color-card-bg)] rounded-xl shadow-sm border border-[color:var(--da-color-surface-border)] p-6 overflow-auto" role="region" aria-live="polite" aria-label={t('閾值熱力圖', 'Threshold heatmap grid')} tabIndex={0}>
             <div className="inline-block min-w-full">
               {/* Heatmap Table */}
               <table className="border-collapse" role="table" aria-label={t('閾值分佈表格', 'Threshold distribution table')}>
