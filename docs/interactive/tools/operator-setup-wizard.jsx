@@ -759,7 +759,7 @@ function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
           </button>
         </div>
         {customTenant.trim() && !validateTenantName(customTenant.trim()) && (
-          <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-danger)', marginTop: 'var(--da-space-1)' }}>
+          <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-error)', marginTop: 'var(--da-space-1)' }}>
             ✗ {t('無效的 tenant 名稱。必須符合 RFC 1123', 'Invalid tenant name. Must comply with RFC 1123')}
           </p>
         )}
@@ -797,7 +797,7 @@ function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
                     border: 'none',
                     cursor: 'pointer',
                     fontSize: 'var(--da-font-size-sm)',
-                    color: 'var(--da-color-danger)',
+                    color: 'var(--da-color-error)',
                     padding: 0,
                   }}
                 >
