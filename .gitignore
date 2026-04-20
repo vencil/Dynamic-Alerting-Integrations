@@ -76,11 +76,16 @@ docs/internal/design-reviews/
 .release-please-manifest.json
 
 # --- Session helper / temp files (Windows MCP Playbook §修復層 C / D) ---
-# Ad-hoc batch scripts, logs and token drops used by Dev Container push path.
-# Any file prefixed with _ or .dev_ is expected to be ephemeral and MUST NOT be committed.
-_*.bat
-_*.txt
-_*.md
+# Policy (v2.8.0): scratch files are NOT hidden via .gitignore — they're
+# either adopted (moved to scripts/ops/) or deleted. Rationale: hiding
+# scratch via gitignore makes the cleanup step invisible and invites
+# drift. See docs/internal/dev-rules.md §P2 + §P3.
+#   * `_*.bat` / `_*.ps1` / `_*.cmd` — blocked by `check_ad_hoc_git_scripts`
+#     hook (L1 pre-commit). Use scripts/ops/win_git_escape.bat /
+#     scripts/ops/win_gh.bat instead.
+#   * `_*.txt` / `_*.md` — allowed as ephemeral commit-message payloads
+#     (consumed by `win_git_escape.bat commit-file`); delete after use.
+# Only truly unreviewable artifacts stay gitignored below:
 _*.json
 _*.out
 _*.err

@@ -103,12 +103,14 @@ lang: en
 |------|------|
 | `_lint_helpers.py` | Shared utilities for lint tools. |
 | `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
+| `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
+| `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
@@ -125,6 +127,7 @@ lang: en
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
+| `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_structure.py` | Project structure enforcement. |
@@ -138,6 +141,7 @@ lang: en
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |
 | `validate_mermaid.py` | Mermaid 圖渲染驗證 |
+| `validate_planning_session_row.py` | Detect bloated §12.1 Session Ledger rows in versioned planning docs. |
 
 ## Shared Libraries
 

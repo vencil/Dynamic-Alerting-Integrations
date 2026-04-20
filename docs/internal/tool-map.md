@@ -103,6 +103,7 @@ lang: zh
 |------|------|
 | `_lint_helpers.py` | Shared utilities for lint tools. |
 | `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
+| `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
