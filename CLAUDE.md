@@ -12,7 +12,8 @@ lang: zh
 
 Session 起手式已 codified 為 **PreToolUse hook**（v2.8.0）— 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` 呼叫自動跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作 + 寫 session marker），後續同 session 呼叫 O(1) no-op。Session 用 `CLAUDE_SESSION_ID` 區分。
 
-- **手動觸發**（偵錯）：`python scripts/session-guards/session-init.py [--status|--force]`
+- **手動觸發**（偵錯）：`python scripts/session-guards/session-init.py [--status|--force|--stats]`
+- **Telemetry**：每次 hook 呼叫 append JSON Lines 到 `~/.cache/vibe/session-init.log`（Windows `%LOCALAPPDATA%\vibe\`）。`--stats` 印 counts / sessions / last N events；`--stats --json` 供 jq pipe；`VIBE_SESSION_LOG=/dev/null` 停用。
 - **Dev Container**：`make dc-up` / `make dc-test` / `make dc-run CMD="..."`
 - **Session 結束**：`make session-cleanup`
 

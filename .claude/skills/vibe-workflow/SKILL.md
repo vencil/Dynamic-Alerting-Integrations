@@ -9,7 +9,8 @@ description: Vibe session 起手式 + 最常踩的 7 個坑 + 標準開發 sessi
 
 起手式已 codified 為 **PreToolUse hook**（v2.8.0）— 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` 呼叫自動跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作 + 寫 session marker），後續同 session 呼叫 O(1) no-op。Session 用 `CLAUDE_SESSION_ID` 區分，marker 在 `/tmp/vibe-session-init.<hash>`。
 
-- **手動觸發**（偵錯）：`python scripts/session-guards/session-init.py [--status|--force]`
+- **手動觸發**（偵錯）：`python scripts/session-guards/session-init.py [--status|--force|--stats]`
+- **Telemetry**（v2.8.0 Phase .b）：每次 hook 呼叫自動 append JSON Lines 到 `~/.cache/vibe/session-init.log`（Windows：`%LOCALAPPDATA%\vibe\session-init.log`）。用 `--stats` 印 counts + 最近事件；`--stats --json` 供 `jq` pipe；`--stats --session <SID>` 過濾；`VIBE_SESSION_LOG=/dev/null` 停用
 - **Dev Container**（K8s / Go test / Helm）：`docker start vibe-dev-container`（或用 `make dc-up` / `make dc-test`）
 - **Session 結束**：`make session-cleanup`
 
