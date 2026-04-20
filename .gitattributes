@@ -29,6 +29,17 @@
 Dockerfile* text eol=lf
 Makefile    text eol=lf
 
+# Windows-specific shells — MUST be CRLF.
+# cmd.exe mis-parses LF-only .bat files (treats every word as a command,
+# reports "'REM' is not recognized" etc.); PowerShell is tolerant of LF
+# but convention is CRLF. Without these overrides, `* text=auto eol=lf`
+# above silently strips CR on every git operation (stash/pop, checkout,
+# pull), breaking wrappers in scripts/ops/ for Windows MCP sessions.
+# See docs/internal/windows-mcp-playbook.md LL #55 + #56.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
 # Binary — 不做任何轉換
 *.png   binary
 *.jpg   binary

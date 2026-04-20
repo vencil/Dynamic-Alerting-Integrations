@@ -23,6 +23,7 @@ lang: zh
 | GitHub API (PS) | [§PowerShell REST API](#powershell-rest-apigithub-等) |
 | git 卡住 / FUSE lock | [§Git 操作決策樹](#git-操作決策樹) |
 | Windows 逃生門 | [§修復層 C](#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑) |
+| 寫 `.bat` / `.ps1` wrapper | [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀) |
 | 環境職責快查 | [§三層環境職責矩陣](#三層環境職責矩陣) |
 | 已知陷阱查表 | [§已知陷阱速查](#已知陷阱速查) |
 
@@ -106,6 +107,62 @@ cd /d C:\Users\vencs\vibe-k8s-lab
 4. 完成後清理暫存腳本
 
 這比嘗試修復 `bash -c "..."` 引號問題更快更可靠。
+
+**Windows 側例外**：若腳本是給 Windows MCP / Desktop Commander 呼叫的 `.bat` / `.ps1`，**不要寫到 `/tmp/` 或 sandbox-only 路徑**，而是放進 `scripts/ops/`（受 `check_ad_hoc_git_scripts` hook 把關）。臨時需求用既有 wrapper 的 `raw <args>` 逃生門；真的缺子命令就擴充 wrapper。詳見 [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀)。
+
+## MCP Shell Pitfalls（編寫 .bat / .ps1 wrapper 時必讀）
+
+Windows MCP (Desktop Commander) 下 `.bat` / `.ps1` 會踩到 **4 個 encoding / parsing 雷**。**任何 session 擴充 `scripts/ops/win_*.bat` 前都必須照這份清單檢查**，否則新 subcommand 在 MCP session 看起來就是「隨機失敗」。
+
+| 雷 | 症狀 | 對策 |
+|----|------|------|
+| 1. 含空格的路徑被 PowerShell 拆解 | `"C:\Program Files\GitHub CLI\gh.exe"` 變成 `'"C:\Program Files\...\gh.exe"'`，cmd 回 `不是內部或外部命令` | **一律用 8.3 short path**（`C:\PROGRA~1\GITHUB~1\gh.exe`、`C:\PROGRA~1\Git\cmd\git.exe`）+ 外層以 `shell: cmd.exe` 呼叫 `.bat` |
+| 2. LF-only line endings → cmd 把 `REM` 當指令 | cmd.exe 報 `'REM' is not recognized`、`'echo' is not recognized` —— 逐行把每個 token 當 command 找 | `.bat` 檔**必須 CRLF**。Write tool 寫入後用 `Get-Content .\file.bat -Encoding Byte \| Select -First 4` 檢查是否有 `0D 0A`。若少了，用 Write tool 重寫（勿用 `sed -i`，見規則 #1） |
+| 3. CJK 註解觸發 Desktop Commander encoding bug | `.bat` 內含中文會讓整個 batch parser 看到截斷指令（見陷阱 #45） | `.bat` 內**全 ASCII**（`REM`、English 註解、echo 字串）。CJK 解說只放在對應的 `.md` 旁註，不嵌進 code |
+| 4. cmd `-m "..."` 嵌 em-dash / 全形引號崩潰 | `git commit -m "feat: X — Y"` 每個 space 後的 word 變成 `pathspec` error（見陷阱 #46） | Commit message 一律走檔案（`commit-file` 子命令），`[IO.File]::WriteAllText($p, $m, [Text.UTF8Encoding]::new($false))` 寫無 BOM UTF-8 |
+
+### Wrapper 起手式模板（複製即用）
+
+```bat
+@echo off
+REM my_wrapper.bat -- <one line purpose>
+REM Why this exists:
+REM   <why not inline the command? which MCP pitfall does this wrapper avoid?>
+REM Usage:
+REM   my_wrapper.bat <subcommand> [args...]
+REM
+REM Rules (see docs/internal/windows-mcp-playbook.md#mcp-shell-pitfalls):
+REM   * ASCII only (no CJK in comments or strings)
+REM   * CRLF line endings
+REM   * 8.3 short path for any exe under "Program Files"
+REM   * Set both PATH and PATHEXT (cmd child shell strips them)
+
+setlocal enabledelayedexpansion
+set "PYTHONUTF8=1"
+chcp 65001 >nul 2>&1
+set "PATHEXT=.COM;.EXE;.BAT;.CMD"
+set "PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%PATH%"
+
+REM --- dispatch: never write sibling _foo.bat; extend this wrapper ---
+```
+
+### 驗證步驟（新增 subcommand 後自測）
+
+```powershell
+# 1. Line ending check (must have 0D 0A)
+Get-Content .\scripts\ops\my_wrapper.bat -Encoding Byte -TotalCount 200 | `
+  Select-String -Pattern "13,10" -SimpleMatch -Quiet
+
+# 2. ASCII check (fail if any byte >= 0x80)
+$bytes = [IO.File]::ReadAllBytes(".\scripts\ops\my_wrapper.bat")
+if ($bytes | Where-Object { $_ -ge 0x80 }) { Write-Error "Non-ASCII byte present" }
+
+# 3. Functional smoke test via Desktop Commander
+#    Call `cmd /c scripts\ops\my_wrapper.bat <subcmd>` from MCP; confirm no
+#    "'REM' is not recognized" or encoding-mangled output.
+```
+
+`check_ad_hoc_git_scripts` hook 只把關「腳本放在對的目錄」；encoding / CRLF 目前仍是人工紀律。違反這 4 條的 session 會一而再踩到同一個坑——這份清單是為了讓下一個 session「讀完 5 分鐘」就能避開 1 小時的 debug。
 
 ## 長時間操作 (>60s)
 
@@ -304,6 +361,9 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 51 | Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError | Python `print()` 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。**正解**：script 開頭偵測 `cp*` encoding 時強制 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')` |
 | 52 | Bash 工具傳 Windows 絕對路徑（`C:\...`）產生 FUSE phantom 檔案 | 當 Bash/Shell 工具接收到 `C:\Users\...\_bench.bat` 這類 Windows 絕對路徑作為**位置參數**，FUSE 層會把 `:` 翻成 U+F03A、`\` 翻成 U+F05C（PUA 區碼位），在 Linux 側建出路徑合法但在 Windows 側看到的是 `CUsersvencsvibe-k8s-lab_bench.bat` 這種「中間夾隱形字元」的殘檔。殘檔會被 `git status` 當 untracked 列出但 wildcard（如 `*vibe-k8s-lab*`）匹配不到，須用 regex 比對 `_bench_f1b\|_bench_poll\|_poll\.bat` 等片段。**正解**：(1) 任何跨 Windows 路徑的寫入操作用 Write 工具或 Windows MCP PowerShell，不要塞給 Bash 工具；(2) `.gitignore` 已加 `CUsersvencs*` + `/C:\*` 雙重防守（PR #v2.7.1-doc-hygiene）；(3) 清理用 Windows 側 `Remove-Item -LiteralPath` + regex match，非從 FUSE 側 `rm`（會 `Operation not permitted`） |
 | 53 | `win_async_exec.ps1` 派 `gh pr create --title "...(v2.9.0+)"` 時 title 尾段被 cmd /c 吞掉（misleading 成功誤判） | `win_async_exec.ps1` 內部走 `cmd.exe /c "<Command> > log 2>&1"`，cmd 的 parenthesis / operator parsing 會把 nested double-quote 中的 `(` / `+` 當成 grouping char / concat operator，導致 `--title` 參數尾段在 cmd 層被吞掉。**典型症狀**：log 只印出 `Creating PR: docs(governance): ... SSOT +` 後就截斷，PR 實際**建立成功**但 title 缺尾綴，operator 誤判失敗去重試，第二次才撞上 "a pull request already exists"，繞一大圈才察覺。**正解（§黃金法則的具體應用）**：把整段命令寫成獨立 `.ps1`，title 用 single-quoted variable 宣告後 `& gh ... --title $title --body-file _pr_body.md`，再以 `win_async_exec.ps1 -Command 'powershell -File _pr_make.ps1'` 派工，cmd /c 就只看到一個外層命令字串，不會吃到內層 `(` / `+`。**差異於 #48**：#48 是 Desktop Commander cmd 把 `--title "x y z"` 拆成空格切開的多參數；#53 是 win_async_exec 的 cmd /c 把完整引號內字元因 `(` / `+` 提早截斷。兩者配方不同，前者用 .bat 包裝，後者用 .ps1 包裝 |
+| 54 | Ad-hoc `_commit.ps1` / `_pr.bat` script proliferation — 每個 session 重寫一次 | PR #39 寫了 `_p39_commit.ps1`；PR #40 寫了 `_p40_commit.ps1`、`_p40_pr.bat`、`_p40_checks.bat`、`_p40_failog.bat`、`_p40_diag.bat`（五隻！）—— 全部 reinvent 既有 `scripts/ops/win_git_escape.bat` 的功能。**根因**：session agent 沒讀 playbook 就動手，每次撞到 FUSE/MCP 問題就寫 throw-away script，下次 session 看不到（被 `.gitignore _*.bat` 藏起來）又重寫一次。**長期解法**（v2.8.0, PR #41）：(1) `scripts/tools/lint/check_ad_hoc_git_scripts.py` 以 whitelist 模式阻擋 `scripts/ops/` / `scripts/tools/` / `tools/` 外的 `*.bat` / `*.ps1` / `*.cmd`；(2) `.gitignore` 不再藏 scratch script（adopt-or-delete 政策）；(3) 新 subcommand 直接擴充 `win_git_escape.bat` / `win_gh.bat`。**下次 session 要寫 `_foo.bat` 前**：先 `scripts/ops/win_gh.bat raw gh ...` 或 `scripts/ops/win_git_escape.bat raw git ...`；真的需要新 subcommand 就擴充 wrapper（whitelist hook 會強制如此）🛡️ |
+| 55 | `.bat` wrapper 三要素（Short path + CRLF + ASCII）沒有全備 | PR #41 新增 `win_gh.bat` 初次執行時三次失敗：(1) 行尾 LF → cmd 報 `'REM' is not recognized`（每個 token 當 command 找）；(2) 忘 `set PATH=...Git\cmd...` → gh 報 `unable to find git executable in PATH`；(3) `"C:\Program Files\GitHub CLI\gh.exe"` 在 PowerShell 下被多層 quote 破壞，不管怎麼逃脫都失敗。**三個對策一次到位**：(a) 8.3 short path `C:\PROGRA~1\GITHUB~1\gh.exe`（避免任何 quote 問題）；(b) wrapper 開頭強制 `set "PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%PATH%"`；(c) 檔案以 CRLF 儲存、全 ASCII（驗證：`Get-Content -Encoding Byte -TotalCount 200` 看到 `0D 0A`）。詳見 [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀) |
+| 56 | Squash-merge base PR 造成下游 stacked PR 進入 `mergeStateStatus: DIRTY` → GH 靜默跳過 `pull_request` CI（零 workflow 觸發） | PR #41 堆在 PR #40 分支上推開；PR #40 以 **squash** merge 到 main，PR #40 原 commits (`f5ccb7d`, `84e6ab5`) 在 PR #41 分支還在，跟 main 的 squashed 版本 (`23c189c`) 在 GH server 比對時算「重複但不同 hash」→ 無法自動合成 merge-ref → `mergeStateStatus=DIRTY`。**關鍵副作用**：`on: pull_request` 的 workflow **完全不觸發**（`gh run list --branch <br>` 空，`gh pr checks` 回 `no checks reported`），很容易被誤判成「GH Actions 壞了」或「path filter 過濾掉」。**正解**：(1) 在 Windows 側 `git rebase origin/main`（squashed commits 會自動丟掉，重複 diff 被 cherry-pick 去重）→ `git push --force-with-lease`；(2) 若 squash diff 不完全對得上，手動 `git rebase -i origin/main` drop 掉重複 commits。**常伴陷阱**：同時確認 wrapper 的 `PATHEXT` 有設（#34）—— PR #41 首次 dogfood 時雖然 playbook template 寫了 `set PATHEXT=...` 但 `win_gh.bat` / `win_git_escape.bat` 實際程式碼忘設，撞到使用者 profile 的 `PATHEXT=.CPL` 直接讓 gh 回 `unable to find git executable in PATH`（雖然 PATH 有 Git\cmd）。Template ↔ actual code 之間會 drift，wrapper 起手式固定六行（`setlocal` / `PYTHONUTF8` / `chcp 65001` / `PATHEXT` / `PATH` / `GH_CMD` 或 `GIT_CMD`）缺一不可 🛡️ |
 
 ## Windows Clone 初次設定 — Symlink 支援
 
@@ -621,7 +681,7 @@ Git 操作入口
 | git add/commit | ✅ | ⚠️ FUSE 風險 | ✅ `win_git_escape.bat` |
 | git push | ✅ | ⚠️ FUSE 風險 | ✅ `win_git_escape.bat` |
 | git tag | ✅ | ⚠️ FUSE 風險 | ✅ `win_git_escape.bat` |
-| gh pr create | ✅ | ❌ gh 不在 VM | ✅ `win_git_escape.ps1` |
+| gh pr create / pr checks / run view | ✅ | ❌ gh 不在 VM | ✅ `win_gh.bat`（推薦） / `win_git_escape.ps1`（legacy） |
 | pre-commit | ✅ | ✅ | ❌ 環境不完整 |
 | Helm / K8s | ✅ | ❌ | ❌ |
 
@@ -631,14 +691,23 @@ Git 操作入口
 
 FUSE 側 git 操作反覆卡住、或 pre-commit hook 在 FUSE mount 上一直踩到 index lock 時，**Windows 原生 cmd/PowerShell 是第二條可走的路徑**。
 
-**⛔ 重要：已有標準化逃生門工具，不要自己寫腳本！**
+**⛔⛔⛔ 鐵則：絕對不要自己寫 `_*.bat` / `_*.ps1` 腳本。**
 
-- **Git 操作**：`scripts/ops/win_git_escape.bat status|add|commit|push|tag|branch|log|diff|preflight`
-- **GitHub 操作**：`scripts/ops/win_git_escape.ps1 pr-create|pr-list|ci-status|release-create`
-- **Hook-gated commit workflow**：`make win-commit MSG=_msg.txt FILES="a b"`（sandbox pre-commit + Windows git；見 [§修復層 C.1](#修復層-c1escape-helpersmcp-60s-timeout-fuse-cache-bypass)）
-- **Sandbox-side pre-commit gate**：`bash scripts/ops/run_hooks_sandbox.sh FILE1 FILE2`（補 Windows 側 `--no-verify` 的漏洞；見 [§修復層 C.1](#修復層-c1escape-helpersmcp-60s-timeout-fuse-cache-bypass)）
-- **MCP 60s timeout 繞道**：`scripts/ops/win_async_exec.ps1 -Command "..." -LogFile _out.log`（見 [§修復層 C.1](#修復層-c1escape-helpersmcp-60s-timeout-fuse-cache-bypass)）
-- **FUSE cache bypass**：`scripts/ops/win_read_fresh.ps1 -Path <src> -OutFile <dest>`（見 [§修復層 C.1](#修復層-c1escape-helpersmcp-60s-timeout-fuse-cache-bypass)）
+PR #39 寫了 1 個 `_p39_commit.ps1`。PR #40 寫了 5 個 `_p40_*.bat|.ps1`。每次都 reinvent wheel、每次都踩新坑、每次都留下 cleanup burden。**PR #41 (v2.8.0) 起，`scripts/tools/lint/check_ad_hoc_git_scripts.py` (L1 pre-commit hook) 會 physically block** 任何在 `scripts/ops/`、`scripts/tools/`、`tools/` 之外的 `*.bat`/`*.ps1`/`*.cmd`。這是 whitelist（不是 blacklist regex），不能用新動詞繞過。
+
+**已有的標準化逃生門工具**（Agent session 用這些，不要寫新的）：
+
+| 工具 | 用途 | 典型呼叫 |
+|------|------|---------|
+| `scripts/ops/win_git_escape.bat` | Git 操作（FUSE 卡死時的主路徑） | `status\|add\|commit-file\|push\|tag\|branch\|log\|diff\|preflight\|pr-preflight\|fix-hooks` |
+| `scripts/ops/win_gh.bat` | GitHub CLI（MCP-friendly 短路徑 + CRLF + ASCII）**v2.8.0 新增** | `pr-checks [PR#]\|pr-view [PR#]\|pr-create <flags>\|run-view <ID>\|run-log <ID>\|raw <args>` |
+| `scripts/ops/win_git_escape.ps1` | GitHub 操作（Release 流程用，保留 legacy） | `pr-create\|pr-list\|ci-status\|release-create` |
+| `make win-commit` | Hook-gated commit（sandbox pre-commit + Windows git 三步） | `make win-commit MSG=_msg.txt FILES="a b"` |
+| `scripts/ops/run_hooks_sandbox.sh` | Sandbox 側 pre-commit gate（補 Windows 側 `--no-verify` 漏洞） | `bash scripts/ops/run_hooks_sandbox.sh a.md b.yaml` |
+| `scripts/ops/win_async_exec.ps1` | MCP 60s timeout 繞道（派工 + poll log） | `-Command "..." -LogFile _out.log` |
+| `scripts/ops/win_read_fresh.ps1` | FUSE dentry cache bypass | `-Path <src> -OutFile <dest>` |
+
+> **子命令缺失？擴充現有 wrapper，不要寫 sibling script。** `win_git_escape.bat` / `win_gh.bat` 都有 `raw <args>` 逃生門可以塞任意命令。真的需要新 subcommand 就開 PR 加進去，下次 session 才能重複使用。
 
 工作模式：
 

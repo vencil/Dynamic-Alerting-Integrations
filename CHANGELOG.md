@@ -13,6 +13,15 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **Windows MCP 側 ad-hoc script 防治（v2.8.0 Phase .a, PR #41）**：延續 PR #39/#40 的 code-driven 精神，把「不要寫 throw-away `_commit.ps1` / `_pr.bat`」從文字規範升級為 L1 pre-commit hook：
+  - **`scripts/tools/lint/check_ad_hoc_git_scripts.py`**（pre-commit 硬失敗，whitelist 模式）：掃 repo 內所有 `*.bat` / `*.ps1` / `*.cmd`，不在 `scripts/ops/` / `scripts/tools/` / `tools/` allowlist 中即 fail。用 whitelist 而非 blacklist regex 的理由：PR #40 session 寫了 `_p40_commit.ps1` / `_p40_pr.bat` / `_p40_checks.bat` / `_p40_failog.bat` / `_p40_diag.bat` 五隻 script，黑名單追不上每個新動詞（check / failog / diag），whitelist 強制所有新 wrapper 走 PR review。
+  - **`scripts/ops/win_gh.bat`**（v2.8.0 新增）：GitHub CLI 的 MCP-friendly wrapper。Desktop Commander PowerShell 下 `"C:\Program Files\GitHub CLI\gh.exe"` 的引號會被多層 escape 破壞；`win_gh.bat` 改用 8.3 short path `C:\PROGRA~1\GITHUB~1\gh.exe`、強制 `PATHEXT` + `PATH` 含 `Git\cmd`、全 ASCII 註解、CRLF line endings。子命令：`pr-checks [PR#]` / `pr-view [PR#]` / `pr-create <flags>` / `run-view <RUN_ID>` / `run-log <RUN_ID>` / `raw <args>`（逃生門）。取代 session 每次自己寫 `_pr_checks.bat` 的循環。
+  - **`docs/internal/windows-mcp-playbook.md §修復層 C` 重寫**：逃生門工具表新增 `win_gh.bat`；opening 改為「⛔⛔⛔ 鐵則」並 chronicle PR #39 / #40 的 1 + 5 = 6 支 ad-hoc script。
+  - **`docs/internal/windows-mcp-playbook.md` 新增 §MCP Shell Pitfalls 節**：編寫 `.bat` / `.ps1` wrapper 必讀的 4 雷清單（Short path / CRLF / ASCII-only / `PATHEXT`+`PATH` 雙設）+ 起手式模板 + 3-step 自測 one-liner。
+  - **新增 LL #54 + #55 + #56**：#54 chronicle PR #39 / #40 ad-hoc script proliferation；#55 記錄 `win_gh.bat` 初次實作踩到的 short-path / CRLF / PATH 三件套；**#56** 記錄 PR #41 dogfood 本身觸發的兩個二次踩坑——(a) `win_gh.bat` / `win_git_escape.bat` 實作時忘了 `set PATHEXT`，撞到使用者 profile 的 `PATHEXT=.CPL` 直接 break gh 內部 git 呼叫；(b) PR #41 base 堆在 PR #40 還未 squash-merge 的分支上，main squash 後 PR #41 進入 `mergeStateStatus: DIRTY`，GH 靜默跳過 `on: pull_request` CI（零 workflow 觸發）。對應修正：兩個 wrapper 都加 `set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"`、`feat/p41-codify-windows-commit` rebase 到 origin/main 去除重複 commits。
+  - **`.gitignore` 政策翻轉**：移除 `_*.bat` / `_*.ps1` / `_*.txt` / `_*.md` scratch-hiding patterns（保留 `_*.json` / `_*.out` / `_*.err` / `_ci_logs/` 等真正 unreviewable artifact）。理由：「藏起來」讓 cleanup 步驟不可見，下個 session 看不到前一個 session 的垃圾，每次重寫。改走 **adopt-or-delete** 路線——scratch 要不升格進 `scripts/ops/`、要不 commit 前刪乾淨。
+  - **`CLAUDE.md` Top 6 坑 → Top 7 坑**：新增 §6「⛔ 絕對不要寫 `_foo.bat` / `_p*_commit.ps1`」指向 `win_gh.bat` / `win_git_escape.bat`。
+
 - **`dev-rules.md §P2` 轉 code-driven enforcement（v2.8.0 Phase .a）**：PR #39/#40 踩坑後的結構性改進——純文字規範（「`gh pr create` 前記得掃 drift」）對 agent 記性依賴過高，改寫為兩個 hook：
   - **`scripts/tools/lint/check_devrules_size.py`**（pre-commit 硬上限）：`docs/internal/dev-rules.md` 超過 **500 行**即 fail。用意是把 dev-rules.md 的累積量做為「code-driven 遷移壓力反向指標」——文字規範越肥代表越多條目本來就該當 hook 寫掉。新增規則時作者被迫三選一：prune / promote（升 L1/L2 hook）/ archive。放寬 `MAX_LINES` 屬禁忌，需在 PR body 明述理由。
   - **`scripts/tools/lint/check_pr_scope_drift.py`**（pr-preflight 硬失敗）：偵測兩項——tool-map drift（`generate_tool_map.py --check` 失敗，典型肇因：新增 `scripts/tools/**/*.py` 但沒 regen）+ working-tree dirty（unstaged / uncommitted staged 存在，典型肇因：session 邊改 playbook / CLAUDE.md 忘記 git add）。
@@ -24,7 +33,7 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 - **`.pre-commit-config.yaml` 新增 `devrules-size-check` hook**：緊鄰 `tool-map-check`，僅在 `docs/internal/dev-rules.md` 變動時觸發。
 - **`Makefile` `pr-preflight` target 描述更新**：反映 7 項檢查範圍（含 scope-drift）。
 - **`dev-rules.md` 大幅瘦身（v2.8.0 Phase .a）**：520 → 487 行，為新 500-line cap 留 buffer。壓縮 §S3 / §S5 的反例+正例 block（資訊保留、用註解合併）。未刪任何規則條文。
-- **CLAUDE.md tool count `114 → 116`**：同步 `docs/internal/tool-map.md` regenerated 計數（ops 46 / dx 29 / lint 40，+2 來自本 PR `check_devrules_size.py` + `check_pr_scope_drift.py`）。`make pr-preflight` 描述同步更新為 7 項。
+- **CLAUDE.md tool count `114 → 117`**：同步 `docs/internal/tool-map.md` regenerated 計數（ops 46 / dx 29 / lint 41，累積 +3：PR #40 的 `check_devrules_size.py` + `check_pr_scope_drift.py`，PR #41 的 `check_ad_hoc_git_scripts.py`）。`make pr-preflight` 描述同步更新為 7 項。
 
 ### Fixed
 
