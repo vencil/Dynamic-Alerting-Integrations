@@ -34,6 +34,7 @@ rules:
       - golden           # golden fixture parity tests
       - tooling          # generic tooling / infrastructure changes
       - blast-radius     # CI bot + scripts/tools/ops/blast_radius.py (PR comment generator)
+      - session-init     # session startup guards (scripts/session-guards/, PreToolUse hook)
       # planning / paperwork scopes (session-ledger / decomposition commits)
       - planning        # v*-planning.md authorship commits (DEC-K/L drafts, session ledger)
       # release-version scopes (used by release-wrap commits)
