@@ -24,6 +24,7 @@ Exit:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -45,6 +46,10 @@ def find_repo_root() -> Path:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=f"Fail if {DEV_RULES_PATH} exceeds {MAX_LINES} lines."
+    )
+    parser.parse_args()  # no flags — just enforce unknown-arg rejection
     repo = find_repo_root()
     target = repo / DEV_RULES_PATH
     if not target.exists():

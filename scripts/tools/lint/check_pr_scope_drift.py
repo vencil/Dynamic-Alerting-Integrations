@@ -25,6 +25,7 @@ Exit:
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +85,10 @@ def check_working_tree_clean(repo: Path) -> tuple[bool, str]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Fail on PR-level drift (tool-map outdated or working-tree dirty)."
+    )
+    parser.parse_args()  # no flags — just enforce unknown-arg rejection
     repo = find_repo_root()
     print("[check_pr_scope_drift] scanning for PR-level drift signals...\n")
 
