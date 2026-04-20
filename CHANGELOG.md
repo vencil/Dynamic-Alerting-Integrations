@@ -11,6 +11,21 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ## [Unreleased]
 
+### Added
+
+- **`dev-rules.md §P2` 轉 code-driven enforcement（v2.8.0 Phase .a）**：PR #39/#40 踩坑後的結構性改進——純文字規範（「`gh pr create` 前記得掃 drift」）對 agent 記性依賴過高，改寫為兩個 hook：
+  - **`scripts/tools/lint/check_devrules_size.py`**（pre-commit 硬上限）：`docs/internal/dev-rules.md` 超過 **500 行**即 fail。用意是把 dev-rules.md 的累積量做為「code-driven 遷移壓力反向指標」——文字規範越肥代表越多條目本來就該當 hook 寫掉。新增規則時作者被迫三選一：prune / promote（升 L1/L2 hook）/ archive。放寬 `MAX_LINES` 屬禁忌，需在 PR body 明述理由。
+  - **`scripts/tools/lint/check_pr_scope_drift.py`**（pr-preflight 硬失敗）：偵測兩項——tool-map drift（`generate_tool_map.py --check` 失敗，典型肇因：新增 `scripts/tools/**/*.py` 但沒 regen）+ working-tree dirty（unstaged / uncommitted staged 存在，典型肇因：session 邊改 playbook / CLAUDE.md 忘記 git add）。
+  - **`scripts/tools/dx/pr_preflight.py` 新增 Scope drift phase**：`make pr-preflight` 從 6 項 → **7 項**檢查（branch / behind-main / conflict / local hooks / **scope-drift** / CI / mergeable）。PR merge 前必過。
+  - **`dev-rules.md §P2` 從文字敘述改為 hook pointer**：規則本體即 code，避免「文字規範 → 記性 → 執行」三段 rot。新增 drift 項目時改 code，不改本節。
+
+### Changed
+
+- **`.pre-commit-config.yaml` 新增 `devrules-size-check` hook**：緊鄰 `tool-map-check`，僅在 `docs/internal/dev-rules.md` 變動時觸發。
+- **`Makefile` `pr-preflight` target 描述更新**：反映 7 項檢查範圍（含 scope-drift）。
+- **`dev-rules.md` 大幅瘦身（v2.8.0 Phase .a）**：520 → 487 行，為新 500-line cap 留 buffer。壓縮 §S3 / §S5 的反例+正例 block（資訊保留、用註解合併）。未刪任何規則條文。
+- **CLAUDE.md tool count `114 → 116`**：同步 `docs/internal/tool-map.md` regenerated 計數（ops 46 / dx 29 / lint 40，+2 來自本 PR `check_devrules_size.py` + `check_pr_scope_drift.py`）。`make pr-preflight` 描述同步更新為 7 項。
+
 ### Fixed
 
 - **A-5a `make pr-preflight` / `pre-tag` Chart.yaml path bug（Phase .a A-5a）**：Helm chart 從 `components/threshold-exporter/` 遷至 `helm/threshold-exporter/`（parallels `helm/tenant-api/`）時遺漏 3 處 stale reference，導致 `make version-check` 印 `grep: components/threshold-exporter/Chart.yaml: No such file or directory` warning、`make chart-package` / `chart-push` target 失效：

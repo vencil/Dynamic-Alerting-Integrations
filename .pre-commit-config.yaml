@@ -63,6 +63,13 @@ repos:
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
 
+      - id: devrules-size-check
+        name: "Guard: dev-rules.md line-count cap (500)"
+        entry: python3 -X utf8 scripts/tools/lint/check_devrules_size.py
+        language: python
+        pass_filenames: false
+        files: ^docs/internal/dev-rules\.md$
+
       - id: doc-map-check
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check

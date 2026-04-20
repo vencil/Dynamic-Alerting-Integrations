@@ -109,6 +109,7 @@ lang: zh
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
+| `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
@@ -125,6 +126,7 @@ lang: zh
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
+| `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_structure.py` | Project structure enforcement. |

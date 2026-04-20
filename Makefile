@@ -139,7 +139,7 @@ git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale 
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 
 .PHONY: pr-preflight
-pr-preflight: ## PR 收尾前檢查（conflict / CI / hooks / mergeable）
+pr-preflight: ## PR 收尾前檢查（branch / conflict / hooks / scope-drift / CI / mergeable）
 	@python3 scripts/tools/dx/pr_preflight.py $(ARGS)
 
 .PHONY: pr-preflight-quick

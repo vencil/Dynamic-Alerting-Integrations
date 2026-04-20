@@ -98,10 +98,10 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **129 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（含受眾、內容摘要、Change Impact Matrix）
-- **112 個 Python 工具**（`validate_all.py` orchestrator / ops 46 / dx 29 / lint 36，含 2 個 helper module）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
+- **116 個 Python 工具**（`validate_all.py` orchestrator / ops 46 / dx 29 / lint 40，含 2 個 helper module）→ [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`；完整 CLI 參考：[`docs/cli-reference.md`](docs/cli-reference.md)
 - **39 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)；變更流程見 [dev-rules.md §互動工具變更 SOP](docs/internal/dev-rules.md#互動工具變更-sop)
 - **Makefile** 完整列表：`make help`。必記 Top 5：
-  - `make pr-preflight` — ⛔ PR merge 前必跑（conflict / CI / hooks / mergeable 六項檢查）
+  - `make pr-preflight` — ⛔ PR merge 前必跑（branch / conflict / hooks / scope-drift / CI / mergeable 七項檢查）
   - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs）
   - `make session-cleanup` — session 結束清理（vscode-git / lock / port-forward）
   - `make lint-docs` — 一站式文件 lint

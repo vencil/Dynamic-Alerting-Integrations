@@ -276,6 +276,31 @@ def check_local_hooks() -> CheckResult:
     )
 
 
+def check_scope_drift() -> CheckResult:
+    """跑 check_pr_scope_drift.py — tool-map 與 working-tree 是否乾淨。
+
+    這是 code-driven §P2 rule 的執行點，偵測 PR 準備 merge 時仍有散落
+    在工作目錄、未納入此 PR commit 的 drift（典型 PR #40 肇因）。
+    """
+    r = run(
+        ["python3", "-X", "utf8", "scripts/tools/lint/check_pr_scope_drift.py"],
+        timeout=60,
+    )
+    if r.returncode == 0:
+        return CheckResult("Scope drift", Status.PASS, "無 drift 訊號")
+
+    # Surface the FAIL summary line (first line of stderr from the hook)
+    tail = (r.stdout + r.stderr).strip().splitlines()
+    headline = next(
+        (ln for ln in tail if "FAIL:" in ln),
+        tail[0] if tail else "(no output)",
+    )
+    detail = "\n".join(
+        ln.strip() for ln in tail if ln.strip().startswith(("FAIL", "PASS"))
+    )[:400]
+    return CheckResult("Scope drift", Status.FAIL, headline, detail=detail)
+
+
 def _classify_ci_failures(failed_checks: list) -> str:
     """A/B 分類：比對 main 最近一次 CI run，判斷失敗是 pre-existing 還是 this-PR 引入。
 
@@ -492,10 +517,13 @@ def main() -> int:
     else:
         report.add(check_local_hooks())
 
-    # 5. CI status
+    # 5. Scope drift (code-driven §P2 rule)
+    report.add(check_scope_drift())
+
+    # 6. CI status
     report.add(check_ci_status(args.pr))
 
-    # 6. PR mergeable
+    # 7. PR mergeable
     report.add(check_pr_mergeable(args.pr))
 
     report.print_summary()
