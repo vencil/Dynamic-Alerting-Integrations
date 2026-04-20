@@ -105,5 +105,3 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 - **Dev Container 重啟**: 系統重開機後 `docker start vibe-dev-container` 或 `make dc-up`
 
 任務→Playbook 章節對照（K8s / docker / release / benchmark / E2E 等）→ 觸發 `vibe-playbook-nav` skill。
-
-## 長期展望
