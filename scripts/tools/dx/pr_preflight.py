@@ -125,6 +125,72 @@ def find_repo_root() -> Path:
     return script_dir.parent.parent.parent
 
 
+# ─── Preflight Marker (consumed by pre-push gate) ────────────
+#
+# `.git/.preflight-ok.<HEAD-sha>` is a zero-byte marker file written when a
+# preflight run completes without FAIL. The pre-push hook
+# (scripts/ops/require_preflight_pass.sh) refuses to push unless the marker
+# for the exact HEAD sha exists. This prevents pushing pre-preflight commits
+# that CI will likely reject.
+
+MARKER_PREFIX = ".preflight-ok"
+
+
+def _git_dir(repo_root: Path) -> Path:
+    """Resolve .git dir even for worktrees (git rev-parse --git-dir)."""
+    r = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=repo_root, capture_output=True, text=True, check=False,
+    )
+    if r.returncode == 0 and r.stdout.strip():
+        p = Path(r.stdout.strip())
+        return p if p.is_absolute() else (repo_root / p).resolve()
+    return repo_root / ".git"
+
+
+def _head_sha(repo_root: Path) -> Optional[str]:
+    r = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root, capture_output=True, text=True, check=False,
+    )
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip()
+    return None
+
+
+def marker_path(repo_root: Path, head_sha: str) -> Path:
+    return _git_dir(repo_root) / f"{MARKER_PREFIX}.{head_sha}"
+
+
+def write_marker(repo_root: Path) -> Optional[Path]:
+    """Touch `.git/.preflight-ok.<HEAD>`. Returns the path on success, else None."""
+    sha = _head_sha(repo_root)
+    if not sha:
+        return None
+    p = marker_path(repo_root, sha)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch(exist_ok=True)
+        return p
+    except OSError:
+        return None
+
+
+def clear_markers(repo_root: Path) -> int:
+    """Remove all `.preflight-ok.*` markers. Returns count removed."""
+    git_dir = _git_dir(repo_root)
+    if not git_dir.exists():
+        return 0
+    count = 0
+    for f in git_dir.glob(f"{MARKER_PREFIX}.*"):
+        try:
+            f.unlink()
+            count += 1
+        except OSError:
+            pass
+    return count
+
+
 # ─── Check Functions ─────────────────────────────────────
 
 
@@ -527,6 +593,20 @@ def main() -> int:
     report.add(check_pr_mergeable(args.pr))
 
     report.print_summary()
+
+    # --- Preflight marker (consumed by pre-push gate) --------------------
+    # On PASS (with or without WARN): write `.git/.preflight-ok.<HEAD>` so
+    # require_preflight_pass.sh lets the subsequent `git push` through.
+    # On FAIL: clear any stale markers so the user can't push a broken SHA
+    # that happened to have an older successful marker.
+    if report.has_failure:
+        cleared = clear_markers(repo_root)
+        if cleared:
+            print(f"   ↳ cleared {cleared} stale preflight marker(s)")
+    else:
+        marker = write_marker(repo_root)
+        if marker:
+            print(f"   ↳ wrote preflight marker: {marker.name}")
 
     if args.ci and report.has_failure:
         return 1
