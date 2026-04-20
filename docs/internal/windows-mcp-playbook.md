@@ -37,9 +37,23 @@ lang: zh
 | 純 Python 工具 (routing-bench 等) | 兩者皆可 | 不依賴 K8s 的優先用 Cowork VM |
 | Mounted workspace | `/workspaces/vibe-k8s-lab` (container 內) | 雙向可見 |
 
-## 核心原則：docker exec stdout 為空
+## 核心原則：docker exec stdout 為空 🛡️
 
-Windows MCP Shell 執行 `docker exec` 時，**stdout 被 PowerShell 吞掉**。唯一可靠做法：
+Windows MCP Shell 執行 `docker exec` 時，**stdout 被 PowerShell 吞掉**。這個陷阱已由 wrapper 自動化（v2.8.0 Plan B），**日常 session 不需記憶 redirect pattern**。
+
+**主路徑（use this）**：
+
+```bash
+make dc-test                          # pytest in container
+make dc-go-test                       # go test ./...
+make dc-run CMD="kubectl get pods -A" # arbitrary command
+make dc-status                        # is container running?
+make dc-up                            # start container if stopped
+```
+
+或直接呼叫 wrapper：`scripts/ops/dx-run.sh <cmd>`（Linux）／`scripts\ops\dx-run.bat <cmd>`（Windows）。wrapper 會 `bash -c "<cmd> > /workspaces/...<file> 2>&1"`、讀回 exit code、把 stdout tee 回 host — 一次解掉 stdout-swallow + `-d` 模式的 redirect 遺漏。
+
+**只有自己寫 one-off `docker exec` 時才需要原始 pattern**：
 
 ```bash
 # ✅ bash -c 內部重定向到 mounted workspace

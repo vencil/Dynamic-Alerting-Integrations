@@ -57,7 +57,13 @@ tests/_test_multidb_output/
 .build/
 
 # --- AI & Tools ---
-.claude/
+# Allow project-level Claude Code config (settings.json / hooks/ / skills/) to
+# be tracked; keep user-specific permission lists (settings.local.json) out.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+.claude/settings.local.json
 site/
 
 # --- Planning (internal, time-bound) ---

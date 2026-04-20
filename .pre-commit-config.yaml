@@ -47,6 +47,19 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # --- Preflight gate (pre-push only) ---
+      # Refuses `git push` to non-main branches unless `make pr-preflight`
+      # touched `.git/.preflight-ok.<HEAD>` marker. Prevents pushing commits
+      # that CI will reject. Escape hatch: GIT_PREFLIGHT_BYPASS=1.
+      # See v2.8.0 Plan C.
+      - id: require-preflight-pass
+        name: "Guard: require make pr-preflight before push"
+        entry: bash scripts/ops/require_preflight_pass.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
+
       # --- sed -i damage detection (after hygiene fixer) ---
       - id: sed-damage-guard
         name: "Guard: detect sed -i damage"

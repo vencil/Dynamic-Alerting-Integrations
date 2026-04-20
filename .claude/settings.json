@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/scripts/session-guards/session-init.py\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(go test ./... -count=1)",
+      "Bash(go test ./... -count=1 -v)",
+      "Bash(ls /workspaces/vibe-k8s-lab/rule-packs/*.yaml)",
+      "Bash(ls /workspaces/vibe-k8s-lab/k8s/03-monitoring/configmap-rules-*.yaml)",
+      "WebFetch(domain:github.com)",
+      "Bash(python3 -m pytest tests/test_generate_routes.py -v --tb=short)",
+      "Bash(python3 -c \":*)",
+      "Bash(helm template:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(wc -l /workspaces/vibe-k8s-lab/k8s/04-tenant-api/*.yaml)",
+      "Bash(wc -l /workspaces/vibe-k8s-lab/components/tenant-api/internal/handler/*.go /workspaces/vibe-k8s-lab/components/tenant-api/internal/gitops/*.go /workspaces/vibe-k8s-lab/components/tenant-api/internal/rbac/*.go /workspaces/vibe-k8s-lab/components/tenant-api/cmd/server/main.go)",
+      "Bash(grep -c \"test_\" tests/test_*.py)",
+      "Bash(bc)",
+      "Bash(ls tests/test_*.py)",
+      "Bash(ls /workspaces/vibe-k8s-lab/scripts/tools/ops/*.py)",
+      "Bash(ls /workspaces/vibe-k8s-lab/scripts/tools/dx/*.py)",
+      "Bash(ls /workspaces/vibe-k8s-lab/scripts/tools/lint/*.py)",
+      "Bash(python3 scripts/tools/dx/bump_docs.py --check)",
+      "Bash(make help:*)",
+      "Bash(python3 scripts/tools/dx/bump_docs.py --platform 2.4.0)",
+      "Bash(python3 scripts/tools/dx/bump_docs.py --sync-counts --check)",
+      "Bash(python3 scripts/tools/dx/bump_docs.py --sync-counts)",
+      "Bash(python -m pytest tests/ --co -q)",
+      "Bash(golangci-lint --version)",
+      "Bash(ruff --version)",
+      "Bash(pip install:*)",
+      "Bash(go version:*)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/ --ignore=tests/test_benchmark.py --ignore=tests/test_integration.py --ignore=tests/test_e2e_routing_profile.py -v --tb=short --co -q)",
+      "Bash(python -m pytest tests/ --ignore=tests/test_benchmark.py --ignore=tests/test_integration.py --ignore=tests/test_e2e_routing_profile.py --cov=scripts --cov-report=term-missing -q --tb=short)",
+      "Bash(python -m pytest tests/test_check_cli_coverage.py::TestParseCommandMap -v --tb=short)",
+      "Bash(python -m pytest tests/ --ignore=tests/test_benchmark.py --ignore=tests/test_integration.py --ignore=tests/test_e2e_routing_profile.py --cov=scripts --cov-report=term -q --tb=line)",
+      "Bash(ruff check:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(python -m pytest tests/test_check_cli_coverage.py -v --tb=short -q)",
+      "Bash(python -m pytest /workspaces/vibe-k8s-lab/tests/test_check_cli_coverage.py -v --tb=short -q)",
+      "Bash(python /workspaces/vibe-k8s-lab/scripts/tools/ops/scaffold_tenant.py --tenant test-db --db mysql --non-interactive --output-dir /tmp/scaffold-test)",
+      "Bash(python -m pytest tests/ --ignore=tests/test_benchmark.py --ignore=tests/test_integration.py --ignore=tests/test_e2e_routing_profile.py --cov=scripts --cov-report=term -q --tb=line -x)",
+      "Bash(grep -v \"^$\")",
+      "Bash(python -m pytest tests/test_sast.py -v --tb=short -q)",
+      "Bash(python -m pytest /workspaces/vibe-k8s-lab/tests/test_sast.py -v --tb=short -q)",
+      "Bash(pre-commit --version)",
+      "Bash(pre-commit run:*)",
+      "Bash(grep \"^Passed\\\\|^Failed\\\\|Failed$\\\\|Passed$\")",
+      "Bash(python scripts/tools/dx/generate_tool_map.py --generate)",
+      "Bash(python scripts/tools/dx/generate_doc_map.py --generate)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
