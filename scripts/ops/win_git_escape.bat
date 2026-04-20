@@ -129,6 +129,10 @@ if "%MSG%"=="" (
     echo NOTE: message must be wrapped in double quotes
     goto :done_err
 )
+REM UTF-8 safety gate (PR #42 Trap #58): reject non-ASCII in -m args, since
+REM cmd.exe corrupts them regardless of chcp. Helper prints hint + exits 1.
+python "%~dp0commit_helper.py" check-ascii "%MSG%"
+if %ERRORLEVEL% NEQ 0 goto :done_err
 REM Use %~2 not %2 -- batch auto-handles quotes
 "%GIT_CMD%" commit -m "%MSG%" >"%OUT%" 2>"%ERR%"
 if %ERRORLEVEL% EQU 0 (
@@ -157,7 +161,10 @@ if not exist "%MSGFILE%" (
     echo ERROR: file not found: %MSGFILE%
     goto :done_err
 )
-"%GIT_CMD%" commit --no-verify -F "%MSGFILE%" >"%OUT%" 2>"%ERR%"
+REM UTF-8 safety (PR #42 Trap #58): pipe bytes to `git commit -F -` via Python,
+REM since `git commit -F file` reads via Windows codepage and mangles CJK bytes
+REM even with chcp 65001 set. The helper does the raw bytes pipe.
+python "%~dp0commit_helper.py" commit-file "%MSGFILE%" >"%OUT%" 2>"%ERR%"
 if %ERRORLEVEL% EQU 0 (
     echo OK: committed
     type "%OUT%"
@@ -299,17 +306,4 @@ echo   push [remote] [br]  Push to remote
 echo   tag tag-name        Create a tag
 echo   branch [name]       List or create+switch branch
 echo   log                 Show recent commits
-echo   diff                Show diff stats
-echo   preflight           Pre-operation health check
-echo   pr-preflight [PR#]  PR closing check (conflict/CI/mergeable)
-echo   fix-hooks           Fix CRLF/shebang in git hooks (cross-platform)
-echo.
-goto :done_err
-
-:done
-popd
-exit /b 0
-
-:done_err
-popd
-exit /b 1
+echo   
