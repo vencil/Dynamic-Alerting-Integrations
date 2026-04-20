@@ -50,6 +50,30 @@ if "%GIT_CMD%"=="" (
     exit /b 1
 )
 
+REM --- Find Python (for commit_helper.py UTF-8 safety layer) ---
+REM Prefer `py` (PEP 397 launcher) over `python`, because on many Windows
+REM installs `where python` resolves to the Microsoft Store shim first — a
+REM reparse-point stub that exits 0 without executing the script, so
+REM `git commit` silently returns 0 with no commit landed. The `py`
+REM launcher always resolves to a real interpreter. Fall back to `python`
+REM only if `py` is not installed, then to the usual AppData install paths.
+set "PY_CMD="
+where py >nul 2>&1 && set "PY_CMD=py"
+if "%PY_CMD%"=="" (
+    where python >nul 2>&1 && set "PY_CMD=python"
+)
+if "%PY_CMD%"=="" (
+    if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "PY_CMD=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+)
+if "%PY_CMD%"=="" (
+    if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY_CMD=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+)
+if "%PY_CMD%"=="" (
+    if exist "%LOCALAPPDATA%\Python\bin\python.exe" set "PY_CMD=%LOCALAPPDATA%\Python\bin\python.exe"
+)
+REM If still unset, commit/commit-file will fail with a clear error below.
+REM Non-commit operations (status/add/push/log/diff) don't need python.
+
 REM --- Find Repo ---
 set "REPO_DIR="
 if exist "%~dp0..\..\..\.git" (
@@ -131,7 +155,12 @@ if "%MSG%"=="" (
 )
 REM UTF-8 safety gate (PR #42 Trap #58): reject non-ASCII in -m args, since
 REM cmd.exe corrupts them regardless of chcp. Helper prints hint + exits 1.
-python "%~dp0commit_helper.py" check-ascii "%MSG%"
+if "%PY_CMD%"=="" (
+    echo ERROR: python not found. Install Python or the `py` launcher, then retry.
+    echo Looked in PATH, py launcher, and %%LOCALAPPDATA%%\Programs\Python\*
+    goto :done_err
+)
+"%PY_CMD%" "%~dp0commit_helper.py" check-ascii "%MSG%"
 if %ERRORLEVEL% NEQ 0 goto :done_err
 REM Use %~2 not %2 -- batch auto-handles quotes
 "%GIT_CMD%" commit -m "%MSG%" >"%OUT%" 2>"%ERR%"
@@ -164,7 +193,12 @@ if not exist "%MSGFILE%" (
 REM UTF-8 safety (PR #42 Trap #58): pipe bytes to `git commit -F -` via Python,
 REM since `git commit -F file` reads via Windows codepage and mangles CJK bytes
 REM even with chcp 65001 set. The helper does the raw bytes pipe.
-python "%~dp0commit_helper.py" commit-file "%MSGFILE%" >"%OUT%" 2>"%ERR%"
+if "%PY_CMD%"=="" (
+    echo ERROR: python not found. Install Python or the `py` launcher, then retry.
+    echo Looked in PATH, py launcher, and %%LOCALAPPDATA%%\Programs\Python\*
+    goto :done_err
+)
+"%PY_CMD%" "%~dp0commit_helper.py" commit-file "%MSGFILE%" >"%OUT%" 2>"%ERR%"
 if %ERRORLEVEL% EQU 0 (
     echo OK: committed
     type "%OUT%"
