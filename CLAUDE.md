@@ -8,23 +8,15 @@ lang: zh
 
 # CLAUDE.md — AI 開發上下文指引
 
-## ⛔ Agent 起手式（每次 Session 必執行）
+## ⛔ Agent 起手式（已自動化 🛡️）
 
-> 以下指令在每次 Cowork / Claude Code session 開始時執行，**不分任務類型**。
+Session 起手式已 codified 為 **PreToolUse hook**（v2.8.0）— 第一次 `Bash`/`Write`/`Edit`/`MultiEdit` 呼叫自動跑 `scripts/session-guards/session-init.py`（關 VS Code Git 背景操作 + 寫 session marker），後續同 session 呼叫 O(1) no-op。Session 用 `CLAUDE_SESSION_ID` 區分，marker 在 `/tmp/vibe-session-init.<hash>`。
 
-```bash
-python scripts/session-guards/vscode_git_toggle.py off   # 關閉 VS Code Git 背景操作（防 FUSE phantom lock）
-```
+- **手動觸發**（偵錯）：`python scripts/session-guards/session-init.py [--status|--force]`
+- **Dev Container**（K8s / Go test / Helm）：`docker start vibe-dev-container`（或 `make dc-test`）
+- **Session 結束**：`make session-cleanup`
 
-如需使用 Dev Container（K8s / Go test / Helm）：
-
-```bash
-docker ps | grep vibe-dev-container || docker start vibe-dev-container
-```
-
-Session 結束或異常終止後：`make session-cleanup`
-
-> 完整原理見 [windows-mcp-playbook §FUSE Phantom Lock 防治](docs/internal/windows-mcp-playbook.md#fuse-phantom-lock-防治)
+> Hook 設定見 [.claude/settings.json](.claude/settings.json)；完整原理見 [windows-mcp-playbook §FUSE Phantom Lock 防治](docs/internal/windows-mcp-playbook.md#fuse-phantom-lock-防治)
 
 ### 設計原則：主路徑 / 逃生門
 
