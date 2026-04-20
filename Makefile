@@ -222,6 +222,27 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 		echo "   (從 MCP 環境：用 Desktop Commander 的 cmd shell 執行上面三行。)"; \
 	fi
 
+.PHONY: dc-status
+dc-status: ## Dev Container 狀態查詢（是否 running）
+	@python3 scripts/ops/dx_run.py --status
+
+.PHONY: dc-up
+dc-up: ## 啟動 Dev Container（若已 running 則 no-op）
+	@python3 scripts/ops/dx_run.py --up
+
+.PHONY: dc-run
+dc-run: ## 在 Dev Container 內跑任意指令。用：make dc-run CMD="go vet ./..."
+	@if [ -z "$(CMD)" ]; then echo "❌ CMD is required. e.g. make dc-run CMD=\"go test ./...\""; exit 1; fi
+	@bash scripts/ops/dx-run.sh $(CMD)
+
+.PHONY: dc-test
+dc-test: ## 在 Dev Container 內跑 pytest（可選 ARGS="-k foo"）
+	@bash scripts/ops/dx-run.sh pytest $(ARGS)
+
+.PHONY: dc-go-test
+dc-go-test: ## 在 Dev Container 內跑 go test ./...（Go 僅在 container 內可用）
+	@bash scripts/ops/dx-run.sh go test ./...
+
 .PHONY: fuse-reset
 fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘影時用
 	@echo "=== FUSE Cache Reset: Level 1 → Level 3 ==="

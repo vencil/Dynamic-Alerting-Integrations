@@ -163,7 +163,7 @@ Playbook 是 **living documents**，跟隨專案演進持續更新：
 
 ### 開發 Session 標準工作流
 
-1. **起手式**：執行上方 [§Agent 起手式](#agent-起手式每次-session-必執行) → 根據任務分流表讀相關 Playbook
+1. **起手式**：執行上方 [§Agent 起手式](#agent-起手式已自動化) → 根據任務分流表讀相關 Playbook
 2. **開發**：程式碼修改 → Go test / Python test → 場景驗證
 3. **Benchmark**：完整 benchmark（idle + routing + Go micro-bench）→ 記錄到 CHANGELOG + architecture docs
 4. **文件同步**：`bump_docs.py --check` → 更新 CLAUDE.md / README / CHANGELOG 的計數
