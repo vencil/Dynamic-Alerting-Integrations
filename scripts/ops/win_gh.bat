@@ -45,6 +45,11 @@ if "%GH_CMD%"=="" (
 REM --- gh needs git on PATH to resolve repo context ---
 set "PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%PATH%"
 
+REM --- PATHEXT guard: some user profiles have PATHEXT=.CPL only (missing .EXE etc.)
+REM --- which makes cmd.exe unable to resolve "git" even when folder is on PATH.
+REM --- Force a sane PATHEXT so gh's internal `git` shell-out works.
+set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+
 REM --- Find repo ---
 set "REPO_DIR="
 if exist "%~dp0..\..\.git" (

@@ -32,6 +32,11 @@ REM --- Environment setup ---
 set "PYTHONUTF8=1"
 chcp 65001 >nul 2>&1
 
+REM --- PATHEXT guard: some user profiles have PATHEXT=.CPL only (missing .EXE etc.),
+REM --- which breaks cmd.exe's extension-less command resolution (e.g. `git`, `where`).
+REM --- Force a sane PATHEXT so subprocess calls work reliably.
+set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+
 REM --- Find Git ---
 set "GIT_CMD="
 where git >nul 2>&1 && set "GIT_CMD=git"
