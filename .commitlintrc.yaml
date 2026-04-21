@@ -60,4 +60,3 @@ rules:
       - test
       - build
       - ci
-  
