@@ -7,23 +7,41 @@ REM
 REM ============================================================================
 REM  MCP PowerShell caller pattern (IMPORTANT -- prevents stdout-hang in MCP)
 REM ============================================================================
-REM  When invoking from Windows-MCP PowerShell, plain `& this.bat args` can
-REM  hang because the MCP transport buffers stdout across the cmd->bash->bat
-REM  pipe chain. Break the chain with cmd.exe redirection to a tempfile +
-REM  Process.Start / WaitForExit (waits on a handle, not a pipe):
+REM  When invoking from Windows-MCP PowerShell, plain `& this.bat args` or a
+REM  naive `Process.Start("cmd.exe", "/c ...")` hangs because the MCP
+REM  transport inherits the child's console handle and buffers stdout across
+REM  the pipe chain. Dogfooded (PR #44 C5 close-loop):
 REM
-REM    $t = "$env:TEMP\vibe-bat-out.txt"
-REM    $p = [Diagnostics.Process]::Start(
-REM            "cmd.exe",
-REM            "/c """"$PSScriptRoot\win_git_escape.bat"" status > ""$t"" 2>&1"""
-REM         )
-REM    [void]$p.WaitForExit(30000)       # 30s timeout -- break hangs
-REM    Get-Content $t                    # read captured output
+REM    $bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_git_escape.bat"
+REM    $t    = "$env:TEMP\vibe-bat-out.txt"
+REM    Remove-Item $t -ErrorAction SilentlyContinue
+REM    $args = '/s /c "' + '"' + $bat + '" push > "' + $t + '" 2>&1"'
+REM    $psi = New-Object Diagnostics.ProcessStartInfo
+REM    $psi.FileName         = "cmd.exe"
+REM    $psi.Arguments        = $args
+REM    $psi.UseShellExecute  = $false
+REM    $psi.CreateNoWindow   = $true     # CRITICAL -- breaks console inherit
+REM    $psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
+REM    $p = [Diagnostics.Process]::Start($psi)
+REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
+REM    Get-Content $t -Raw
 REM
-REM  Double-quoting: cmd.exe /c "" ... "" preserves inner quoting so paths
-REM  with spaces survive. WaitForExit(ms) gives the MCP a process handle to
-REM  wait on instead of an open pipe, which the transport does NOT buffer.
-REM  See windows-mcp-playbook sec MCP Shell Pitfalls.
+REM  Three things matter, and the first TWO are not optional:
+REM    1) CreateNoWindow = $true     -- without it MCP still inherits the
+REM                                     child console handle and the 30s
+REM                                     WaitForExit silently becomes a 60s
+REM                                     MCP transport timeout.
+REM    2) cmd.exe /s /c "..."        -- the /s flag makes cmd strip exactly
+REM                                     the outer pair of quotes, no matter
+REM                                     how many inner quotes there are.
+REM                                     Without /s the triple/quadruple-
+REM                                     quote dance is fragile and often
+REM                                     launches an empty command (exit=0,
+REM                                     0 bytes output -- looks like pass).
+REM    3) WaitForExit(ms)            -- gives MCP a process handle to wait
+REM                                     on instead of an open pipe.
+REM
+REM  See windows-mcp-playbook §MCP Shell Pitfalls / §FUSE Phantom Lock 防治.
 REM ============================================================================
 REM
 REM Usage:

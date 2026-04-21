@@ -178,6 +178,51 @@ if ($bytes | Where-Object { $_ -ge 0x80 }) { Write-Error "Non-ASCII byte present
 
 `check_ad_hoc_git_scripts` hook 只把關「腳本放在對的目錄」；encoding / CRLF 目前仍是人工紀律。違反這 4 條的 session 會一而再踩到同一個坑——這份清單是為了讓下一個 session「讀完 5 分鐘」就能避開 1 小時的 debug。
 
+### MCP Caller Pattern（從 PowerShell 呼叫 `.bat` 的正確姿勢）
+
+寫好了合規的 `.bat` 還有第二關：**怎麼從 MCP PowerShell session 把它叫起來**。PR #44 C5 close-loop 實測發現，「天真」的呼叫法（`& $bat pr-checks`、`Start-Process -Wait`）在 Windows-MCP 下會 **靜默 timeout**（60s RPC 上限），即使 `.bat` 自己 1 秒內就跑完。
+
+根因：MCP 的 PowerShell 傳輸機制會 inherit 子 process 的 **console handle**。即使 `.bat` 早已 `exit /b 0`，只要 console handle 還在 MCP stdout pipe chain 上，RPC 就不會回 — 直到 60s timeout 才截斷。
+
+**唯一穩定的呼叫模板**（三個非可選要素：`CreateNoWindow=$true` + `cmd.exe /s /c` + `WaitForExit(ms)`）：
+
+```powershell
+$bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_gh.bat"
+$t    = "$env:TEMP\vibe-gh-out.txt"
+Remove-Item $t -ErrorAction SilentlyContinue
+
+# /s /c 的兩個旗標缺一不可：
+#   /c  告訴 cmd.exe 執行後就退出
+#   /s  讓 cmd.exe 只剝**一層**外部雙引號（否則嵌在 args 裡的內層引號會被亂剝）
+$args = '/s /c "' + '"' + $bat + '" pr-checks > "' + $t + '" 2>&1"'
+
+$psi = New-Object Diagnostics.ProcessStartInfo
+$psi.FileName         = "cmd.exe"
+$psi.Arguments        = $args
+$psi.UseShellExecute  = $false
+$psi.CreateNoWindow   = $true     # CRITICAL — 不加這行 MCP 還是會 inherit console handle 然後 hang
+$psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
+$p = [Diagnostics.Process]::Start($psi)
+[void]$p.WaitForExit(30000)       # 給一個毫秒為單位的硬 timeout，避免萬一 hang
+Get-Content $t -Raw
+```
+
+**為什麼三個要素都不能省：**
+
+| 要素 | 省略的症狀 | 作用 |
+|------|-----------|------|
+| `CreateNoWindow = $true` | MCP RPC 卡 60s 後截斷（`.bat` 明明瞬間跑完） | 阻止 child 建立 console → 斷開 MCP 對 console handle 的 inheritance |
+| `cmd.exe /s /c "..."` 的 `/s` | 內層引號被意外剝掉 → `.bat` 收到半截 args / 路徑空字串 | 告訴 cmd 只拆掉最外層的一對引號 — 剛好對應上面 `$args` 組裝的雙包結構 |
+| `$p.WaitForExit(ms)` | `.bat` 還在跑 PowerShell 就往下跑 → `Get-Content` 讀到空檔 | 用毫秒 timeout 的同步等待取代「傳 pipe 去等 stdout」；MCP 拿到的是 process handle，不是 open pipe |
+
+> **實測基準**（PR #44 C5 dogfood）：
+> - 錯誤寫法（`& $bat`）：`waited=False, exit=None, MCP timeout @ 60s`
+> - 缺 `CreateNoWindow`：`waited=False, exit=None, MCP timeout @ 60s`
+> - 缺 `/s` 用 `/c` only：`waited=True, exit=0, len=0`（cmd 把 `.bat` 路徑的外層引號剝掉之後、又把內層引號當內容）
+> - 三個都加：`waited=True, exit=0, len=39`（正常）
+
+`scripts/ops/win_git_escape.bat` 和 `scripts/ops/win_gh.bat` 的檔頭都嵌入了這段模板作為 in-tree 單一來源，並由 `tests/dx/test_bat_label_integrity.py::test_mcp_caller_pattern_documented` 強制要求 header 包含 `Process.Start` / `WaitForExit` / `CreateNoWindow` / `/s /c` 四個關鍵字 — 任何未來改動都會擋 CI。
+
 ## 長時間操作 (>60s)
 
 Desktop Commander `start_process` 硬上限 **60 秒**（`timeout_ms` 參數無效）。超過的操作用背景腳本：
@@ -575,7 +620,45 @@ bash scripts/session-guards/git_check_lock.sh --clean
 
 `.gitattributes` 確保 repo 內一律 LF，避免 CRLF/LF 混用在 FUSE 上造成額外的 diff 雜訊和 index 更新。
 
-### 修復層 B：FUSE Cache 重建（Level 1 ~ 5）
+### v2.8.0 Resilience Tooling（PR #44 session resilience + token economy bundle）
+
+`win_git_escape.bat` 是 FUSE 側卡死時的 **大逃生門**（需要 Windows-MCP 可用）。PR #44 加了一組更細顆粒度、**從 sandbox 側就能跑** 的工具，涵蓋 index 損壞 / phantom lock / commit-msg 驗證 / pre-push gate 四類 session resilience 問題。
+
+| 工具 | 解決的具體問題 | 典型呼叫 |
+|------|--------------|---------|
+| `scripts/ops/fuse_plumbing_commit.py` | `.git/index` 鎖住 / phantom 或 partially-corrupt 時仍需 commit — 用 git plumbing (`hash-object` → `update-index --cacheinfo` → `write-tree` → `commit-tree` → 直寫 `refs/heads/<branch>`) 走下去，完全不觸發 `.git/index.lock` 路徑 | `python3 scripts/ops/fuse_plumbing_commit.py --auto --msg _msg.txt <files...>`（`--auto` 偵測 phantom lock 後自動選 plumbing path） |
+| `scripts/ops/recover_index.sh` | `.git/index` 已經 corrupt 或寫入一半；用 `git read-tree HEAD` 在 tmp 產生新 index，**以 atomic cp+rename 換掉 `.git/index`**（同 FS 上的 rename 才保證原子性 — trap EXIT 清 staging 檔） | `bash scripts/ops/recover_index.sh`（或 `make recover-index`） |
+| `make fuse-locks` | 列出 `.git/*.lock` 殘留、每個 lock 的 age / holder process / FUSE phantom 狀態 | `make fuse-locks` |
+| `make fuse-commit MSG=_msg.txt FILES="a b"` | 前項 `fuse_plumbing_commit.py --auto` 的 Make 封裝 | `make fuse-commit MSG=_msg.txt FILES="scripts/ops/x.sh docs/y.md"` |
+| `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）— 讓 Windows 側 `--no-verify` 的 commit 仍有 commit-msg gate | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
+| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`；**狀態感知**：透過 `gh pr view <branch>` 判斷 PR 狀態，OPEN PR 時 `require_preflight_pass.sh` 才擋，WIP 允許 push 觸發 CI smoke | `make pr-preflight`（pre-push hook 自動 consume marker）|
+
+**什麼時候用哪一條**（決策助記）：
+
+```
+git commit 失敗，錯誤訊息是 ...
+│
+├─ "Unable to create '.git/index.lock': File exists"
+│   └─ 先跑 `bash scripts/session-guards/git_check_lock.sh --clean`；
+│      清不掉 → `make fuse-locks` 看 phantom 狀態；
+│      仍卡 → `python3 scripts/ops/fuse_plumbing_commit.py --auto --msg <file> <paths>`（繞過 index.lock）
+│
+├─ "fatal: index file corrupt"（或 `git status` 讀 index 崩）
+│   └─ `make recover-index`（atomic 重建 `.git/index` from HEAD tree）→ 再跑 `git status`
+│
+├─ Commit message 被 commitlint 打回（本地沒裝 commitlint 而不自覺）
+│   └─ 自家 `scripts/hooks/commit-msg`（session-init 已自動 install）跑 `.commitlintrc.yaml` 的 type/scope 驗證
+│
+└─ pre-push hook 說 "preflight marker missing"，但 branch 是 WIP 還沒開 PR
+    └─ v2.8.0 後：`require_preflight_pass.sh` 用 `gh pr view <branch>` 判 PR 狀態；
+       OPEN 才擋，WIP 直接放行 → 適合快速 push 觸發 CI smoke
+```
+
+> **為什麼 plumbing 路徑可以繞 phantom lock**：git porcelain (`git commit`) 一定會 acquire `.git/index.lock`；plumbing 直接操作 object database + refs — `hash-object` 寫 blob 到 `.git/objects/`（新檔，無 lock 爭用），`write-tree` / `commit-tree` 寫 tree & commit 物件（同理），最後只 `echo <sha> > .git/refs/heads/<branch>`（單檔 atomic write）。完全不觸發 `.git/index.lock`。
+
+> **為什麼 `recover_index.sh` 要 cp-to-sibling + mv，而不是直接 `git read-tree` 就好**：`git read-tree` 本身也會嘗試 acquire `.git/index.lock`；若 phantom lock 還在、或 VFS 不允許 `rename(tmp_outside_gitdir, .git/index)` 跨 device/FS，會直接 EPERM。正確做法是先在 `.git/` 內用 `cp "$TMP_IDX" "$INDEX.recover.$$"` 做 staging（同 FS），再 `mv "$INDEX.recover.$$" "$INDEX"` 原子換過去；`trap 'rm -f ...' EXIT` 保證半成品會被清乾淨。
+
+
 
 當檔案殘影 / phantom lock 反覆出現、`rm` 過的檔案還看得到、或 git index 與磁碟內容對不上時，按以下層次逐步重建（輕 → 重）。優先跑 `make fuse-reset`，它會自動串 Level 1 + Level 3。
 

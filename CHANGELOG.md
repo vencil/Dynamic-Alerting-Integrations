@@ -13,6 +13,49 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **Session resilience + token-economy bundle（v2.8.0 Phase .c, PR #44, branch `feat/v280-session-resilience-bundle`, 8 commits: C1–C8）**：解決 Cowork FUSE mount 下反覆踩到的兩類 showstopper——(a) `.git/index.lock` / `.git/HEAD.lock` 幻影鎖讓所有 `git add` / `commit` / `update-ref` 直接 fail、(b) `.git/index` 被寫壞後 `git status` 以下全部不可用。同步把 commit-msg 驗證從 CI-only 搬到本地、把 pre-push marker gate 做成 PR-state 感知，整組落成「code-first 逃生門」：
+  - **C1 `.commitlintrc.yaml` 擴展 enum**：`type-enum` 加 `chore` / `revert`，`scope-enum` 加 `config` / `resilience` 對應 PR #44 本身的類別。既有 Conventional Commits 家族不變。
+  - **C2 `scripts/hooks/commit-msg` + `scripts/tools/dx/pr_preflight.py --check-commit-msg` / `--check-pr-title`**：把 commitlint 檢查本地化。`commit-msg` hook 由 session-init 自動安裝進 `.git/hooks/`（見 C6）；`pr_preflight` 新增兩個離線子命令：
+    - `--check-commit-msg <file>`：讀 commit msg file → 解析 header → 對 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum` / 長度上限驗證。fail 時列明違規項 + 修正建議。
+    - `--check-pr-title <string>`：同樣的驗證邏輯，但輸入是 PR title。CI 端用來擋 PR title drift（跟 commit header 不同步的經典坑）。
+    - `_read_commitlint_enum()` 不依賴 PyYAML，block-style flow 手解，對應 repo 現行 YAML 格式。
+    - **新測試 `tests/dx/test_preflight_msg_validator.py`** 覆蓋合法/違法 type/scope/長度/空白字元/CRLF 結尾 etc.
+  - **C3 `scripts/ops/fuse_plumbing_commit.py` + `make fuse-commit` / `make fuse-locks`**：幻影鎖場景下的 commit 逃生門。當 `.git/index.lock` 以 EPERM 狀態存在（`ls` 看得到、`rm` 失敗、`git` 拒絕 create own lock）時，走 git plumbing：`hash-object -w <file>` → 建 `GIT_INDEX_FILE=/tmp/plumb_idx_...` 的 temp index → `update-index --add --cacheinfo` → `write-tree` → `commit-tree` → 直接 write `.git/refs/heads/<branch>`。完全跳過 `.git/index` + `.git/index.lock` 的 handshake。三種 mode：
+    - `--auto --msg msg.txt file1 file2` — 偵測幻影鎖 → 有則 plumbing、無則 normal path（hooks 有跑）
+    - `--force-plumbing` — 永遠走 plumbing（skip hooks；quality gate 另外由 `make pr-preflight` 把關）
+    - `--show-locks` — 列出偵測到的 phantom lock paths（診斷用）
+    - `--amend`、exit codes 0/1/2 語意、保留 exec bit、best-effort `.git/index` 同步
+    - **新測試 `tests/dx/test_fuse_plumbing_commit.py`** 覆蓋 detect / plumbing path / normal path / amend / ref 寫失敗回報 / exec bit 保留
+  - **C4 `scripts/ops/recover_index.sh` + `make recover-index`**：`.git/index` 被寫壞（`index file corrupt` / `index uses ???? extension, which we do not understand` / `index file smaller than expected` / `bad index file signature` / `bad index file sha1 signature`）時的重建路徑。從 HEAD 走 `GIT_INDEX_FILE=$TMP_IDX git read-tree HEAD` 建 temp index，cp 到 `$INDEX.recover.$$` 同路徑 staging → `mv` 覆蓋 `.git/index`（rename(2) 同 FS atomic）。`--check` 模式只診斷（exit 0=clean / 2=corrupt）、預設模式診斷+修復。
+    - **新測試 `tests/dx/test_recover_index.py`** 覆蓋 clean / 各類 corruption signature / `--check` 模式 / rebuild success / rebuild fail 路徑
+  - **C5 `scripts/ops/win_git_escape.bat` `:done` / `:done_err` label fix + cmd-redirect pattern 文件化 + 三項 review polish**：
+    - **Critical bug fix**：`win_git_escape.bat` 所有 `:do_*` handler 都 `goto :done` 或 `goto :done_err`，但這兩個 label **整個檔案都沒定義**（`:usage` 之後直接 EOF，最後一行甚至 truncate 成無換行的 `echo   `）。cmd.exe 對「goto 不存在的 label」採靜默 errorlevel=1，所以**每次成功命令都回 rc=1**，caller 永遠看到 `FAILED`。補回兩個 label（`popd` + `endlocal` + `exit /b 0/1`）、補齊 truncate 的 `:usage`、保正確 CRLF + EOF 換行。
+    - **MCP PowerShell cmd-redirect pattern 文件化**：兩支 `.bat` header 加上經過 dogfood 驗證的呼叫範例。三件套：`CreateNoWindow=$true`（斷開 MCP console handle 繼承，**非這個 MCP 還是會 hang**）、`cmd.exe /s /c "..."`（`/s` 讓 cmd 乾淨地剝掉外層引號，**不是 `/c """"..."""` 那套**——實測後者會在某些 PS 引號路徑上變成 exit=0 / 0 bytes 的假通過）、`WaitForExit(ms)`（給 MCP 一個 process handle 等待，而不是讓它持有開著的 pipe）。
+    - **S1 `session-init.py` `_install_commit_msg_hook` install/update 指示修正**：舊邏輯 `return "installed" if not dst.exists() else "updated"` 跑在 `dst.write_bytes()` **之後**，`dst` 永遠 exists，所以永遠回 "updated"，telemetry 的「初次安裝」事件被整個遮蔽。改為 `write_bytes` 前先 capture `existed_before = dst.exists()`。
+    - **S6 `recover_index.sh` 注釋錯誤 + non-atomic write 修正**：舊注釋說 `cp (not mv) ... for atomic write behavior` — **裸 cp onto .git/index 不是 atomic**（讀者可能看到寫到一半的檔案）。改走 cp 到同 FS 的 sibling `$INDEX.recover.$$` → mv（rename(2) atomic），注釋同步更正。
+    - **S7 `require_preflight_pass.sh` 注釋錯誤修正**：舊注釋說 `gh pr view with --head filter`——但指令其實是 `gh pr view <branch>`（沒用 `--head`，branch 自動對 head 分支）。改注釋，行為不變。
+    - **新測試 `tests/dx/test_bat_label_integrity.py`** 7 條 parametrized assertion：每個 `goto :X` 必須有對應 `:X` label（擋 C5 bug class）、`:done` / `:done_err` 都必須存在（exit-handling contract）、header 必須含 `Process.Start` + `WaitForExit` + `CreateNoWindow` + `/s /c`（MCP caller pattern 可發現性）。
+  - **C6 `scripts/session-guards/session-init.py` auto-heal git hooks**：PreToolUse hook 每次起手式時：
+    - `_heal_pre_commit_shebang()` — 偵測 `.git/hooks/pre-commit` 的 shebang 指向不存在的 interpreter（典型 Windows `pre-commit install` 寫 `#!C:\Python*\python.exe` 路徑到 FUSE Linux 側不可用）→ 自動改為 `#!/usr/bin/env python3`。
+    - `_install_commit_msg_hook()` — 把 `scripts/hooks/commit-msg`（C2）copy 進 `.git/hooks/commit-msg`、chmod 0o755、內容相同時 no-op、status 送進 telemetry。
+    - Telemetry 新增 `hook_status: {pre_commit_shebang, commit_msg}` 欄位，和既有 session-init telemetry 合併寫 JSON Lines。所有 heal 失敗**絕不 block** session 起手式（只進 telemetry）。
+  - **C7 `scripts/ops/require_preflight_pass.sh` pre-push marker 條件性啟動**：舊版任何 push 都要 `.git/.preflight-ok.<HEAD-sha>` marker，WIP iteration 階段（PR 還沒開）每次 push-to-save 都被擋、`make pr-preflight` 要跑 3-5 分鐘，是長期摩擦源。改為 state-aware：
+    - `GIT_PREFLIGHT_STRICT=1` → 永遠要 marker（舊行為保留成 opt-in）
+    - `gh` 不可用 → 要 marker（安全 fallback）
+    - `gh pr view <branch> --json state --jq '.state'` 回 `OPEN` → 要 marker（PR 已開，CI 可見性 + reviewer noise 成本已實化）
+    - `gh` 可用但無 OPEN PR → 允許 push（WIP 階段，作者自付成本）
+    - **新測試 `tests/dx/test_preflight_pass_gate.py`** 15 條 parametrized 覆蓋 STRICT / 各 PR state / gh 可用與否 / multi-branch push / orthogonal bypass + main protection。特別做了 `_make_gh_missing_path(tmp_path)` helper：symlink bash/git/basename/sh/cat 到 clean dir，可靠地模擬「`gh` 不在 PATH」的 fallback 路徑。
+    - **`tests/dx/test_preflight_marker.py` 既有 `blocks_*` 案例補 `env_extra={"GIT_PREFLIGHT_STRICT": "1"}`**：pin 到舊「永遠要 marker」契約，不受測試機 `gh` 可用性影響。
+  - **C8 `pr_preflight.py` / `check_pr_scope_drift.py` 對非 UTF-8 git stderr 容錯**：兩個 orchestrator 的 `run()` helper 原本是 `subprocess.run(..., text=True)`（預設 UTF-8 decode）。Windows 側 git 的本地化 progress 輸出可能含 cp1252 smart-quote（0x93 / 0x94 / 0x96）等非 UTF-8 位元組，**一顆就整條 preflight 崩潰**（`UnicodeDecodeError: can't decode byte 0x93 in position 18`），連帶破壞 pre-push marker 寫入。改傳 `encoding="utf-8", errors="replace"`，stderr 本就只用於人看 / grep signature，replacement char 無害。C8 的修正 dogfood 實證：跑 `make pr-preflight` 不再被 git fetch 的 localized progress line 咬死。
+
+- **`scripts/hooks/commit-msg`** — Conventional Commits header 本地化檢查器（installed 進 `.git/hooks/` by session-init C6）。defensive 處理：repo root 靠 `git rev-parse --show-toplevel` 解析不依賴 cwd、找不到 `pr_preflight.py` 不 block、python interpreter 多候選 PATH resolve（`python3` / `python` / 絕對路徑 fallback）。
+- **`make` targets**：`fuse-commit MSG=msg.txt FILES="a b"` / `fuse-locks` / `recover-index`（對應 C3 / C3 / C4）。
+
+### Changed
+
+- **`CLAUDE.md` Makefile Top 7 擴充說明**：`make win-commit` 行補充 `+ fuse-commit / recover-index` 指向 PR #44 的 FUSE 逃生門工具鏈。
+- **`docs/internal/windows-mcp-playbook.md`** 新增 §FUSE Phantom Lock 防治 + §修復層 C 補 CreateNoWindow/`/s /c` 的實測 pattern（見下方 Fixed）。
+
 - **session-init telemetry + `--stats` CLI（v2.8.0 Phase .b, PR feat/v280-session-init-telemetry）**：PR #42 事後稽核發現 — PreToolUse hook 已上線，但缺「hook 真的有跑嗎」的觀測路徑；只能靠使用者手動 `--status` 看單一 session marker，跨 session 趨勢（幾次 init / 幾次 noop / vscode_toggle 失敗率 / avg duration）完全不可見。本次把 telemetry 內建進 hook 本身：
   - **每次 hook 呼叫 append 一筆 JSON Lines**（event=`init`/`noop`/`force`；`--status` / `--stats` 是 query，刻意不寫 log 避免自我污染）。欄位：`ts` / `session_id` / `marker_digest` / `event` / `duration_ms` / `vscode_toggle`（`ok`/`partial`/`skipped`）/ `vscode_msg` / `marker_path` / `repo_root` / `pid` / `argv`
   - **Log path cross-platform 解析（4 層優先序）**：`VIBE_SESSION_LOG` env override → Windows `%LOCALAPPDATA%\vibe\session-init.log` → POSIX `$XDG_CACHE_HOME/vibe/session-init.log` → home fallback（`~/.cache/vibe/` 或 `~/AppData/Local/vibe/`）。邏輯抽成 pure `_resolve_log_path(os_name, env, home)` 可直接 unit-test，不需 monkey-patch `os.name`（後者會撞到 pathlib `WindowsPath` 無法在 Linux 實例化的 INTERNALERROR）

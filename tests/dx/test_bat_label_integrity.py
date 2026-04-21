@@ -113,13 +113,27 @@ def test_mcp_caller_pattern_documented(bat_path: pathlib.Path) -> None:
     text = bat_path.read_text(encoding="utf-8", errors="replace")
     # Look in the first ~80 lines for the pattern — it belongs in the header.
     header = "\n".join(text.splitlines()[:80])
-    assert "Process.Start" in header, (
+    # Accept either the C# form `Process.Start` or the PowerShell form
+    # `[Diagnostics.Process]::Start` — both describe the same API.
+    assert re.search(r"Process[\]\.:]+Start", header), (
         f"{bat_path.name}: MCP caller pattern not documented in header. "
-        "Add a Process.Start + WaitForExit example to the REM block."
+        "Add a Process.Start / [Diagnostics.Process]::Start example to the REM block."
     )
     assert "WaitForExit" in header, (
         f"{bat_path.name}: WaitForExit not mentioned in header. "
         "The caller pattern is incomplete without it — MCP hangs otherwise."
+    )
+    # CreateNoWindow and /s /c are the two non-obvious pieces we dogfooded
+    # (PR #44 C5 close-loop). Without CreateNoWindow MCP still inherits the
+    # child console handle. Without /s the quoted-args dance is fragile.
+    assert "CreateNoWindow" in header, (
+        f"{bat_path.name}: header must mention CreateNoWindow=$true. "
+        "Without it the MCP transport still inherits the child console "
+        "and WaitForExit silently times out."
+    )
+    assert "/s /c" in header, (
+        f"{bat_path.name}: header must show the `cmd.exe /s /c` invocation. "
+        "The /s flag is what makes cmd.exe strip the outer quotes cleanly."
     )
 
 
