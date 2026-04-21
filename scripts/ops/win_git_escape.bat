@@ -4,6 +4,28 @@ REM
 REM When FUSE-layer git is stuck, use Windows native git to finish the job.
 REM This is an ESCAPE HATCH, not the normal workflow. Primary path is Dev Container.
 REM
+REM ============================================================================
+REM  MCP PowerShell caller pattern (IMPORTANT -- prevents stdout-hang in MCP)
+REM ============================================================================
+REM  When invoking from Windows-MCP PowerShell, plain `& this.bat args` can
+REM  hang because the MCP transport buffers stdout across the cmd->bash->bat
+REM  pipe chain. Break the chain with cmd.exe redirection to a tempfile +
+REM  Process.Start / WaitForExit (waits on a handle, not a pipe):
+REM
+REM    $t = "$env:TEMP\vibe-bat-out.txt"
+REM    $p = [Diagnostics.Process]::Start(
+REM            "cmd.exe",
+REM            "/c """"$PSScriptRoot\win_git_escape.bat"" status > ""$t"" 2>&1"""
+REM         )
+REM    [void]$p.WaitForExit(30000)       # 30s timeout -- break hangs
+REM    Get-Content $t                    # read captured output
+REM
+REM  Double-quoting: cmd.exe /c "" ... "" preserves inner quoting so paths
+REM  with spaces survive. WaitForExit(ms) gives the MCP a process handle to
+REM  wait on instead of an open pipe, which the transport does NOT buffer.
+REM  See windows-mcp-playbook sec MCP Shell Pitfalls.
+REM ============================================================================
+REM
 REM Usage:
 REM   win_git_escape.bat status
 REM   win_git_escape.bat add <file1> [file2...]
@@ -340,4 +362,27 @@ echo   push [remote] [br]  Push to remote
 echo   tag tag-name        Create a tag
 echo   branch [name]       List or create+switch branch
 echo   log                 Show recent commits
-echo   
+echo   diff                Show diff --stat
+echo   preflight           Quick 3-point preflight (locks/status/remote)
+echo   pr-preflight [N]    PR closing check (conflict/CI/hooks/mergeable)
+echo   fix-hooks           Fix CRLF/shebang issues in .git/hooks/*
+echo.
+echo Tip: For commit messages with CJK, em-dash, or other non-ASCII:
+echo   echo feat: my msg ^> _msg.txt
+echo   win_git_escape.bat commit-file _msg.txt
+echo.
+goto :done
+
+REM --- Exit label (success): restore cwd + return 0. ---
+REM Every :do_* block ends with `goto :done`. Without this label cmd.exe
+REM returns errorlevel=1 silently, making successful commands look failed.
+:done
+popd
+endlocal
+exit /b 0
+
+REM --- Exit label (failure): restore cwd + return 1. ---
+:done_err
+popd
+endlocal
+exit /b 1

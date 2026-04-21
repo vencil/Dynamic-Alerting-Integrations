@@ -93,8 +93,10 @@ if [ "${GIT_PREFLIGHT_STRICT:-0}" != "1" ]; then
     fi
     if [ "$gh_available" = "1" ]; then
         for b in "${pushed_branches[@]}"; do
-            # gh pr view with --head filter. Non-zero exit = no PR or not
-            # authenticated; treat both as "no open PR".
+            # `gh pr view <branch>` resolves the PR whose head matches this
+            # branch on the current repo. Non-zero exit = no PR, not
+            # authenticated, or API error; treat all as "no open PR" (the
+            # gh_available=1 + has_open_pr=0 block below then allows the push).
             state="$(gh pr view "$b" --json state --jq '.state' 2>/dev/null || true)"
             if [ "$state" = "OPEN" ]; then
                 has_open_pr=1

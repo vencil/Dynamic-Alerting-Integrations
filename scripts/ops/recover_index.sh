@@ -89,7 +89,11 @@ fi
 
 echo "🔧 Rebuilding .git/index from HEAD via temp-index plumbing..."
 TMP_IDX="$(mktemp /tmp/recover_idx_XXXXXX)"
-trap 'rm -f "$TMP_IDX"' EXIT
+# Stage path on the SAME filesystem as .git/index so `mv` is atomic (rename(2)).
+# /tmp is usually a different filesystem; cross-FS mv falls back to copy+delete,
+# which is NOT atomic. Keep the staging file next to the real index.
+STAGE_IDX="$INDEX.recover.$$"
+trap 'rm -f "$TMP_IDX" "$STAGE_IDX"' EXIT
 
 # read-tree with a separate GIT_INDEX_FILE avoids touching the corrupted
 # .git/index (and avoids any .git/index.lock handshake).
@@ -98,10 +102,15 @@ if ! GIT_INDEX_FILE="$TMP_IDX" git -C "$REPO_ROOT" read-tree HEAD; then
     exit 1
 fi
 
-# Replace the corrupted index. cp (not mv) because mv would fail across
-# filesystem boundaries (/tmp → FUSE) and we want the atomic write behavior.
-if ! cp "$TMP_IDX" "$INDEX"; then
-    echo "❌ Failed to write .git/index (is it locked? check \`make fuse-locks\`)." >&2
+# Replace the corrupted index atomically: cp to a sibling path (same FS as
+# .git/index) then mv, which is rename(2) and atomic on POSIX. A bare `cp`
+# onto .git/index is NOT atomic — a reader could see a partially written file.
+if ! cp "$TMP_IDX" "$STAGE_IDX"; then
+    echo "❌ Failed to stage .git/index replacement (is the FS full?)." >&2
+    exit 1
+fi
+if ! mv "$STAGE_IDX" "$INDEX"; then
+    echo "❌ Failed to rename staged index onto .git/index (is it locked? check \`make fuse-locks\`)." >&2
     echo "   Fallback: use \`make fuse-commit\` for plumbing commits that" >&2
     echo "   don't require a healthy .git/index." >&2
     exit 1

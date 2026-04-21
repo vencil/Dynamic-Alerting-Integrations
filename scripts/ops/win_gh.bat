@@ -20,6 +20,27 @@ REM
 REM DO NOT write _pr_checks.bat / _pr_log.bat / etc. — extend this wrapper.
 REM
 REM See docs/internal/windows-mcp-playbook.md (§MCP Shell Pitfalls, §修復層 C).
+REM
+REM ============================================================================
+REM  MCP PowerShell caller pattern (IMPORTANT -- prevents stdout-hang in MCP)
+REM ============================================================================
+REM  When invoking from Windows-MCP PowerShell, plain `& this.bat args` can
+REM  hang because the MCP transport buffers stdout across the cmd->bash->bat
+REM  pipe chain. Break the chain with cmd.exe redirection to a tempfile +
+REM  Process.Start / WaitForExit (waits on a handle, not a pipe):
+REM
+REM    $t = "$env:TEMP\vibe-gh-out.txt"
+REM    $p = [Diagnostics.Process]::Start(
+REM            "cmd.exe",
+REM            "/c """"$PSScriptRoot\win_gh.bat"" pr-checks > ""$t"" 2>&1"""
+REM         )
+REM    [void]$p.WaitForExit(30000)       # 30s timeout -- break hangs
+REM    Get-Content $t                    # read captured output
+REM
+REM  Double-quoting: cmd.exe /c "" ... "" preserves inner quoting so paths
+REM  with spaces survive. WaitForExit(ms) gives the MCP a process handle to
+REM  wait on instead of an open pipe, which the transport does NOT buffer.
+REM ============================================================================
 
 setlocal enabledelayedexpansion
 

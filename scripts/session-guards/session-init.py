@@ -236,10 +236,13 @@ def _install_commit_msg_hook(repo_root: Path) -> str:
         src_bytes = src.read_bytes()
         if dst.exists() and dst.read_bytes() == src_bytes:
             return "already up-to-date"
+        # Capture existence BEFORE write_bytes — after write, dst always exists
+        # so a post-write check would always report "updated" (S1 bug fix).
+        existed_before = dst.exists()
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(src_bytes)
         os.chmod(dst, 0o755)
-        return "installed" if not dst.exists() else "updated"
+        return "updated" if existed_before else "installed"
     except OSError as exc:
         return f"install failed: {exc}"
 
