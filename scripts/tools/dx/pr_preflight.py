@@ -95,12 +95,21 @@ class PreflightReport:
 
 
 def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.CompletedProcess:
-    """Run a command with sensible defaults."""
+    """Run a command with sensible defaults.
+
+    Uses errors="replace" on decoding because tools like git may emit
+    localized progress/stderr in Windows codepages (e.g. 0x93 smart-quote
+    from cp1252), which would otherwise crash the whole preflight with a
+    UnicodeDecodeError. We only consume stderr for display/grep, so
+    replacement characters are fine.
+    """
     try:
         return subprocess.run(
             cmd,
             capture_output=capture,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except FileNotFoundError:
