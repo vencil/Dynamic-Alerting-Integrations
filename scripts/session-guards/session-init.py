@@ -117,6 +117,7 @@ def _write_log(
     vscode_toggle: str,
     vscode_msg: str,
     argv: list[str],
+    hook_status: dict | None = None,
 ) -> None:
     """Append one JSON Lines entry. 絕不 raise — 失敗只印 stderr warning。"""
     path = _log_path()
@@ -135,6 +136,8 @@ def _write_log(
         "pid": os.getpid(),
         "argv": argv,
     }
+    if hook_status is not None:
+        entry["hook_status"] = hook_status
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # ensure_ascii=False so CJK messages 不 escape 成 \uXXXX
@@ -169,6 +172,89 @@ def _run_vscode_git_toggle(repo_root: Path) -> tuple[bool, str]:
         return False, f"OSError: {exc}"
 
 
+# ---------------------------------------------------------------------------
+# Git hook healing (PR #44 C6)
+# ---------------------------------------------------------------------------
+# Two problems this fixes:
+#   1. .git/hooks/pre-commit ships from pre-commit install with a hardcoded
+#      python path (e.g. /usr/local/python/current/bin/python3). That path
+#      exists in the devcontainer but NOT in the sandbox. First commit from
+#      sandbox fails "bad interpreter: No such file or directory".
+#   2. commit-msg hook (new in PR #44 C2) lives at scripts/hooks/commit-msg.
+#      Git doesn't auto-install it; we want it copied to .git/hooks/commit-msg
+#      on session start so local commits get validated immediately.
+#
+# Both are idempotent: if already healed, _heal_git_hooks is a no-op.
+
+
+def _heal_pre_commit_shebang(repo_root: Path) -> str:
+    """If .git/hooks/pre-commit shebang points to a non-existent interpreter,
+    rewrite it to `#!/usr/bin/env python3` (portable fallback).
+
+    Returns a human-readable status string.
+    """
+    hook = repo_root / ".git" / "hooks" / "pre-commit"
+    if not hook.exists():
+        return "no pre-commit hook installed"
+    try:
+        content = hook.read_text()
+    except OSError as exc:
+        return f"read failed: {exc}"
+    lines = content.split("\n", 1)
+    if not lines or not lines[0].startswith("#!"):
+        return "no shebang"
+    shebang = lines[0]
+    # Extract interpreter path: "#!/path/to/python" → "/path/to/python"
+    # Handle "#!/usr/bin/env python3" (env-style) separately — always works.
+    interp = shebang[2:].strip().split()[0] if len(shebang) > 2 else ""
+    if interp == "/usr/bin/env":
+        return "already using /usr/bin/env"
+    if not interp:
+        return "empty shebang"
+    if Path(interp).exists():
+        return f"interpreter ok: {interp}"
+    # Rewrite: replace first line with #!/usr/bin/env python3
+    new_content = "#!/usr/bin/env python3\n" + (lines[1] if len(lines) > 1 else "")
+    try:
+        hook.write_text(new_content)
+        os.chmod(hook, 0o755)
+        return f"healed: {interp} → /usr/bin/env python3"
+    except OSError as exc:
+        return f"write failed: {exc}"
+
+
+def _install_commit_msg_hook(repo_root: Path) -> str:
+    """Copy scripts/hooks/commit-msg → .git/hooks/commit-msg if missing/stale.
+
+    Returns a human-readable status string.
+    """
+    src = repo_root / "scripts" / "hooks" / "commit-msg"
+    if not src.exists():
+        return "source commit-msg hook not present"
+    dst = repo_root / ".git" / "hooks" / "commit-msg"
+    try:
+        src_bytes = src.read_bytes()
+        if dst.exists() and dst.read_bytes() == src_bytes:
+            return "already up-to-date"
+        # Capture existence BEFORE write_bytes — after write, dst always exists
+        # so a post-write check would always report "updated" (S1 bug fix).
+        existed_before = dst.exists()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src_bytes)
+        os.chmod(dst, 0o755)
+        return "updated" if existed_before else "installed"
+    except OSError as exc:
+        return f"install failed: {exc}"
+
+
+def _heal_git_hooks(repo_root: Path) -> dict:
+    """Run all hook-healing steps. Returns status dict for telemetry."""
+    return {
+        "pre_commit_shebang": _heal_pre_commit_shebang(repo_root),
+        "commit_msg": _install_commit_msg_hook(repo_root),
+    }
+
+
 def _do_init(
     repo_root: Path, marker: Path, *, event: str, argv: list[str]
 ) -> int:
@@ -176,6 +262,10 @@ def _do_init(
     sid = _session_id()
     t0 = time.monotonic()
     success, msg = _run_vscode_git_toggle(repo_root)
+    # Heal git hooks (idempotent — no file change if already healed).
+    # Doesn't affect overall session-init success; hook healing failures
+    # are telemetered but don't block tool calls.
+    hook_status = _heal_git_hooks(repo_root)
     duration_ms = (time.monotonic() - t0) * 1000.0
     toggle_status = "ok" if success else "partial"
     try:
@@ -206,6 +296,7 @@ def _do_init(
         vscode_toggle=toggle_status,
         vscode_msg=msg,
         argv=argv,
+        hook_status=hook_status,
     )
     return 0  # 永不 block tool call
 

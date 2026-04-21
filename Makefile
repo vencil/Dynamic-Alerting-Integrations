@@ -222,6 +222,32 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 		echo "   (從 MCP 環境：用 Desktop Commander 的 cmd shell 執行上面三行。)"; \
 	fi
 
+.PHONY: fuse-commit
+fuse-commit: ## FUSE phantom lock 逃生門：純 sandbox plumbing commit。用：make fuse-commit MSG=_msg.txt FILES="a b" [AMEND=1]
+	@if [ -z "$(MSG)" ]; then echo "❌ MSG is required. e.g. make fuse-commit MSG=_msg.txt FILES=\"a b\""; exit 1; fi
+	@if [ ! -f "$(MSG)" ]; then echo "❌ Message file not found: $(MSG)"; exit 1; fi
+	@if [ -z "$(FILES)" ]; then echo "❌ FILES is required. e.g. make fuse-commit MSG=_msg.txt FILES=\"a b\""; exit 1; fi
+	@echo "=== FUSE plumbing commit: $(MSG) <- $(FILES) ==="
+	@# Auto-mode: uses plumbing only if phantom lock detected, else normal git
+	@# (hooks run in normal path; preflight gates the push either way).
+	@if [ "$(AMEND)" = "1" ]; then \
+		python3 scripts/ops/fuse_plumbing_commit.py --auto --amend --msg $(MSG) $(FILES); \
+	else \
+		python3 scripts/ops/fuse_plumbing_commit.py --auto --msg $(MSG) $(FILES); \
+	fi
+
+.PHONY: fuse-locks
+fuse-locks: ## 偵測 .git/ 的 phantom lock（FUSE 鬼影）
+	@python3 scripts/ops/fuse_plumbing_commit.py --show-locks
+
+.PHONY: recover-index
+recover-index: ## FUSE index corruption 逃生門：從 HEAD 重建 .git/index (用：CHECK=1 只診斷不修)
+	@if [ "$(CHECK)" = "1" ]; then \
+		bash scripts/ops/recover_index.sh --check; \
+	else \
+		bash scripts/ops/recover_index.sh; \
+	fi
+
 .PHONY: dc-status
 dc-status: ## Dev Container 狀態查詢（是否 running）
 	@python3 scripts/ops/dx_run.py --status

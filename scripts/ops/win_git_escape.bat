@@ -4,6 +4,46 @@ REM
 REM When FUSE-layer git is stuck, use Windows native git to finish the job.
 REM This is an ESCAPE HATCH, not the normal workflow. Primary path is Dev Container.
 REM
+REM ============================================================================
+REM  MCP PowerShell caller pattern (IMPORTANT -- prevents stdout-hang in MCP)
+REM ============================================================================
+REM  When invoking from Windows-MCP PowerShell, plain `& this.bat args` or a
+REM  naive `Process.Start("cmd.exe", "/c ...")` hangs because the MCP
+REM  transport inherits the child's console handle and buffers stdout across
+REM  the pipe chain. Dogfooded (PR #44 C5 close-loop):
+REM
+REM    $bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_git_escape.bat"
+REM    $t    = "$env:TEMP\vibe-bat-out.txt"
+REM    Remove-Item $t -ErrorAction SilentlyContinue
+REM    $args = '/s /c "' + '"' + $bat + '" push > "' + $t + '" 2>&1"'
+REM    $psi = New-Object Diagnostics.ProcessStartInfo
+REM    $psi.FileName         = "cmd.exe"
+REM    $psi.Arguments        = $args
+REM    $psi.UseShellExecute  = $false
+REM    $psi.CreateNoWindow   = $true     # CRITICAL -- breaks console inherit
+REM    $psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
+REM    $p = [Diagnostics.Process]::Start($psi)
+REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
+REM    Get-Content $t -Raw
+REM
+REM  Three things matter, and the first TWO are not optional:
+REM    1) CreateNoWindow = $true     -- without it MCP still inherits the
+REM                                     child console handle and the 30s
+REM                                     WaitForExit silently becomes a 60s
+REM                                     MCP transport timeout.
+REM    2) cmd.exe /s /c "..."        -- the /s flag makes cmd strip exactly
+REM                                     the outer pair of quotes, no matter
+REM                                     how many inner quotes there are.
+REM                                     Without /s the triple/quadruple-
+REM                                     quote dance is fragile and often
+REM                                     launches an empty command (exit=0,
+REM                                     0 bytes output -- looks like pass).
+REM    3) WaitForExit(ms)            -- gives MCP a process handle to wait
+REM                                     on instead of an open pipe.
+REM
+REM  See windows-mcp-playbook §MCP Shell Pitfalls / §FUSE Phantom Lock 防治.
+REM ============================================================================
+REM
 REM Usage:
 REM   win_git_escape.bat status
 REM   win_git_escape.bat add <file1> [file2...]
@@ -340,4 +380,27 @@ echo   push [remote] [br]  Push to remote
 echo   tag tag-name        Create a tag
 echo   branch [name]       List or create+switch branch
 echo   log                 Show recent commits
-echo   
+echo   diff                Show diff --stat
+echo   preflight           Quick 3-point preflight (locks/status/remote)
+echo   pr-preflight [N]    PR closing check (conflict/CI/hooks/mergeable)
+echo   fix-hooks           Fix CRLF/shebang issues in .git/hooks/*
+echo.
+echo Tip: For commit messages with CJK, em-dash, or other non-ASCII:
+echo   echo feat: my msg ^> _msg.txt
+echo   win_git_escape.bat commit-file _msg.txt
+echo.
+goto :done
+
+REM --- Exit label (success): restore cwd + return 0. ---
+REM Every :do_* block ends with `goto :done`. Without this label cmd.exe
+REM returns errorlevel=1 silently, making successful commands look failed.
+:done
+popd
+endlocal
+exit /b 0
+
+REM --- Exit label (failure): restore cwd + return 1. ---
+:done_err
+popd
+endlocal
+exit /b 1

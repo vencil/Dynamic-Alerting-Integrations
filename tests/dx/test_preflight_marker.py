@@ -122,9 +122,13 @@ class TestGateScript:
 
     def test_missing_marker_blocks(self, tmp_path):
         sha = _init_git(tmp_path)
+        # STRICT forces the "always require marker" contract this test exists
+        # for. Without STRICT, PR #44 C7's conditional gate may let WIP
+        # branches through based on gh pr view state.
         r = self._run_gate(
             tmp_path,
             f"refs/heads/feat/x {sha} refs/heads/feat/x 0000000000000000000000000000000000000000\n",
+            env_extra={"GIT_PREFLIGHT_STRICT": "1"},
         )
         assert r.returncode == 1
         assert "Push blocked" in r.stderr
@@ -170,6 +174,7 @@ class TestGateScript:
         r = self._run_gate(
             tmp_path,
             f"refs/heads/feat/x {sha} refs/heads/feat/x 0000000000000000000000000000000000000000\n",
+            env_extra={"GIT_PREFLIGHT_STRICT": "1"},
         )
         assert r.returncode == 1
         assert "Push blocked" in r.stderr

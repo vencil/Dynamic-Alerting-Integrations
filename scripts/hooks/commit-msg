@@ -1,0 +1,43 @@
+#!/bin/sh
+# commit-msg — validate conventional-commits header against .commitlintrc.yaml
+#
+# Installed into .git/hooks/commit-msg by scripts/session-guards/session-init.py
+# (PR #44 commit 6). Can also be installed manually:
+#
+#     cp scripts/hooks/commit-msg .git/hooks/commit-msg
+#     chmod +x .git/hooks/commit-msg
+#
+# Exits 0 on pass, 1 on fail. Git will abort the commit on failure.
+# Bypass only with `git commit --no-verify` (reserved for real emergencies).
+
+COMMIT_MSG_FILE="$1"
+
+# Locate repo root without relying on cwd (hook runs from repo root but let's
+# be defensive — some tools chdir before invoking hooks).
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$REPO_ROOT" ]; then
+    # Not in a git repo (unusual for a commit-msg hook); fall through.
+    exit 0
+fi
+
+PREFLIGHT="$REPO_ROOT/scripts/tools/dx/pr_preflight.py"
+if [ ! -f "$PREFLIGHT" ]; then
+    # Preflight tool missing — don't block commits on a missing validator.
+    exit 0
+fi
+
+# Resolve a python interpreter that exists. session-init.py auto-heals the
+# pre-commit shebang but commit-msg runs in a plain shell, so we try common
+# candidates ourselves.
+for PY in python3 python /usr/bin/python3 /usr/local/bin/python3; do
+    if command -v "$PY" >/dev/null 2>&1; then
+        PYTHON="$PY"
+        break
+    fi
+done
+if [ -z "${PYTHON:-}" ]; then
+    # No python — can't validate; don't block.
+    exit 0
+fi
+
+"$PYTHON" "$PREFLIGHT" --check-commit-msg "$COMMIT_MSG_FILE"

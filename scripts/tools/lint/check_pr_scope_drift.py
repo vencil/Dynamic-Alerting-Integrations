@@ -40,9 +40,20 @@ def find_repo_root() -> Path:
 
 
 def run(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
-    """Run a subprocess, return (exit, stdout, stderr)."""
+    """Run a subprocess, return (exit, stdout, stderr).
+
+    Decodes with errors="replace" — git's localized stderr may contain
+    Windows codepage bytes (e.g. 0x93 from cp1252) that would otherwise
+    crash this orchestrator with a UnicodeDecodeError.
+    """
     proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, check=False
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
     )
     return proc.returncode, proc.stdout, proc.stderr
 

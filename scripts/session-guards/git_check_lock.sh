@@ -84,10 +84,12 @@ if [ "$CLEAN_MODE" = "--clean" ] && [ "$HAS_STALE" = true ] && [ "$HAS_ACTIVE_GI
             else
                 REL="${f#"$REPO_ROOT"/}"
                 REL_WIN="${REL//\//\\}"
-                echo "  ❌ 無法刪除: $REL"
-                echo "     → 請用 Windows MCP 執行："
+                echo "  ❌ 無法刪除: $REL (FUSE phantom lock)"
+                echo "     ▸ Option A (sandbox plumbing): use \`make fuse-commit\` which"
+                echo "       bypasses the lock entirely via git commit-tree."
+                echo "     ▸ Option B (Windows MCP): run the following to force-remove:"
                 echo "       Remove-Item \"\$env:REPO_WIN_PATH\\$REL_WIN\" -Force"
-                echo "     （其中 \$env:REPO_WIN_PATH 是 repo 的 Windows 路徑，如 C:\\Users\\<username>\\vibe-k8s-lab）"
+                echo "       (\$env:REPO_WIN_PATH is the Windows repo path, e.g. C:\\Users\\<username>\\vibe-k8s-lab)"
                 FAILED=$((FAILED + 1))
             fi
         fi

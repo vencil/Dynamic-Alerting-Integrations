@@ -86,7 +86,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 - **Makefile** 必記 Top 7：
   - `make pr-preflight` — ⛔ PR merge 前必跑（七項檢查 + 寫 `.git/.preflight-ok.<SHA>` marker）
   - `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs）
-  - `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時 hook-gated Windows commit
+  - `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時 hook-gated Windows commit（siblings：`make fuse-commit` plumbing 逃生門 / `make fuse-locks` 幻影鎖診斷 / `make recover-index` 重建 `.git/index`）
   - `make dc-up` / `make dc-test` / `make dc-run CMD="..."` — Dev Container 統一入口
   - `make session-cleanup` — session 結束清理
   - `make lint-docs` — 一站式文件 lint

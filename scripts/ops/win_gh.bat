@@ -20,6 +20,31 @@ REM
 REM DO NOT write _pr_checks.bat / _pr_log.bat / etc. — extend this wrapper.
 REM
 REM See docs/internal/windows-mcp-playbook.md (§MCP Shell Pitfalls, §修復層 C).
+REM
+REM ============================================================================
+REM  MCP PowerShell caller pattern (IMPORTANT -- prevents stdout-hang in MCP)
+REM ============================================================================
+REM  Dogfooded pattern (PR #44 C5 close-loop). The naive `& this.bat` call
+REM  hangs the MCP because the transport inherits the child console handle.
+REM
+REM    $bat  = "C:\Users\<you>\vibe-k8s-lab\scripts\ops\win_gh.bat"
+REM    $t    = "$env:TEMP\vibe-gh-out.txt"
+REM    Remove-Item $t -ErrorAction SilentlyContinue
+REM    $args = '/s /c "' + '"' + $bat + '" pr-checks > "' + $t + '" 2>&1"'
+REM    $psi = New-Object Diagnostics.ProcessStartInfo
+REM    $psi.FileName         = "cmd.exe"
+REM    $psi.Arguments        = $args
+REM    $psi.UseShellExecute  = $false
+REM    $psi.CreateNoWindow   = $true     # CRITICAL -- without it MCP hangs
+REM    $psi.WorkingDirectory = "C:\Users\<you>\vibe-k8s-lab"
+REM    $p = [Diagnostics.Process]::Start($psi)
+REM    [void]$p.WaitForExit(30000)
+REM    Get-Content $t -Raw
+REM
+REM  CreateNoWindow = $true + cmd.exe /s /c + WaitForExit(ms) are the three
+REM  non-optional pieces. See win_git_escape.bat header + windows-mcp-
+REM  playbook §MCP Shell Pitfalls for the failure modes of each.
+REM ============================================================================
 
 setlocal enabledelayedexpansion
 
