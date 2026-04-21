@@ -17,9 +17,9 @@ REM   win_gh.bat run-view <RUN_ID>        Show CI run summary
 REM   win_gh.bat run-log <RUN_ID>         Show failed-step logs
 REM   win_gh.bat raw <args...>            Escape hatch: `gh <args>` verbatim
 REM
-REM DO NOT write _pr_checks.bat / _pr_log.bat / etc. — extend this wrapper.
+REM DO NOT write _pr_checks.bat / _pr_log.bat / etc. -- extend this wrapper.
 REM
-REM See docs/internal/windows-mcp-playbook.md (§MCP Shell Pitfalls, §修復層 C).
+REM See docs/internal/windows-mcp-playbook.md ("MCP Shell Pitfalls" + "Fix Layer C").
 REM
 REM ============================================================================
 REM  MCP PowerShell caller pattern (IMPORTANT -- prevents stdout-hang in MCP)
@@ -43,7 +43,7 @@ REM    Get-Content $t -Raw
 REM
 REM  CreateNoWindow = $true + cmd.exe /s /c + WaitForExit(ms) are the three
 REM  non-optional pieces. See win_git_escape.bat header + windows-mcp-
-REM  playbook §MCP Shell Pitfalls for the failure modes of each.
+REM  playbook "MCP Shell Pitfalls" section for the failure modes of each.
 REM ============================================================================
 
 setlocal enabledelayedexpansion
@@ -54,7 +54,7 @@ chcp 65001 >nul 2>&1
 
 REM --- Find gh.exe ---
 REM 8.3 short path avoids quoting issues when invoked via MCP/PowerShell.
-REM See §MCP Shell Pitfalls for why this matters.
+REM See "MCP Shell Pitfalls" section for why this matters.
 set "GH_CMD="
 if exist "C:\Program Files\GitHub CLI\gh.exe" (
     set "GH_CMD=C:\PROGRA~1\GITHUB~1\gh.exe"

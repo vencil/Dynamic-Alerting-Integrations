@@ -90,6 +90,13 @@ repos:
         pass_filenames: false
         files: \.(bat|ps1|cmd)$
 
+      - id: bat-ascii-purity-check
+        name: "Guard: scripts/ops/*.bat must be ASCII + CRLF + no-BOM (pitfall #45)"
+        entry: python3 -X utf8 scripts/tools/lint/check_bat_ascii_purity.py
+        language: python
+        pass_filenames: true
+        files: ^scripts/ops/.*\.bat$
+
       - id: doc-map-check
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check
