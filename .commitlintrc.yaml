@@ -35,6 +35,9 @@ rules:
       - tooling          # generic tooling / infrastructure changes
       - blast-radius     # CI bot + scripts/tools/ops/blast_radius.py (PR comment generator)
       - session-init     # session startup guards (scripts/session-guards/, PreToolUse hook)
+      # configuration & resilience scopes
+      - config           # CI / linter / commitlint / pre-commit config tweaks (chore(config) equivalent)
+      - resilience       # session / FUSE / Windows-MCP resilience tooling (fuse_plumbing, recover_index, cmd-redirect)
       # planning / paperwork scopes (session-ledger / decomposition commits)
       - planning        # v*-planning.md authorship commits (DEC-K/L drafts, session ledger)
       # release-version scopes (used by release-wrap commits)
@@ -60,3 +63,10 @@ rules:
       - test
       - build
       - ci
+      # chore: routine maintenance (config bumps, dep pins, housekeeping)
+      # that doesn't ship a feature or user-visible fix. Standard in
+      # conventional-commits; previously excluded but accepted per
+      # user decision on PR #43 post-merge review.
+      - chore
+      # revert: standard conventional-commits type for reverting prior commits.
+      - revert
