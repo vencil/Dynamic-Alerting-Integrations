@@ -658,7 +658,7 @@ git commit 失敗，錯誤訊息是 ...
 
 > **為什麼 `recover_index.sh` 要 cp-to-sibling + mv，而不是直接 `git read-tree` 就好**：`git read-tree` 本身也會嘗試 acquire `.git/index.lock`；若 phantom lock 還在、或 VFS 不允許 `rename(tmp_outside_gitdir, .git/index)` 跨 device/FS，會直接 EPERM。正確做法是先在 `.git/` 內用 `cp "$TMP_IDX" "$INDEX.recover.$$"` 做 staging（同 FS），再 `mv "$INDEX.recover.$$" "$INDEX"` 原子換過去；`trap 'rm -f ...' EXIT` 保證半成品會被清乾淨。
 
-
+### 修復層 B：FUSE Cache 重建（Level 1 ~ 5）
 
 當檔案殘影 / phantom lock 反覆出現、`rm` 過的檔案還看得到、或 git index 與磁碟內容對不上時，按以下層次逐步重建（輕 → 重）。優先跑 `make fuse-reset`，它會自動串 Level 1 + Level 3。
 
