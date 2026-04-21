@@ -510,3 +510,126 @@ class TestStatsCLI:
         mod.main(["--stats"])
         after = log_path.read_text(encoding="utf-8")
         assert before == after
+
+
+# ---------------------------------------------------------------------------
+# PR #44 C6: Git hook healing
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo(tmp_path: Path) -> Path:
+    """Create a bare-minimum .git dir (no commits needed) for hook tests."""
+    git_dir = tmp_path / ".git"
+    (git_dir / "hooks").mkdir(parents=True)
+    return tmp_path
+
+
+class TestHookHealing:
+    def test_heal_pre_commit_no_hook(self, tmp_path: Path) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        msg = mod._heal_pre_commit_shebang(tmp_path)
+        assert "not installed" in msg or "no pre-commit" in msg
+
+    def test_heal_pre_commit_env_shebang_is_noop(self, tmp_path: Path) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        hook = tmp_path / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/usr/bin/env python3\nprint('hi')\n")
+        os.chmod(hook, 0o755)
+        msg = mod._heal_pre_commit_shebang(tmp_path)
+        assert "already using" in msg
+        # File unchanged
+        assert hook.read_text().startswith("#!/usr/bin/env python3\n")
+
+    def test_heal_pre_commit_dead_interpreter_gets_rewritten(
+        self, tmp_path: Path
+    ) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        hook = tmp_path / ".git" / "hooks" / "pre-commit"
+        # Point to a path that definitely doesn't exist
+        hook.write_text(
+            "#!/nonexistent/path/to/python3\nimport sys\nsys.exit(0)\n"
+        )
+        os.chmod(hook, 0o755)
+        msg = mod._heal_pre_commit_shebang(tmp_path)
+        assert "healed" in msg
+        # Verify rewrite
+        content = hook.read_text()
+        assert content.startswith("#!/usr/bin/env python3\n")
+        # Body preserved
+        assert "import sys" in content
+        # Executable bit preserved
+        assert os.access(hook, os.X_OK)
+
+    def test_heal_pre_commit_live_interpreter_is_noop(
+        self, tmp_path: Path
+    ) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        hook = tmp_path / ".git" / "hooks" / "pre-commit"
+        hook.write_text(f"#!{sys.executable}\nimport sys\n")
+        os.chmod(hook, 0o755)
+        msg = mod._heal_pre_commit_shebang(tmp_path)
+        assert "interpreter ok" in msg
+        # Unchanged
+        assert hook.read_text().startswith(f"#!{sys.executable}\n")
+
+    def test_install_commit_msg_hook_fresh(self, tmp_path: Path) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        # Provide a source hook
+        src = tmp_path / "scripts" / "hooks"
+        src.mkdir(parents=True)
+        src_hook = src / "commit-msg"
+        src_hook.write_text("#!/bin/sh\necho installed\n")
+        os.chmod(src_hook, 0o755)
+
+        msg = mod._install_commit_msg_hook(tmp_path)
+        assert "installed" in msg or "updated" in msg
+        dst = tmp_path / ".git" / "hooks" / "commit-msg"
+        assert dst.exists()
+        assert dst.read_text() == "#!/bin/sh\necho installed\n"
+        assert os.access(dst, os.X_OK)
+
+    def test_install_commit_msg_hook_idempotent(self, tmp_path: Path) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        src = tmp_path / "scripts" / "hooks"
+        src.mkdir(parents=True)
+        (src / "commit-msg").write_text("#!/bin/sh\necho v1\n")
+        mod._install_commit_msg_hook(tmp_path)
+        msg = mod._install_commit_msg_hook(tmp_path)
+        assert "up-to-date" in msg
+
+    def test_install_commit_msg_hook_updates_when_source_changes(
+        self, tmp_path: Path
+    ) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        src = tmp_path / "scripts" / "hooks"
+        src.mkdir(parents=True)
+        src_hook = src / "commit-msg"
+        src_hook.write_text("#!/bin/sh\necho v1\n")
+        mod._install_commit_msg_hook(tmp_path)
+        # Change source
+        src_hook.write_text("#!/bin/sh\necho v2\n")
+        mod._install_commit_msg_hook(tmp_path)
+        dst = tmp_path / ".git" / "hooks" / "commit-msg"
+        assert "v2" in dst.read_text()
+
+    def test_install_commit_msg_hook_no_source(self, tmp_path: Path) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        msg = mod._install_commit_msg_hook(tmp_path)
+        assert "not present" in msg
+        assert not (tmp_path / ".git" / "hooks" / "commit-msg").exists()
+
+    def test_heal_git_hooks_returns_dict(self, tmp_path: Path) -> None:
+        mod = _load_module()
+        _init_git_repo(tmp_path)
+        status = mod._heal_git_hooks(tmp_path)
+        assert isinstance(status, dict)
+        assert "pre_commit_shebang" in status
+        assert "commit_msg" in status
