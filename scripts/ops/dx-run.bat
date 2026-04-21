@@ -4,7 +4,7 @@ REM
 REM Why this exists:
 REM   docker exec stdout is swallowed under PowerShell/MCP shells.
 REM   dx_run.py (Python) captures to file + tees back reliably.
-REM   See docs\internal\windows-mcp-playbook.md #核心原則.
+REM   See docs\internal\windows-mcp-playbook.md "Core Principle" section.
 REM
 REM Usage:
 REM   scripts\ops\dx-run.bat pytest tests\

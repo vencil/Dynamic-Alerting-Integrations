@@ -28,10 +28,19 @@ import re
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+# Primary MCP-caller wrappers with goto/label structure + documented caller
+# pattern. These go through the full structural suite below.
 BAT_FILES = [
     REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat",
     REPO_ROOT / "scripts" / "ops" / "win_gh.bat",
 ]
+# All .bat under scripts/ops/ that can be invoked by Desktop Commander /
+# Windows-MCP start_process. These get the narrower ASCII/CRLF/BOM gate
+# (pitfall #45 + pitfall row #2) but not the goto/label + caller-pattern
+# checks that only apply to the two escape-hatch wrappers above.
+ALL_OPS_BAT_FILES = sorted(
+    (REPO_ROOT / "scripts" / "ops").glob("*.bat")
+)
 
 LABEL_RE = re.compile(r"^:([A-Za-z_][A-Za-z0-9_]*)\s*$")
 # cmd.exe label dispatch — match `goto :name` (optionally with extra tokens
@@ -141,3 +150,127 @@ def test_bat_files_exist() -> None:
     """Sanity — fail loudly if someone renames/moves the .bat files."""
     for p in BAT_FILES:
         assert p.exists(), f"expected .bat file missing: {p}"
+
+
+# ---------------------------------------------------------------------------
+# Pitfall #45 — Desktop Commander start_process mangles .bat with CJK bytes.
+#
+# cmd.exe's batch parser reads byte-by-byte and does NOT normalize UTF-8
+# multi-byte sequences. When Desktop Commander's start_process launches a
+# .bat, it spawns a child cmd.exe that inherits the parent OEM codepage
+# (typically cp950 / cp437 on zh-TW Windows) — NOT cp65001. Any byte ≥ 0x80
+# in a REM comment or string can land on what the parser treats as a
+# shell metacharacter (0x80–0xBF covers several cp1252 punctuation bytes)
+# and corrupts parser state on downstream lines.
+#
+# The symptom is that @echo off / setlocal / goto appear to "not exist"
+# on lines that came AFTER the CJK one — the corruption leaks downstream.
+# `cmd /c` indirection doesn't help: the child cmd still inherits the
+# parent codepage, and chcp 65001 inside the .bat is too late (the parser
+# has already read the preamble with the wrong codepage).
+#
+# PowerShell-invoked .bat does NOT hit this, because PowerShell runtime
+# decodes the file to UTF-16 before handing the command line to cmd —
+# the byte-level collision happens one level earlier.
+#
+# These three tests below enforce the ASCII-only contract at CI time, so
+# the rule cannot silently decay between PRs (which it did — all three
+# wrappers accumulated CJK REM lines between commit e55d9af and PR #45).
+# ---------------------------------------------------------------------------
+
+
+def _find_non_ascii(data: bytes) -> list[tuple[int, int, int, str]]:
+    """Return list of (line_no, col, byte_value, line_preview) for bytes ≥ 0x80.
+
+    Line numbers are 1-indexed. Preview is the UTF-8-decoded line truncated
+    to 80 chars for readable assertion failure messages.
+    """
+    hits: list[tuple[int, int, int, str]] = []
+    lines = data.split(b"\r\n") if b"\r\n" in data else data.split(b"\n")
+    for i, line in enumerate(lines, 1):
+        for j, b in enumerate(line):
+            if b >= 0x80:
+                try:
+                    preview = line.decode("utf-8", errors="replace")[:80]
+                except Exception:
+                    preview = repr(line[:80])
+                hits.append((i, j, b, preview))
+                break  # one hit per line is enough for the report
+    return hits
+
+
+@pytest.mark.parametrize("bat_path", ALL_OPS_BAT_FILES, ids=lambda p: p.name)
+def test_bat_files_are_ascii_pure(bat_path: pathlib.Path) -> None:
+    """Pitfall #45 — .bat under scripts/ops/ must be ASCII-only (no byte ≥ 0x80).
+
+    Desktop Commander start_process reads the .bat through a child cmd.exe
+    that inherits OEM codepage (cp950 on zh-TW, cp437 on en-US). cmd's
+    batch parser is byte-oriented; a CJK byte in a REM comment corrupts
+    parser state and silently breaks @echo off / setlocal on DOWNSTREAM
+    lines. See playbook §MCP Shell Pitfalls + pitfall #45 for byte-level
+    root cause.
+
+    Enforcement rationale: commit e55d9af originally purged CJK from
+    win_git_escape.bat, but between that commit and PR #45, all three
+    wrappers accumulated CJK back in REM link-back comments. Without
+    CI gating the rule silently decays.
+    """
+    data = bat_path.read_bytes()
+    hits = _find_non_ascii(data)
+    if hits:
+        lines = [
+            f"{bat_path.name}: {len(hits)} line(s) contain byte(s) ≥ 0x80 — "
+            "pitfall #45 forbids non-ASCII in .bat under scripts/ops/."
+        ]
+        for ln, col, b, preview in hits[:5]:
+            lines.append(f"  L{ln} col{col}: byte=0x{b:02x}  |  {preview}")
+        if len(hits) > 5:
+            lines.append(f"  ... and {len(hits) - 5} more")
+        lines.append(
+            "  Fix: translate CJK/em-dash to ASCII. Link-back prose can use "
+            '"see: <section-name>" phrasing instead of "§<cjk-anchor>".'
+        )
+        pytest.fail("\n".join(lines))
+
+
+@pytest.mark.parametrize("bat_path", ALL_OPS_BAT_FILES, ids=lambda p: p.name)
+def test_bat_files_are_crlf(bat_path: pathlib.Path) -> None:
+    """Pitfall row #2 — LF-only .bat makes cmd.exe treat every line as a command.
+
+    cmd.exe expects CRLF. With bare LF, the parser sees `REM\\n@echo off`
+    as `REM@echo` (one token) and reports `'REM@echo' is not recognized`.
+    Write/Edit tools on Linux default to LF — this test catches that.
+    """
+    data = bat_path.read_bytes()
+    # Count bare LFs (LF not preceded by CR).
+    bare_lf_lines: list[int] = []
+    line_no = 1
+    for i, b in enumerate(data):
+        if b == 0x0A:
+            if i == 0 or data[i - 1] != 0x0D:
+                bare_lf_lines.append(line_no)
+            line_no += 1
+    assert not bare_lf_lines, (
+        f"{bat_path.name}: {len(bare_lf_lines)} bare LF line-ending(s) — "
+        f".bat files must be CRLF. First offending line(s): "
+        f"{bare_lf_lines[:5]}. Re-save via Write tool on Windows side, or "
+        f"run `unix2dos` equivalent."
+    )
+
+
+@pytest.mark.parametrize("bat_path", ALL_OPS_BAT_FILES, ids=lambda p: p.name)
+def test_bat_files_have_no_utf8_bom(bat_path: pathlib.Path) -> None:
+    """Pitfall row #2 extension — UTF-8 BOM at file start breaks cmd.exe.
+
+    A UTF-8 BOM (`EF BB BF`) before `@echo off` makes cmd.exe read the
+    first command as `\ufeff@echo off`, which it reports as
+    `'<bom>@echo' is not recognized`. Write tool on some platforms can
+    inject a BOM when the file is declared as UTF-8. Keep the wrapper
+    byte-prefix clean.
+    """
+    data = bat_path.read_bytes()
+    assert not data.startswith(b"\xef\xbb\xbf"), (
+        f"{bat_path.name}: file starts with UTF-8 BOM (EF BB BF). "
+        f"Remove the BOM — cmd.exe cannot parse the BOM bytes as a command "
+        f"prefix and will fail on the first line."
+    )

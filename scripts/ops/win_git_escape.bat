@@ -41,7 +41,7 @@ REM                                     0 bytes output -- looks like pass).
 REM    3) WaitForExit(ms)            -- gives MCP a process handle to wait
 REM                                     on instead of an open pipe.
 REM
-REM  See windows-mcp-playbook §MCP Shell Pitfalls / §FUSE Phantom Lock 防治.
+REM  See windows-mcp-playbook "MCP Shell Pitfalls" / "FUSE Phantom Lock Prevention".
 REM ============================================================================
 REM
 REM Usage:
@@ -92,7 +92,7 @@ if "%GIT_CMD%"=="" (
 
 REM --- Find Python (for commit_helper.py UTF-8 safety layer) ---
 REM Prefer `py` (PEP 397 launcher) over `python`, because on many Windows
-REM installs `where python` resolves to the Microsoft Store shim first — a
+REM installs `where python` resolves to the Microsoft Store shim first -- a
 REM reparse-point stub that exits 0 without executing the script, so
 REM `git commit` silently returns 0 with no commit landed. The `py`
 REM launcher always resolves to a real interpreter. Fall back to `python`
