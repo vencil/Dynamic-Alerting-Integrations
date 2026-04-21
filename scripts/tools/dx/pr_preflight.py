@@ -114,6 +114,194 @@ def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.
         )
 
 
+# ---------------------------------------------------------------------------
+# Conventional-commits message / PR title validator (PR #44 C2)
+# ---------------------------------------------------------------------------
+# Mirrors the subset of commitlint rules encoded in .commitlintrc.yaml:
+#   - type-enum (level 2, always)
+#   - scope-enum (level 2, always)
+#   - subject non-empty
+#   - header max-length (default 100 — conventional-commits)
+# Kept pure so tests can feed messages without touching git state.
+
+CONVENTIONAL_HEADER_RE = re.compile(
+    r"^(?P<type>[a-z]+)"
+    r"(?:\((?P<scope>[^)]+)\))?"
+    r"(?P<bang>!)?"
+    r":\s*(?P<subject>.+)$"
+)
+
+
+def _read_commitlint_enum(repo_root: Path, key: str) -> Optional[List[str]]:
+    """Parse type-enum / scope-enum from .commitlintrc.yaml without PyYAML.
+
+    The rule block looks like:
+        type-enum:
+          - 2
+          - always
+          - - feat
+            - fix
+            ...
+
+    We just need the leaf list. Hand-rolled so we don't add a runtime dep.
+    Returns None if the key isn't found (callers treat that as "no restriction").
+    """
+    config = repo_root / ".commitlintrc.yaml"
+    if not config.exists():
+        return None
+    lines = config.read_text().splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == f"{key}:":
+            # Skip the level (2) and applicability (always) lines, then consume
+            # the leaf list.
+            j = i + 1
+            enum: List[str] = []
+            seen_inner = False
+            while j < len(lines):
+                line = lines[j]
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    j += 1
+                    continue
+                # Dedent-check: if we hit a line at column 0 or less indent
+                # than the leaf list, we're done.
+                indent = len(line) - len(line.lstrip())
+                if indent <= 2 and seen_inner:
+                    break
+                # Leaf entries: "- foo" at deeper indent than the key
+                if s.startswith("- "):
+                    val = s[2:].strip()
+                    # Skip the "2" and "always" meta entries
+                    if val in ("2", "always", "never", "0", "1"):
+                        j += 1
+                        continue
+                    # Nested list start ("- - foo") — treat same: strip extra "-"
+                    if val.startswith("- "):
+                        val = val[2:].strip()
+                    # Strip quotes if present
+                    val = val.strip("'\"")
+                    # Strip inline comment
+                    if "#" in val:
+                        val = val.split("#", 1)[0].strip()
+                    if val:
+                        enum.append(val)
+                        seen_inner = True
+                j += 1
+            return enum
+        i += 1
+    return None
+
+
+def validate_conventional_header(
+    header: str,
+    type_enum: Optional[List[str]] = None,
+    scope_enum: Optional[List[str]] = None,
+    max_length: int = 100,
+) -> List[str]:
+    """Validate a single conventional-commits header line.
+
+    Returns a list of error messages. Empty list == pass.
+    """
+    errors: List[str] = []
+    header = header.rstrip("\n\r")
+
+    if not header.strip():
+        errors.append("header is empty")
+        return errors
+
+    if len(header) > max_length:
+        errors.append(f"header too long: {len(header)} > {max_length}")
+
+    m = CONVENTIONAL_HEADER_RE.match(header)
+    if not m:
+        errors.append(
+            "header does not match conventional-commits format "
+            "'type(scope): subject' or 'type: subject'"
+        )
+        return errors
+
+    t = m.group("type")
+    s = m.group("scope")
+    subject = m.group("subject").strip()
+
+    if type_enum is not None and t not in type_enum:
+        errors.append(
+            f"type '{t}' not in allowed enum: {', '.join(sorted(type_enum))}"
+        )
+
+    if s is not None and scope_enum is not None and s not in scope_enum:
+        # Multi-scope like "dx+e2e" is a single scope string (already allowed
+        # via explicit enum entries); nothing special needed here.
+        errors.append(
+            f"scope '{s}' not in allowed enum: {', '.join(sorted(scope_enum))}"
+        )
+
+    if not subject:
+        errors.append("subject is empty")
+
+    return errors
+
+
+def check_commit_msg_file(path: Path, repo_root: Path) -> int:
+    """Validate a commit-msg file (first non-comment line is the header).
+
+    Returns 0 on pass, 1 on fail. Prints errors to stderr.
+    """
+    if not path.exists():
+        print(f"error: commit-msg file not found: {path}", file=sys.stderr)
+        return 1
+
+    # First non-comment non-empty line is the header (standard git convention).
+    header: Optional[str] = None
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        header = line
+        break
+
+    if header is None:
+        # Empty commit messages are allowed by git with --allow-empty-message;
+        # we don't enforce beyond that.
+        return 0
+
+    type_enum = _read_commitlint_enum(repo_root, "type-enum")
+    scope_enum = _read_commitlint_enum(repo_root, "scope-enum")
+
+    errors = validate_conventional_header(header, type_enum, scope_enum)
+    if errors:
+        print("❌ commit-msg validation failed:", file=sys.stderr)
+        for e in errors:
+            print(f"   - {e}", file=sys.stderr)
+        print(f"\nHeader was:\n   {header}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def check_pr_title(title: str, repo_root: Path, max_length: int = 70) -> int:
+    """Validate a PR title.
+
+    Project convention (CLAUDE.md PR creation): title < 70 chars.
+    Also enforces conventional-commits type/scope enum.
+
+    Returns 0 on pass, 1 on fail.
+    """
+    type_enum = _read_commitlint_enum(repo_root, "type-enum")
+    scope_enum = _read_commitlint_enum(repo_root, "scope-enum")
+
+    errors = validate_conventional_header(
+        title, type_enum, scope_enum, max_length=max_length
+    )
+    if errors:
+        print("❌ PR title validation failed:", file=sys.stderr)
+        for e in errors:
+            print(f"   - {e}", file=sys.stderr)
+        print(f"\nTitle was:\n   {title}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def find_repo_root() -> Path:
     """從 cwd 向上找 .git 目錄。"""
     current = Path.cwd()
@@ -560,11 +748,35 @@ def main() -> int:
     parser.add_argument("--skip-hooks", action="store_true", help="跳過 local pre-commit hooks（快速模式）")
     parser.add_argument("--ci", action="store_true", help="CI 模式：有 FAIL 時 exit 1")
     parser.add_argument("--pr", type=int, default=None, help="指定 PR 號碼（不指定則自動偵測）")
+    parser.add_argument(
+        "--check-commit-msg",
+        metavar="FILE",
+        help="只驗 commit-msg 檔案：type/scope enum + 長度；exit 1 失敗（git commit-msg hook 用）",
+    )
+    parser.add_argument(
+        "--check-pr-title",
+        metavar="TITLE",
+        help="只驗 PR title 字串：type/scope enum + 長度（預設 70）；exit 1 失敗",
+    )
+    parser.add_argument(
+        "--pr-title-max-length",
+        type=int,
+        default=70,
+        help="PR title 長度上限（預設 70；CLAUDE.md PR creation convention）",
+    )
     args = parser.parse_args()
 
     # cd to repo root
     repo_root = find_repo_root()
     os.chdir(repo_root)
+
+    # Exit-early modes: just-validate-one-thing
+    if args.check_commit_msg:
+        return check_commit_msg_file(Path(args.check_commit_msg), repo_root)
+    if args.check_pr_title:
+        return check_pr_title(
+            args.check_pr_title, repo_root, max_length=args.pr_title_max_length
+        )
 
     report = PreflightReport()
 
