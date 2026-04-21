@@ -13,6 +13,19 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
 
 ### Added
 
+- **session-init telemetry + `--stats` CLI（v2.8.0 Phase .b, PR feat/v280-session-init-telemetry）**：PR #42 事後稽核發現 — PreToolUse hook 已上線，但缺「hook 真的有跑嗎」的觀測路徑；只能靠使用者手動 `--status` 看單一 session marker，跨 session 趨勢（幾次 init / 幾次 noop / vscode_toggle 失敗率 / avg duration）完全不可見。本次把 telemetry 內建進 hook 本身：
+  - **每次 hook 呼叫 append 一筆 JSON Lines**（event=`init`/`noop`/`force`；`--status` / `--stats` 是 query，刻意不寫 log 避免自我污染）。欄位：`ts` / `session_id` / `marker_digest` / `event` / `duration_ms` / `vscode_toggle`（`ok`/`partial`/`skipped`）/ `vscode_msg` / `marker_path` / `repo_root` / `pid` / `argv`
+  - **Log path cross-platform 解析（4 層優先序）**：`VIBE_SESSION_LOG` env override → Windows `%LOCALAPPDATA%\vibe\session-init.log` → POSIX `$XDG_CACHE_HOME/vibe/session-init.log` → home fallback（`~/.cache/vibe/` 或 `~/AppData/Local/vibe/`）。邏輯抽成 pure `_resolve_log_path(os_name, env, home)` 可直接 unit-test，不需 monkey-patch `os.name`（後者會撞到 pathlib `WindowsPath` 無法在 Linux 實例化的 INTERNALERROR）
+  - **`VIBE_SESSION_LOG=/dev/null` / `NUL` 可完全停用**（CI / 使用者 opt-out）；`_is_disabled_log_path` 提早 return、連 `mkdir` 都不跑
+  - **Log 寫入失敗絕不 block**：所有 OSError 收攏、僅 stderr 印 warning、exit 0 維持不變。遵循 PreToolUse hook 的既有 never-block 原則
+  - **UTF-8 safety**：`json.dumps(ensure_ascii=False)` — CJK session id / vscode_git_toggle 中文訊息原樣落盤（不 escape 成 `\uXXXX`），`jq` / 肉眼 grep 都直接可讀。dogfood 實測 vscode_git_toggle 的「✅ VS Code Git 已關閉」訊息 round-trip 乾淨
+  - **`--stats` subcommand**：印 log path / size / total events / `init=N noop=N force=N` / sessions tracked / `vscode_toggle: ok=N partial=N skipped=N` / avg init duration / last N events 摘要。支援 `--limit N`（預設 10）/ `--json`（輸出原始 JSON Lines 供 `jq` pipe）/ `--session <SID>`（過濾單一 session）。Malformed log lines 自動 skip（例如寫到一半被 SIGKILL 的歪斜 line），不讓統計掛點
+  - **21 新測試**（tests/dx/test_session_init.py：13 → 34）：
+    - `TestTelemetryLog` × 11：env override / XDG / LOCALAPPDATA / home fallback / override-wins-on-nt-and-posix（pure function 測試，不碰 `os.name`）/ init/noop/force 事件 / partial toggle / `--status` 不寫 log / 寫入失敗 never block / `/dev/null` 停用 / CJK round-trip
+    - `TestStatsCLI` × 7：empty log / summarize / `--json` mode / `--session` filter / `--limit N` / 歪斜 line skip / `--stats` 不自污染
+  - **End-to-end dogfood** 已跑過 4 次 hook 呼叫（1× force + 2× noop + 1× new session init）+ `--stats --session` / `--stats --json` pipe 驗證全綠
+  - **CLAUDE.md / vibe-workflow skill 同步更新**：把 `--stats` 加進手動觸發指令集、標注 log 位置與停用方式
+
 - **Windows MCP 側 ad-hoc script 防治（v2.8.0 Phase .a, PR #41）**：延續 PR #39/#40 的 code-driven 精神，把「不要寫 throw-away `_commit.ps1` / `_pr.bat`」從文字規範升級為 L1 pre-commit hook：
   - **`scripts/tools/lint/check_ad_hoc_git_scripts.py`**（pre-commit 硬失敗，whitelist 模式）：掃 repo 內所有 `*.bat` / `*.ps1` / `*.cmd`，不在 `scripts/ops/` / `scripts/tools/` / `tools/` allowlist 中即 fail。用 whitelist 而非 blacklist regex 的理由：PR #40 session 寫了 `_p40_commit.ps1` / `_p40_pr.bat` / `_p40_checks.bat` / `_p40_failog.bat` / `_p40_diag.bat` 五隻 script，黑名單追不上每個新動詞（check / failog / diag），whitelist 強制所有新 wrapper 走 PR review。
   - **`scripts/ops/win_gh.bat`**（v2.8.0 新增）：GitHub CLI 的 MCP-friendly wrapper。Desktop Commander PowerShell 下 `"C:\Program Files\GitHub CLI\gh.exe"` 的引號會被多層 escape 破壞；`win_gh.bat` 改用 8.3 short path `C:\PROGRA~1\GITHUB~1\gh.exe`、強制 `PATHEXT` + `PATH` 含 `Git\cmd`、全 ASCII 註解、CRLF line endings。子命令：`pr-checks [PR#]` / `pr-view [PR#]` / `pr-create <flags>` / `run-view <RUN_ID>` / `run-log <RUN_ID>` / `raw <args>`（逃生門）。取代 session 每次自己寫 `_pr_checks.bat` 的循環。
