@@ -166,8 +166,8 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 | `--da-color-journey-deploy` | #9d174d | #f472b6 | Deploy、部署階段 |
 | `--da-color-journey-configure` | #1d4ed8 | #93c5fd | Configure、配置階段 |
 | `--da-color-journey-monitor` | #065f46 | #6ee7b7 | Monitor、監控階段 |
-| `--da-color-journey-troubleshoot` | #92400e | — | Troubleshoot、排故階段 |
-| `--da-color-journey-reference` | #6d28d9 | — | Reference、參考文件 |
+| `--da-color-journey-troubleshoot` | #92400e | #fcd34d | Troubleshoot、排故階段 |
+| `--da-color-journey-reference` | #6d28d9 | #c4b5fd | Reference、參考文件 |
 
 > 每個 journey token 皆有 `*-bg` variant（rgba tinted），用於 card border + badge 底。詳值以 `docs/assets/design-tokens.css` 為 SSOT。
 
