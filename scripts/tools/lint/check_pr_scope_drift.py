@@ -65,11 +65,33 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
     scoped to scripts/tools/**/*.py vs docs/internal/tool-map.md consistency.
     Caveat: exits 0 even on drift (known issue with that script). We parse
     stdout for the failure sentinel instead of relying on exit code.
+
+    We pass `-X utf8` to the child so it inherits PEP 540 UTF-8 mode — the
+    script prints emoji (✅ / ❌) and would otherwise crash on Windows
+    cp950/cp932 consoles. generate_tool_map.py also self-defends via
+    `sys.stdout.reconfigure()`, but `-X utf8` here is belt-and-suspenders
+    and matches the pattern used by `.pre-commit-config.yaml` for the
+    42 Python hooks.
+
+    Crash-vs-drift disambiguation: a UnicodeEncodeError / Traceback / bare
+    SystemExit in stderr means the generator itself crashed rather than
+    finding a drift — we surface that distinction so the caller does not
+    waste time investigating a phantom `tool-map.md` diff.
     """
     rc, stdout, stderr = run(
-        ["python3", "scripts/tools/dx/generate_tool_map.py", "--check"], repo
+        ["python3", "-X", "utf8", "scripts/tools/dx/generate_tool_map.py", "--check"],
+        repo,
     )
     combined = (stdout + stderr).strip()
+
+    # Crash signatures take precedence — if the generator exploded, mark as
+    # a distinct failure mode rather than reporting "drift". This avoids the
+    # diagnostic-misdirection we hit in the PR #46 smoke test.
+    crash_sigs = ("Traceback", "UnicodeEncodeError", "UnicodeDecodeError")
+    if any(sig in stderr for sig in crash_sigs):
+        last_err = stderr.strip().splitlines()[-1] if stderr.strip() else "(no stderr)"
+        return False, f"tool-map generator crashed: {last_err}"
+
     if rc == 0 and "outdated" not in combined.lower():
         return True, "tool-map --check: PASS"
     last = combined.splitlines()[-1] if combined else "(no output)"

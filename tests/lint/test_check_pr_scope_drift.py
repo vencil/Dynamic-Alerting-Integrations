@@ -66,6 +66,50 @@ class TestCheckToolMap:
             ok, _ = cpsd.check_tool_map(tmp_path)
             assert ok is False
 
+    def test_passes_dash_x_utf8_to_subprocess(self, tmp_path):
+        """Regression guard: the child python3 invocation must carry `-X utf8`
+        so generate_tool_map.py inherits PEP 540 UTF-8 mode. Without it the
+        emoji print crashes under Windows cp950/cp932 consoles (real bug
+        surfaced in PR #46 smoke test)."""
+        with patch("check_pr_scope_drift.run",
+                   return_value=(0, "up to date", "")) as mock_run:
+            cpsd.check_tool_map(tmp_path)
+            args, _ = mock_run.call_args
+            cmd = args[0]
+            assert "-X" in cmd and "utf8" in cmd, (
+                f"expected `-X utf8` in cmd, got {cmd!r}"
+            )
+
+    def test_distinguishes_generator_crash_from_drift(self, tmp_path):
+        """When the generator itself crashes (Traceback in stderr), the message
+        must flag it as a generator crash, NOT as tool-map drift — otherwise
+        developers chase a phantom tool-map.md diff that isn't there."""
+        stderr = (
+            "Traceback (most recent call last):\n"
+            '  File "generate_tool_map.py", line 267, in main\n'
+            '    print(f"\u2705 Tool map ({lang}) is up to date.")\n'
+            "UnicodeEncodeError: 'cp950' codec can't encode character '\\u2705'\n"
+        )
+        with patch("check_pr_scope_drift.run",
+                   return_value=(0, "", stderr)):
+            ok, msg = cpsd.check_tool_map(tmp_path)
+            assert ok is False
+            assert "generator crashed" in msg, (
+                f"expected crash signal in msg, got: {msg!r}"
+            )
+            assert "drift" not in msg.lower(), (
+                f"expected NO 'drift' wording for a generator crash, got: {msg!r}"
+            )
+
+    def test_crash_detection_on_unicode_decode_error(self, tmp_path):
+        """Second crash signature: UnicodeDecodeError (input side)."""
+        stderr = "Traceback ...\nUnicodeDecodeError: 'cp950' can't decode byte 0xe6"
+        with patch("check_pr_scope_drift.run",
+                   return_value=(0, "", stderr)):
+            ok, msg = cpsd.check_tool_map(tmp_path)
+            assert ok is False
+            assert "generator crashed" in msg
+
 
 # ---------------------------------------------------------------------------
 # check_working_tree_clean
