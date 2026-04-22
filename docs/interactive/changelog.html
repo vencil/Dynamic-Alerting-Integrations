@@ -139,14 +139,44 @@
 
 <div class="timeline-container">
 
-  <!-- v2.6.0 -->
+  <!-- v2.7.0 -->
   <div class="version-entry">
     <div class="version-dot major"></div>
     <div class="version-card current">
       <div class="version-header">
+        <span class="version-tag">v2.7.0</span>
+        <span class="version-date">2026-04-19</span>
+        <span class="version-badge badge-current">CURRENT</span>
+      </div>
+      <div class="version-title">千租戶配置架構 + 元件健壯化</div>
+      <div class="version-summary">
+        Scale Foundation I（<code>conf.d/</code> 階層 + <code>_defaults.yaml</code> 繼承引擎
+        + dual-hash 熱重載）、Design Token 全面遷移（9 個 Tier 1 JSX 工具）、
+        1000-tenant benchmark（cold load 112 ms / reload noop 1.3 ms）、
+        7 條新 ADR（ADR-012~018）。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">conf.d/ 階層</span>
+        <span class="hl-tag">Dual-hash 熱重載</span>
+        <span class="hl-tag">Token 全面遷移</span>
+        <span class="hl-tag">1000-tenant fixture</span>
+        <span class="hl-tag">Blast Radius CI bot</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">ADRs: <strong>+7</strong></div>
+        <div class="stat-item">JSX tools: <strong>39</strong></div>
+        <div class="stat-item">Cold load: <strong>112 ms / 1000</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.6.0 -->
+  <div class="version-entry">
+    <div class="version-dot major"></div>
+    <div class="version-card">
+      <div class="version-header">
         <span class="version-tag">v2.6.0</span>
         <span class="version-date">2026-04-07</span>
-        <span class="version-badge badge-current">CURRENT</span>
       </div>
       <div class="version-title">Operator 遷移路徑 × PR Write-back × 設計系統統一</div>
       <div class="version-summary">
