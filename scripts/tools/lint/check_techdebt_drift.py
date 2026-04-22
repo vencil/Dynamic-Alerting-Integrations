@@ -58,8 +58,10 @@ STATUS_RE = re.compile(
 )
 
 # Commit trailer: Resolves / Fixes / Closes TECH-DEBT-XXX or REG-XXX
+# Trailing `\b` guards against pathological IDs like TECH-DEBT-007x or
+# TECH-DEBT-0071 being sliced to match TECH-DEBT-007 by accident.
 TRAILER_RE = re.compile(
-    r"(?:Resolves|Fixes|Closes)\s+((?:TECH-DEBT|REG)-\d+)", re.IGNORECASE
+    r"(?:Resolves|Fixes|Closes)\s+((?:TECH-DEBT|REG)-\d+)\b", re.IGNORECASE
 )
 
 
@@ -96,8 +98,17 @@ def parse_git_log(since: str | None) -> dict[str, list[str]]:
     rev_range = f"{since}..HEAD" if since else "HEAD"
     cmd = ["git", "log", rev_range, "--pretty=%H%x00%B%x00%x00"]
     try:
+        # encoding + errors="replace" protects against Windows console
+        # codepage (cp950/cp932) surfacing in git output when commit
+        # messages contain CJK — otherwise check_output would raise
+        # UnicodeDecodeError and mask the real drift signal.
         output = subprocess.check_output(
-            cmd, text=True, stderr=subprocess.DEVNULL, cwd=REPO_ROOT
+            cmd,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stderr=subprocess.DEVNULL,
+            cwd=REPO_ROOT,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return {}

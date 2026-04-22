@@ -94,11 +94,26 @@ def resolve_targets(args_paths: list[str], glob: str) -> list[Path]:
     return sorted(REPO_ROOT.glob(glob))
 
 
+def _display_path(path: Path) -> Path:
+    """Return a repo-relative path when possible, else the path as-is.
+
+    Using `Path.relative_to` directly crashes if the path is absolute but
+    lives outside REPO_ROOT (e.g. test fixture under tmp_path); we fall
+    back to the original path in that case instead of aborting the report.
+    """
+    if not path.is_absolute():
+        return path
+    try:
+        return path.relative_to(REPO_ROOT)
+    except ValueError:
+        return path
+
+
 def report(offenders_by_path: dict[Path, list[tuple[int, int, str]]], limit: int) -> None:
     for path, offenders in offenders_by_path.items():
         if not offenders:
             continue
-        print(f"\n{path.relative_to(REPO_ROOT) if path.is_absolute() else path}: "
+        print(f"\n{_display_path(path)}: "
               f"{len(offenders)} Session row(s) exceed {limit} chars")
         for lineno, n, preview in offenders:
             print(f"  L{lineno}: {n} chars — {preview}…")

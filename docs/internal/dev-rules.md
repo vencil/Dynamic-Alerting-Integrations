@@ -270,6 +270,8 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **為什麼**：axe-core `scrollable-region-focusable` rule 在任何 scrollable 且**無 focusable children** 的元素上觸發，不論是否有 `role="region"`。v2.8.0 Phase .a Day 1 scope check 發現 `notification-previewer.jsx` 雖 Day 5-7 期間移除了 `role="region"`，但 `styles.previewBox` 的 `overflowY: 'auto'` + `maxHeight: '400px'` 仍觸發 axe，印證這是容器本身屬性問題而非 role 問題。
 
+**反例：容器已有 focusable children 時勿再套 `tabIndex={0}`**（v2.8.0 Phase .a 追加補充）：若捲動容器內已經放了會吃 Tab 焦點的元素（`<button>`、`<a href>`、`<input>`、`<select>`、`[tabindex="0"]` 等），**容器自己應走 `tabIndex={-1}`**（或乾脆省略），避免 Tab 序列產生容器→內部元素的雙 stop。axe 在這種情況本來就不會觸發 `scrollable-region-focusable`（容器「有 focusable descendants」）；本規則適用範圍就是「容器是捲動區但內部沒 tabbable 元素」的純資訊顯示區塊（heatmap cells / preview panels）。
+
 **反 / 正例**（v2.7.0 實際踩過，TECH-DEBT-006 / -009）：
 
 ```jsx
