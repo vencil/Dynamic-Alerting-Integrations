@@ -200,8 +200,33 @@ def generate_tool_map(categorized: dict, lang: str = "zh") -> str:
     return "\n".join(lines)
 
 
+def _force_utf8_streams() -> None:
+    """Defensive stdout/stderr UTF-8 reconfigure for Windows cp950/cp932 consoles.
+
+    This script prints emoji (✅ / ❌) as part of its --check summary. When
+    invoked with `-X utf8` or under `PYTHONUTF8=1` the caller already
+    guarantees UTF-8 I/O, but when another script fires us via
+    `subprocess.run(["python3", ..., "generate_tool_map.py", "--check"])`
+    without those flags, Windows defaults to the ANSI codepage and emoji
+    print crashes with UnicodeEncodeError. The CI-side `check_tool_map`
+    orchestrator then mis-reports the crash as "tool-map drift", which
+    sends developers on the wrong diagnostic path.
+
+    Self-defending at entry keeps direct invocation safe regardless of how
+    the caller configured the interpreter. Errors="replace" guarantees we
+    never crash even if the stream refuses reconfigure.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        # Python < 3.7 (no reconfigure) or already-closed streams (test harness)
+        pass
+
+
 def main():
     """CLI entry point: 工具導覽自動生成."""
+    _force_utf8_streams()
     parser = argparse.ArgumentParser(
         description="Generate docs/internal/tool-map.md from scripts/tools/*.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
