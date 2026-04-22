@@ -139,14 +139,174 @@
 
 <div class="timeline-container">
 
-  <!-- v2.0.0 -->
+  <!-- v2.6.0 -->
   <div class="version-entry">
     <div class="version-dot major"></div>
     <div class="version-card current">
       <div class="version-header">
+        <span class="version-tag">v2.6.0</span>
+        <span class="version-date">2026-04-07</span>
+        <span class="version-badge badge-current">CURRENT</span>
+      </div>
+      <div class="version-title">Operator 遷移路徑 × PR Write-back × 設計系統統一</div>
+      <div class="version-summary">
+        完整 ConfigMap → Operator 遷移工具鏈（ADR-008 addendum），PR-based 非同步寫入雙平台
+        支援 GitHub + GitLab（ADR-011），統一設計系統消除三套平行 CSS 技術債，4 個新互動工具。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">migrate-to-operator</span>
+        <span class="hl-tag">Operator Setup Wizard</span>
+        <span class="hl-tag">PR Write-back</span>
+        <span class="hl-tag">ADR-011 GitLab</span>
+        <span class="hl-tag">Design Tokens</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">JSX tools: <strong>38</strong></div>
+        <div class="stat-item">ADRs: <strong>+3</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.5.0 -->
+  <div class="version-entry">
+    <div class="version-dot"></div>
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-tag">v2.5.0</span>
+        <span class="version-date">2026-04-06</span>
+      </div>
+      <div class="version-title">Multi-Tenant Grouping × Saved Views × E2E Testing</div>
+      <div class="version-summary">
+        ADR-010 租戶分群管理（`conf.d/_groups.yaml`）+ Saved Views API + Playwright E2E
+        基礎，擴充 Tenant Metadata（environment/region/domain/db_type/tags），4 個新互動工具。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">Groups API</span>
+        <span class="hl-tag">Saved Views</span>
+        <span class="hl-tag">Playwright E2E</span>
+        <span class="hl-tag">Tenant Metadata</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">JSX tools: <strong>+4</strong></div>
+        <div class="stat-item">New ADR: <strong>ADR-010</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.4.0 -->
+  <div class="version-entry">
+    <div class="version-dot"></div>
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-tag">v2.4.0</span>
+        <span class="version-date">2026-04-05</span>
+      </div>
+      <div class="version-title">防守深化 × 體質精簡 × 租戶管理 API</div>
+      <div class="version-summary">
+        Phase A 新增 6 個 pre-commit auto hooks（13 → 19），Phase B 將 config.go 2,093 行
+        拆 4 檔案並 table-driven 重構測試，Phase C 引入 Tenant Management API 作為管理平面。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">Tenant API</span>
+        <span class="hl-tag">config.go 拆分</span>
+        <span class="hl-tag">+6 pre-commit hooks</span>
+        <span class="hl-tag">Table-driven tests</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">auto hooks: <strong>19</strong></div>
+        <div class="stat-item">Go tests: <strong>145</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.3.0 -->
+  <div class="version-entry">
+    <div class="version-dot major"></div>
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-tag">v2.3.0</span>
+        <span class="version-date">2026-04-04</span>
+      </div>
+      <div class="version-title">Operator-Native × Management UI × Platform Maturity</div>
+      <div class="version-summary">
+        Self-Service Portal 模組化（1,376 行 → 5 modules）、Template Gallery 外部化至
+        JSON、Portal Hub 五層重組（29 工具卡片），品質閘門升級與 CI matrix 成型。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">Portal 模組化</span>
+        <span class="hl-tag">Template Gallery JSON</span>
+        <span class="hl-tag">Hub 五層重組</span>
+        <span class="hl-tag">CI Matrix</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">Portal modules: <strong>5</strong></div>
+        <div class="stat-item">Templates: <strong>24</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.2.0 -->
+  <div class="version-entry">
+    <div class="version-dot"></div>
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-tag">v2.2.0</span>
+        <span class="version-date">2026-03-17</span>
+      </div>
+      <div class="version-title">採用管線 + UX 升級 + 運維工具</div>
+      <div class="version-summary">
+        `da-tools init` 一鍵產出專案骨架（CI + conf.d/ + Kustomize + pre-commit），
+        Template Gallery 從 6 擴至 24 模板，3 個新互動工具（CI/CD Setup / Notification
+        Previewer / Platform Health），Demo Showcase + Hands-on Lab。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">da-tools init</span>
+        <span class="hl-tag">Templates 6 → 24</span>
+        <span class="hl-tag">Notification Previewer</span>
+        <span class="hl-tag">Hands-on Lab</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">JSX tools: <strong>29</strong></div>
+        <div class="stat-item">CLI tools: <strong>+2</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.1.0 -->
+  <div class="version-entry">
+    <div class="version-dot major"></div>
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-tag">v2.1.0</span>
+        <span class="version-date">2026-03-16</span>
+      </div>
+      <div class="version-title">運維自助 + 告警智能化 + 性能優化 + 跨域路由</div>
+      <div class="version-summary">
+        Go Exporter Incremental Hot-Reload（per-file SHA-256 + mtime guard），ADR-006
+        Tenant Mapping Topologies (1:1 / N:1 / 1:N)、ADR-007 Cross-Domain Routing，
+        Backstage Plugin，tests 1,759 → 3,070（+75%）。
+      </div>
+      <div class="highlights">
+        <span class="hl-tag">Incremental Hot-Reload</span>
+        <span class="hl-tag">ADR-006/007</span>
+        <span class="hl-tag">Backstage Plugin</span>
+        <span class="hl-tag">+1,311 tests</span>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">CLI tools: <strong>+5</strong></div>
+        <div class="stat-item">JSX tools: <strong>+3</strong></div>
+        <div class="stat-item">tests: <strong>3,070</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.0.0 -->
+  <div class="version-entry">
+    <div class="version-dot major"></div>
+    <div class="version-card">
+      <div class="version-header">
         <span class="version-tag">v2.0.0</span>
         <span class="version-date">2026-03-14</span>
-        <span class="version-badge badge-current">CURRENT</span>
       </div>
       <div class="version-title">Scalable Config Governance + DX Tooling</div>
       <div class="version-summary">

@@ -2,7 +2,7 @@
 title: "Design System Guide"
 tags: [documentation, internal, design]
 audience: [maintainers]
-version: v2.7.0
+version: v2.8.0
 lang: zh
 ---
 
@@ -23,7 +23,7 @@ lang: zh
 | 用途 | Token | Light 值 |
 |------|-------|---------|
 | 主文字 | `--da-color-fg` | `#1a1a2e` |
-| 次要文字 | `--da-color-muted` | `#64748b` |
+| 次要文字 | `--da-color-muted` | `#475569` |
 | Tag 背景文字 | `--da-color-tag-fg` | `#475569` |
 | 強調色 | `--da-color-accent` | `#2563eb` |
 | 卡片背景 | `--da-color-card-bg` | `#ffffff` |
@@ -76,7 +76,7 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 
 | Category | 用途 | 命名示例 |
 |----------|------|---------|
-| `color` | 色彩（語義色、icon 類別色、operational mode 色等） | `--da-color-primary`, `--da-color-success-light` |
+| `color` | 色彩（語義色、icon 類別色、operational mode 色等） | `--da-color-accent`, `--da-color-success-light` |
 | `space` | 間距（基於 8px grid） | `--da-space-xs`, `--da-space-md-lg` |
 | `font` | 字型（family、size、weight、line-height） | `--da-font-family-sans`, `--da-font-size-lg` |
 | `shadow` | 陰影 | `--da-shadow-subtle`, `--da-shadow-modal` |
@@ -100,18 +100,22 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 
 #### 主要色彩家族
 
-**Primary（主色）**
-- `--da-color-primary`：主按鈕、強調文字、active tab
-- `--da-color-primary-light`：主色淺色版本（Dark 模式中用於低對比度背景）
-- `--da-color-primary-dark`：主色深色版本（Light 模式中用於高對比度前景）
+**Accent（強調色）**
+- `--da-color-accent`：主按鈕、強調文字、active tab（canonical 替代原 `--da-color-primary`）
+- `--da-color-accent-hover`：hover 狀態強調色
+- `--da-color-accent-soft`：淺底背景（例：selected row tint、alert info block）
+- `--da-color-accent-fg`：放在 accent 底色上的前景文字
 
-**Secondary（次色）**
-- `--da-color-secondary`：次級按鈕、輔助元素
-- `--da-color-secondary-light` / `--da-color-secondary-dark`
+**Hero（深色 hero 區塊專屬）**
+- `--da-color-hero-bg` / `--da-color-hero-fg`：深色 hero card 的底/文字
+- `--da-color-hero-muted`：deep navy (#0f172a) 上 7.2:1 AA pass；**不得**用於 light bg（TECH-DEBT-007）
+- `--da-color-hero-accent`：hero 內部的 accent highlight
 
-**Muted（中性色）**
-- `--da-color-muted`：禁用狀態、placeholder 文字
-- `--da-color-muted-light` / `--da-color-muted-dark`
+**Tile（淺色 tile / SVG 白底專屬）**
+- `--da-color-tile-muted`：white / hsl(x, 60%, 90%) 上 4.83:1 AA pass；用於 heatmap cell、SVG 文字（PR#1c token-split）
+
+**Muted（中性次要文字）**
+- `--da-color-muted`：次要文字、placeholder；WCAG AA compliant on `#fafbfc`/white
 
 **Background 與 Foreground**
 - `--da-color-bg`：頁面背景色
@@ -120,6 +124,8 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 - `--da-color-fg-muted`：次級文字（如 label、hint）
 - `--da-color-border`：邊框色
 - `--da-color-border-subtle`：細線邊框色
+
+> **Token 歷史**：v2.8.0 Phase .a PR #34（Token Audit）將 `primary/secondary/*-light/*-dark` 家族收斂為 `accent/hero-*/tile-*` 語義命名空間；PR#1c（`ec21f13`）完成 `hero-muted` ↔ `tile-muted` token-split（詳見 dev-rules.md §S5 + TECH-DEBT-007）。若看到舊 `--da-color-primary` 引用，為遷移殘留，請 refactor 為 `--da-color-accent`。
 
 ### 3.2 語義色（Semantic Colors）
 
@@ -142,24 +148,28 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 
 | Token | Light 模式 | Dark 模式 | 類別 |
 |-------|-----------|---------|------|
-| `--da-color-icon-validation` | #059669 | #10b981 | 驗證、validation |
-| `--da-color-icon-cli` | #2563eb | #3b82f6 | CLI 工具、terminal |
-| `--da-color-icon-rules` | #7c3aed | #a78bfa | Rule Pack、告警規則 |
-| `--da-color-icon-wizard` | #dc2626 | #ef4444 | Wizard、引導工具 |
-| `--da-color-icon-dashboard` | #0891b2 | #06b6d4 | Dashboard、儀表板 |
-| `--da-color-icon-chart` | #d97706 | #f59e0b | Chart、圖表分析 |
+| `--da-color-icon-validation` | #10b981 | #34d399 | 驗證、validation |
+| `--da-color-icon-cli` | #f59e0b | #fbbf24 | CLI 工具、terminal |
+| `--da-color-icon-rules` | #8b5cf6 | #a78bfa | Rule Pack、告警規則 |
+| `--da-color-icon-wizard` | #ec4899 | #f472b6 | Wizard、引導工具 |
+| `--da-color-icon-dashboard` | #6366f1 | #818cf8 | Dashboard、儀表板 |
+| `--da-color-icon-chart` | #db2777 | #f472b6 | Chart、圖表分析 |
 
-### 3.4 Journey Phase 色
+> Each icon token 配套有 `*-bg` variant（light-tinted 背景），命名 `--da-color-icon-<category>-bg`。使用時前景 token + 背景 token 一組搭配，避免自行湊色破壞對比度契約。
 
-標記告警解決旅程中的不同階段：
+### 3.4 Journey 色（告警解決旅程）
 
-| Token | 顏色 | 對應階段 |
-|-------|------|---------|
-| `--da-color-phase-deploy` | 紫色 | Deploy、部署階段 |
-| `--da-color-phase-configure` | 青色 | Configure、配置階段 |
-| `--da-color-phase-monitor` | 藍色 | Monitor、監控階段 |
-| `--da-color-phase-troubleshoot` | 橙色 | Troubleshoot、排故階段 |
-| `--da-color-phase-reference` | 灰色 | Reference、參考文件 |
+標記告警解決旅程中的不同階段。**命名注意**：v2.8.0 前稱 `phase-*`，已統一改為 `journey-*`（舊名 deprecated）。
+
+| Token | Light 模式 | Dark 模式 | 對應階段 |
+|-------|-----------|---------|---------|
+| `--da-color-journey-deploy` | #9d174d | #f472b6 | Deploy、部署階段 |
+| `--da-color-journey-configure` | #1d4ed8 | #93c5fd | Configure、配置階段 |
+| `--da-color-journey-monitor` | #065f46 | #6ee7b7 | Monitor、監控階段 |
+| `--da-color-journey-troubleshoot` | #92400e | — | Troubleshoot、排故階段 |
+| `--da-color-journey-reference` | #6d28d9 | — | Reference、參考文件 |
+
+> 每個 journey token 皆有 `*-bg` variant（rgba tinted），用於 card border + badge 底。詳值以 `docs/assets/design-tokens.css` 為 SSOT。
 
 ### 3.5 Operational Mode 色
 
@@ -168,8 +178,8 @@ v2.5.0 存在三套平行的 CSS 系統，導致色彩、間距、字型等 desi
 | Token | Light 模式 | Dark 模式 | 對應模式 |
 |-------|-----------|---------|---------|
 | `--da-color-mode-normal` | #10b981 | #34d399 | Normal（正常運營） |
-| `--da-color-mode-silent` | #6b7280 | #9ca3af | Silent（靜默模式） |
-| `--da-color-mode-maintenance` | #f59e0b | #fbbf24 | Maintenance（維護模式） |
+| `--da-color-mode-silent` | #f59e0b | #fbbf24 | Silent（靜默模式） |
+| `--da-color-mode-maintenance` | #ef4444 | #f87171 | Maintenance（維護模式） |
 
 ---
 
@@ -380,7 +390,7 @@ color: var(--da-color-fg);
 ```css
 /* design-tokens.css 中的全局定義 */
 *:focus-visible {
-  outline: 2px solid var(--da-color-primary);
+  outline: 2px solid var(--da-color-accent);
   outline-offset: 2px;
 }
 ```
@@ -541,7 +551,7 @@ CSS 中應包含：
 :root {
   --bg: var(--da-color-bg);
   --fg: var(--da-color-fg);
-  --primary: var(--da-color-primary);
+  --primary: var(--da-color-accent);
   --success: var(--da-color-success);
   --warning: var(--da-color-warning);
   --error: var(--da-color-error);
