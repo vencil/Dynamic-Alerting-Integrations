@@ -29,6 +29,11 @@ class TestValidateFile:
         assert v.total_diagrams == 1
         assert v.valid_diagrams == 1
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="os.chmod(0o000) is a no-op on Windows NTFS (uses ACLs, not POSIX mode); "
+               "the file stays readable and this test's read-error path cannot be exercised.",
+    )
     def test_file_read_error(self, tmp_path):
         """Non-readable file returns error."""
         md = tmp_path / "unreadable.md"

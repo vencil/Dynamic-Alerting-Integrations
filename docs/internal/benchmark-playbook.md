@@ -154,13 +154,27 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 - 有 email receiver 時，`global.smtp_from` 為必填
 - 測試 Alertmanager config 時，先用 `amtool check-config` 本地驗證再 patch
 
-### Go benchmark log 噪音致 output 爆量 (v2.1.0)
+### Go benchmark log 噪音致 output 爆量 (v2.1.0 → v2.8.0 A-15 codified)
+
+> **v2.8.0 A-15 收束**：本節原約 40 行的 per-case guidance 已被 `scripts/tools/ops/bench_wrapper.sh` + `bench_filter.go` 取代為**單一標準路徑**。新用法：
+>
+> ```bash
+> make go-bench-clean                     # 對等於原 go-bench，但 stdout 乾淨
+> BENCH_OUT_DIR=_out make go-bench-clean  # 指定輸出目錄
+> COUNT=3 make go-bench-clean             # 覆寫 -count
+> ```
+>
+> 產出：`bench.out.txt`（僅 `goos:` / `goarch:` / `pkg:` / `cpu:` / `BenchmarkX ns/op` / `PASS` / `FAIL` 行）、`bench.err.log`（log.Printf 原 stderr）、`bench.raw.jsonl`（`go test -json` 原 event stream 供 debug）。
+>
+> 底層實作：`go test -bench ... -json <args>` → `bench_filter.go` 解析 JSON event，只保留「benchmark result pattern」+ 「suite header/summary」。-json 把 stdout/stderr 分流，彻底消除 log 污染。
+
+**以下原 v2.1.0 LL 保留為背景，供 `bench_wrapper.sh` 出問題時的 root-cause 參考：**
 
 **現象：** `go test -bench="FullDirLoad|IncrementalLoad" -benchmem -count=5` 產出 ~732KB 的 stdout，benchmark 結果行被淹沒在 log 噪音中。`2>/dev/null` 在某些 Docker exec 管線下無效（stdout 也被丟棄）。
 
 **根因：** `fullDirLoad()` 和 `IncrementalLoad()` 每次呼叫都寫一行 `log.Printf("Config loaded ...")`，100 tenant × N iterations × 5 rounds = 數千行 log。
 
-**修復：** 在 benchmark 函數中加入 `silenceLogs(b)` helper：
+**原修復（仍建議搭配 wrapper）：** 在 benchmark 函數中加入 `silenceLogs(b)` helper：
 
 ```go
 func silenceLogs(b *testing.B) {
@@ -171,9 +185,7 @@ func silenceLogs(b *testing.B) {
 }
 ```
 
-**關鍵：** `silenceLogs(b)` 要放在 setup `fullDirLoad()` **之前**（不只是 `b.ResetTimer()` 前），否則每次 benchmark invocation 的 setup phase 仍會產生 log。`b.Cleanup()` 確保 benchmark 結束後恢復正常 log 輸出。
-
-**延伸：** Docker exec + PowerShell 的引號嵌套問題使得 `2>/dev/null` / `grep` 管線不可靠。最可靠的做法是：(1) 將 output redirect 到容器內檔案（`> /tmp/bench.txt 2>/tmp/err.txt`），(2) 事後用 `grep ns/op` 過濾。
+`silenceLogs(b)` 要放在 setup `fullDirLoad()` **之前**（不只是 `b.ResetTimer()` 前），否則每次 benchmark invocation 的 setup phase 仍會產生 log。`b.Cleanup()` 確保 benchmark 結束後恢復正常 log 輸出。Wrapper + silenceLogs 雙層防禦：即使新 benchmark 作者忘了加 silenceLogs，wrapper 的 -json 分流也能把污染隔離到 `bench.err.log`。
 
 ### 連續多輪 benchmark port-forward 不穩定 (v2.0.0-preview.4)
 
