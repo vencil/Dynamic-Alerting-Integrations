@@ -81,7 +81,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 ## 文件 / 工具 / Makefile
 
 - **129 份文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)
-- **118 個 Python 工具** → [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`
+- **120 個 Python 工具** → [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`
 - **39 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)
 - **Makefile** 必記 Top 7：
   - `make pr-preflight` — ⛔ PR merge 前必跑（七項檢查 + 寫 `.git/.preflight-ok.<SHA>` marker）

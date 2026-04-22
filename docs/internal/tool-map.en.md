@@ -70,6 +70,7 @@ lang: en
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
+| `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
 | `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |
@@ -126,6 +127,7 @@ lang: en
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
+| `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
