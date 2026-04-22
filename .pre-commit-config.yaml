@@ -335,6 +335,14 @@ repos:
         files: ^docs/.*\.md$
         stages: [manual]
 
+      - id: path-metadata-consistency-check
+        name: Path/metadata consistency (warning-only)
+        entry: python3 -X utf8 scripts/tools/lint/check_path_metadata_consistency.py --ci
+        language: system
+        pass_filenames: false
+        files: ^components/threshold-exporter/config/conf\.d/.*\.yaml$
+        stages: [manual]
+
       - id: check-doc-template
         name: Check document template compliance
         entry: python3 -X utf8 scripts/tools/lint/check_doc_template.py

@@ -19,6 +19,7 @@ lang: zh
 | da-tools 獨立 Release | [§da-tools 獨立 Release](#da-tools-獨立-release) |
 | tenant-api 獨立 Release | [§tenant-api 獨立 Release](#tenant-api-獨立-release) |
 | 認證設定 (git/gh) | [§認證設定](#認證設定) |
+| PR CI 診斷（gh 不可用時 REST fallback） | [§PR CI 診斷流程](#pr-ci-診斷流程) |
 | Pre-release Checklist | [§上版前品質驗證清單](#上版前品質驗證清單pre-release-checklist) |
 | 已知陷阱 | [§已知陷阱](#已知陷阱) |
 
@@ -302,6 +303,52 @@ git push origin --delete ci/fix-docs-workflow-cli-drift  # 事後手動刪 paren
 ```
 
 > **PowerShell 環境陷阱**（JSON body 編碼、CJK 亂碼、PSObject 序列化、長 body timeout、`Invoke-RestMethod` timeout、BOM 問題）統一見 [Windows-MCP Playbook § PowerShell REST API](windows-mcp-playbook.md#powershell-rest-apigithub-等) 及 [§ 長 Body 的建議做法](windows-mcp-playbook.md#長-body-的建議做法)。
+
+## PR CI 診斷流程
+
+> **觸發情境**：Cowork VM proxy 封鎖 `api.github.com`（見 [Windows-MCP Playbook Pitfall #31](windows-mcp-playbook.md#已知陷阱速查)）**且** `gh` CLI 不在當下 shell PATH（#49）時，要從 Windows 側走 `curl.exe` + REST API 排查 PR 上的 check 失敗。`gh pr checks` 可用時仍優先走 `gh`。
+>
+> **設計原則**：本節只列「`gh` 擋在外面時該打哪幾個 endpoint」；環境層陷阱（BOM / timeout / PATH / quoting）一律轉指到 windows-mcp-playbook 對應 pitfall row，避免 drift。
+
+### 四段 REST API 排查鏈路
+
+所有 endpoint 都以 `https://api.github.com/repos/{owner}/{repo}` 為 base。用 Windows 側 `curl.exe -H "Authorization: Bearer $PAT" -H "Accept: application/vnd.github+json"` 呼叫。
+
+1. `GET /pulls/{pr_number}` — 讀回 `head.sha`（後續呼叫的 `{sha}`）+ `mergeable` + `mergeStateStatus`（值為 `DIRTY` 常見於 stacked PR base 被 squash-merge 後，見 [Windows-MCP Pitfall #56](windows-mcp-playbook.md#已知陷阱速查)）。
+2. `GET /commits/{sha}/check-runs` — 列出該 commit 上所有 check run。每個 run 有 `id` / `name` / `status` / `conclusion`。找 `conclusion == "failure"` 的 run。
+3. `GET /actions/runs/{run_id}/jobs` — 若 check 是 GH Actions 跑出來的，用 run_id（從 check run 的 `details_url` 反查或直接 `gh run list` 對齊）拿到 job list 與失敗 step index。
+4. `GET /check-runs/{check_run_id}/annotations` — 拿行級註記（`path` / `start_line` / `message`）。**這是拿實際 error message 的正路**——`/actions/jobs/{job_id}/logs` 經常回 **403 Forbidden**（見本節下方 Trap #24），annotations endpoint 不受此限制。
+
+### 已知陷阱
+
+| # | 情境 | 處置 |
+|---|------|------|
+| 24 | `GET /actions/jobs/{job_id}/logs` 回 403（即使 PAT 帶 `actions:read`） | 改呼 `/check-runs/{check_run_id}/annotations`；annotations 已收斂 human-readable 行級 error，多數情境夠用。要完整 raw log 只能透過 GitHub UI 下載 |
+| 25 | PowerShell 寫 commit message file 帶 BOM → `git commit -F` 把 `\uFEFF` 當 subject 第一字，commitlint `subject-empty` / `header-trim` / `type-empty` 三層 fail | `Out-File -Encoding utf8` (PS 5.1) 或 `Set-Content -Encoding utf8` **都會加 BOM**。正解一律 `[IO.File]::WriteAllText($path, $msg, [Text.UTF8Encoding]::new($false))`；或從 Git Bash `printf '%s\n' "$msg" > file`。延伸見 [Windows-MCP Pitfall #32](windows-mcp-playbook.md#已知陷阱速查) |
+| 26 | `Invoke-RestMethod` timeout 60s → PR list 抓不完 | Desktop Commander MCP 對 PowerShell 有 60s 硬 timeout。改 `curl.exe --data-binary @file`（見 [Windows-MCP Pitfall #28](windows-mcp-playbook.md#已知陷阱速查)）；讀取 API 同樣用 `curl.exe` 吐到暫存檔再 `Get-Content \| ConvertFrom-Json` |
+| 27 | `gh pr checks` 的 JSON 沒有 `conclusion` 欄位 | 用 `bucket`（值：`pass` / `fail` / `pending` / `skipping`），見 [Windows-MCP Pitfall #50](windows-mcp-playbook.md#已知陷阱速查) |
+| 28 | `mergeStateStatus: DIRTY` 下 `on: pull_request` workflow 靜默不跑 | 不是 workflow 壞掉，是 GH 無法合成 merge-ref。Windows 側 `git rebase origin/main && git push --force-with-lease` 清掉重複 commits；詳見 [Windows-MCP Pitfall #56](windows-mcp-playbook.md#已知陷阱速查) |
+
+### 最小可用診斷範本（Windows 側 PowerShell）
+
+```powershell
+$env:GH_TOKEN = (gh auth token)   # or 從 credential manager 取
+$base = "https://api.github.com/repos/OWNER/REPO"
+$pr   = 48
+$head = (curl.exe -s -H "Authorization: Bearer $env:GH_TOKEN" `
+          -H "Accept: application/vnd.github+json" `
+          "$base/pulls/$pr" | ConvertFrom-Json).head.sha
+$runs = curl.exe -s -H "Authorization: Bearer $env:GH_TOKEN" `
+          "$base/commits/$head/check-runs" | ConvertFrom-Json
+$fails = $runs.check_runs | Where-Object { $_.conclusion -eq 'failure' }
+foreach ($r in $fails) {
+  curl.exe -s -H "Authorization: Bearer $env:GH_TOKEN" `
+    "$base/check-runs/$($r.id)/annotations" | ConvertFrom-Json |
+    Select-Object path, start_line, message
+}
+```
+
+> `gh` 可用時仍優先 `gh pr checks <pr> --json name,bucket,state,link` 走官方路徑；這節只在 REST fallback 時派用場。
 
 ## 上版前品質驗證清單（Pre-release Checklist）
 
