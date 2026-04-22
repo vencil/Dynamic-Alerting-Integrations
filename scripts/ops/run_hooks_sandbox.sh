@@ -27,6 +27,14 @@
 #   SKIP        — passed through to pre-commit (CSV of hook IDs to skip)
 #   PRECOMMIT_LOG — override log destination (default: _sandbox_hooks.log)
 #
+# Concurrency note:
+#   The default log path (_sandbox_hooks.log) is a single shared file in
+#   the repo root. If two `make win-commit` invocations run in parallel
+#   they will overwrite each other's log and misreport status. Do NOT
+#   run concurrent win-commit / run_hooks_sandbox invocations — either
+#   serialize them, or override PRECOMMIT_LOG per caller:
+#     PRECOMMIT_LOG=_sandbox_hooks.$$.log scripts/ops/run_hooks_sandbox.sh ...
+#
 # Exit codes:
 #   0   All hooks passed
 #   1   At least one hook failed (see log for details)
