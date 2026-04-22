@@ -12,9 +12,6 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -57,25 +54,28 @@ def _make_playbook_tree(tmp_path: Path, verified_by_name: dict) -> Path:
     return tmp_path
 
 
-def _run_cli(repo_root: Path, *args: str) -> subprocess.CompletedProcess:
-    script = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "tools"
-        / "dx"
-        / "bump_playbook_versions.py"
+def _run_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    repo_root: Path,
+    *args: str,
+) -> tuple[int, str, str]:
+    """Invoke main() in-process so coverage.py captures execution.
+
+    Returns (exit_code, stdout, stderr). SystemExit from argparse is
+    handled transparently.
+    """
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        bpv.sys, "argv",
+        ["bump_playbook_versions.py", *args],
     )
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    return subprocess.run(
-        [sys.executable, str(script), *args],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
+    try:
+        exit_code = bpv.main()
+    except SystemExit as exc:
+        exit_code = int(exc.code) if exc.code is not None else 0
+    captured = capsys.readouterr()
+    return exit_code, captured.out, captured.err
 
 
 # ── TestApplyBump ──────────────────────────────────────────────────────
@@ -179,63 +179,147 @@ class TestApplyBump:
 
 
 class TestCLI:
-    """End-to-end via subprocess — guards CLI surface stability."""
+    """In-process main() exercises — covers CLI surface + argparse branches."""
 
-    def test_bumps_all_four_playbooks(self, tmp_path):
-        repo = _make_playbook_tree(
-            tmp_path, {name: "v2.7.0" for name in []}  # all default v2.7.0
+    def test_bumps_all_four_playbooks(self, tmp_path, monkeypatch, capsys):
+        repo = _make_playbook_tree(tmp_path, {})
+        exit_code, stdout, _ = _run_cli(
+            monkeypatch, capsys, repo, "--to", "v2.8.0"
         )
-        result = _run_cli(repo, "--to", "v2.8.0")
-        assert result.returncode == 0, result.stderr
+        assert exit_code == 0
+        assert "Bumped 4 playbook(s)" in stdout
         for rel in bpv.PLAYBOOK_PATHS:
             text = (repo / rel).read_text(encoding="utf-8")
             assert "verified-at-version: v2.8.0" in text
 
-    def test_check_passes_when_clean(self, tmp_path):
+    def test_check_passes_when_clean(self, tmp_path, monkeypatch, capsys):
         repo = _make_playbook_tree(
             tmp_path,
             {Path(rel).name: "v2.8.0" for rel in bpv.PLAYBOOK_PATHS},
         )
-        result = _run_cli(repo, "--to", "v2.8.0", "--check")
-        assert result.returncode == 0
-        assert "All 4 playbooks at v2.8.0" in result.stdout
+        exit_code, stdout, _ = _run_cli(
+            monkeypatch, capsys, repo, "--to", "v2.8.0", "--check"
+        )
+        assert exit_code == 0
+        assert "All 4 playbooks at v2.8.0" in stdout
 
-    def test_check_fails_when_stale(self, tmp_path):
+    def test_check_fails_when_stale(self, tmp_path, monkeypatch, capsys):
         repo = _make_playbook_tree(
             tmp_path,
             {Path(rel).name: "v2.7.0" for rel in bpv.PLAYBOOK_PATHS},
         )
-        result = _run_cli(repo, "--to", "v2.8.0", "--check")
-        assert result.returncode == 1
-        assert "4 playbook(s) need bump" in result.stderr
+        exit_code, _, stderr = _run_cli(
+            monkeypatch, capsys, repo, "--to", "v2.8.0", "--check"
+        )
+        assert exit_code == 1
+        assert "4 playbook(s) need bump" in stderr
 
-    def test_dry_run_no_write(self, tmp_path):
+    def test_check_fails_when_file_missing_field(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """--check should exit 1 not only on stale but also on missing
+        verified-at-version field (maintainer visibility).
+        """
+        repo = _make_playbook_tree(tmp_path, {})
+        # Strip the field from one playbook to simulate a rot state.
+        target = repo / bpv.PLAYBOOK_PATHS[0]
+        target.write_text(
+            "---\ntitle: x\nversion: v2.7.0\n---\nbody\n",
+            encoding="utf-8",
+            newline="",
+        )
+        exit_code, _, stderr = _run_cli(
+            monkeypatch, capsys, repo, "--to", "v2.7.0", "--check"
+        )
+        assert exit_code == 1
+        assert "missing field" in stderr
+
+    def test_dry_run_no_write(self, tmp_path, monkeypatch, capsys):
         repo = _make_playbook_tree(
             tmp_path,
             {Path(rel).name: "v2.7.0" for rel in bpv.PLAYBOOK_PATHS},
         )
         before = (repo / bpv.PLAYBOOK_PATHS[0]).read_text(encoding="utf-8")
-        result = _run_cli(repo, "--to", "v2.8.0", "--dry-run")
-        assert result.returncode == 0
-        assert "would update" in result.stdout
+        exit_code, stdout, _ = _run_cli(
+            monkeypatch, capsys, repo, "--to", "v2.8.0", "--dry-run"
+        )
+        assert exit_code == 0
+        assert "would update" in stdout
         after = (repo / bpv.PLAYBOOK_PATHS[0]).read_text(encoding="utf-8")
         assert before == after
 
-    def test_rejects_bad_version_format(self, tmp_path):
+    def test_rejects_bad_version_format(
+        self, tmp_path, monkeypatch, capsys
+    ):
         repo = _make_playbook_tree(tmp_path, {})
-        result = _run_cli(repo, "--to", "2.8", "--check")
-        assert result.returncode == 2
-        assert "must match vX.Y.Z" in result.stderr
+        exit_code, _, stderr = _run_cli(
+            monkeypatch, capsys, repo, "--to", "2.8", "--check"
+        )
+        assert exit_code == 2
+        assert "must match vX.Y.Z" in stderr
 
-    def test_accepts_version_without_v_prefix(self, tmp_path):
+    def test_accepts_version_without_v_prefix(
+        self, tmp_path, monkeypatch, capsys
+    ):
         repo = _make_playbook_tree(
             tmp_path,
             {Path(rel).name: "v2.7.0" for rel in bpv.PLAYBOOK_PATHS},
         )
-        result = _run_cli(repo, "--to", "2.8.0")
-        assert result.returncode == 0
+        exit_code, _, _ = _run_cli(
+            monkeypatch, capsys, repo, "--to", "2.8.0"
+        )
+        assert exit_code == 0
         text = (repo / bpv.PLAYBOOK_PATHS[0]).read_text(encoding="utf-8")
         assert "verified-at-version: v2.8.0" in text
+
+    def test_reports_missing_file(self, tmp_path, monkeypatch, capsys):
+        """Unknown playbook path should be reported as MISSING (file not
+        found) without crashing the tool."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "docs" / "internal").mkdir(parents=True)
+        # Deliberately skip creating playbook files.
+        exit_code, stdout, stderr = _run_cli(
+            monkeypatch, capsys, tmp_path, "--to", "v2.8.0"
+        )
+        assert exit_code == 0
+        # All 4 paths missing → one MISSING row each in stdout summary.
+        assert stdout.count("MISSING") == 4
+        assert "4 playbook(s) lack" in stderr
+
+
+# ── TestApplyBumpEdgeCases ─────────────────────────────────────────────
+
+
+class TestApplyBumpEdgeCases:
+    """Cover defensive branches in apply_bump()."""
+
+    def test_handles_read_oserror(self, tmp_path, monkeypatch):
+        """read_bytes() raising OSError should produce MISSING status,
+        not propagate the exception."""
+        target = tmp_path / "missing.md"
+        # File does not exist → read_bytes raises FileNotFoundError.
+        status, detail = bpv.apply_bump(target, "v2.8.0", write=True)
+        assert status == "MISSING"
+        assert "read error" in detail
+
+    def test_handles_undecodable_bytes(self, tmp_path):
+        """Non-UTF-8 bytes should produce MISSING, not UnicodeDecodeError."""
+        f = tmp_path / "binary.md"
+        f.write_bytes(b"\xff\xfe\x00binary garbage")
+        status, detail = bpv.apply_bump(f, "v2.8.0", write=True)
+        assert status == "MISSING"
+        assert "decode error" in detail
+
+    def test_unterminated_frontmatter_reported(self, tmp_path):
+        """`---` at top but no closing `---` → MISSING."""
+        f = tmp_path / "pb.md"
+        f.write_text(
+            "---\ntitle: x\nverified-at-version: v2.7.0\n\n# no end marker\n",
+            encoding="utf-8",
+            newline="",
+        )
+        status, _ = bpv.apply_bump(f, "v2.8.0", write=True)
+        assert status == "MISSING"
 
 
 # ── TestFindRepoRoot ───────────────────────────────────────────────────
@@ -248,6 +332,15 @@ class TestFindRepoRoot:
         nested.mkdir(parents=True)
         monkeypatch.chdir(nested)
         assert bpv.find_repo_root() == tmp_path
+
+    def test_fallback_when_no_git_dir(self, tmp_path, monkeypatch):
+        """Without a .git ancestor, fall back to the script-location
+        heuristic (3 levels up from the module file). The important
+        guarantee is that find_repo_root() never raises."""
+        monkeypatch.chdir(tmp_path)
+        result = bpv.find_repo_root()
+        # Must be a real directory (the heuristic target).
+        assert result.is_dir()
 
 
 # ── TestNormalizeVersion ───────────────────────────────────────────────

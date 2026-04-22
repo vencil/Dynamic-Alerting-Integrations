@@ -13,10 +13,9 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
+
+import pytest
 
 import check_path_metadata_consistency as cpmc  # noqa: E402
 
@@ -56,27 +55,23 @@ def _tenant_yaml(
 
 
 def _run_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
     repo_root: Path,
     *args: str,
-) -> subprocess.CompletedProcess:
-    script = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "tools"
-        / "lint"
-        / "check_path_metadata_consistency.py"
+) -> tuple[int, str, str]:
+    """Invoke main() in-process so coverage.py captures execution."""
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        cpmc.sys, "argv",
+        ["check_path_metadata_consistency.py", *args],
     )
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    return subprocess.run(
-        [sys.executable, str(script), *args],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
+    try:
+        exit_code = cpmc.main()
+    except SystemExit as exc:
+        exit_code = int(exc.code) if exc.code is not None else 0
+    captured = capsys.readouterr()
+    return exit_code, captured.out, captured.err
 
 
 # ── TestPathInferences ─────────────────────────────────────────────────
@@ -157,6 +152,23 @@ class TestScanFile:
         _write(f, "tenants:\n  - not-a-map\n    x: [unclosed")
         assert cpmc.scan_file(f, config_dir) == []
 
+    def test_region_field_never_warns_without_path_inference(
+        self, tmp_path
+    ):
+        """`region` is not in the path-inference heuristic (only domain
+        and environment are). A tenant declaring _metadata.region must
+        not produce a warning just because the path doesn't mention it.
+        """
+        config_dir = tmp_path / "conf.d"
+        f = config_dir / "db" / "mariadb" / "prod" / "t.yaml"
+        _write(
+            f,
+            _tenant_yaml(
+                "t", domain="db", region="us-east-1", environment="prod"
+            ),
+        )
+        assert cpmc.scan_file(f, config_dir) == []
+
 
 # ── TestScan (full-directory) ──────────────────────────────────────────
 
@@ -197,51 +209,142 @@ class TestScan:
 
 
 class TestCLI:
-    def test_clean_dir_exit_zero(self, tmp_path):
+    def test_clean_dir_exit_zero(self, tmp_path, monkeypatch, capsys):
         (tmp_path / ".git").mkdir()
         config_dir = tmp_path / "conf.d"
         _write(
             config_dir / "db" / "prod" / "t.yaml",
             _tenant_yaml("t", domain="db", environment="prod"),
         )
-        result = _run_cli(tmp_path, "--config-dir", str(config_dir))
-        assert result.returncode == 0
-        assert "0 mismatch(es)" in result.stdout
+        exit_code, stdout, _ = _run_cli(
+            monkeypatch, capsys, tmp_path,
+            "--config-dir", str(config_dir),
+        )
+        assert exit_code == 0
+        assert "0 mismatch(es)" in stdout
 
-    def test_warning_still_exits_zero(self, tmp_path):
+    def test_warning_still_exits_zero(self, tmp_path, monkeypatch, capsys):
         (tmp_path / ".git").mkdir()
         config_dir = tmp_path / "conf.d"
         _write(
             config_dir / "db" / "prod" / "t.yaml",
             _tenant_yaml("t", environment="staging"),
         )
-        result = _run_cli(tmp_path, "--config-dir", str(config_dir))
-        assert result.returncode == 0
-        # warning is printed; summary tail goes to stderr when mismatches
-        # exist.
-        assert "WARN path/metadata mismatch" in result.stdout
-        assert "1 mismatch(es)" in result.stderr
+        exit_code, stdout, stderr = _run_cli(
+            monkeypatch, capsys, tmp_path,
+            "--config-dir", str(config_dir),
+        )
+        assert exit_code == 0
+        assert "WARN path/metadata mismatch" in stdout
+        assert "1 mismatch(es)" in stderr
 
-    def test_ci_mode_single_line_format(self, tmp_path):
+    def test_ci_mode_single_line_format(
+        self, tmp_path, monkeypatch, capsys
+    ):
         (tmp_path / ".git").mkdir()
         config_dir = tmp_path / "conf.d"
         _write(
             config_dir / "db" / "prod" / "t.yaml",
             _tenant_yaml("t", environment="staging"),
         )
-        result = _run_cli(
-            tmp_path, "--config-dir", str(config_dir), "--ci"
+        exit_code, stdout, _ = _run_cli(
+            monkeypatch, capsys, tmp_path,
+            "--config-dir", str(config_dir), "--ci",
         )
-        assert result.returncode == 0
-        # format: "<file>:0: warning: path/metadata mismatch tenant=..."
-        assert ":0: warning: path/metadata mismatch" in result.stdout
-        assert "tenant=t" in result.stdout
-        assert "field=environment" in result.stdout
+        assert exit_code == 0
+        assert ":0: warning: path/metadata mismatch" in stdout
+        assert "tenant=t" in stdout
+        assert "field=environment" in stdout
 
-    def test_missing_config_dir_is_soft(self, tmp_path):
+    def test_missing_config_dir_is_soft(
+        self, tmp_path, monkeypatch, capsys
+    ):
         (tmp_path / ".git").mkdir()
-        result = _run_cli(
-            tmp_path, "--config-dir", str(tmp_path / "does-not-exist")
+        exit_code, _, stderr = _run_cli(
+            monkeypatch, capsys, tmp_path,
+            "--config-dir", str(tmp_path / "does-not-exist"),
         )
-        assert result.returncode == 0
-        assert "config dir not found" in result.stderr
+        assert exit_code == 0
+        assert "config dir not found" in stderr
+
+    def test_default_config_dir_when_unset(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Without --config-dir, the tool resolves to the repo-default
+        conf.d path (which may or may not exist in the test tmp_path).
+        Either way, exit code must be 0 (soft fail on missing dir)."""
+        (tmp_path / ".git").mkdir()
+        exit_code, _, _ = _run_cli(monkeypatch, capsys, tmp_path)
+        assert exit_code == 0
+
+
+# ── TestExtractTenantMetadata ─────────────────────────────────────────
+
+
+class TestExtractTenantMetadata:
+    """Cover the defensive shape-guard branches."""
+
+    def test_returns_empty_for_non_dict_root(self):
+        assert cpmc._extract_tenant_metadata(["not", "a", "dict"]) == {}
+
+    def test_returns_empty_when_tenants_missing(self):
+        assert cpmc._extract_tenant_metadata({"defaults": {}}) == {}
+
+    def test_returns_empty_when_tenants_is_list(self):
+        assert cpmc._extract_tenant_metadata({"tenants": []}) == {}
+
+    def test_skips_non_dict_tenant_block(self):
+        data = {"tenants": {"t": "not-a-dict"}}
+        assert cpmc._extract_tenant_metadata(data) == {}
+
+    def test_skips_non_dict_metadata_block(self):
+        data = {"tenants": {"t": {"_metadata": "scalar"}}}
+        assert cpmc._extract_tenant_metadata(data) == {}
+
+    def test_skips_non_string_field_values(self):
+        data = {"tenants": {"t": {"_metadata": {"domain": 123}}}}
+        assert cpmc._extract_tenant_metadata(data) == {}
+
+    def test_skips_empty_string_field_values(self):
+        data = {"tenants": {"t": {"_metadata": {"domain": ""}}}}
+        assert cpmc._extract_tenant_metadata(data) == {}
+
+
+# ── TestFindRepoRoot ─────────────────────────────────────────────────
+
+
+class TestFindRepoRoot:
+    def test_walks_up_to_git_dir(self, tmp_path, monkeypatch):
+        (tmp_path / ".git").mkdir()
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        monkeypatch.chdir(nested)
+        assert cpmc.find_repo_root() == tmp_path
+
+    def test_fallback_when_no_git_dir(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # Must not raise; returns some directory (script-location
+        # heuristic 3 levels up from the module).
+        result = cpmc.find_repo_root()
+        assert result.is_dir()
+
+
+# ── TestScanFileOSError ──────────────────────────────────────────────
+
+
+class TestScanFileOSError:
+    def test_unreadable_file_returns_empty(self, tmp_path, monkeypatch):
+        """OSError on read_text should be swallowed (return [])."""
+        config_dir = tmp_path / "conf.d"
+        f = config_dir / "db" / "prod" / "missing.yaml"
+        # File does not exist on disk.
+        assert cpmc.scan_file(f, config_dir) == []
+
+    def test_outside_config_dir_returns_empty(self, tmp_path):
+        """A file outside config_dir (ValueError on relative_to) must
+        be silently skipped."""
+        config_dir = tmp_path / "conf.d"
+        config_dir.mkdir()
+        outside = tmp_path / "outside.yaml"
+        outside.write_text(_tenant_yaml("t", environment="staging"))
+        assert cpmc.scan_file(outside, config_dir) == []
