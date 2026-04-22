@@ -44,6 +44,13 @@ benchmark: ## 效能基準測試 (使用: make benchmark ARGS="--routing-bench -
 go-bench: ## Go micro-benchmark (-count=5, 含 1000T incremental reload，需 ~3min)
 	cd components/threshold-exporter/app && go test -bench=. -benchmem -count=5 -run="^$$" -timeout=15m ./...
 
+.PHONY: go-bench-clean
+go-bench-clean: ## Go micro-benchmark via bench_wrapper (stdout-clean, -json filtered; Planning A-15)
+	@cd components/threshold-exporter/app && \
+		BENCH_OUT_DIR="$${BENCH_OUT_DIR:-$${PWD}/_out}" \
+		bash $(CURDIR)/scripts/tools/ops/bench_wrapper.sh \
+		-bench=. -benchmem -count=$${COUNT:-5} -run="^$$" -timeout=15m ./...
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
