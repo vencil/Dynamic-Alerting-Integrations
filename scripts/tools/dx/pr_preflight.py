@@ -263,8 +263,11 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
         return 1
 
     # First non-comment non-empty line is the header (standard git convention).
+    # Explicit utf-8: commit messages can contain CJK / em-dash; Windows
+    # default cp950 would raise UnicodeDecodeError (PR #52 hit this when
+    # committing with --check-commit-msg as a commit-msg hook).
     header: Optional[str] = None
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip() or line.startswith("#"):
             continue
         header = line

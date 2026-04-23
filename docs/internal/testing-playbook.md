@@ -521,6 +521,57 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 5. `docs/internal/frontend-quality-backlog.md` 該檔的登記條目逐條劃掉
 6. PR 標題：`test(e2e): calibrate <spec> (remove N fixme)`，body 附 `--count=3` 輸出
 
+## v2.8.0 Lessons Learned（2026-04-23, Phase .a）
+
+> **觸發**：PR #49 / PR #50 / PR #52（Phase .a 軌道一 bundle 鏈）各自踩到一類容易重複的 agent pattern error。都是「工具輸出看似完成、但實際隱藏另一個失敗模式」的形狀；本節 codify 三條鐵律避免下次 session 再踩。
+
+### 1. Subprocess-based CLI test **不計 coverage**（PR #49 S#19）
+
+**觸發**：PR #49 新增 `scripts/tools/dx/bump_playbook_versions.py` + `scripts/tools/lint/check_path_metadata_consistency.py`，CLI-level 測試走 `subprocess.run([sys.executable, str(script), ...])` end-to-end，19 tests 全過。CI 卻 `Python Tests (3.13)` 失敗：coverage 74.94% < 75% fail_under，兩檔 53% / 64%，`main()` 整段 uncovered。
+
+**根因**：`coverage.py` 的 trace hook 不跨 process inherit。subprocess 啟新 interpreter，走的是自己的 `sys.settrace`，不會把結果回報給父行程的 coverage collector。看起來在跑 `main()`，coverage 只見 import-time 程式碼。
+
+**正解**：
+1. **新工具的 CLI surface test 一律 in-process** — `monkeypatch.setattr(module, 'sys', ...)` 設 `sys.argv`，`monkeypatch.chdir(repo_root)`，直接呼 `module.main()`，`capsys` 吃 stdout/stderr，catch `SystemExit`（argparse exit path）。
+2. **End-to-end subprocess test 可以保留但不作 coverage 主力** — 只跑 1-2 個「確實從 shell 呼得到」的 smoke。
+3. **若必須 subprocess 驗 PATH / env 行為**：配 `COVERAGE_PROCESS_START` env var + `sitecustomize.py` 掛 sub-process coverage；本 repo 目前沒此需求。
+
+**Range 指標**：PR #49 改法後兩檔 coverage 59.2% → 98.2%（`bump_playbook_versions` 100% / `check_path_metadata` 96.7%）。詳見 `v2.8.0-planning-archive.md §S#19`。
+
+### 2. 本地工具輸出**被截斷 / 被 encoding 吃掉**後必須二次驗證（PR #49 anchor drift + PR #50 journey `—`）
+
+**觸發**：
+- **PR #49**：A-11 寫 `#已知陷阱` anchor 指 windows-mcp-playbook，實際章節名 `#已知陷阱速查`。本地跑 `python3 scripts/tools/lint/check_doc_links.py --ci` 印 `UnicodeEncodeError: cp950 codec can't encode character '\u2713'` 後 exit 1，被誤判成「工具本身壞了」— **stdout 其實有印 `BROKEN ANCHORS:` 6 筆**被 cp950 encoding mojibake 遮蔽。
+- **PR #50**：design-system-guide §3.4 journey 表 `dark mode` 欄我填 `—`，實際 canonical 有值（`#fcd34d` / `#c4b5fd`）。`grep "journey-" | head -10` 截斷了 dark-mode rows，我憑記憶 filed 成「無值」。
+
+**共同根因**：本地工具輸出被**截 / 爆 encoding / 分頁**後沒補驗一次就下結論。
+
+**正解**：
+1. **任何 Python lint / generator 輸出**一律 `PYTHONIOENCODING=utf-8 python3 -X utf8 <script>` 確保 stdout/stderr 走 UTF-8；或走 `pre-commit run <hook>`（hook 在 `.pre-commit-config.yaml` 已統一帶 `-X utf8`）。
+2. **看到 `head -N` / `--head N` / `head_limit`**：每次截斷後必須補一次精確 grep 或 `| head -50` 確認底部內容。寧可輸出多一點也不要靠記憶。
+3. **凡是 exit code 與 stdout 不一致**（e.g. exit 1 但 stdout 印 "0 errors"），第一反應是**工具本身 encoding/console bug**，不要下結論 "工具壞了"；改走 hook 或 UTF-8 env 再跑一次。
+
+### 3. `--no-verify` 使用規範 — 只跳 FUSE 已知卡死，不跳 commit-msg（PR #50 自己踩到）
+
+**觸發**：PR #50 commit 用 `git commit --no-verify` 繞 FUSE Trap #57 `head-blob-hygiene` 17+ 分鐘 0 output。`--no-verify` 同時 bypass `commit-msg` hook（PR #44 C2 裝的 commitlint 本地 validator），commit header 寫了 104 chars，CI 才擋下，需 force-push-with-lease 修。
+
+**正解**：
+1. **首選**：`SKIP=<hook-name> git commit ...` 精準跳。例：`SKIP=head-blob-hygiene git commit -F msg.txt`
+2. **次選**：`pre-commit run --hook-stage manual` 事前跑所有 manual hooks 手動驗證，再 `SKIP=...` 跳該單一 hook
+3. **鐵則 — 禁用 `git commit --no-verify`**，除非能明確寫出「這次真的同時要跳過哪幾個 hook」。本 repo 目前唯一合法場景是 **FUSE Trap #57**（head-blob-hygiene 卡死），請改用 `SKIP=head-blob-hygiene`
+4. commit message 必須記錄：(a) 哪個 hook 被跳過、(b) 原因（引 Trap #N）、(c) 手動補跑了哪些 hook 確認通過
+5. **長期 enforcement** 追蹤於 [Issue #53](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/53)（narrow `--no-verify` bypass）
+
+### 4. Dev Container mount scope（Trap #62 連帶工作流）
+
+Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），claude worktree 的 Edit **不會進 container**。詳 `windows-mcp-playbook.md` Trap #62。**Go test / Playwright E2E** 在 claude worktree 做 Edit 後，一律走：
+
+1. `cp <claude-worktree-path> <main-worktree-path>` 同步單檔
+2. 在主 worktree 跑 `make dc-go-test` / `bash scripts/ops/dx-run.sh ...`
+3. 跑完在主 worktree `git checkout -- <path>` revert，claude worktree 保留為 SoT
+
+**不要**用 `git commit + push + fetch` 同步 — 會污染 commit history。**不要**改 `dx-run.sh` 的 `-w` 參數除非你願意同步調整 container bind-mount。
+
 ## v2.2.0 Lessons Learned（2026-03-18）
 
 1. **`apk del` 後必須驗證移除成功**：`|| true` 吃掉錯誤導致 CVE 殘留。Dockerfile 加 `if apk info -e <pkg>; then exit 1; fi` 做 build-time 斷言
