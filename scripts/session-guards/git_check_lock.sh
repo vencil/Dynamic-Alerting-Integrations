@@ -124,16 +124,19 @@ repair_head_if_corrupt() {
 # ── Main ─────────────────────────────────────────────────────────────
 
 # `--check-head` 模式：只驗 HEAD，不看 lock，不清理
+# Note: `rc` is a plain variable (not bash `local` — that keyword is
+# function-scoped). Inside the `else` branch, `$?` reflects the nonzero
+# exit of `check_head_sanity` (2 = recoverable corrupt, 3 = unrecoverable).
 if [ "$CLEAN_MODE" = "--check-head" ]; then
     echo "--- HEAD sanity check ---"
     if check_head_sanity; then
         echo "✅ .git/HEAD 正常。"
         exit 0
     else
-        local_rc=$?
+        rc=$?
         echo ""
-        echo "⚠️  .git/HEAD corruption detected (exit=$local_rc)"
-        exit "$local_rc"
+        echo "⚠️  .git/HEAD corruption detected (exit=$rc)"
+        exit "$rc"
     fi
 fi
 

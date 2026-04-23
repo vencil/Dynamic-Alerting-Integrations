@@ -158,7 +158,10 @@ def _read_commitlint_enum(repo_root: Path, key: str) -> Optional[List[str]]:
     config = repo_root / ".commitlintrc.yaml"
     if not config.exists():
         return None
-    lines = config.read_text().splitlines()
+    # Explicit utf-8 for parity with check_commit_msg_file (L270) — the file
+    # is currently ASCII but defensive encoding avoids future cp950 surprises
+    # on Windows.
+    lines = config.read_text(encoding="utf-8", errors="replace").splitlines()
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()

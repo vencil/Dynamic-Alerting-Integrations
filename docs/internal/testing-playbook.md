@@ -523,11 +523,11 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 
 ## v2.8.0 Lessons Learned（2026-04-23, Phase .a）
 
-> **觸發**：PR #49 / PR #50 / PR #52（Phase .a 軌道一 bundle 鏈）各自踩到一類容易重複的 agent pattern error。都是「工具輸出看似完成、但實際隱藏另一個失敗模式」的形狀；本節 codify 三條鐵律避免下次 session 再踩。
+> **觸發**：PR #49 / PR #50 / PR #51（Phase .a 軌道一 bundle 鏈）各自踩到一類容易重複的 agent pattern error。都是「工具輸出看似完成、但實際隱藏另一個失敗模式」的形狀；本節 codify 三條鐵律避免下次 session 再踩。
 
 ### 1. Subprocess-based CLI test **不計 coverage**（PR #49 S#19）
 
-**觸發**：PR #49 新增 `scripts/tools/dx/bump_playbook_versions.py` + `scripts/tools/lint/check_path_metadata_consistency.py`，CLI-level 測試走 `subprocess.run([sys.executable, str(script), ...])` end-to-end，19 tests 全過。CI 卻 `Python Tests (3.13)` 失敗：coverage 74.94% < 75% fail_under，兩檔 53% / 64%，`main()` 整段 uncovered。
+**觸發**：PR #49 新增 `scripts/tools/dx/bump_playbook_versions.py` + `scripts/tools/lint/check_path_metadata_consistency.py`，CLI-level 測試走 `subprocess.run([sys.executable, str(script), ...])` end-to-end，總計 **35 tests**（bump_playbook 19 + check_path_metadata 16）全過。CI 卻 `Python Tests (3.13)` 失敗：coverage 74.94% < 75% fail_under，兩檔 53% / 64%，`main()` 整段 uncovered。
 
 **根因**：`coverage.py` 的 trace hook 不跨 process inherit。subprocess 啟新 interpreter，走的是自己的 `sys.settrace`，不會把結果回報給父行程的 coverage collector。看起來在跑 `main()`，coverage 只見 import-time 程式碼。
 
@@ -541,7 +541,7 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 ### 2. 本地工具輸出**被截斷 / 被 encoding 吃掉**後必須二次驗證（PR #49 anchor drift + PR #50 journey `—`）
 
 **觸發**：
-- **PR #49**：A-11 寫 `#已知陷阱` anchor 指 windows-mcp-playbook，實際章節名 `#已知陷阱速查`。本地跑 `python3 scripts/tools/lint/check_doc_links.py --ci` 印 `UnicodeEncodeError: cp950 codec can't encode character '\u2713'` 後 exit 1，被誤判成「工具本身壞了」— **stdout 其實有印 `BROKEN ANCHORS:` 6 筆**被 cp950 encoding mojibake 遮蔽。
+- **PR #49**：A-11 寫 `#已知陷阱` anchor 指 windows-mcp-playbook，實際章節名 `#已知陷阱速查`。裸跑 `python3 scripts/tools/lint/check_doc_links.py --ci` 的 exit code **同時被兩個來源污染**：(a) broken anchor（真 fail）、(b) 工具本身 final `✓ All links ...` print 在 cp950 console 觸發 `UnicodeEncodeError`（即使無 broken anchor 也會 exit 1）。fix 完 anchor 後仍 exit 1，差點下錯結論「工具壞了」；走 `pre-commit run doc-links-check`（config 自帶 `-X utf8`）才分清兩個來源。
 - **PR #50**：design-system-guide §3.4 journey 表 `dark mode` 欄我填 `—`，實際 canonical 有值（`#fcd34d` / `#c4b5fd`）。`grep "journey-" | head -10` 截斷了 dark-mode rows，我憑記憶 filed 成「無值」。
 
 **共同根因**：本地工具輸出被**截 / 爆 encoding / 分頁**後沒補驗一次就下結論。
