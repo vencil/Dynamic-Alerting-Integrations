@@ -562,7 +562,14 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 4. commit message 必須記錄：(a) 哪個 hook 被跳過、(b) 原因（引 Trap #N）、(c) 手動補跑了哪些 hook 確認通過
 5. **長期 enforcement** 追蹤於 [Issue #53](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/53)（narrow `--no-verify` bypass）
 
-> **Extension（PR #51 self-review 新發現）**：本地 `commit-msg` hook（PR #44 C2 安裝的 `scripts/hooks/commit-msg` → `pr_preflight.py --check-commit-msg`）**只驗 header**（type / scope / header length），**不驗 body / footer**。CI commitlint 多驗 `footer-max-line-length ≤ 100`、`footer-leading-blank` 等 body 規則；long pytest path / long file list 塞在 commit message 末段會被 commitlint 當 footer → 觸發 `footer-max-line-length`。PR #51 self-review commit 踩到：local 過、CI 擋、force-push-with-lease 修。**暫時 mitigation**：commit body 的 long command 改寫 `pytest <a> <b> <c>` 放在非末段、或多行斷 ≤ 100 chars。**長期 enforcement**：`pr_preflight.py --check-commit-msg` 擴充 footer 規則（沿用 `.commitlintrc.yaml` 的 `footer-max-line-length` config），併入 [Issue #53](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/53)。
+> **Extension（PR #51 self-review 新發現，PR #55 enforcement 落地）**：本地 `commit-msg` hook（PR #44 C2 安裝的 `scripts/hooks/commit-msg` → `pr_preflight.py --check-commit-msg`）v2.8.0 Issue #53 前**只驗 header**（type / scope / header length），**不驗 body / footer**。CI commitlint 多驗 `footer-max-line-length ≤ 100`、`footer-leading-blank` 等 body 規則；long pytest path / long file list 塞在 commit message 末段會被 commitlint 當 footer → 觸發 `footer-max-line-length`。PR #51 self-review commit 踩到：local 過、CI 擋、force-push-with-lease 修。
+>
+> **PR #55 Issue #53 enforcement 落地**：
+>
+> 1. `pr_preflight.py --check-commit-msg` 擴 `validate_commit_msg_body()`：每個 post-header 非註解行 > 100 chars → ERROR；缺 blank-line-after-header → WARN。保守策略 — 比 CI 還嚴（CI body-max-line-length 放寬到 200），但可靠防 PR #51 類 class of error。`test_preflight_msg_validator.py` 從 20 → 29 tests
+> 2. `make commit-bypass-hh ARGS="-F _msg.txt" [EXTRA_SKIP=hook1,hook2]`：codified narrow bypass — `SKIP=head-blob-hygiene git commit <ARGS>`，commit-msg hook 仍跑，防 `--no-verify` 的 all-or-nothing 災
+>
+> **規則更新**：從本 PR 起，FUSE Trap #57 繞道改為 `make commit-bypass-hh`；`git commit --no-verify` 只在 commit-bypass-hh 本身失效（如 commit-msg 自己 bug）時才用，且 commit message 需寫明 bypass 原因
 
 ### 4. Dev Container mount scope（Trap #62 連帶工作流）
 

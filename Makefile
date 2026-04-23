@@ -229,6 +229,26 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 		echo "   (從 MCP 環境：用 Desktop Commander 的 cmd shell 執行上面三行。)"; \
 	fi
 
+.PHONY: commit-bypass-hh
+commit-bypass-hh: ## FUSE Trap #57 窄 bypass: SKIP=head-blob-hygiene git commit (Issue #53)。用：make commit-bypass-hh ARGS="-F _msg.txt" [EXTRA_SKIP=hook1,hook2]
+	@# v2.8.0 Issue #53: codified narrow bypass for FUSE Trap #57 (head-blob-hygiene
+	@# hook hangs 17+ min on FUSE side). Replaces the sledgehammer `git commit
+	@# --no-verify` — commit-msg hook + other pre-commit hooks still run, so
+	@# header / scope / body-length validation catch errors locally instead of
+	@# on CI. Use case: `make commit-bypass-hh ARGS="-F _msg.txt"`
+	@#
+	@# EXTRA_SKIP: additional hooks to skip (comma-separated). Do NOT add
+	@# commit-msg-validator or commitlint-ish hooks here — defeats the point.
+	@if [ -z "$(ARGS)" ]; then \
+		echo "❌ ARGS is required. e.g. make commit-bypass-hh ARGS=\"-F _msg.txt\""; \
+		echo "   Equivalent to: SKIP=head-blob-hygiene git commit <ARGS>"; \
+		exit 1; \
+	fi
+	@skip_list="head-blob-hygiene"; \
+	if [ -n "$(EXTRA_SKIP)" ]; then skip_list="$$skip_list,$(EXTRA_SKIP)"; fi; \
+	echo "=== commit-bypass-hh (SKIP=$$skip_list) ==="; \
+	SKIP="$$skip_list" git commit $(ARGS)
+
 .PHONY: fuse-commit
 fuse-commit: ## FUSE phantom lock 逃生門：純 sandbox plumbing commit。用：make fuse-commit MSG=_msg.txt FILES="a b" [AMEND=1]
 	@if [ -z "$(MSG)" ]; then echo "❌ MSG is required. e.g. make fuse-commit MSG=_msg.txt FILES=\"a b\""; exit 1; fi

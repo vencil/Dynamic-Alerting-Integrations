@@ -226,3 +226,137 @@ def test_cli_check_commit_msg_missing_file(tmp_path: Path) -> None:
     proc = _run_cli("--check-commit-msg", str(tmp_path / "nope"))
     assert proc.returncode == 1
     assert "not found" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# v2.8.0 Issue #53: body/footer line-length validation
+# ---------------------------------------------------------------------------
+
+
+def test_validate_body_catches_long_line() -> None:
+    """Post-header line > 100 chars should produce [E] error entry."""
+    mod = _load_module()
+    long_line = "x" * 101
+    lines = [
+        "feat(dx): header ok",
+        "",
+        "Body paragraph intro.",
+        long_line,
+    ]
+    findings = mod.validate_commit_msg_body(lines)
+    errs = [f for f in findings if f.startswith("[E]")]
+    assert any("too long" in f and "101 chars" in f for f in errs)
+
+
+def test_validate_body_exactly_100_is_ok() -> None:
+    """Boundary: 100 chars exact is allowed (max is inclusive)."""
+    mod = _load_module()
+    exactly_100 = "x" * 100
+    lines = [
+        "feat(dx): header ok",
+        "",
+        exactly_100,
+    ]
+    findings = mod.validate_commit_msg_body(lines)
+    errs = [f for f in findings if f.startswith("[E]")]
+    assert errs == [], f"expected no errors, got {errs}"
+
+
+def test_validate_body_warn_missing_leading_blank() -> None:
+    """Header immediately followed by body line (no blank) → warning."""
+    mod = _load_module()
+    lines = [
+        "feat(dx): header",
+        "Body line with no blank between",
+    ]
+    findings = mod.validate_commit_msg_body(lines)
+    warns = [f for f in findings if f.startswith("[W]")]
+    assert any("body-leading-blank" in f for f in warns)
+
+
+def test_validate_body_blank_line_before_body_ok() -> None:
+    """Header → blank → body is the conventional shape, no warning."""
+    mod = _load_module()
+    lines = [
+        "feat(dx): header",
+        "",
+        "Body line normal length.",
+    ]
+    findings = mod.validate_commit_msg_body(lines)
+    warns = [f for f in findings if f.startswith("[W]")]
+    assert not any("body-leading-blank" in f for f in warns)
+
+
+def test_validate_body_ignores_comment_lines() -> None:
+    """Git comment lines (# prefix) must not trigger line-length."""
+    mod = _load_module()
+    lines = [
+        "feat(dx): header",
+        "",
+        "# " + ("x" * 200),  # comment should be skipped entirely
+        "Normal body.",
+    ]
+    findings = mod.validate_commit_msg_body(lines)
+    errs = [f for f in findings if f.startswith("[E]")]
+    assert errs == [], f"expected no errors for comment-only long line, got {errs}"
+
+
+def test_validate_body_custom_max_length() -> None:
+    """validate_commit_msg_body takes max_line_length override."""
+    mod = _load_module()
+    lines = [
+        "feat(dx): header",
+        "",
+        "x" * 75,
+    ]
+    findings = mod.validate_commit_msg_body(lines, max_line_length=50)
+    errs = [f for f in findings if f.startswith("[E]")]
+    assert any("75 chars > 50" in f for f in errs)
+
+
+def test_validate_body_empty_message_no_errors() -> None:
+    """Empty / comment-only message returns no findings."""
+    mod = _load_module()
+    lines = ["", "# comment", ""]
+    findings = mod.validate_commit_msg_body(lines)
+    assert findings == []
+
+
+def test_cli_check_commit_msg_rejects_long_body_line(tmp_path: Path) -> None:
+    """End-to-end via --check-commit-msg: long body line → exit 1."""
+    msg = tmp_path / "msg.txt"
+    long_line = "- " + ("x" * 120)  # 122 chars
+    msg.write_text(
+        f"feat(dx): something\n\nBody intro normal.\n{long_line}\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "too long" in proc.stderr
+    assert "122 chars" in proc.stderr
+
+
+def test_cli_check_commit_msg_accepts_short_body(tmp_path: Path) -> None:
+    """Control: well-formed message passes."""
+    msg = tmp_path / "msg.txt"
+    msg.write_text(
+        "feat(dx): new helper\n\n"
+        "Body paragraph normal length (under 100 chars).\n"
+        "Second line also short.\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 0, f"stderr={proc.stderr}"
+
+
+def test_cli_check_commit_msg_warnings_only_still_pass(tmp_path: Path) -> None:
+    """Missing body-leading-blank is warning, not error. Exit 0."""
+    msg = tmp_path / "msg.txt"
+    msg.write_text(
+        "feat(dx): header\nBody starting immediately without blank.\n",
+        encoding="utf-8",
+    )
+    proc = _run_cli("--check-commit-msg", str(msg))
+    # Should pass (0) but stderr contains warnings.
+    assert proc.returncode == 0, f"stderr={proc.stderr}"
+    assert "warnings" in proc.stderr or "body-leading-blank" in proc.stderr

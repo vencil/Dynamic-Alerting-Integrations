@@ -256,10 +256,97 @@ def validate_conventional_header(
     return errors
 
 
+# v2.8.0 Issue #53: commitlint body/footer line-length enforcement.
+#
+# Before this PR the local commit-msg hook only validated the header.
+# commitlint in CI (.github/workflows/commitlint.yaml) additionally
+# enforces footer-max-line-length=100 via @commitlint/config-conventional
+# defaults, which bit PR #51 and PR #52 — long pytest command paths at
+# the end of the body got classified as "footer" and rejected in CI.
+#
+# Commitlint uses conventional-commits-parser to split the message into
+# header / body / footer. We don't re-implement the full parser (would
+# require Node-style trailer detection); instead we apply the
+# **conservative** rule: **any post-header line > 100 chars = ERROR**.
+# This is strictly stricter than CI (which lets body lines up to 200 per
+# our .commitlintrc.yaml override) — if a committer writes a legit long
+# prose line in body, they'll need to wrap at 100 locally. Trade-off is
+# acceptable: false-positive rate is low (commit messages should wrap at
+# 72-100 anyway per git convention), false-negative rate would be high
+# (letting PR #51-class errors through is what we want to avoid).
+#
+# The 100-char bound and the name `POST_HEADER_MAX_LINE_LENGTH` are
+# intentional: commitlint default for footer-max-line-length is 100.
+POST_HEADER_MAX_LINE_LENGTH = 100
+
+
+def validate_commit_msg_body(lines: list[str], max_line_length: int = POST_HEADER_MAX_LINE_LENGTH) -> list[str]:
+    """Check every post-header line for length + blank-line conventions.
+
+    `lines` is the raw splitlines() of the commit-msg file. Leading
+    comment/empty lines are discarded; the first non-comment non-empty
+    line is treated as the header. Everything below goes through the
+    body/footer checks.
+
+    Returns list of error strings (empty = pass). Each error prefixed
+    with an [E] (error) or [W] (warning) tag so the caller can route to
+    stderr/stdout appropriately.
+
+      [E] line N too long (L chars > max): <snippet>
+      [W] line N should be preceded by blank line after header (body-leading-blank)
+    """
+    errors: list[str] = []
+
+    # Skip leading comments + empty lines to find the header.
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if not line.strip() or line.startswith("#"):
+            continue
+        header_idx = i
+        break
+
+    if header_idx < 0:
+        return errors  # empty commit message, caller handles
+
+    # Every post-header non-comment line subject to line-length check.
+    # (Git strips comment lines before passing to hooks, but we stay
+    # safe and skip them here too.)
+    any_post_header_content = False
+    for i in range(header_idx + 1, len(lines)):
+        line = lines[i]
+        if line.startswith("#"):
+            continue
+        # First non-empty line after header: should have blank line between.
+        stripped = line.strip()
+        if stripped and not any_post_header_content:
+            any_post_header_content = True
+            # Check blank-line-after-header convention. lines[header_idx+1]
+            # should be empty if there's any body at all.
+            if header_idx + 1 < len(lines) and lines[header_idx + 1].strip():
+                errors.append(
+                    f"[W] line {header_idx + 2}: body should be preceded by blank "
+                    f"line after header (body-leading-blank)"
+                )
+
+        if len(line) > max_line_length:
+            snippet = line if len(line) <= 60 else line[:57] + "..."
+            errors.append(
+                f"[E] line {i + 1} too long ({len(line)} chars > {max_line_length}): "
+                f"{snippet}"
+            )
+
+    return errors
+
+
 def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     """Validate a commit-msg file (first non-comment line is the header).
 
     Returns 0 on pass, 1 on fail. Prints errors to stderr.
+
+    v2.8.0 Issue #53: also validates post-header line-length against
+    POST_HEADER_MAX_LINE_LENGTH (conservative match of commitlint's
+    footer-max-line-length=100 default). Warnings (prefixed [W]) do
+    not fail the validation.
     """
     if not path.exists():
         print(f"error: commit-msg file not found: {path}", file=sys.stderr)
@@ -269,8 +356,9 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     # Explicit utf-8: commit messages can contain CJK / em-dash; Windows
     # default cp950 would raise UnicodeDecodeError (PR #52 hit this when
     # committing with --check-commit-msg as a commit-msg hook).
+    all_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     header: Optional[str] = None
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in all_lines:
         if not line.strip() or line.startswith("#"):
             continue
         header = line
@@ -284,11 +372,30 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     type_enum = _read_commitlint_enum(repo_root, "type-enum")
     scope_enum = _read_commitlint_enum(repo_root, "scope-enum")
 
-    errors = validate_conventional_header(header, type_enum, scope_enum)
-    if errors:
+    header_errors = validate_conventional_header(header, type_enum, scope_enum)
+    body_findings = validate_commit_msg_body(all_lines)
+
+    # Split body findings into errors ([E]) vs warnings ([W]).
+    body_errors = [e for e in body_findings if e.startswith("[E]")]
+    body_warnings = [e for e in body_findings if e.startswith("[W]")]
+
+    if not header_errors and not body_errors and not body_warnings:
+        return 0
+
+    # Print warnings first, then errors. Both go to stderr so
+    # git's commit-msg hook pipeline surfaces them.
+    if body_warnings:
+        print("⚠  commit-msg warnings (not blocking):", file=sys.stderr)
+        for w in body_warnings:
+            print(f"   {w}", file=sys.stderr)
+
+    if header_errors or body_errors:
         print("❌ commit-msg validation failed:", file=sys.stderr)
-        for e in errors:
+        for e in header_errors:
             print(f"   - {e}", file=sys.stderr)
+        for e in body_errors:
+            # Strip the [E] tag for display consistency with header_errors.
+            print(f"   - {e[4:] if e.startswith('[E] ') else e}", file=sys.stderr)
         print(f"\nHeader was:\n   {header}", file=sys.stderr)
         return 1
     return 0
