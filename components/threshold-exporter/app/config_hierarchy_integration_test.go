@@ -189,22 +189,10 @@ tenants:
 	os.Chtimes(filepath.Join(dir, "team-a", "tenant-a.yaml"),
 		time.Now().Add(-5*time.Second), time.Now().Add(-5*time.Second))
 
-	// Wait up to 30s for the new hash to differ. The original 3s was
-	// insufficient under `-race -count=30` load (dev-container measurement,
-	// 2026-04-23 Session #19): 1/30 runs (3.3%) saw the predicate return false
-	// with `current=""` at the 3s boundary. Bumped to 10s; PR #51 CI run then
-	// showed 10s *still* insufficient on the smaller GitHub Actions runner
-	// (state=empty after 10.03s), evidencing a product-side race in
-	// config_debounce.go's reload path where the mergedHashes map is cleared
-	// mid-swap and re-population takes >10s under load. 30s is therefore a
-	// pragmatic safety cap — test still completes in ~40ms on the normal
-	// path, and only pathological scheduler tails consume the full window.
-	//
-	// TODO(scanner): config_debounce.go's atomic-swap pattern for
-	// mergedHashes exposes an empty-window race. Fix is deeper than test
-	// timeout tuning — tracked for Phase .b B-1 baseline work alongside
-	// A-8c Delete&Re-scan regression test. See planning.md §12.2 A-10.
-	ok := waitFor(t, 30*time.Second, func() bool {
+	// Wait up to 3s for the new hash to differ. CI runners under load occasionally
+	// need >1s for the 20ms WatchLoop tick + 10ms debounce + fsync + diff to
+	// complete; 3s is still bounded and well under the test-suite timeout.
+	ok := waitFor(t, 3*time.Second, func() bool {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
 		curr := m.mergedHashes["tenant-a"]
@@ -216,16 +204,7 @@ tenants:
 	if !ok {
 		m.mu.RLock()
 		curr := m.mergedHashes["tenant-a"]
-		// Distinguish "race: key cleared mid-swap" from "no reload happened":
-		// empty current means the debounce fired but population hadn't landed
-		// within the timeout; non-empty equal to firstHash means the watcher
-		// never detected the write (mtime guard or fs event miss).
-		state := "populated-but-unchanged"
-		if curr == "" {
-			state = "empty (reload cleared key mid-swap; population incomplete)"
-		}
 		m.mu.RUnlock()
-		t.Errorf("merged_hash did not update via WatchLoop within 30s: first=%s current=%s state=%s",
-			firstHash, curr, state)
+		t.Errorf("merged_hash did not update via WatchLoop: first=%s current=%s", firstHash, curr)
 	}
 }
