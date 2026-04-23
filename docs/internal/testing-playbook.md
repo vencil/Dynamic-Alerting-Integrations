@@ -562,6 +562,8 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 4. commit message 必須記錄：(a) 哪個 hook 被跳過、(b) 原因（引 Trap #N）、(c) 手動補跑了哪些 hook 確認通過
 5. **長期 enforcement** 追蹤於 [Issue #53](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/53)（narrow `--no-verify` bypass）
 
+> **Extension（PR #51 self-review 新發現）**：本地 `commit-msg` hook（PR #44 C2 安裝的 `scripts/hooks/commit-msg` → `pr_preflight.py --check-commit-msg`）**只驗 header**（type / scope / header length），**不驗 body / footer**。CI commitlint 多驗 `footer-max-line-length ≤ 100`、`footer-leading-blank` 等 body 規則；long pytest path / long file list 塞在 commit message 末段會被 commitlint 當 footer → 觸發 `footer-max-line-length`。PR #51 self-review commit 踩到：local 過、CI 擋、force-push-with-lease 修。**暫時 mitigation**：commit body 的 long command 改寫 `pytest <a> <b> <c>` 放在非末段、或多行斷 ≤ 100 chars。**長期 enforcement**：`pr_preflight.py --check-commit-msg` 擴充 footer 規則（沿用 `.commitlintrc.yaml` 的 `footer-max-line-length` config），併入 [Issue #53](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/53)。
+
 ### 4. Dev Container mount scope（Trap #62 連帶工作流）
 
 Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），claude worktree 的 Edit **不會進 container**。詳 `windows-mcp-playbook.md` Trap #62。**Go test / Playwright E2E** 在 claude worktree 做 Edit 後，一律走：

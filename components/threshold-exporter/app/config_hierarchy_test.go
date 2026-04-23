@@ -9,9 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // writeFile is a test helper that creates the parent dir and writes content.
@@ -277,5 +281,235 @@ func TestInheritanceGraph_DefaultsToTenantsOrder(t *testing.T) {
 	sortStrings(ours)
 	if !reflect.DeepEqual(cross, ours) {
 		t.Errorf("local sort diverges from stdlib: stdlib=%v ours=%v", cross, ours)
+	}
+}
+
+// TestScanDirHierarchical_K8sSymlinkLayout (A-8b, planning §12.2) locks
+// the invariants around Kubernetes ConfigMap mount layouts:
+//
+//   conf.d/                        ← exporter mount root
+//     _defaults.yaml  → real/_defaults.yaml        (file-symlink)
+//     team-a/                                      (real directory)
+//       tenant-a.yaml → ../real/tenant-a.yaml      (file-symlink)
+//     sl-dir/         → real/                      (dir-symlink)
+//     real/                                        (actual content)
+//       _defaults.yaml
+//       tenant-a.yaml
+//       nested-only.yaml                           (only reachable via sl-dir)
+//
+// Go `filepath.WalkDir` under the hood uses `fs.DirEntry` + `Lstat`:
+//   - **file-level symlinks** ARE followed when we call `os.ReadFile(path)`
+//     (ReadFile uses Stat, which resolves symlinks) → content IS read
+//   - **dir-level symlinks** are NOT recursed into (WalkDir sees them as
+//     non-dir leaves via Lstat; we then call os.ReadFile which fails
+//     with "is a directory" and we log+skip)
+//
+// K8s ConfigMap mount pattern flattens to file-level symlinks only
+// (nested keys are legal via `/` in the key name becoming subdirs, but
+// each leaf is a file-symlink). So file-symlinks must work; dir-symlinks
+// must NOT cause double-walk or infinite loops.
+//
+// The production scanner relies on this behavior but never asserts it.
+// Per Gemini R3 #1: invariant under-test → future Go stdlib change could
+// silently regress. This test nails it down.
+func TestScanDirHierarchical_K8sSymlinkLayout(t *testing.T) {
+	// Skip on platforms that can't create symlinks without privilege.
+	// Linux CI (ubuntu-latest) always works; Windows developer-mode
+	// usually has symlinks enabled but CI runners may not.
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires Windows Developer Mode; covered on Linux CI")
+	}
+
+	// Real content lives OUTSIDE the scan root. K8s ConfigMap mount does
+	// the equivalent via `..data/` hidden by the dotfile prefix; here we
+	// just keep the backing dir as a separate tmp to avoid the scanner
+	// walking it directly (which would produce duplicate tenant IDs from
+	// both the real path AND the symlink resolution).
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root")
+	backing := filepath.Join(tmp, "backing")
+
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	writeFile(t, filepath.Join(backing, "_defaults.yaml"), `defaults:
+  level: L0
+`)
+	writeFile(t, filepath.Join(backing, "tenant-a.yaml"), `tenants:
+  tenant-a:
+    threshold:
+      cpu: 90
+`)
+	writeFile(t, filepath.Join(backing, "nested-only.yaml"), `tenants:
+  nested-only:
+    threshold:
+      cpu: 95
+`)
+
+	// File-symlink at root: should be followed (K8s-style key mount).
+	if err := os.Symlink(
+		filepath.Join(backing, "_defaults.yaml"),
+		filepath.Join(root, "_defaults.yaml"),
+	); err != nil {
+		t.Fatalf("symlink root file: %v", err)
+	}
+
+	// File-symlink in subdirectory: K8s "team-a/tenant-a.yaml" key format.
+	if err := os.MkdirAll(filepath.Join(root, "team-a"), 0o755); err != nil {
+		t.Fatalf("mkdir team-a: %v", err)
+	}
+	if err := os.Symlink(
+		filepath.Join(backing, "tenant-a.yaml"),
+		filepath.Join(root, "team-a", "tenant-a.yaml"),
+	); err != nil {
+		t.Fatalf("symlink nested file: %v", err)
+	}
+
+	// Dir-symlink: should NOT be recursed into. `nested-only.yaml`
+	// is ONLY reachable via this symlink path — so if we see it in
+	// `tenants`, the scanner mistakenly followed the dir-symlink.
+	if err := os.Symlink(
+		backing,
+		filepath.Join(root, "sl-dir"),
+	); err != nil {
+		t.Fatalf("symlink dir: %v", err)
+	}
+
+	tenants, defaults, hashes, _, graph, err := scanDirHierarchical(root, nil)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	// Invariant #1: root-level file-symlink followed → _defaults.yaml
+	// is registered as a defaults file.
+	if len(defaults) == 0 {
+		t.Errorf("defaults map empty; file-symlink at root not followed")
+	}
+
+	// Invariant #2: subdirectory file-symlink followed → tenant-a
+	// discovered via team-a/tenant-a.yaml path.
+	if _, ok := tenants["tenant-a"]; !ok {
+		t.Errorf("tenant-a missing; nested file-symlink not followed (WalkDir behavior regressed)")
+	}
+
+	// Invariant #3: tenant-a has a non-empty defaults chain (L0 picked up
+	// from the root symlink'd _defaults.yaml).
+	if chain := graph.TenantDefaults["tenant-a"]; len(chain) == 0 {
+		t.Errorf("tenant-a defaults chain empty; _defaults.yaml not in hierarchy")
+	}
+
+	// Invariant #4: dir-symlink NOT recursed — nested-only tenant MUST
+	// NOT appear. If it does, scanner is double-walking (also potential
+	// infinite-loop risk if the symlink pointed at an ancestor).
+	if _, ok := tenants["nested-only"]; ok {
+		t.Errorf("nested-only tenant discovered; scanner recursed into dir-symlink (should skip)")
+	}
+
+	// Invariant #5: exactly 2 yaml hashes (the two file-symlinks resolved).
+	// If we see 3+, either dir-symlink got followed OR the backing dir
+	// is visible inside the scan root.
+	yamlCount := 0
+	for path, h := range hashes {
+		if filepath.Ext(path) == ".yaml" && h != "" {
+			yamlCount++
+		}
+	}
+	if yamlCount != 2 {
+		t.Errorf("yaml hash count = %d, want exactly 2 (the two file-symlinks)", yamlCount)
+	}
+}
+
+// TestScanDirHierarchical_MixedValidInvalid (A-8d, planning §12.2) locks
+// the "poison pill isolation" invariant: a malformed YAML file in the
+// scan tree must not block discovery / hashing of sibling valid files.
+//
+// Also verifies the v2.8.0 A-8d observability metric
+// `da_config_parse_failure_total{file_basename=...}` is incremented
+// so ops can alert on persistently broken tenant files.
+//
+// Per Gemini R3 #3: per-file error-skip already exists in scanner
+// (config_hierarchy.go yaml.Unmarshal warn+return nil). This test nails
+// the behavior down AND exposes the observability hook.
+func TestScanDirHierarchical_MixedValidInvalid(t *testing.T) {
+	root := t.TempDir()
+
+	// Reset metrics so the parseFailures counter is fresh for assertion.
+	// Save+restore rather than nil-out in cleanup — getConfigMetrics does
+	// not re-init after sync.Once fires, so a nil substitution would crash
+	// subsequent tests in the same process.
+	origMetrics := getConfigMetrics()
+	freshMetrics := newConfigMetrics()
+	setConfigMetrics(freshMetrics)
+	t.Cleanup(func() { setConfigMetrics(origMetrics) })
+
+	// Valid sibling — must survive the broken neighbor.
+	writeFile(t, filepath.Join(root, "team-a", "t-good.yaml"), `tenants:
+  t-good:
+    threshold:
+      cpu: 80
+`)
+
+	// Poison pill — unclosed brace, YAML parser will error.
+	writeFile(t, filepath.Join(root, "team-a", "broken.yaml"),
+		"tenants:\n  broken-tenant:\n    threshold: {unclosed\n")
+
+	// Second valid sibling in a different directory — broken.yaml in
+	// team-a must not bleed into team-b scanning.
+	writeFile(t, filepath.Join(root, "team-b", "t-ok.yaml"), `tenants:
+  t-ok:
+    threshold:
+      cpu: 70
+`)
+
+	tenants, _, hashes, _, _, err := scanDirHierarchical(root, nil)
+	if err != nil {
+		t.Fatalf("scan should not return error on per-file parse failure: %v", err)
+	}
+
+	// Invariant #1: valid siblings discovered normally.
+	if _, ok := tenants["t-good"]; !ok {
+		t.Errorf("t-good missing; broken sibling poisoned the scan")
+	}
+	if _, ok := tenants["t-ok"]; !ok {
+		t.Errorf("t-ok (different dir) missing; error propagated across dirs")
+	}
+
+	// Invariant #2: broken tenant NOT discovered (yaml.Unmarshal failed
+	// before `decls` append). Good — we don't want ghost entries.
+	if _, ok := tenants["broken-tenant"]; ok {
+		t.Errorf("broken-tenant should NOT be registered; its YAML didn't parse")
+	}
+
+	// Invariant #3: broken.yaml IS in the hashes map (hash of raw bytes
+	// happens before yaml parse). This is important for change detection
+	// — if a tenant file becomes malformed, subsequent scans should still
+	// notice the hash changed so WatchLoop can trigger a reload attempt.
+	brokenHashFound := false
+	for path, h := range hashes {
+		if filepath.Base(path) == "broken.yaml" && h != "" {
+			brokenHashFound = true
+			break
+		}
+	}
+	if !brokenHashFound {
+		t.Errorf("broken.yaml not in hashes; change detection will miss recovery")
+	}
+
+	// Invariant #4: parse-failure metric incremented exactly once for
+	// the broken file's basename. Pulls counter value via the test-only
+	// collector API.
+	ch := make(chan prometheus.Metric, 1)
+	freshMetrics.parseFailures.WithLabelValues("broken.yaml").Collect(ch)
+	close(ch)
+	var count float64
+	for m := range ch {
+		var dto dto.Metric
+		if err := m.Write(&dto); err != nil {
+			t.Fatalf("metric.Write: %v", err)
+		}
+		count = dto.GetCounter().GetValue()
+	}
+	if count != 1 {
+		t.Errorf("da_config_parse_failure_total{file_basename=broken.yaml} = %v, want 1", count)
 	}
 }

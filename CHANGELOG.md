@@ -31,6 +31,13 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .a Scanner correctness + test harness bundle（v2.8.0, A-10 fix + A-8b + A-8d + LL ext）**
+  - **A-10 product fix — WatchLoop hierarchical scan awareness**（`components/threshold-exporter/app/config.go` WatchLoop block, [Issue #52](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/52)）：root cause — WatchLoop 在 hierarchical mode 下仍用 flat-only `scanDirFileHashes`（`os.ReadDir(dir)` + `IsDir()` skip），看不到 `conf.d/<domain>/<region>/tenant.yaml` 等 nested tenant file 的變動，所以 file 改動**永遠不觸發 reload**；測試靠 `os.Chtimes(now-5s)` 詭技偶然湊效率才 pass。改為在 hierarchical mode 走 `scanDirHierarchical`（recursive）+ per-file hash diff。`TestWatchLoop_DebouncedReload_DetectsFileChange` 從 Chtimes 版本改為直接寫檔觸發，dev container `-race -count=30` → **30/30 PASS**（修前 1/30 flake）
+  - **A-8b `TestScanDirHierarchical_K8sSymlinkLayout`**（planning §12.2）：K8s ConfigMap mount pattern invariant lock — file-symlinks ARE followed (`os.ReadFile` resolves)、dir-symlinks NOT recursed（`filepath.WalkDir` lstat semantics），防止未來 Go stdlib 升級悄悄 regress
+  - **A-8d `TestScanDirHierarchical_MixedValidInvalid` + 新 metric `da_config_parse_failure_total{file_basename}`**：poison-pill chaos — malformed YAML 不污染 sibling 正常 file 的發現 / 掃描；broken file 仍進 hash 表（change detection 可感知 recovery）；**新 Counter** 提供「tenant 檔持續損壞」的 ops observability signal（Gemini R3 #3 原提案，per-file error-skip 邏輯本就存在，這批純加 metric exposure + behavior lock）
+  - **Testing-playbook §v2.8.0 LL #3 extension** — 本地 commit-msg hook（PR #44 C2）**只驗 header**，不驗 body/footer；CI commitlint 多驗 `footer-max-line-length` 等 body 規則。PR #51 self-review commit 本地過、CI 擋（long pytest path 被當 footer），force-push 修。暫時 mitigation + 長期 enforcement 併入 Issue #53
+  - A-8c 已於 PR #51 merge；A-8 family 至此 b/c/d 三件齊。僅 A-8 Golden Parity `hypothesis` 擴充（基礎已在 codebase）還可後續做
+
 - **Phase .a Dev Container enablement bundle（v2.8.0, PR #51 接手: Trap #62 + A-12(v) + A-8c + testing LL）**
   - **Trap #62** `windows-mcp-playbook.md` — dev container mount scope drift workaround（cp-test-revert workflow for editing claude worktree files that need to run in container）
   - **A-12(v) `scripts/session-guards/git_check_lock.sh` hardening** — self-PID + name filter（Trap #58 long-term fix）+ `.git/HEAD` NUL-byte corruption auto-repair（Trap #59 long-term fix）+ dedicated `--check-head` subcommand + 14 pytest cases
