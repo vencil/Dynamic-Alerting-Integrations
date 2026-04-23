@@ -31,6 +31,13 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .a commit-msg enforcement bundle（v2.8.0, Issue #53）**
+  - **`pr_preflight.py --check-commit-msg` body/footer validation**：加 `validate_commit_msg_body()` helper，每個 post-header 非註解行 > 100 chars → ERROR；缺 blank-line-after-header → WARN。本地 commit-msg hook（PR #44 C2）本來只驗 header，CI commitlint 多驗 `footer-max-line-length ≤ 100`，PR #51 / PR #54 踩到「local 過 CI 擋」走 force-push-with-lease 修的情境至此消除
+  - **`make commit-bypass-hh ARGS="-F _msg.txt" [EXTRA_SKIP=...]`**：codified narrow bypass — 只跳 `head-blob-hygiene`（FUSE Trap #57 的唯一合法 bypass case），commit-msg hook + 其他 pre-commit hook 仍跑。替代 sledgehammer `git commit --no-verify`
+  - **testing-playbook §v2.8.0 LL #3 更新**：regulation layer → enforcement layer；新規則「FUSE Trap #57 繞道一律 `make commit-bypass-hh`」
+  - **`tests/dx/test_preflight_msg_validator.py` 20 → 29 tests**：9 條新 body/footer 驗證（long line ERROR / 恰 100 chars 邊界 / 缺 blank-line-after-header WARN / comment 行不計 / 自訂 max_length / empty msg / CLI 端 rejection / CLI 端 warnings-only 仍 pass）
+  - Dogfood：本 PR 的所有 commit 走 `make commit-bypass-hh`，commit-msg validator 自己驗自己。closes Issue #53
+
 - **Phase .a Scanner correctness + test harness bundle（v2.8.0, A-10 fix + A-8b + A-8d + LL ext）**
   - **A-10 product fix — WatchLoop hierarchical scan awareness**（`components/threshold-exporter/app/config.go` WatchLoop block, [Issue #52](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/52)）：root cause — WatchLoop 在 hierarchical mode 下仍用 flat-only `scanDirFileHashes`（`os.ReadDir(dir)` + `IsDir()` skip），看不到 `conf.d/<domain>/<region>/tenant.yaml` 等 nested tenant file 的變動，所以 file 改動**永遠不觸發 reload**；測試靠 `os.Chtimes(now-5s)` 詭技偶然湊效率才 pass。改為在 hierarchical mode 走 `scanDirHierarchical`（recursive）+ per-file hash diff。`TestWatchLoop_DebouncedReload_DetectsFileChange` 從 Chtimes 版本改為直接寫檔觸發，dev container `-race -count=30` → **30/30 PASS**（修前 1/30 flake）
   - **A-8b `TestScanDirHierarchical_K8sSymlinkLayout`**（planning §12.2）：K8s ConfigMap mount pattern invariant lock — file-symlinks ARE followed (`os.ReadFile` resolves)、dir-symlinks NOT recursed（`filepath.WalkDir` lstat semantics），防止未來 Go stdlib 升級悄悄 regress
