@@ -2,7 +2,7 @@
 title: "Design System Guide"
 tags: [documentation, internal, design]
 audience: [maintainers]
-version: v2.8.0
+version: v2.7.0
 lang: zh
 ---
 
