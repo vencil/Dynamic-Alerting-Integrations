@@ -158,7 +158,10 @@ def _read_commitlint_enum(repo_root: Path, key: str) -> Optional[List[str]]:
     config = repo_root / ".commitlintrc.yaml"
     if not config.exists():
         return None
-    lines = config.read_text().splitlines()
+    # Explicit utf-8 for parity with check_commit_msg_file (L270) — the file
+    # is currently ASCII but defensive encoding avoids future cp950 surprises
+    # on Windows.
+    lines = config.read_text(encoding="utf-8", errors="replace").splitlines()
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
@@ -263,8 +266,11 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
         return 1
 
     # First non-comment non-empty line is the header (standard git convention).
+    # Explicit utf-8: commit messages can contain CJK / em-dash; Windows
+    # default cp950 would raise UnicodeDecodeError (PR #52 hit this when
+    # committing with --check-commit-msg as a commit-msg hook).
     header: Optional[str] = None
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip() or line.startswith("#"):
             continue
         header = line

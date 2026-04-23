@@ -152,10 +152,16 @@ def test_read_enum_ignores_level_and_always(tmp_path: Path) -> None:
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess:
+    # text=True alone uses the locale codec, which on Windows cp950 will
+    # crash when the tool prints non-cp950 bytes (e.g. em-dash U+2014 in
+    # error messages). Pass encoding="utf-8" explicitly — same pattern
+    # codified in testing-playbook.md §v2.8.0 LL #2.
     return subprocess.run(
         [sys.executable, str(_SCRIPT), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=_REPO_ROOT,
     )
 
@@ -167,18 +173,25 @@ def test_cli_check_commit_msg_good(tmp_path: Path) -> None:
     assert proc.returncode == 0, f"stderr={proc.stderr}"
 
 
-def test_cli_check_commit_msg_bad() -> None:
-    # Reuse the real repo's .commitlintrc.yaml via cwd=_REPO_ROOT
+def test_cli_check_commit_msg_bad(tmp_path) -> None:
+    # Reuse the real repo's .commitlintrc.yaml via cwd=_REPO_ROOT.
+    # Write to a real tmp_path file instead of /dev/stdin — the tool
+    # reads by path via Path.read_text(), and /dev/stdin only exists
+    # on POSIX systems. PR #51 S#21 self-review caught this Windows
+    # test failure; see dx-tooling-backlog.md.
+    msg = tmp_path / "bad_msg.txt"
+    msg.write_text("blam(unknown-scope): bogus\n", encoding="utf-8")
     proc = subprocess.run(
         [
             sys.executable,
             str(_SCRIPT),
             "--check-commit-msg",
-            "/dev/stdin",
+            str(msg),
         ],
-        input="blam(unknown-scope): bogus\n",
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=_REPO_ROOT,
     )
     assert proc.returncode == 1

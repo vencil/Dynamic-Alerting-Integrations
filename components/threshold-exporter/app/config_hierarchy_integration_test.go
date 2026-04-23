@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -206,5 +207,131 @@ tenants:
 		curr := m.mergedHashes["tenant-a"]
 		m.mu.RUnlock()
 		t.Errorf("merged_hash did not update via WatchLoop: first=%s current=%s", firstHash, curr)
+	}
+}
+
+// TestConfigManager_DeletedTenantCleanup (A-8c, planning §12.2) locks the
+// behavior contract that when a tenant file is removed from disk and a
+// reload is triggered, every ConfigManager per-tenant map entry for that
+// tenant is cleared **in the same atomic swap** — not only the visible
+// `tenantSources` / `mergedHashes` maps but also the internal
+// `hierarchyHashes` / `hierarchyMtimes` lookups and the
+// `inheritanceGraph.TenantDefaults` chain entry.
+//
+// The test is behavior-lock; no product code changes are required — the
+// atomic-swap at config_debounce.go L346-353 already clears all four maps.
+// But A-10 (GitHub issue #52) surfaced that the WatchLoop → diffAndReload
+// path has an empty window on slow CI runners; A-8c extends coverage to
+// the deletion path so any future regression of the swap logic is caught
+// before it ships.
+//
+// Also asserts no goroutine leak: the test fires an entire reload cycle
+// then closes the manager; runtime.NumGoroutine() before/after should
+// differ by at most a small epsilon accounting for the Go scheduler's
+// per-test framework churn.
+func TestConfigManager_DeletedTenantCleanup(t *testing.T) {
+	dir := t.TempDir()
+	// L0 defaults + three sibling tenants under team-a/.
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
+defaults:
+  mysql_connections: 80
+`)
+	teamDir := filepath.Join(dir, "team-a")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatalf("mkdir team-a: %v", err)
+	}
+	for _, tid := range []string{"tenant-a", "tenant-b", "tenant-c"} {
+		writeTestYAML(t, filepath.Join(teamDir, tid+".yaml"),
+			"tenants:\n  "+tid+":\n    mysql_connections: \"90\"\n")
+	}
+
+	// Snapshot goroutine count before manager spawns any background work.
+	goBefore := runtime.NumGoroutine()
+
+	m := NewConfigManagerWithDebounce(dir, 10*time.Millisecond)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	// Baseline invariant: all 3 tenants populated across every per-tenant map.
+	m.mu.RLock()
+	for _, tid := range []string{"tenant-a", "tenant-b", "tenant-c"} {
+		if _, ok := m.tenantSources[tid]; !ok {
+			t.Errorf("baseline: tenantSources missing %s", tid)
+		}
+		if _, ok := m.mergedHashes[tid]; !ok {
+			t.Errorf("baseline: mergedHashes missing %s", tid)
+		}
+		if m.inheritanceGraph == nil || len(m.inheritanceGraph.TenantDefaults[tid]) == 0 {
+			t.Errorf("baseline: inheritanceGraph.TenantDefaults missing %s", tid)
+		}
+	}
+	m.mu.RUnlock()
+
+	// Delete tenant-b's source file on disk and trigger a reload. Use
+	// triggerDebouncedReload (not filesystem watcher) so the test is
+	// deterministic — we're not measuring WatchLoop latency here, just
+	// the state invariant after diffAndReload completes.
+	bFile := filepath.Join(dir, "team-a", "tenant-b.yaml")
+	if err := os.Remove(bFile); err != nil {
+		t.Fatalf("remove tenant-b.yaml: %v", err)
+	}
+	m.triggerDebouncedReload(ReloadReasonDelete)
+
+	// Wait for the reload to land; deletion is observable when tenantSources
+	// no longer has tenant-b.
+	ok := waitFor(t, 2*time.Second, func() bool {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		_, stillHere := m.tenantSources["tenant-b"]
+		return !stillHere
+	})
+	if !ok {
+		t.Fatalf("tenant-b still in tenantSources after 2s reload wait")
+	}
+
+	// Post-delete invariants — atomic swap must clear tenant-b from EVERY
+	// per-tenant data structure. If any of these regress, a stale read
+	// (e.g. in GET /api/v1/tenants/tenant-b/effective) will return data
+	// for a tenant that no longer exists.
+	m.mu.RLock()
+	if _, stillHere := m.tenantSources["tenant-b"]; stillHere {
+		t.Errorf("tenantSources still has tenant-b")
+	}
+	if _, stillHere := m.mergedHashes["tenant-b"]; stillHere {
+		t.Errorf("mergedHashes still has tenant-b")
+	}
+	if _, stillHere := m.hierarchyHashes["team-a/tenant-b.yaml"]; stillHere {
+		t.Errorf("hierarchyHashes still has team-a/tenant-b.yaml")
+	}
+	if _, stillHere := m.hierarchyMtimes["team-a/tenant-b.yaml"]; stillHere {
+		t.Errorf("hierarchyMtimes still has team-a/tenant-b.yaml")
+	}
+	if m.inheritanceGraph == nil {
+		t.Errorf("inheritanceGraph became nil after delete")
+	} else if chain := m.inheritanceGraph.TenantDefaults["tenant-b"]; chain != nil {
+		t.Errorf("inheritanceGraph.TenantDefaults[tenant-b] = %v, want nil", chain)
+	}
+	// Surviving tenants must NOT be collateral damage.
+	for _, tid := range []string{"tenant-a", "tenant-c"} {
+		if _, ok := m.tenantSources[tid]; !ok {
+			t.Errorf("collateral damage: tenantSources missing surviving %s", tid)
+		}
+		if _, ok := m.mergedHashes[tid]; !ok {
+			t.Errorf("collateral damage: mergedHashes missing surviving %s", tid)
+		}
+	}
+	m.mu.RUnlock()
+
+	// Goroutine leak check: close manager and give the scheduler a moment
+	// to drain. Small epsilon tolerates test-runtime goroutines (pprof,
+	// race detector, etc.) that aren't ours.
+	m.Close()
+	time.Sleep(50 * time.Millisecond)
+	goAfter := runtime.NumGoroutine()
+	if delta := goAfter - goBefore; delta > 2 {
+		t.Errorf("goroutine leak suspected: before=%d after=%d (delta=%d > 2)",
+			goBefore, goAfter, delta)
 	}
 }
