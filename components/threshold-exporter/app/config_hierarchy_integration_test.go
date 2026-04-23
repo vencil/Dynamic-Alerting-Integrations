@@ -185,10 +185,10 @@ tenants:
   tenant-a:
     mysql_connections: "77"
 `)
-	// Bump mtime explicitly so the flat scanDirFileHashes composite hash
-	// picks up the change past its 2s age guard.
-	os.Chtimes(filepath.Join(dir, "team-a", "tenant-a.yaml"),
-		time.Now().Add(-5*time.Second), time.Now().Add(-5*time.Second))
+	// v2.8.0 A-10 fix (Issue #52, PR #54): no longer need `os.Chtimes(past)`
+	// trick — WatchLoop in hierarchical mode now uses scanDirHierarchical
+	// (recursive) instead of flat scanDirFileHashes, so nested tenant file
+	// writes are detected directly via content hash without mtime tricks.
 
 	// Wait up to 3s for the new hash to differ. CI runners under load occasionally
 	// need >1s for the 20ms WatchLoop tick + 10ms debounce + fsync + diff to

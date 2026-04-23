@@ -230,6 +230,10 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 		}
 		if perr := yaml.Unmarshal(data, &doc); perr != nil {
 			log.Printf("WARN: cannot parse %s: %v", path, perr)
+			// v2.8.0 A-8d: expose parse failure as a Prometheus counter so
+			// ops can alert on "tenant file persistently broken". label is
+			// basename (not full path) to cap cardinality.
+			IncParseFailure(filepath.Base(path))
 			return nil
 		}
 		if len(doc.Tenants) == 0 {

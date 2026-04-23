@@ -46,6 +46,7 @@ type configMetrics struct {
 	scanDuration     prometheus.Histogram
 	reloadTriggers   *prometheus.CounterVec
 	defaultsNoop     prometheus.Counter
+	parseFailures    *prometheus.CounterVec // v2.8.0 A-8d: per-file YAML parse failures
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -76,6 +77,10 @@ func newConfigMetrics() *configMetrics {
 			Name: "da_config_defaults_change_noop_total",
 			Help: "Count of _defaults.yaml changes that did NOT move any dependent tenant's merged_hash (ADR-018 'quiet defaults edit').",
 		}),
+		parseFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "da_config_parse_failure_total",
+			Help: "Count of per-file YAML parse failures during hierarchical scan (v2.8.0 A-8d). Label 'file_basename' lets ops pin down which tenant or defaults file is broken. Alert: >5/h for any single basename = page ops.",
+		}, []string{"file_basename"}),
 	}
 }
 
@@ -116,6 +121,17 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.scanDuration)
 	reg.MustRegister(m.reloadTriggers)
 	reg.MustRegister(m.defaultsNoop)
+	reg.MustRegister(m.parseFailures)
+}
+
+// IncParseFailure bumps the parse-failure counter for a specific file
+// basename. Called from scanDirHierarchical whenever yaml.Unmarshal
+// returns an error for a non-_-prefixed tenant file. file_basename
+// (not full path) is used as the label to keep cardinality bounded
+// in practice — same tenant name across domains sums to one series.
+// v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).
+func IncParseFailure(fileBasename string) {
+	getConfigMetrics().parseFailures.WithLabelValues(fileBasename).Inc()
 }
 
 // ObserveScanDuration starts a timer and returns a stop function that
