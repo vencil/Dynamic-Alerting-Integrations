@@ -102,6 +102,8 @@ lang: en
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
 | `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
+| `docs/internal/archive/automation-origins/trap-60-fuse-fsync.md` | maintainers, AI Agent | Trap #60 原 RCA — `generate_doc_map.py` FUSE fsync 中斷 |
+| `docs/internal/archive/automation-origins/trap-61-bom.md` | maintainers, AI Agent | Trap #61 原 RCA — PowerShell BOM 污染 commit message |
 | `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |

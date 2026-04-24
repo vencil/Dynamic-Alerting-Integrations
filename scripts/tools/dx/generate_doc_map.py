@@ -21,6 +21,9 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from _atomic_write import atomic_write_text  # noqa: E402
+
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 DOC_MAP_ZH = REPO_ROOT / "docs" / "internal" / "doc-map.md"
 DOC_MAP_EN = REPO_ROOT / "docs" / "internal" / "doc-map.en.md"
@@ -431,6 +434,9 @@ def main():
                         help="Include ADR entries from docs/adr/ (default: True)")
     parser.add_argument("--no-adr", action="store_true",
                         help="Exclude ADR entries from docs/adr/")
+    parser.add_argument("--safe", action="store_true",
+                        help="Write via sibling .tmp + atomic os.replace "
+                             "(FUSE interruption safety; v2.8.0 Trap #60)")
 
     args = parser.parse_args()
     if args.no_adr:
@@ -450,8 +456,11 @@ def main():
             # Force LF line endings on all platforms so Windows and Linux
             # regens produce byte-identical output (prevents CRLF ping-pong
             # drift in `--check`).
-            with open(map_path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(content)
+            if args.safe:
+                atomic_write_text(map_path, content, newline="\n")
+            else:
+                with open(map_path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(content)
             os.chmod(map_path,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)

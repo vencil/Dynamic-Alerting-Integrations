@@ -18,6 +18,9 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from _atomic_write import atomic_write_text  # noqa: E402
+
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
 TOOL_MAP = REPO_ROOT / "docs" / "internal" / "tool-map.md"
@@ -238,6 +241,9 @@ def main():
                         help="CI mode: exit 1 if tool-map.md is outdated")
     parser.add_argument("--lang", choices=["zh", "en", "all"], default="zh",
                         help="Language: zh (default), en, or all")
+    parser.add_argument("--safe", action="store_true",
+                        help="Write via sibling .tmp + atomic os.replace "
+                             "(FUSE interruption safety; v2.8.0 Trap #60)")
 
     args = parser.parse_args()
 
@@ -257,7 +263,10 @@ def main():
         target = TOOL_MAP if lang == "zh" else TOOL_MAP_EN
 
         if args.generate:
-            target.write_text(content, encoding="utf-8")
+            if args.safe:
+                atomic_write_text(target, content, newline=None)
+            else:
+                target.write_text(content, encoding="utf-8")
             os.chmod(target,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)

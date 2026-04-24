@@ -338,6 +338,38 @@ def validate_commit_msg_body(lines: list[str], max_line_length: int = POST_HEADE
     return errors
 
 
+# Byte-order-mark patterns commitlint chokes on. PS 5.1's
+# `Out-File -Encoding utf8` / `Set-Content -Encoding utf8` both prepend U+FEFF
+# (EF BB BF) to the file — commitlint then sees the BOM as the first char of
+# the header, subject-empty / type-empty / header-trim all fail in a cascade.
+# See windows-mcp-playbook.md Trap #61 + v2.8.0-planning §12.4 #8.
+_KNOWN_COMMIT_MSG_BOMS = {
+    b"\xef\xbb\xbf": ("UTF-8 BOM", "U+FEFF"),
+    b"\xff\xfe": ("UTF-16 LE BOM", "PS default Out-File encoding"),
+    b"\xfe\xff": ("UTF-16 BE BOM", "less common but same failure mode"),
+}
+
+
+def detect_commit_msg_bom(path: Path) -> Optional[str]:
+    """Return a human-readable BOM description if `path` starts with a known BOM, else None.
+
+    Only inspects the first 3 bytes — cheap and safe on empty files.
+    """
+    try:
+        head = path.read_bytes()[:3]
+    except OSError:
+        return None
+    # Longer prefixes first so UTF-8 BOM (3 bytes) doesn't get masked by the
+    # shorter UTF-16 LE BOM (2 bytes) on the rare chance they overlap.
+    for marker, (name, origin) in sorted(
+        _KNOWN_COMMIT_MSG_BOMS.items(), key=lambda kv: -len(kv[0])
+    ):
+        if head.startswith(marker):
+            hex_str = " ".join(f"{b:02X}" for b in marker)
+            return f"{name} (bytes {hex_str}, typical origin: {origin})"
+    return None
+
+
 def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     """Validate a commit-msg file (first non-comment line is the header).
 
@@ -347,9 +379,35 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     POST_HEADER_MAX_LINE_LENGTH (conservative match of commitlint's
     footer-max-line-length=100 default). Warnings (prefixed [W]) do
     not fail the validation.
+
+    v2.8.0 Trap #61: detects UTF-8 / UTF-16 BOM at file start (PowerShell
+    `Out-File -Encoding utf8` default) and fails fast with a BOM-stripping
+    hint — commitlint would otherwise emit a confusing cascade of
+    header-trim / subject-empty / type-empty errors.
     """
     if not path.exists():
         print(f"error: commit-msg file not found: {path}", file=sys.stderr)
+        return 1
+
+    # BOM detection runs BEFORE text-decoding: a BOM slipping through as U+FEFF
+    # at the top of the header is exactly what makes commitlint's error
+    # messages cryptic. Fail with a specific, actionable error instead.
+    bom_description = detect_commit_msg_bom(path)
+    if bom_description is not None:
+        print("❌ commit-msg encoding error:", file=sys.stderr)
+        print(f"   - file starts with {bom_description}", file=sys.stderr)
+        print(
+            "   - commitlint interprets the BOM as part of the subject → "
+            "type-empty / subject-empty cascade.\n"
+            "     Fix (PowerShell):"
+            "\n       [IO.File]::WriteAllText($p, $msg, "
+            "[Text.UTF8Encoding]::new($false))\n"
+            "     Fix (bash): printf '%s\\n' \"$msg\" > commit.txt\n"
+            "     Recovery (already-pushed commits):\n"
+            "       git filter-branch --msg-filter "
+            "\"sed '1s/^\\xEF\\xBB\\xBF//'\" <range>",
+            file=sys.stderr,
+        )
         return 1
 
     # First non-comment non-empty line is the header (standard git convention).
