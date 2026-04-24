@@ -31,6 +31,15 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .a Playwright E2E fixme 清零 + ESLint 守關（v2.8.0, A-7 + A-13）**
+  - **A-7 locator calibration**：`notification-previewer` / `threshold-heatmap` / `rbac-setup-wizard` / `cicd-setup-wizard` 4 spec × 2 `test.fixme()` = **8 條**全數清除。各 spec 改用 `getByRole` / `getByLabel` / `getByText(exact)` 穩定 semantic anchor。針對 wizard 類 fixme #2 的錯假設重新 frame 測試意圖（rbac / cicd 原假設「load 即見 output」，實際要到 step 3 / 5 才渲染，改為驗 step nav 結構）
+  - **A-13 ESLint 守關**：新增 `tests/e2e/eslint.config.mjs` flat config，rule `playwright/no-skipped-test` 設 `{ allowConditional: false, disallowFixme: true }`。bare `test.fixme()` / `test.skip()` commit-time 即擋；條件式 `test.skip(isChrome, 'reason')` 仍允許
+  - **pre-commit + Makefile 整合**：`.pre-commit-config.yaml` 加 `playwright-lint` hook（scoped `^tests/e2e/.*\.spec\.(ts|js)$`）+ `make lint-e2e` target
+  - **`docs/internal/frontend-quality-backlog.md` 新建**：補齊 testing-playbook §v2.7.0 LL §5 引用但不存在的登記檔案；template + A-7 清零歷史 + A-13 cross-ref
+  - **testing-playbook §v2.7.0 LL §2 注 "A-13 Enforcement"**：政策從規範 → 自動攔截
+  - **Dev Container 主路徑驗證**：48/48 test pass × 3 repeat stability gate（headless `npx playwright test --repeat-each=3`）。方法論：寫 `_calibrate.mjs` probe（`_*` 前綴 gitignored）→ Playwright Node.js API `count()` + `textContent()` = `--ui` locator panel 同等信號，不需 X11 GUI / 不需 user 介入
+  - 詳見 planning §12.1 Session #25 / archive §S#25
+
 - **Phase .a commit-msg enforcement bundle（v2.8.0, Issue #53）**
   - **`pr_preflight.py --check-commit-msg` body/footer validation**：加 `validate_commit_msg_body()` helper，每個 post-header 非註解行 > 100 chars → ERROR；缺 blank-line-after-header → WARN。本地 commit-msg hook（PR #44 C2）本來只驗 header，CI commitlint 多驗 `footer-max-line-length ≤ 100`，PR #51 / PR #54 踩到「local 過 CI 擋」走 force-push-with-lease 修的情境至此消除
   - **`make commit-bypass-hh ARGS="-F _msg.txt" [EXTRA_SKIP=...]`**：codified narrow bypass — 只跳 `head-blob-hygiene`（FUSE Trap #57 的唯一合法 bypass case），commit-msg hook + 其他 pre-commit hook 仍跑。替代 sledgehammer `git commit --no-verify`

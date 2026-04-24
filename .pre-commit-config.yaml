@@ -404,3 +404,14 @@ repos:
         pass_filenames: false
         files: ^(docs/interactive/|tests/e2e/|docs/assets/(tool-registry|jsx-loader|flows))
         stages: [manual]
+
+      - id: playwright-lint
+        name: Playwright spec lint (test.fixme/skip guard, A-13)
+        # A-13 enforcement: block new `test.fixme()` / `test.skip()` (bare
+        # form) from landing in E2E specs. Scoped to tests/e2e/*.spec.*.
+        # Conditional `test.skip(!isLinux, 'reason')` still allowed.
+        # Matches the narrow ESLint config at tests/e2e/eslint.config.mjs.
+        entry: bash -c 'cd tests/e2e && npm run --silent lint'
+        language: system
+        pass_filenames: false
+        files: ^tests/e2e/.*\.spec\.(ts|js)$

@@ -14,11 +14,15 @@
     "test:batch": "playwright test tests/e2e/batch-operations.spec.ts",
     "test:critical": "playwright test --grep @critical",
     "serve:portal": "python -m http.server 8080 --directory ../../docs",
-    "install-deps": "playwright install chromium"
+    "install-deps": "playwright install chromium",
+    "lint": "eslint ."
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.8.0",
     "@playwright/test": "^1.59.1",
-    "@types/node": "^20.19.39"
+    "@types/node": "^20.19.39",
+    "eslint": "^9.17.0",
+    "eslint-plugin-playwright": "^2.2.0",
+    "typescript-eslint": "^8.18.1"
   }
 }

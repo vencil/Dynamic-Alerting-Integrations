@@ -112,6 +112,7 @@ lang: en
 | `docs/internal/dev-rules.md` | All | 開發規範 (Development Rules) |
 | `docs/internal/doc-template.md` | All | 文件模板規範 |
 | `docs/internal/dx-tooling-backlog.md` | maintainers, contributors | DX Tooling Backlog |
+| `docs/internal/frontend-quality-backlog.md` | maintainers, AI Agent | 前端品質待辦 (Frontend Quality Backlog) |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
 | `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
 | `docs/internal/ssot-migration-pilot-report.md` | maintainers | SSOT 語言遷移 Phase 1 Pilot Report |

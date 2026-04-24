@@ -25,16 +25,15 @@ test.describe('Notification Previewer @critical', () => {
     });
   });
 
-  test('renders channel selector or notification types', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+  test('renders channel selector (receiver buttons for Slack/Email/PagerDuty/Teams/etc.)', async ({ page }) => {
+    // Calibrated against notification-previewer.jsx L839-852 (receiver button map).
+    // Each RECEIVER_TYPES entry renders `<button aria-pressed aria-label="Select receiver:<Label>">`.
     await loadPortalTool(page, 'notification-previewer');
 
-    // Should present channel options like Slack, Email, Teams, Webhook, PagerDuty.
-    const channelEl = page.locator(
-      ':text-matches("Slack|Email|Teams|Webhook|PagerDuty", "i")'
-    );
-    await expect(channelEl.first()).toBeVisible({ timeout: 10000 });
+    const receiverButtons = page.getByRole('button', { name: /^Select receiver:/i });
+    await expect(receiverButtons.first()).toBeVisible({ timeout: 10000 });
+    // Sanity: we should see at least 5 receiver types (Slack, Webhook, Email, PagerDuty, Teams are required).
+    expect(await receiverButtons.count()).toBeGreaterThanOrEqual(5);
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
@@ -42,15 +41,14 @@ test.describe('Notification Previewer @critical', () => {
     await assertNoAbsoluteRootHrefs(page);
   });
 
-  test('preview area is present', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+  test('live preview region is present (title + body preview boxes)', async ({ page }) => {
+    // Calibrated against notification-previewer.jsx L745-787 (LivePreview component).
+    // Two tabindex=0 previewBox <div>s with aria-label "Notification {title,body} preview".
     await loadPortalTool(page, 'notification-previewer');
 
-    // Should have a preview/output area for the notification template.
-    const preview = page.locator(
-      '[role="region"], [aria-label*="Preview" i], [data-testid*="preview"], :text-matches("Preview|Sample|Template", "i")'
-    );
+    const preview = page.getByLabel(/notification (title|body) preview/i);
     await expect(preview.first()).toBeVisible({ timeout: 10000 });
+    // Both title + body preview boxes should exist.
+    expect(await preview.count()).toBeGreaterThanOrEqual(2);
   });
 });
