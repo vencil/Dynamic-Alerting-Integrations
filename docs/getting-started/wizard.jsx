@@ -65,8 +65,13 @@ const GlossaryTip = ({ term }) => {
         {term}
       </button>
       {show && (
-        <span className="absolute z-10 left-0 top-full mt-1 w-64 p-3 bg-[color:var(--da-color-toast-bg)] text-white text-xs rounded-lg shadow-lg leading-relaxed">
+        <span className="absolute z-10 left-0 top-full mt-1 w-64 p-3 bg-[color:var(--da-color-toast-bg)] text-[color:var(--da-color-hero-fg)] text-xs rounded-lg shadow-lg leading-relaxed">
           {def}
+          {/* A-3 deferred: `text-blue-300` is a toast-link-on-dark-bg color.
+              The toast bg is `--da-color-toast-bg` (dark); this close button
+              needs a light-blue link color that reads on that dark surface.
+              No `--da-color-link-on-dark` exists yet. Keep until token is
+              added (same context as hero-accent considerations). */}
           <button type="button" onClick={() => setShow(false)} className="block mt-1 text-blue-300 text-xs hover:underline">close</button>
         </span>
       )}
@@ -275,9 +280,9 @@ const ProgressIndicator = ({ step, totalSteps }) => {
         key={`circle-${i}`}
         className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full font-bold transition-all ${
           i < step
-            ? "bg-[color:var(--da-color-accent)] text-white"
+            ? "bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)]"
             : i === step
-              ? "bg-[color:var(--da-color-accent)] text-white ring-4 ring-[color:var(--da-color-focus-ring)]"
+              ? "bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] ring-4 ring-[color:var(--da-color-focus-ring)]"
               : "bg-[color:var(--da-color-surface-border)] text-[color:var(--da-color-muted)]"
         }`}
       >
@@ -305,7 +310,7 @@ const RoleCard = ({ role, isSelected, onClick }) => {
       className={`p-6 rounded-lg border-2 transition-all text-left hover:shadow-lg ${
         isSelected
           ? "border-[color:var(--da-color-accent)] bg-[color:var(--da-color-accent-soft)] shadow-lg"
-          : "border-[color:var(--da-color-surface-border)] bg-white hover:border-[color:var(--da-color-accent)]"
+          : "border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-surface)] hover:border-[color:var(--da-color-accent)]"
       }`}
     >
       <div className="text-3xl mb-3">{role.icon}</div>
@@ -323,7 +328,7 @@ const OptionCard = ({ option, isSelected, onClick, icon = null }) => {
       className={`p-4 rounded-lg border-2 transition-all text-left hover:shadow-md ${
         isSelected
           ? "border-[color:var(--da-color-accent)] bg-[color:var(--da-color-accent-soft)]"
-          : "border-[color:var(--da-color-surface-border)] bg-white hover:border-[color:var(--da-color-accent)]"
+          : "border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-surface)] hover:border-[color:var(--da-color-accent)]"
       }`}
     >
       {icon && <div className="text-2xl mb-2">{icon}</div>}
@@ -342,13 +347,13 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
   const href = docUrl(doc.path);
   return (
     <div className={`flex items-center gap-3 p-4 rounded-lg border transition-all hover:shadow-md ${
-      isRead ? "border-green-300 bg-green-50" : isPriority ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : "border-[color:var(--da-color-surface-border)] bg-white hover:bg-[color:var(--da-color-surface-hover)]"
+      isRead ? "border-[color:var(--da-color-success)] bg-[color:var(--da-color-success-soft)]" : isPriority ? "border-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)] hover:bg-[color:var(--da-color-warning-soft)]" : "border-[color:var(--da-color-surface-border)] bg-[color:var(--da-color-surface)] hover:bg-[color:var(--da-color-surface-hover)]"
     }`}>
       <button
         type="button"
         onClick={(e) => { e.preventDefault(); onToggleRead(doc.path); }}
         className={`flex-shrink-0 w-6 h-6 rounded border-2 flex items-center justify-center transition-colors ${
-          isRead ? "bg-green-500 border-green-500 text-white" : "border-[color:var(--da-color-surface-border)] hover:border-[color:var(--da-color-accent)]"
+          isRead ? "bg-[color:var(--da-color-success)] border-[color:var(--da-color-success)] text-[color:var(--da-color-accent-fg)]" : "border-[color:var(--da-color-surface-border)] hover:border-[color:var(--da-color-accent)]"
         }`}
         title={isRead ? t("標記為未讀", "Mark as unread") : t("標記為已讀", "Mark as read")}
       >
@@ -357,10 +362,10 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
       <a href={href} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <h4 className={`font-semibold text-sm ${isRead ? "text-green-800 line-through" : "text-[color:var(--da-color-fg)]"}`}>
+            <h4 className={`font-semibold text-sm ${isRead ? "text-[color:var(--da-color-success)] line-through" : "text-[color:var(--da-color-fg)]"}`}>
               {doc.name}
               {isPriority && !isRead && (
-                <span className="ml-2 inline-block px-2 py-1 bg-amber-200 text-amber-900 text-xs font-bold rounded">
+                <span className="ml-2 inline-block px-2 py-1 bg-[color:var(--da-color-warning-soft)] text-[color:var(--da-color-warning)] text-xs font-bold rounded">
                   START HERE
                 </span>
               )}
@@ -393,8 +398,11 @@ const PathCompare = ({ currentKey, onClose }) => {
   const onlyA = currentRec.docs.filter(d => !compareDocs.has(d.path));
   const onlyB = compareRec ? compareRec.docs.filter(d => !currentDocs.has(d.path)) : [];
 
+  // A-3 deferred: `border-indigo-200` below is a decorative subtle-blue card
+  // border without a direct token. Dark-mode concern is low (card is a modal,
+  // not theme-flipping). Revisit when `--da-color-accent-border-soft` is added.
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-indigo-200 p-6 space-y-4">
+    <div className="bg-[color:var(--da-color-surface)] rounded-lg shadow-sm border border-indigo-200 p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-bold text-[color:var(--da-color-fg)]">{t('路徑比較', 'Compare Paths')}</h3>
         <button onClick={onClose} className="text-[color:var(--da-color-muted)] hover:text-[color:var(--da-color-muted)] text-sm">✕ {t('關閉', 'Close')}</button>
@@ -404,7 +412,7 @@ const PathCompare = ({ currentKey, onClose }) => {
         <select
           value={compareKey || ''}
           onChange={(e) => setCompareKey(e.target.value || null)}
-          className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
         >
           <option value="">{t('-- 選擇路徑 --', '-- Select a path --')}</option>
           {ALL_PATHS.filter(p => p.key !== currentKey).map(p => (
@@ -422,12 +430,16 @@ const PathCompare = ({ currentKey, onClose }) => {
             {onlyA.length === 0 && <div className="text-[color:var(--da-color-muted)] italic">{t('無', 'None')}</div>}
           </div>
           <div>
-            <h4 className="font-semibold text-green-700 mb-2">{t('共同文件', 'Shared')} ({sharedDocs.length})</h4>
+            <h4 className="font-semibold text-[color:var(--da-color-success)] mb-2">{t('共同文件', 'Shared')} ({sharedDocs.length})</h4>
             {sharedDocs.map(d => (
               <div key={d.path} className="py-1 text-[color:var(--da-color-fg)]">{d.name}</div>
             ))}
           </div>
           <div>
+            {/* A-3 deferred: `text-purple-700` is a semantic "other-path" color
+                (green = shared, purple = compared-only). No --da-color-* for
+                purple; adding one requires design-system sign-off. Keep until
+                --da-color-semantic-other is introduced. */}
             <h4 className="font-semibold text-purple-700 mb-2">{t('僅在比較路徑', 'Only in compared path')} ({onlyB.length})</h4>
             {onlyB.map(d => (
               <div key={d.path} className="py-1 text-[color:var(--da-color-fg)]">{d.name}</div>
@@ -455,7 +467,7 @@ const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => 
         </p>
         <div className="mt-3 flex items-center gap-3">
           <div className="flex-1 h-2 bg-[color:var(--da-color-accent-soft)] rounded-full overflow-hidden">
-            <div className="h-full bg-green-500 rounded-full transition-all" style={progressStyle}></div>
+            <div className="h-full bg-[color:var(--da-color-success)] rounded-full transition-all" style={progressStyle}></div>
           </div>
           <span className="text-sm font-medium text-[color:var(--da-color-muted)]">{done}/{total}</span>
         </div>
@@ -560,6 +572,11 @@ export default function GettingStartedWizard() {
     ? RECOMMENDATIONS[recommendationKey]
     : null;
 
+  // A-3 deferred: page-level hero gradient below. Tailwind palette stops
+  // (blue-50 / white / indigo-50) are light-mode-specific; dark mode would
+  // need different stops. Migration needs either (a) a composite
+  // `--da-color-hero-gradient` token or (b) inline style with CSS vars.
+  // Keep until composite-token policy is decided.
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
       <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
@@ -587,7 +604,7 @@ export default function GettingStartedWizard() {
         {/* Step 1: Role Selection */}
         {step === 0 && (
           <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow-sm p-8">
+            <div className="bg-[color:var(--da-color-surface)] rounded-lg shadow-sm p-8">
               <h2 className="text-2xl font-bold text-[color:var(--da-color-fg)] mb-8">
                 {t("你的角色是？", "Who are you?")}
               </h2>
@@ -608,7 +625,7 @@ export default function GettingStartedWizard() {
         {/* Step 2: Role-Specific Questions */}
         {step === 1 && selectedRoleObj && (
           <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow-sm p-8">
+            <div className="bg-[color:var(--da-color-surface)] rounded-lg shadow-sm p-8">
               <h2 className="text-2xl font-bold text-[color:var(--da-color-fg)] mb-2">
                 {selectedRoleObj.label}
               </h2>
@@ -664,14 +681,16 @@ export default function GettingStartedWizard() {
               <button
                 onClick={() => setShowCompare(!showCompare)}
                 className={`flex-1 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
-                  showCompare ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                  showCompare
+                    ? 'bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)]'
+                    : 'bg-[color:var(--da-color-accent-soft)] text-[color:var(--da-color-accent)] hover:bg-[color:var(--da-color-accent-soft)]'
                 }`}
               >
                 {showCompare ? t('隱藏比較', 'Hide Compare') : t('比較路徑', 'Compare Paths')}
               </button>
               <button
                 onClick={handleStartOver}
-                className="flex-1 px-4 py-3 text-sm font-medium text-white bg-[color:var(--da-color-accent)] rounded-lg hover:bg-[color:var(--da-color-accent-hover)] transition-colors"
+                className="flex-1 px-4 py-3 text-sm font-medium text-[color:var(--da-color-accent-fg)] bg-[color:var(--da-color-accent)] rounded-lg hover:bg-[color:var(--da-color-accent-hover)] transition-colors"
               >
                 Start Over
               </button>

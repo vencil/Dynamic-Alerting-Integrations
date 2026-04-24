@@ -31,6 +31,15 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .a wizard.jsx 剩餘 Tailwind 色票 → CSS var 遷移（v2.8.0, A-3）**
+  - **Tier A migration（15 個 edit points 遷 ~28 個 Tailwind color class instances → `var(--da-color-*)`）**：`bg-white` ×5 → `bg-[color:var(--da-color-surface)]`；`text-white` on accent bg ×3 → `text-[color:var(--da-color-accent-fg)]`；`text-white` on toast bg ×1 → `text-[color:var(--da-color-hero-fg)]`（toast-bg 與 hero-bg 一致不 theme-flip）；`text-green-*` / `bg-green-*` / `border-green-*` → `--da-color-success(-soft)`；`bg-amber-* text-amber-*` / `border-amber-*` → `--da-color-warning(-soft)`；`bg-indigo-600 text-white` / `bg-indigo-100 text-indigo-700` 按鈕對 → `--da-color-accent(-soft) / -fg`；`ring-indigo-400` focus → `ring-[color:var(--da-color-focus-ring)]`
+  - **Tier B 延後項（4 處，加 `// A-3 deferred:` TODO 註解）**：`text-blue-300` toast-link-on-dark（缺 `--da-color-link-on-dark` token）/ `border-indigo-200` 裝飾性藍邊（缺 `--da-color-accent-border-soft`）/ `text-purple-700` 語意 other-path（缺 `--da-color-semantic-other`）/ `bg-gradient-to-br from-blue-50 via-white to-indigo-50` 頁面 hero 漸層（需複合 token 或 inline style 決策）。每處 TODO 寫明所需新 token 名 + 決策條件
+  - **已知 UX 微退化**：優先順序卡片的 `hover:bg-amber-100` 被遷成 `hover:bg-[color:var(--da-color-warning-soft)]`，與 normal state 同色 → 懸浮時背景無視覺變化。原因：`--da-color-warning-soft-hover` token 未存在。影響範圍：單一 `.priority` card 懸浮狀態；`border` 與 `shadow` hover 效果仍保留。**Tier B follow-up 候選**：新增 hover 變體 token 或改用 `filter: brightness(0.95)` 替代
+  - **dark-mode readiness**：Tier A 遷移後 wizard 色彩隨 `data-theme="dark"` 自動翻轉（原 Tailwind palette 寫死亮模式）；Tier B 延後項仍 light-mode-only，待新 token land 後再遷。**已知驗證缺口**：本 PR 僅以 Dev Container 亮模式 DOM probe 驗證，未視覺驗證 `data-theme="dark"` 下實際渲染；wizard.jsx 不在 `tests/e2e/` 覆蓋，無 CI regression 保護。遷移後 token 翻轉由 `design-tokens.css` 規範承諾保證
+  - **驗證**：Dev Container 真 DOM 渲染 + probe（h1 / role 4 matches / 4× `bg-surface` / 1× `bg-accent`）；`check_design_token_usage.py --ci` wizard.jsx 0 violations（仍 45 個 pre-existing 在其他檔案）；JSX Babel standalone parse 通過
+  - **Phase .a 軌道一完結**：A-3 merge 後全綠（A-4 / A-14 / A-16 三項延 v2.8.1 除外）
+  - 詳見 planning §12.1 Session #26 / archive §S#26
+
 - **Phase .a Playwright E2E fixme 清零 + ESLint 守關（v2.8.0, A-7 + A-13）**
   - **A-7 locator calibration**：`notification-previewer` / `threshold-heatmap` / `rbac-setup-wizard` / `cicd-setup-wizard` 4 spec × 2 `test.fixme()` = **8 條**全數清除。各 spec 改用 `getByRole` / `getByLabel` / `getByText(exact)` 穩定 semantic anchor。針對 wizard 類 fixme #2 的錯假設重新 frame 測試意圖（rbac / cicd 原假設「load 即見 output」，實際要到 step 3 / 5 才渲染，改為驗 step nav 結構）
   - **A-13 ESLint 守關**：新增 `tests/e2e/eslint.config.mjs` flat config，rule `playwright/no-skipped-test` 設 `{ allowConditional: false, disallowFixme: true }`。bare `test.fixme()` / `test.skip()` commit-time 即擋；條件式 `test.skip(isChrome, 'reason')` 仍允許
