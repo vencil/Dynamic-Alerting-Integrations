@@ -26,16 +26,14 @@ test.describe('Threshold Heatmap @critical', () => {
     });
   });
 
-  test('renders heatmap grid or table', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+  test('renders threshold distribution table', async ({ page }) => {
+    // Calibrated against threshold-heatmap.jsx — renders <table role="table"
+    // aria-label="Threshold distribution table">. getByRole lets us avoid the
+    // generic `table` matcher that would also grab unrelated tables.
     await loadPortalTool(page, 'threshold-heatmap');
 
-    // The heatmap should render as a table/grid with cells.
-    const grid = page.locator(
-      'table, [role="grid"], [role="table"], [data-testid*="heatmap"]'
-    );
-    await expect(grid.first()).toBeVisible({ timeout: 10000 });
+    const grid = page.getByRole('table', { name: /threshold distribution/i });
+    await expect(grid).toBeVisible({ timeout: 10000 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
@@ -44,24 +42,24 @@ test.describe('Threshold Heatmap @critical', () => {
   });
 
   test('colorblind-safe severity symbols are rendered (ADR-012)', async ({ page }) => {
-    test.fixme();
-    // TODO: calibrate locator against real DOM
+    // Calibrated against ADR-012 colorblind hotfix — the heatmap emits
+    // `<span aria-hidden="true">✓</span>` (plus ⚠ / ❌) alongside the color
+    // cell, so the calibrated probe saw 106 occurrences on a loaded heatmap.
+    // We assert at least one ✓ (success) symbol is present, which is the most
+    // common state when seed data renders. If the heatmap is empty (no seed
+    // fixtures), fall back to asserting some severity symbol exists rather
+    // than requiring ✓ specifically.
     await loadPortalTool(page, 'threshold-heatmap');
 
-    // ADR-012 colorblind hotfix added Unicode severity symbols (✓/⚠/⚠⚠/❌)
-    // alongside color coding. At least one should be visible if data is loaded.
-    // We check for aria-label containing severity text as a fallback.
-    const severityIndicator = page.locator(
-      ':text-matches("[✓⚠❌]"), [aria-label*="severity" i], [aria-label*="critical" i], [aria-label*="warning" i], [aria-label*="success" i]'
-    );
-    // If no data is loaded, the heatmap may be empty — allow graceful skip.
-    const count = await severityIndicator.count();
-    if (count === 0) {
-      // Check that the empty state renders correctly at least
-      const emptyState = page.locator(
-        ':text-matches("No data|Empty|Load|Select", "i")'
-      );
-      await expect(emptyState.first()).toBeVisible({ timeout: 5000 });
+    const successSymbol = page.getByText('✓', { exact: true });
+    const anySeverity = page.locator('span[aria-hidden="true"]').filter({ hasText: /[✓⚠❌]/ });
+
+    const successCount = await successSymbol.count();
+    if (successCount > 0) {
+      await expect(successSymbol.first()).toBeVisible({ timeout: 5000 });
+    } else {
+      // Heatmap loaded but without a ✓ — verify some other severity symbol.
+      expect(await anySeverity.count()).toBeGreaterThan(0);
     }
   });
 });
