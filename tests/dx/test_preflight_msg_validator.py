@@ -360,3 +360,110 @@ def test_cli_check_commit_msg_warnings_only_still_pass(tmp_path: Path) -> None:
     # Should pass (0) but stderr contains warnings.
     assert proc.returncode == 0, f"stderr={proc.stderr}"
     assert "warnings" in proc.stderr or "body-leading-blank" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# v2.8.0 Trap #61: BOM detection in commit-msg file
+# ---------------------------------------------------------------------------
+
+
+def test_detect_bom_utf8(tmp_path: Path) -> None:
+    """UTF-8 BOM (EF BB BF) is flagged with actionable description."""
+    mod = _load_module()
+    msg = tmp_path / "msg.txt"
+    msg.write_bytes(b"\xef\xbb\xbffeat(dx): header\n")
+    desc = mod.detect_commit_msg_bom(msg)
+    assert desc is not None
+    assert "UTF-8 BOM" in desc
+    assert "EF BB BF" in desc
+
+
+def test_detect_bom_utf16_le(tmp_path: Path) -> None:
+    """UTF-16 LE BOM (FF FE) — PS default Out-File encoding."""
+    mod = _load_module()
+    msg = tmp_path / "msg.txt"
+    msg.write_bytes(b"\xff\xfefeat")
+    desc = mod.detect_commit_msg_bom(msg)
+    assert desc is not None
+    assert "UTF-16 LE" in desc
+    assert "FF FE" in desc
+
+
+def test_detect_bom_utf16_be(tmp_path: Path) -> None:
+    mod = _load_module()
+    msg = tmp_path / "msg.txt"
+    msg.write_bytes(b"\xfe\xfffeat")
+    desc = mod.detect_commit_msg_bom(msg)
+    assert desc is not None
+    assert "UTF-16 BE" in desc
+
+
+def test_detect_bom_clean_utf8_is_none(tmp_path: Path) -> None:
+    """No BOM → None (the common case, no false positives)."""
+    mod = _load_module()
+    msg = tmp_path / "msg.txt"
+    msg.write_text("feat(dx): header\n\nclean body\n", encoding="utf-8")
+    assert mod.detect_commit_msg_bom(msg) is None
+
+
+def test_detect_bom_cjk_without_bom_is_none(tmp_path: Path) -> None:
+    """CJK content without BOM must not trip the detector."""
+    mod = _load_module()
+    msg = tmp_path / "msg.txt"
+    msg.write_text("feat(dx): 中文 header\n\n中文 body\n", encoding="utf-8")
+    assert mod.detect_commit_msg_bom(msg) is None
+
+
+def test_detect_bom_empty_file_is_none(tmp_path: Path) -> None:
+    """Empty file → None (no bytes to check)."""
+    mod = _load_module()
+    msg = tmp_path / "msg.txt"
+    msg.write_bytes(b"")
+    assert mod.detect_commit_msg_bom(msg) is None
+
+
+def test_detect_bom_missing_file_is_none(tmp_path: Path) -> None:
+    """Missing file → None (OSError caught; absence != BOM)."""
+    mod = _load_module()
+    assert mod.detect_commit_msg_bom(tmp_path / "does-not-exist") is None
+
+
+def test_cli_rejects_utf8_bom_message(tmp_path: Path) -> None:
+    """End-to-end: PS-style UTF-8 BOM commit message → exit 1 with recovery hint."""
+    msg = tmp_path / "msg.txt"
+    # Valid header content — but with a BOM that PS Out-File would prepend.
+    msg.write_bytes(b"\xef\xbb\xbffeat(dx): valid header otherwise\n")
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "encoding error" in proc.stderr
+    assert "UTF-8 BOM" in proc.stderr
+    # Recovery hint must mention the bash/PS no-BOM incantation.
+    assert "UTF8Encoding" in proc.stderr or "filter-branch" in proc.stderr
+
+
+def test_cli_rejects_utf16_le_bom_message(tmp_path: Path) -> None:
+    """UTF-16 LE BOM (most common PS default) → exit 1."""
+    msg = tmp_path / "msg.txt"
+    msg.write_bytes(b"\xff\xfefeat(dx): header")
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "UTF-16 LE" in proc.stderr
+
+
+def test_cli_bom_check_precedes_body_validation(tmp_path: Path) -> None:
+    """If a BOM is present, we report the BOM error — not a confusing header-format error.
+
+    Before Trap #61 wiring, a BOM'd file would fail as 'type empty' or similar
+    cascade because U+FEFF is the first char of what we parse as the header.
+    The BOM-first check must emit the actionable encoding error instead.
+    """
+    msg = tmp_path / "msg.txt"
+    # UTF-8 BOM + otherwise-valid header.
+    msg.write_bytes(b"\xef\xbb\xbffeat(dx): valid header\n")
+    proc = _run_cli("--check-commit-msg", str(msg))
+    assert proc.returncode == 1
+    assert "encoding error" in proc.stderr
+    # The conventional-commits cascade errors must NOT be emitted — BOM is
+    # handled first with a targeted diagnostic.
+    assert "type '" not in proc.stderr
+    assert "subject is empty" not in proc.stderr

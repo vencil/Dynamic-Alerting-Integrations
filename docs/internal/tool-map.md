@@ -67,6 +67,7 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
+| `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
