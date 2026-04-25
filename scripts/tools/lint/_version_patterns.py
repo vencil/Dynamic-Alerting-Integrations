@@ -157,8 +157,15 @@ SKIP_RULE_PACK_FILES = {"CHANGELOG.md", "CHANGELOG.en.md", "benchmarks.md",
 # Bilingual number consistency skips these
 SKIP_BILINGUAL_NUMBER_FILES = {"benchmarks.md", "CHANGELOG.md"}
 
-# doc-map coverage check skips these directories and files
-DOC_MAP_SKIP_DIRS = {"includes", "adr", "design-reviews"}
+# doc-map coverage check skips these directories and files.
+#
+# `internal` is skipped (issue #66 follow-up; mirrors generate_doc_map.py
+# SKIP_DIRS): docs/internal/** are explicitly out-of-scope for the public
+# doc catalog. Validator must not flag missing-from-doc-map for internal
+# files; otherwise generator and validator disagree and produce false
+# drift (the v2.8.0-{planning-archive,tech-debt-decomposition}.md cases
+# observed during PR #72 review).
+DOC_MAP_SKIP_DIRS = {"includes", "adr", "design-reviews", "internal"}
 DOC_MAP_SKIP_NAMES = {"tags.md", "CHANGELOG.md", "README-root.md",
                       "doc-map.md", "tool-map.md",
                       "known-regressions.md"}

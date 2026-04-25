@@ -84,7 +84,16 @@ SKIP_FILENAME_PREFIXES = ("_",)
 # Directories to skip entirely (adr is conditionally included via --include-adr)
 # rule-packs is skipped because it's a junction/symlink on Windows/Linux pointing
 # to the top-level rule-packs/ dir; its README is added via EXTRA_ENTRIES instead.
-SKIP_DIRS = {"includes", "adr", "rule-packs"}
+#
+# `internal` is skipped (issue #66 follow-up): docs/internal/** are maintainer-
+# and AI-agent-only artifacts (playbooks, planning archives, RCAs, dev rules).
+# They have richer discovery paths via CLAUDE.md, dedicated skills (e.g.
+# `vibe-playbook-nav`), and direct file-system search; the catalog adds no
+# real navigation value over those, and including them mixed public + internal
+# documents in a single count that's not actually meaningful externally. The
+# catalog meta-entries (`doc-map.md`, `tool-map.md` themselves) are still
+# manually added via SELF_ENTRIES so the catalog continues to self-describe.
+SKIP_DIRS = {"includes", "adr", "rule-packs", "internal"}
 
 # Extra non-docs entries (manually curated, appended at end)
 EXTRA_ENTRIES = {
