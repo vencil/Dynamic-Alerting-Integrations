@@ -136,11 +136,30 @@ def suggest_slim_pointer(full_line: str, archive_path: Path) -> str | None:
     if len(cells) < 6:
         return None
     sid, date, title, body, status, nxt = cells[0], cells[1], cells[2], cells[3], cells[4], cells[5]
-    # Truncate title to avoid pulling huge content; keep ≤ 80 chars.
-    short_title = title if len(title) <= 80 else title[:77] + "…"
-    # Body should reduce to a one-liner pointing at archive.
+    # Truncate title / status / next to keep slim pointer compact while
+    # preserving readability. Cut at last whitespace before the budget so
+    # we don't slice mid-word (avoids "session 🟢 / §12.5 line 677 fl…").
+    short_title = _truncate_at_word_boundary(title, max_chars=80)
+    short_status = _truncate_at_word_boundary(status, max_chars=80)
+    short_next = _truncate_at_word_boundary(nxt, max_chars=80)
+    # Body collapses to a one-liner pointing at archive.
     suggested_body = f"**Archived** — full detail in archive §S#{session_id}"
-    return f"| {sid} | {date} | {short_title} | {suggested_body} | {status[:80]} | {nxt[:80]} |"
+    return f"| {sid} | {date} | {short_title} | {suggested_body} | {short_status} | {short_next} |"
+
+
+def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
+    """Return text truncated at the last whitespace ≤ max_chars, with an
+    ellipsis appended. If the first `max_chars` contain no whitespace at
+    all (e.g. one giant URL), fall back to a hard cut so we never exceed
+    the budget. Inputs already ≤ max_chars are returned verbatim.
+    """
+    if len(text) <= max_chars:
+        return text
+    head = text[: max_chars - 1]  # leave room for ellipsis
+    last_space = head.rfind(" ")
+    if last_space <= 0:  # no break point found — hard cut
+        return head + "…"
+    return head[:last_space] + "…"
 
 
 def emit_archive_suggestions(

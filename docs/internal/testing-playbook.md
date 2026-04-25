@@ -631,6 +631,10 @@ if deltaReload == deltaFire && deltaFire == 1 {
 
 **Reference implementations**: see `components/threshold-exporter/app/config_debounce_test.go::TestFireDebounced_EmitsBatchAndDuration` for the canonical example.
 
+> **Generality note**: the example uses `m.DebounceFiredCount()` which is exporter-specific. The pattern generalizes to **any** Go test that:
+> (a) swaps a global metric instance via a `withIsolated*` helper, AND
+> (b) exercises production code that spawns goroutines / `time.AfterFunc` callbacks whose `Close()` doesn't wait. Substitute `DebounceFiredCount()` with whatever per-instance counter your subject exposes (e.g. tenant-api could use a `RequestCount()` accessor). The lockstep + `>=` invariants hold whenever two metric observations sit in the same critical section in the production callback.
+
 ### 2. 時間敏感 test 用 quiescence detection，**不要**「sleep + assert exactly N」
 
 **Anti-pattern** (PR #75 v1):

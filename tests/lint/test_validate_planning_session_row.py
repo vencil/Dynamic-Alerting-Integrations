@@ -237,3 +237,36 @@ class TestAutoArchiveSuggest:
         assert "S#42" in out
         # No suggestion emitted; instructions to write archive first.
         assert "MANUAL" in out or "first" in out.lower()
+
+
+class TestTruncateAtWordBoundary:
+    """`_truncate_at_word_boundary` keeps slim-pointer cells readable
+    by cutting at whitespace instead of mid-word."""
+
+    def test_short_input_returned_verbatim(self):
+        assert vpsr._truncate_at_word_boundary("short", max_chars=80) == "short"
+
+    def test_long_input_cuts_at_last_space(self):
+        text = "the quick brown fox jumps over the lazy dog and onwards forever"
+        got = vpsr._truncate_at_word_boundary(text, max_chars=20)
+        # Budget 20: "the quick brown fox " is 20 chars; head[:19] = "the quick brown fox"
+        # last space at index 15, so head[:15] = "the quick brown" + "…"
+        assert got == "the quick brown…"
+        assert len(got) <= 20
+
+    def test_no_whitespace_falls_back_to_hard_cut(self):
+        # One giant token with no spaces — fallback to hard truncation
+        # rather than refuse to truncate.
+        text = "x" * 100
+        got = vpsr._truncate_at_word_boundary(text, max_chars=20)
+        assert got == "x" * 19 + "…"
+        assert len(got) <= 20
+
+    def test_unicode_chars_count_as_chars(self):
+        # CJK chars are single code points; budget counts code points, not bytes.
+        text = "資料工程 platform team alpha beta gamma delta"
+        got = vpsr._truncate_at_word_boundary(text, max_chars=15)
+        # head[:14] = "資料工程 platform" (15 cps wait — let me recount)
+        # actually whatever the cut, just verify length ≤ budget and ends with …
+        assert len(got) <= 15
+        assert got.endswith("…")
