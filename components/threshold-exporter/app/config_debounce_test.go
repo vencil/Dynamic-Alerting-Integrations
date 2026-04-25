@@ -346,12 +346,18 @@ func TestPendingDebounceReasons_AccumulatesThenClears(t *testing.T) {
 // TestFireDebounced_EmitsBatchAndDuration verifies v2.8.0 B-3 metrics
 // (debounce batch size + reload duration) land exactly once per fire,
 // with the batch sample reflecting the count of triggers collapsed.
+//
+// Window sized for CI scheduler jitter under -race: at 30ms a stressed
+// runner can split the 4 triggers across two windows (CI failure
+// observed: _count=2 instead of 1 — runs/24933040316). 150ms keeps
+// the test under 1s while leaving ~5× margin over Go's -race
+// scheduling overhead per trigger call.
 func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 	fresh, _ := withIsolatedMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
-	m := NewConfigManagerWithDebounce(dir, 30*time.Millisecond)
+	m := NewConfigManagerWithDebounce(dir, 150*time.Millisecond)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -361,13 +367,13 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		m.triggerDebouncedReload(ReloadReasonSource)
 	}
-	if !waitFor(t, 500*time.Millisecond, func() bool {
+	if !waitFor(t, 1*time.Second, func() bool {
 		return m.DebounceFiredCount() >= 1
 	}) {
 		t.Fatalf("debounce never fired")
 	}
 	// Tail sleep so any rogue extra fire is also visible.
-	time.Sleep(80 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	// reload duration: exactly one Observe per fire.
 	reg := prometheus.NewRegistry()
