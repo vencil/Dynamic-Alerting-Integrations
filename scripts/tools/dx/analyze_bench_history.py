@@ -15,13 +15,20 @@ Outputs a Markdown table; exit code reflects gate verdict (0 = all GO,
 
 Threshold gate (per #67)
 -----------------------
-Per benchmark:
-  - ``CV ≤ 25%``               (coefficient of variation)
-  - ``max_ns / min_ns ≤ 1.30`` (window max-min ratio)
+Per benchmark, computed across **per-run medians** (not raw samples — see
+``BenchStats`` docstring for methodology):
+
+  - cross-run ``CV ≤ 25%``               (stddev / mean of the per-run medians)
+  - cross-run ``max_ns / min_ns ≤ 1.30`` (max/min of the per-run medians)
 
 Across the run window:
   - ``≥ 26 of N runs succeeded`` (default N=28; tolerates ~2 GitHub Actions
     outages in 4 weeks)
+
+Within-run CV (variance among the 6 samples *inside* one run) is reported
+as a separate column for diagnostics but does **not** affect the verdict —
+median-of-samples per run absorbs within-run jitter, which is the entire
+point of the median-of-5 framing in issue #60 §Phase 2.
 
 Usage
 -----
@@ -59,14 +66,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -98,11 +103,30 @@ class RunSample:
 
 @dataclass
 class BenchStats:
-    """Aggregate stats for one benchmark across the run window."""
+    """Aggregate stats for one benchmark across the run window.
+
+    Stats methodology
+    -----------------
+    The gate question is: *does this benchmark's typical-night latency move
+    between nights?* That requires **cross-run variance**, not within-run
+    jitter.
+
+    1. Group samples by ``run_id`` → compute median per run (e.g., 6
+       samples per run becomes 1 representative number).
+    2. Variance / CV / max-min are computed across the **per-run medians**,
+       not raw samples.
+    3. Within-run jitter is reported separately as ``within_run_cv_mean``
+       (mean of per-run CVs) for transparency / outlier diagnosis.
+
+    This matches issue #60 §Phase 2's "3× of median-of-5" framing: median
+    smooths within-run jitter, cross-run CV is the regression signal.
+    """
 
     bench: str
     samples: list[float] = field(default_factory=list)
     runs: set[int] = field(default_factory=set)
+    # Map run_id -> list of samples in that run, populated by aggregate()
+    samples_by_run: dict[int, list[float]] = field(default_factory=dict)
 
     @property
     def n_samples(self) -> int:
@@ -113,35 +137,63 @@ class BenchStats:
         return len(self.runs)
 
     @property
+    def per_run_medians(self) -> list[float]:
+        """One representative ns/op per run."""
+        return [statistics.median(s) for s in self.samples_by_run.values() if s]
+
+    @property
     def median(self) -> float:
-        return statistics.median(self.samples) if self.samples else math.nan
+        """Median of per-run medians (typical-night latency over the window)."""
+        m = self.per_run_medians
+        return statistics.median(m) if m else math.nan
 
     @property
     def cv(self) -> float:
-        """Coefficient of variation = stddev / mean."""
-        if len(self.samples) < 2:
+        """Cross-run coefficient of variation: stddev(per-run medians) / mean(...).
+
+        Returns NaN if fewer than 2 runs (variance undefined).
+        """
+        m = self.per_run_medians
+        if len(m) < 2:
             return math.nan
-        m = statistics.mean(self.samples)
-        if m == 0:
+        mean = statistics.mean(m)
+        if mean == 0:
             return math.nan
-        return statistics.stdev(self.samples) / m
+        return statistics.stdev(m) / mean
 
     @property
     def max_min_ratio(self) -> float:
-        if not self.samples:
+        """Cross-run max/min ratio of per-run medians."""
+        m = self.per_run_medians
+        if not m:
             return math.nan
-        lo = min(self.samples)
+        lo = min(m)
         if lo == 0:
             return math.nan
-        return max(self.samples) / lo
+        return max(m) / lo
+
+    @property
+    def within_run_cv_mean(self) -> float:
+        """Mean of per-run within-run CVs. High value = bench is jittery in any single run."""
+        cvs = []
+        for run_samples in self.samples_by_run.values():
+            if len(run_samples) >= 2:
+                mean = statistics.mean(run_samples)
+                if mean > 0:
+                    cvs.append(statistics.stdev(run_samples) / mean)
+        return statistics.mean(cvs) if cvs else math.nan
 
     def verdict(self) -> tuple[str, list[str]]:
-        """Returns (GO|NO-GO|INSUFFICIENT, reason_list)."""
+        """Returns (GO|NO-GO|INSUFFICIENT, reason_list).
+
+        Verdict is based on cross-run CV + max/min, NOT within-run noise.
+        Within-run noise is informational only.
+        """
         reasons = []
         if self.n_runs < 2:
-            return "INSUFFICIENT", [f"only {self.n_runs} run(s) — need ≥ 2 for variance"]
+            return "INSUFFICIENT", [f"only {self.n_runs} run(s) — need ≥ 2 for cross-run variance"]
         if self.cv > CV_THRESHOLD:
-            reasons.append(f"CV={self.cv:.1%} > {CV_THRESHOLD:.0%}")
+            reasons.append(f"cross-run CV={self.cv:.1%} > {CV_THRESHOLD:.0%}")
         if self.max_min_ratio > RATIO_THRESHOLD:
             reasons.append(f"max/min={self.max_min_ratio:.2f}× > {RATIO_THRESHOLD}×")
         return ("NO-GO" if reasons else "GO", reasons)
@@ -164,15 +216,29 @@ def _gh(cmd: list[str], capture: bool = True) -> str:
 
 
 def list_recent_runs(workflow: str, limit: int) -> list[dict]:
-    """List the N most recent successful workflow runs."""
-    out = _gh([
-        "run", "list",
-        "--workflow", workflow,
-        "--repo", REPO,
-        "--limit", str(limit),
-        "--status", "success",
-        "--json", "databaseId,createdAt,headSha,conclusion",
-    ])
+    """List the N most recent successful workflow runs.
+
+    Raises ``RuntimeError`` with a friendly message if ``gh`` is unauthenticated
+    or the workflow doesn't exist.
+    """
+    try:
+        out = _gh([
+            "run", "list",
+            "--workflow", workflow,
+            "--repo", REPO,
+            "--limit", str(limit),
+            "--status", "success",
+            "--json", "databaseId,createdAt,headSha,conclusion",
+        ])
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        if "authentication" in stderr.lower() or "gh auth login" in stderr:
+            raise RuntimeError(
+                "gh is not authenticated. Run `gh auth login` first."
+            ) from exc
+        raise RuntimeError(
+            f"`gh run list --workflow {workflow}` failed: {stderr or 'no stderr'}"
+        ) from exc
     return json.loads(out)
 
 
@@ -214,8 +280,10 @@ def aggregate(samples: Iterable[RunSample]) -> dict[str, BenchStats]:
     for s in samples:
         if s.bench not in by_bench:
             by_bench[s.bench] = BenchStats(bench=s.bench)
-        by_bench[s.bench].samples.append(s.ns_per_op)
-        by_bench[s.bench].runs.add(s.run_id)
+        bs = by_bench[s.bench]
+        bs.samples.append(s.ns_per_op)
+        bs.runs.add(s.run_id)
+        bs.samples_by_run.setdefault(s.run_id, []).append(s.ns_per_op)
     return by_bench
 
 
@@ -258,8 +326,12 @@ def render_markdown_table(
     lines.append("")
 
     # Per-bench table
-    lines.append("| Bench | Runs | Samples | Median | CV | max/min | Verdict | Reason |")
-    lines.append("|---|---:|---:|---:|---:|---:|---|---|")
+    # Cross-run CV is the gate signal; within-run CV is informational
+    # (high within-run CV alone does NOT fail the gate, but worth flagging).
+    lines.append(
+        "| Bench | Runs | Samples | Median | Cross-run CV | max/min | Within-run CV | Verdict | Reason |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---|---|")
 
     summary = {"GO": 0, "NO-GO": 0, "INSUFFICIENT": 0}
     for name in sorted(stats):
@@ -269,10 +341,13 @@ def render_markdown_table(
         emoji = {"GO": "✅", "NO-GO": "❌", "INSUFFICIENT": "⚠️"}[verdict]
         cv_str = f"{s.cv:.1%}" if not math.isnan(s.cv) else "—"
         ratio_str = f"{s.max_min_ratio:.2f}×" if not math.isnan(s.max_min_ratio) else "—"
+        within_cv_str = (
+            f"{s.within_run_cv_mean:.1%}" if not math.isnan(s.within_run_cv_mean) else "—"
+        )
         reason_str = "; ".join(reasons) if reasons else ""
         lines.append(
             f"| `{s.bench}` | {s.n_runs} | {s.n_samples} | {format_ns(s.median)} "
-            f"| {cv_str} | {ratio_str} | {emoji} {verdict} | {reason_str} |"
+            f"| {cv_str} | {ratio_str} | {within_cv_str} | {emoji} {verdict} | {reason_str} |"
         )
 
     lines.append("")
@@ -314,7 +389,11 @@ def main() -> int:
     try:
         print(f"→ listing last {args.limit} successful runs of {args.workflow}…",
               file=sys.stderr)
-        runs = list_recent_runs(args.workflow, args.limit)
+        try:
+            runs = list_recent_runs(args.workflow, args.limit)
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
         if not runs:
             print("error: no successful runs found", file=sys.stderr)
             return 2
