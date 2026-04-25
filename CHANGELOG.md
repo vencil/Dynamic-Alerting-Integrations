@@ -44,6 +44,12 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
   - **`benchmark-playbook.md` `verified-at-version`**：已為 v2.8.0（PR #59 同步更新），本 PR 確認無需 bump
   - **`doc-map` / `tool-map`**：`generate_doc_map.py --check` / `generate_tool_map.py --check` 雙雙 clean（無 drift）
 
+- **`docs/internal/pitch-deck-talking-points.md`（v2.8.0, internal sales/business 對話素材）**
+  - 從 PR #59 / `f1f14e7` Phase 1 baseline 萃取 4 個對外 talking points：ADR-018 dual-hash quiet edit noOp / 1000-tenant resource footprint / 1000-2000-5000 empirical scaling / Honest baseline disclaimer
+  - 每個 section 附「不要這樣講」清單以防 overclaim（不可講「microservices 不會 restart」、不可混淆 dual-hash 與 noOp algorithm、不可把線性外推當實測等）
+  - 引用守則表：合約 SLA / marketing 公開數字 ❌；pitch / proposal ⚠️ 須附 Phase 1 synthetic baseline 前綴
+  - 詳見 PR #63
+
 - **Phase .b 1000/2000/5000-tenant hierarchical baseline（v2.8.0, B-1 Phase 1 + B-8）— 此 baseline 非 definitive SLO 承諾**
   - ⛔ **重要 disclaimer**：以下數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 需 Phase 2 customer anonymized sample 校準後重跑（DEC-B in planning §10）。下游文件引用須附「Phase 1 synthetic baseline」前綴
   - **11 new Go benchmarks** in `components/threshold-exporter/app/config_hierarchy_bench_test.go`：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` + `DiffAndReload_Hierarchical_1000_OneTenantChanged`（B-8 blast-radius with `affected-tenants` metric per size）
