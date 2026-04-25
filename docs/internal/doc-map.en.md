@@ -114,6 +114,7 @@ lang: en
 | `docs/internal/dx-tooling-backlog.md` | maintainers, contributors | DX Tooling Backlog |
 | `docs/internal/frontend-quality-backlog.md` | maintainers, AI Agent | 前端品質待辦 (Frontend Quality Backlog) |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
+| `docs/internal/pitch-deck-talking-points.md` | maintainers, business | Pitch Deck Talking Points — v2.8.0 Phase 1 Baseline |
 | `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
 | `docs/internal/ssot-migration-pilot-report.md` | maintainers | SSOT 語言遷移 Phase 1 Pilot Report |
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |

@@ -40,6 +40,33 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
   - **告警範例**（`k8s/03-monitoring/configmap-rules-platform.yaml`）：`histogram_quantile(0.99, sum by (le)(rate(...{effect="applied"}_bucket[5m]))) > 500` for 10m → P2 警報；`effect="applied"` 過濾避開 cosmetic / shadowed 假觸發
   - 詳見 [Issue #61](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/61)（含 deep-review 兩輪決議）
 
+- **Pre-tag benchmark report — Phase 1 of issue #60 3-phase rollout（v2.8.0）**
+  - **`make benchmark-report`** — 1000-tenant baseline 基準測試 → `.build/bench-baseline.txt`，使用既有 `bench_wrapper.sh`（A-15）。regex `_1000(_|$)` 涵蓋 13 支 1000-scale benchmarks：8 個 legacy flat（`Benchmark{ResolveSilentModes,FullDirLoad,IncrementalLoad_1000_NoChange,IncrementalLoad_1000_NoChange_MtimeGuard,IncrementalLoad_1000_OneFileChanged,ScanDirFileHashes,ScanDirFileHashes_1000_MtimeGuard,MergePartialConfigs}_1000`）+ 5 個 hierarchical（PR #59 新加：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_1000_NoChange,DiffAndReload_Hierarchical_1000_OneTenantChanged,BlastRadius_DefaultsChange_Hierarchical}_1000`）。Legacy flat 仍在生產（v2.7.0 fallback path），同 scale 一併 record 給 trend 分析。預設 `-count=6 -benchtime=3s`；第一個 sample 視為 warmup，由下游 median-of-5 分析（Phase 2）丟棄，target 本身 record 全 6 個。`COUNT` / `BENCHTIME` 可覆寫
+  - **`make pre-tag` 串入 `benchmark-report-warn`** — informational only，bench 失敗不阻擋 tag。Phase 1 設計刻意不加 hard gate（issue #60 §Tension：62% CI variance 證據）；maintainer tag 前人眼看 trend
+  - **`.github/workflows/bench-record.yaml`** — nightly 03:00 UTC + `workflow_dispatch`，僅 main，artifact 保留 90 天，`GITHUB_STEP_SUMMARY` 內嵌結果。4 週累積 ~28 點數據作為 Phase 2 entry 條件（hard gate at 3× median-of-5 baseline）的判斷基準
+  - **與 issue #60 acceptance 對照**：(1) Makefile target ✅；(2) pre-tag wiring ✅；(3) `.build/bench-baseline.txt` 輸出 ✅；(4) Go 版本固定 1.26 與 ci.yml SSOT 一致 ✅；(5) nightly schedule 解決「4-week stability」資料缺口 ✅；(6) release-please attachment ⏭️ 延後（current target 寫入 `.build/`，未串接 release notes asset upload；low-effort follow-up）
+  - **不做的事**（明確分階段）：不寫 `benchmarks/baseline.json`（Phase 2）；不加 hard gate（Phase 2）；不引入 `rhysd/github-action-benchmark`（Phase 1 評估後判定 Phase 2 再考慮）；不碰 PR template / commit lint enforcement（Q3 後續獨立工作）；release-please 自動 attach asset（low-priority follow-up）
+  - 詳見 issue #60 / planning §4 Phase .b 離場條件
+
+- **Post-merge housekeeping — PR #59 follow-up drift（v2.8.0）**：PR #59（B-1 Phase 1 + B-8）merge 後例行 drift 收尾，獨立 PR 以保留主 PR diff 純淨：
+  - **`docs/internal/test-coverage-matrix.md`** 新增「Tier 2 — Performance Benchmarks」章節 + Phase .b 1000+ tenant baseline 子節，登錄 PR #59 加入 `components/threshold-exporter/app/config_hierarchy_bench_test.go` 的 13 支 hierarchical benchmarks（`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` × 4 patterns + `DiffAndReload_Hierarchical_1000_OneTenantChanged`）：每筆登 Tier / Coverage Target / Last Verified（v2.8.0）；附共用 helpers（`buildDirConfigHierarchical` / `reportResourceMetrics` / `bench*AtSize` 驅動函式）說明 + Phase 1 synthetic baseline disclaimer
+  - **`benchmark-playbook.md` `verified-at-version`**：已為 v2.8.0（PR #59 同步更新），本 PR 確認無需 bump
+  - **`doc-map` / `tool-map`**：`generate_doc_map.py --check` / `generate_tool_map.py --check` 雙雙 clean（無 drift）
+
+- **`docs/internal/pitch-deck-talking-points.md`（v2.8.0, internal sales/business 對話素材）**
+  - 從 PR #59 / `f1f14e7` Phase 1 baseline 萃取 4 個對外 talking points：ADR-018 dual-hash quiet edit noOp / 1000-tenant resource footprint / 1000-2000-5000 empirical scaling / Honest baseline disclaimer
+  - 每個 section 附「不要這樣講」清單以防 overclaim（不可講「microservices 不會 restart」、不可混淆 dual-hash 與 noOp algorithm、不可把線性外推當實測等）
+  - 引用守則表：合約 SLA / marketing 公開數字 ❌；pitch / proposal ⚠️ 須附 Phase 1 synthetic baseline 前綴
+  - 詳見 PR #63
+
+- **Phase .b Phase 2 e2e alert fire-through harness design doc（v2.8.0, B-1 Phase 2 prep）**
+  - 新增 `docs/internal/design/phase-b-e2e-harness.md` — 描述從 `conf.d/` 寫入 → webhook 收到 alert 的端到端 latency 量測 harness 設計
+  - **Measurement model**：5-anchor（T0 driver write / T1 scan-complete gauge / T2 reload-complete gauge / T3 Prometheus alert activeAt / T4 webhook receive）；scrape+eval 交織塌成單一 stage C 不假裝拆；driver 進 compose 同 kernel clock；fire+resolve 對稱量測。需 exporter 加兩個 timestamp gauges（同 PR ~10 行）
+  - **Architecture choice**：docker-compose 而非 k3d，論證 K8s networking jitter 落在 5s scrape quantization 解析度以下；ConfigMap-symlink 行為已被 A-8b unit test (PR #54) 覆蓋
+  - **Customer sample 採 calibration gate 模型，非 hard blocker**：output JSON 帶 `fixture_kind` × `gate_status` 欄位；synthetic-v2（zipfian + power-law）為 v2.8.0 baseline，customer-anon 抵達後跑 ±30% 校準 gate；v2.9.0 cut 前未抵達觸發 kill switch go/no-go review
+  - **Run isolation**：每 run 用獨立 `tenant_id=bench-run-{i}` 避 Alertmanager dedup；fixture pre-create 避 fsnotify create-vs-modify 路徑差異；第 1 run 標 warm_up 不入聚合；n≥30 + bootstrap 95% CI
+  - 詳見 design doc §1–§11；acceptance criteria 在 §9（含 exporter gauge / pushgateway service / send_resolved / actual-vs-threshold rule 等具體要求）
+
 - **Phase .b 1000/2000/5000-tenant hierarchical baseline（v2.8.0, B-1 Phase 1 + B-8）— 此 baseline 非 definitive SLO 承諾**
   - ⛔ **重要 disclaimer**：以下數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 需 Phase 2 customer anonymized sample 校準後重跑（DEC-B in planning §10）。下游文件引用須附「Phase 1 synthetic baseline」前綴
   - **11 new Go benchmarks** in `components/threshold-exporter/app/config_hierarchy_bench_test.go`：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` + `DiffAndReload_Hierarchical_1000_OneTenantChanged`（B-8 blast-radius with `affected-tenants` metric per size）

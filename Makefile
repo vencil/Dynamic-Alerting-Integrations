@@ -51,6 +51,24 @@ go-bench-clean: ## Go micro-benchmark via bench_wrapper (stdout-clean, -json fil
 		bash $(CURDIR)/scripts/tools/ops/bench_wrapper.sh \
 		-bench=. -benchmem -count=$${COUNT:-5} -run="^$$" -timeout=15m ./...
 
+.PHONY: benchmark-report
+benchmark-report: ## 1000-scale baseline (13 benches: 8 flat + 5 hierarchical) → .build/bench-baseline.txt（issue #60 Phase 1, informational; COUNT/BENCHTIME 可覆寫）
+	@mkdir -p .build
+	@echo "[benchmark-report] running 1000-scale baseline (count=$${COUNT:-6}, benchtime=$${BENCHTIME:-3s}; samples 2..N treated as steady-state by Phase 2 median-of-5)"
+	@cd components/threshold-exporter/app && \
+		BENCH_OUT_DIR="$(CURDIR)/.build" \
+		bash $(CURDIR)/scripts/tools/ops/bench_wrapper.sh \
+		-bench='_1000(_|$$)' -benchmem -count=$${COUNT:-6} -run='^$$' \
+		-timeout=20m -benchtime=$${BENCHTIME:-3s} ./...
+	@cp .build/bench.out.txt .build/bench-baseline.txt
+	@echo "[benchmark-report] wrote .build/bench-baseline.txt ($$(wc -l < .build/bench-baseline.txt) lines)"
+	@echo "[benchmark-report] Phase 1 informational — review trend manually before tagging (issue #60)"
+
+.PHONY: benchmark-report-warn
+benchmark-report-warn: ## benchmark-report 但失敗不阻擋（pre-tag 用，issue #60 Phase 1 informational）
+	@$(MAKE) benchmark-report || \
+		echo "[pre-tag] ⚠ benchmark-report failed (informational, not blocking — issue #60 Phase 1)"
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)
@@ -437,10 +455,11 @@ version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs playbook-freshness-ll ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag）
+pre-tag: version-check lint-docs playbook-freshness-ll benchmark-report-warn ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness ✅"
+	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
 

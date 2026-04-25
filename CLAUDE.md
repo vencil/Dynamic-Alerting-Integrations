@@ -96,6 +96,8 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 
 五線版號（`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `tenant-api/v*`）。完整步驟、Distribution artifacts、踩坑記錄見 [`docs/internal/github-release-playbook.md`](docs/internal/github-release-playbook.md)。
 
+**Pre-tag 加跑 `make benchmark-report`（v2.8.0, issue #60 Phase 1）**：1000-tenant baseline 寫到 `.build/bench-baseline.txt`，informational only（pre-tag 不阻擋）。Tag 前人眼比上次 trend；異常時延遲 tag 並先在 issue #60 留 comment。Nightly `bench-record` workflow（main only, 90 天 retention）累積 ~28 點數據後評估 Phase 2 hard gate（3× median-of-5）。
+
 ## AI Agent 環境
 
 - **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`（或 `make dc-run`）

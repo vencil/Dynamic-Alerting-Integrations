@@ -108,12 +108,14 @@ lang: zh
 | `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
 | `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
 | `docs/internal/component-health-snapshot.md` | maintainer, ui-engineer | Component Health Snapshot (v2.7.0 Phase .a baseline) |
+| `docs/internal/design/phase-b-e2e-harness.md` | maintainers, Platform Engineers | Phase 2 E2E Harness — Alert Fire-through Latency Design |
 | `docs/internal/design-system-guide.md` | maintainers | Design System Guide |
 | `docs/internal/dev-rules.md` | All | 開發規範 (Development Rules) |
 | `docs/internal/doc-template.md` | All | 文件模板規範 |
 | `docs/internal/dx-tooling-backlog.md` | maintainers, contributors | DX Tooling Backlog |
 | `docs/internal/frontend-quality-backlog.md` | maintainers, AI Agent | 前端品質待辦 (Frontend Quality Backlog) |
 | `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
+| `docs/internal/pitch-deck-talking-points.md` | maintainers, business | Pitch Deck Talking Points — v2.8.0 Phase 1 Baseline |
 | `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
 | `docs/internal/ssot-migration-pilot-report.md` | maintainers | SSOT 語言遷移 Phase 1 Pilot Report |
 | `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
