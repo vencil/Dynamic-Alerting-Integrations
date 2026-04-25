@@ -423,7 +423,7 @@ Remove-Item "C:/Users/<user>/AppData/Local/Temp/release-body.txt" -Force
 | 54 | Ad-hoc `_commit.ps1` / `_pr.bat` script proliferation — 每個 session 重寫一次 | PR #39 寫了 `_p39_commit.ps1`；PR #40 寫了 `_p40_commit.ps1`、`_p40_pr.bat`、`_p40_checks.bat`、`_p40_failog.bat`、`_p40_diag.bat`（五隻！）—— 全部 reinvent 既有 `scripts/ops/win_git_escape.bat` 的功能。**根因**：session agent 沒讀 playbook 就動手，每次撞到 FUSE/MCP 問題就寫 throw-away script，下次 session 看不到（被 `.gitignore _*.bat` 藏起來）又重寫一次。**長期解法**（v2.8.0, PR #41）：(1) `scripts/tools/lint/check_ad_hoc_git_scripts.py` 以 whitelist 模式阻擋 `scripts/ops/` / `scripts/tools/` / `tools/` 外的 `*.bat` / `*.ps1` / `*.cmd`；(2) `.gitignore` 不再藏 scratch script（adopt-or-delete 政策）；(3) 新 subcommand 直接擴充 `win_git_escape.bat` / `win_gh.bat`。**下次 session 要寫 `_foo.bat` 前**：先 `scripts/ops/win_gh.bat raw gh ...` 或 `scripts/ops/win_git_escape.bat raw git ...`；真的需要新 subcommand 就擴充 wrapper（whitelist hook 會強制如此）🛡️ |
 | 55 | `.bat` wrapper 三要素（Short path + CRLF + ASCII）沒有全備 | PR #41 新增 `win_gh.bat` 初次執行時三次失敗：(1) 行尾 LF → cmd 報 `'REM' is not recognized`（每個 token 當 command 找）；(2) 忘 `set PATH=...Git\cmd...` → gh 報 `unable to find git executable in PATH`；(3) `"C:\Program Files\GitHub CLI\gh.exe"` 在 PowerShell 下被多層 quote 破壞，不管怎麼逃脫都失敗。**三個對策一次到位**：(a) 8.3 short path `C:\PROGRA~1\GITHUB~1\gh.exe`（避免任何 quote 問題）；(b) wrapper 開頭強制 `set "PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%PATH%"`；(c) 檔案以 CRLF 儲存、全 ASCII（驗證：`Get-Content -Encoding Byte -TotalCount 200` 看到 `0D 0A`）。詳見 [§MCP Shell Pitfalls](#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀) |
 | 56 | Squash-merge base PR 造成下游 stacked PR 進入 `mergeStateStatus: DIRTY` → GH 靜默跳過 `pull_request` CI（零 workflow 觸發） | PR #41 堆在 PR #40 分支上推開；PR #40 以 **squash** merge 到 main，PR #40 原 commits (`f5ccb7d`, `84e6ab5`) 在 PR #41 分支還在，跟 main 的 squashed 版本 (`23c189c`) 在 GH server 比對時算「重複但不同 hash」→ 無法自動合成 merge-ref → `mergeStateStatus=DIRTY`。**關鍵副作用**：`on: pull_request` 的 workflow **完全不觸發**（`gh run list --branch <br>` 空，`gh pr checks` 回 `no checks reported`），很容易被誤判成「GH Actions 壞了」或「path filter 過濾掉」。**正解**：(1) 在 Windows 側 `git rebase origin/main`（squashed commits 會自動丟掉，重複 diff 被 cherry-pick 去重）→ `git push --force-with-lease`；(2) 若 squash diff 不完全對得上，手動 `git rebase -i origin/main` drop 掉重複 commits。**常伴陷阱**：同時確認 wrapper 的 `PATHEXT` 有設（#34）—— PR #41 首次 dogfood 時雖然 playbook template 寫了 `set PATHEXT=...` 但 `win_gh.bat` / `win_git_escape.bat` 實際程式碼忘設，撞到使用者 profile 的 `PATHEXT=.CPL` 直接讓 gh 回 `unable to find git executable in PATH`（雖然 PATH 有 Git\cmd）。Template ↔ actual code 之間會 drift，wrapper 起手式固定六行（`setlocal` / `PYTHONUTF8` / `chcp 65001` / `PATHEXT` / `PATH` / `GH_CMD` 或 `GIT_CMD`）缺一不可 🛡️ |
-| 57 | FUSE 側 `pre-commit` 跑 `head-blob-hygiene` hook 長時間 0-output 疑似卡死 | `check_head_blob_hygiene.py` 對 HEAD 全部 ~850 個 blob 跑 `git cat-file --batch` + NUL / EOF / YAML 截斷 heuristic。CI 側 ~6 秒，FUSE 側可以**完全卡住 17+ 分鐘 0 output**（PR #46 / PR #47 親踩兩次）。**根因候選**：`git count-objects -v` 同時回報 `warning: garbage found: .git/objects/pack/tmp_pack_*`、`.git/objects/XX/tmp_obj_*` 多筆 FUSE stale temp → `git cat-file` 在某些 pack 上卡住。**診斷**：(a) `tail` pre-commit log 看最後一個成功的 hook 名（確認真卡在 head-blob-hygiene 而非別的）；(b) 觀察 `pre-commit.exe` 程序記憶體 <10 MB 且 10+ 分鐘無進度。**短期處置**：kill `pre-commit.exe` + `git commit --no-verify`，在 commit body 明寫 bypass 理由 + 列出已手動 spot-check 通過的關鍵 hook（例：`pre-commit run file-hygiene --all-files` / `pytest` / `pre-commit run check-techdebt-drift --hook-stage pre-push --all-files`）。**中期**：清 stale temp —— Windows 側 `git fsck --no-reflog` + 手動 `Remove-Item .git/objects/pack/tmp_*` + `.git/objects/*/tmp_*`。**長期**：hook 自身加 progress output（每 100 blobs 印一行）讓「卡住」vs「慢」可區分 🛡️ |
+| 57 | FUSE 側 `pre-commit` 跑 `head-blob-hygiene` hook 長時間 0-output 疑似卡死 | **🟡 Mitigated（v2.8.0）**：根因 = FUSE stale temp 累積。**自動清理**：`make fuse-reset` 串 Level 1+3，含 stale temp 清除；S#18 親手清掉 288 個 >60min stale 後 hook 從 17+ 分鐘恢復 6 秒。**recovery 路徑**：(a) `kill pre-commit` + `make fuse-locks` 確認 phantom；(b) `make commit-bypass-hh MSG=_msg.txt` 走窄 bypass（自動寫 commit-msg trailer 記錄 `head-blob-hygiene` skip 原因 + `pr_preflight.py` 後驗）；(c) Windows 側 `git fsck --no-reflog` 清 stale；(d) 復活後 `~/.cache/pre-commit/patch{TS}-{PID}` backup 可 `git apply` 還原被 unstaged-stash 吃掉的檔（S#31 發現的 recovery vector）。**仍待**：hook 自身加 progress output（每 100 blobs 印一行）讓 hang vs slow 可區分 🛡️ |
 | 58 | `make git-preflight` 把自身 bash 程序誤判為「活躍 git 程序」跳過清理 | preflight helper `scripts/session-guards/git_check_lock.sh` 用 `pgrep git` 偵測 active git 程序決定要不要清 `.git/*.lock`，卻把 Makefile 本身啟動的 bash subshell（其 argv 含 `git` 字串的 path）當成活 git，於是**永遠跳過清理**。**表現**：`make git-preflight` 回報「lock exists but git active → skip」但實際沒有 git 在跑，lock 永久存在。**修法**：過濾自身 PID + parent PID：`pgrep git \| grep -v -E "^($$\|$PPID)$"`；或改偵測 `.git/index.lock` 的 mtime（> 60s 無進度視為 stale）。歸檔於 `v2.8.0-planning.md` §12.4 #2，排入 A-12 子項 (v) 施工週。**手動繞道**：直接 `rm -f .git/*.lock` 或 Windows 側 `Remove-Item .git\*.lock -Force` |
 | 59 | `.git/HEAD` 被 null byte 填充至 57 bytes（正常 45）→ `git rev-parse HEAD` fatal | FUSE 寫 cache 在 context compaction 被 drop 時，部分檔案沒 flush 完整，`.git/HEAD` 尾巴殘 NUL bytes。正常內容 `ref: refs/heads/<branch>\n` 約 40-50 bytes；若檔案 ≥ 55 bytes 且尾端 hexdump 全是 `00 00 00`，基本是 FUSE cache loss（見 trap #9）。**診斷**：`wc -c .git/HEAD` + `hexdump -C .git/HEAD \| tail`。**修法**（不需 full fuse-reset）：`printf 'ref: refs/heads/<branch>\n' > .git/HEAD`（若在 FUSE 側失敗則走 Windows 側 `[IO.File]::WriteAllText("C:\...\.git\HEAD", "ref: refs/heads/<branch>`n", [Text.UTF8Encoding]::new($false))`）。**長期**：`scripts/ops/git_check_lock.sh` 加 HEAD 長度 + 首行格式 sanity check，異常即 report + auto-repair。歸檔於 §12.4 #4，排入 A-12 子項 (v) |
 | 60 | `generate_doc_map.py` / 類似 regen 工具執行途中遭 FUSE fsync 中斷 → HEAD corruption + 全檔假 "new file" | **✅ Codified（PR #56, v2.8.0）**：regen 工具走 `--safe` flag，`scripts/tools/dx/_atomic_write.py::atomic_write_text()` 寫 tmp → chmod → `os.replace` 原子搬檔；目標檔不再短暫以半寫狀態存在。`generate_doc_map.py --generate --safe` / `generate_tool_map.py --generate --safe` 已 opt-in 支援。**出事救援**：`make recover-index`（PR #44 plumbing 逃生門）或 `git reset HEAD -- .`。原 RCA + 手動 recovery SOP → [`archive/automation-origins/trap-60-fuse-fsync.md`](archive/automation-origins/trap-60-fuse-fsync.md) |
@@ -568,20 +568,17 @@ FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind moun
 
 **1. VS Code Git 開關（專案級，不影響其他專案）**
 
+✅ **已自動化（v2.8.0）**：`scripts/session-guards/session-init.py` PreToolUse hook 在每個 Claude Code session 第一次 `Bash`/`Edit`/`Write` 呼叫時自動跑 `vscode_git_toggle off`，後續同 session 為 O(1) no-op；不需要手動 invoke。詳見 repo root `CLAUDE.md` §Agent 起手式。
+
+僅以下情境需手動：(a) 非 Claude Code 的人類 dev session；(b) hook 失效偵錯；(c) session 結束後恢復 IDE 體驗：
+
 ```bash
-# Agent session 開始時 — 關閉 VS Code 背景 Git
-python scripts/session-guards/vscode_git_toggle.py off
-
-# Session 結束或手動開發時 — 打開
-python scripts/session-guards/vscode_git_toggle.py on
-
-# 查看目前狀態
-python scripts/session-guards/vscode_git_toggle.py
+python scripts/session-guards/vscode_git_toggle.py off    # 關
+python scripts/session-guards/vscode_git_toggle.py on     # 開
+python scripts/session-guards/vscode_git_toggle.py        # 查看
 ```
 
-原理：VS Code 即時 hot-reload `.vscode/settings.json`，切換後立即生效。檔案已在 `.gitignore` 排除。
-
-**⚠️ Agent 起手式**：每次 Cowork session 開始，**先跑 `vscode_git_toggle.py off`** 再做任何 git 操作。
+切換靠 VS Code hot-reload `.vscode/settings.json`，立即生效。`session-init` telemetry 寫到 `~/.cache/vibe/session-init.log`（Windows `%LOCALAPPDATA%\vibe\`）。
 
 **2. Git Config FUSE 調校（路徑條件式，只影響本 repo）**
 
@@ -666,91 +663,21 @@ git commit 失敗，錯誤訊息是 ...
 
 ### 修復層 B：FUSE Cache 重建（Level 1 ~ 5）
 
-當檔案殘影 / phantom lock 反覆出現、`rm` 過的檔案還看得到、或 git index 與磁碟內容對不上時，按以下層次逐步重建（輕 → 重）。優先跑 `make fuse-reset`，它會自動串 Level 1 + Level 3。
+殘影 / phantom lock 反覆 / `rm` 過的檔案還看得到 / index 與磁碟內容對不上時，輕→重逐層走。每層原由與設計脈絡 → [`archive/automation-origins/fuse-cache-recovery.md`](archive/automation-origins/fuse-cache-recovery.md)。
 
-**Level 1 — Cowork VM 端 drop dentry/inode cache**
+| Level | 動作 | Codified |
+|---|---|---|
+| 1 | `sync; echo 2 \| sudo tee /proc/sys/vm/drop_caches`（VM kernel cache；常無 sudo） | ✅ `make fuse-reset` 串 |
+| 2 | **最實用**：Cowork 桌面 UI 把 workspace 取消再重選 → FUSE driver per-session cold start（解 9 成殘影） | ⛔ 需手動 UI 操作 |
+| 3 | Windows 端清壓著 inode 的 process：(a) `vscode_git_toggle off` (b) `git_check_lock.sh --clean` (c) `Stop-Process Code, git, pre-commit` | ✅ `make fuse-reset` 串 a/b/c |
+| 4 | 核彈：`make session-cleanup` → 關 Cowork 桌面、重開、開新 session | ✅ make target |
+| 5 | Sysinternals `handle64.exe -nobanner vibe-k8s-lab` 找壓 inode 的 PID → `Stop-Process -Id <PID> -Force`；仍殘 → `chkdsk C: /scan` | ⛔ admin tool |
 
-```bash
-sync
-echo 2 | sudo tee /proc/sys/vm/drop_caches   # 需要 sudo；Cowork VM 常沒給
-```
+**建議順序**：`make fuse-reset` → Level 2 unmount-remount → `make session-cleanup` → Level 5。**驗證**：`ls -la .git/ \| grep -E 'lock\|index'` 應無 `*.lock` + `git status -sb` 應無殘影。
 
-只影響 VM 側的 kernel cache。無 sudo 時跳過，不影響後面層級。
+**Level 6 — rename-trick** ✅ **superseded by Trap #44 + Windows 逃生門**
 
-**Level 2 — Cowork UI 把 workspace unmount 再重選**（**最實用**）
-
-在 Cowork 桌面應用側邊欄把目前選取的資料夾取消，再重新選一次同樣的資料夾。這會讓 Cowork 重啟 FUSE driver 的 per-session state，等效於 FUSE userspace cache 冷啟動。9 成的殘影問題這一步就能解決。
-
-**Level 3 — Windows 端把壓住 inode 的 process 清掉**
-
-爛掉的 FUSE cache 多半是 Windows 上的 VS Code 或 Git for Windows 背景程序持續握著 file handle，讓 FUSE 以為檔案 busy → 快取無法驗證一致性。對應動作（`make fuse-reset` 自動跑 a/b/c）：
-
-```powershell
-# (a) 關 VS Code 背景 Git 掃描
-python scripts/session-guards/vscode_git_toggle.py off
-
-# (b) 清 stale .git/*.lock
-bash scripts/session-guards/git_check_lock.sh --clean
-
-# (c) 砍殘留的 port-forward / helm / kubectl / git process
-Get-Process Code, git, pre-commit -ErrorAction SilentlyContinue | Stop-Process -Force
-```
-
-**Level 4 — 整個 Session 重啟（核彈選項）**
-
-```bash
-make session-cleanup
-```
-
-然後**關 Cowork 桌面應用**、重開、開新 session。這會重建 FUSE driver process 跟所有 kernel mount 狀態。
-
-**Level 5 — 深層診斷（最後手段）**
-
-用 Sysinternals `handle64.exe` 列出誰還握著 `vibe-k8s-lab/` 下的 file handle：
-
-```powershell
-# 下載 handle64.exe：https://learn.microsoft.com/sysinternals/downloads/handle
-handle64.exe -accepteula -nobanner "vibe-k8s-lab"
-# 找到 PID 後：
-Stop-Process -Id <PID> -Force
-```
-
-若仍有殘影，跑 `chkdsk C: /scan`（唯讀掃描，不影響 FUSE）檢查底層 NTFS metadata 是否出錯。
-
-> **驗證重建成功**：`ls -la .git/ | grep -E 'lock|index'`（應該無 `*.lock`）+ `git status -sb`（應該無「殘影檔案」）。
-
-**Level 6 — Cowork VM 內的 rename-trick（Level 2/4/5 都不可用時的最後救命稻草）**
-
-2026-04-10 遇到的案例：Cowork 桌面無法重選資料夾、沒有 PowerShell、沒有 docker、沒有 sudo。phantom `.git/index.lock`（inode `7599824371576445`）被 stat/exists 看見，但 `ls`、`open`、`unlink`、`shutil.copy` 全部 ENOENT 或 EPERM。同時 `os.unlink` 在整個 `.git/` 下都回 EPERM（FUSE 層 block unlink）。
-
-關鍵觀察：**CREATE 仍可以成功、RENAME 也可以成功**。於是可以繞過：
-
-```python
-import os
-# (1) 建一個其他名字的檔案
-fd = os.open('.git/_scratch.tmp', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-os.close(fd)
-
-# (2) 把它 rename 到 phantom 路徑 — rename 會 override 掉 phantom dentry，
-#     讓 .git/index.lock 變成一個真正存在的 0-byte 檔案
-os.rename('.git/_scratch.tmp', '.git/index.lock')
-
-# (3) 再 rename 走 — 此時 .git/index.lock 已是真檔，rename 成功後 dentry 消失
-os.rename('.git/index.lock', '.git/_old_lock.tmp')
-
-# (4) 驗證 phantom 已清除
-assert 'index.lock' not in os.listdir('.git')
-assert not os.path.exists('.git/index.lock')
-
-# (5) 測試 git 的 O_CREAT|O_EXCL 現在可以用
-fd = os.open('.git/index.lock', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-os.close(fd)
-os.rename('.git/index.lock', '.git/_old_lock2.tmp')  # 讓 git 可以自己 acquire
-```
-
-清理殘留的 `.git/_old_lock*.tmp` 需要等下次 Level 2/4 cold-restart — 這些 0-byte 檔案不影響 git 操作。
-
-為何 rename 可行：FUSE 的 rename 走 `create+unlink` path 的相反操作（由 userspace driver 代為執行 NTFS 層的 `MoveFileEx`），而 Windows 的 `MoveFileEx` 在 phantom dentry 情況下會對齊到真實 NTFS 狀態，等於強制 dentry 重新 validate 一次。同理，`O_CREAT|O_EXCL` 在 phantom dentry 下會 EEXIST，但 rename-over 不會。
+當 Level 1–5 全部不可用時，原本的 fallback 是 Cowork VM 內走 `os.rename`-over-phantom 的繞道。v2.8.0 起此路徑已被 Trap #44 結論「phantom 薛丁格態唯一可靠解法 = `win_git_escape.bat` 走 Windows 原生 git」與 PR #44 plumbing 逃生門（`scripts/ops/fuse_plumbing_commit.py` / `make recover-index`）取代。原 RCA + 2026-04-10 case study + Python 範例 → [`archive/automation-origins/fuse-rename-trick.md`](archive/automation-origins/fuse-rename-trick.md)。
 
 ### Git 操作決策樹
 
