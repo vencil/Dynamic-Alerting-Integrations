@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -228,6 +229,131 @@ func TestObserveBlastRadius_DistinctLabelsCreateDistinctSeries(t *testing.T) {
 	if got := testutil.CollectAndCount(fresh.blastRadius); got != 4 {
 		t.Errorf("expected 4 distinct series, got %d", got)
 	}
+}
+
+// ============================================================
+// v2.8.0 B-3 — reload-duration + debounce-batch histograms
+// ============================================================
+
+func TestObserveReloadDuration_RecordsOneSample(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	ObserveReloadDuration(150 * time.Millisecond)
+
+	text, err := prometheusTextExport(fresh.reloadDuration)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if !strings.Contains(text, "da_config_reload_duration_seconds_count 1") {
+		t.Errorf("expected _count=1; export:\n%s", text)
+	}
+	// 150ms lands in le=0.25 (not le=0.1).
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.reloadDuration); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var le01, le025 uint64
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			for _, b := range metric.Histogram.Bucket {
+				if b.GetUpperBound() == 0.1 {
+					le01 = b.GetCumulativeCount()
+				}
+				if b.GetUpperBound() == 0.25 {
+					le025 = b.GetCumulativeCount()
+				}
+			}
+		}
+	}
+	if le01 != 0 {
+		t.Errorf("expected le=0.1 cumulative=0, got %d", le01)
+	}
+	if le025 != 1 {
+		t.Errorf("expected le=0.25 cumulative=1, got %d", le025)
+	}
+}
+
+func TestObserveDebounceBatch_RecordsBucketBoundary(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	// Three observations across two buckets: 1, 7, 47.
+	// le=1 → 1; le=2 → 1; le=5 → 1; le=10 → 2 (1+7); le=50 → 3 (all);
+	ObserveDebounceBatch(1)
+	ObserveDebounceBatch(7)
+	ObserveDebounceBatch(47)
+
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.debounceBatch); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	want := map[float64]uint64{
+		1:   1,
+		2:   1,
+		5:   1,
+		10:  2,
+		25:  2,
+		50:  3,
+		100: 3,
+		500: 3,
+	}
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			for _, b := range metric.Histogram.Bucket {
+				ub := b.GetUpperBound()
+				if w, ok := want[ub]; ok && b.GetCumulativeCount() != w {
+					t.Errorf("le=%v: got cumulative=%d want %d", ub, b.GetCumulativeCount(), w)
+				}
+			}
+			if metric.Histogram.GetSampleCount() != 3 {
+				t.Errorf("expected _count=3, got %d", metric.Histogram.GetSampleCount())
+			}
+			if metric.Histogram.GetSampleSum() != 55 {
+				t.Errorf("expected _sum=55, got %v", metric.Histogram.GetSampleSum())
+			}
+		}
+	}
+}
+
+func TestObserveDebounceBatch_NegativeIsNoOp(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	ObserveDebounceBatch(-1)
+
+	// Plain Histogram (not HistogramVec) is always present after
+	// registration; assert via sample count, not series count.
+	if got := histogramSampleCount(t, fresh.debounceBatch); got != 0 {
+		t.Errorf("negative observation should be no-op; got _count=%d", got)
+	}
+}
+
+// histogramSampleCount gathers a single Histogram and returns its
+// _count value. Helper for plain (non-Vec) histograms where the
+// series always exists post-registration regardless of observation
+// count.
+func histogramSampleCount(t *testing.T, h prometheus.Histogram) uint64 {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(h); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			return metric.Histogram.GetSampleCount()
+		}
+	}
+	return 0
 }
 
 // TestDiffAndReload_EmitsMetricsForSourceChange ensures the full pipeline

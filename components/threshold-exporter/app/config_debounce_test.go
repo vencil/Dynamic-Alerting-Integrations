@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // waitFor polls `cond` until it returns true or the timeout expires. Returns
@@ -338,6 +340,122 @@ func TestPendingDebounceReasons_AccumulatesThenClears(t *testing.T) {
 	// Post-fire: reasons cleared.
 	if remaining := m.PendingDebounceReasons(); len(remaining) != 0 {
 		t.Errorf("reasons not cleared after fire; got %v", remaining)
+	}
+}
+
+// TestFireDebounced_EmitsBatchAndDuration verifies v2.8.0 B-3 metrics
+// (debounce batch size + reload duration) land exactly once per fire,
+// with the batch sample reflecting the count of triggers collapsed.
+func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 30*time.Millisecond)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Fire 4 triggers within one window.
+	for i := 0; i < 4; i++ {
+		m.triggerDebouncedReload(ReloadReasonSource)
+	}
+	if !waitFor(t, 500*time.Millisecond, func() bool {
+		return m.DebounceFiredCount() >= 1
+	}) {
+		t.Fatalf("debounce never fired")
+	}
+	// Tail sleep so any rogue extra fire is also visible.
+	time.Sleep(80 * time.Millisecond)
+
+	// reload duration: exactly one Observe per fire.
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.reloadDuration); err != nil {
+		t.Fatalf("register reload: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather reload: %v", err)
+	}
+	gotReloadCount := uint64(0)
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			gotReloadCount = metric.Histogram.GetSampleCount()
+		}
+	}
+	if gotReloadCount != 1 {
+		t.Errorf("reloadDuration: expected _count=1 (one fired window), got %d", gotReloadCount)
+	}
+
+	// debounce batch: one Observe with sum=4 (collapsed triggers).
+	reg2 := prometheus.NewRegistry()
+	if err := reg2.Register(fresh.debounceBatch); err != nil {
+		t.Fatalf("register batch: %v", err)
+	}
+	families, err = reg2.Gather()
+	if err != nil {
+		t.Fatalf("gather batch: %v", err)
+	}
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			h := metric.Histogram
+			if h.GetSampleCount() != 1 {
+				t.Errorf("debounceBatch: expected _count=1, got %d", h.GetSampleCount())
+			}
+			if h.GetSampleSum() != 4 {
+				t.Errorf("debounceBatch: expected _sum=4 (4 collapsed triggers), got %v", h.GetSampleSum())
+			}
+		}
+	}
+}
+
+// TestSyncFallback_EmitsReloadDurationButNoBatch verifies the
+// debounceWindow=0 path observes reload duration (so SLO histograms
+// stay accurate) but skips the batch histogram (no batching to
+// observe — folding "1" samples in would skew p50).
+func TestSyncFallback_EmitsReloadDurationButNoBatch(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 0)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	m.triggerDebouncedReload(ReloadReasonSource)
+
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.reloadDuration); err != nil {
+		t.Fatalf("register reload: %v", err)
+	}
+	families, _ := reg.Gather()
+	gotReload := uint64(0)
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			gotReload = metric.Histogram.GetSampleCount()
+		}
+	}
+	if gotReload < 1 {
+		t.Errorf("sync fallback should still observe reload duration; got count=%d", gotReload)
+	}
+	// Plain Histogram series always exists after registration; assert
+	// no Observe via sample count, not series count.
+	reg2 := prometheus.NewRegistry()
+	if err := reg2.Register(fresh.debounceBatch); err != nil {
+		t.Fatalf("register batch: %v", err)
+	}
+	families, _ = reg2.Gather()
+	gotBatch := uint64(0)
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			gotBatch = metric.Histogram.GetSampleCount()
+		}
+	}
+	if gotBatch != 0 {
+		t.Errorf("sync fallback should NOT observe debounce batch; got _count=%d", gotBatch)
 	}
 }
 

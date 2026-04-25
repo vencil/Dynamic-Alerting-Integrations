@@ -227,13 +227,32 @@ defaults:
 }
 
 // TestBlastRadius_MixedTickEmitsThreeDistinctBuckets — single tick
-// produces source change for one tenant + defaults change shadowed
-// for another + defaults change applied for a third. Three buckets,
-// each observed exactly once.
+// produces three distinct (reason, scope, effect) buckets:
+//
+//	source/tenant/applied      — tenant-naive's own YAML mutated.
+//	defaults/global/shadowed   — defaults mysql_connections changed but
+//	                             tenant-overrides has its own override.
+//	defaults/global/applied    — defaults mysql_connections changed and
+//	                             tenant-third has no mysql override, so
+//	                             merged_hash moves.
+//
+// PR #69 follow-up: pre-fix the test only emitted two buckets
+// (source/applied + shadowed) because there was no tenant for whom the
+// defaults change resolved as `applied`. Adding tenant-third (which
+// overrides redis_connections only) closes the gap.
 func TestBlastRadius_MixedTickEmitsThreeDistinctBuckets(t *testing.T) {
 	fresh, _ := withIsolatedMetrics(t)
 	dir := t.TempDir()
 	writeBlastRadiusFixture(t, dir)
+
+	// Add a third tenant that overrides redis_connections only — so a
+	// defaults-side mysql_connections change reaches it as `applied`
+	// (no override on the changed key).
+	writeTestYAML(t, filepath.Join(dir, "team-a", "tenant-third.yaml"), `
+tenants:
+  tenant-third:
+    redis_connections: "65"
+`)
 
 	m := NewConfigManagerWithDebounce(dir, 0)
 	defer m.Close()
@@ -241,17 +260,17 @@ func TestBlastRadius_MixedTickEmitsThreeDistinctBuckets(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// (a) Source change for tenant-naive.
+	// (a) Source change for tenant-naive — reason=source, sourceChanged
+	// branch wins over the defaults branch in diffAndReload, so this
+	// tenant does NOT contribute to the defaults bucket.
 	writeTestYAML(t, filepath.Join(dir, "team-a", "tenant-naive.yaml"), `
 tenants:
   tenant-naive:
     redis_connections: "75"
 `)
-	// (b) Defaults change touching mysql (shadowed by tenant-overrides,
-	//     applied for... wait, tenant-naive's source ALSO changed so it
-	//     goes via reason=source). To get a clean defaults-applied
-	//     bucket we'd need a third tenant. Instead, only assert (a) +
-	//     defaults-shadowed for tenant-overrides.
+	// (b) Defaults mysql_connections change — shadowed by tenant-overrides
+	//     (has its own mysql override), applied for tenant-third
+	//     (no mysql override).
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), `
 defaults:
   mysql_connections: 250
@@ -261,15 +280,15 @@ defaults:
 
 	reloadOnce(t, m)
 
-	// (a) tenant-naive source change.
 	if c, sum := blastRadiusSample(t, fresh, "source", "tenant", "applied"); c != 1 || sum != 1 {
 		t.Errorf("source/tenant/applied: want count=1 sum=1, got count=%d sum=%v", c, sum)
 	}
-	// (b) tenant-overrides defaults change is shadowed (source not touched).
 	if c, sum := blastRadiusSample(t, fresh, "defaults", "global", "shadowed"); c != 1 || sum != 1 {
 		t.Errorf("defaults/global/shadowed: want count=1 sum=1, got count=%d sum=%v", c, sum)
 	}
-	// No cosmetic observation.
+	if c, sum := blastRadiusSample(t, fresh, "defaults", "global", "applied"); c != 1 || sum != 1 {
+		t.Errorf("defaults/global/applied: want count=1 sum=1, got count=%d sum=%v", c, sum)
+	}
 	if c, _ := blastRadiusSample(t, fresh, "defaults", "global", "cosmetic"); c != 0 {
 		t.Errorf("unexpected cosmetic observation: %d", c)
 	}

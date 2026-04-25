@@ -70,6 +70,8 @@ type configMetrics struct {
 	parseFailures    *prometheus.CounterVec // v2.8.0 A-8d: per-file YAML parse failures
 	defaultsShadowed prometheus.Counter     // v2.8.0 Issue #61: shadowed defaults change (split from defaultsNoop)
 	blastRadius      *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
+	reloadDuration   prometheus.Histogram   // v2.8.0 B-3: end-to-end diffAndReload elapsed (debounce window → atomic swap done)
+	debounceBatch    prometheus.Histogram   // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -117,6 +119,26 @@ func newConfigMetrics() *configMetrics {
 			// optimization tier; >10000 is sharding territory.
 			Buckets: []float64{1, 5, 25, 100, 500, 1000, 2500, 5000, 10000},
 		}, []string{"reason", "scope", "effect"}),
+		reloadDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "da_config_reload_duration_seconds",
+			Help: "End-to-end duration of diffAndReload (scan + per-tenant merge + blast-radius emit + fullDirLoad + atomic swap). Observed once per fired debounce window or once per synchronous fallback (debounceWindow=0). v2.8.0 B-3: feeds the empirical p99 used to validate the 300ms debounce floor and inform Phase 2 SLO sign-off.",
+			// Buckets cover synthetic 1000-tenant baseline (~200ms p50,
+			// ~500ms p99) + 5000-tenant tail (~1.1s) + headroom for
+			// degraded FUSE / NFS mounts. 30s top-end exists so a
+			// pathological reload does not silently saturate the last
+			// bucket — operators want to see the actual tail.
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		}),
+		debounceBatch: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "da_config_debounce_batch_size",
+			Help: "Number of triggerDebouncedReload calls collapsed into a single fired window (v2.8.0 B-3 debounce effectiveness). Observed once per fireDebounced; sample count == fire count. p50 == 1 means debounce never coalesces (window may be too short or fsnotify storms are absent); p99 climbing past ~50 signals an event-storm pathology worth investigating.",
+			// Bucket boundaries chosen to surface (a) the typical 1-2
+			// case (single-file edits), (b) the K8s symlink-rotation
+			// case (3-10 fsnotify events per ConfigMap update), and
+			// (c) git-sync batch case (10-200 files in one rsync
+			// burst — exactly the scenario B-7 stress-tests).
+			Buckets: []float64{1, 2, 5, 10, 25, 50, 100, 250, 500},
+		}),
 	}
 }
 
@@ -151,7 +173,7 @@ func setConfigMetrics(m *configMetrics) {
 	configMetricsMu.Unlock()
 }
 
-// registerConfigMetrics installs all three metrics on the given registry.
+// registerConfigMetrics installs all metrics on the given registry.
 // Called by MetricsHandler during /metrics wiring.
 func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.scanDuration)
@@ -160,6 +182,8 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.parseFailures)
 	reg.MustRegister(m.defaultsShadowed)
 	reg.MustRegister(m.blastRadius)
+	reg.MustRegister(m.reloadDuration)
+	reg.MustRegister(m.debounceBatch)
 }
 
 // IncParseFailure bumps the parse-failure counter for a specific file
@@ -251,4 +275,25 @@ func ObserveBlastRadius(reason, scope, effect string, n int) {
 		return
 	}
 	getConfigMetrics().blastRadius.WithLabelValues(reason, scope, effect).Observe(float64(n))
+}
+
+// ObserveReloadDuration records one diffAndReload elapsed-time sample
+// (v2.8.0 B-3). Called from fireDebounced wrapper around diffAndReload
+// and from the synchronous-fallback path in triggerDebouncedReload so
+// every reload contributes one sample regardless of debounce mode.
+func ObserveReloadDuration(d time.Duration) {
+	getConfigMetrics().reloadDuration.Observe(d.Seconds())
+}
+
+// ObserveDebounceBatch records one debounce-window batch-size sample
+// (v2.8.0 B-3). Called once per fireDebounced with the count of triggers
+// collapsed into the window. Synchronous fallback (debounceWindow=0)
+// does NOT contribute to this histogram — it has no batching semantics
+// to observe, and folding "1" samples in would skew the p50 baseline
+// that ops use to detect debounce regressions.
+func ObserveDebounceBatch(n int) {
+	if n < 0 {
+		return
+	}
+	getConfigMetrics().debounceBatch.Observe(float64(n))
 }
