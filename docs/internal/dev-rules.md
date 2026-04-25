@@ -141,67 +141,21 @@ lang: zh
 
 ### 11. 檔案衛生：禁用 `sed -i` 在掛載路徑
 
-**規則**：**禁止** 對掛載路徑（`/sessions/*/mnt/**`）的檔案使用 `sed -i`。
+**規則**：禁止對掛載路徑（`/sessions/*/mnt/**`）用 `sed -i`——FUSE 下對缺 EOF newline 的檔案會截斷最後一行。改用 Read + Edit（首選）或 `git show HEAD:file | sed '...' | tr -d '\0' > file`（批次 pipe）。
 
-**為什麼**：FUSE 掛載下，`sed -i` 對 **缺少 EOF 換行的檔案** 會截斷最後一行（已踩過多次）。
-
-**應該用**：
-- **首選**：Read + Edit 工具（自動處理 EOF）
-- **批次 pipe**：`git show HEAD:file | sed '...' | tr -d '\0' > file`
-- **絕對不要**：`sed -i '...' file`
-
-**自動修復**：`file-hygiene` pre-commit hook 會偵測並修復 null bytes + 缺失 EOF 換行，但最好一開始就不要製造問題。
-
-> **⚠️ v2.7.1 LL — Symlink blob + EOF newline**：bulk「補 EOF newline」cleanup（Windows-side commit 尤甚）會把 symlink 的 blob 從 `../target.md` 變成 `../target.md\n`，Linux CI 的 `readlink()` 就解不了。`file-hygiene` hook 的 `os.path.islink()` 在 Linux/FUSE 側會擋下，但 Windows clone 若 `core.symlinks=false`，symlink 被物化成純文字檔、runtime guard 失效。防線：`.pre-commit-config.yaml` 把所有 symlink proxy md 加進 `exclude` 正則。完整事件與 repo symlink 清單見 [windows-mcp-playbook §v2.7.1 LL：`end-of-file-fixer` 會把 symlink blob 弄壞](windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞)。
+✅ **Codified**：`file-hygiene` pre-commit hook 偵測並修復 null bytes + 缺 EOF newline。**Symlink 例外（v2.7.1 LL）**：symlink proxy md 已在 `.pre-commit-config.yaml` `exclude` 正則內排除（避免 EOF fixer 把 `../target.md` 變成 `../target.md\n` 讓 Linux CI `readlink()` 解不了）；事件記錄見 [windows-mcp-playbook §v2.7.1 LL](windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞)。
 
 ### 12. Branch + PR 流程：禁止直推 main
 
-**規則**：任何程式碼或文件變更**不得**直接 commit 到 `main`。必須：
-1. 從 `main` 開 feature branch（命名慣例：`feat/xxx`、`fix/xxx`、`chore/xxx`、`docs/xxx`）
-2. 推到 remote → 開 PR
-3. 取得 owner 明確同意後才 merge
+**規則**：任何變更走 feature branch → PR → owner 同意後 merge；命名 `feat/` / `fix/` / `chore/` / `docs/`。歷史教訓：多次未審核直推 main 後才發現問題。
 
-**為什麼**：歷史教訓 — 多次 session 未經實質審核就直推 main，事後才發現問題。Branch + PR 強制建立 review 節點，避免未經檢視的變更進入主幹。
+✅ **Codified**：
+- `scripts/ops/protect_main_push.sh` pre-push hook（`pre-commit install --hook-type pre-push` 自動裝）攔截 main push
+- `make pr-preflight`（merge 前必跑）寫 `.git/.preflight-ok.<SHA>` marker；`scripts/ops/require_preflight_pass.sh` 走 `gh pr view` 狀態判斷（OPEN PR 才擋，WIP 直接放行）
+- 七項檢查：branch 身份 / behind main / conflict / local hooks / scope drift / CI 狀態 / PR mergeable
 
-**Harness**：`scripts/ops/protect_main_push.sh` 作為 pre-push hook，在 push 到 `main`（或 `master`）時攔截並報錯。安裝方式：
-```bash
-# 自動安裝（pre-commit install --hook-type pre-push 已包含）
-pre-commit install --hook-type pre-push
-
-# 或手動安裝
-cp scripts/ops/protect_main_push.sh .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
-```
-
-**PR 收尾 SOP（Branch Closing Checklist）**：
-
-merge 前執行 `make pr-preflight`（或 `make pr-preflight-quick` 跳過 local hooks），自動檢查七項：
-
-```
-┌─ 1. Branch 身份    確認在 feature branch，非 main
-├─ 2. Behind main    落後幾個 commit → 建議先 merge main
-├─ 3. Conflict       dry-run merge 偵測衝突
-├─ 4. Local hooks    pre-commit run --all-files
-├─ 5. Scope drift    check_pr_scope_drift.py（tool-map + working-tree clean，§P2）
-├─ 6. CI 狀態        gh pr checks（含 A/B 分類：pre-existing vs this-PR）
-└─ 7. PR mergeable   GitHub mergeable + review 狀態
-```
-
-各 status 的處理方式：
-
-| Status | 意義 | 處理 |
-|--------|------|------|
-| ✅ PASS | 檢查通過 | 無需動作 |
-| ⚠️ WARN | 可合併但有風險 | behind main → merge main；CI pending → 等 |
-| ❌ FAIL | 必須修復 | conflict → merge main 解衝突；CI fail → 看 A/B 分類決定是否需修 |
-| ⏭️ SKIP | 檢查被跳過 | gh 不可用 → 在 Windows 跑；hooks 跳過 → 改跑完整版 |
-
-**執行入口**（三條等價路徑）：
-- Cowork VM / Dev Container：`make pr-preflight` 或 `make pr-preflight-quick`
-- Windows 逃生門 (bat)：`win_git_escape.bat pr-preflight [PR#]`
-- Windows 逃生門 (ps1)：`win_git_escape.ps1 pr-preflight [PR#]`
-
-**例外**：若確實需要直推 main（例如 hotfix），必須在 commit message 或 push 命令中明確標記理由，並事後補 PR review。
+**執行入口**（三條等價）：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`。
+Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playbook.md`](github-release-playbook.md)。
 
 ## 互動工具變更 SOP
 
