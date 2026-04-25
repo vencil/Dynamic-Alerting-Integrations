@@ -31,6 +31,14 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Pre-tag benchmark report — Phase 1 of issue #60 3-phase rollout（v2.8.0）**
+  - **`make benchmark-report`** — 1000-tenant baseline 基準測試 → `.build/bench-baseline.txt`，使用既有 `bench_wrapper.sh`（A-15）。regex `_1000(_|$)` 涵蓋 13 支 1000-scale benchmarks：8 個 legacy flat（`Benchmark{ResolveSilentModes,FullDirLoad,IncrementalLoad_1000_NoChange,IncrementalLoad_1000_NoChange_MtimeGuard,IncrementalLoad_1000_OneFileChanged,ScanDirFileHashes,ScanDirFileHashes_1000_MtimeGuard,MergePartialConfigs}_1000`）+ 5 個 hierarchical（PR #59 新加：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_1000_NoChange,DiffAndReload_Hierarchical_1000_OneTenantChanged,BlastRadius_DefaultsChange_Hierarchical}_1000`）。Legacy flat 仍在生產（v2.7.0 fallback path），同 scale 一併 record 給 trend 分析。預設 `-count=6 -benchtime=3s`；第一個 sample 視為 warmup，由下游 median-of-5 分析（Phase 2）丟棄，target 本身 record 全 6 個。`COUNT` / `BENCHTIME` 可覆寫
+  - **`make pre-tag` 串入 `benchmark-report-warn`** — informational only，bench 失敗不阻擋 tag。Phase 1 設計刻意不加 hard gate（issue #60 §Tension：62% CI variance 證據）；maintainer tag 前人眼看 trend
+  - **`.github/workflows/bench-record.yaml`** — nightly 03:00 UTC + `workflow_dispatch`，僅 main，artifact 保留 90 天，`GITHUB_STEP_SUMMARY` 內嵌結果。4 週累積 ~28 點數據作為 Phase 2 entry 條件（hard gate at 3× median-of-5 baseline）的判斷基準
+  - **與 issue #60 acceptance 對照**：(1) Makefile target ✅；(2) pre-tag wiring ✅；(3) `.build/bench-baseline.txt` 輸出 ✅；(4) Go 版本固定 1.26 與 ci.yml SSOT 一致 ✅；(5) nightly schedule 解決「4-week stability」資料缺口 ✅；(6) release-please attachment ⏭️ 延後（current target 寫入 `.build/`，未串接 release notes asset upload；low-effort follow-up）
+  - **不做的事**（明確分階段）：不寫 `benchmarks/baseline.json`（Phase 2）；不加 hard gate（Phase 2）；不引入 `rhysd/github-action-benchmark`（Phase 1 評估後判定 Phase 2 再考慮）；不碰 PR template / commit lint enforcement（Q3 後續獨立工作）；release-please 自動 attach asset（low-priority follow-up）
+  - 詳見 issue #60 / planning §4 Phase .b 離場條件
+
 - **Post-merge housekeeping — PR #59 follow-up drift（v2.8.0）**：PR #59（B-1 Phase 1 + B-8）merge 後例行 drift 收尾，獨立 PR 以保留主 PR diff 純淨：
   - **`docs/internal/test-coverage-matrix.md`** 新增「Tier 2 — Performance Benchmarks」章節 + Phase .b 1000+ tenant baseline 子節，登錄 PR #59 加入 `components/threshold-exporter/app/config_hierarchy_bench_test.go` 的 13 支 hierarchical benchmarks（`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` × 4 patterns + `DiffAndReload_Hierarchical_1000_OneTenantChanged`）：每筆登 Tier / Coverage Target / Last Verified（v2.8.0）；附共用 helpers（`buildDirConfigHierarchical` / `reportResourceMetrics` / `bench*AtSize` 驅動函式）說明 + Phase 1 synthetic baseline disclaimer
   - **`benchmark-playbook.md` `verified-at-version`**：已為 v2.8.0（PR #59 同步更新），本 PR 確認無需 bump

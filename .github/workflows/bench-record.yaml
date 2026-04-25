@@ -1,0 +1,74 @@
+name: Bench Record (nightly)
+
+# Phase 1 of pre-tag benchmark gate (issue #60).
+#
+# Purpose: collect ~28 nightly data points / 4 weeks to characterize empirical
+# variance on GitHub Actions runners. This is informational only — there is NO
+# regression gate at this stage. Phase 2 will introduce a hard gate (3× of
+# median-of-5 baseline, main+release-please only) once stability is measured.
+#
+# Scope:
+#   - Runs only on main (cron + workflow_dispatch from main).
+#   - Bench artifacts retained 90 days for cross-quarter trend review.
+#   - Go version pinned to match ci.yml.
+
+on:
+  schedule:
+    # 03:00 UTC nightly — runner contention typically lowest in this window.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench-record:
+    name: 1000-tenant baseline (informational)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Run benchmark-report
+        run: make benchmark-report
+
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "### Bench Record — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f .build/bench-baseline.txt ]; then
+            cat .build/bench-baseline.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "(no bench output produced)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline-${{ github.run_id }}
+          path: |
+            .build/bench-baseline.txt
+            .build/bench.raw.jsonl
+            .build/bench.err.log
+          retention-days: 90
+          if-no-files-found: warn
