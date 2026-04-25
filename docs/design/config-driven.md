@@ -196,7 +196,7 @@ v2.7.0 從單一 SHA-256 升級為雙層 hash，區分「source 變更」與「m
 | `source_hash` | 單一 YAML 原始內容 | 偵測使用者的實際寫入操作 |
 | `merged_hash` | 繼承 + canonical-JSON-normalized 後的 merged config | 偵測「對該 tenant 有實質影響的變更」（濾除 formatter 噪音） |
 
-**Merge noop 偵測**：若 `_defaults.yaml` 變更但 merged_hash 未改變（純註解/空白/排序差異），exporter 不觸發 reload，僅 +1 `da_config_defaults_change_noop_total`。
+**Merge noop 偵測**：若 `_defaults.yaml` 變更但 merged_hash 未改變，exporter 不觸發 reload；v2.8.0 (Issue #61) 起依 effect 拆兩條路徑：純註解/空白/排序差異 → `da_config_defaults_change_noop_total`（cosmetic）；變動的 key 全被 tenant override 蓋掉 → `da_config_defaults_shadowed_total`（shadowed）。
 
 **300ms Debounce**
 
@@ -217,7 +217,9 @@ Debounce 可透過 `--scan-debounce=<duration>` 調整；壓測建議 100ms-500m
 |--------|------|------|
 | `da_config_scan_duration_seconds` | histogram | 單次 directory scan + merge 的延遲分佈（`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`） |
 | `da_config_reload_trigger_total{reason}` | counter | Reload 觸發原因統計，`reason ∈ {source, defaults, new_tenant, delete, forced}` |
-| `da_config_defaults_change_noop_total` | counter | `_defaults.yaml` 變更但 merged_hash 未變（純 formatter 噪音）的次數 |
+| `da_config_defaults_change_noop_total` | counter | `_defaults.yaml` 變更但 merged_hash 未變的次數。**v2.8.0 (Issue #61) 起語義收窄為 cosmetic-only**（comment-only / reorder / whitespace） |
+| `da_config_defaults_shadowed_total` | counter | **v2.8.0 (Issue #61)** — defaults 變更被 tenant override 擋下的次數（從 `noop_total` 拆出） |
+| `da_config_blast_radius_tenants_affected` | histogram | **v2.8.0 (Issue #61)** — 每 tick 受影響 tenant 分佈，labels = `reason / scope / effect`，buckets `[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]` |
 
 **Tenant API `/effective` endpoint（v2.7.0 B-3 delivery）**
 

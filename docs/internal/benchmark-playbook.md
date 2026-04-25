@@ -286,7 +286,7 @@ func silenceLogs(b *testing.B) {
 ### 發現（Phase 1 baseline 量測時順手踩出）
 
 1. **`diffAndReload` NoChange/OneTenantChanged/BlastRadius 時間相近**：因為 diffAndReload L341 尾段呼 `fullDirLoad` — per-tenant diff 階段快（5-50μs），但尾段 full-reload 占 dominant 150ms。**Phase 2 優化候選**：當 diff stage 顯示無變化時，skip 尾段 fullDirLoad 可省 ~150ms/tick
-2. **"Quiet defaults edit" noOp 生效**：blast-radius bench 初版用 `container_memory` key（tenants 有 override）→ defaults 變更被 shadowed → `affected-tenants: 0`（對應 `config_debounce.go` L313-318 的 quiet edit detection）。改用 `region_alert_schedule`（tenants 無 override）後 → 21 affected，符合預期。**Bench design 教訓**：測 blast-radius 必用 tenants 不 override 的 key，否則量到的是噪音
+2. **"Quiet defaults edit" noOp 生效**：blast-radius bench 初版用 `container_memory` key（tenants 有 override）→ defaults 變更被 shadowed → `affected-tenants: 0`（對應 `config_debounce.go` L313-318 的 quiet edit detection）。改用 `region_alert_schedule`（tenants 無 override）後 → 21 affected，符合預期。**Bench design 教訓**：測 blast-radius 必用 tenants 不 override 的 key，否則量到的是噪音。**v2.8.0 (Issue #61) production-equivalent metric**：`b.ReportMetric("affected-tenants")` 對應 production 的 `da_config_blast_radius_tenants_affected{effect="applied"}` histogram；當前 bench 量到的 21/42/105 等同於 `_sum / _count` 的單一觀測值。Shadowed/cosmetic 案例在 production 由 `effect={shadowed,cosmetic}` 分流，與此 bench 互補
 3. **`IncrementalLoad` ≠ hierarchical 熱路徑**：v2.6.0 保留的 `IncrementalLoad` 使用 `scanDirFileHashes`（root-only flat），不走 hierarchical。**A-10 後 production 走 WatchLoop → `diffAndReload` → `scanDirHierarchical`**。Benchmark 作者注意 call site 選對
 
 ### Phase 2 延伸（blocked）

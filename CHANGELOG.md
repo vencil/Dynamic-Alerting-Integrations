@@ -31,6 +31,15 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Issue #61 production blast-radius metric `da_config_blast_radius_tenants_affected`（v2.8.0, RFC）**
+  - **新 Histogram** `da_config_blast_radius_tenants_affected{reason, scope, effect}`，buckets `[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]`。`reason ∈ {source, defaults, new, delete}`；`scope ∈ {global, domain, region, env, tenant, unknown}`（widest changed defaults level for `reason=defaults`，`tenant` for source/new/delete）；`effect ∈ {applied, shadowed, cosmetic}`（applied = merged_hash 移動；shadowed = defaults 變動被 tenant override 擋下；cosmetic = comment/reorder 無語義 key 移動）
+  - **新 Counter** `da_config_defaults_shadowed_total` — 把原 `da_config_defaults_change_noop_total` 內混雜的「override 擋下變動」案例獨立計數，便於 ops 量化繼承機制擋下多少潛在風暴
+  - **語義收窄**：`da_config_defaults_change_noop_total` 改為僅計 cosmetic（comment-only / reorder / unrelated key），不再涵蓋 shadowed。詳見 §Changed 與 ADR-018 amendment
+  - **Per-tick group-by emission**：`diffAndReload` 一個 tick 收集 `(reason, scope, effect)` 計數，loop 結束後一次性 `Observe(N)` 多次（不丟 scope 維度）
+  - **新 helpers** `defaultsPathLevel` / `widestChangedScope` / `changedDefaultsKeys` / `tenantOverridesAll` / `parseDefaultsBytes` / `classifyDefaultsNoOpEffect` 在 `config_defaults_diff.go`，27 unit + 7 integration test 覆蓋
+  - **告警範例**（`k8s/03-monitoring/configmap-rules-platform.yaml`）：`histogram_quantile(0.99, sum by (le)(rate(...{effect="applied"}_bucket[5m]))) > 500` for 10m → P2 警報；`effect="applied"` 過濾避開 cosmetic / shadowed 假觸發
+  - 詳見 [Issue #61](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/61)（含 deep-review 兩輪決議）
+
 - **Phase .b 1000/2000/5000-tenant hierarchical baseline（v2.8.0, B-1 Phase 1 + B-8）— 此 baseline 非 definitive SLO 承諾**
   - ⛔ **重要 disclaimer**：以下數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 需 Phase 2 customer anonymized sample 校準後重跑（DEC-B in planning §10）。下游文件引用須附「Phase 1 synthetic baseline」前綴
   - **11 new Go benchmarks** in `components/threshold-exporter/app/config_hierarchy_bench_test.go`：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` + `DiffAndReload_Hierarchical_1000_OneTenantChanged`（B-8 blast-radius with `affected-tenants` metric per size）
@@ -145,6 +154,7 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Changed
 
+- **⚠ `da_config_defaults_change_noop_total` 語義收窄（Issue #61，v2.8.0 breaking-ish）**：原本同時涵蓋 cosmetic edit（comment-only / reorder）+ shadowed override（tenant 蓋掉變動的 default key）兩類事件；v2.8.0 起僅計 cosmetic，shadowed 案例移到新 `da_config_defaults_shadowed_total`。**Migration**：原本依賴此 counter 偵測「inheritance 機制擋下變動」的 dashboard / alert 改用新 counter；只想看 cosmetic 噪音的查詢不需改。ADR-018 §Metrics 已加 amendment。
 - **`CLAUDE.md` Makefile Top 7 擴充說明**：`make win-commit` 行補充 `+ fuse-commit / recover-index` 指向 PR #44 的 FUSE 逃生門工具鏈。
 - **`docs/internal/windows-mcp-playbook.md`** 新增 §FUSE Phantom Lock 防治 + §修復層 C 補 CreateNoWindow/`/s /c` 的實測 pattern（見下方 Fixed）。
 

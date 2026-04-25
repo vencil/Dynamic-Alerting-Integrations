@@ -53,7 +53,7 @@ conf.d/
 | `source_hash` | 原始 YAML 文件內容（未套繼承） | 只做 diff 觀察，不直接觸發 |
 | `merged_hash` | 套完 L0→L3 繼承後的 canonical JSON | **變化才 reload** |
 
-這解決了 v2.6.x 的痛點：ConfigMap 被 K8s symlink rotation 修改 mtime 但內容沒變 → v2.6.x 會假 reload；v2.7.0 因為 merged_hash 不變，透過 `da_config_defaults_change_noop_total` 計數跳過。
+這解決了 v2.6.x 的痛點：ConfigMap 被 K8s symlink rotation 修改 mtime 但內容沒變 → v2.6.x 會假 reload；v2.7.0 因為 merged_hash 不變而跳過。v2.8.0 (Issue #61) 將該事件依 effect 拆 `da_config_defaults_change_noop_total`（cosmetic）+ `da_config_defaults_shadowed_total`（shadowed by override）兩個 counter。
 
 **300ms Debounce**：
 
@@ -74,7 +74,9 @@ fsnotify event ──┘       │
 |--------|------|------|
 | `da_config_scan_duration_seconds` | Histogram | 每次 fullDirLoad 的耗時分佈 |
 | `da_config_reload_trigger_total{reason}` | Counter | 按 reason 分的 reload 觸發次數 |
-| `da_config_defaults_change_noop_total` | Counter | merged_hash 未變的 noop 次數（symlink rotation 吸收驗證） |
+| `da_config_defaults_change_noop_total` | Counter | merged_hash 未變的 noop 次數（symlink rotation 吸收驗證）。**v2.8.0 (Issue #61) 起 cosmetic-only**；shadowed 移到下方新 counter |
+| `da_config_defaults_shadowed_total` | Counter | **v2.8.0** — defaults 變更被 tenant override 擋下（從 noop_total 拆出） |
+| `da_config_blast_radius_tenants_affected` | Histogram | **v2.8.0** — 每 tick `(reason, scope, effect)` 受影響 tenant 分佈 |
 
 **相關 CLI (`da-tools` package)**：
 

@@ -152,7 +152,41 @@ When `_defaults.yaml` changes, `DefaultsToTenants` quickly identifies which tena
 |:-------|:-----|:-------|:------------|
 | `da_config_scan_duration_seconds` | histogram | — | Single periodic scan duration |
 | `da_config_reload_trigger_total` | counter | `reason` | Reload reason: source / defaults / new / delete |
-| `da_config_defaults_change_noop_total` | counter | — | Skipped reloads when merged_hash unchanged |
+| `da_config_defaults_change_noop_total` | counter | — | Skipped reloads when merged_hash unchanged — **v2.8.0 narrows the semantics to cosmetic-only** (see Amendment 2026-04-25) |
+| `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — Defaults change blocked by tenant override (split out from `da_config_defaults_change_noop_total`) |
+| `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — Per-tick distribution of affected tenants |
+
+### Amendment 2026-04-25 (Issue #61): noop semantic split
+
+The original §Reload logic conflated "comment-only edit" with "override-shadowed edit" under `da_config_defaults_change_noop_total`, leaving ops unable to distinguish "truly no impact" from "inheritance system blocked the change". v2.8.0 splits this by `effect`:
+
+```
+elif any ancestor _defaults.yaml changed:
+    recompute effective config → update merged_hash
+    if merged_hash changed:
+        trigger reload
+        emit blast_radius{effect="applied"}
+    else:
+        # Further classification (Issue #61)
+        compute changedKeys = diff(prior_parsed_defaults, new_parsed_defaults)
+        if len(changedKeys) == 0:
+            # Pure cosmetic: comment-only / reordering / whitespace
+            increment da_config_defaults_change_noop_total
+            emit blast_radius{effect="cosmetic"}
+        elif tenantOverridesAll(tenant_src, changedKeys):
+            # Shadowed: tenant overrides every changed key
+            increment da_config_defaults_shadowed_total
+            emit blast_radius{effect="shadowed"}
+        else:
+            # Logically unreachable (merged_hash should have moved)
+            # — defensive fallback to cosmetic
+            increment da_config_defaults_change_noop_total
+```
+
+Implementation notes:
+- New `m.parsedDefaults` field on `ConfigManager`, atomic-swapped together with `hierarchyHashes`, caching the normalized parsed dict (`map[string]any`) of every `_defaults.yaml`. ~1 MB at 1000 tenants.
+- `populateHierarchyState` eager-parses every defaults file at cold start; `diffAndReload` only re-parses files whose hash actually moved, reusing the prior parse otherwise.
+- See `components/threshold-exporter/app/config_defaults_diff.go` and Issue #61 RFC.
 
 ## Alternatives Considered
 

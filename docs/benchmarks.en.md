@@ -471,11 +471,13 @@ Per-file SHA-256 index + parsed config cache incremental reload path (introduced
 **Key Takeaways:**
 
 - **Mtime guard effect (production scenario)**: `NoChange_1000` 2.45 ms→**1.30 ms** (**-47%**); scan cost reduced from O(N×ReadFile+SHA256) to O(N×Stat)
-- **Dual-hash effect**: defaults changes that don't change merged_hash (e.g. comment-only) skip the entire reload (`da_config_defaults_change_noop_total` counter increments)
-- **B-4 telemetry (v2.7.0 already implemented)**: the following metrics observe reload behavior from the exporter:
+- **Dual-hash effect**: defaults changes that don't change merged_hash (e.g. comment-only) skip the entire reload. v2.8.0 (Issue #61) splits the event by effect: cosmetic → `da_config_defaults_change_noop_total`; override-shadowed → `da_config_defaults_shadowed_total`
+- **B-4 telemetry (v2.7.0 + v2.8.0 Issue #61 extensions)**:
   - `da_config_scan_duration_seconds` (histogram)
   - `da_config_reload_trigger_total{reason=source|defaults|new|delete}` (counter)
-  - `da_config_defaults_change_noop_total` (counter)
+  - `da_config_defaults_change_noop_total` (counter; cosmetic-only since v2.8.0)
+  - `da_config_defaults_shadowed_total` (counter; v2.8.0 new)
+  - `da_config_blast_radius_tenants_affected{reason,scope,effect}` (histogram; v2.8.0 new)
 - **v2.7.0 trade-off**: FullDirLoad increased from 35ms to 112ms is an acceptable cost (cold start happens once per pod) in exchange for the 86× hot-path speedup + dual-hash skip-reload capability
 
 ## pytest-benchmark Micro-Benchmarks
