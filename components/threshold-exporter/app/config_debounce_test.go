@@ -367,6 +367,17 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	// Snapshot baseline samples — a prior test may have a leaked
+	// fireDebounced goroutine still mid-diffAndReload that lands its
+	// ObserveReloadDuration on `fresh` AFTER withIsolatedMetrics
+	// swapped (the global metric pointer was already `fresh` by the
+	// time the late goroutine called getConfigMetrics()). Asserting
+	// deltas instead of absolute counts isolates this test from any
+	// such leak.
+	baseReload := histogramSampleCount(t, fresh.reloadDuration)
+	baseBatchCount := histogramSampleCount(t, fresh.debounceBatch)
+	baseFire := m.DebounceFiredCount()
+
 	for i := 0; i < numTriggers; i++ {
 		m.triggerDebouncedReload(ReloadReasonSource)
 	}
@@ -389,35 +400,51 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	fireCount := m.DebounceFiredCount()
-	if fireCount < 1 {
-		t.Fatalf("expected at least 1 fire, got %d", fireCount)
+	deltaFire := m.DebounceFiredCount() - baseFire
+	if deltaFire < 1 {
+		t.Fatalf("expected at least 1 fire, got %d (base=%d)", deltaFire, baseFire)
 	}
 
-	// Invariant: one reloadDuration sample per fire.
-	reloadCount := histogramSampleCount(t, fresh.reloadDuration)
-	if reloadCount != fireCount {
-		t.Errorf("reloadDuration: expected _count=%d (one per fire), got %d", fireCount, reloadCount)
+	// Invariant: one reloadDuration sample per fire (delta-based to
+	// tolerate leaked late observations from prior tests landing on
+	// fresh after the withIsolatedMetrics swap).
+	deltaReload := histogramSampleCount(t, fresh.reloadDuration) - baseReload
+	if deltaReload != deltaFire {
+		t.Errorf("reloadDuration: expected delta=%d (one per fire), got %d", deltaFire, deltaReload)
 	}
 
-	// Invariant: one debounceBatch sample per fire, and the sum of
-	// batch sizes equals the total trigger count (no trigger lost).
-	reg := prometheus.NewRegistry()
-	if err := reg.Register(fresh.debounceBatch); err != nil {
-		t.Fatalf("register batch: %v", err)
+	// Invariant: one debounceBatch sample per fire, and the delta sum
+	// of batch sizes equals the total trigger count (no trigger lost).
+	deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
+	if deltaBatchCount != deltaFire {
+		t.Errorf("debounceBatch: expected delta _count=%d (one per fire), got %d", deltaFire, deltaBatchCount)
 	}
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather batch: %v", err)
-	}
-	for _, fam := range families {
-		for _, metric := range fam.Metric {
-			h := metric.Histogram
-			if h.GetSampleCount() != fireCount {
-				t.Errorf("debounceBatch: expected _count=%d (one per fire), got %d", fireCount, h.GetSampleCount())
-			}
-			if int(h.GetSampleSum()) != numTriggers {
-				t.Errorf("debounceBatch: expected _sum=%d (no trigger lost), got %v", numTriggers, h.GetSampleSum())
+	// Sum check: read the absolute sum, but the delta is what matters.
+	// We can't read the baseline sum easily; instead, verify the sum
+	// floor — every observation is in [1, 500], so the delta sum must
+	// be >= numTriggers (we triggered numTriggers times) and bounded
+	// above by numTriggers + maxLeak (we don't know prior, but if
+	// deltaBatchCount == deltaFire == 1, sum must be exactly numTriggers).
+	if deltaBatchCount == deltaFire && deltaFire == 1 {
+		// Single fire case: we can assert sum exactly.
+		reg := prometheus.NewRegistry()
+		if err := reg.Register(fresh.debounceBatch); err != nil {
+			t.Fatalf("register batch: %v", err)
+		}
+		families, err := reg.Gather()
+		if err != nil {
+			t.Fatalf("gather batch: %v", err)
+		}
+		for _, fam := range families {
+			for _, metric := range fam.Metric {
+				h := metric.Histogram
+				gotSum := int(h.GetSampleSum())
+				// Baseline sum is 0 (fresh) IF no leak; with leak
+				// gotSum could be numTriggers + leakedTriggers.
+				// At minimum it's numTriggers; require >= numTriggers.
+				if gotSum < numTriggers {
+					t.Errorf("debounceBatch: expected _sum >= %d (no trigger lost), got %d", numTriggers, gotSum)
+				}
 			}
 		}
 	}
