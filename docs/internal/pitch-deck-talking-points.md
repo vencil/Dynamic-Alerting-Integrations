@@ -15,6 +15,8 @@ lang: zh
 
 本文件整理 v2.8.0 Phase 1 baseline（PR #59 / merge commit `f1f14e7`, merged 2026-04-25）對應的客戶對話 talking points。每個 section 提供（a）一段技術錨點 + 客戶語言版本，（b）明確的「**不要這樣講**」清單以防 overclaim。**請先讀完本文件結尾的 Honest baseline disclaimer 再引用任何數字到對外材料**。
 
+> **用詞釐清（避免混淆）**：本文件的 **Phase 1 / Phase 2** 一律指 `v2.8.0-planning §10` **B-1 Scale Gate program** 的兩個階段（Phase 1 = synthetic fixture baseline，已完成於 PR #59；Phase 2 = customer anonymized sample 校準 + full-stack e2e fire-through + hard SLO sign-off，gated on DEC-B，未啟動），**不是本 talking-points 文件自己的 phase**。本文件是 derivative artifact，會在 B-1 Phase 2 完成後**被同步更新**。
+
 ---
 
 ## 1. ADR-018 dual-hash 啟用的「Quiet defaults edit」noOp detection
@@ -88,7 +90,7 @@ PR #59 baseline（[benchmark-playbook.md §Resource Baseline](./benchmark-playbo
 
 - ❌ **「永遠只用 20 MB」** — 這是 1000-tenant 的數字；5000-tenant 是 42 MB
 - ❌ **「GC 完全沒有 pressure」** — 1000-tenant allocs/op ~1M（YAML parse 主導），4.17 M allocs/op for FullDirLoad；GC 有運作
-- ❌ **「無 leak 已被證明」** — 我們量到 1000/2000/5000 三點 goroutine 數都是 2 → 沒有 leak signal。這是 **absence of evidence**，不是 proof of absence；長時間 soak test 仍待 Phase 2
+- ❌ **「無 leak 已被證明」** — 我們量到 1000/2000/5000 三點 goroutine 數都是 2 → 沒有 leak signal。這是 **absence of evidence**，不是 proof of absence；長時間 soak test 仍待 B-1 Phase 2
 
 ---
 
@@ -130,14 +132,14 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 
 ## 4. ⛔ Honest Baseline Disclaimer ⛔
 
-> 本 talking points 基於 v2.8.0 Phase 1 synthetic fixture baseline（PR #59 / merge commit `f1f14e7`, merged 2026-04-25）。**不可作為客戶合約 SLA 承諾**。Definitive SLO sign-off 待 Phase 2 customer anonymized sample 校準後（DEC-B in `v2.8.0-planning §10`，內部 planning artifact）。
+> 本 talking points 基於 v2.8.0 **B-1 Phase 1** synthetic fixture baseline（PR #59 / merge commit `f1f14e7`, merged 2026-04-25）。**不可作為客戶合約 SLA 承諾**。Definitive SLO sign-off 待 **B-1 Phase 2** customer anonymized sample 校準 + full-stack e2e fire-through 量測完成（DEC-B in `v2.8.0-planning §10`，內部 planning artifact）。
 >
-> 引用此文件的數字到 customer-facing materials（pitch deck / proposal / RFP response）時，**必須**附帶「Phase 1 synthetic baseline / pending Phase 2 customer-data validation」前綴。
+> 引用此文件的數字到 customer-facing materials（pitch deck / proposal / RFP response）時，**必須**附帶「B-1 Phase 1 synthetic baseline / pending B-1 Phase 2 customer-data validation」前綴。
 
 ### 為什麼 Phase 1 不夠？
 
-- **Synthetic fixture 不等於客戶 workload**：`buildDirConfigHierarchical(b, N)` 用 8 domains × 6 regions × 3 envs = 144 leaf 的 geometric 分布。客戶真實 domain / region / env 比例**未知** — Phase 2 帶 customer anonymized sample 重跑才有代表性。
-- **未含 alert fire-through e2e**：本 baseline 只量 internal SLO（scan / reload / blast-radius），**不含** Prometheus + Alertmanager + receiver 完整鏈路。客戶在意的「config change → alert visibly stops firing」這條 e2e latency **沒量過**。
+- **Synthetic fixture 不等於客戶 workload**：`buildDirConfigHierarchical(b, N)` 用 8 domains × 6 regions × 3 envs = 144 leaf 的 geometric 分布。客戶真實 domain / region / env 比例**未知** — B-1 Phase 2 帶 customer anonymized sample 重跑才有代表性。
+- **未含 alert fire-through e2e**：本 baseline 只量 internal SLO（scan / reload / blast-radius），**不含** Prometheus + Alertmanager + receiver 完整鏈路。客戶在意的「config change → alert visibly stops firing」這條 e2e latency **沒量過**（亦待 B-1 Phase 2）。
 - **CI runner variance 20-50%**：Dev Container 量測有顯著 noise（observed: scan 32→51 ms, fullDirLoad 146→237 ms 跨兩次重跑）。SLA-grade 數字需 `count=10+` 且 isolated env。
 - **10000-tenant 是線性外推**：5000 是上限實測點。10000 的 ~2 秒 reload 數字是 5000 × 2 的數學外推，**非量測**。
 
@@ -147,17 +149,19 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 |---|---|---|
 | 內部 architecture review / contributor onboarding | ✅ 可 | 無 |
 | Engineering blog / 公開技術文章 | ⚠️ 有條件 | 「Phase 1 synthetic baseline, lab fixture」 |
-| Pitch deck / sales deck | ⚠️ 有條件 | 「Phase 1 synthetic baseline / pending Phase 2 customer-data validation」 |
-| Customer proposal / RFP response | ⚠️ 有條件 | 同上 + 註明 Phase 2 校準時程 |
+| Pitch deck / sales deck | ⚠️ 有條件 | 「B-1 Phase 1 synthetic baseline / pending B-1 Phase 2 customer-data validation」 |
+| Customer proposal / RFP response | ⚠️ 有條件 | 同上 + 註明 B-1 Phase 2 校準時程 |
 | 客戶合約 SLA 條款 | ❌ **禁止** | — |
 | 公開 marketing 數字（網站 / press release） | ❌ **禁止** | — |
 
-### Phase 2 校準後本文件如何更新
+### B-1 Phase 2 完成後本文件如何更新
 
-1. Phase 2（B-2 hard SLO）完成 customer anonymized sample re-run
+> 提醒：以下「Phase 2」= **B-1 Scale Gate Phase 2**（customer anonymized sample + full-stack e2e + hard SLO），不是 talking-points 文件自己的 phase。本文件不是 phased deliverable，而是會被同步更新的 derivative artifact。
+
+1. B-1 Phase 2 完成 customer anonymized sample re-run + full-stack e2e fire-through 量測 + hard SLO sign-off（DEC-B 觸發）
 2. 本文件 frontmatter `version` bump → 對應 release tag
-3. 各 talking point 數字更新為 Phase 2 量測值；保留 Phase 1 數字於附錄供對照
-4. 移除「pending Phase 2」前綴；引入正式 SLO 條款引用
+3. 各 talking point 數字更新為 B-1 Phase 2 量測值；保留 Phase 1 數字於附錄供對照
+4. 移除「pending B-1 Phase 2」前綴；引入正式 SLO 條款引用
 5. **`docs/benchmarks.md` §12 同步升級**為 v2.8.0 calibrated baseline（雙語）— 公開 canonical perf doc 才算正式 promote。本文件「客戶語言版本」+「不要這樣講」永遠 stays internal（pedagogical artifact 不該進 canonical reference）
 
 ---
@@ -167,9 +171,9 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 | 資源 | 說明 |
 |------|------|
 | [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) | 完整方法論、fixture spec、量測指令 — talking points 的 Phase 1 數字 SOT |
-| [docs/benchmarks.md §12 Incremental Hot-Reload + B-1 Scale Gate](../benchmarks.md#12-incremental-hot-reload-b-1-scale-gate) | 公開 perf doc（platform-engineer / sre 受眾，雙語）。**目前 §12 是 v2.7.0 B-1 baseline；v2.8.0 Phase 1 數字刻意不進 §12** — 待 Phase 2 customer sample calibrated 後再 promote 升級 §12（避免 Phase 1 disclaimer-laden 數字進 canonical doc 後產生 implicit anchoring） |
+| [docs/benchmarks.md §12 Incremental Hot-Reload + B-1 Scale Gate](../benchmarks.md#12-incremental-hot-reload-b-1-scale-gate) | 公開 perf doc（platform-engineer / sre 受眾，雙語）。**目前 §12 是 v2.7.0 B-1 baseline；v2.8.0 B-1 Phase 1 數字刻意不進 §12** — 待 B-1 Phase 2 customer sample calibrated 後再 promote 升級 §12（避免 Phase 1 disclaimer-laden 數字進 canonical doc 後產生 implicit anchoring） |
 | [ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md) | dual-hash 架構決策原文（source_hash + merged_hash 定義、merge 語意） |
 | [config_debounce.go L260-330](../../components/threshold-exporter/app/config_debounce.go) | quiet defaults edit noOp detection 實作（L313-318 prev == mh 判定） |
 | [CHANGELOG `[Unreleased]`](../../CHANGELOG.md) | Phase 1 baseline entry 與本文件交叉引用 |
-| `v2.8.0-planning §10 DEC-B`（內部 planning artifact） | Phase 2 customer sample 校準時程 / definitive SLO sign-off 觸發條件 |
+| `v2.8.0-planning §10 DEC-B`（內部 planning artifact） | B-1 Phase 2 customer sample 校準時程 / definitive SLO sign-off 觸發條件 |
 | [doc-map.md](./doc-map.md) | 內部文件導覽（自動產生） |
