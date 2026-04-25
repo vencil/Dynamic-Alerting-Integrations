@@ -117,6 +117,119 @@ func TestIncDefaultsNoop_AccumulatesTotal(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Issue #61 — blast-radius histogram + shadowed counter
+// ============================================================
+
+func TestIncDefaultsShadowed_AccumulatesTotal(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	IncDefaultsShadowed()
+	IncDefaultsShadowed()
+	IncDefaultsShadowedBy(4)
+	IncDefaultsShadowedBy(0)  // no-op
+	IncDefaultsShadowedBy(-2) // no-op (defensive)
+
+	if got := testutil.ToFloat64(fresh.defaultsShadowed); got != 6 {
+		t.Errorf("expected shadowed=6, got %v", got)
+	}
+}
+
+func TestObserveBlastRadius_RecordsBucketAndSumCount(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	// One observation: 21 tenants in (defaults, region, applied).
+	ObserveBlastRadius("defaults", "region", "applied", 21)
+
+	text, err := prometheusTextExport(fresh.blastRadius)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	// Sample count = 1 (one Observe call).
+	if !strings.Contains(text, "da_config_blast_radius_tenants_affected_count 1") {
+		t.Errorf("expected _count=1; export:\n%s", text)
+	}
+	// Bucket boundary: 21 falls in le=25, not le=5. We can't grep
+	// per-label bucket counts from prometheusTextExport (it doesn't
+	// emit them), so use testutil.CollectAndCount as a sanity proxy
+	// — exact bucket validation lives in
+	// TestObserveBlastRadius_BucketBoundary below.
+	if got := testutil.CollectAndCount(fresh.blastRadius); got != 1 {
+		t.Errorf("expected 1 metric series, got %d", got)
+	}
+}
+
+func TestObserveBlastRadius_BucketBoundary(t *testing.T) {
+	// Verify N=21 lands in bucket le=25 (not le=5) by reading the
+	// Histogram's underlying proto via a per-test registry.
+	fresh, _ := withIsolatedMetrics(t)
+	ObserveBlastRadius("defaults", "region", "applied", 21)
+
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.blastRadius); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != "da_config_blast_radius_tenants_affected" {
+			continue
+		}
+		for _, metric := range fam.Metric {
+			h := metric.Histogram
+			if h == nil {
+				t.Fatalf("expected Histogram, got %v", metric)
+			}
+			// Buckets are sorted ascending; locate le=5 and le=25.
+			var le5, le25 uint64
+			for _, b := range h.Bucket {
+				if b.GetUpperBound() == 5 {
+					le5 = b.GetCumulativeCount()
+				}
+				if b.GetUpperBound() == 25 {
+					le25 = b.GetCumulativeCount()
+				}
+			}
+			if le5 != 0 {
+				t.Errorf("expected le=5 cumulative=0, got %d", le5)
+			}
+			if le25 != 1 {
+				t.Errorf("expected le=25 cumulative=1, got %d", le25)
+			}
+			if h.GetSampleSum() != 21 {
+				t.Errorf("expected _sum=21, got %v", h.GetSampleSum())
+			}
+		}
+	}
+}
+
+func TestObserveBlastRadius_ZeroIsNoOp(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	ObserveBlastRadius("defaults", "global", "applied", 0)
+	ObserveBlastRadius("defaults", "global", "applied", -5)
+
+	if got := testutil.CollectAndCount(fresh.blastRadius); got != 0 {
+		t.Errorf("expected 0 metric series after no-op observes, got %d", got)
+	}
+}
+
+func TestObserveBlastRadius_DistinctLabelsCreateDistinctSeries(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	ObserveBlastRadius("defaults", "region", "applied", 1)
+	ObserveBlastRadius("defaults", "region", "shadowed", 1)
+	ObserveBlastRadius("defaults", "region", "cosmetic", 1)
+	ObserveBlastRadius("source", "tenant", "applied", 1)
+
+	if got := testutil.CollectAndCount(fresh.blastRadius); got != 4 {
+		t.Errorf("expected 4 distinct series, got %d", got)
+	}
+}
+
 // TestDiffAndReload_EmitsMetricsForSourceChange ensures the full pipeline
 // (scan → diff → counter increment) hooks up end-to-end.
 func TestDiffAndReload_EmitsMetricsForSourceChange(t *testing.T) {

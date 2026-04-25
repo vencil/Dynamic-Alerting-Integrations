@@ -60,3 +60,48 @@ data:
             annotations:
               summary: "Threshold exporter {{ $labels.pod }} restarting frequently"
               description: "{{ $value | printf \"%.0f\" }} restarts in the last hour"
+
+          # --- Config Blast Radius (v2.8.0, Issue #61) ---
+          # Fires when a defaults change ripples to >500 tenants in p99
+          # over a 5-minute window. effect="applied" filter excludes
+          # cosmetic edits and override-shadowed events that are NOT
+          # operationally impactful — without this filter the alert
+          # would page on safe noise (operator formatter run, tenant
+          # override absorbing a default change).
+          - alert: ConfigBlastRadiusHighImpact
+            expr: |
+              histogram_quantile(
+                0.99,
+                sum by (le) (
+                  rate(da_config_blast_radius_tenants_affected_bucket{effect="applied"}[5m])
+                )
+              ) > 500
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Config change rippled to >500 tenants (p99, 5m)"
+              description: |
+                A defaults / source change has been propagating to a large
+                fraction of tenants. Investigate whether this is intentional
+                (planned global rollout) or accidental (operator pushed
+                wrong-scope edit). Dashboard: blast-radius heatmap by
+                (reason, scope, effect).
+
+          # --- Config Override-Shadow Surge (v2.8.0, Issue #61) ---
+          # Info-level signal: lots of defaults edits being absorbed by
+          # tenant overrides. Often indicates ops drift (operator keeps
+          # tweaking a global default that nobody actually consumes).
+          - alert: ConfigDefaultsShadowedSurge
+            expr: rate(da_config_defaults_shadowed_total[1h]) > (10 / 3600)
+            for: 30m
+            labels:
+              severity: info
+            annotations:
+              summary: "High rate of override-shadowed defaults edits"
+              description: |
+                Inheritance system blocked >10 defaults changes per hour over
+                the last 30m. Not an outage, but suggests the platform's
+                global defaults are diverging from how tenants actually
+                consume them — investigate which defaults are being touched
+                without effect.

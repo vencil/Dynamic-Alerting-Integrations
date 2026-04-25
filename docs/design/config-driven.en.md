@@ -195,7 +195,7 @@ v2.7.0 upgrades from a single SHA-256 to dual hashes distinguishing "source chan
 | `source_hash` | Raw YAML contents of a single file | Detect actual user write operations |
 | `merged_hash` | Post-inheritance + canonical-JSON-normalized merged config | Detect "changes with real impact on this tenant" (filters formatter noise) |
 
-**Merge-noop detection**: If `_defaults.yaml` changes but merged_hash stays identical (pure comment/whitespace/ordering diff), the exporter skips reload and increments `da_config_defaults_change_noop_total`.
+**Merge-noop detection**: If `_defaults.yaml` changes but merged_hash stays identical, the exporter skips reload. v2.8.0 (Issue #61) splits this by effect: comment/whitespace/reorder edits → `da_config_defaults_change_noop_total` (cosmetic); changed keys fully covered by a tenant override → `da_config_defaults_shadowed_total` (shadowed).
 
 **300ms Debounce**
 
@@ -216,7 +216,9 @@ Debounce is tunable via `--scan-debounce=<duration>`; recommended 100ms-500ms un
 |--------|------|-------------|
 | `da_config_scan_duration_seconds` | histogram | Latency distribution of one directory scan + merge (`le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}`) |
 | `da_config_reload_trigger_total{reason}` | counter | Reload trigger attribution, `reason ∈ {source, defaults, new_tenant, delete, forced}` |
-| `da_config_defaults_change_noop_total` | counter | Count of `_defaults.yaml` changes where merged_hash is unchanged (pure formatter noise) |
+| `da_config_defaults_change_noop_total` | counter | Count of `_defaults.yaml` changes where merged_hash is unchanged. **v2.8.0 (Issue #61) narrows the semantics to cosmetic-only** (comment / reorder / whitespace) |
+| `da_config_defaults_shadowed_total` | counter | **v2.8.0 (Issue #61)** — defaults change blocked by a tenant override (split out from `noop_total`) |
+| `da_config_blast_radius_tenants_affected` | histogram | **v2.8.0 (Issue #61)** — per-tick affected-tenants distribution, labels = `reason / scope / effect`, buckets `[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]` |
 
 **Tenant API `/effective` Endpoint (v2.7.0, B-3 delivery)**
 

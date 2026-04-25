@@ -153,7 +153,41 @@ type InheritanceGraph struct {
 |:-------|:-----|:-------|:------------|
 | `da_config_scan_duration_seconds` | histogram | — | 單次 periodic scan 耗時 |
 | `da_config_reload_trigger_total` | counter | `reason` | reload 原因：source / defaults / new / delete |
-| `da_config_defaults_change_noop_total` | counter | — | merged_hash 不變時跳過 reload 的次數 |
+| `da_config_defaults_change_noop_total` | counter | — | merged_hash 不變時跳過 reload 的次數 — **v2.8.0 起語義收窄為 cosmetic-only**（見 §Amendment 2026-04-25） |
+| `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — defaults 變動但被 tenant override 擋下的次數（從 `da_config_defaults_change_noop_total` 拆出） |
+| `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — 每 tick 受影響 tenant 數的分佈 |
+
+### Amendment 2026-04-25 (Issue #61): noop 語義拆分
+
+原 §Reload 判斷邏輯把「comment-only edit」與「override-shadowed edit」都記為 `da_config_defaults_change_noop_total`，使 ops 無法區分「真的沒事」vs「繼承機制擋下變動」。v2.8.0 後拆為兩個 effect：
+
+```
+elif any ancestor _defaults.yaml changed:
+    recompute effective config → update merged_hash
+    if merged_hash changed:
+        trigger reload
+        emit blast_radius{effect="applied"}
+    else:
+        # 進一步拆分（Issue #61）
+        compute changedKeys = diff(prior_parsed_defaults, new_parsed_defaults)
+        if len(changedKeys) == 0:
+            # 純 cosmetic：comment-only / reordering / whitespace
+            increment da_config_defaults_change_noop_total
+            emit blast_radius{effect="cosmetic"}
+        elif tenantOverridesAll(tenant_src, changedKeys):
+            # Shadowed：tenant 覆寫了所有變動的 key
+            increment da_config_defaults_shadowed_total
+            emit blast_radius{effect="shadowed"}
+        else:
+            # 邏輯上不可達（merged_hash 應已移動）
+            # — 防禦性 fallback 至 cosmetic
+            increment da_config_defaults_change_noop_total
+```
+
+實作要點：
+- `m.parsedDefaults` 新增的 ConfigManager 欄位，與 `hierarchyHashes` 同 atomic-swap，存放每個 `_defaults.yaml` 的 normalized parsed dict（`map[string]any`），記憶體 ~1MB / 1000 tenants
+- 在 `populateHierarchyState` cold-start 時 eager-parse 全部 defaults；`diffAndReload` 時只重新 parse 有 hash 變動的檔案，未變動的沿用前值
+- 詳見 `components/threshold-exporter/app/config_defaults_diff.go` + Issue #61 RFC
 
 ## 考量的替代方案
 

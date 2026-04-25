@@ -9,7 +9,7 @@ lang: zh
 # Pitch Deck Talking Points — v2.8.0 Phase 1 Baseline
 
 > **受眾**：Maintainers + business / sales（內部對外溝通協作）
-> **版本**：v2.7.0（current canonical；Phase 1 baseline 量測於 v2.8.0 開發中）
+> **版本**：v2.7.0（current canonical；Phase 1 baseline 量測於 `v2.8.0` 開發中）
 >
 > **相關文件**：[Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) · [ADR-018: dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md) · [`config_debounce.go`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go)
 
@@ -132,7 +132,7 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 
 ## 4. ⛔ Honest Baseline Disclaimer ⛔
 
-> 本 talking points 基於 v2.8.0 **B-1 Phase 1** synthetic fixture baseline（PR #59 / merge commit `f1f14e7`, merged 2026-04-25）。**不可作為客戶合約 SLA 承諾**。Definitive SLO sign-off 待 **B-1 Phase 2** customer anonymized sample 校準 + full-stack e2e fire-through 量測完成（DEC-B in `v2.8.0-planning §10`，內部 planning artifact）。
+> 本 talking points 基於 `v2.8.0` **B-1 Phase 1** synthetic fixture baseline（PR #59 / merge commit `f1f14e7`, merged 2026-04-25）。**不可作為客戶合約 SLA 承諾**。Definitive SLO sign-off 待 **B-1 Phase 2** customer anonymized sample 校準 + full-stack e2e fire-through 量測完成（DEC-B in `v2.8.0-planning §10`，內部 planning artifact）。
 >
 > 引用此文件的數字到 customer-facing materials（pitch deck / proposal / RFP response）時，**必須**附帶「B-1 Phase 1 synthetic baseline / pending B-1 Phase 2 customer-data validation」前綴。
 

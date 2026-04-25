@@ -73,6 +73,23 @@ type ConfigManager struct {
 	// atomically on reload (pointer swap; the graph itself is immutable
 	// once built). nil when hierarchicalMode is false.
 	inheritanceGraph *InheritanceGraph
+	// parsedDefaults caches the *parsed-and-normalized* dict of every
+	// _defaults.yaml file in the tree (key = absolute Clean path, same
+	// keying as hierarchyHashes). Required by Issue #61 to distinguish
+	// effect=shadowed from effect=cosmetic in the blast-radius
+	// histogram: the noOp branch needs to know which keys actually
+	// moved between prior and current scan, which file-hash alone can't
+	// answer (comment-only edits move the file hash but not any key).
+	//
+	// MUST atomic-swap together with hierarchyHashes — a desync between
+	// "we know file X has hash H_new" and "parsed cache for X is H_old"
+	// would cause changedDefaultsKeys to compute against the wrong
+	// baseline. Both are installed under m.mu.Lock() in
+	// populateHierarchyState (cold start) and diffAndReload (incremental).
+	//
+	// Memory: ~432 _defaults files × ~2KB parsed dict ≈ 1MB at the
+	// 1000-tenant baseline; scales linearly with tree size.
+	parsedDefaults map[string]map[string]any
 
 	// Debounce state (v2.7.0 Phase 3)
 	//
@@ -691,6 +708,27 @@ func (m *ConfigManager) populateHierarchyState() error {
 		newMergedHashes[tid] = mh
 	}
 
+	// v2.8.0 Issue #61: pre-parse every _defaults.yaml so the first
+	// post-cold-start diffAndReload tick can already classify
+	// shadowed-vs-cosmetic effects without a "warm-up" tick where every
+	// noOp falls back to "unknown". Parse failures are logged-and-skipped
+	// (not fatal — same policy as logMergeSkip above) so one broken
+	// defaults file can't poison the rest of the cache.
+	newParsedDefaults := make(map[string]map[string]any, len(defaults))
+	for dp := range defaults {
+		b, rerr := os.ReadFile(dp)
+		if rerr != nil {
+			log.Printf("WARN: parsedDefaults cache: read %s: %v", dp, rerr)
+			continue
+		}
+		parsed, perr := parseDefaultsBytes(b)
+		if perr != nil {
+			log.Printf("WARN: parsedDefaults cache: parse %s: %v", dp, perr)
+			continue
+		}
+		newParsedDefaults[dp] = parsed
+	}
+
 	m.mu.Lock()
 	// Only flip hierarchicalMode on once we've seen a _defaults.yaml
 	// somewhere. Pure-flat trees keep hierarchicalMode=false, letting
@@ -703,6 +741,7 @@ func (m *ConfigManager) populateHierarchyState() error {
 	m.hierarchyMtimes = mtimes
 	m.mergedHashes = newMergedHashes
 	m.inheritanceGraph = graph
+	m.parsedDefaults = newParsedDefaults
 	m.mu.Unlock()
 	return nil
 }

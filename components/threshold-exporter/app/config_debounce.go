@@ -231,6 +231,7 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	priorHashes := m.hierarchyHashes
 	priorMergedHashes := m.mergedHashes
 	priorTenantSources := m.tenantSources
+	priorParsedDefaults := m.parsedDefaults // Issue #61: required for shadow-vs-cosmetic classification
 	hierarchicalMode := m.hierarchicalMode
 	m.mu.RUnlock()
 
@@ -265,6 +266,41 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	for tid := range tenants {
 		newMergedHashes[tid] = "" // filled below
 	}
+
+	// Issue #61: maintain parsedDefaults cache incrementally. Reuse
+	// the prior parse for any defaults file whose hash didn't move;
+	// re-parse the rest. Required for shadow-vs-cosmetic effect
+	// classification in the noOp branch below. Parse failures are
+	// log-and-skip (same policy as populateHierarchyState cold start).
+	newParsedDefaults := make(map[string]map[string]any, len(defaults))
+	for dp := range defaults {
+		if hashes[dp] == priorHashes[dp] {
+			if cached, ok := priorParsedDefaults[dp]; ok && cached != nil {
+				newParsedDefaults[dp] = cached
+				continue
+			}
+		}
+		b, rerr := os.ReadFile(dp)
+		if rerr != nil {
+			log.Printf("WARN: parsedDefaults: read %s: %v", dp, rerr)
+			continue
+		}
+		parsed, perr := parseDefaultsBytes(b)
+		if perr != nil {
+			log.Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
+			continue
+		}
+		newParsedDefaults[dp] = parsed
+	}
+
+	// Issue #61: per-tick group-by emission for the blast-radius
+	// histogram. Each tenant contributes one increment to exactly one
+	// (reason, scope, effect) bucket; after the loop each non-empty
+	// bucket emits a single Observe(N=count). This preserves dimensional
+	// detail (a tick can fire applied/shadowed/cosmetic concurrently)
+	// without conflating distinct events into a single sample.
+	type emissionKey struct{ reason, scope, effect string }
+	buckets := make(map[emissionKey]int)
 
 	for tid, srcPath := range tenants {
 		prevSrc, wasKnown := priorTenantSources[tid]
@@ -306,19 +342,45 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 			reloaded++
 			if wasKnown {
 				IncReloadTrigger(ReloadReasonSource)
+				buckets[emissionKey{ReloadReasonSource, "tenant", "applied"}]++
 			} else {
 				IncReloadTrigger(ReloadReasonNewTenant)
+				buckets[emissionKey{ReloadReasonNewTenant, "tenant", "applied"}]++
 			}
 		} else if defaultsChanged {
+			scope := widestChangedScope(defaultsChain, hashes, priorHashes, m.path)
+			if scope == "" {
+				// Defensive: defaultsChanged was true but no chain entry
+				// differs by hash. Shouldn't happen (defaultsChanged is
+				// derived from the same comparison) — fall back to unknown.
+				scope = "unknown"
+			}
 			if prev, ok := priorMergedHashes[tid]; ok && prev == mh {
 				// Defaults file changed but the resulting merged_hash
-				// didn't — "quiet defaults edit" (comment-only, reordering,
-				// or a key that's shadowed by a tenant override).
+				// didn't — "quiet defaults edit". v2.8.0 Issue #61 splits
+				// this into shadowed (tenant override blocked the change)
+				// vs cosmetic (comment/reorder/whitespace).
 				noOp++
-				IncDefaultsNoop()
+				tenantBytes, terr := os.ReadFile(srcPath)
+				effect := "cosmetic"
+				if terr == nil {
+					effect = classifyDefaultsNoOpEffect(
+						tenantBytes, tid, defaultsChain,
+						priorParsedDefaults, newParsedDefaults,
+						hashes, priorHashes,
+					)
+				}
+				switch effect {
+				case "shadowed":
+					IncDefaultsShadowed()
+				default:
+					IncDefaultsNoop()
+				}
+				buckets[emissionKey{ReloadReasonDefaults, scope, effect}]++
 			} else {
 				reloaded++
 				IncReloadTrigger(ReloadReasonDefaults)
+				buckets[emissionKey{ReloadReasonDefaults, scope, "applied"}]++
 			}
 		}
 	}
@@ -330,7 +392,15 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 		if _, stillKnown := tenants[tid]; !stillKnown {
 			reloaded++
 			IncReloadTrigger(ReloadReasonDelete)
+			buckets[emissionKey{ReloadReasonDelete, "tenant", "applied"}]++
 		}
+	}
+
+	// Issue #61: emit one observation per non-empty bucket. Order
+	// doesn't matter for Histogram observations; the per-key Observe
+	// is the only state mutation.
+	for k, n := range buckets {
+		ObserveBlastRadius(k.reason, k.scope, k.effect, n)
 	}
 
 	// Atomic swap. We rebuild ThresholdConfig via fullDirLoad first (it
@@ -350,6 +420,7 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	m.hierarchyMtimes = mtimes
 	m.mergedHashes = newMergedHashes
 	m.inheritanceGraph = graph
+	m.parsedDefaults = newParsedDefaults
 	m.mu.Unlock()
 
 	return reloaded, noOp, nil

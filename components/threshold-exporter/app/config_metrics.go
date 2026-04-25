@@ -16,7 +16,28 @@ package main
 //
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
-//     merged_hash moved (ADR-018 "quiet defaults edit").
+//     merged_hash moved (ADR-018 "quiet defaults edit"). v2.8.0 Issue #61
+//     narrowed the semantics to *cosmetic-only* edits — shadowed cases now
+//     leak into da_config_defaults_shadowed_total below.
+//
+//   da_config_defaults_shadowed_total      (Counter)  [v2.8.0, Issue #61]
+//     incremented when a defaults file change *would* have moved a
+//     tenant's effective config except every changed key is overridden by
+//     that tenant's source YAML. Pre-RFC #61 these events were folded
+//     into da_config_defaults_change_noop_total; they're split out so ops
+//     can quantify how often the inheritance system blocks would-be blast.
+//
+//   da_config_blast_radius_tenants_affected (HistogramVec)  [v2.8.0, Issue #61]
+//     labels = [reason, scope, effect]
+//       reason ∈ {source, defaults, new, delete}    (forced is filtered: it
+//                                                   maps to per-tenant
+//                                                   reasons inside
+//                                                   diffAndReload)
+//       scope  ∈ {global, domain, region, env, tenant, unknown}
+//       effect ∈ {applied, shadowed, cosmetic}
+//     buckets = [1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]
+//     observed once per (reason, scope, effect) bucket per
+//     diffAndReload tick, with N = tenants in that bucket.
 //
 // These metrics are defined as package-level state (not emitted by the
 // ThresholdCollector.Collect path) because they carry cumulative state —
@@ -47,6 +68,8 @@ type configMetrics struct {
 	reloadTriggers   *prometheus.CounterVec
 	defaultsNoop     prometheus.Counter
 	parseFailures    *prometheus.CounterVec // v2.8.0 A-8d: per-file YAML parse failures
+	defaultsShadowed prometheus.Counter     // v2.8.0 Issue #61: shadowed defaults change (split from defaultsNoop)
+	blastRadius      *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -75,12 +98,25 @@ func newConfigMetrics() *configMetrics {
 		}, []string{"reason"}),
 		defaultsNoop: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "da_config_defaults_change_noop_total",
-			Help: "Count of _defaults.yaml changes that did NOT move any dependent tenant's merged_hash (ADR-018 'quiet defaults edit').",
+			Help: "Count of _defaults.yaml changes that did NOT move any dependent tenant's merged_hash AND were not shadowed by a tenant override — i.e. cosmetic edits (comment-only, key reordering, or unrelated-key change). v2.8.0 Issue #61 narrowed the semantics; shadowed cases now go to da_config_defaults_shadowed_total. Pre-2.8.0 dashboards reading this counter for 'how often did the inheritance system block changes' should switch to da_config_defaults_shadowed_total.",
 		}),
 		parseFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "da_config_parse_failure_total",
 			Help: "Count of per-file YAML parse failures during hierarchical scan (v2.8.0 A-8d). Label 'file_basename' lets ops pin down which tenant or defaults file is broken. Alert: >5/h for any single basename = page ops.",
 		}, []string{"file_basename"}),
+		defaultsShadowed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "da_config_defaults_shadowed_total",
+			Help: "Count of dependent tenants for whom a defaults change was effectively blocked because every changed key is overridden by that tenant's source YAML (v2.8.0 Issue #61, ADR-018 inheritance). Distinct from da_config_defaults_change_noop_total which counts cosmetic edits with no semantic key movement.",
+		}),
+		blastRadius: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "da_config_blast_radius_tenants_affected",
+			Help: "Distribution of tenants affected per diffAndReload tick, grouped by (reason, scope, effect) (v2.8.0 Issue #61, RFC). reason=source/defaults/new/delete; scope=global/domain/region/env/tenant/unknown (widest changed defaults level for reason=defaults; tenant for source/new/delete); effect=applied (merged_hash moved) / shadowed (defaults change blocked by tenant override) / cosmetic (no semantic key change). Alert on histogram_quantile(0.99, sum by (le)(rate(...{effect=\"applied\"}_bucket[5m]))) > 500 for high-impact change detection.",
+			// Buckets chosen to surface low-impact (1-5 affected) vs
+			// catastrophic-blast (5000+) reloads. 2500/10000 added per
+			// CHANGELOG sharding-decision: ≤2000 fine; 5000-10000 is the
+			// optimization tier; >10000 is sharding territory.
+			Buckets: []float64{1, 5, 25, 100, 500, 1000, 2500, 5000, 10000},
+		}, []string{"reason", "scope", "effect"}),
 	}
 }
 
@@ -122,6 +158,8 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.reloadTriggers)
 	reg.MustRegister(m.defaultsNoop)
 	reg.MustRegister(m.parseFailures)
+	reg.MustRegister(m.defaultsShadowed)
+	reg.MustRegister(m.blastRadius)
 }
 
 // IncParseFailure bumps the parse-failure counter for a specific file
@@ -181,4 +219,36 @@ func IncDefaultsNoopBy(n int) {
 		return
 	}
 	getConfigMetrics().defaultsNoop.Add(float64(n))
+}
+
+// IncDefaultsShadowed bumps the shadowed-defaults counter — called once
+// per dependent tenant whose merged_hash didn't move because every
+// changed defaults key is overridden by that tenant's source YAML
+// (v2.8.0 Issue #61). Distinct from IncDefaultsNoop, which now counts
+// only cosmetic edits.
+func IncDefaultsShadowed() {
+	getConfigMetrics().defaultsShadowed.Inc()
+}
+
+// IncDefaultsShadowedBy bumps the shadowed counter by N for the batch
+// case (mirror of IncDefaultsNoopBy).
+func IncDefaultsShadowedBy(n int) {
+	if n <= 0 {
+		return
+	}
+	getConfigMetrics().defaultsShadowed.Add(float64(n))
+}
+
+// ObserveBlastRadius records one (reason, scope, effect) bucket
+// observation for the blast-radius histogram. n is the count of
+// tenants in this bucket for the current diffAndReload tick.
+//
+// n <= 0 is silently no-op (caller can pass an empty bucket without
+// guarding) so the per-tick group-by emission loop in diffAndReload
+// can iterate over a sparse map without conditional logic.
+func ObserveBlastRadius(reason, scope, effect string, n int) {
+	if n <= 0 {
+		return
+	}
+	getConfigMetrics().blastRadius.WithLabelValues(reason, scope, effect).Observe(float64(n))
 }
