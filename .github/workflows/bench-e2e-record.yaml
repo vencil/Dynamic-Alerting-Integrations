@@ -34,8 +34,12 @@ on:
         type: string
         default: '30'
       fixture_tenant_count:
-        description: 'Tenant count for synthetic fixture generation (ignored for customer-anon)'
-        type: string
+        description: 'Tenant count for synthetic fixture generation (ignored for customer-anon). Per design §9.3: 1000 + 5000 each in 30-run runs as separate workflow invocations.'
+        type: choice
+        options:
+          - '1000'
+          - '2000'
+          - '5000'
         default: '1000'
 
 permissions:

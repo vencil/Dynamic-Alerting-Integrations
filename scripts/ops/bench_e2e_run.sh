@@ -25,6 +25,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BENCH_DIR="$REPO_ROOT/tests/e2e-bench"
 
+# Cleanup trap: any failure mid-script (set -e) leaves docker compose
+# resources running on the host. Without this trap, the next
+# `make bench-e2e` would hit port conflicts / volume residue. The trap
+# only runs `compose down -v` if the script exits before reaching the
+# explicit step-6 teardown — we use a flag so a successful run doesn't
+# `down` twice (harmless but noisy).
+_cleanup_done=0
+_cleanup() {
+    if [[ "$_cleanup_done" -eq 1 ]]; then
+        return
+    fi
+    if [[ -d "$BENCH_DIR" ]]; then
+        (cd "$BENCH_DIR" && docker compose down -v 2>/dev/null || true)
+    fi
+}
+trap _cleanup EXIT
+
 COUNT="${COUNT:-30}"
 FIXTURE_KIND="${E2E_FIXTURE_KIND:-synthetic-v2}"
 FIXTURE_TENANT_COUNT="${FIXTURE_TENANT_COUNT:-1000}"
@@ -102,9 +119,10 @@ fi
 python3 aggregate.py "${agg_args[@]}"
 
 # ---------------------------------------------------------------------------
-# Step 6: cleanup.
+# Step 6: cleanup. Mark done so the EXIT trap doesn't double-down.
 # ---------------------------------------------------------------------------
 echo "[bench-e2e] tearing down stack..."
 docker compose down -v
+_cleanup_done=1
 
 echo "[bench-e2e] done. Aggregate JSON in $BENCH_DIR/bench-results/"

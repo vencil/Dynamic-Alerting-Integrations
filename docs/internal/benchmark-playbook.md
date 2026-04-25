@@ -362,7 +362,7 @@ python3 scripts/tools/dx/compare_e2e_baseline.py \
 | **B-1.P2-d** | host driver (5-anchor 量測 + run isolation + fire+resolve 對稱) | 🟢 | PR #79 |
 | **B-1.P2-e** | n≥30 aggregation + bootstrap 95% CI + output JSON `fixture_kind`/`gate_status` | 🟢 | 本 PR (PR-3) |
 | **B-1.P2-f** | `make bench-e2e` + `bench-e2e-record.yaml` workflow (main only, manual dispatch) | 🟢 | 本 PR (PR-3) |
-| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow） | 🟢 (本 PR 完成；首批 baseline 數字待第一輪 main workflow_dispatch 後填入) | 本 PR (PR-3) |
+| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow） | 🟡 ops-flow 完成；**首批 baseline 數字未填**（待第一輪 main workflow_dispatch 後 maintainer 從 aggregate JSON 抽數寫入 §「首批 baseline 數字」） | 本 PR (PR-3) + 後續 doc-only commit |
 
 ### 跑一輪 baseline 速查（B-1.P2-f）
 
@@ -456,14 +456,26 @@ Per design §6.5 + §11：v2.9.0 cut 前若 customer sample 未抵達，**強制
 
 ### 首批 baseline 數字（待第一輪 workflow_dispatch 後填入）
 
-> **Status**: 本表將於本 PR merge 後第一輪 `gh workflow run bench-e2e-record.yaml -f fixture_kind=synthetic-v2 -f count=30` 完成後，由 maintainer 從 aggregate JSON 抽數填入；customer-anon 數字待 sample 抵達後另填。
+> **Status**: 本表將於 PR-3 merge 後第一輪 `gh workflow run bench-e2e-record.yaml ...` 完成後，由 maintainer 從 aggregate JSON 抽數填入；customer-anon 數字待 sample 抵達後另填。
 >
-> **不要**從本 PR 直接讀數字 — 數字未經 main runner 量測。
+> **不要**從 PR-3 直接讀數字 — 數字未經 main runner 量測。
+>
+> **Design §9.3 acceptance**：1000-tenant + 5000-tenant 各跑 30 runs 是 hard requirement。第一輪 baseline 完成 1000-tenant；5000-tenant 列為 v2.8.x **doc-only follow-up**（call workflow with `fixture_tenant_count=5000`，把第二批數字填到下表第二行）。
 
 ```
-fixture_kind=synthetic-v2  fire P50=___ms  fire P95=___ms  fire P99=___ms  resolve P50=___ms  resolve P95=___ms  resolve P99=___ms
-fixture_kind=customer-anon fire P50=___ms  fire P95=___ms  fire P99=___ms  gate_status=___ delta=___% vs synthetic-v2 baseline
+fixture_kind=synthetic-v2  tenants=1000  fire P50=___ms  fire P95=___ms  fire P99=___ms  resolve P50=___ms  resolve P95=___ms  resolve P99=___ms
+fixture_kind=synthetic-v2  tenants=5000  fire P50=___ms  fire P95=___ms  fire P99=___ms  resolve P50=___ms  resolve P95=___ms  resolve P99=___ms
+fixture_kind=customer-anon                fire P50=___ms  fire P95=___ms  fire P99=___ms  gate_status=___ delta=___% vs synthetic-v2 1000-tenant baseline
 ```
+
+### Pending follow-ups（design §9 partial-green deferred items）
+
+兩條 design §9 acceptance 在 PR-3 內沒做，明確 deferred：
+
+| § | Item | Plan |
+|---|---|---|
+| §9.3 | 5000-tenant × 30 runs baseline | Workflow input 已預留 `fixture_tenant_count: 5000` 選項；merge 後在第一輪 1000-tenant baseline 落地後立即跑第二輪 5000-tenant，數字填上表 |
+| §9.4 | Design doc 升格 + archive | `docs/internal/design/phase-b-e2e-harness.md` → `docs/internal/archive/design/phase-b-e2e-harness.md`，本 playbook §v2.8.0 Phase 2 e2e 章節加 `archive-of: design/phase-b-e2e-harness.md` cross-ref；待第一輪實測數字進本節後做 doc-only follow-up PR |
 
 ### 產出 fixture 速查（B-1.P2-b）
 
