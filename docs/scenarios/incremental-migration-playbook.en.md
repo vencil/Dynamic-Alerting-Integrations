@@ -521,6 +521,96 @@ EOF
 
 ---
 
+## Emergency Rollback Procedures
+
+> **Applies to**: structural bug discovered after customer cutover (e.g. parser eats labels / Dangling Guard false positives / mass false alerts) requiring batch reversal of a Base Infrastructure PR plus multiple tenant PRs.
+> Distinct from per-phase 0/1/2/3 rollback above (single-domain pilot retreat); this section covers post-cutover batch-PR pipeline reversal with cascading defaults and hierarchical dependencies.
+>
+> **Added in v2.8.0 B-4** to complement the Phase .c C-10 Batch PR Pipeline hierarchy-aware chunking design.
+
+### Rollback order: strict reverse of merge order
+
+**Do NOT click "Revert" arbitrarily on GitHub** — under hierarchical layout cascading defaults have inter-dependencies; out-of-order rollback triggers cycling reloads and intermediate-state false alerts. The correct order is the strict reverse of the merge order:
+
+| Merge phase (forward) | Rollback phase (reverse) |
+|---|---|
+| 1. `[Base Infrastructure PR]` — `_defaults.yaml` changes | **rollback step 4** (last) |
+| 2. cascading defaults (outer → inner) | **rollback step 3** (inner → outer reverse) |
+| 3. tenant PR chunk 1 (`Blocked by: #base-pr`) | **rollback step 2** (parallel with chunks 4-N) |
+| 4. tenant PR chunks 2-N | **rollback step 1** (first) |
+
+**Why inner first**: if you revert outer `_defaults.yaml` before tenant PRs, inner tenants briefly land in a hybrid state — "outer defaults already reverted, tenant override still present" — and the inheritance graph's merged_hash will not match any pre-Base-PR historical value.
+
+### WatchLoop debounce verification (linked to B-3 metrics)
+
+During a rollback wave, git-sync applies multiple commits sequentially within ~50-300ms, firing consecutive fsnotify events. The `config_debounce.go` sliding-window debounce must collapse the entire wave into a **single** reload — intermediate state must NOT fire alerts.
+
+**Verification metrics** (added in v2.8.0 B-3, PR #75):
+
+```promql
+# During rollback wave, sliding window should collapse all reload triggers into one fire:
+# 1 fire ⇒ 1 reloadDuration sample; multiple fires ⇒ multiple samples (bad signal)
+increase(da_config_reload_duration_seconds_count[5m])
+
+# debounce_batch sum should approximate the count of files changed in the wave;
+# sum/count = "average coalescing rate"
+# 1 = no coalescing (every event fires alone); wave size = perfect coalescing
+sum(rate(da_config_debounce_batch_size_sum[5m]))
+  /
+sum(rate(da_config_debounce_batch_size_count[5m]))
+```
+
+**New test case (v2.8.0 follow-up, scheduled with C-10 implementation PR)**: `TestDebouncedReload_RollbackWave` — simulates N git-sync commits applied in reverse order with 100ms debounce window, asserts fire count always == 1 (same pattern as B-7 `TestSlowWriteTornStateStress`, but with reversed time series + cascading defaults retreating in lockstep). Detailed design deferred to the C-10 PR.
+
+### Staging rehearsal mandatory (T-2 weeks before cutover)
+
+**No formal cutover without a passed rehearsal first** — written into the cutover checklist as a hard gate (Customer Delivery milestone calendar).
+
+Rehearsal contents:
+1. Apply one full batch-PR pipeline output in customer's staging environment (any size, minimum 1 Base PR + 5 tenant PRs)
+2. **Immediately** trigger reverse-order rollback (no cooldown wait)
+3. Measure each segment: per-PR review/merge/git-sync apply/WatchLoop settle in seconds; end-to-end time for entire rollback to converge `merged_hash` back to the pre-Base-PR state
+4. Fill data into the "rollback time budget" table below; if production cutover measures > 1.5× of rehearsed budget, treat as anomaly and abort
+
+### Rollback time budget (based on Phase 1 baseline @ 1000-tenant, PR #59)
+
+> **Source**: `config_hierarchy_bench_test.go` PR #59 baseline (B-1 Phase 1 1000/2000/5000-tenant scaling characterization).
+> **Scope**: ≤ 1000 tenants = baseline; 2000-5000 use the §"Phase 1 scaling characterization" linear extrapolation (5×=4.6-5.4×).
+
+| Rollback action | 1000-tenant budget | 5000-tenant budget | Source |
+|---|---|---|---|
+| Single tenant PR revert + git-sync apply | < 5s | < 5s | git-sync polling 5s + scan_dir ≈ 51-273ms |
+| Single `_defaults.yaml` revert (region-level) → 21t affected @ 1000 / 105t @ 5000 | < 600ms reload | < 1.5s reload | BlastRadius bench 266ms / 1308ms |
+| Full wave rollback (Base PR + 10 tenant PRs + 2 cascading defaults) | < 90s | < 4 min | git-sync poll × N + reload × N |
+| `merged_hash` convergence verification | < 30s | < 2 min | `da-tools tenant verify --all` |
+
+**Threshold**: measurements > 1.5× of the table = anomaly → **pause rollback**, inspect `da_config_reload_duration_seconds` p99 and `da_config_blast_radius_tenants_affected{effect="applied"}` distribution; escalate to maintainer if abnormal.
+
+### Verification checklist (tick each after rollback completes)
+
+```
+[ ] 1. All N PRs reverted (git log --oneline | head -N all "Revert ..." commits)
+[ ] 2. git-sync applied all reverts (kubectl exec git-sync -- git rev-parse HEAD == expected SHA)
+[ ] 3. da_config_reload_trigger_total{reason="defaults"} delta from wave start == expected cascading defaults file count
+[ ] 4. da_config_reload_duration_seconds_count delta from wave start == 1 (debounce coalesced correctly)
+[ ] 5. da_config_blast_radius_tenants_affected{effect="applied"} delta sum ≈ expected affected-tenant count
+[ ] 6. Sample 5 tenants: da-tools tenant verify <id> merged_hash == pre-Base-PR historical snapshot
+[ ] 7. ALERTS{severity!="info"} count over last 10 min ≤ pre-wave baseline + 5%
+[ ] 8. Alertmanager Silenced alerts list is empty (no leftover silences obscuring observation)
+```
+
+**Item 6 is the core**: checksums must return to the pre-Base-PR `merged_hash`. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed); resolve manually via `da-tools effective <id> --diff-against-sha=<pre-base-sha>` per tenant.
+
+### Tooling follow-up (not yet implemented, on v2.8.x backlog)
+
+- `make rollback-dryrun` Makefile target — one-command staging rehearsal in customer environment that auto-fills the time-budget table above
+- `da-tools batch-pr rollback --plan` — given a Base PR #, derive the full reverse-order plan and output a markdown plan for ops review
+- `da-tools batch-pr rollback --execute` — automated reverse-order revert; waits for git-sync apply + reload settle between steps
+
+These tools are out of scope for the B-4 doc PR but the procedures defined here are their specification.
+
+---
+
 ## Frequently Asked Questions
 
 ### Q1: Do I need to clean up scrape config before migration?

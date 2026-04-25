@@ -521,6 +521,95 @@ EOF
 
 ---
 
+## Emergency Rollback Procedures（緊急退版程序）
+
+> **適用情境**：客戶 cutover 後發現結構性 bug（例：parser 吃掉 label / Dangling Guard 誤判 / 大量 false positive），需要把 Base Infrastructure PR + 多個 tenant PR 整批退版。
+> 與「階段 0/1/2/3 回滾」的差異：那些是試點期單一域的回退；本節是 cutover 後 batch PR pipeline 的整體退版，要處理 cascading defaults 與 hierarchical 依賴。
+>
+> **此程序為 v2.8.0 B-4 新增**（配合 Phase .c C-10 Batch PR Pipeline 的 hierarchy-aware chunking 設計）。
+
+### 退版順序：merge 順序的嚴格反序
+
+**禁止「隨意按 GitHub Revert」**——hierarchical 結構下 cascading defaults 有依賴關係，亂序退版會觸發 cycling reload 與中間態誤觸發告警。正確順序為 merge 時的反序：
+
+| Merge 階段（forward） | 退版階段（reverse） |
+|---|---|
+| 1. `[Base Infrastructure PR]` —— `_defaults.yaml` 變更 | **退版 step 4**（最後）|
+| 2. cascading defaults（outer → inner） | **退版 step 3**（按 inner → outer 逆序）|
+| 3. tenant PR chunk 1（`Blocked by: #base-pr`） | **退版 step 2**（與 chunk 4-N 平行）|
+| 4. tenant PR chunks 2-N | **退版 step 1**（最先）|
+
+**為什麼 inner 先退**：tenant PR 不退而先退 outer `_defaults.yaml`，會讓 inner tenant 的 `effective_config` 瞬間落到「outer defaults 已退、tenant override 還在」的混合態 —— inheritance graph 計算的 merged_hash 會與 base PR merge 前的歷史值都不相符。
+
+### WatchLoop debounce 驗收（與 B-3 觀測 metrics 連動）
+
+退版 wave 期間 git-sync 會把多個 commit 在 ~50-300ms 內依序 apply，觸發連續 fsnotify 事件。`config_debounce.go` 的 sliding-window debounce 必須把整個 wave 收斂為**單次** reload，中間態禁止誤 fire alert。
+
+**驗證 metrics**（v2.8.0 B-3 PR #75 加入）：
+
+```promql
+# 退版 wave 期間，預期 sliding window 把所有 reload 觸發合併為單次 fire：
+# fire 一次 ⇒ reloadDuration 1 sample；多次 fire ⇒ 多 sample（壞訊號）
+increase(da_config_reload_duration_seconds_count[5m])
+
+# debounce_batch sum 應接近 wave 內變更檔案數：sum/count 比即「平均收斂率」
+# 1 = 沒收斂（每個事件單獨 fire）；wave 大小 = 完美收斂
+sum(rate(da_config_debounce_batch_size_sum[5m]))
+  /
+sum(rate(da_config_debounce_batch_size_count[5m]))
+```
+
+**新增 test case（v2.8.0 follow-up，預定排在 C-10 實作 PR）**：`TestDebouncedReload_RollbackWave` —— 模擬 N 個 git-sync commit 反序 apply、debounce window 100ms，斷言 fire count 永遠 = 1（與 B-7 `TestSlowWriteTornStateStress` 同 pattern，差別在「反向時間序列 + cascading defaults 同步退」）。設計細節留待 C-10 PR。
+
+### Staging rehearsal 強制（cutover 前 2 週）
+
+**未跑過 rehearsal 不准正式 cutover** —— 寫入 cutover checklist 作為 hard gate（Customer Delivery 客戶里程碑日曆）。
+
+Rehearsal 內容：
+1. 客戶 staging 環境完整套用一輪 batch PR pipeline 產出（不限規模，最少 1 個 Base PR + 5 個 tenant PR）
+2. **立刻** 跑反序退版（不等任何 cooldown）
+3. 量測每段時間：每個 PR 的 review/merge/git-sync apply/WatchLoop settle 各約幾秒，整輪退版到 `merged_hash` 收斂回 Base PR merge 前狀態的端到端時間
+4. 數據填入下方「退版時間預算表」，正式 cutover 時若實測時間超過預算 1.5 倍即視為異常需 abort
+
+### 退版時間預算表（基於 Phase 1 baseline @ 1000-tenant，PR #59）
+
+> **數據來源**：`config_hierarchy_bench_test.go` PR #59 baseline（B-1 Phase 1 1000/2000/5000-tenant scaling characterization）。
+> **適用範圍**：tenant 數 ≤ 1000 視為 baseline；2000-5000 套 §「Phase 1 scaling characterization」線性外推（5×=4.6-5.4×）。
+
+| 退版動作 | 1000-tenant 預算 | 5000-tenant 預算 | 來源 |
+|---|---|---|---|
+| 單個 tenant PR revert + git-sync apply | < 5s | < 5s | git-sync polling 5s + scan_dir ≈ 51-273ms |
+| 單個 `_defaults.yaml` revert（region 級）→ 21t affected @ 1000 / 105t @ 5000 | < 600ms reload | < 1.5s reload | BlastRadius bench 266ms / 1308ms |
+| 整波退版（Base PR + 10 tenant PR + 2 cascading defaults）| < 90s | < 4 min | git-sync poll × N + reload × N |
+| `merged_hash` 收斂驗證 | < 30s | < 2 min | `da-tools tenant verify --all` |
+
+**門檻**：實測超過上表 1.5 倍視為異常 → **暫停退版**，先讀 `da_config_reload_duration_seconds` p99 與 `da_config_blast_radius_tenants_affected{effect="applied"}` 看是否落在預期分佈，異常找 maintainer 介入。
+
+### 驗證 checklist（退版完成後逐項打勾）
+
+```
+[ ] 1. 全部 N 個 PR 都已 revert（git log --oneline | head -N 全為 "Revert ..." commit）
+[ ] 2. git-sync 已 apply 全部 revert（kubectl exec git-sync -- git rev-parse HEAD == 預期 SHA）
+[ ] 3. da_config_reload_trigger_total{reason="defaults"} 從 wave 開始增量 == 預期 cascading defaults 變更檔數
+[ ] 4. da_config_reload_duration_seconds_count 從 wave 開始增量 == 1（debounce 收斂正確）
+[ ] 5. da_config_blast_radius_tenants_affected{effect="applied"} 增量 sum ≈ 預期受影響 tenant 數
+[ ] 6. 抽樣 5 個 tenant：da-tools tenant verify <id> 的 merged_hash == Base PR merge 前歷史快照
+[ ] 7. 過去 10 分鐘 ALERTS{severity!="info"} 總數 ≤ wave 開始前的 baseline + 5%
+[ ] 8. Alertmanager Silenced alerts 列表為空（沒有遺留 silence 干擾觀測）
+```
+
+**第 6 項是核心**：checksum 必須回到 Base PR merge 前的 `merged_hash`，若不一致即代表 drift（可能某個 tenant PR 被部分退版、或某 cascading defaults 漏退），需要人工逐個 tenant 比對 `da-tools effective <id> --diff-against-sha=<pre-base-sha>`。
+
+### 工具層 follow-up（未實裝，列入 v2.8.x backlog）
+
+- `make rollback-dryrun` Makefile target —— 客戶 staging 環境一鍵跑 staging rehearsal，自動填上方時間預算表
+- `da-tools batch-pr rollback --plan` —— 從 Base PR # 反推完整退版順序，產出 markdown plan 給 ops review
+- `da-tools batch-pr rollback --execute` —— 自動執行反序 revert，每步等 git-sync apply + reload 收斂後才前進
+
+這些工具不在 B-4 文件 PR 範圍，但本節定義的程序為其 specification。
+
+---
+
 ## 常見問題（FAQ）
 
 ### Q1：遷移前需要清理 scrape 配置嗎？
