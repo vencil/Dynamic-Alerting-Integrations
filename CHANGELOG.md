@@ -29,6 +29,10 @@ Compare：v2.7.0 最終條目約 55 行（Scale / Token / Test / Benchmark / ADR
 Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 -->
 
+### Changed
+
+- **GitHub Actions Node 20 → Node 24 sweep（v2.8.0, chore）** — 升級全部 11 個 workflow 用到的 7 個 actions 到當前最新 stable major，避開 2026-06-02 GitHub 強制 Node 24 deadline + 26 週後 Node 20 移除：`actions/checkout@v4 → @v6`（11 處）、`actions/setup-python@v5 → @v6`（6 處）、`actions/setup-go@v5 → @v6`（3 處）、`actions/setup-node@v4 → @v6`（3 處，**確認** repo 未用 yarn/pnpm cache 故 v6「limit auto-cache to npm」breaking 不影響）、`actions/cache@v4 → @v5`、`actions/upload-artifact@v4 → @v7`、`actions/github-script@v7 → @v9`（**確認** repo 3 個 inline script 全使用 `require('fs')` + injected `github.rest.*`，未踩到 v9 移除的 `require('@actions/github')` 路徑）。74 個 reference 全替換；diff 嚴格只動 version tag 不動其他語意。verification path：本 PR 自身 CI run（trigger 多數 PR-level workflow）+ post-merge `gh workflow run bench-record.yaml`、`mkdocs-deploy.yaml` 手動 dispatch（cron/push-only workflow）
+
 ### Added
 
 - **`scripts/tools/dx/analyze_bench_history.py` + `make bench-history-analyze`（v2.8.0, issue #67 prep）** — pre-Phase-2 工具：用 `gh api` 拉最近 N 次 `bench-record` workflow 的 artifact，parse `bench-baseline.txt` per-bench 跨 run 聚合，輸出 Markdown table 含 per-benchmark median / CV / max-min ratio + GO/NO-GO 決議。閾值 hardcode 對齊 #67 acceptance gate（CV ≤ 25%、max/min ≤ 1.30、≥ 26/28 runs reliability）。stdlib only（無 pandas / numpy 依賴），Dev Container / Cowork VM / CI 都能直跑。`--ci` flag exit 1 on NO-GO 供未來 #67 review 自動化用。`--cache-dir` 持久化下載 artifact 避免重複 `gh run download`。今日驗證：對 PR #65 merge 後第一次 nightly run 跑 `--limit 1 --no-gate`，正確 parse 13 bench × 6 sample = 78 records，per-bench within-run CV 範圍 0.2%–27.6%（`IncrementalLoad_1000_OneFileChanged` 為 outlier）。Phase 2 review 時跑 `make bench-history-analyze ARGS="--ci"` 一次得 GO/NO-GO 表。詳見 [issue #67](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/67)
