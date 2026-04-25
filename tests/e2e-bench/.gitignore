@@ -1,0 +1,19 @@
+# Run-time fixture stage (driver writes/mutates here per run);
+# generated from the kind-specific dirs below at harness startup.
+fixture/active/
+
+# Generated fixtures (large) — produced by
+# scripts/tools/dx/generate_tenant_fixture.py on demand.
+# fixture/synthetic-v1/ and fixture/synthetic-v2/ are local-only;
+# the placeholder _defaults.yaml under each is checked in so the
+# directory structure documents intent.
+fixture/synthetic-v1/conf.d/*
+!fixture/synthetic-v1/conf.d/_defaults.yaml
+fixture/synthetic-v2/conf.d/*
+!fixture/synthetic-v2/conf.d/_defaults.yaml
+
+# Customer anonymized samples never enter version control.
+fixture/customer-anon/conf.d/
+
+# Per-run JSON output from driver.
+bench-results/

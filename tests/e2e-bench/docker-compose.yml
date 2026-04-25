@@ -1,0 +1,117 @@
+# B-1 Phase 2 e2e alert fire-through harness — local-only (NOT in CI).
+#
+# Per design doc §3 (chose docker-compose over k3d/kind: K8s noise
+# falls below the 5s scrape quantization, and we already cover symlink
+# rotation in PR #54 unit tests).
+#
+# Usage:
+#
+#   cd tests/e2e-bench
+#   # Pre-flight: generate fixture once (PR-1 tool):
+#   python3 ../../scripts/tools/dx/generate_tenant_fixture.py \
+#       --layout synthetic-v2 --count 1000 --with-defaults \
+#       --output fixture/synthetic-v2/conf.d --seed 42
+#   # Copy chosen fixture into the run-time active dir:
+#   cp -r fixture/synthetic-v2/conf.d/* fixture/active/conf.d/
+#   # Run the harness:
+#   COUNT=30 docker compose up --build --abort-on-container-exit
+#   # Per-run JSONs land in bench-results/.
+#   docker compose down -v
+#
+# Driver runs INSIDE the compose stack so all timestamps share the
+# host kernel clock (per design §2.4 — eliminates host-vs-container
+# clock skew that would otherwise corrupt 5-anchor measurements).
+
+services:
+  threshold-exporter:
+    build:
+      context: ../../components/threshold-exporter/app
+    volumes:
+      # Driver writes new tenant YAMLs here mid-run; exporter watches
+      # via its existing fsnotify path. Bind-mount over a Compose
+      # volume so the host (and the driver service below) can read/
+      # write the same dir.
+      - ./fixture/active/conf.d:/etc/threshold-exporter/conf.d:rw
+    command:
+      - "--listen=:8080"
+      - "--config=/etc/threshold-exporter/conf.d"
+    expose:
+      - "8080"
+    # Distroless base has no wget/curl/sh — use Prometheus's
+    # service-discovery scrape success as health signal instead
+    # (this service has no compose-level healthcheck; downstream
+    # services depend on prometheus which scrapes this one).
+
+  pushgateway:
+    image: prom/pushgateway:v1.10.0
+    expose:
+      - "9091"
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-lifecycle"
+      # 5s evaluation matches the scrape interval — anything tighter
+      # is wasted CPU; anything looser pushes stage C latency up.
+      - "--storage.tsdb.retention.time=1h"
+    expose:
+      - "9090"
+    depends_on:
+      - threshold-exporter
+      - pushgateway
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--web.listen-address=:9093"
+    expose:
+      - "9093"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  receiver:
+    build:
+      context: ./receiver
+    expose:
+      - "5001"
+
+  driver:
+    build:
+      context: ./driver
+    environment:
+      EXPORTER_URL: "http://threshold-exporter:8080"
+      PROMETHEUS_URL: "http://prometheus:9090"
+      PUSHGATEWAY_URL: "http://pushgateway:9091"
+      RECEIVER_URL: "http://receiver:5001"
+      FIXTURE_ACTIVE: "/fixture/active/conf.d"
+      RESULTS_DIR: "/results"
+      E2E_FIXTURE_KIND: "${E2E_FIXTURE_KIND:-synthetic-v2}"
+      COUNT: "${COUNT:-30}"
+    volumes:
+      - ./fixture/active/conf.d:/fixture/active/conf.d:rw
+      - ./bench-results:/results:rw
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+      receiver:
+        condition: service_started
+    # Driver exits naturally after COUNT+1 runs; abort-on-container-exit
+    # in `docker compose up` brings the rest down.

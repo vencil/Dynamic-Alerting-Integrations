@@ -1,0 +1,5 @@
+# Placeholder — see synthetic-v1 sibling for generation command,
+# but use --layout synthetic-v2 (B-1.P2-b PR #78).
+
+defaults:
+  bench_trigger: 100
