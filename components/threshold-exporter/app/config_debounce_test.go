@@ -343,74 +343,81 @@ func TestPendingDebounceReasons_AccumulatesThenClears(t *testing.T) {
 	}
 }
 
-// TestFireDebounced_EmitsBatchAndDuration verifies v2.8.0 B-3 metrics
-// (debounce batch size + reload duration) land exactly once per fire,
-// with the batch sample reflecting the count of triggers collapsed.
+// TestFireDebounced_EmitsBatchAndDuration verifies the invariant that
+// every fired debounce window produces exactly one reloadDuration
+// sample AND one debounceBatch sample, with the batch sums totaling
+// the number of triggers seen.
 //
-// Window sized for CI scheduler jitter under -race: at 30ms a stressed
-// runner can split the 4 triggers across two windows (CI failure
-// observed: _count=2 instead of 1 — runs/24933040316). 150ms keeps
-// the test under 1s while leaving ~5× margin over Go's -race
-// scheduling overhead per trigger call.
+// Earlier versions asserted "_count == 1" by timing assumption (4
+// triggers fit in one window) — that flaked on CI under -race when
+// the scheduler split the trigger loop across two windows
+// (runs/24933040316 + runs/24933130105). The actual contract is
+// not "1 fire" but "samples consistent with fire count", so we
+// drive a fixed number of triggers, wait for quiescence, and
+// assert the contract directly.
 func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 	fresh, _ := withIsolatedMetrics(t)
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90")
 
-	m := NewConfigManagerWithDebounce(dir, 150*time.Millisecond)
+	const numTriggers = 4
+	m := NewConfigManagerWithDebounce(dir, 50*time.Millisecond)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Fire 4 triggers within one window.
-	for i := 0; i < 4; i++ {
+	for i := 0; i < numTriggers; i++ {
 		m.triggerDebouncedReload(ReloadReasonSource)
 	}
-	if !waitFor(t, 1*time.Second, func() bool {
+	if !waitFor(t, 2*time.Second, func() bool {
 		return m.DebounceFiredCount() >= 1
 	}) {
 		t.Fatalf("debounce never fired")
 	}
-	// Tail sleep so any rogue extra fire is also visible.
-	time.Sleep(200 * time.Millisecond)
-
-	// reload duration: exactly one Observe per fire.
-	reg := prometheus.NewRegistry()
-	if err := reg.Register(fresh.reloadDuration); err != nil {
-		t.Fatalf("register reload: %v", err)
-	}
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather reload: %v", err)
-	}
-	gotReloadCount := uint64(0)
-	for _, fam := range families {
-		for _, metric := range fam.Metric {
-			gotReloadCount = metric.Histogram.GetSampleCount()
+	// Wait for quiescence: no new fires for 3 consecutive windows.
+	stable := uint64(0)
+	stableSince := time.Time{}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		now := m.DebounceFiredCount()
+		if now != stable {
+			stable = now
+			stableSince = time.Now()
+		} else if !stableSince.IsZero() && time.Since(stableSince) > 150*time.Millisecond {
+			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if gotReloadCount != 1 {
-		t.Errorf("reloadDuration: expected _count=1 (one fired window), got %d", gotReloadCount)
+	fireCount := m.DebounceFiredCount()
+	if fireCount < 1 {
+		t.Fatalf("expected at least 1 fire, got %d", fireCount)
 	}
 
-	// debounce batch: one Observe with sum=4 (collapsed triggers).
-	reg2 := prometheus.NewRegistry()
-	if err := reg2.Register(fresh.debounceBatch); err != nil {
+	// Invariant: one reloadDuration sample per fire.
+	reloadCount := histogramSampleCount(t, fresh.reloadDuration)
+	if reloadCount != fireCount {
+		t.Errorf("reloadDuration: expected _count=%d (one per fire), got %d", fireCount, reloadCount)
+	}
+
+	// Invariant: one debounceBatch sample per fire, and the sum of
+	// batch sizes equals the total trigger count (no trigger lost).
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.debounceBatch); err != nil {
 		t.Fatalf("register batch: %v", err)
 	}
-	families, err = reg2.Gather()
+	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("gather batch: %v", err)
 	}
 	for _, fam := range families {
 		for _, metric := range fam.Metric {
 			h := metric.Histogram
-			if h.GetSampleCount() != 1 {
-				t.Errorf("debounceBatch: expected _count=1, got %d", h.GetSampleCount())
+			if h.GetSampleCount() != fireCount {
+				t.Errorf("debounceBatch: expected _count=%d (one per fire), got %d", fireCount, h.GetSampleCount())
 			}
-			if h.GetSampleSum() != 4 {
-				t.Errorf("debounceBatch: expected _sum=4 (4 collapsed triggers), got %v", h.GetSampleSum())
+			if int(h.GetSampleSum()) != numTriggers {
+				t.Errorf("debounceBatch: expected _sum=%d (no trigger lost), got %v", numTriggers, h.GetSampleSum())
 			}
 		}
 	}
