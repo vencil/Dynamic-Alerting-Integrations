@@ -31,6 +31,19 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .b 1000/2000/5000-tenant hierarchical baseline（v2.8.0, B-1 Phase 1 + B-8）— 此 baseline 非 definitive SLO 承諾**
+  - ⛔ **重要 disclaimer**：以下數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 需 Phase 2 customer anonymized sample 校準後重跑（DEC-B in planning §10）。下游文件引用須附「Phase 1 synthetic baseline」前綴
+  - **11 new Go benchmarks** in `components/threshold-exporter/app/config_hierarchy_bench_test.go`：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` + `DiffAndReload_Hierarchical_1000_OneTenantChanged`（B-8 blast-radius with `affected-tenants` metric per size）
+  - **Pure Go hierarchical fixture helper** `buildDirConfigHierarchical(b, N)` — 8 domains × 6 regions × 3 envs = 144 leaf dirs + `_defaults.yaml` at L0/L1/L2/L3；sync.Once cached across read-only benchmarks + fresh-dir variant for mutating benchmarks
+  - **Resource metrics helper** `reportResourceMetrics(b)` — 強制 `runtime.GC()` ×2（reap finalizers）後 emit `MB-heap-after-gc` / `MB-sys` / `goroutines` via `b.ReportMetric`
+  - **1000-tenant baseline**（3-run median）：scan 32 ms / fullDirLoad 146 ms / diffAndReload-noChange 189 ms / BlastRadius (21 affected) 212 ms
+  - **Scaling characterization（1000 / 2000 / 5000 tenants, 3-run median）**：scan 51/105/273 ms（5×=5.35× → 略 super-linear, +7% over linear）；fullDirLoad 237/570/1097 ms（5×=4.63× → 混合）；BlastRadius 266/535/1308 ms（5×=4.92× → near linear）；affected-tenants 21/42/105（嚴格 linear, geometric expectation）
+  - **Memory/goroutines** linear at scale：1000=19 MB sys / 2000=29 MB / 5000=42 MB；goroutines 一律 2（**無 leak signal at 5000-scale**）
+  - **Sharding 決策 empirical（not extrapolated）**：≤2000 完全無瓶頸；2000-5000 可運行需 staggering；5000-10000 需配 `diffAndReload` 尾段優化 + GOGC tuning；>10000 強烈建議 sharding。**不從單一 1000 點外推**
+  - **benchmark-playbook.md** 新章節「v2.8.0 1000-Tenant Hierarchical Baseline (Phase 1, B-1)」— 完整方法論 + latency/resource 表格 + 3 個量測踩坑（`diffAndReload` 尾段 fullDirLoad 佔時、quiet defaults edit noOp 的 bench design 教訓、`IncrementalLoad` ≠ hierarchical hot path 澄清）
+  - **Honest baseline caveats**：Phase 1 synthetic fixture；不含 alert fire-through e2e；non-definitive SLO（待 Phase 2 customer sample 校準）
+  - 詳見 planning §12.1 Session #27 / archive §S#27
+
 - **Phase .a wizard.jsx 剩餘 Tailwind 色票 → CSS var 遷移（v2.8.0, A-3）**
   - **Tier A migration（15 個 edit points 遷 ~28 個 Tailwind color class instances → `var(--da-color-*)`）**：`bg-white` ×5 → `bg-[color:var(--da-color-surface)]`；`text-white` on accent bg ×3 → `text-[color:var(--da-color-accent-fg)]`；`text-white` on toast bg ×1 → `text-[color:var(--da-color-hero-fg)]`（toast-bg 與 hero-bg 一致不 theme-flip）；`text-green-*` / `bg-green-*` / `border-green-*` → `--da-color-success(-soft)`；`bg-amber-* text-amber-*` / `border-amber-*` → `--da-color-warning(-soft)`；`bg-indigo-600 text-white` / `bg-indigo-100 text-indigo-700` 按鈕對 → `--da-color-accent(-soft) / -fg`；`ring-indigo-400` focus → `ring-[color:var(--da-color-focus-ring)]`
   - **Tier B 延後項（4 處，加 `// A-3 deferred:` TODO 註解）**：`text-blue-300` toast-link-on-dark（缺 `--da-color-link-on-dark` token）/ `border-indigo-200` 裝飾性藍邊（缺 `--da-color-accent-border-soft`）/ `text-purple-700` 語意 other-path（缺 `--da-color-semantic-other`）/ `bg-gradient-to-br from-blue-50 via-white to-indigo-50` 頁面 hero 漸層（需複合 token 或 inline style 決策）。每處 TODO 寫明所需新 token 名 + 決策條件

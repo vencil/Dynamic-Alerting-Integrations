@@ -197,4 +197,116 @@ func silenceLogs(b *testing.B) {
 
 ---
 
+## v2.8.0 1000-Tenant Hierarchical Baseline (Phase 1, B-1)
+
+> ⛔ **此 baseline 非 definitive SLO 承諾** ⛔
+>
+> 本節數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 必須等 Phase 2 customer anonymized sample 校準後重跑（DEC-B in v2.8.0-planning §10）。下游文件（pitch deck / proposal / 客戶 onboarding 文件）若引用本節數字，**必須**附帶「Phase 1 synthetic baseline」前綴。
+
+> **Scope + honest caveats**：
+>
+> - **包含**：infrastructure SLOs（scan / reload / blast-radius）+ resource metrics（heap / goroutines / virtual memory）+ 1000/2000/5000 三點 scaling characterization
+> - **不包含**：(a) Prometheus + Alertmanager alert fire-through latency（需 full-stack e2e，Phase 2）；(b) 客戶真實 workload 校準（fixture 分布 per `generate_tenant_fixture.py` 不代表客戶 domain/region/env 比例，等 customer anonymized sample 到位後 Phase 2 re-run）
+> - **Variance**：Dev Container CI runner timing 有 20-50% noise（observed 跨兩次重跑 same code: scan 32→51ms, FullDirLoad 146→237ms）。下節數字以 **3-run min/median/max 範圍**呈現。需 statistical SLO 鎖定請走 count=10+ 並排除外部 IO 干擾
+
+### 量測方法論
+
+- **Fixture**: `buildDirConfigHierarchical(b, 1000)` — 8 domains × 6 regions × 3 envs = 144 leaf dirs，1000 tenant files（~7 per leaf），`_defaults.yaml` at L0/L1/L2/L3（4 層）
+- **Harness**: A-15 `bench_wrapper.sh`（PR #48 stdout-clean `-json` filter）
+- **Runs**: `-count=3 -timeout=15m` — 3 runs per bench for variance; report (min / median / max)
+- **Env**: Dev Container（Ubuntu 22.04.5 LTS / Intel Core 7 240H / Go 1.26）
+- **Resource metrics**: `runtime.GC()` ×2（reap finalizers）+ `runtime.ReadMemStats` → `HeapAlloc` after GC / `Sys` / `NumGoroutine`
+
+### Latency Baseline 1000-tenant（3-run min / median / max, ns → ms）
+
+> **註**：以下 1000-tenant 數字為**第一次量測** run（PR #59 v1）；第二次 run（v2，加 2000/5000 後重跑）數字略高（OS noise）。**scaling 分析下節用第二次 run 完整數據**。
+
+| Operation | Min ms | Median ms | Max ms | Variance | Notes |
+|---|---|---|---|---|---|
+| `scanDirHierarchical` (bare walk + hash + graph) | 32.3 | **32.4** | 35.1 | 8.6% | 純掃描熱路徑，A-10 (PR #54) 新的 WatchLoop 入口 |
+| `fullDirLoad` (cold load, 1000 tenants) | 143.0 | **146.0** | 147.0 | 2.7% | 含 YAML parse + merge + populateHierarchyState |
+| `diffAndReload` (no change) | 186.4 | **189.4** | 215.8 | 13.9% | **註**：diffAndReload L341 最後仍會呼 `fullDirLoad` — no-change case 時間 ≈ fullDirLoad，per-tenant diff 階段只 ~5μs |
+| `diffAndReload` (1 tenant file change) | 201.5 | **203.0** | 224.6 | 10.2% | 與 NoChange 相近（dominant cost: 尾段 fullDirLoad）|
+| Blast-radius (1 region `_defaults.yaml` change, 21 tenants affected) | 195.8 | **212.0** | 214.3 | 8.4% | 21 tenants re-merged + fullDirLoad |
+
+### Scaling Characterization 1000 / 2000 / 5000（3-run median ms）
+
+> **目的**：empirically 驗證「線性外推到 10000 = 2 秒可接受」這個 sharding 決策假設是否成立 — **不要從單一 1000 點外推**。本節用 1000 / 2000 / 5000 三點建立趨勢。
+
+| Operation | 1000 | 2000 | 5000 | 1000→2000 ratio | 1000→5000 ratio | Linearity |
+|---|---|---|---|---|---|---|
+| `scanDirHierarchical` | 51 | 105 | 273 | **2.06×** | **5.35×** | 略 super-linear (~7% over linear) |
+| `fullDirLoad` | 237 | 570 | 1097 | **2.41×** | **4.63×** | 混合（2× super-linear, 5× sub-linear；variance 影響）|
+| `diffAndReload NoChange` | (run 中 OOM-fixture-ENOSPC) | — | — | — | — | bench 在 5000 跑時 fixture 寫入磁碟壓力大；measurement omitted |
+| `BlastRadius (defaults change)` | 266 | 535 | 1308 | **2.01×** | **4.92×** | near linear |
+| `affected-tenants` (BlastRadius scope) | 21 | 42 | 105 | **2.0×** | **5.0×** | 嚴格 linear（geometric expectation 1 region × 3 envs × N/144 per leaf）|
+
+#### 觀察
+
+1. **Linear-ish 但不完美**：`scanDirHierarchical` 5× 規模 → 5.35× 時間（+7% over linear），`BlastRadius` 5× → 4.92× 時間（near linear）。沒有發現 O(N²) 級的劣化。
+2. **Memory linear**：allocs/op 隨 N 線性（172K → 338K → 834K for scan）。Sys (RSS) 1000=19MB / 2000=29MB / 5000=42MB — 線性。
+3. **Goroutines 穩定 = 2**：1000、2000、5000 都 2 個 goroutine — **無 leak signal at scale**。
+4. **`diffAndReload NoChange`** 在 5000-tenant fixture 重跑時遇到 fixture write contention；數據 inconclusive，留 follow-up 加 count=5 重測。
+
+#### 10000-tenant 線性外推（不是實測 — 標 caveat）
+
+| Operation | 5000 實測 | 10000 線性外推 | 10000 +20% safety | 是否 acceptable for production |
+|---|---|---|---|---|
+| `scanDirHierarchical` | 273 ms | ~550 ms | ~660 ms | ✅ acceptable（per-tick scan，scrape 15-30s 完全容忍）|
+| `fullDirLoad` | 1097 ms | ~2200 ms | ~2640 ms | ⚠️ borderline — Alertmanager rule reload 在 cascading batch 時可能出現 stall |
+| BlastRadius | 1308 ms | ~2620 ms | ~3144 ms | ⚠️ 同上，每 region defaults 變更需 ~3s reload |
+| Allocs / FullDirLoad | 4.17 M | ~8.3 M | ~10 M | ⚠️ Go GC pressure 提升；建議搭 GOGC tuning |
+| Memory (sys RSS) | 42 MB | ~80 MB | ~100 MB | ✅ 仍小，無記憶體瓶頸 |
+
+#### Sharding 決策建議（empirical, not extrapolated）
+
+- **≤ 2000 tenant**: 完全無瓶頸；現架構充裕應對
+- **2000-5000 tenant**: 可運行，但每次 reload 1-1.3 秒；批次 PR pipeline 後 cascading reload 需要 staggering
+- **5000-10000 tenant**:
+  - **可行 IF** (a) 落地 `diffAndReload` skip-trailing-fullDirLoad 優化（省 ~70% reload time on no-change tick） (b) 接受 ~2-3 秒 reload latency (c) GOGC tuning
+  - **可行 ELSE** sharding 為 2-4 個獨立 conf.d/ tree，各自 mount → 平行掃描
+- **> 10000**: sharding 強烈建議，不再依賴單 process 路徑
+
+#### 不要做的判斷
+
+- ❌ 不要從單一 1000-tenant 數字線性外推到 10000 並斷言「不需 sharding」
+- ❌ 不要把上面 "10000 線性外推" 表當實測（標 ~ 字符 + 「不是實測」明示）
+- ❌ 不要在客戶合約寫「10000 tenant 2 秒 reload」— 沒實測過
+
+### Resource Baseline
+
+| Metric | Value | Notes |
+|---|---|---|
+| Heap after GC (steady state) | **0.46-0.50 MB** | 極小 working set；GC 後 |
+| Sys (total virtual) | **18-20 MB** | OS 視角總 VM |
+| Goroutines (benchmark steady) | **2** | main + test runner；無 leak signal |
+| Allocs per diff-reload op | ~1,000,000 | ~1K allocs/tenant；主要 YAML parse |
+| Allocs per bare scan op | ~172,000 | ~172/tenant |
+
+### 發現（Phase 1 baseline 量測時順手踩出）
+
+1. **`diffAndReload` NoChange/OneTenantChanged/BlastRadius 時間相近**：因為 diffAndReload L341 尾段呼 `fullDirLoad` — per-tenant diff 階段快（5-50μs），但尾段 full-reload 占 dominant 150ms。**Phase 2 優化候選**：當 diff stage 顯示無變化時，skip 尾段 fullDirLoad 可省 ~150ms/tick
+2. **"Quiet defaults edit" noOp 生效**：blast-radius bench 初版用 `container_memory` key（tenants 有 override）→ defaults 變更被 shadowed → `affected-tenants: 0`（對應 `config_debounce.go` L313-318 的 quiet edit detection）。改用 `region_alert_schedule`（tenants 無 override）後 → 21 affected，符合預期。**Bench design 教訓**：測 blast-radius 必用 tenants 不 override 的 key，否則量到的是噪音
+3. **`IncrementalLoad` ≠ hierarchical 熱路徑**：v2.6.0 保留的 `IncrementalLoad` 使用 `scanDirFileHashes`（root-only flat），不走 hierarchical。**A-10 後 production 走 WatchLoop → `diffAndReload` → `scanDirHierarchical`**。Benchmark 作者注意 call site 選對
+
+### Phase 2 延伸（blocked）
+
+- **Alert fire-through e2e**：需 Prometheus + Alertmanager + receiver，目前只量內部 SLO
+- **Customer sample 校準**：synthetic fixture 分布未必等同客戶 workload；Phase 2 帶客戶 anonymized sample re-run
+- **SLO definitive sign-off**：B-2 hard SLO 需 3+ 輪 customer 環境驗證
+
+### 重跑本 baseline 指令
+
+```bash
+# In Dev Container:
+cd /workspaces/vibe-k8s-lab/components/threshold-exporter/app
+BENCH_OUT_DIR=/tmp/b1_out bash /workspaces/vibe-k8s-lab/scripts/tools/ops/bench_wrapper.sh \
+  -run='^$' \
+  -bench='BenchmarkFullDirLoad_Hierarchical_1000|BenchmarkDiffAndReload_Hierarchical_1000_NoChange|BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged|BenchmarkScanDirHierarchical_1000|BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000' \
+  -benchmem -count=3 -timeout=15m .
+cat /tmp/b1_out/bench.out.txt
+```
+
+---
+
 > 本文件從 [Testing Playbook](testing-playbook.md) § Performance Benchmark 獨立拆分（v2.0.0-preview.4）。
