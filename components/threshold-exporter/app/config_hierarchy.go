@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -290,6 +291,11 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 		graph.AddTenant(tid, chain)
 	}
 
+	// v2.8.0 B-1.P2-a: stamp the last-successful-scan gauge for the e2e
+	// harness anchor T1 + production stuck-scanner detection. Stamped only
+	// on success — error returns above leave the gauge at its previous
+	// value so a transient failure doesn't look like a completion.
+	SetLastScanComplete(time.Now())
 	return tenants, defaults, hashes, mtimes, graph, nil
 }
 
