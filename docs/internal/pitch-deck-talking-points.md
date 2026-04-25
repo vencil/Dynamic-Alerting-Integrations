@@ -35,15 +35,15 @@ PR #59 BlastRadius bench 初版用 `container_memory` 這個 key 變更 region-l
 
 ### 客戶語言版本
 
-> 客戶調整 platform-wide defaults（例如修改全域 CPU threshold）若被 tenant-level override 遮蔽，threshold-exporter 在 ~200 ms 內判定「實際生效配置未變」，**不向下游 Alertmanager 發送 rule reload 信號**。已 customize 過的 tenant 不會被無謂打擾。
+> 客戶調整 platform-wide defaults（例如修改全域 CPU threshold）若被**所有受影響 tenant** 的 override 遮蔽，threshold-exporter 在 ~200 ms 內逐 tenant 判定「實際生效配置未變」，**對該批 tenant 不向下游 Alertmanager 發送 rule reload 信號**。已 customize 過的 tenant 不會被無謂打擾；未 override 的 tenant 仍會照常 reload。
 
 ### Talking bullets
 
 - **ADR-018 引入 dual-hash**：`source_hash`（檔案內容）+ `merged_hash`（合成後 effective config）— 後者用 canonical JSON SHA-256 計算
-- **Quiet edit 偵測**：當 defaults 檔變動但所有受影響 tenant 都 override 了該 key，merged_hash 不變 → 整批標記 noOp，不下發 reload
+- **Quiet edit 偵測（per-tenant）**：每個受影響 tenant 各自比對 prior vs recomputed merged_hash；不變者標 noOp、變者照常 reload。可能出現 mixed 結果（部分 tenant noOp、部分 reload）
 - **計數器可觀測**：`da_config_defaults_change_noop_total` counter 記錄 quiet edit 次數，platform team 可審計
 - **典型場景**：global defaults 註解修整、key 順序整理、被 tenant override 的 key 微調 — 客戶端服務不會被打擾
-- **重要：noOp ≠ 零工作**：1000 tenants 仍會花 ~200 ms 重算 21 個 tenants 的 merged_hash 來比對；節省的是**下游** Alertmanager rule re-evaluation cascade
+- **重要：noOp ≠ 零工作**：~200 ms 大部分花在 [config_debounce.go:341](../../components/threshold-exporter/app/config_debounce.go) `diffAndReload` 尾段**無條件呼叫**的 `fullDirLoad`（1000-tenant 約 146-237 ms 主導 cost）；21 個 tenant merged_hash 重算只占 ~1 ms。節省的是**下游** Alertmanager rule re-evaluation cascade（Phase 2 優化候選：diff 階段全 noOp 時 skip 尾段 fullDirLoad，可再省 ~150 ms/tick）
 - **Bench design 教訓**：blast-radius 想量真正影響面，要選 tenants 不 override 的 key（B-1 改用 `region_alert_schedule` → 21 affected）
 
 ### ❌ 不要這樣講
@@ -52,6 +52,7 @@ PR #59 BlastRadius bench 初版用 `container_memory` 這個 key 變更 region-l
 - ❌ **「dual-hash 會自動跳過 reload」** — dual-hash 是 architecture（ADR-018）；noOp detection 是 algorithm（[config_debounce.go L313-318](../../components/threshold-exporter/app/config_debounce.go)）。**RELATED but DISTINCT**。dual-hash 啟用了 noOp 判定，但 noOp 是判定的**結果**，不是 dual-hash 本身的功能
 - ❌ **「noOp 省下 reload 工作」** — 上游的 21 tenant merged_hash 重算（~200 ms）**還是花了**；省的是下游 Alertmanager rule cascade
 - ❌ **「100% 不會誤觸發 reload」** — quiet edit 偵測只覆蓋「defaults 變更但 merged_hash 不變」的場景；source 變更（tenant YAML 自身改動）一律觸發 reload
+- ❌ **「noOp 是 batch / 整批級別判定」** — noOp 是 per-tenant 標記。常見誤解：「只要有一個 tenant override 該 key 整個 reload 就跳過」— 錯。判定是逐 tenant 比對 merged_hash，可能出現 21 中 19 noOp + 2 reload 的 mixed 結果，下游 reload signal 仍會 fire（為那 2 個變動的 tenant）
 
 ---
 
