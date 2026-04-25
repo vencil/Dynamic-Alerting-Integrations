@@ -582,6 +582,148 @@ Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），
 
 **不要**用 `git commit + push + fetch` 同步 — 會污染 commit history。**不要**改 `dx-run.sh` 的 `-w` 參數除非你願意同步調整 container bind-mount。
 
+## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
+
+> **觸發**：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 `withIsolatedMetrics` + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。
+>
+> **Authority**：本節為「production code 含 async callback（`time.AfterFunc` / goroutine spawn）+ 測試用 `withIsolatedMetrics` swap global metric 實例」class of test 的 hard rule。違反任一條的 PR 預期會在 CI 隨機 flake。
+
+### 1. `withIsolatedMetrics` + async-callback isolation 不完整 — 用 lockstep + `>=` invariant，不要 exact-equality
+
+**現象**：`withIsolatedMetrics` swaps the global metric instance to `fresh` for the test's lifetime. But production code with async callbacks (e.g. `fireDebounced` spawned by `time.AfterFunc`) may complete its work **after**:
+
+1. The previous test's `defer m.Close()` returned (Close does **not** wait for in-flight callbacks — see [`config_debounce.go::Close` docstring](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go))
+2. The next test's `withIsolatedMetrics` already swapped to its own `fresh`
+
+The leaked callback's late `getConfigMetrics()` returns the **NEW** test's `fresh` (the global is now swapped), inflating the metric count.
+
+**Insufficient fix (S#32, PR #75)**: snapshot baseline counts at test start, assert deltas. **Doesn't help** if the leak lands BETWEEN snapshot and final read (5-50ms `diffAndReload` window). PR #79 reproduced the same flake despite the baseline-snapshot fix.
+
+**Durable fix (S#35, PR #79 commit `0abc2ff`)**: assert lockstep + `>=` invariants. For a metric pair Set in the same critical section (e.g. `ObserveDebounceBatch` + `ObserveReloadDuration` both in `fireDebounced` after the lock):
+
+```go
+// Capture baseline before triggering our own work.
+baseFire := m.DebounceFiredCount()
+baseReload := histogramSampleCount(t, fresh.reloadDuration)
+baseBatchCount := histogramSampleCount(t, fresh.debounceBatch)
+
+// ... trigger our N calls, wait for quiescence ...
+
+deltaFire := m.DebounceFiredCount() - baseFire
+deltaReload := histogramSampleCount(t, fresh.reloadDuration) - baseReload
+deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
+
+// Lockstep invariant: same critical section ⇒ leak in lockstep.
+if deltaReload != deltaBatchCount {
+    t.Errorf("lockstep violated: deltaReload=%d != deltaBatch=%d", deltaReload, deltaBatchCount)
+}
+// At-least-our-own invariant: we observed >= our own fires.
+if deltaReload < deltaFire {
+    t.Errorf("at-least invariant violated: deltaReload=%d < deltaFire=%d", deltaReload, deltaFire)
+}
+// Exact equality only when no leak detected.
+if deltaReload == deltaFire && deltaFire == 1 {
+    // assert sum/count exactly here
+}
+```
+
+**Verified stable** under `go test -race -count=20` on `TestFireDebounced_EmitsBatchAndDuration` after applying the pattern.
+
+**Reference implementations**: see `components/threshold-exporter/app/config_debounce_test.go::TestFireDebounced_EmitsBatchAndDuration` for the canonical example.
+
+### 2. 時間敏感 test 用 quiescence detection，**不要**「sleep + assert exactly N」
+
+**Anti-pattern** (PR #75 v1):
+
+```go
+for i := 0; i < N; i++ { trigger() }
+time.Sleep(window + buffer)         // <-- timing assumption!
+assert.Equal(t, 1, fireCount)       // <-- "exactly 1" timing claim
+```
+
+`time.Sleep(buffer)` may overshoot under `-race` instrumentation, splitting the batch across two debounce windows. "Exactly 1 fire" tests **timing**, not the actual contract ("one observation per fire").
+
+**Pattern**:
+
+```go
+for i := 0; i < N; i++ { trigger() }
+
+// Wait for stability: no new fires for `stableWindow` consecutive ms.
+stable := uint64(0)
+stableSince := time.Time{}
+deadline := time.Now().Add(2 * time.Second)
+for time.Now().Before(deadline) {
+    now := m.DebounceFiredCount()
+    if now != stable {
+        stable = now
+        stableSince = time.Now()
+    } else if !stableSince.IsZero() && time.Since(stableSince) > 150*time.Millisecond {
+        break  // stable
+    }
+    time.Sleep(10 * time.Millisecond)
+}
+fireCount := m.DebounceFiredCount()
+// Assert per-fire invariants regardless of fireCount value.
+```
+
+This decouples the test from window-size choice and CI scheduling jitter.
+
+### 3. `testutil.CollectAndCount` 對 plain Histogram **回 family count, 不是 sample count**
+
+**Footgun**: `prometheus.testutil.CollectAndCount(h)` for a plain `prometheus.Histogram` returns **1** after registration, regardless of how many `Observe()` calls happened. It returns the number of metric families, not samples.
+
+**Wrong** (PR #75 first attempt — caught in self-review):
+
+```go
+if got := testutil.CollectAndCount(fresh.reloadDuration); got != 0 {
+    t.Errorf("expected no observations, got %d", got)  // always fails!
+}
+```
+
+**Right** — gather and read `SampleCount` directly:
+
+```go
+func histogramSampleCount(t *testing.T, h prometheus.Histogram) uint64 {
+    t.Helper()
+    reg := prometheus.NewRegistry()
+    if err := reg.Register(h); err != nil {
+        t.Fatalf("register: %v", err)
+    }
+    families, err := reg.Gather()
+    if err != nil {
+        t.Fatalf("gather: %v", err)
+    }
+    for _, fam := range families {
+        for _, metric := range fam.Metric {
+            return metric.Histogram.GetSampleCount()
+        }
+    }
+    return 0
+}
+```
+
+This helper exists at `components/threshold-exporter/app/config_metrics_test.go::histogramSampleCount` for reference.
+
+**Note**: `HistogramVec` (with labels) has different semantics — `CollectAndCount` returns the active series count, which is meaningful. The footgun is specifically plain `Histogram`.
+
+### PR review checklist item
+
+When reviewing a PR that adds a Go test using `withIsolatedMetrics` + production code with async callbacks (`time.AfterFunc`, goroutine spawn), verify:
+
+- [ ] Snapshot baseline counts at test start (don't rely on `fresh` starting at 0)
+- [ ] Assert lockstep invariants for metric pairs Set in same critical section (`deltaA == deltaB`)
+- [ ] Assert `>=` invariants relative to per-instance `DebounceFiredCount()` etc., not exact equality
+- [ ] Use quiescence detection for "wait for fire" (poll + stable-window), not `time.Sleep(window+buffer)` + exact-count assert
+- [ ] If using `testutil.CollectAndCount` on plain `Histogram`, replace with `histogramSampleCount` helper
+
+Apply this checklist as part of any PR that adds new Go tests touching `config_metrics.go` / `config_debounce.go` paths.
+
+### Cross-refs
+
+- `docs/internal/v2.8.0-planning-archive.md` §S#32 (PR #75 — initial fix; partial)
+- `docs/internal/v2.8.0-planning-archive.md` §S#35 (PR #79 — durable lockstep+>= upgrade)
+- [Issue #81](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/81) — codification tracking (this section is its deliverable)
+
 ## v2.2.0 Lessons Learned（2026-03-18）
 
 1. **`apk del` 後必須驗證移除成功**：`|| true` 吃掉錯誤導致 CVE 殘留。Dockerfile 加 `if apk info -e <pkg>; then exit 1; fi` 做 build-time 斷言

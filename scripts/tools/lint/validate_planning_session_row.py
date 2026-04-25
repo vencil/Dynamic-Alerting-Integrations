@@ -62,11 +62,19 @@ ANY_SUBHEADER_RE = re.compile(r"^###\s+")
 TABLE_ROW_RE = re.compile(r"^\|\s*[#\d]")
 TABLE_DIVIDER_RE = re.compile(r"^\|[\s\-:|]+\|\s*$")
 
+# Match "#NN" or "| #NN |" at the start of a row to extract the session id.
+SESSION_ID_RE = re.compile(r"^\|\s*#?(\d+)\s*\|")
+# Match "## §S#NN" headers in archive files to find existing archive sections.
+ARCHIVE_SECTION_RE = re.compile(r"^##\s+§S#(\d+)\b")
 
-def find_offending_rows(path: Path, limit: int) -> list[tuple[int, int, str]]:
-    """Return list of (line_no, char_count, preview) tuples for over-limit rows."""
+
+def find_offending_rows(path: Path, limit: int) -> list[tuple[int, int, str, str]]:
+    """Return list of (line_no, char_count, preview, full_line) tuples for
+    over-limit rows. `full_line` is needed by --auto-archive-suggest to
+    extract session_id and date from the original row.
+    """
     in_ledger = False
-    offenders: list[tuple[int, int, str]] = []
+    offenders: list[tuple[int, int, str, str]] = []
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -83,8 +91,92 @@ def find_offending_rows(path: Path, limit: int) -> list[tuple[int, int, str]]:
             continue
         if TABLE_ROW_RE.match(line) and len(line) > limit:
             preview = line[:120].replace("\n", " ")
-            offenders.append((lineno, len(line), preview))
+            offenders.append((lineno, len(line), preview, line))
     return offenders
+
+
+def find_archived_sessions(archive_path: Path) -> set[str]:
+    """Scan archive doc for ## §S#NN headers, return set of session IDs as strings."""
+    if not archive_path.exists():
+        return set()
+    try:
+        text = archive_path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return {m.group(1) for line in text.splitlines() if (m := ARCHIVE_SECTION_RE.match(line))}
+
+
+def derive_archive_path(planning_path: Path) -> Path:
+    """Convention: v2.8.0-planning.md ↔ v2.8.0-planning-archive.md (sibling)."""
+    name = planning_path.name
+    if name.endswith("-planning.md"):
+        archive_name = name[: -len(".md")] + "-archive.md"
+        return planning_path.parent / archive_name
+    return planning_path.parent / (planning_path.stem + "-archive.md")
+
+
+def suggest_slim_pointer(full_line: str, archive_path: Path) -> str | None:
+    """Generate a slim-pointer replacement for an over-bloat row IFF the
+    archive contains a matching §S#NN section. Returns None if no archive
+    match (caller would have to manually archive first).
+
+    Format follows existing slim pointers in the codebase:
+        | #NN | DATE | <one-line title> | **PR #X merged** … 詳 archive §S#NN | <status> | <next> |
+    """
+    m = SESSION_ID_RE.match(full_line)
+    if not m:
+        return None
+    session_id = m.group(1)
+    if session_id not in find_archived_sessions(archive_path):
+        return None
+    # Parse the existing row to extract: id, date, title (3rd cell), status (5th cell), next (6th cell).
+    # Markdown tables: split on '|' but discard leading/trailing empties.
+    cells = [c.strip() for c in full_line.split("|")]
+    cells = cells[1:-1] if cells and cells[0] == "" else cells
+    if len(cells) < 6:
+        return None
+    sid, date, title, body, status, nxt = cells[0], cells[1], cells[2], cells[3], cells[4], cells[5]
+    # Truncate title to avoid pulling huge content; keep ≤ 80 chars.
+    short_title = title if len(title) <= 80 else title[:77] + "…"
+    # Body should reduce to a one-liner pointing at archive.
+    suggested_body = f"**Archived** — full detail in archive §S#{session_id}"
+    return f"| {sid} | {date} | {short_title} | {suggested_body} | {status[:80]} | {nxt[:80]} |"
+
+
+def emit_archive_suggestions(
+    offenders_by_path: dict[Path, list[tuple[int, int, str, str]]],
+) -> None:
+    """Print --auto-archive-suggest output to stdout: one block per offender,
+    showing the original row and a suggested slim-pointer replacement.
+    """
+    any_suggestion = False
+    for planning_path, offenders in offenders_by_path.items():
+        if not offenders:
+            continue
+        archive_path = derive_archive_path(planning_path)
+        archived = find_archived_sessions(archive_path)
+        for lineno, n, preview, full_line in offenders:
+            sid_match = SESSION_ID_RE.match(full_line)
+            sid = sid_match.group(1) if sid_match else "?"
+            print(f"\n=== {_display_path(planning_path)}:L{lineno} (S#{sid}, {n} chars) ===")
+            if sid not in archived:
+                print(f"  No matching §S#{sid} in {_display_path(archive_path)}.")
+                print(f"  → MANUAL: write archive §S#{sid} first, then re-run with --auto-archive-suggest.")
+                continue
+            suggested = suggest_slim_pointer(full_line, archive_path)
+            if suggested is None:
+                print(f"  Could not parse row structure (need 6 cells); manual trim required.")
+                continue
+            any_suggestion = True
+            print(f"  ORIGINAL (excerpt): {preview}…")
+            print(f"  SUGGESTED replacement (paste over L{lineno}):")
+            print(f"  {suggested}")
+    if not any_suggestion:
+        print(
+            "\nNo auto-suggestions generated. For each over-bloat row, ensure the matching\n"
+            "§S#NN section exists in the archive doc, then re-run.",
+            file=sys.stderr,
+        )
 
 
 def resolve_targets(args_paths: list[str], glob: str) -> list[Path]:
@@ -109,13 +201,15 @@ def _display_path(path: Path) -> Path:
         return path
 
 
-def report(offenders_by_path: dict[Path, list[tuple[int, int, str]]], limit: int) -> None:
+def report(
+    offenders_by_path: dict[Path, list[tuple[int, int, str, str]]], limit: int
+) -> None:
     for path, offenders in offenders_by_path.items():
         if not offenders:
             continue
         print(f"\n{_display_path(path)}: "
               f"{len(offenders)} Session row(s) exceed {limit} chars")
-        for lineno, n, preview in offenders:
+        for lineno, n, preview, _full in offenders:
             print(f"  L{lineno}: {n} chars — {preview}…")
 
 
@@ -140,6 +234,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=DEFAULT_GLOB,
         help=f"Glob pattern when paths omitted (default {DEFAULT_GLOB!r}).",
     )
+    parser.add_argument(
+        "--auto-archive-suggest",
+        action="store_true",
+        help="For each over-bloat row, if a matching §S#NN section exists in "
+             "the sibling -archive.md doc, emit a suggested slim-pointer "
+             "replacement to stdout (manual paste). No file is modified.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     targets = resolve_targets(args.paths, args.glob)
@@ -148,7 +249,7 @@ def main(argv: Iterable[str] | None = None) -> int:
               file=sys.stderr)
         return 0
 
-    offenders_by_path: dict[Path, list[tuple[int, int, str]]] = {}
+    offenders_by_path: dict[Path, list[tuple[int, int, str, str]]] = {}
     any_bad = False
     for path in targets:
         if not path.exists():
@@ -164,12 +265,16 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
 
     report(offenders_by_path, args.limit)
+    if args.auto_archive_suggest:
+        emit_archive_suggestions(offenders_by_path)
     print(
         "\nHint: fold bloated rows to:",
         "\n  • CHANGELOG.md  — durable user-facing entry (PR/commit landed)",
         "\n  • <playbook>.md — Lesson Learned for env / FUSE / CI traps",
         "\n  • v*-planning-archive.md  — concluded session detail",
         "\nSee dev-rules.md §A6 (v2.9.0+ planning doc 不再保留 Session Ledger).",
+        "\nRun with --auto-archive-suggest to generate slim-pointer replacements"
+        " for rows that already have an archive §S#NN section.",
         file=sys.stderr,
     )
     return 1
