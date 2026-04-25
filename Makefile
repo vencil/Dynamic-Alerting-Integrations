@@ -69,6 +69,10 @@ benchmark-report-warn: ## benchmark-report 但失敗不阻擋（pre-tag 用，is
 	@$(MAKE) benchmark-report || \
 		echo "[pre-tag] ⚠ benchmark-report failed (informational, not blocking — issue #60 Phase 1)"
 
+.PHONY: bench-history-analyze
+bench-history-analyze: ## 拉最近 N 次 bench-record artifact + 算 per-bench 統計 + GO/NO-GO 決議（issue #67 Phase 2 readiness 工具；ARGS=--limit 28 / --ci / --no-gate / --cache-dir DIR）
+	@python3 ./scripts/tools/dx/analyze_bench_history.py $(ARGS)
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)

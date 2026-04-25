@@ -31,6 +31,8 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **`scripts/tools/dx/analyze_bench_history.py` + `make bench-history-analyze`（v2.8.0, issue #67 prep）** — pre-Phase-2 工具：用 `gh api` 拉最近 N 次 `bench-record` workflow 的 artifact，parse `bench-baseline.txt` per-bench 跨 run 聚合，輸出 Markdown table 含 per-benchmark median / CV / max-min ratio + GO/NO-GO 決議。閾值 hardcode 對齊 #67 acceptance gate（CV ≤ 25%、max/min ≤ 1.30、≥ 26/28 runs reliability）。stdlib only（無 pandas / numpy 依賴），Dev Container / Cowork VM / CI 都能直跑。`--ci` flag exit 1 on NO-GO 供未來 #67 review 自動化用。`--cache-dir` 持久化下載 artifact 避免重複 `gh run download`。今日驗證：對 PR #65 merge 後第一次 nightly run 跑 `--limit 1 --no-gate`，正確 parse 13 bench × 6 sample = 78 records，per-bench within-run CV 範圍 0.2%–27.6%（`IncrementalLoad_1000_OneFileChanged` 為 outlier）。Phase 2 review 時跑 `make bench-history-analyze ARGS="--ci"` 一次得 GO/NO-GO 表。詳見 [issue #67](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/67)
+
 - **Issue #61 production blast-radius metric `da_config_blast_radius_tenants_affected`（v2.8.0, RFC）**
   - **新 Histogram** `da_config_blast_radius_tenants_affected{reason, scope, effect}`，buckets `[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]`。`reason ∈ {source, defaults, new, delete}`；`scope ∈ {global, domain, region, env, tenant, unknown}`（widest changed defaults level for `reason=defaults`，`tenant` for source/new/delete）；`effect ∈ {applied, shadowed, cosmetic}`（applied = merged_hash 移動；shadowed = defaults 變動被 tenant override 擋下；cosmetic = comment/reorder 無語義 key 移動）
   - **新 Counter** `da_config_defaults_shadowed_total` — 把原 `da_config_defaults_change_noop_total` 內混雜的「override 擋下變動」案例獨立計數，便於 ops 量化繼承機制擋下多少潛在風暴
