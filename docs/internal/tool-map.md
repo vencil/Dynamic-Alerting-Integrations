@@ -69,6 +69,7 @@ lang: zh
 |------|------|
 | `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
+| `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
