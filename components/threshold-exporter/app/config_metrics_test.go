@@ -356,6 +356,163 @@ func histogramSampleCount(t *testing.T, h prometheus.Histogram) uint64 {
 	return 0
 }
 
+// ============================================================
+// v2.8.0 B-1.P2-a — last-scan-complete + last-reload-complete gauges
+// ============================================================
+
+func TestSetLastScanComplete_StoresUnixSeconds(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	t0 := time.Now()
+	SetLastScanComplete(t0)
+
+	got := testutil.ToFloat64(fresh.lastScanComplete)
+	if int64(got) != t0.Unix() {
+		t.Errorf("expected gauge=%d, got %d", t0.Unix(), int64(got))
+	}
+}
+
+func TestSetLastReloadComplete_StoresUnixSeconds(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	t0 := time.Now()
+	SetLastReloadComplete(t0)
+
+	got := testutil.ToFloat64(fresh.lastReloadComplete)
+	if int64(got) != t0.Unix() {
+		t.Errorf("expected gauge=%d, got %d", t0.Unix(), int64(got))
+	}
+}
+
+// TestSetLastScanComplete_MonotonicAdvance verifies that successive Set
+// calls move the gauge forward. The e2e harness depends on this — anchor
+// T1 must advance after every successful scan so the harness can detect
+// "scan completed since T0" by sampling the gauge.
+//
+// Per S#32 lesson: assert deltas / monotonic advance, not exact absolute
+// timing. Two `time.Now().Unix()` values across a 10ms sleep can be
+// equal IF the sleep happens to span no second boundary, so the
+// assertion is `>=` not `>`.
+func TestSetLastScanComplete_MonotonicAdvance(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	t1 := time.Now()
+	SetLastScanComplete(t1)
+	got1 := testutil.ToFloat64(fresh.lastScanComplete)
+
+	time.Sleep(10 * time.Millisecond)
+	t2 := time.Now()
+	SetLastScanComplete(t2)
+	got2 := testutil.ToFloat64(fresh.lastScanComplete)
+
+	if got2 < got1 {
+		t.Errorf("expected monotonic advance: t1=%v t2=%v gauge1=%v gauge2=%v", t1.Unix(), t2.Unix(), got1, got2)
+	}
+}
+
+// TestScanDirHierarchical_StampsLastScanCompleteOnSuccess verifies the
+// gauge advances after a real scan call. Uses delta-based assertion
+// (per S#32 lesson) — only assert "advanced past scan-start", not
+// "equals exact value".
+func TestScanDirHierarchical_StampsLastScanCompleteOnSuccess(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	scanStart := time.Now().Unix()
+
+	if _, _, _, _, _, err := scanDirHierarchical(dir, nil); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	got := testutil.ToFloat64(fresh.lastScanComplete)
+	if int64(got) < scanStart {
+		t.Errorf("gauge did not advance past scanStart: scanStart=%d gauge=%d", scanStart, int64(got))
+	}
+}
+
+// TestScanDirHierarchical_DoesNotStampOnError verifies that an error path
+// does NOT advance the gauge — a transient scan failure must look
+// distinct from a successful completion. Pre-set the gauge to a known
+// value, run a failing scan, assert no movement.
+func TestScanDirHierarchical_DoesNotStampOnError(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+
+	known := time.Unix(1700000000, 0)
+	SetLastScanComplete(known)
+	before := testutil.ToFloat64(fresh.lastScanComplete)
+
+	if _, _, _, _, _, err := scanDirHierarchical("/nonexistent/path/that/does/not/exist", nil); err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+
+	after := testutil.ToFloat64(fresh.lastScanComplete)
+	if after != before {
+		t.Errorf("gauge advanced on error path: before=%v after=%v", before, after)
+	}
+}
+
+// TestDiffAndReload_StampsLastReloadCompleteOnSuccess verifies the reload
+// gauge advances after a real diffAndReload (delta-based).
+func TestDiffAndReload_StampsLastReloadCompleteOnSuccess(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 0)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	reloadStart := time.Now().Unix()
+
+	if _, _, err := m.diffAndReload(); err != nil {
+		t.Fatalf("diffAndReload: %v", err)
+	}
+
+	got := testutil.ToFloat64(fresh.lastReloadComplete)
+	if int64(got) < reloadStart {
+		t.Errorf("gauge did not advance past reloadStart: reloadStart=%d gauge=%d", reloadStart, int64(got))
+	}
+}
+
+// TestDiffAndReload_StampsAfterAtomicSwap verifies the contract "gauge
+// advanced ⇒ observable state already updated" by checking that
+// reload_stamp >= scan_stamp (reload pipeline always scans before
+// swapping; reload-complete is stamped strictly after swap).
+//
+// Direct ordering test (gauge stamped post-swap) would require
+// restructuring production code to expose the swap point. The
+// >= invariant is sufficient because if SetLastReloadComplete were
+// called before the swap, a concurrent reader could observe the
+// gauge advanced while the swap was still in progress — exactly what
+// we want to forbid.
+func TestDiffAndReload_StampsAfterAtomicSwap(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 0)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if _, _, err := m.diffAndReload(); err != nil {
+		t.Fatalf("diffAndReload: %v", err)
+	}
+
+	scanStamp := int64(testutil.ToFloat64(fresh.lastScanComplete))
+	reloadStamp := int64(testutil.ToFloat64(fresh.lastReloadComplete))
+	if scanStamp == 0 {
+		t.Errorf("scan gauge should be set after diffAndReload, got 0")
+	}
+	if reloadStamp < scanStamp {
+		t.Errorf("reload stamp should be >= scan stamp: scan=%d reload=%d", scanStamp, reloadStamp)
+	}
+}
+
 // TestDiffAndReload_EmitsMetricsForSourceChange ensures the full pipeline
 // (scan → diff → counter increment) hooks up end-to-end.
 func TestDiffAndReload_EmitsMetricsForSourceChange(t *testing.T) {

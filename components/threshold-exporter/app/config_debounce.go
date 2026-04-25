@@ -432,6 +432,11 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	m.parsedDefaults = newParsedDefaults
 	m.mu.Unlock()
 
+	// v2.8.0 B-1.P2-a: stamp the last-successful-reload gauge for the
+	// e2e harness anchor T2 + production stuck-reloader detection. Stamped
+	// strictly post atomic-swap so the gauge cannot advance ahead of
+	// observable state.
+	SetLastReloadComplete(time.Now())
 	return reloaded, noOp, nil
 }
 

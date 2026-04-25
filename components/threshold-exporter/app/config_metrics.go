@@ -72,6 +72,8 @@ type configMetrics struct {
 	blastRadius      *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
 	reloadDuration   prometheus.Histogram   // v2.8.0 B-3: end-to-end diffAndReload elapsed (debounce window → atomic swap done)
 	debounceBatch    prometheus.Histogram   // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
+	lastScanComplete   prometheus.Gauge // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful scanDirHierarchical completion (e2e harness anchor T1; production stuck-detection)
+	lastReloadComplete prometheus.Gauge // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -139,6 +141,14 @@ func newConfigMetrics() *configMetrics {
 			// burst — exactly the scenario B-7 stress-tests).
 			Buckets: []float64{1, 2, 5, 10, 25, 50, 100, 250, 500},
 		}),
+		lastScanComplete: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_last_scan_complete_unixtime_seconds",
+			Help: "Wall-clock unix seconds at the most recent successful scanDirHierarchical completion. Set by the scanner; read by the e2e harness as anchor T1 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-scanner detection. 0 means scanner has not yet completed a successful scan.",
+		}),
+		lastReloadComplete: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_last_reload_complete_unixtime_seconds",
+			Help: "Wall-clock unix seconds at the most recent successful diffAndReload completion (post atomic-swap). Set by the reload pipeline; read by the e2e harness as anchor T2 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-reloader detection. 0 means reloader has not yet completed a successful reload.",
+		}),
 	}
 }
 
@@ -184,6 +194,8 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 	reg.MustRegister(m.blastRadius)
 	reg.MustRegister(m.reloadDuration)
 	reg.MustRegister(m.debounceBatch)
+	reg.MustRegister(m.lastScanComplete)
+	reg.MustRegister(m.lastReloadComplete)
 }
 
 // IncParseFailure bumps the parse-failure counter for a specific file
@@ -296,4 +308,25 @@ func ObserveDebounceBatch(n int) {
 		return
 	}
 	getConfigMetrics().debounceBatch.Observe(float64(n))
+}
+
+// SetLastScanComplete records the wall-clock unix seconds at successful
+// scanDirHierarchical completion (v2.8.0 B-1.P2-a). The e2e harness reads
+// this gauge as anchor T1 in the 5-anchor measurement model; production
+// uses `time() - <gauge>` for stuck-scanner alerting.
+//
+// Called only on success — error paths leave the gauge at its previous
+// value so a transient scan failure does not look like a successful
+// completion. Tests that want a clean baseline observe via withIsolatedMetrics.
+func SetLastScanComplete(t time.Time) {
+	getConfigMetrics().lastScanComplete.Set(float64(t.Unix()))
+}
+
+// SetLastReloadComplete records the wall-clock unix seconds at the
+// successful diffAndReload completion (post atomic-swap, v2.8.0 B-1.P2-a).
+// E2E harness reads this gauge as anchor T2.
+//
+// Called only on success path — see SetLastScanComplete docstring.
+func SetLastReloadComplete(t time.Time) {
+	getConfigMetrics().lastReloadComplete.Set(float64(t.Unix()))
 }

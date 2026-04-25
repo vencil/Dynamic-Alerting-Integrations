@@ -41,6 +41,13 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **B-1 Phase 2 implementation — PR-1 of 3（v2.8.0 B-1.P2-a + B-1.P2-b + g 骨架）** — e2e alert fire-through harness 的 building blocks。零行為變動，全是新增 metric + 新增 fixture mode + doc skeleton：
+  - **`da_config_last_scan_complete_unixtime_seconds` Gauge（B-1.P2-a）** — set in `scanDirHierarchical` success path；e2e harness 5-anchor 模型的 T1 anchor；production 用 `time() - <gauge> > N` 做 stuck-scanner 偵測。Error path 不 set（保持 stale gauge 與「忘了 emit」可區分）
+  - **`da_config_last_reload_complete_unixtime_seconds` Gauge（B-1.P2-a）** — set strictly post-atomic-swap in `diffAndReload`；e2e harness T2 anchor。同樣 error path 不 set
+  - **`generate_tenant_fixture.py --layout synthetic-v2`（B-1.P2-b）** — Phase 2 主基準 fixture mode，在既有 `hierarchical` layout 上加兩個 realistic-ops 分布：(1) Zipf alpha=1.5 / max_size=6 對 tenant size（多數 1-2 個 threshold override，~15% 4+）；(2) power-law alpha=2.0 / max_depth=3 對 `_metadata` overlay depth（>60% flat、~10% 達 depth=3）。`--seed` reproducible。10 unit tests 含分布 statistical asserts（per S#32 lesson 用 invariant-based 而非 absolute-value）
+  - **`docs/internal/benchmark-playbook.md` §v2.8.0 Phase 2 e2e 章節 skeleton（g）** — ops-view 摘要：5-anchor 量測模型對照表、fixture_kind 三態（synthetic-v1 / synthetic-v2 / customer-anon）+ calibration gate ±30% 操作流程、implementation 7-子項 progress tracker、fixture 產出速查指令。Design SSOT 仍在 `design/phase-b-e2e-harness.md`；本節是 ops 視角 cookbook
+  - **PR-2 / PR-3 預告**：PR-2 = docker-compose stack + host driver；PR-3 = aggregation + Makefile target + workflow + playbook 完整化（以 synthetic-v2 跑出第一份 baseline）
+
 - **Migration playbook — Emergency Rollback Procedures（v2.8.0 B-4，doc-only）** — `docs/scenarios/incremental-migration-playbook.md` + `.en.md` 新增 `Emergency Rollback Procedures` 章節，覆蓋 Phase .c batch-PR pipeline cutover 後的整批退版流程：(1) 退版順序 = merge 順序的嚴格反序（inner tenant PR 先 / outer `_defaults.yaml` 最後 / cascading defaults 按 inner→outer 退）；(2) WatchLoop debounce 驗收 PromQL 對接 v2.8.0 B-3 加入的 `da_config_reload_duration_seconds_count` 與 `da_config_debounce_batch_size`；(3) Staging rehearsal hard gate（cutover 前 2 週）；(4) 退版時間預算表（基於 PR #59 Phase 1 baseline，1000-tenant / 5000-tenant 各四種動作）；(5) 8-項驗證 checklist 含 `merged_hash` 收斂、PromQL counter delta、Alertmanager Silenced 清空。配合 Phase .c C-10 pipeline。工具層 `make rollback-dryrun` / `da-tools batch-pr rollback` 列入 v2.8.x backlog
 - **Issue #76 — pre-tag bench gate 3-phase rollout（issue-only，無 code）** — Spawn task C 落地：開 GitHub issue 規範 Phase 1（已 land PR #65）→ Phase 2（main-only hard gate at 3× median-of-5）→ Phase 3（PR-level after Larger Runners）的 entry conditions、acceptance criteria、Gemini「不要 hard gate」反論點 + PR #59 50% within-run variance 反駁。Phase 2 / 3 實作不在此 issue 範圍
 

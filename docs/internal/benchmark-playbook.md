@@ -295,6 +295,93 @@ func silenceLogs(b *testing.B) {
 - **Customer sample 校準**：synthetic fixture 分布未必等同客戶 workload；Phase 2 帶客戶 anonymized sample re-run
 - **SLO definitive sign-off**：B-2 hard SLO 需 3+ 輪 customer 環境驗證
 
+---
+
+## v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2, design + skeleton)
+
+> **Status**: design contract 完成（PR #64 / `design/phase-b-e2e-harness.md`）；implementation 進行中（B-1.P2-a/b 在本 PR 落地，c-g 後續）。本節是 playbook 操作層 skeleton — design doc 是 SSOT，這裡只放 ops 視角的「怎麼跑、看哪幾個數字、customer sample 校準怎麼操作」。
+
+### 5-anchor 量測模型（摘要）
+
+完整 5-anchor 鏈與 stage 拆解見 `design/phase-b-e2e-harness.md` §2.5。Ops 視角速查：
+
+| Anchor | Time | 量測來源 | 對應 stage |
+|---|---|---|---|
+| **T0** | now() | driver 寫 fixture | — |
+| **T1** | exporter `last_scan_complete_unixtime_seconds` 值 | 本 PR (B-1.P2-a) 加的 gauge | A: scan |
+| **T2** | exporter `last_reload_complete_unixtime_seconds` 值 | 本 PR (B-1.P2-a) 加的 gauge | B: reload |
+| **T3** | Prometheus `/api/v1/alerts` `activeAt` | Prom internal time | C: scrape+eval |
+| **T4** | receiver POST timestamp | webhook receiver 記錄 | D: alertmanager dispatch |
+
+stage(s) = T1−T0 (A) / T2−T1 (B) / T3−T2 (C: scrape+eval 不拆分) / T4−T3 (D)
+e2e_ms = T4 − T0
+
+**Ops 為何要會看 T1/T2 兩個 gauge**：
+1. **Production stuck-detection** — `time() - da_config_last_scan_complete_unixtime_seconds > 60` → scanner 卡死（gauge 永不會 backfill 過去值，所以 stale gauge 一定是 stuck，不是「忘了 emit」）
+2. **E2E harness 對齊** — harness driver 寫 fixture 後輪詢這兩個 gauge，看到值大於寫入 timestamp 才往下走。**Driver / exporter 同 kernel clock**（皆在 docker-compose 內）所以無 clock skew 問題
+
+### Fixture kinds & calibration gate
+
+完整 calibration gate 規格見 design doc §6.5。Ops 速查：
+
+| `fixture_kind` | 來源 | `gate_status` 預設 | 用途 |
+|---|---|---|---|
+| `synthetic-v1` | PR #59 `buildDirConfigHierarchical` (uniform 分布) | `pending` | Phase 1 baseline，不再為 Phase 2 主基準 |
+| `synthetic-v2` | 本 PR (B-1.P2-b) `generate_tenant_fixture.py --layout synthetic-v2` (Zipf+power-law 分布) | `pending` | Phase 2 主基準；customer sample 抵達前唯一 baseline；customer sample 抵達後做 ±30% 校準 gate 對照 |
+| `customer-anon` | 客戶 anonymized sample（gitignored, manual 取得） | `pending` → `passed/failed/voided` | Definitive baseline 來源；填回 `synthetic-v2` 校準狀態 |
+
+**Customer sample 校準操作流程**（cutover 前 2 週執行；客戶 fixture 拿到後）：
+
+```bash
+# 1. 把客戶 sample 解壓到 tests/e2e-bench/fixture/customer-anon/conf.d/
+#    (整個 customer-anon/ 目錄 gitignored)
+tar -xzf customer-sample.tar.gz -C tests/e2e-bench/fixture/customer-anon/
+
+# 2. 跑 e2e harness 對 customer-anon (n>=30)
+COUNT=30 E2E_FIXTURE_KIND=customer-anon make bench-e2e  # Makefile target 預定 PR-3 加
+
+# 3. 比對最近一次 synthetic-v2 P95 — gate 通過條件:
+#    customer-anon P95 與 synthetic-v2 P95 差距 ≤30%
+python3 scripts/tools/dx/compare_e2e_baseline.py \
+    --customer bench-results/e2e-customer-anon-*.json \
+    --baseline bench-results/e2e-synthetic-v2-*.json \
+    --threshold-pct 30  # PR-3 預定加的工具
+```
+
+通過後填回 synthetic-v2 對應 run 的 `gate_status: "passed"`（calibration confirmed）；失敗則 `gate_status: "voided"` 並在本節章節加紅框。
+
+**Kill switch**：v2.9.0 cut 前若 customer sample 未抵達，強制 go/no-go review — 要嘛 explicit 接受 synthetic-v2 為定案 baseline（含 fixture 假設文件化），要嘛 rescope phase 2。詳 design doc §6.5 + §11。
+
+### Implementation 進度 tracker
+
+| 子項 | 內容 | 狀態 | PR |
+|---|---|---|---|
+| **B-1.P2-a** | exporter timestamp gauges (`last_{scan,reload}_complete_unixtime_seconds`) | 🟢 | 本 PR |
+| **B-1.P2-b** | `generate_tenant_fixture.py --layout synthetic-v2` (Zipf+power-law) | 🟢 | 本 PR |
+| **B-1.P2-c** | docker-compose stack (exporter + Prometheus + Alertmanager + pushgateway + receiver) | ⬜ | PR-2 |
+| **B-1.P2-d** | host driver (5-anchor 量測 + run isolation + fire+resolve 對稱) | ⬜ | PR-2 |
+| **B-1.P2-e** | n≥30 aggregation + bootstrap 95% CI + output JSON `fixture_kind`/`gate_status` | ⬜ | PR-3 |
+| **B-1.P2-f** | `make bench-e2e` + `bench-e2e-record.yaml` workflow (main only, manual dispatch) | ⬜ | PR-3 |
+| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow refinement） | 🟡 (skeleton in this PR) | PR-3 |
+
+### 產出 fixture 速查（B-1.P2-b）
+
+```bash
+# Synthetic-v2 (Zipf+power-law skews; B-1 Phase 2 主基準)
+python3 scripts/tools/dx/generate_tenant_fixture.py \
+    --layout synthetic-v2 --count 1000 --with-defaults \
+    --output tests/e2e-bench/fixture/synthetic-v2/conf.d \
+    --seed 42
+
+# Synthetic-v1 (uniform; PR #59 baseline reuse, 不變)
+python3 scripts/tools/dx/generate_tenant_fixture.py \
+    --layout hierarchical --count 1000 --with-defaults \
+    --output tests/e2e-bench/fixture/synthetic-v1/conf.d \
+    --seed 42
+
+# Customer-anon (manual; 不在 generator 範圍 — 客戶 sample 解壓後直接放)
+```
+
 ### 重跑本 baseline 指令
 
 ```bash

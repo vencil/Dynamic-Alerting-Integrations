@@ -295,6 +295,165 @@ def generate_hierarchical(count: int, output_dir: Path, with_defaults: bool, see
     print(f"   Structure: {len(DOMAINS)} domains × {len(REGIONS)} regions × {len(ENVIRONMENTS)} envs")
 
 
+def _zipfian_sizes(count: int, alpha: float, max_size: int, rng: random.Random) -> list[int]:
+    """Sample `count` integers from a discrete Zipf-like distribution.
+
+    Returns a list of "tenant size multipliers" in the range [1, max_size]
+    drawn so that low values dominate (most tenants are small) and high
+    values are rare (few tenants are large). `alpha` controls skew; higher
+    alpha = sharper drop-off. Synthetic-v2 uses alpha=1.5 by design choice
+    (per phase-b-e2e-harness §6.2): close to real ops distribution where
+    a small fraction of tenants accumulate disproportionate threshold
+    overrides while the long tail is near-default.
+
+    Implementation note: uses the inverse-CDF method on a normalized
+    discrete distribution rather than `random.zipfian` (3.12+) so this
+    keeps working on older Python in CI. We cap by max_size to bound
+    test fixture YAML size — true Zipf has unbounded support.
+    """
+    weights = [1.0 / ((i + 1) ** alpha) for i in range(max_size)]
+    total = sum(weights)
+    cdf = []
+    running = 0.0
+    for w in weights:
+        running += w / total
+        cdf.append(running)
+    out = []
+    for _ in range(count):
+        u = rng.random()
+        # bisect-style: find smallest index with cdf >= u
+        for size_idx, threshold in enumerate(cdf):
+            if u <= threshold:
+                out.append(size_idx + 1)
+                break
+        else:
+            out.append(max_size)
+    return out
+
+
+def _power_law_depths(count: int, alpha: float, max_depth: int, rng: random.Random) -> list[int]:
+    """Sample `count` integers in [0, max_depth] from a power-law tail.
+
+    Returns _metadata block depth multipliers — most tenants get 0
+    (flat metadata), a long tail get nested overlays. Distinct from
+    Zipf because here the mass is concentrated at 0; only rare tenants
+    deserve depth >= 1. `alpha` higher = more flat tenants. Synthetic-v2
+    uses alpha=2.0 by default (long-tail per phase-b-e2e-harness §6.2).
+    """
+    out = []
+    for _ in range(count):
+        # Sample depth from power-law: P(d) ∝ 1 / (d+1)^alpha for d in [0, max_depth].
+        # Inverse-CDF closed form is messy; just sample-reject from CDF table.
+        weights = [1.0 / ((d + 1) ** alpha) for d in range(max_depth + 1)]
+        total = sum(weights)
+        u = rng.random()
+        running = 0.0
+        for d, w in enumerate(weights):
+            running += w / total
+            if u <= running:
+                out.append(d)
+                break
+        else:
+            out.append(max_depth)
+    return out
+
+
+def generate_synthetic_v2(count: int, output_dir: Path, with_defaults: bool, seed: int) -> None:
+    """Generate a synthetic-v2 hierarchical fixture with skewed distributions.
+
+    Layered on top of `generate_hierarchical` (same domain/region/env tree)
+    but with two realistic-ops skews per phase-b-e2e-harness design §6.2:
+
+      1. Zipfian tenant size — most tenants override 1-2 thresholds; a
+         small fraction (~5-10%) override 5-10. Implementation: sample
+         a "size multiplier" in [1, 6] via Zipf alpha=1.5 and replicate
+         the threshold dict that many times (up to the available metric
+         template count) to vary YAML body size.
+      2. Power-law _metadata overlay depth — most tenants have flat
+         metadata (depth=0); a long tail (~5%) get depth 1-3 nested
+         overlay blocks (e.g. nested escalation policies, inherited
+         silence schedules). Implementation: sample depth in [0, 3]
+         via power-law alpha=2.0.
+
+    Why these specific distributions: they push the inheritance graph
+    + merged_hash compute through a non-uniform input that better
+    surfaces tail-latency in the e2e harness measurement. Uniform
+    fixtures (synthetic-v1, PR #59) hide variance because every tenant
+    looks alike.
+    """
+    rng = _seed_rng(seed)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    slots: list[tuple[str, str, str]] = []
+    for d in DOMAINS:
+        for r in REGIONS:
+            for e in ENVIRONMENTS:
+                slots.append((d, r, e))
+
+    tenants_per_slot = max(1, count // len(slots))
+    remainder = count - tenants_per_slot * len(slots)
+
+    # Sample skew distributions up-front for the full tenant set.
+    sizes = _zipfian_sizes(count, alpha=1.5, max_size=6, rng=rng)
+    depths = _power_law_depths(count, alpha=2.0, max_depth=3, rng=rng)
+
+    idx = 0
+    domain_db_types: dict[str, list[str]] = {}
+    for slot_i, (domain, region, env) in enumerate(slots):
+        if idx >= count:
+            break
+        n = tenants_per_slot + (1 if slot_i < remainder else 0)
+        slot_dir = output_dir / domain / region / env
+        slot_dir.mkdir(parents=True, exist_ok=True)
+
+        for j in range(n):
+            if idx >= count:
+                break
+            db_type = DB_TYPES[idx % len(DB_TYPES)]
+            tid = f"{domain}-{db_type}-{idx:04d}"
+            tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
+            tenant_config["tenants"][tid]["_metadata"]["domain"] = domain
+            tenant_config["tenants"][tid]["_metadata"]["region"] = region
+            tenant_config["tenants"][tid]["_metadata"]["environment"] = env
+
+            # Zipfian: replicate threshold dict to grow YAML body.
+            # _gen_tenant_config produces a base set of threshold keys; we
+            # add `_extra_threshold_NN` keys to reach the desired multiplier.
+            size_mult = sizes[idx]
+            for extra_i in range(size_mult - 1):
+                extra_key = f"_extra_threshold_{extra_i:02d}"
+                tenant_config["tenants"][tid][extra_key] = _gen_threshold_value(rng)
+
+            # Power-law: deepen _metadata with nested overlay blocks.
+            depth = depths[idx]
+            if depth > 0:
+                meta = tenant_config["tenants"][tid]["_metadata"]
+                cursor = meta
+                for d_i in range(depth):
+                    nested_key = f"_overlay_l{d_i}"
+                    cursor[nested_key] = {
+                        "schedule": rng.choice(["business-hours", "off-hours", "24x7"]),
+                        "escalation_tier": rng.choice(TIERS),
+                    }
+                    cursor = cursor[nested_key]
+
+            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config)
+            domain_db_types.setdefault(domain, []).append(db_type)
+            idx += 1
+
+    if with_defaults:
+        _write_yaml(output_dir / "_defaults.yaml", _gen_defaults_yaml(rng))
+        for domain in DOMAINS:
+            domain_dir = output_dir / domain
+            if domain_dir.exists():
+                db_types_in_domain = list(set(domain_db_types.get(domain, DB_TYPES[:2])))
+                _write_yaml(domain_dir / "_defaults.yaml", _gen_defaults_yaml(rng, db_types_in_domain))
+
+    print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
+    print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3)")
+    print(f"   Distribution: sizes p50={sorted(sizes)[len(sizes)//2]} p99={sorted(sizes)[int(len(sizes)*0.99)] if len(sizes)>1 else sizes[0]}; depths p50={sorted(depths)[len(depths)//2]} p99={sorted(depths)[int(len(depths)*0.99)] if len(depths)>1 else depths[0]}")
+
+
 def _write_yaml(path: Path, data: dict) -> None:
     """Write a dict as YAML. Avoids importing yaml to keep deps minimal."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -363,8 +522,8 @@ def main() -> None:
         help="Number of tenants to generate (common: 100, 500, 1000, 2000)",
     )
     parser.add_argument(
-        "--layout", "-l", choices=["flat", "hierarchical"], default="flat",
-        help="Directory layout mode (default: flat)",
+        "--layout", "-l", choices=["flat", "hierarchical", "synthetic-v2"], default="flat",
+        help="Directory layout mode (default: flat). 'synthetic-v2' is hierarchical layout with Zipf+power-law skews per phase-b-e2e-harness §6.2 (B-1 Phase 2 calibration baseline).",
     )
     parser.add_argument(
         "--output", "-o", type=str, default=None,
@@ -393,6 +552,8 @@ def main() -> None:
 
     if args.layout == "flat":
         generate_flat(args.count, output_dir, args.with_defaults, args.seed)
+    elif args.layout == "synthetic-v2":
+        generate_synthetic_v2(args.count, output_dir, args.with_defaults, args.seed)
     else:
         generate_hierarchical(args.count, output_dir, args.with_defaults, args.seed)
 
