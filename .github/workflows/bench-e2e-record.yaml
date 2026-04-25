@@ -1,0 +1,97 @@
+name: Bench E2E Record (manual dispatch)
+
+# B-1 Phase 2 e2e alert fire-through harness — manual-dispatch only.
+#
+# Per design §8.1: cold start (compose up + healthcheck + COUNT runs ×
+# 2 phases + teardown) is ~5-8 min wall-clock. Running on every PR is
+# inappropriate; this workflow is invoked from the GitHub UI / CLI by
+# maintainer when fresh baseline is needed.
+#
+# Scope:
+#   - main only (workflow_dispatch from main).
+#   - Bench artifacts retained 30 days (synthetic-v* results lose
+#     relevance after a few releases; customer-anon results are
+#     out-of-band so workflow doesn't store them).
+#   - Default fixture_kind: synthetic-v2 (the post-PR-1 baseline).
+#
+# Acceptance criterion check is the gate_status field in the aggregate
+# JSON; this workflow uploads the artifact + surfaces the banner in
+# the GitHub Actions summary, leaving go/no-go to maintainer review.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixture_kind:
+        description: 'Fixture kind: synthetic-v1, synthetic-v2, or customer-anon (latter requires sample present out of band)'
+        type: choice
+        options:
+          - synthetic-v2
+          - synthetic-v1
+          - customer-anon
+        default: synthetic-v2
+      count:
+        description: 'Run count (n+1 cycles total; first is warm-up)'
+        type: string
+        default: '30'
+      fixture_tenant_count:
+        description: 'Tenant count for synthetic fixture generation (ignored for customer-anon)'
+        type: string
+        default: '1000'
+
+permissions:
+  contents: read
+
+jobs:
+  bench-e2e:
+    name: e2e harness (${{ inputs.fixture_kind }} × ${{ inputs.count }} runs)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Verify Docker Compose available
+        run: docker compose version
+
+      - name: Run e2e harness
+        env:
+          COUNT: ${{ inputs.count }}
+          E2E_FIXTURE_KIND: ${{ inputs.fixture_kind }}
+          FIXTURE_TENANT_COUNT: ${{ inputs.fixture_tenant_count }}
+        run: make bench-e2e
+
+      - name: Surface gate banner in summary
+        if: always()
+        run: |
+          echo "### B-1 Phase 2 e2e — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Fixture kind**: \`${{ inputs.fixture_kind }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          latest=$(ls -t tests/e2e-bench/bench-results/e2e-*.json 2>/dev/null | head -1)
+          if [ -n "$latest" ]; then
+            echo "**Aggregate**: \`$(basename "$latest")\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            python3 -c "import json,sys; d=json.load(open('$latest')); print(json.dumps({k:d[k] for k in ['fixture_kind','gate_status','gate_banner','n_runs_total']}, indent=2, ensure_ascii=False))" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "(no aggregate JSON produced)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-bench-${{ inputs.fixture_kind }}-${{ github.run_id }}
+          path: |
+            tests/e2e-bench/bench-results/per-run-*.json
+            tests/e2e-bench/bench-results/e2e-*.json
+          retention-days: 30
+          if-no-files-found: warn

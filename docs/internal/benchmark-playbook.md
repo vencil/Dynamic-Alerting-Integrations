@@ -356,13 +356,114 @@ python3 scripts/tools/dx/compare_e2e_baseline.py \
 
 | 子項 | 內容 | 狀態 | PR |
 |---|---|---|---|
-| **B-1.P2-a** | exporter timestamp gauges (`last_{scan,reload}_complete_unixtime_seconds`) | 🟢 | 本 PR |
-| **B-1.P2-b** | `generate_tenant_fixture.py --layout synthetic-v2` (Zipf+power-law) | 🟢 | 本 PR |
-| **B-1.P2-c** | docker-compose stack (exporter + Prometheus + Alertmanager + pushgateway + receiver) | ⬜ | PR-2 |
-| **B-1.P2-d** | host driver (5-anchor 量測 + run isolation + fire+resolve 對稱) | ⬜ | PR-2 |
-| **B-1.P2-e** | n≥30 aggregation + bootstrap 95% CI + output JSON `fixture_kind`/`gate_status` | ⬜ | PR-3 |
-| **B-1.P2-f** | `make bench-e2e` + `bench-e2e-record.yaml` workflow (main only, manual dispatch) | ⬜ | PR-3 |
-| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow refinement） | 🟡 (skeleton in this PR) | PR-3 |
+| **B-1.P2-a** | exporter timestamp gauges (`last_{scan,reload}_complete_unixtime_seconds`) | 🟢 | PR #78 |
+| **B-1.P2-b** | `generate_tenant_fixture.py --layout synthetic-v2` (Zipf+power-law) | 🟢 | PR #78 |
+| **B-1.P2-c** | docker-compose stack (exporter + Prometheus + Alertmanager + pushgateway + receiver) | 🟢 | PR #79 |
+| **B-1.P2-d** | host driver (5-anchor 量測 + run isolation + fire+resolve 對稱) | 🟢 | PR #79 |
+| **B-1.P2-e** | n≥30 aggregation + bootstrap 95% CI + output JSON `fixture_kind`/`gate_status` | 🟢 | 本 PR (PR-3) |
+| **B-1.P2-f** | `make bench-e2e` + `bench-e2e-record.yaml` workflow (main only, manual dispatch) | 🟢 | 本 PR (PR-3) |
+| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow） | 🟢 (本 PR 完成；首批 baseline 數字待第一輪 main workflow_dispatch 後填入) | 本 PR (PR-3) |
+
+### 跑一輪 baseline 速查（B-1.P2-f）
+
+**Local（local-only per design §8.1，5-8 min wall-clock）**：
+
+```bash
+# Default: synthetic-v2, 1000 tenants, 30 runs.
+make bench-e2e
+
+# Override fixture / count / seed.
+COUNT=10 E2E_FIXTURE_KIND=synthetic-v1 FIXTURE_TENANT_COUNT=500 make bench-e2e
+
+# Customer-anon vs latest synthetic-v2 baseline (calibration gate ±30%):
+BASELINE_GLOB='tests/e2e-bench/bench-results/e2e-*-synthetic-v2.json' \
+    E2E_FIXTURE_KIND=customer-anon make bench-e2e
+```
+
+**CI（main only, manual dispatch）**：
+
+```bash
+# Trigger from CLI (must be on main branch).
+gh workflow run bench-e2e-record.yaml -f fixture_kind=synthetic-v2 -f count=30
+# Inputs: fixture_kind / count / fixture_tenant_count.
+# Artifacts retained 30 days; gate_banner surfaces in run summary.
+```
+
+### Aggregator 輸出與 gate banner
+
+`make bench-e2e` 完工後（或 `make bench-e2e-aggregate` 對既有 per-run JSONs 重算），在 `tests/e2e-bench/bench-results/` 產出 `e2e-{ISO}-{kind}.json`，schema：
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-04-26T00:00:00+00:00",
+  "fixture_kind": "synthetic-v2",
+  "n_runs_total": 30,
+  "gate_status": "pending",
+  "gate_banner": "🟡 synthetic-v2 pending customer-anon validation; baseline not yet calibrated against real workload",
+  "gate_threshold_pct": 30,
+  "baseline_p95_fire": null,
+  "fire": {
+    "n_valid": 30,
+    "e2e_ms": {
+      "p50": 4145, "p95": 4280, "p99": 4290,
+      "p50_ci95": [4135, 4150], "p95_ci95": [4220, 4290],
+      "ci_too_wide": false
+    },
+    "stage_ms": {"A": {"p95": 50}, "B": {"p95": 145}, "C": {"p95": 4255}, "D": {"p95": 50}},
+    "stage_c_histogram": [{"le": 5000, "count": 30}, ...]
+  },
+  "resolve": { ... }
+}
+```
+
+**Banner 渲染矩陣**（per design §6.5）：
+
+| `fixture_kind` × `gate_status` | Banner |
+|---|---|
+| `synthetic-v*` × `pending` | 🟡 「pending customer-anon validation」(synthetic-v* 永遠 pending — 只有 customer-anon 能 flip) |
+| `customer-anon` × `pending` | ⚠️ 「baseline 未到位 — 先跑 synthetic-v2 再重 aggregate」 |
+| `customer-anon` × `passed` | ✅ 「calibration passed: customer P95 X ms 在 ±30% of synthetic-v2 P95 Y ms」 |
+| `customer-anon` × `failed` | ❌ 「calibration failed: synthetic-v2 baseline marked voided, all external references must be reviewed」 |
+
+### Customer sample calibration gate operational flow
+
+當 customer anonymized sample 抵達後：
+
+1. 解壓 sample 到 `tests/e2e-bench/fixture/customer-anon/conf.d/`（`gitignored`，never commit；詳 `tests/e2e-bench/fixture/customer-anon/README.md`）
+2. 確保有最近一次 synthetic-v2 baseline aggregate JSON 存在（若無，先跑 `make bench-e2e` with default fixture）
+3. 跑 customer-anon harness with baseline glob:
+   ```bash
+   BASELINE_GLOB='tests/e2e-bench/bench-results/e2e-*-synthetic-v2.json' \
+       E2E_FIXTURE_KIND=customer-anon \
+       make bench-e2e
+   ```
+4. 看 banner：
+   - `passed` → 該批 customer-anon run 標 `gate_status: "passed"`；最近一次 synthetic-v2 P95 retroactively 標 calibration confirmed（可手動 commit a JSON sidecar 標記）
+   - `failed` → 兩件事必做：(a) synthetic-v2 baseline 標 `voided`，(b) playbook 本節加紅色 banner，(c) 評估 fixture 假設要怎麼修
+5. 若 `failed`，下個 phase planning 必須含「fixture 校正」工作項（synthetic-v2 的 Zipf alpha / power-law alpha / size 範圍 sweep）
+
+### Kill switch — v2.9.0 cut 前 customer sample 未抵達
+
+Per design §6.5 + §11：v2.9.0 cut 前若 customer sample 未抵達，**強制 go/no-go review**：
+
+| 選項 | 後果 |
+|---|---|
+| Explicit 接受 synthetic-v2 為定案 baseline | 必須在 `pitch-deck-talking-points.md` + `docs/benchmarks.md` 雙處明寫「baseline derived from synthetic-v2 fixture; not customer-validated」disclaimer，DEC-B 在無 customer-data 條件下 sign-off |
+| Rescope phase 2 | 把 customer sample 從 acceptance criteria 移除；e2e harness 仍交付但**不**列為 SLO 來源；DEC-B 延 v2.9.0 |
+
+決策時間點：v2.9.0 release-please cut 前 4 週 maintainer review。
+
+### 首批 baseline 數字（待第一輪 workflow_dispatch 後填入）
+
+> **Status**: 本表將於本 PR merge 後第一輪 `gh workflow run bench-e2e-record.yaml -f fixture_kind=synthetic-v2 -f count=30` 完成後，由 maintainer 從 aggregate JSON 抽數填入；customer-anon 數字待 sample 抵達後另填。
+>
+> **不要**從本 PR 直接讀數字 — 數字未經 main runner 量測。
+
+```
+fixture_kind=synthetic-v2  fire P50=___ms  fire P95=___ms  fire P99=___ms  resolve P50=___ms  resolve P95=___ms  resolve P99=___ms
+fixture_kind=customer-anon fire P50=___ms  fire P95=___ms  fire P99=___ms  gate_status=___ delta=___% vs synthetic-v2 baseline
+```
 
 ### 產出 fixture 速查（B-1.P2-b）
 
