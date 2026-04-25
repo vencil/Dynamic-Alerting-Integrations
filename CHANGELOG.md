@@ -50,6 +50,14 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
   - 引用守則表：合約 SLA / marketing 公開數字 ❌；pitch / proposal ⚠️ 須附 Phase 1 synthetic baseline 前綴
   - 詳見 PR #63
 
+- **Phase .b Phase 2 e2e alert fire-through harness design doc（v2.8.0, B-1 Phase 2 prep）**
+  - 新增 `docs/internal/design/phase-b-e2e-harness.md` — 描述從 `conf.d/` 寫入 → webhook 收到 alert 的端到端 latency 量測 harness 設計
+  - **Measurement model**：5-anchor（T0 driver write / T1 scan-complete gauge / T2 reload-complete gauge / T3 Prometheus alert activeAt / T4 webhook receive）；scrape+eval 交織塌成單一 stage C 不假裝拆；driver 進 compose 同 kernel clock；fire+resolve 對稱量測。需 exporter 加兩個 timestamp gauges（同 PR ~10 行）
+  - **Architecture choice**：docker-compose 而非 k3d，論證 K8s networking jitter 落在 5s scrape quantization 解析度以下；ConfigMap-symlink 行為已被 A-8b unit test (PR #54) 覆蓋
+  - **Customer sample 採 calibration gate 模型，非 hard blocker**：output JSON 帶 `fixture_kind` × `gate_status` 欄位；synthetic-v2（zipfian + power-law）為 v2.8.0 baseline，customer-anon 抵達後跑 ±30% 校準 gate；v2.9.0 cut 前未抵達觸發 kill switch go/no-go review
+  - **Run isolation**：每 run 用獨立 `tenant_id=bench-run-{i}` 避 Alertmanager dedup；fixture pre-create 避 fsnotify create-vs-modify 路徑差異；第 1 run 標 warm_up 不入聚合；n≥30 + bootstrap 95% CI
+  - 詳見 design doc §1–§11；acceptance criteria 在 §9（含 exporter gauge / pushgateway service / send_resolved / actual-vs-threshold rule 等具體要求）
+
 - **Phase .b 1000/2000/5000-tenant hierarchical baseline（v2.8.0, B-1 Phase 1 + B-8）— 此 baseline 非 definitive SLO 承諾**
   - ⛔ **重要 disclaimer**：以下數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 需 Phase 2 customer anonymized sample 校準後重跑（DEC-B in planning §10）。下游文件引用須附「Phase 1 synthetic baseline」前綴
   - **11 new Go benchmarks** in `components/threshold-exporter/app/config_hierarchy_bench_test.go`：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` + `DiffAndReload_Hierarchical_1000_OneTenantChanged`（B-8 blast-radius with `affected-tenants` metric per size）
