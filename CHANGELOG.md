@@ -31,6 +31,11 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Post-merge housekeeping — PR #59 follow-up drift（v2.8.0）**：PR #59（B-1 Phase 1 + B-8）merge 後例行 drift 收尾，獨立 PR 以保留主 PR diff 純淨：
+  - **`docs/internal/test-coverage-matrix.md`** 新增「Tier 2 — Performance Benchmarks」章節 + Phase .b 1000+ tenant baseline 子節，登錄 PR #59 加入 `components/threshold-exporter/app/config_hierarchy_bench_test.go` 的 13 支 hierarchical benchmarks（`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` × 4 patterns + `DiffAndReload_Hierarchical_1000_OneTenantChanged`）：每筆登 Tier / Coverage Target / Last Verified（v2.8.0）；附共用 helpers（`buildDirConfigHierarchical` / `reportResourceMetrics` / `bench*AtSize` 驅動函式）說明 + Phase 1 synthetic baseline disclaimer
+  - **`benchmark-playbook.md` `verified-at-version`**：已為 v2.8.0（PR #59 同步更新），本 PR 確認無需 bump
+  - **`doc-map` / `tool-map`**：`generate_doc_map.py --check` / `generate_tool_map.py --check` 雙雙 clean（無 drift）
+
 - **Phase .b 1000/2000/5000-tenant hierarchical baseline（v2.8.0, B-1 Phase 1 + B-8）— 此 baseline 非 definitive SLO 承諾**
   - ⛔ **重要 disclaimer**：以下數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 需 Phase 2 customer anonymized sample 校準後重跑（DEC-B in planning §10）。下游文件引用須附「Phase 1 synthetic baseline」前綴
   - **11 new Go benchmarks** in `components/threshold-exporter/app/config_hierarchy_bench_test.go`：`Benchmark{ScanDirHierarchical,FullDirLoad_Hierarchical,DiffAndReload_Hierarchical_NoChange,BlastRadius_DefaultsChange_Hierarchical}_{1000,2000,5000}` + `DiffAndReload_Hierarchical_1000_OneTenantChanged`（B-8 blast-radius with `affected-tenants` metric per size）

@@ -79,6 +79,44 @@ v1.7.0–v2.0.0 新增大量企業功能，其測試覆蓋集中在 unit/integra
 
 > 完整測試套件：`make test`（Go）+ `pytest tests/`（Python, 2,002+ passed）。CI pipeline `.github/workflows/validate.yaml` 在每次 PR 自動執行。完整測試架構導覽見 [Test Map](test-map.md)。
 
+### Tier 2 — Performance Benchmarks（`go test -bench`）
+
+Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production hot-path 在不同 tenant 規模下的延遲、記憶體與 goroutine 行為，為 SLO 與 sharding 決策提供 empirical 依據（**非 unit-level 正確性驗證**）。完整方法論與基線數據見 [Benchmark Playbook](benchmark-playbook.md)。
+
+#### Phase .b 1000+ tenant hierarchical baseline (B-1 Phase 1 + B-8, v2.8.0)
+
+新增於 PR #59，檔案 `components/threshold-exporter/app/config_hierarchy_bench_test.go`。覆蓋 post-A-10 production hot path：`WatchLoop → scanDirHierarchical → diffAndReload`。
+
+| Benchmark | Tier | 量測對象（Coverage Target） | Last Verified |
+|-----------|------|---------------------------|---------------|
+| `BenchmarkScanDirHierarchical_1000` | 2 | `scanDirHierarchical`：directory walk + per-file SHA-256 hash + parent graph build (1000 tenants) | v2.8.0 |
+| `BenchmarkScanDirHierarchical_2000` | 2 | 同上，2000 tenants（scaling characterization） | v2.8.0 |
+| `BenchmarkScanDirHierarchical_5000` | 2 | 同上，5000 tenants（scaling characterization） | v2.8.0 |
+| `BenchmarkFullDirLoad_Hierarchical_1000` | 2 | `fullDirLoad`：cold-load YAML parse + L0/L1/L2/L3 hierarchical merge (1000 tenants) | v2.8.0 |
+| `BenchmarkFullDirLoad_Hierarchical_2000` | 2 | 同上，2000 tenants | v2.8.0 |
+| `BenchmarkFullDirLoad_Hierarchical_5000` | 2 | 同上，5000 tenants | v2.8.0 |
+| `BenchmarkDiffAndReload_Hierarchical_1000_NoChange` | 2 | `diffAndReload` steady-state WatchLoop tick：hash diff → no-op fast path (1000 tenants) | v2.8.0 |
+| `BenchmarkDiffAndReload_Hierarchical_2000_NoChange` | 2 | 同上，2000 tenants | v2.8.0 |
+| `BenchmarkDiffAndReload_Hierarchical_5000_NoChange` | 2 | 同上，5000 tenants | v2.8.0 |
+| `BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged` | 2 | `diffAndReload` 單一 tenant YAML 變更 → diff + targeted reload tail（fresh-dir variant） | v2.8.0 |
+| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000` | 2 | B-8：region-level `_defaults.yaml` 變更 → affected-tenants count via `b.ReportMetric` (1000 tenants) | v2.8.0 |
+| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_2000` | 2 | 同上，2000 tenants（geometric expectation：~42 affected） | v2.8.0 |
+| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_5000` | 2 | 同上，5000 tenants（~105 affected） | v2.8.0 |
+
+**共用 helpers**（同檔案，非獨立 benchmark）：
+
+- `buildDirConfigHierarchical(b, N)` — Pure Go fixture writer，鏡射 `generate_tenant_fixture.py` 結構（8 domains × 6 regions × 3 envs + L0/L1/L2/L3 `_defaults.yaml`）；`sync.Once` cached for read-only benchmarks，fresh-dir variant for mutating benchmarks
+- `reportResourceMetrics(b)` — `runtime.GC()` ×2 reap finalizers 後 emit `MB-heap-after-gc` / `MB-sys` / `goroutines` via `b.ReportMetric`
+- 共享驅動函式 `benchScanDirHierarchicalAtSize` / `benchFullDirLoadAtSize` / `benchDiffAndReloadHierarchicalAtSizeNoChange` / `benchBlastRadiusDefaultsChangeAtSize` — 由各 size variant 呼叫，DRY 化 1000/2000/5000 三組量測
+
+**執行方式**：
+```bash
+make bench-hierarchical                         # 一站式（dev container 內）
+make dc-go-test BENCH=BenchmarkScanDirHierarchical_1000   # 單支
+```
+
+> **Phase 1 baseline disclaimer**：以上 benchmarks 量測 synthetic fixture，**非 definitive SLO 承諾**。Customer anonymized sample 校準排定於 Phase 2（B-2，blocked on customer data per planning §11.1）。下游文件引用須附「Phase 1 synthetic baseline」前綴。
+
 ### 斷言細節補充
 
 **Scenario E 的兩個隔離維度：**
