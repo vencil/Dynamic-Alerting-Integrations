@@ -1,0 +1,24 @@
+# Alertmanager config for e2e-bench (per design §4.4).
+#
+# group_wait: 0s — disable batching latency from the C→D path so we
+#                  measure the actual dispatch time, not the artificial
+#                  group-wait delay.
+# group_by: [tenant] — each driver run uses a unique tenant_id, so
+#                      groups never collide; deduplication can't
+#                      cross-contaminate runs.
+# send_resolved: true — required to measure the resolve path's stage D
+#                       (T4'). Without it, the receiver sees no event
+#                       on resolve.
+
+route:
+  receiver: e2e-webhook
+  group_wait: 0s
+  group_interval: 1s
+  repeat_interval: 5m
+  group_by: [tenant]
+
+receivers:
+  - name: e2e-webhook
+    webhook_configs:
+      - url: http://receiver:5001/hook
+        send_resolved: true

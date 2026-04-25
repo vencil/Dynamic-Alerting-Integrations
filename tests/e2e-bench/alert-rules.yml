@@ -1,0 +1,34 @@
+# actual-vs-threshold double-metric alert (per design §4.3).
+#
+# Why double-metric: v1 design used a single metric `bench_trigger`
+# self-compared against literal 100, which is logically meaningless
+# (a metric exceeding a constant tells you nothing about exporter
+# behavior). The double-metric model mirrors production: exporter
+# computes `user_threshold` from config, pushgateway injects
+# `actual_metric_value` simulating real business metrics, alert fires
+# when actual exceeds threshold.
+#
+# Run isolation: each driver run uses a unique `tenant=bench-run-{i}`
+# label; both metrics carry that label; the join `on(tenant)` aligns
+# them. Alertmanager group_by[tenant] keeps fire/resolve cycles for
+# different runs in separate groups → no dedup interference.
+
+groups:
+  - name: e2e-bench
+    interval: 5s
+    rules:
+      - alert: TenantThresholdExceeded
+        # actual > threshold for the same tenant where metric=bench_trigger.
+        # group_left(metric) carries the metric label through for clarity
+        # in the alert annotations.
+        expr: |
+          actual_metric_value
+            > on(tenant) group_left(metric)
+          user_threshold{metric="bench_trigger"}
+        for: 0s
+        labels:
+          severity: critical
+          run_kind: e2e-bench
+        annotations:
+          summary: "E2E bench: actual exceeded threshold for {{ $labels.tenant }}"
+          actual: "{{ $value }}"

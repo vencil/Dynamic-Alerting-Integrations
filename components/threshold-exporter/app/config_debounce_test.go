@@ -405,28 +405,36 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 		t.Fatalf("expected at least 1 fire, got %d (base=%d)", deltaFire, baseFire)
 	}
 
-	// Invariant: one reloadDuration sample per fire (delta-based to
-	// tolerate leaked late observations from prior tests landing on
-	// fresh after the withIsolatedMetrics swap).
+	// Goroutine-leak race (per S#32 / runs/24935213973): a prior test's
+	// fireDebounced may complete its diffAndReload AFTER our
+	// withIsolatedMetrics swap AND after our baseline snapshot — its
+	// late ObserveReloadDuration / ObserveDebounceBatch then lands on
+	// `fresh`, inflating both deltas by 1. `m.Close()` does NOT wait for
+	// in-flight callbacks (intentional — see config_debounce.go::Close).
+	//
+	// The actually-testable invariants under this race:
+	//   1. deltaReload == deltaBatch (both observed in the same
+	//      fireDebounced critical section, so they leak in lockstep)
+	//   2. deltaReload >= deltaFire (we observed at least our own fires)
+	//   3. when no leak (deltaReload == deltaFire), sum == numTriggers
+	//      exactly (every triggerDebouncedReload coalesced into one fire)
 	deltaReload := histogramSampleCount(t, fresh.reloadDuration) - baseReload
-	if deltaReload != deltaFire {
-		t.Errorf("reloadDuration: expected delta=%d (one per fire), got %d", deltaFire, deltaReload)
+	deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
+
+	if deltaReload != deltaBatchCount {
+		t.Errorf("lockstep invariant violated: deltaReload=%d != deltaBatch=%d (both observed in fireDebounced under same lock)", deltaReload, deltaBatchCount)
+	}
+	if deltaReload < deltaFire {
+		t.Errorf("at-least-our-own invariant violated: deltaReload=%d < deltaFire=%d", deltaReload, deltaFire)
 	}
 
-	// Invariant: one debounceBatch sample per fire, and the delta sum
-	// of batch sizes equals the total trigger count (no trigger lost).
-	deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
-	if deltaBatchCount != deltaFire {
-		t.Errorf("debounceBatch: expected delta _count=%d (one per fire), got %d", deltaFire, deltaBatchCount)
-	}
-	// Sum check: read the absolute sum, but the delta is what matters.
-	// We can't read the baseline sum easily; instead, verify the sum
-	// floor — every observation is in [1, 500], so the delta sum must
-	// be >= numTriggers (we triggered numTriggers times) and bounded
-	// above by numTriggers + maxLeak (we don't know prior, but if
-	// deltaBatchCount == deltaFire == 1, sum must be exactly numTriggers).
-	if deltaBatchCount == deltaFire && deltaFire == 1 {
-		// Single fire case: we can assert sum exactly.
+	// When there's no leak, we can assert the exact sum (numTriggers
+	// coalesced into our one fire). When there's a leak, deltaReload >
+	// deltaFire and the sum includes both our triggers and the leaked
+	// fire's batch — sum-floor (>= numTriggers) is the strongest
+	// assertion possible.
+	leaked := deltaReload > deltaFire
+	if !leaked && deltaFire == 1 {
 		reg := prometheus.NewRegistry()
 		if err := reg.Register(fresh.debounceBatch); err != nil {
 			t.Fatalf("register batch: %v", err)
@@ -438,12 +446,8 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 		for _, fam := range families {
 			for _, metric := range fam.Metric {
 				h := metric.Histogram
-				gotSum := int(h.GetSampleSum())
-				// Baseline sum is 0 (fresh) IF no leak; with leak
-				// gotSum could be numTriggers + leakedTriggers.
-				// At minimum it's numTriggers; require >= numTriggers.
-				if gotSum < numTriggers {
-					t.Errorf("debounceBatch: expected _sum >= %d (no trigger lost), got %d", numTriggers, gotSum)
+				if int(h.GetSampleSum()) != numTriggers {
+					t.Errorf("debounceBatch (no leak detected): expected _sum=%d (all triggers coalesced into our one fire), got %d", numTriggers, int(h.GetSampleSum()))
 				}
 			}
 		}
