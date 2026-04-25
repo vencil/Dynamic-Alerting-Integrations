@@ -158,6 +158,7 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 2. 本文件 frontmatter `version` bump → 對應 release tag
 3. 各 talking point 數字更新為 Phase 2 量測值；保留 Phase 1 數字於附錄供對照
 4. 移除「pending Phase 2」前綴；引入正式 SLO 條款引用
+5. **`docs/benchmarks.md` §12 同步升級**為 v2.8.0 calibrated baseline（雙語）— 公開 canonical perf doc 才算正式 promote。本文件「客戶語言版本」+「不要這樣講」永遠 stays internal（pedagogical artifact 不該進 canonical reference）
 
 ---
 
@@ -165,7 +166,8 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 
 | 資源 | 說明 |
 |------|------|
-| [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) | 完整方法論、fixture spec、量測指令 — talking points 的數字 SOT |
+| [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) | 完整方法論、fixture spec、量測指令 — talking points 的 Phase 1 數字 SOT |
+| [docs/benchmarks.md §12 Incremental Hot-Reload + B-1 Scale Gate](../benchmarks.md#12-incremental-hot-reload-b-1-scale-gate) | 公開 perf doc（platform-engineer / sre 受眾，雙語）。**目前 §12 是 v2.7.0 B-1 baseline；v2.8.0 Phase 1 數字刻意不進 §12** — 待 Phase 2 customer sample calibrated 後再 promote 升級 §12（避免 Phase 1 disclaimer-laden 數字進 canonical doc 後產生 implicit anchoring） |
 | [ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md) | dual-hash 架構決策原文（source_hash + merged_hash 定義、merge 語意） |
 | [config_debounce.go L260-330](../../components/threshold-exporter/app/config_debounce.go) | quiet defaults edit noOp detection 實作（L313-318 prev == mh 判定） |
 | [CHANGELOG `[Unreleased]`](../../CHANGELOG.md) | Phase 1 baseline entry 與本文件交叉引用 |
