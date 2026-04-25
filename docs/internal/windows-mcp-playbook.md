@@ -568,7 +568,7 @@ FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind moun
 
 **1. VS Code Git 開關（專案級，不影響其他專案）**
 
-✅ **已自動化（v2.8.0）**：`scripts/session-guards/session-init.py` PreToolUse hook 在每個 Claude Code session 第一次 `Bash`/`Edit`/`Write` 呼叫時自動跑 `vscode_git_toggle off`，後續同 session 為 O(1) no-op；不需要手動 invoke。詳見 [CLAUDE.md §Agent 起手式](../../CLAUDE.md)。
+✅ **已自動化（v2.8.0）**：`scripts/session-guards/session-init.py` PreToolUse hook 在每個 Claude Code session 第一次 `Bash`/`Edit`/`Write` 呼叫時自動跑 `vscode_git_toggle off`，後續同 session 為 O(1) no-op；不需要手動 invoke。詳見 repo root `CLAUDE.md` §Agent 起手式。
 
 僅以下情境需手動：(a) 非 Claude Code 的人類 dev session；(b) hook 失效偵錯；(c) session 結束後恢復 IDE 體驗：
 
