@@ -31,6 +31,8 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Changed
 
+- **doc-map scope 收窄為公開文件，`docs/internal/**` 不再 catalog（v2.8.0, [#66](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/66) follow-up）** — `generate_doc_map.py` `SKIP_DIRS` + `_version_patterns.py` `DOC_MAP_SKIP_DIRS` 同步加入 `internal`。理由：catalog 真正的 consumer 是「快速查找公開文件」（AI agent / 開發者 discovery）；internal docs 的 discovery path 是 CLAUDE.md / skills / `vibe-playbook-nav`，不需要 catalog 重複登錄。修掉這個 scope 不一致也順手清掉 `validate_docs_versions.py` 對 `v2.8.0-{planning-archive,tech-debt-decomposition}.md` 的 false-positive `doc-map-coverage` warning（產生器故意排除但驗證器不知道）。doc-map 從 134 → 114 entries；公開文件 count 在 CLAUDE.md L83 + README.md 對應行同步更新並改用「公開文件」措辭以反映 scope 收窄。catalog 自描述的 `doc-map.md` / `tool-map.md` meta-entries 仍由 `SELF_ENTRIES` 手動加入，不受影響
+
 - **GitHub Actions Node 20 → Node 24 sweep（v2.8.0, chore）** — 升級全部 11 個 workflow 用到的 7 個 actions 到當前最新 stable major，避開 2026-06-02 GitHub 強制 Node 24 deadline + 26 週後 Node 20 移除：`actions/checkout@v4 → @v6`（11 處）、`actions/setup-python@v5 → @v6`（6 處）、`actions/setup-go@v5 → @v6`（3 處）、`actions/setup-node@v4 → @v6`（3 處，**確認** repo 未用 yarn/pnpm cache 故 v6「limit auto-cache to npm」breaking 不影響）、`actions/cache@v4 → @v5`、`actions/upload-artifact@v4 → @v7`、`actions/github-script@v7 → @v9`（**確認** repo 3 個 inline script 全使用 `require('fs')` + injected `github.rest.*`，未踩到 v9 移除的 `require('@actions/github')` 路徑）。74 個 reference 全替換；diff 嚴格只動 version tag 不動其他語意。verification path：本 PR 自身 CI run（trigger 多數 PR-level workflow）+ post-merge `gh workflow run bench-record.yaml`、`mkdocs-deploy.yaml` 手動 dispatch（cron/push-only workflow）
 
 ### Added
