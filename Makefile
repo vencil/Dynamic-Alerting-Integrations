@@ -73,6 +73,14 @@ benchmark-report-warn: ## benchmark-report 但失敗不阻擋（pre-tag 用，is
 bench-history-analyze: ## 拉最近 N 次 bench-record artifact + 算 per-bench 統計 + GO/NO-GO 決議（issue #67 Phase 2 readiness 工具；ARGS=--limit 28 / --ci / --no-gate / --cache-dir DIR）
 	@python3 ./scripts/tools/dx/analyze_bench_history.py $(ARGS)
 
+.PHONY: bench-e2e
+bench-e2e: ## B-1 Phase 2 e2e harness — local-only (5-8 min wall-clock). COUNT=N runs (default 30), E2E_FIXTURE_KIND=synthetic-v1|synthetic-v2|customer-anon (default synthetic-v2).
+	@bash ./scripts/ops/bench_e2e_run.sh
+
+.PHONY: bench-e2e-aggregate
+bench-e2e-aggregate: ## Aggregate existing per-run-*.json under tests/e2e-bench/bench-results/ without re-running the stack. ARGS=--baseline-glob '...' --gate-threshold-pct 30
+	@cd tests/e2e-bench && python3 aggregate.py $(ARGS)
+
 .PHONY: test-alert
 test-alert: ## 硬體故障/服務中斷測試 — Kill process 模擬 Hard Outage (使用: make test-alert TENANT=db-b)
 	@./scripts/test-alert.sh $(TENANT)

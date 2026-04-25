@@ -44,15 +44,24 @@ EOF
 done
 
 # 4. Run the harness. COUNT=N means 1 warm-up run + N measurement runs.
-COUNT=30 docker compose up --build --abort-on-container-exit
+#    `--abort-on-container-exit driver` waits specifically for *driver*
+#    to exit (it terminates naturally after COUNT+1 cycles), avoiding a
+#    bring-down on receiver/exporter unrelated exits.
+COUNT=30 docker compose up --build --abort-on-container-exit driver
 
-# 5. Inspect per-run outputs.
+# 5. Inspect per-run outputs and run aggregator.
 ls bench-results/
 cat bench-results/per-run-0001.json | jq
+python3 aggregate.py
+cat bench-results/e2e-*.json | jq
 
 # 6. Cleanup.
 docker compose down -v
 ```
+
+**Easier path** (PR-3 integration): from repo root, `make bench-e2e`
+runs the entire 1-6 sequence with EXIT-trap cleanup (failure mid-
+script doesn't leave a dangling stack). See [`scripts/ops/bench_e2e_run.sh`](../../scripts/ops/bench_e2e_run.sh).
 
 ## Fixture kinds
 
