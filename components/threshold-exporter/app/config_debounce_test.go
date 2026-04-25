@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // waitFor polls `cond` until it returns true or the timeout expires. Returns
@@ -338,6 +340,162 @@ func TestPendingDebounceReasons_AccumulatesThenClears(t *testing.T) {
 	// Post-fire: reasons cleared.
 	if remaining := m.PendingDebounceReasons(); len(remaining) != 0 {
 		t.Errorf("reasons not cleared after fire; got %v", remaining)
+	}
+}
+
+// TestFireDebounced_EmitsBatchAndDuration verifies the invariant that
+// every fired debounce window produces exactly one reloadDuration
+// sample AND one debounceBatch sample, with the batch sums totaling
+// the number of triggers seen.
+//
+// Earlier versions asserted "_count == 1" by timing assumption (4
+// triggers fit in one window) — that flaked on CI under -race when
+// the scheduler split the trigger loop across two windows
+// (runs/24933040316 + runs/24933130105). The actual contract is
+// not "1 fire" but "samples consistent with fire count", so we
+// drive a fixed number of triggers, wait for quiescence, and
+// assert the contract directly.
+func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	const numTriggers = 4
+	m := NewConfigManagerWithDebounce(dir, 50*time.Millisecond)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Snapshot baseline samples — a prior test may have a leaked
+	// fireDebounced goroutine still mid-diffAndReload that lands its
+	// ObserveReloadDuration on `fresh` AFTER withIsolatedMetrics
+	// swapped (the global metric pointer was already `fresh` by the
+	// time the late goroutine called getConfigMetrics()). Asserting
+	// deltas instead of absolute counts isolates this test from any
+	// such leak.
+	baseReload := histogramSampleCount(t, fresh.reloadDuration)
+	baseBatchCount := histogramSampleCount(t, fresh.debounceBatch)
+	baseFire := m.DebounceFiredCount()
+
+	for i := 0; i < numTriggers; i++ {
+		m.triggerDebouncedReload(ReloadReasonSource)
+	}
+	if !waitFor(t, 2*time.Second, func() bool {
+		return m.DebounceFiredCount() >= 1
+	}) {
+		t.Fatalf("debounce never fired")
+	}
+	// Wait for quiescence: no new fires for 3 consecutive windows.
+	stable := uint64(0)
+	stableSince := time.Time{}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		now := m.DebounceFiredCount()
+		if now != stable {
+			stable = now
+			stableSince = time.Now()
+		} else if !stableSince.IsZero() && time.Since(stableSince) > 150*time.Millisecond {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	deltaFire := m.DebounceFiredCount() - baseFire
+	if deltaFire < 1 {
+		t.Fatalf("expected at least 1 fire, got %d (base=%d)", deltaFire, baseFire)
+	}
+
+	// Invariant: one reloadDuration sample per fire (delta-based to
+	// tolerate leaked late observations from prior tests landing on
+	// fresh after the withIsolatedMetrics swap).
+	deltaReload := histogramSampleCount(t, fresh.reloadDuration) - baseReload
+	if deltaReload != deltaFire {
+		t.Errorf("reloadDuration: expected delta=%d (one per fire), got %d", deltaFire, deltaReload)
+	}
+
+	// Invariant: one debounceBatch sample per fire, and the delta sum
+	// of batch sizes equals the total trigger count (no trigger lost).
+	deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
+	if deltaBatchCount != deltaFire {
+		t.Errorf("debounceBatch: expected delta _count=%d (one per fire), got %d", deltaFire, deltaBatchCount)
+	}
+	// Sum check: read the absolute sum, but the delta is what matters.
+	// We can't read the baseline sum easily; instead, verify the sum
+	// floor — every observation is in [1, 500], so the delta sum must
+	// be >= numTriggers (we triggered numTriggers times) and bounded
+	// above by numTriggers + maxLeak (we don't know prior, but if
+	// deltaBatchCount == deltaFire == 1, sum must be exactly numTriggers).
+	if deltaBatchCount == deltaFire && deltaFire == 1 {
+		// Single fire case: we can assert sum exactly.
+		reg := prometheus.NewRegistry()
+		if err := reg.Register(fresh.debounceBatch); err != nil {
+			t.Fatalf("register batch: %v", err)
+		}
+		families, err := reg.Gather()
+		if err != nil {
+			t.Fatalf("gather batch: %v", err)
+		}
+		for _, fam := range families {
+			for _, metric := range fam.Metric {
+				h := metric.Histogram
+				gotSum := int(h.GetSampleSum())
+				// Baseline sum is 0 (fresh) IF no leak; with leak
+				// gotSum could be numTriggers + leakedTriggers.
+				// At minimum it's numTriggers; require >= numTriggers.
+				if gotSum < numTriggers {
+					t.Errorf("debounceBatch: expected _sum >= %d (no trigger lost), got %d", numTriggers, gotSum)
+				}
+			}
+		}
+	}
+}
+
+// TestSyncFallback_EmitsReloadDurationButNoBatch verifies the
+// debounceWindow=0 path observes reload duration (so SLO histograms
+// stay accurate) but skips the batch histogram (no batching to
+// observe — folding "1" samples in would skew p50).
+func TestSyncFallback_EmitsReloadDurationButNoBatch(t *testing.T) {
+	fresh, _ := withIsolatedMetrics(t)
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "90")
+
+	m := NewConfigManagerWithDebounce(dir, 0)
+	defer m.Close()
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	m.triggerDebouncedReload(ReloadReasonSource)
+
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(fresh.reloadDuration); err != nil {
+		t.Fatalf("register reload: %v", err)
+	}
+	families, _ := reg.Gather()
+	gotReload := uint64(0)
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			gotReload = metric.Histogram.GetSampleCount()
+		}
+	}
+	if gotReload < 1 {
+		t.Errorf("sync fallback should still observe reload duration; got count=%d", gotReload)
+	}
+	// Plain Histogram series always exists after registration; assert
+	// no Observe via sample count, not series count.
+	reg2 := prometheus.NewRegistry()
+	if err := reg2.Register(fresh.debounceBatch); err != nil {
+		t.Fatalf("register batch: %v", err)
+	}
+	families, _ = reg2.Gather()
+	gotBatch := uint64(0)
+	for _, fam := range families {
+		for _, metric := range fam.Metric {
+			gotBatch = metric.Histogram.GetSampleCount()
+		}
+	}
+	if gotBatch != 0 {
+		t.Errorf("sync fallback should NOT observe debounce batch; got _count=%d", gotBatch)
 	}
 }
 

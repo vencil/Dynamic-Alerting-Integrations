@@ -79,9 +79,12 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 	if m.debounceWindow <= 0 {
 		// Synchronous fallback — useful for v2.6.0 parity tests and for
 		// the initial Load() bootstrap where we don't want to gate startup
-		// on a timer.
+		// on a timer. Observe reload duration so callers using the
+		// zero-window opt-out still feed the SLO histogram (B-3).
 		m.recordReason(reason)
+		t0 := time.Now()
 		m.diffAndReload()
+		ObserveReloadDuration(time.Since(t0))
 		return
 	}
 
@@ -139,9 +142,15 @@ func (m *ConfigManager) fireDebounced() {
 	m.debounceTimer = nil
 	m.debounceMu.Unlock()
 
-	_ = reasons // consumed by diffAndReload via incrementReloadReasons
+	// v2.8.0 B-3: observe debounce batch size (effectiveness signal)
+	// before the reload so the sample lands even if diffAndReload
+	// errors out. Sample count == fire count by construction.
+	ObserveDebounceBatch(len(reasons))
 	atomic.AddUint64(&m.debounceFired, 1)
-	if _, _, err := m.diffAndReload(); err != nil {
+	t0 := time.Now()
+	_, _, err := m.diffAndReload()
+	ObserveReloadDuration(time.Since(t0))
+	if err != nil {
 		log.Printf("ERROR: debounced reload failed: %v", err)
 	}
 }

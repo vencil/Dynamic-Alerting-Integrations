@@ -59,6 +59,32 @@ func TestDefaultsPathLevel_NonDescendantIsUnknown(t *testing.T) {
 	}
 }
 
+// PR #69 follow-up (Issue #61): K8s ConfigMap mounts can surface
+// `..data` (symlink) and `..2026_*` (timestamped backing dir) segments
+// in the rel path under unusual mount layouts. Verify those segments
+// are skipped in depth counting so a `<root>/..data/_defaults.yaml`
+// path classifies as "global" not "domain". Production-named dirs
+// never start with `..`.
+func TestDefaultsPathLevel_SkipsK8sConfigMapSymlinkSegments(t *testing.T) {
+	root := filepath.FromSlash("/etc/config")
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/etc/config/..data/_defaults.yaml", "global"},
+		{"/etc/config/..2026_04_25_12_00_00.123456789/_defaults.yaml", "global"},
+		{"/etc/config/..data/finance/_defaults.yaml", "domain"},
+		{"/etc/config/..data/finance/us-east/_defaults.yaml", "region"},
+		{"/etc/config/..data/finance/us-east/prod/_defaults.yaml", "env"},
+	}
+	for _, tc := range cases {
+		got := defaultsPathLevel(filepath.FromSlash(tc.path), root)
+		if got != tc.want {
+			t.Errorf("path %s: want %q got %q", tc.path, tc.want, got)
+		}
+	}
+}
+
 // ============================================================
 // widestChangedScope
 // ============================================================

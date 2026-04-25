@@ -58,6 +58,14 @@ var scopeRank = map[string]int{
 // Path *segment names* (e.g. literal "domain") are deliberately not
 // inspected — production configs use real names like "finance" /
 // "us-east" / "prod", and depth from root is the only reliable signal.
+//
+// PR #69 follow-up (Issue #61): K8s ConfigMap mounts surface symlink
+// shims like `..data` and `..2026_04_25_...` at the mount root. Under
+// git-sync (the production scanner path) these never appear on the
+// scanned path, but we filter `..`-prefixed segments defensively so a
+// CM-mounted scan doesn't downgrade a real `global` defaults change to
+// `domain` just because Walk saw the symlink dir. Production-named
+// dirs never start with `..`.
 func defaultsPathLevel(path, root string) string {
 	rel, err := filepath.Rel(root, filepath.Dir(path))
 	if err != nil {
@@ -73,8 +81,19 @@ func defaultsPathLevel(path, root string) string {
 	if rel == "." {
 		return "global"
 	}
-	depth := strings.Count(rel, "/") + 1
+	// Drop K8s ConfigMap symlink artifacts (`..data` / `..2026_*`) before
+	// counting depth. A segment starting with `..` is never a legitimate
+	// hierarchy directory in our schema.
+	depth := 0
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == "" || strings.HasPrefix(seg, "..") {
+			continue
+		}
+		depth++
+	}
 	switch depth {
+	case 0:
+		return "global"
 	case 1:
 		return "domain"
 	case 2:
