@@ -29,6 +29,10 @@ Compare：v2.7.0 最終條目約 55 行（Scale / Token / Test / Benchmark / ADR
 Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 -->
 
+### Fixed
+
+- **CLAUDE.md L57 stale ref to `doc-map.md § Change Impact Matrix`（[#66](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/66) part 2）** — 該章節從未存在於 `doc-map.md`（auto-generated catalog，無 manual section）。移除 parenthetical 連結；保留主規範文字「影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`」自身已完整。`#66` 另一半（tool-count drift 121 vs actual 122）已於 PR #71 一併修。`#66` 可 close
+
 ### Changed
 
 - **doc-map scope 收窄為公開文件，`docs/internal/**` 不再 catalog（v2.8.0, [#66](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/66) follow-up）** — `generate_doc_map.py` `SKIP_DIRS` + `_version_patterns.py` `DOC_MAP_SKIP_DIRS` 同步加入 `internal`。理由：catalog 真正的 consumer 是「快速查找公開文件」（AI agent / 開發者 discovery）；internal docs 的 discovery path 是 CLAUDE.md / skills / `vibe-playbook-nav`，不需要 catalog 重複登錄。修掉這個 scope 不一致也順手清掉 `validate_docs_versions.py` 對 `v2.8.0-{planning-archive,tech-debt-decomposition}.md` 的 false-positive `doc-map-coverage` warning（產生器故意排除但驗證器不知道）。doc-map 從 134 → 114 entries；公開文件 count 在 CLAUDE.md L83 + README.md 對應行同步更新並改用「公開文件」措辭以反映 scope 收窄。catalog 自描述的 `doc-map.md` / `tool-map.md` meta-entries 仍由 `SELF_ENTRIES` 手動加入，不受影響
