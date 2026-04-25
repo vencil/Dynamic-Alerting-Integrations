@@ -11,7 +11,7 @@ lang: zh
 > **受眾**：Maintainers + business / sales（內部對外溝通協作）
 > **版本**：v2.7.0（current canonical；Phase 1 baseline 量測於 v2.8.0 開發中）
 >
-> **相關文件**：[Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) · [ADR-018: dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md) · [config_debounce.go](../../components/threshold-exporter/app/config_debounce.go)
+> **相關文件**：[Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) · [ADR-018: dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md) · [`config_debounce.go`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go)
 
 本文件整理 v2.8.0 Phase 1 baseline（PR #59 / merge commit `f1f14e7`, merged 2026-04-25）對應的客戶對話 talking points。每個 section 提供（a）一段技術錨點 + 客戶語言版本，（b）明確的「**不要這樣講**」清單以防 overclaim。**請先讀完本文件結尾的 Honest baseline disclaimer 再引用任何數字到對外材料**。
 
@@ -23,7 +23,7 @@ lang: zh
 
 ### 技術錨點
 
-PR #59 BlastRadius bench 初版用 `container_memory` 這個 key 變更 region-level `_defaults.yaml`，觀察到 `affected-tenants: 0`（每個 tenant 都 override 了該 key）。對應 [config_debounce.go L313-318](../../components/threshold-exporter/app/config_debounce.go) 的判斷：
+PR #59 BlastRadius bench 初版用 `container_memory` 這個 key 變更 region-level `_defaults.yaml`，觀察到 `affected-tenants: 0`（每個 tenant 都 override 了該 key）。對應 `config_debounce.go` L313-318 的判斷：
 
 ```go
 } else if defaultsChanged {
@@ -45,13 +45,13 @@ PR #59 BlastRadius bench 初版用 `container_memory` 這個 key 變更 region-l
 - **Quiet edit 偵測（per-tenant）**：每個受影響 tenant 各自比對 prior vs recomputed merged_hash；不變者標 noOp、變者照常 reload。可能出現 mixed 結果（部分 tenant noOp、部分 reload）
 - **計數器可觀測**：`da_config_defaults_change_noop_total` counter 記錄 quiet edit 次數，platform team 可審計
 - **典型場景**：global defaults 註解修整、key 順序整理、被 tenant override 的 key 微調 — 客戶端服務不會被打擾
-- **重要：noOp ≠ 零工作**：~200 ms 大部分花在 [config_debounce.go:341](../../components/threshold-exporter/app/config_debounce.go) `diffAndReload` 尾段**無條件呼叫**的 `fullDirLoad`（1000-tenant 約 146-237 ms 主導 cost）；21 個 tenant merged_hash 重算只占 ~1 ms。節省的是**下游** Alertmanager rule re-evaluation cascade（Phase 2 優化候選：diff 階段全 noOp 時 skip 尾段 fullDirLoad，可再省 ~150 ms/tick）
+- **重要：noOp ≠ 零工作**：~200 ms 大部分花在 `config_debounce.go` L341 `diffAndReload` 尾段**無條件呼叫**的 `fullDirLoad`（1000-tenant 約 146-237 ms 主導 cost）；21 個 tenant merged_hash 重算只占 ~1 ms。節省的是**下游** Alertmanager rule re-evaluation cascade（Phase 2 優化候選：diff 階段全 noOp 時 skip 尾段 fullDirLoad，可再省 ~150 ms/tick）
 - **Bench design 教訓**：blast-radius 想量真正影響面，要選 tenants 不 override 的 key（B-1 改用 `region_alert_schedule` → 21 affected）
 
 ### ❌ 不要這樣講
 
 - ❌ **「microservices 不會 restart」** — threshold-exporter 是**單一 process**，不是 microservices；說錯會讓客戶以為架構是 service mesh 規模
-- ❌ **「dual-hash 會自動跳過 reload」** — dual-hash 是 architecture（ADR-018）；noOp detection 是 algorithm（[config_debounce.go L313-318](../../components/threshold-exporter/app/config_debounce.go)）。**RELATED but DISTINCT**。dual-hash 啟用了 noOp 判定，但 noOp 是判定的**結果**，不是 dual-hash 本身的功能
+- ❌ **「dual-hash 會自動跳過 reload」** — dual-hash 是 architecture（ADR-018）；noOp detection 是 algorithm（`config_debounce.go` L313-318）。**RELATED but DISTINCT**。dual-hash 啟用了 noOp 判定，但 noOp 是判定的**結果**，不是 dual-hash 本身的功能
 - ❌ **「noOp 省下 reload 工作」** — 上游的 21 tenant merged_hash 重算（~200 ms）**還是花了**；省的是下游 Alertmanager rule cascade
 - ❌ **「100% 不會誤觸發 reload」** — quiet edit 偵測只覆蓋「defaults 變更但 merged_hash 不變」的場景；source 變更（tenant YAML 自身改動）一律觸發 reload
 - ❌ **「noOp 是 batch / 整批級別判定」** — noOp 是 per-tenant 標記。常見誤解：「只要有一個 tenant override 該 key 整個 reload 就跳過」— 錯。判定是逐 tenant 比對 merged_hash，可能出現 21 中 19 noOp + 2 reload 的 mixed 結果，下游 reload signal 仍會 fire（為那 2 個變動的 tenant）
@@ -173,7 +173,7 @@ PR #59 三點實測（3-run median ms，[benchmark-playbook.md §Scaling Charact
 | [Benchmark Playbook §v2.8.0 1000-Tenant Hierarchical Baseline](./benchmark-playbook.md#v280-1000-tenant-hierarchical-baseline-phase-1-b-1) | 完整方法論、fixture spec、量測指令 — talking points 的 Phase 1 數字 SOT |
 | [docs/benchmarks.md §12 Incremental Hot-Reload + B-1 Scale Gate](../benchmarks.md#12-incremental-hot-reload-b-1-scale-gate) | 公開 perf doc（platform-engineer / sre 受眾，雙語）。**目前 §12 是 v2.7.0 B-1 baseline；v2.8.0 B-1 Phase 1 數字刻意不進 §12** — 待 B-1 Phase 2 customer sample calibrated 後再 promote 升級 §12（避免 Phase 1 disclaimer-laden 數字進 canonical doc 後產生 implicit anchoring） |
 | [ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload](../adr/018-defaults-yaml-inheritance-dual-hash.md) | dual-hash 架構決策原文（source_hash + merged_hash 定義、merge 語意） |
-| [config_debounce.go L260-330](../../components/threshold-exporter/app/config_debounce.go) | quiet defaults edit noOp detection 實作（L313-318 prev == mh 判定） |
-| [CHANGELOG `[Unreleased]`](../../CHANGELOG.md) | Phase 1 baseline entry 與本文件交叉引用 |
+| [`config_debounce.go` L260-330](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go#L260-L330) | quiet defaults edit noOp detection 實作（L313-318 prev == mh 判定） |
+| [CHANGELOG `[Unreleased]`](../CHANGELOG.md) | Phase 1 baseline entry 與本文件交叉引用 |
 | `v2.8.0-planning §10 DEC-B`（內部 planning artifact） | B-1 Phase 2 customer sample 校準時程 / definitive SLO sign-off 觸發條件 |
 | [doc-map.md](./doc-map.md) | 內部文件導覽（自動產生） |
