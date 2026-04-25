@@ -100,8 +100,8 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 | `BenchmarkDiffAndReload_Hierarchical_5000_NoChange` | 2 | 同上，5000 tenants | v2.8.0 |
 | `BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged` | 2 | `diffAndReload` 單一 tenant YAML 變更 → diff + targeted reload tail（fresh-dir variant） | v2.8.0 |
 | `BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000` | 2 | B-8：region-level `_defaults.yaml` 變更 → affected-tenants count via `b.ReportMetric` (1000 tenants) | v2.8.0 |
-| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_2000` | 2 | 同上，2000 tenants（geometric expectation：~42 affected） | v2.8.0 |
-| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_5000` | 2 | 同上，5000 tenants（~105 affected） | v2.8.0 |
+| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_2000` | 2 | 同上，2000 tenants | v2.8.0 |
+| `BenchmarkBlastRadius_DefaultsChange_Hierarchical_5000` | 2 | 同上，5000 tenants | v2.8.0 |
 
 **共用 helpers**（同檔案，非獨立 benchmark）：
 
@@ -109,11 +109,7 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 - `reportResourceMetrics(b)` — `runtime.GC()` ×2 reap finalizers 後 emit `MB-heap-after-gc` / `MB-sys` / `goroutines` via `b.ReportMetric`
 - 共享驅動函式 `benchScanDirHierarchicalAtSize` / `benchFullDirLoadAtSize` / `benchDiffAndReloadHierarchicalAtSizeNoChange` / `benchBlastRadiusDefaultsChangeAtSize` — 由各 size variant 呼叫，DRY 化 1000/2000/5000 三組量測
 
-**執行方式**：
-```bash
-make bench-hierarchical                         # 一站式（dev container 內）
-make dc-go-test BENCH=BenchmarkScanDirHierarchical_1000   # 單支
-```
+**執行方式**：完整 `bench_wrapper.sh` 重跑指令見 [Benchmark Playbook §重跑本 baseline 指令](benchmark-playbook.md#重跑本-baseline-指令)；快速跑全 Go bench 用 `make go-bench` 或 `make go-bench-clean`（後者經 `bench_wrapper.sh` 過濾 stdout）。
 
 > **Phase 1 baseline disclaimer**：以上 benchmarks 量測 synthetic fixture，**非 definitive SLO 承諾**。Customer anonymized sample 校準排定於 Phase 2（B-2，blocked on customer data per planning §11.1）。下游文件引用須附「Phase 1 synthetic baseline」前綴。
 
