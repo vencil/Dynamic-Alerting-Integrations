@@ -20,25 +20,34 @@
 //   - Customer-side pre-commit hook (the same Go code packaged in
 //     a CLI subcommand by C-11 Migration Toolkit).
 //
-// PR-1 scope — pure library that operates on already-merged
-// effective configs supplied by the caller. Two checks land:
+// Pure library — operates on already-merged effective configs
+// supplied by the caller, never touches YAML or disk. Checks shipped:
 //
-//  1. Schema validation (Severity=error)
+//  1. Schema validation (Severity=error, PR-1)
 //     For every tenant under the affected scope: required fields
 //     must be present and non-nil after merge. Missing fields
 //     block merge.
 //
-//  2. Redundant override (Severity=warn)
+//  2. Redundant override (Severity=warn, PR-1)
 //     Per planning §C-12 Claude补. When a tenant.yaml field has
 //     the same value as the new _defaults.yaml at the same
 //     dotted path, the override carries no information — it just
-//     duplicates the inherited value. We emit a warning so the
-//     tenant author can clean up; we do NOT block merge because
-//     the duplication is harmless at runtime.
+//     duplicates the inherited value. Warning only; the
+//     duplication is harmless at runtime.
+//
+//  3. Routing schema guardrails (PR-2; see routing.go)
+//     Five checks against each tenant's `_routing` block:
+//     unknown receiver type (error), missing receiver fields
+//     (error), empty override matcher (error), duplicate override
+//     matcher (warn), redundant override receiver (warn).
+//     Note: the planning row originally said "routing tree cycle
+//     detection" — the codebase's routing model is a flat
+//     per-tenant block with no cross-references, so cycles are
+//     structurally impossible. PR-2 ships the checks that
+//     actually catch real bugs in this model. See routing.go
+//     header for the full rationale.
 //
 // Future PRs in the C-12 family:
-//   - PR-2: ADR-017/018 Routing Guardrails — routing tree cycle
-//     detection + orphaned route detection (planning §C-12 layer ii).
 //   - PR-3: Cardinality Guard — post-merge label cardinality must
 //     not exceed ADR-003 thresholds (planning §C-12 layer iii).
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
@@ -76,6 +85,14 @@ type FindingKind string
 const (
 	FindingMissingRequired   FindingKind = "missing_required"
 	FindingRedundantOverride FindingKind = "redundant_override"
+
+	// Routing-schema findings (PR-2; see routing.go for rationale on
+	// why this is not "routing_cycle"/"orphaned_route").
+	FindingUnknownReceiverType       FindingKind = "unknown_receiver_type"
+	FindingMissingReceiverField      FindingKind = "missing_receiver_field"
+	FindingEmptyOverrideMatcher      FindingKind = "empty_override_matcher"
+	FindingDuplicateOverrideMatcher  FindingKind = "duplicate_override_matcher"
+	FindingRedundantOverrideReceiver FindingKind = "redundant_override_receiver"
 )
 
 // Finding is one issue the guard surfaced. Stable JSON serialisation
@@ -163,8 +180,22 @@ type CheckInput struct {
 	// asserts non-nil presence for in every tenant's effective
 	// config. Empty/nil disables the schema check.
 	//
-	// PR-1 keeps this caller-supplied (no built-in schema). PR-2
-	// will add an optional `internal/schema/required.yaml`
-	// loader once the v2.8.0 mandatory-fields list lands.
+	// PR-1 keeps this caller-supplied (no built-in schema). A future
+	// PR may add an optional `internal/schema/required.yaml` loader
+	// once the v2.8.0 mandatory-fields list lands.
 	RequiredFields []string `json:"required_fields,omitempty"`
+
+	// RoutingByTenant maps tenant ID → the parsed `_routing` block
+	// for that tenant. Routing schema checks (added in PR-2) run
+	// per tenant present in this map; tenants absent from the map
+	// have routing checks skipped (no finding emitted, not even a
+	// warning — absent routing is a valid configuration).
+	//
+	// The caller is responsible for parsing the routing payload —
+	// `_routing` ships across the wire as a YAML-serialised string
+	// inside ScheduledValue.Default, and unwrapping that requires
+	// the main package's config types. The guard library deliberately
+	// stays YAML-agnostic; the CLI wrapper (deferred PR-4) does the
+	// extraction before invoking CheckDefaultsImpact.
+	RoutingByTenant map[string]map[string]any `json:"routing_by_tenant,omitempty"`
 }

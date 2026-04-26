@@ -11,7 +11,7 @@
 #   docker run -p 8080:8080 -v $(pwd)/conf.d:/conf.d ghcr.io/vencil/tenant-api:2.4.0
 
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.2-alpine3.22 AS builder
 
 WORKDIR /src
 
