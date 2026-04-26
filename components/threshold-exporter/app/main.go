@@ -75,6 +75,10 @@ func main() {
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/ready", readyHandler(manager))
 	mux.HandleFunc("/api/v1/config", configViewHandler(manager))
+	// v2.8.0 Phase .c C-7b: ephemeral simulate primitive. Stateless —
+	// no shared writer to manager, no disk IO; safe to colocate with
+	// the rest of the read-only API.
+	mux.HandleFunc("/api/v1/tenants/simulate", simulateHandler())
 
 	server := &http.Server{
 		Addr:              listenAddr,

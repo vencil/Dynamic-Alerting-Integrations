@@ -26,6 +26,7 @@ rules:
       - a11y            # accessibility (WCAG / axe fixes, cross-cutting per v2.8.0 Phase .a PR#2)
       - phase-a
       - phase-b
+      - phase-c
       # compound scopes (multi-area changes)
       - dx+e2e
       - lint+tooling
