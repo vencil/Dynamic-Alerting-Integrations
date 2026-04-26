@@ -53,6 +53,18 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .c — C-9 Profile Builder PR-2 — Proposal artifact emission (v2.8.0)** — 給 PR-1 cluster engine 加 emission 層：把 ProposalSet 轉成可寫入 git 的 artifact 目錄樹 (per-proposal `_defaults.yaml` + per-tenant `<tenant>.yaml` + `PROPOSAL.md`)。**Honest scope redirect from spec**：planning row 描述的是「conf.d-ready emission」但 PromRule expr (`avg(rate(...))>0.85`) → threshold-exporter conf.d 結構化欄位 (`cpu_avg_rate_5m: 0.85`) 需要 PromRule→threshold translator，那層不在 PR-2 scope (留給 PR-3 + ADR-019)。PR-2 因此 ship 「intermediate proposal artifact」格式：
+  - **`EmitProposals(input)` 純函式**（`profile/emit.go`）— 接 `ProposalSet` + `[]parser.ParsedRule` (corpus index) + `EmissionLayout` (caller 提供 proposal→dir mapping，PR-2 不推斷 directory structure)，回傳 `map[path][]byte`。Caller 寫 disk / stage git / pipe。同 C-7a InMemoryConfigSource / C-10 batchpr.Plan 「IO at the edges」pattern
+  - **每 proposal 三 artifact**：`_defaults.yaml` (shared template + dialect + provenance + confidence)、`<tenant>.yaml` per member (varying labels only — shared 不重複)、`PROPOSAL.md` (人類 review summary)
+  - **Tenant-key heuristic**：scan VaryingLabelKeys，prefer `tenant`，fallback to first sorted varying key
+  - **Safe filename**：`/` and `\` → `-`、leading dots stripped、empty → `_unknown`
+  - **Determinism**：yaml.v3 對 `map[string]any` 已 sort keys；output bytes 兩次跑 byte-identical (`TestEmit_DeterministicOutput` lock)
+  - **Warning paths (不 fail)**：empty `Layout.ProposalDirs[i]`、`MemberRuleID` 不在 `AllRules` lookup、rule 缺 tenant label → `Warnings` 但其他繼續 emit。**Fatal**：`ProposalSet == nil` / 0 proposals / layout length mismatch
+  - **15 new tests / 43 total profile tests**。`-race -count=2` 穩定 1.2s；full suite `-race` 5.4s 無 regression
+  - **PR-2 scope discipline** — 不做：translator (PR-3 + ADR-019)、actual conf.d/ 直接 emission、auto-derive layout、interactive UI (PR-4)
+  - **PR-3 接口已預留**：emission 已帶 `source_rule_id` provenance、`tenants:` wrapper 已對齊 ADR-018 `extractTenantRaw` 形狀。Translator in-place 把 `_defaults.yaml` 改成 conf.d 形而不動 emit 層
+  - 詳見 planning §12.2 Phase .c row C-9
+
 - **Phase .c — C-12 Dangling Defaults Guard PR-3 — Cardinality guard (v2.8.0)** — guard 第三 (最後) 個檢查層落地。預測每 tenant post-merge 的 metric 數，比對 caller-supplied `CardinalityLimit` (建議值對齊 `DefaultMaxMetricsPerTenant=500` from `config_types.go`)。兩 tier — error 在 `>` limit、warn 在 `>` `WarnRatio×limit` (default 0.8 = 80%)。動機：`config_resolve.go::ResolveAt` runtime 對 over-limit tenants **silently truncate excess + WARN log**，operators 經常 deploy 後才發現某些 alerts 不 fire — guard 把這個失敗模式拉到 pre-merge：
   - **`checkCardinality(input)` 純函式**（`cardinality.go`）— 單 pass：每 tenant 算 `countMetricKeys(effective)` (skip-list 對齊 ResolveAt 的 `_state_*` / `_silent_*` / `_routing*` / `_severity_dedup` / `_metadata` 5 類 special keys) → 比對 limit → emit error/warn/nothing
   - **Counting model 是 conservative upper bound** — 不模擬 dimensional regex 展開 (`metric{db=~"db[0-9]+"}` 一 key 會在 runtime 變 N thresholds)，所以 dimensional-heavy tenants 可能被 under-count；其他情況 (tenant override 已 disable 的 metrics、`_critical` suffix overrides) 都對。Trade-off 朝「不誤報」傾斜，限制寫進 `cardinality.go` package header
