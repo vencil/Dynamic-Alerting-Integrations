@@ -41,6 +41,17 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .c — C-12 Dangling Defaults Guard PR-3 — Cardinality guard (v2.8.0)** — guard 第三 (最後) 個檢查層落地。預測每 tenant post-merge 的 metric 數，比對 caller-supplied `CardinalityLimit` (建議值對齊 `DefaultMaxMetricsPerTenant=500` from `config_types.go`)。兩 tier — error 在 `>` limit、warn 在 `>` `WarnRatio×limit` (default 0.8 = 80%)。動機：`config_resolve.go::ResolveAt` runtime 對 over-limit tenants **silently truncate excess + WARN log**，operators 經常 deploy 後才發現某些 alerts 不 fire — guard 把這個失敗模式拉到 pre-merge：
+  - **`checkCardinality(input)` 純函式**（`cardinality.go`）— 單 pass：每 tenant 算 `countMetricKeys(effective)` (skip-list 對齊 ResolveAt 的 `_state_*` / `_silent_*` / `_routing*` / `_severity_dedup` / `_metadata` 5 類 special keys) → 比對 limit → emit error/warn/nothing
+  - **Counting model 是 conservative upper bound** — 不模擬 dimensional regex 展開 (`metric{db=~"db[0-9]+"}` 一 key 會在 runtime 變 N thresholds)，所以 dimensional-heavy tenants 可能被 under-count；其他情況 (tenant override 已 disable 的 metrics、`_critical` suffix overrides) 都對。Trade-off 朝「不誤報」傾斜，限制寫進 `cardinality.go` package header
+  - **Skip-list lock-step 維護**：`isSpecialKey` 與 `config_resolve.go::ResolveAt` 的 skip-list 必須手動 keep in lock-step，新加 `_*` semantic prefix 須兩邊都改。`TestIsSpecialKey_FullCoverage` 14 cases 守關 boundary 行為 (含 `_routing_extra` prefix-match vs `_severity_dedup_extra` exact-match)
+  - **新 `CheckInput` fields**：`CardinalityLimit int` (≤0 disables 整個 check)、`CardinalityWarnRatio float64` (out of [0,1] fallback to 0.8；=1.0 disable warn tier 只報 errors)
+  - **新 2 個 `FindingKind`**：`cardinality_exceeded` (error) / `cardinality_warning` (warn)
+  - **16 new top-level tests / 60 total guard tests** — countMetricKeys / isSpecialKey full coverage + checkCardinality 各 tier (no-op when disabled / below floor / at/above warn floor / at exact boundary / above limit / custom warn ratio / out-of-range ratio fallback / ratio=1.0 disables warn tier) + multi-tenant independence + integration with CheckDefaultsImpact (PassedTenantCount drop)。`-race -count=3` 穩定 1.0s；full suite `-race` 5.6s 無 regression
+  - **PR-3 scope discipline** — 不做：dimensional regex expansion 估算 (need fixture data to calibrate, defer)、ADR-003 cross-ref (planning row 寫的 ADR-003 實際是 Sentinel Alert，cardinality 真正 source 是 `DefaultMaxMetricsPerTenant`，CHANGELOG 註記 honest correction)
+  - **C-12 guard 三層 (schema / routing / cardinality) 全到位** — C-10 PR-2 apply mode 啟動時可呼叫完整 guard
+  - 詳見 planning §12.2 Phase .c row C-12
+
 - **Phase .c — C-12 Dangling Defaults Guard PR-2 — Routing schema guardrails (v2.8.0)** — 給 PR-1 落地的 `internal/guard/` 加 routing-schema 檢查。**Scope redirect 從 planning spec**：planning §C-12 layer (ii) 寫的是「routing tree cycle detection + orphaned route」，但 codebase 實際 `_routing` model 是 *flat per-tenant block* (一 receiver + optional `overrides[]`，無 cross-references) → cycles 結構上不可能、orphans 在嚴格意義上不存在。實作 cycle detector 純屬 theatre。本 PR 改 ship 對此 model 真正能抓 bug 的 5 項檢查：
   - **Unknown receiver type (error)** — `receiver.type` 不在 `{webhook, email, slack, teams, rocketchat, pagerduty}`。Source of truth: `scripts/tools/_lib_constants.py::RECEIVER_TYPES` (Python/Go 共用)
   - **Missing required receiver field (error)** — 每 type 有自己的 required fields (`webhook`→`url`、`slack`→`api_url`、`email`→`to`+`smarthost`、`pagerduty`→`service_key`、`teams`→`webhook_url`、`rocketchat`→`url`)。Empty-string 也算 missing (mirror `generate_alertmanager_routes.py` 的 truthy check)

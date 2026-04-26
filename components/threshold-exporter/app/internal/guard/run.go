@@ -41,6 +41,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkRequiredFields(input)...)
 	findings = append(findings, checkRedundantOverrides(input)...)
 	findings = append(findings, checkRoutingGuardrails(input)...)
+	findings = append(findings, checkCardinality(input)...)
 
 	// Stable sort: errors before warnings, then by tenant id, then
 	// by field path. Within the same (severity, tenant, field) we
