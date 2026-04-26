@@ -58,6 +58,8 @@ lang: zh
 
 **檢查方式**：見 [doc-map.md § Change Impact Matrix](doc-map.md)，列出每種變更類型要連動哪些文件。
 
+**docs/**.md push 前必跑 `make lint-docs-mkdocs`**：mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit `check_doc_links.py` 的 filesystem 語意有 gap — 例如 `../../CHANGELOG.md` 在 filesystem 對但 mkdocs 視為跳出 site 而 fail。CI 會擋但要 push 後才知道；本地跑這個 target 取得 fast feedback。
+
 ### 5. SAST：7 條自動掃描規則
 
 **規則**：pre-commit stage 會跑 7 條 SAST 規則：
