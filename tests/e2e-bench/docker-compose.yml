@@ -61,7 +61,7 @@ services:
       - "9091"
 
   prometheus:
-    image: prom/prometheus:v2.55.0
+    image: prom/prometheus:v3.11.2
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
@@ -83,7 +83,7 @@ services:
       retries: 30
 
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.32.0
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:

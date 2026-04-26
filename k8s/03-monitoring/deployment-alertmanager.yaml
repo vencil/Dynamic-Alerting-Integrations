@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: alertmanager
-          image: prom/alertmanager:v0.31.1
+          image: prom/alertmanager:v0.32.0
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
