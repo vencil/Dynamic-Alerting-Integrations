@@ -1,0 +1,23 @@
+# Mixed PromQL + MetricsQL in the same file — the parser must not
+# down-classify the portable rules just because their neighbour is VM-only.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+spec:
+  groups:
+    - name: portable
+      rules:
+        - alert: PortableMemoryAlert
+          # Standard PromQL — should classify as `prom`.
+          expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.85
+          for: 10m
+        - record: requests:rate1m
+          # Standard PromQL — should classify as `prom`.
+          expr: sum by (job) (rate(http_requests_total[1m]))
+    - name: vm-flavor
+      rules:
+        - alert: SmoothedSpike
+          # smooth_exponential is VM-only.
+          expr: smooth_exponential(rate(http_requests_total[1m]), 0.3) > 100
+        - alert: PortableInVMGroup
+          # Even in the same file as VM-only rules, this one is portable.
+          expr: rate(http_errors_total[5m]) > 5

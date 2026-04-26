@@ -1,0 +1,43 @@
+# Five rules across 3 tenants:
+#   - 3× HighCPU (one per tenant) → should cluster into one proposal
+#   - 1× DiskSpace (single instance, only on tenant-a) → unclustered
+#   - 1× MemoryPressure (single instance, on tenant-b) → unclustered
+#
+# All HighCPU rules differ only in their `tenant` label value and
+# threshold literal — the cluster engine should normalise both away.
+spec:
+  groups:
+    - name: cpu
+      rules:
+        - alert: HighCPU
+          expr: avg(rate(node_cpu_seconds_total{tenant="tenant-a"}[5m])) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-a
+        - alert: HighCPU
+          expr: avg(rate(node_cpu_seconds_total{tenant="tenant-b"}[5m])) > 0.90
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-b
+        - alert: HighCPU
+          expr: avg(rate(node_cpu_seconds_total{tenant="tenant-c"}[5m])) > 0.95
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-c
+    - name: misc
+      rules:
+        - alert: DiskSpaceLow
+          expr: node_filesystem_avail_bytes{tenant="tenant-a"} < 1e9
+          for: 10m
+          labels:
+            severity: critical
+            tenant: tenant-a
+        - alert: MemoryPressure
+          expr: process_resident_memory_bytes{tenant="tenant-b"} > 2.5e9
+          for: 1m
+          labels:
+            severity: warning
+            tenant: tenant-b

@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vm-extensions
+spec:
+  groups:
+    - name: vm-only
+      rules:
+        - alert: HighLatencyP9999
+          # quantiles_over_time is VM-only — vanilla Prometheus has no
+          # equivalent for computing multiple quantiles in one pass.
+          expr: quantiles_over_time("0.99,0.999", request_latency_seconds[10m]) > 1.5
+          for: 2m
+          labels:
+            severity: critical
+        - alert: GaugeWentBackInTime
+          # remove_resets is VM-only — counter normalisation utility.
+          expr: remove_resets(some_counter) > 0
+        - record: redis_keys:rollup_rate
+          # rollup_rate is a VM rollup analogue of rate().
+          expr: rollup_rate(redis_db_keys[5m])
