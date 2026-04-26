@@ -297,9 +297,15 @@ func silenceLogs(b *testing.B) {
 
 ---
 
-## v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2, design + skeleton)
+## v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2)
 
-> **Status**: design contract 完成（PR #64 / `design/phase-b-e2e-harness.md`）；implementation 進行中（B-1.P2-a/b 在本 PR 落地，c-g 後續）。本節是 playbook 操作層 skeleton — design doc 是 SSOT，這裡只放 ops 視角的「怎麼跑、看哪幾個數字、customer sample 校準怎麼操作」。
+> **Status**: 🟢 Implementation 完整 land + 首批 baseline 數字落地（synthetic-v2 1000-tenant + 5000-tenant，2026-04-26）。本節為 SSOT；design 文件已 archive。
+>
+> **archive-of**: `archive/design/phase-b-e2e-harness.md` (read-only historical reference for design rationale, decision log, rejected alternatives)
+>
+> **Implementation PRs**: #78 (gauges) → #79 (compose+driver) → #80 (aggregator+workflow) → #85/#86/#88/#90/#105 (cycle-1-6 RCA chain) → #112 (Tier 1 fail-fast)
+>
+> **Tier 1 fail-fast guard** is now active — any future bench harness regression that produces a zero T anchor in the warm_up run will abort the workflow within ~90s instead of waiting the full 60-min timeout. See §「Tier 1 fail-fast smoke gate」below.
 
 ### 5-anchor 量測模型（摘要）
 
@@ -362,7 +368,7 @@ python3 scripts/tools/dx/compare_e2e_baseline.py \
 | **B-1.P2-d** | host driver (5-anchor 量測 + run isolation + fire+resolve 對稱) | 🟢 | PR #79 |
 | **B-1.P2-e** | n≥30 aggregation + bootstrap 95% CI + output JSON `fixture_kind`/`gate_status` | 🟢 | 本 PR (PR-3) |
 | **B-1.P2-f** | `make bench-e2e` + `bench-e2e-record.yaml` workflow (main only, manual dispatch) | 🟢 | 本 PR (PR-3) |
-| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow） | 🟡 ops-flow 完成；**首批 baseline 數字未填**（待第一輪 main workflow_dispatch 後 maintainer 從 aggregate JSON 抽數寫入 §「首批 baseline 數字」） | 本 PR (PR-3) + 後續 doc-only commit |
+| **B-1.P2-g** | playbook 完整章節（含實測數字 + customer-sample calibration flow） | 🟢 完整 land — ops flow + 首批 1000+5000 baseline 數字（2026-04-26 main workflow_dispatch runs 24951460457 + 24955478536）+ design doc archived | PR #80 (skeleton) + S#37 (numbers + design archive) |
 
 ### 跑一輪 baseline 速查（B-1.P2-f）
 
@@ -387,6 +393,25 @@ BASELINE_GLOB='tests/e2e-bench/bench-results/e2e-*-synthetic-v2.json' \
 gh workflow run bench-e2e-record.yaml -f fixture_kind=synthetic-v2 -f count=30
 # Inputs: fixture_kind / count / fixture_tenant_count.
 # Artifacts retained 30 days; gate_banner surfaces in run summary.
+```
+
+### Tier 1 fail-fast smoke gate（cycle-6 RCA 後加，issue #83 §S#37d）
+
+Driver 跑完 warm_up run 0 後立刻檢查 `per-run-0000.json` 的 5 個 T anchor — 任一為 0（== 沒觀察到）→ exit code 2 → `--abort-on-container-exit driver` → `bench_e2e_run.sh` 整段失敗 → workflow 在 ~2 min（而非 30-60 min timeout）內 fail。**之前 6 個 cycle 每個都浪費 30+ min wall-clock 才 timeout；Tier 1 把這個延遲縮到 ~90s**。
+
+**對應信號**：
+- T1=0：exporter scan-complete gauge 從未 advance（multi-tenant 大 fixture cold-load 沒撐過 wait_for_services 的 60s window）
+- T2=0：reload gauge 從未 advance（content hash 同前次 → diffAndReload short-circuit）
+- T3=0：Prometheus 沒 fire alert（label/expr mismatch、defaults 未載入、tenant 沒 register `bench_trigger`）
+- T4=0：webhook receiver 沒收到（Alertmanager 路由斷或 alert 沒持續到 dispatch）
+
+**診斷工件**：workflow 失敗時自動把 `docker compose logs threshold-exporter / prometheus / alertmanager / receiver / driver` dump 到 `bench-results/*.log`，與 `per-run-0000.json` 一起 upload artifact。Exporter `WARN: skip unparseable file` / `WARN: tenant=X: unknown key` 兩條是最高訊息密度的線索。
+
+**Opt-out**：本機 debug harness 本身（不是想抓 cycle-6 那種）想看完整 30 runs 的 timeline，加 `--no-smoke-abort` 或 `NO_SMOKE_ABORT=1`：
+
+```bash
+# Driver 預設 ON；只在診斷 driver 自己時 opt-out
+NO_SMOKE_ABORT=1 COUNT=3 make bench-e2e
 ```
 
 ### Aggregator 輸出與 gate banner
@@ -454,28 +479,44 @@ Per design §6.5 + §11：v2.9.0 cut 前若 customer sample 未抵達，**強制
 
 決策時間點：v2.9.0 release-please cut 前 4 週 maintainer review。
 
-### 首批 baseline 數字（待第一輪 workflow_dispatch 後填入）
+### 首批 baseline 數字（synthetic-v2 main workflow_dispatch, 2026-04-26）
 
-> **Status**: 本表將於 PR-3 merge 後第一輪 `gh workflow run bench-e2e-record.yaml ...` 完成後，由 maintainer 從 aggregate JSON 抽數填入；customer-anon 數字待 sample 抵達後另填。
+> **Source**: `gh workflow run bench-e2e-record.yaml` on `main`, `n=30` runs each (warm_up + 30 measured).
 >
-> **不要**從 PR-3 直接讀數字 — 數字未經 main runner 量測。
+> | Fixture | Tenants | Run | n | fire P50 | fire P95 | fire P99 | resolve P50 | resolve P95 | resolve P99 | gate |
+> |---|---|---|---|---|---|---|---|---|---|---|
+> | synthetic-v2 | 1000 | [24951460457](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/24951460457) | 30 | 4748.5 ms | 4953.95 ms | 4977.88 ms | 4766.0 ms | 4974.5 ms | 4985.39 ms | 🟡 pending |
+> | synthetic-v2 | 5000 | [24955478536](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/24955478536) | 30 | 4763.5 ms | 4971.55 ms | 4984.07 ms | 3769.5 ms | 3985.2 ms | 3996.71 ms | 🟡 pending |
+> | customer-anon | TBD | (待 sample 抵達) | — | — | — | — | — | — | — | ⚠️ awaiting sample |
 >
-> **Design §9.3 acceptance**：1000-tenant + 5000-tenant 各跑 30 runs 是 hard requirement。第一輪 baseline 完成 1000-tenant；5000-tenant 列為 v2.8.x **doc-only follow-up**（call workflow with `fixture_tenant_count=5000`，把第二批數字填到下表第二行）。
+> Bootstrap 95% CI not too wide on either run (`ci_too_wide: false`).
 
-```
-fixture_kind=synthetic-v2  tenants=1000  fire P50=___ms  fire P95=___ms  fire P99=___ms  resolve P50=___ms  resolve P95=___ms  resolve P99=___ms
-fixture_kind=synthetic-v2  tenants=5000  fire P50=___ms  fire P95=___ms  fire P99=___ms  resolve P50=___ms  resolve P95=___ms  resolve P99=___ms
-fixture_kind=customer-anon                fire P50=___ms  fire P95=___ms  fire P99=___ms  gate_status=___ delta=___% vs synthetic-v2 1000-tenant baseline
-```
+**Stage breakdown** (fire phase P95):
 
-### Pending follow-ups（design §9 partial-green deferred items）
+| tenants | A (scan) | B (reload) | C (scrape+eval) | D (dispatch) | total ≈ |
+|---|---|---|---|---|---|
+| 1000 | 1440.5 ms | 1000.0 ms | 3305.0 ms | 3.0 ms | 4953.95 |
+| 5000 | 3663.55 ms | 2000.0 ms | 0.0 ms | 3.0 ms | 4971.55 |
 
-兩條 design §9 acceptance 在 PR-3 內沒做，明確 deferred：
+**Observations**:
 
-| § | Item | Plan |
+1. **Near-flat e2e at P95 across 1000 → 5000 tenants** (+0.4% on fire P95, +0.4% on fire P99). The e2e latency is dominated by the 5s scrape quantization (Stage C in 1000-tenant; absorbed into A+B in 5000-tenant — see note 3), exactly the floor design §5.4 predicted.
+2. **Stage A and B scale ~2.5× and 2× from 1000 → 5000** (scan walks more files; reload diff range is wider). Both scale within `ResolveAt` per-tenant linear cost expectation. The increase is hidden inside the scrape window.
+3. **Stage C = 0 ms at 5000-tenant** is an artifact, not zero scrape time. With wider Stage A+B, the alert's `activeAt` (T3) sometimes lands BEFORE the post-reload scrape that produces T2 — Stage C = max(T3 − T2, 0). Real scrape latency is still ~5s but it's hidden in A+B; the e2e number (T4 − T0) is unaffected. Tier 2 follow-up could either redefine Stage C or document that Stage C → 0 means "T2 lagged T3" rather than "scrape was instant".
+4. **Resolve faster than fire at 5000-tenant** (3985 vs 4971 ms P95) is real — resolve only has Stage C+D (Stage A+B skipped because no fixture mutation), so it bypasses the wide scan window.
+5. **Gate status `pending` for both rows** is the design (synthetic-v2 → pending until customer-anon validation per design §6.5; the row will flip to `passed` / `voided` retroactively when customer-anon lands).
+
+### 已完成的 design §9 acceptance follow-ups
+
+| § | Item | Done in |
 |---|---|---|
-| §9.3 | 5000-tenant × 30 runs baseline | Workflow input 已預留 `fixture_tenant_count: 5000` 選項；merge 後在第一輪 1000-tenant baseline 落地後立即跑第二輪 5000-tenant，數字填上表 |
-| §9.4 | Design doc 升格 + archive | `docs/internal/design/phase-b-e2e-harness.md` → `docs/internal/archive/design/phase-b-e2e-harness.md`，本 playbook §v2.8.0 Phase 2 e2e 章節加 `archive-of: design/phase-b-e2e-harness.md` cross-ref；待第一輪實測數字進本節後做 doc-only follow-up PR |
+| §9.3 | 1000-tenant + 5000-tenant × 30 runs baseline | S#37 (this PR) — see §「首批 baseline 數字」above |
+| §9.4 | Design doc archive | S#37 (this PR) — moved to `archive/design/phase-b-e2e-harness.md`; this section now SSOT |
+
+剩餘 follow-up（不阻擋 v2.8.0 ship）：
+
+- **Customer-anon sample 抵達後 calibration gate run** — 客戶 sample 還未抵達；待抵達後 maintainer 跑 `BASELINE_GLOB=... E2E_FIXTURE_KIND=customer-anon make bench-e2e`，把 customer-anon row 數字填入上表，並 retroactively 標 synthetic-v2 row `gate_status` 為 `passed` / `voided`。詳 §「Customer sample calibration gate operational flow」。
+- **Stage C 渲染語意** — 5000-tenant Stage C=0 是觀測 artifact 不是真零；考慮 Tier 2 follow-up 改用 `max(T3-T2, T1-T0)` 或 explicit "absorbed-into-AB" 標記。
 
 ### 產出 fixture 速查（B-1.P2-b）
 
