@@ -1,0 +1,38 @@
+# Two pairs of rules with the same normalised expression but
+# DIFFERENT dialects must NOT cluster together — `prom` vs
+# `metricsql` carries different portability semantics that
+# C-9 emission must respect downstream.
+spec:
+  groups:
+    - name: prom-portable
+      rules:
+        - alert: PortableHighCPU
+          expr: avg(rate(cpu_seconds_total{tenant="tenant-a"}[5m])) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-a
+        - alert: PortableHighCPU
+          expr: avg(rate(cpu_seconds_total{tenant="tenant-b"}[5m])) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-b
+    - name: vm-flavor
+      rules:
+        - alert: VMRollupCPU
+          # rollup_rate makes this metricsql-dialect; even though the
+          # outer wrapper looks similar to the prom rules, the
+          # signature includes dialect=metricsql and these must
+          # cluster with each other, not with the prom group.
+          expr: avg(rollup_rate(cpu_seconds_total{tenant="tenant-a"}[5m])) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-a
+        - alert: VMRollupCPU
+          expr: avg(rollup_rate(cpu_seconds_total{tenant="tenant-b"}[5m])) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-b

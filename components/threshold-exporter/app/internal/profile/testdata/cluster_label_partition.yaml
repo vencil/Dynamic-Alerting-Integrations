@@ -1,0 +1,30 @@
+# Three rules same expression template, identical `severity` label,
+# but `tenant` and `team` differ. Verifies partitionLabels splits
+# correctly:
+#   shared:  severity=warning
+#   varying: tenant, team
+spec:
+  groups:
+    - name: cpu
+      rules:
+        - alert: HighCPU
+          expr: cpu_load{tenant="tenant-a"} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-a
+            team: backend
+        - alert: HighCPU
+          expr: cpu_load{tenant="tenant-b"} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-b
+            team: payments
+        - alert: HighCPU
+          expr: cpu_load{tenant="tenant-c"} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            tenant: tenant-c
+            team: backend
