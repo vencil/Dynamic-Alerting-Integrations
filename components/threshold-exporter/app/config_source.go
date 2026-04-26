@@ -32,8 +32,9 @@ package main
 // and (b) build the defaults chain by walking dir parents — both
 // require random access to the population. For the in-memory case
 // the population is already a map; for the disk case the WalkDir
-// pass produces one map at the cost of holding tenant YAML bytes
-// in memory briefly (peak ~few MB at 1000 tenants per benchmarks).
+// pass produces one map at the cost of briefly holding all YAML
+// bytes in memory (back-of-envelope: ~1 MB per 1000 tenants × 1 KiB
+// average tenant.yaml; not measured under load).
 
 import (
 	"crypto/sha256"

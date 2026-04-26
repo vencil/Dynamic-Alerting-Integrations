@@ -90,9 +90,9 @@ func simulateHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		// Encoder errors here are nearly always client disconnects —
-		// nothing useful to do, but log via the default mux which
-		// already wraps writes with a logger in production.
+		// Encoder errors here are nearly always client disconnects after
+		// we've already written the status line — there's no useful
+		// recovery path and nothing to surface to the caller.
 		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
