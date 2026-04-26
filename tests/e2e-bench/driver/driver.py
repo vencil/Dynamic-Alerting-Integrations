@@ -424,10 +424,53 @@ def wait_for_services(deadline_s: float = 60.0) -> None:
             raise SystemExit(f"upstream {name} not ready")
 
 
+# ---------------------------------------------------------------------------
+# Tier 1 fail-fast smoke check
+# ---------------------------------------------------------------------------
+# Cycle-6 lesson (issue #83 RCA chain): every harness regression so far
+# was visible in the warm_up run's per-run-0000.json within ~90 seconds
+# (T anchors zero), yet the workflow waited the full 30-60 min timeout
+# before failing. 5 cycles × 30-60 min = 5 hours of wall-clock + CI
+# minutes wasted before the fix landed.
+#
+# Tier 1 fix: after warm_up run 0, inspect the result. If any T anchor
+# is zero (== "anchor never observed"), abort with exit code 2 — don't
+# spend another 25-55 min running runs 1..N that will all hit the same
+# wall.
+#
+# Opt-out: --no-smoke-abort or NO_SMOKE_ABORT=1 (kept for cases where
+# the operator wants the full diagnostic timeline despite warm_up
+# failure — e.g. local debugging of the harness itself).
+
+ANCHOR_KEYS = ("T0_unix_ns", "T1_unix_ns", "T2_unix_ns", "T3_unix_ns", "T4_unix_ns")
+
+
+def check_warm_up_anchors(result: dict) -> list[str]:
+    """Return list of anchor names that are zero (== never observed) in
+    the warm_up run's fire phase. Empty list = all anchors fired = OK.
+
+    The fire phase is the canonical smoke surface — resolve anchors are
+    derived from it, and Stages A/B can be skipped legitimately, but a
+    missing T anchor in fire is always a harness failure.
+    """
+    fire = result.get("fire") or {}
+    return [k for k in ANCHOR_KEYS if not fire.get(k)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "30")))
     parser.add_argument("--results-dir", type=str, default=str(RESULTS_DIR))
+    parser.add_argument(
+        "--no-smoke-abort",
+        action="store_true",
+        default=os.environ.get("NO_SMOKE_ABORT", "") == "1",
+        help=(
+            "Disable Tier 1 fail-fast: continue runs 1..N even if warm_up "
+            "produced zero T anchors. Default: smoke check ON. Override only "
+            "for local diagnostic runs that want the full timeline."
+        ),
+    )
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
@@ -458,6 +501,31 @@ def main() -> int:
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         e2e = result.get("fire", {}).get("e2e_ms", -1)
         print(f"[driver] run {i:3d} (warm_up={warm_up}): fire e2e_ms={e2e}", flush=True)
+
+        # Tier 1 fail-fast: warm_up smoke gate.
+        if warm_up and not args.no_smoke_abort:
+            zero_anchors = check_warm_up_anchors(result)
+            if zero_anchors:
+                fire = result.get("fire") or {}
+                anchors_state = {k: fire.get(k, 0) for k in ANCHOR_KEYS}
+                print(
+                    f"[driver] SMOKE FAIL: warm_up produced zero anchors: {zero_anchors}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(
+                    f"[driver]   anchors observed: {anchors_state}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(
+                    f"[driver]   aborting before runs 1..{args.count} to save CI "
+                    f"minutes (Tier 1 fail-fast — see cycle-6 RCA in §S#37d). "
+                    f"Use --no-smoke-abort to override for local diagnostic runs.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 2
 
     print(f"[driver] done: wrote {n_total} per-run JSON files to {results_dir}", flush=True)
     return 0

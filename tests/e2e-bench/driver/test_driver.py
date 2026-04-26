@@ -156,3 +156,91 @@ def test_now_unix_s_resolution(driver):
     v = driver.now_unix_s()
     assert isinstance(v, int)
     assert v > 1_700_000_000  # > 2023-11
+
+
+# ============================================================
+# Tier 1 fail-fast — check_warm_up_anchors
+# ============================================================
+#
+# Cycle-6 RCA lesson (issue #83): every harness regression we hit so
+# far surfaced as one or more T anchors == 0 in the warm_up run's
+# fire phase. Tier 1 catches that within ~90s of the bench step
+# starting, instead of waiting the full 30-60 min workflow timeout.
+
+
+def _make_fire(t0: int = 1, t1: int = 2, t2: int = 3, t3: int = 4, t4: int = 5) -> dict:
+    """Helper: build a fake `result` dict with a populated fire phase."""
+    return {
+        "run_id": 0,
+        "warm_up": True,
+        "fire": {
+            "T0_unix_ns": t0,
+            "T1_unix_ns": t1,
+            "T2_unix_ns": t2,
+            "T3_unix_ns": t3,
+            "T4_unix_ns": t4,
+            "e2e_ms": 4000,
+        },
+    }
+
+
+def test_check_warm_up_anchors_all_present_returns_empty(driver):
+    """All five T anchors > 0 → no zeros → empty list (smoke pass)."""
+    assert driver.check_warm_up_anchors(_make_fire()) == []
+
+
+def test_check_warm_up_anchors_t3_zero_detected(driver):
+    """Cycle-3/4/5/6 signature: alert never fires → T3=0, T4=0
+    (T4 derived from T3). Both should be reported."""
+    result = _make_fire(t3=0, t4=0)
+    zeros = driver.check_warm_up_anchors(result)
+    assert zeros == ["T3_unix_ns", "T4_unix_ns"]
+
+
+def test_check_warm_up_anchors_t2_zero_detected(driver):
+    """Cycle-2 signature: reload gauge never advances → T2=0."""
+    result = _make_fire(t2=0)
+    zeros = driver.check_warm_up_anchors(result)
+    assert zeros == ["T2_unix_ns"]
+
+
+def test_check_warm_up_anchors_t1_t2_t3_t4_all_zero(driver):
+    """Cycle-6 worst case: exporter rejected `_defaults.yaml` → no
+    series → no scan-complete advance → T1+T2+T3+T4 all zero."""
+    result = _make_fire(t1=0, t2=0, t3=0, t4=0)
+    zeros = driver.check_warm_up_anchors(result)
+    assert zeros == ["T1_unix_ns", "T2_unix_ns", "T3_unix_ns", "T4_unix_ns"]
+
+
+def test_check_warm_up_anchors_missing_fire_block_treats_all_as_zero(driver):
+    """`run_one` failure path may write a result with no fire block
+    (just an `error` field). Smoke check should still trip."""
+    result = {"run_id": 0, "warm_up": True, "error": "boom"}
+    zeros = driver.check_warm_up_anchors(result)
+    assert zeros == list(driver.ANCHOR_KEYS)
+
+
+def test_check_warm_up_anchors_negative_one_treated_as_zero(driver):
+    """`_stages_ms` uses -1 to mark unobserved anchors elsewhere, but
+    fire-phase T anchors specifically use 0 for "never observed".
+    A -1 here would indicate driver-side corruption — same severity,
+    same abort. (`not v` is truthy for both 0 and -1 only when -1 is
+    bool-False, so verify this explicitly.)"""
+    result = _make_fire()
+    result["fire"]["T3_unix_ns"] = 0  # zero is the canonical signal
+    zeros = driver.check_warm_up_anchors(result)
+    assert "T3_unix_ns" in zeros
+
+
+def test_anchor_keys_constant_matches_design_doc(driver):
+    """Lock the anchor key set against the 5-anchor protocol in
+    docs/internal/design/phase-b-e2e-harness.md §5.2. Adding a 6th
+    anchor (or renaming) is a breaking design change that should
+    require explicit test update."""
+    assert driver.ANCHOR_KEYS == (
+        "T0_unix_ns",
+        "T1_unix_ns",
+        "T2_unix_ns",
+        "T3_unix_ns",
+        "T4_unix_ns",
+    )
