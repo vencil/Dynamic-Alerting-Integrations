@@ -35,6 +35,19 @@ services:
     command:
       - "--listen=:8080"
       - "--config=/etc/threshold-exporter/conf.d"
+      # Production defaults are reload=30s, debounce=300ms — fine for
+      # K8s ConfigMap rotation cadence. For the bench harness we need
+      # MUCH faster change detection because the driver's per-run
+      # POLL_TIMEOUT_S is 60s. With production reloadInterval=30s and
+      # 1000-tenant scan time ~30s on slow CI runners, the next
+      # WatchLoop tick after driver's fixture mutation can land at
+      # T0+60s, exactly the polling deadline — race city.
+      #
+      # Override to 5s reload + 100ms debounce: WatchLoop catches
+      # the mutation within 5s, debounce window collapses, diffAndReload
+      # stamps the gauge well within driver's 60s budget.
+      - "--reload-interval=5s"
+      - "--scan-debounce=100ms"
     expose:
       - "8080"
     # Distroless base has no wget/curl/sh — use Prometheus's
@@ -112,6 +125,26 @@ services:
       alertmanager:
         condition: service_healthy
       receiver:
+        condition: service_started
+      # Pushgateway and threshold-exporter are dependencies of prometheus
+      # (which alertmanager depends on), so they're started by the time
+      # alertmanager is healthy. BUT compose's `service_started` only
+      # means the container is up, NOT that the process inside is
+      # listening. At CI scale (1000-tenant fixture mounted from slow
+      # ubuntu-latest disk), the threshold-exporter's first config
+      # load + the pushgateway's first :9091 listen can lag the driver's
+      # first push by several seconds, producing
+      # `urllib.error.URLError: <urlopen error [Errno 111] Connection
+      # refused>` for runs 0..N. Local-scale (3-4 tenants) doesn't
+      # trigger this because everything's ready instantly.
+      #
+      # Add explicit dependencies so compose waits for these too.
+      # Pushgateway has no healthcheck so we use service_started; the
+      # in-driver wait_for_services() loop (added in driver.py) covers
+      # the listen-vs-up gap.
+      pushgateway:
+        condition: service_started
+      threshold-exporter:
         condition: service_started
     # Driver exits naturally after COUNT+1 runs; abort-on-container-exit
     # in `docker compose up` brings the rest down.
