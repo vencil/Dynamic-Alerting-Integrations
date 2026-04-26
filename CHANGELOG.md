@@ -41,6 +41,16 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .c — C-12 Dangling Defaults Guard PR-1 (v2.8.0)** — 新 `components/threshold-exporter/app/internal/guard/` package：在 `_defaults.yaml` 變更被 merge 前驗 (a) 該目錄下所有 tenant 必填欄位仍存在；(b) tenant.yaml 是否有與新 defaults 同值的 redundant override。Phase .c 「保護層」— C-10 PR-2 apply mode 將呼叫 guard 確認 Base Infrastructure PR 安全才放行：
+  - **Schema validation (`schema.go`, SeverityError)** — 對每 tenant 的 effective config 走 caller-supplied `RequiredFields` (dotted-path) 列表；missing or explicit-null 都 flag (per ADR-018，YAML null 在 override 等於 delete inherited key — 對 required field 等於 opt-out 該 requirement)
+  - **Redundant override check (`redundant.go`, SeverityWarn)** — `flattenLeaves` 把 tenant.yaml + new defaults 拍平成 dotted-path leaves；同 path + scalar 同值 → warning「remove the override and rely on inheritance」。**Skip structured values** (map/slice) per documented PR-1 false-positive guardrail
+  - **`CheckDefaultsImpact(input)` 純函式 (`run.go`)** — 跑兩個 check + 全域 stable sort (errors before warnings, then by tenant ID, then field path) + 計 `PassedTenantCount` (warnings 不算 fail)；len(EffectiveConfigs)==0 → fatal error (caller 應 skip 而非 invoke empty)
+  - **`Plan.Markdown()` PR-comment 渲染 (`render.go`)** — GFM Summary + 分 Errors / Warnings 兩 table；clean run → ✅ sentinel；pipe / newline 在 table cell escape (避破表)
+  - **PR-1 contract 故意 zero-dep on YAML / merge engine** — caller (CLI / GitHub Actions wrapper, deferred to PR-4/5) 負責 YAML parse + deepMerge；guard 只吃 `map[string]any`。讓 C-10 PR-2 apply mode (它本來就要 merge 給 emitter 用) 可直接複用結果
+  - **22 tests / 23 incl. subtests** `-race -count=3` 穩定 1.0s；full suite `-race` 5.6s 無 regression。涵蓋 path resolver (happy path / empty / explicit null / non-map walk-through) / flatten leaves / 兩 check 各自 no-op 條件 + 正向 + 邊界 / integration (passed-count 排除 erroring tenants / warnings-only-pass / sort errors-first / determinism JSON byte-identical) / Markdown render (nil-safe / all-clear sentinel / 兩 table 都出 / pipe+newline escape)
+  - **PR-1 scope discipline** — 故意延後到後續 PR：(a) **PR-2** Routing Guardrails (ADR-017/018 routing tree cycle + orphaned route)；(b) **PR-3** Cardinality Guard (post-merge label cardinality vs ADR-003)；(c) **PR-4** CLI subcommand `da-tools guard defaults-impact` + YAML parse convenience layer；(d) **PR-5** GitHub Actions wrapper post PR comment
+  - 詳見 planning §12.2 Phase .c row C-12
+
 - **Phase .c — C-10 Batch PR Pipeline planner PR-1 (v2.8.0)** — 新 `components/threshold-exporter/app/internal/batchpr/` package：消費 C-9 ProposalSet → 產出 ordered `Plan` (一個 Base Infrastructure PR + N 個 tenant chunk PRs)。**Pure planner** — 零 git ops、零 GitHub API、零 disk write。Phase .c 整鏈 (C-8 → C-9 → C-10) 第四環，定義 input contract 給後續 PR-2 (apply mode) 對齊：
   - **Hierarchy-Aware chunking** (planning §C-10 + risk #13)：所有 `_defaults.yaml` 變更 → **單一 `[Base Infrastructure PR]`**；個別 tenant 變更按 `ChunkBy` 分組 → 每個 tenant PR 帶 `Blocked by: <base>` placeholder marker (PR-2 取代成 `#<actual-pr-num>`)
   - **三種 ChunkBy 策略**：`ChunkByDomain` (default，第一 path segment 分組，安全；review 邊界對齊 domain ownership) / `ChunkByRegion` (前兩 segments，更細) / `ChunkByCount` (固定大小 N，當 domain/region 分組產生 lopsided buckets 時用)。**Soft cap** — `ChunkSize` (default 25) 對 domain/region buckets 切 sub-chunks (`<key>/part-NN`)，oversized domain 不會炸 review
