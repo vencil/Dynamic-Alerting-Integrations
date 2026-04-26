@@ -216,13 +216,25 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
 
 
 def _gen_defaults_yaml(rng: random.Random, db_types: list[str] | None = None) -> dict:
-    """Generate a _defaults.yaml content."""
+    """Generate a _defaults.yaml content.
+
+    NOTE: the exporter's `_defaults.yaml` parser only accepts numeric
+    (float64) values for the `defaults:` block — scheduled-threshold
+    strings ("17838:critical") and "disable" sentinels are valid only
+    in tenant override files. If those forms appear in defaults, the
+    parser rejects the entire file with `cannot unmarshal !!str into
+    float64`, which silently drops every default and breaks downstream
+    tenant overrides that depend on key-presence-in-defaults validation
+    (see exporter `WARN: tenant=…: unknown key … not in defaults`).
+    Always emit ints here.
+    """
     defaults: dict[str, Any] = {"defaults": {}}
     all_db_types = db_types or DB_TYPES
     for dbt in all_db_types:
         metrics = METRIC_TEMPLATES.get(dbt, [])
         for m in metrics[:3]:  # top 3 metrics per db type as defaults
-            defaults["defaults"][m] = _gen_threshold_value(rng)
+            # Numeric-only — see docstring above for rationale.
+            defaults["defaults"][m] = rng.randint(50, 100000)
     return defaults
 
 
