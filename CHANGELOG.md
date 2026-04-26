@@ -41,6 +41,19 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .c — C-12 Dangling Defaults Guard PR-2 — Routing schema guardrails (v2.8.0)** — 給 PR-1 落地的 `internal/guard/` 加 routing-schema 檢查。**Scope redirect 從 planning spec**：planning §C-12 layer (ii) 寫的是「routing tree cycle detection + orphaned route」，但 codebase 實際 `_routing` model 是 *flat per-tenant block* (一 receiver + optional `overrides[]`，無 cross-references) → cycles 結構上不可能、orphans 在嚴格意義上不存在。實作 cycle detector 純屬 theatre。本 PR 改 ship 對此 model 真正能抓 bug 的 5 項檢查：
+  - **Unknown receiver type (error)** — `receiver.type` 不在 `{webhook, email, slack, teams, rocketchat, pagerduty}`。Source of truth: `scripts/tools/_lib_constants.py::RECEIVER_TYPES` (Python/Go 共用)
+  - **Missing required receiver field (error)** — 每 type 有自己的 required fields (`webhook`→`url`、`slack`→`api_url`、`email`→`to`+`smarthost`、`pagerduty`→`service_key`、`teams`→`webhook_url`、`rocketchat`→`url`)。Empty-string 也算 missing (mirror `generate_alertmanager_routes.py` 的 truthy check)
+  - **Empty override matcher (error)** — override 沒任何 matcher field (`alertname`/`metric_group`/`severity`/`component`/`db_type`/`environment`) → 會 shadow ALL alerts，幾乎肯定是 bug
+  - **Duplicate override matcher (warn)** — 兩 overrides 同 matcher fingerprint → 第二條死碼。Canonical fingerprint 用 `encoding/json` (sorted keys) + SHA-256，order-independent
+  - **Redundant override receiver (warn)** — override 的 receiver 與 main receiver 結構完全相同 → override 無路由效果
+  - **新 `CheckInput.RoutingByTenant` field** — `map[tenantID]map[string]any`，caller 預先解析 `_routing` payload。維持 PR-1 的 zero-dep on YAML/merge engine 設計 — guard package 仍只吃 `map[string]any`
+  - **新 5 個 `FindingKind`**：`unknown_receiver_type` / `missing_receiver_field` / `empty_override_matcher` / `duplicate_override_matcher` / `redundant_override_receiver`
+  - **21 new top-level tests** (44 total guard tests, 含 PR-1 的 22) — 五 check 各自 happy/sad path、6 個 receiver type all accepted、empty-string 判 missing、matcher order-independence、nil-tenant skip、failing tenant 算入 PassedTenantCount drop。`-race -count=3` 穩定 1.0s；full suite `-race` 5.6s 無 regression
+  - **SSOT 漂移 sentinel** `TestReceiverTypeSpecs_KeysMatchExpected` — 提醒未來若 Python 端加新 receiver type 必須同步本 Go 列表 (PR-3 可能補完整 freshness CI gate)
+  - **PR-2 scope discipline** — 不做：完整 URL allowlist 驗證 (重複 `_resolve.go` 已有的層) / cross-tenant alert-rule 名查重 (需 rule discovery 跨 scope) / 完整 ADR-019 routing model 改造 (deferred to v2.9.0+)
+  - 詳見 planning §12.2 Phase .c row C-12
+
 - **Phase .c — C-12 Dangling Defaults Guard PR-1 (v2.8.0)** — 新 `components/threshold-exporter/app/internal/guard/` package：在 `_defaults.yaml` 變更被 merge 前驗 (a) 該目錄下所有 tenant 必填欄位仍存在；(b) tenant.yaml 是否有與新 defaults 同值的 redundant override。Phase .c 「保護層」— C-10 PR-2 apply mode 將呼叫 guard 確認 Base Infrastructure PR 安全才放行：
   - **Schema validation (`schema.go`, SeverityError)** — 對每 tenant 的 effective config 走 caller-supplied `RequiredFields` (dotted-path) 列表；missing or explicit-null 都 flag (per ADR-018，YAML null 在 override 等於 delete inherited key — 對 required field 等於 opt-out 該 requirement)
   - **Redundant override check (`redundant.go`, SeverityWarn)** — `flattenLeaves` 把 tenant.yaml + new defaults 拍平成 dotted-path leaves；同 path + scalar 同值 → warning「remove the override and rely on inheritance」。**Skip structured values** (map/slice) per documented PR-1 false-positive guardrail
