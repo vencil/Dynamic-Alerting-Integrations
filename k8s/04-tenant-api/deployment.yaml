@@ -146,7 +146,7 @@ spec:
         # Listens on :4180, authenticates via GitHub/OIDC, forwards to localhost:8080.
         # Injects X-Forwarded-Email and X-Forwarded-Groups headers consumed by tenant-api RBAC.
         - name: oauth2-proxy
-          image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
