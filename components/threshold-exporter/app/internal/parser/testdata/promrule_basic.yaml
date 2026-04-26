@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: example
+spec:
+  groups:
+    - name: cpu
+      rules:
+        - alert: HighCPU
+          expr: avg by (instance) (rate(node_cpu_seconds_total[5m])) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: high cpu on {{ $labels.instance }}
+        - record: job:cpu:rate5m
+          expr: sum by (job) (rate(node_cpu_seconds_total[5m]))
