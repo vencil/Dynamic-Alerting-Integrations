@@ -1,4 +1,4 @@
-FROM python:3.13.3-alpine3.22 AS builder
+FROM python:3.13.13-alpine3.22 AS builder
 
 # ── Security: Alpine 3.22 includes fixes for: ─────────────────────
 #   CVE-2025-48174 (libavif >= 1.3.0, integer overflow → buffer overflow)
@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.7.0 croniter==6.0.0
 
 # ── Runtime Stage ──────────────────────────────────────────────────
-FROM python:3.13.3-alpine3.22
+FROM python:3.13.13-alpine3.22
 
 LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.description="Dynamic Alerting CLI Toolkit — portable verification and migration tools" \
