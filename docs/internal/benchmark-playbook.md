@@ -389,6 +389,25 @@ gh workflow run bench-e2e-record.yaml -f fixture_kind=synthetic-v2 -f count=30
 # Artifacts retained 30 days; gate_banner surfaces in run summary.
 ```
 
+### Tier 1 fail-fast smoke gate（cycle-6 RCA 後加，issue #83 §S#37d）
+
+Driver 跑完 warm_up run 0 後立刻檢查 `per-run-0000.json` 的 5 個 T anchor — 任一為 0（== 沒觀察到）→ exit code 2 → `--abort-on-container-exit driver` → `bench_e2e_run.sh` 整段失敗 → workflow 在 ~2 min（而非 30-60 min timeout）內 fail。**之前 6 個 cycle 每個都浪費 30+ min wall-clock 才 timeout；Tier 1 把這個延遲縮到 ~90s**。
+
+**對應信號**：
+- T1=0：exporter scan-complete gauge 從未 advance（multi-tenant 大 fixture cold-load 沒撐過 wait_for_services 的 60s window）
+- T2=0：reload gauge 從未 advance（content hash 同前次 → diffAndReload short-circuit）
+- T3=0：Prometheus 沒 fire alert（label/expr mismatch、defaults 未載入、tenant 沒 register `bench_trigger`）
+- T4=0：webhook receiver 沒收到（Alertmanager 路由斷或 alert 沒持續到 dispatch）
+
+**診斷工件**：workflow 失敗時自動把 `docker compose logs threshold-exporter / prometheus / alertmanager / receiver / driver` dump 到 `bench-results/*.log`，與 `per-run-0000.json` 一起 upload artifact。Exporter `WARN: skip unparseable file` / `WARN: tenant=X: unknown key` 兩條是最高訊息密度的線索。
+
+**Opt-out**：本機 debug harness 本身（不是想抓 cycle-6 那種）想看完整 30 runs 的 timeline，加 `--no-smoke-abort` 或 `NO_SMOKE_ABORT=1`：
+
+```bash
+# Driver 預設 ON；只在診斷 driver 自己時 opt-out
+NO_SMOKE_ABORT=1 COUNT=3 make bench-e2e
+```
+
 ### Aggregator 輸出與 gate banner
 
 `make bench-e2e` 完工後（或 `make bench-e2e-aggregate` 對既有 per-run JSONs 重算），在 `tests/e2e-bench/bench-results/` 產出 `e2e-{ISO}-{kind}.json`，schema：
