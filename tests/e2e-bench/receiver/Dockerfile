@@ -4,7 +4,7 @@
 # Same distroless pattern as components/threshold-exporter/app/Dockerfile
 # for consistency: nonroot UID 65532, no shell, static binary.
 
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.2-alpine3.22 AS builder
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./
