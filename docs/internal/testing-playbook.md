@@ -599,7 +599,17 @@ The leaked callback's late `getConfigMetrics()` returns the **NEW** test's `fres
 
 **Insufficient fix (S#32, PR #75)**: snapshot baseline counts at test start, assert deltas. **Doesn't help** if the leak lands BETWEEN snapshot and final read (5-50ms `diffAndReload` window). PR #79 reproduced the same flake despite the baseline-snapshot fix.
 
-**Durable fix (S#35, PR #79 commit `0abc2ff`)**: assert lockstep + `>=` invariants. For a metric pair Set in the same critical section (e.g. `ObserveDebounceBatch` + `ObserveReloadDuration` both in `fireDebounced` after the lock):
+**Insufficient fix (S#35, PR #79 commit `0abc2ff`)**: claimed `deltaReload == deltaBatch` "lockstep" because both are observed in `fireDebounced`. **WRONG** — only `ObserveDebounceBatch` + `atomic.AddUint64(&m.debounceFired)` are atomic (steps 1+2 under `m.debounceMu`). `ObserveReloadDuration` happens AFTER `diffAndReload` (step 4), giving reload a much wider leak window than batch. PR #90 CI run #24946980383 observed `deltaReload=2, deltaBatch=1` — invalidated the lockstep claim.
+
+```text
+fireDebounced timeline (per config_debounce.go):
+  1. ObserveDebounceBatch(len(reasons))    ← batch leaks here
+  2. atomic.AddUint64(&m.debounceFired)    ← per-instance fire counter
+     ----- diffAndReload runs (~ms-100ms) -----
+  4. ObserveReloadDuration(elapsed)        ← reload leaks LATE
+```
+
+**Durable fix (S#37, PR #90)**: assert what's actually atomic + a `>=` lower bound on what isn't. Three invariants:
 
 ```go
 // Capture baseline before triggering our own work.
@@ -613,27 +623,30 @@ deltaFire := m.DebounceFiredCount() - baseFire
 deltaReload := histogramSampleCount(t, fresh.reloadDuration) - baseReload
 deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
 
-// Lockstep invariant: same critical section ⇒ leak in lockstep.
-if deltaReload != deltaBatchCount {
-    t.Errorf("lockstep violated: deltaReload=%d != deltaBatch=%d", deltaReload, deltaBatchCount)
+// (1) batch + fire ARE atomic per fireDebounced steps 1+2 → lockstep:
+if deltaBatchCount != deltaFire {
+    t.Errorf("batch-fire lockstep violated: deltaBatch=%d != deltaFire=%d", deltaBatchCount, deltaFire)
 }
-// At-least-our-own invariant: we observed >= our own fires.
+// (2) reload is observed AFTER diffAndReload → only `>=` invariant holds:
 if deltaReload < deltaFire {
     t.Errorf("at-least invariant violated: deltaReload=%d < deltaFire=%d", deltaReload, deltaFire)
 }
-// Exact equality only when no leak detected.
+// (3) Exact equality only when no leak detected.
 if deltaReload == deltaFire && deltaFire == 1 {
     // assert sum/count exactly here
 }
 ```
 
-**Verified stable** under `go test -race -count=20` on `TestFireDebounced_EmitsBatchAndDuration` after applying the pattern.
-
 **Reference implementations**: see `components/threshold-exporter/app/config_debounce_test.go::TestFireDebounced_EmitsBatchAndDuration` for the canonical example.
 
 > **Generality note**: the example uses `m.DebounceFiredCount()` which is exporter-specific. The pattern generalizes to **any** Go test that:
 > (a) swaps a global metric instance via a `withIsolated*` helper, AND
-> (b) exercises production code that spawns goroutines / `time.AfterFunc` callbacks whose `Close()` doesn't wait. Substitute `DebounceFiredCount()` with whatever per-instance counter your subject exposes (e.g. tenant-api could use a `RequestCount()` accessor). The lockstep + `>=` invariants hold whenever two metric observations sit in the same critical section in the production callback.
+> (b) exercises production code that spawns goroutines / `time.AfterFunc` callbacks whose `Close()` doesn't wait.
+>
+> Identify which observations sit **inside** vs **after** the critical section in the production callback:
+> - **Inside critical section** (atomic with the per-instance counter): assert `delta == fire`
+> - **After critical section** (separated by I/O / heavy compute): assert `delta >= fire`
+> Substitute `DebounceFiredCount()` with whatever per-instance counter your subject exposes (e.g. tenant-api could use a `RequestCount()` accessor).
 
 ### 2. 時間敏感 test 用 quiescence detection，**不要**「sleep + assert exactly N」
 
@@ -715,8 +728,8 @@ This helper exists at `components/threshold-exporter/app/config_metrics_test.go:
 When reviewing a PR that adds a Go test using `withIsolatedMetrics` + production code with async callbacks (`time.AfterFunc`, goroutine spawn), verify:
 
 - [ ] Snapshot baseline counts at test start (don't rely on `fresh` starting at 0)
-- [ ] Assert lockstep invariants for metric pairs Set in same critical section (`deltaA == deltaB`)
-- [ ] Assert `>=` invariants relative to per-instance `DebounceFiredCount()` etc., not exact equality
+- [ ] **Identify which metric observations are `inside` vs `after` the production critical section** — assert `delta == fire` only for those inside; use `delta >= fire` for those after (e.g. observed post-I/O)
+- [ ] **Do NOT assume two metrics in the same callback function are atomic** — check whether they bracket I/O / heavy compute (which makes their leak windows different sizes)
 - [ ] Use quiescence detection for "wait for fire" (poll + stable-window), not `time.Sleep(window+buffer)` + exact-count assert
 - [ ] If using `testutil.CollectAndCount` on plain `Histogram`, replace with `histogramSampleCount` helper
 
