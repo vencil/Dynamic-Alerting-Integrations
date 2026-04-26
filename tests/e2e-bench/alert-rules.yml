@@ -12,19 +12,30 @@
 # label; both metrics carry that label; the join `on(tenant)` aligns
 # them. Alertmanager group_by[tenant] keeps fire/resolve cycles for
 # different runs in separate groups → no dedup interference.
+#
+# Label-emit convention (per collector.go): the exporter splits a
+# config key like `bench_trigger` on the FIRST underscore into:
+#   metric="trigger", component="bench"
+# So `bench_trigger: 50` in `_defaults.yaml` becomes
+#   user_threshold{component="bench",metric="trigger",severity="warning",
+#                  tenant="bench-run-N"} 50
+# NOT `user_threshold{metric="bench_trigger"}` — the original alert
+# rule drafted in design §4.3 used the latter and never matched.
+# Diagnosed via local exporter scrape against a representative fixture
+# during 4th cancelled workflow_dispatch (#24945790974) investigation.
 
 groups:
   - name: e2e-bench
     interval: 5s
     rules:
       - alert: TenantThresholdExceeded
-        # actual > threshold for the same tenant where metric=bench_trigger.
-        # group_left(metric) carries the metric label through for clarity
-        # in the alert annotations.
+        # Match the (component, metric) pair that the exporter actually
+        # emits for `bench_trigger` config key. group_left carries both
+        # labels through so alert annotations can reference them.
         expr: |
           actual_metric_value
-            > on(tenant) group_left(metric)
-          user_threshold{metric="bench_trigger"}
+            > on(tenant) group_left(component, metric)
+          user_threshold{component="bench", metric="trigger"}
         for: 0s
         labels:
           severity: critical

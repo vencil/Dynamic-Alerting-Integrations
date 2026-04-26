@@ -405,34 +405,40 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 		t.Fatalf("expected at least 1 fire, got %d (base=%d)", deltaFire, baseFire)
 	}
 
-	// Goroutine-leak race (per S#32 / runs/24935213973): a prior test's
-	// fireDebounced may complete its diffAndReload AFTER our
-	// withIsolatedMetrics swap AND after our baseline snapshot — its
-	// late ObserveReloadDuration / ObserveDebounceBatch then lands on
-	// `fresh`, inflating both deltas by 1. `m.Close()` does NOT wait for
-	// in-flight callbacks (intentional — see config_debounce.go::Close).
+	// Goroutine-leak race (per S#32 / S#35 / S#37): a prior test's
+	// fireDebounced may complete AFTER our withIsolatedMetrics swap. The
+	// S#35 fix asserted "deltaReload == deltaBatch lockstep" but that
+	// claim was WRONG — only batch + DebounceFiredCount() are atomic
+	// (Step 1+2 of fireDebounced under m.debounceMu). Reload is observed
+	// AFTER diffAndReload (Step 4), making its leak window much wider:
 	//
-	// The actually-testable invariants under this race:
-	//   1. deltaReload == deltaBatch (both observed in the same
-	//      fireDebounced critical section, so they leak in lockstep)
-	//   2. deltaReload >= deltaFire (we observed at least our own fires)
-	//   3. when no leak (deltaReload == deltaFire), sum == numTriggers
-	//      exactly (every triggerDebouncedReload coalesced into one fire)
+	//   fireDebounced steps:
+	//     1. ObserveDebounceBatch(len(reasons))   ← batch leaks here
+	//     2. atomic.AddUint64(&m.debounceFired)   ← fire counter
+	//        ----- diffAndReload runs (~ms-100ms) -----
+	//     4. ObserveReloadDuration(elapsed)       ← reload leaks LATE
+	//
+	// PR #90 CI run #24946980383 observed deltaReload=2, deltaBatch=1 —
+	// invalidating the lockstep claim. The truly testable invariants:
+	//   1. deltaBatch == deltaFire (these ARE atomic per fireDebounced)
+	//   2. deltaReload >= deltaFire (we observed at least our own fires;
+	//      prior leak's late ObserveReloadDuration may add more)
+	//   3. when deltaReload == deltaFire AND deltaFire == 1 (no leak
+	//      detected), batch sum == numTriggers exactly.
 	deltaReload := histogramSampleCount(t, fresh.reloadDuration) - baseReload
 	deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
 
-	if deltaReload != deltaBatchCount {
-		t.Errorf("lockstep invariant violated: deltaReload=%d != deltaBatch=%d (both observed in fireDebounced under same lock)", deltaReload, deltaBatchCount)
+	if deltaBatchCount != deltaFire {
+		t.Errorf("batch-fire lockstep violated: deltaBatch=%d != deltaFire=%d (both atomic under m.debounceMu in fireDebounced steps 1+2)", deltaBatchCount, deltaFire)
 	}
 	if deltaReload < deltaFire {
 		t.Errorf("at-least-our-own invariant violated: deltaReload=%d < deltaFire=%d", deltaReload, deltaFire)
 	}
 
-	// When there's no leak, we can assert the exact sum (numTriggers
-	// coalesced into our one fire). When there's a leak, deltaReload >
-	// deltaFire and the sum includes both our triggers and the leaked
-	// fire's batch — sum-floor (>= numTriggers) is the strongest
-	// assertion possible.
+	// When there's no reload leak (deltaReload == deltaFire) AND we
+	// observed exactly one fire, we can assert batch sum exactly.
+	// Otherwise (reload leak from prior test in flight, or multiple
+	// fires), sum-floor (>= numTriggers) is the strongest assertion.
 	leaked := deltaReload > deltaFire
 	if !leaked && deltaFire == 1 {
 		reg := prometheus.NewRegistry()
