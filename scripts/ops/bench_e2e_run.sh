@@ -96,13 +96,26 @@ cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
 
 # ---------------------------------------------------------------------------
 # Step 3: pre-create bench-run-{0..COUNT} placeholder tenants.
-# ---------------------------------------------------------------------------
-echo "[bench-e2e] pre-creating $((COUNT + 1)) bench-run-* placeholder tenants"
+#
+# Sentinel value (bench_trigger: "1") differs from what driver.py writes
+# during the fire phase (bench_trigger: "100"). This guarantees the
+# first fire-phase fixture write produces a real content-hash diff so
+# `diffAndReload` actually triggers and `last_reload_complete_unixtime_
+# seconds` advances → driver's T2 poll succeeds.
+#
+# History: first CI run (24937326270) wrote "100" here AND in the
+# driver, producing identical bytes. Watcher saw mtime change, scan
+# computed identical hash, no reload triggered → driver polled T2
+# until timeout (60s) for every run, taking ~5 min/run × 6 runs before
+# 30-min workflow timeout cancelled. Per-run-*.json all showed
+# `T2_unix_ns: 0, stage_ab_skipped: true` for fire phase, the
+# diagnostic that pinpointed the bug.
+echo "[bench-e2e] pre-creating $((COUNT + 1)) bench-run-* placeholder tenants (sentinel value differs from driver write)"
 for i in $(seq 0 "$COUNT"); do
     cat > "fixture/active/conf.d/bench-run-${i}.yaml" <<EOF
 tenants:
   bench-run-${i}:
-    bench_trigger: "100"
+    bench_trigger: "1"
 EOF
 done
 

@@ -50,7 +50,14 @@ jobs:
     name: e2e harness (${{ inputs.fixture_kind }} × ${{ inputs.count }} runs)
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    timeout-minutes: 30
+    # 60 min budget: 1000-tenant typically finishes in ~5-8 min after the
+    # bench-trigger sentinel fix, but 5000-tenant has not been measured
+    # end-to-end on ubuntu-latest yet — could plausibly take 20-30 min
+    # given (a) larger fixture generation, (b) longer per-scan time, (c)
+    # higher chance of compose stack memory pressure. 30 was too tight
+    # (run 24937326270 cancelled). 60 leaves slack without normalizing
+    # an unbounded-cost workflow.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
