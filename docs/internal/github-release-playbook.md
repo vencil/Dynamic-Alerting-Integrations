@@ -178,14 +178,34 @@ Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
 
 > **方法 B 關鍵：** 必須用 `[System.Text.Encoding]::UTF8.GetBytes()` 轉換 body，並顯式指定 `charset=utf-8`，否則 CJK 字元會被 PowerShell 以系統 codepage 編碼導致亂碼。`&` 字元在 `ConvertTo-Json` 中會被正確 escape。
 
+### Step 4.5: Bench baseline 自動 attach（issue #60 Phase 1 acceptance #6, 2026-04-26）
+
+Release 建立後（`release: published` event），workflow `release-attach-bench-baseline.yaml` 自動：
+
+1. 找最近一次成功的 nightly `bench-record.yaml` run
+2. Download 該 run 的 artifact（`bench-baseline-<run_id>`）
+3. Rename + upload 為 release asset：`bench-baseline-<tag>.txt`（tag 中的 `/` 換成 `-`）
+
+完全 non-blocking：若無近期 nightly artifact 或 download 失敗，logs warning 但不擋 release。Release 一定可正常 publish；bench-baseline 是 nice-to-have。
+
+**手動補 attach**（若 workflow 跑失敗）：
+```bash
+# 從本機跑或從某次 bench-record artifact 抓
+make benchmark-report  # 寫到 .build/bench-baseline.txt
+gh release upload v2.8.0 .build/bench-baseline.txt --clobber
+```
+
+**為何用 nightly artifact 不現跑**：fresh bench 在 release-time runner 上 ~10-15 min（13 benches × count=6）；nightly cron 在 03:00 UTC 跑（runner contention 最低），數字更具代表性 + 30 秒就 attach 完。
+
 ### Step 5: 驗證
 
 ```powershell
 # CI workflow 狀態（Windows MCP）
 Invoke-RestMethod -Uri "https://api.github.com/repos/vencil/Dynamic-Alerting-Integrations/actions/runs?per_page=3" -Headers $headers
 
-# Release 確認
+# Release 確認（含 bench-baseline asset）
 Invoke-RestMethod -Uri "https://api.github.com/repos/vencil/Dynamic-Alerting-Integrations/releases/latest" -Headers $headers
+# 預期 .assets[] 應該包含 bench-baseline-<tag>.txt（自 issue #60 closure 起）
 
 # ⚠️ Packages 查詢需要 PAT 有 packages:read scope
 # 若 403 "Resource not accessible"，package 仍可能已成功推送（CI 用 GITHUB_TOKEN 有 packages:write）
