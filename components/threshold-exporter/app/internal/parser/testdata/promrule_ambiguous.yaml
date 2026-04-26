@@ -1,0 +1,13 @@
+# Edge cases the parser must surface as warnings without aborting:
+#  - rule whose expression doesn't parse → DialectAmbiguous + AnalyzeError
+#  - rule with valid expr but missing both alert and record name → warning
+spec:
+  groups:
+    - name: broken
+      rules:
+        - alert: SyntaxError
+          # Unbalanced parenthesis — metricsql.Parse fails.
+          expr: sum(rate(foo[5m]
+        - expr: up == 0
+          # Intentionally missing both alert and record name — the
+          # parser keeps the rule but appends a warning.
