@@ -40,6 +40,7 @@ from pathlib import Path
 EXPORTER_URL = os.environ.get("EXPORTER_URL", "http://threshold-exporter:8080")
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 PUSHGATEWAY_URL = os.environ.get("PUSHGATEWAY_URL", "http://pushgateway:9091")
+ALERTMANAGER_URL = os.environ.get("ALERTMANAGER_URL", "http://alertmanager:9093")
 RECEIVER_URL = os.environ.get("RECEIVER_URL", "http://receiver:5001")
 
 FIXTURE_ACTIVE = Path(os.environ.get("FIXTURE_ACTIVE", "/fixture/active/conf.d"))
@@ -384,6 +385,45 @@ def run_one(run_id: int, warm_up: bool) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def wait_for_services(deadline_s: float = 60.0) -> None:
+    """Pre-flight: poll each upstream service until its HTTP endpoint
+    responds. Compose's `service_started` only means the container is
+    up — NOT that the process inside is listening on its port. At
+    CI scale (1000-tenant fixture), threshold-exporter cold-load and
+    pushgateway first-listen lag behind compose `Started` by several
+    seconds, producing `Connection refused` for runs 0..N if driver
+    pushes immediately on boot.
+
+    Use stdout `print(..., flush=True)` so progress is visible even
+    if the workflow gets cancelled mid-wait (Python `print` block-
+    buffers when piped, masking driver activity from `gh run view
+    --log` output otherwise).
+    """
+    targets = [
+        ("exporter", f"{EXPORTER_URL}/metrics"),
+        ("prometheus", f"{PROMETHEUS_URL}/-/ready"),
+        ("pushgateway", f"{PUSHGATEWAY_URL}/-/ready"),
+        ("alertmanager", f"{ALERTMANAGER_URL}/-/ready"),
+        ("receiver", f"{RECEIVER_URL}/healthz"),
+    ]
+    print(f"[driver] waiting for {len(targets)} upstream services to listen ...", flush=True)
+    for name, url in targets:
+        start = time.time()
+        last_err: Exception | None = None
+        while time.time() - start < deadline_s:
+            try:
+                _get(url, timeout=2.0)
+                print(f"[driver]   {name} ready ({time.time() - start:.1f}s)", flush=True)
+                last_err = None
+                break
+            except (urllib.error.URLError, OSError) as e:
+                last_err = e
+                time.sleep(1.0)
+        if last_err is not None:
+            print(f"[driver]   {name} did NOT respond within {deadline_s}s: {last_err}", flush=True)
+            raise SystemExit(f"upstream {name} not ready")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "30")))
@@ -396,7 +436,8 @@ def main() -> int:
     # Pre-flight: ensure fixture/active dir exists (compose volume mount).
     FIXTURE_ACTIVE.mkdir(parents=True, exist_ok=True)
 
-    print(f"[driver] starting: count={args.count}, fixture_kind={FIXTURE_KIND}")
+    print(f"[driver] starting: count={args.count}, fixture_kind={FIXTURE_KIND}", flush=True)
+    wait_for_services()
 
     # Run 0 = warm_up; runs 1..count are real.
     n_total = args.count + 1
@@ -405,7 +446,7 @@ def main() -> int:
         try:
             result = run_one(i, warm_up=warm_up)
         except (urllib.error.URLError, OSError) as e:
-            print(f"[driver] run {i} failed: {e}", file=sys.stderr)
+            print(f"[driver] run {i} failed: {e}", file=sys.stderr, flush=True)
             result = {
                 "run_id": i,
                 "warm_up": warm_up,
@@ -416,9 +457,9 @@ def main() -> int:
         out_path = results_dir / f"per-run-{i:04d}.json"
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         e2e = result.get("fire", {}).get("e2e_ms", -1)
-        print(f"[driver] run {i:3d} (warm_up={warm_up}): fire e2e_ms={e2e}")
+        print(f"[driver] run {i:3d} (warm_up={warm_up}): fire e2e_ms={e2e}", flush=True)
 
-    print(f"[driver] done: wrote {n_total} per-run JSON files to {results_dir}")
+    print(f"[driver] done: wrote {n_total} per-run JSON files to {results_dir}", flush=True)
     return 0
 
 
