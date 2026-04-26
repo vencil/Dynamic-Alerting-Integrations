@@ -3,7 +3,7 @@
 #
 # Stdlib-only Python; no pip install needed. Alpine for minimal size.
 
-FROM python:3.13-alpine
+FROM python:3.13.13-alpine3.22
 WORKDIR /app
 COPY driver.py /app/driver.py
 ENTRYPOINT ["python3", "/app/driver.py"]
