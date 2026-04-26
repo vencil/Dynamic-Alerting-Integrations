@@ -87,12 +87,69 @@ if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: stage fixture into active/.
+# Step 2: stage fixture into active/ + register bench_trigger metric.
 # ---------------------------------------------------------------------------
 echo "[bench-e2e] staging fixture into fixture/active/conf.d/"
 rm -rf fixture/active/conf.d
 mkdir -p fixture/active/conf.d
 cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
+
+# Register `bench_trigger` in the active root _defaults.yaml — the
+# synthetic-v* generator only knows DB-domain metrics (mysql_*, pg_*,
+# etc.), but our bench-run-{i} tenants override `bench_trigger`. Without
+# a default entry the exporter rejects the override (logs "unknown key
+# bench_trigger not in defaults") and never emits user_threshold{
+# metric="bench_trigger"} → alert rule never matches → driver T3/T4
+# poll forever (60s × 4 polls × 31 runs = workflow timeout territory).
+#
+# Diagnosed via partial artifact from cancelled run #24944542524:
+# per-run-*.json showed T1+T2 advance correctly (PR #86 fix worked) but
+# T3=0, T4=0 → alert never fired → metric absent from Prometheus.
+#
+# `_defaults.yaml` lives at root of conf.d/ (root scope per ADR-018).
+# Append `bench_trigger: 50` if the file already exists; else create it.
+# Value 50 is below driver fire-phase actual=200 (alert fires) and
+# above driver resolve-phase actual=50 (alert resolves) … wait, no:
+# resolve sets actual=50 which is NOT > 50, so alert resolves correctly.
+# Setting default to 50 means bench-run-N tenants without explicit
+# override would also have threshold 50 — irrelevant since each tenant
+# config sets its own override before driver pushes actual.
+DEFAULTS_FILE="fixture/active/conf.d/_defaults.yaml"
+if [[ -f "$DEFAULTS_FILE" ]]; then
+    # File exists from --with-defaults; append bench_trigger to the
+    # `defaults:` block. We use a Python helper for safe YAML write
+    # since we don't have yq/jq guaranteed in this orchestrator.
+    python3 - <<PYEOF
+import sys
+from pathlib import Path
+p = Path("$DEFAULTS_FILE")
+text = p.read_text(encoding="utf-8")
+if "bench_trigger:" in text:
+    print("[bench-e2e] bench_trigger already in _defaults.yaml; skipping")
+    sys.exit(0)
+# Find the 'defaults:' block and append a new key. Simple line-based
+# approach: insert after the 'defaults:' line, indented 2 spaces.
+lines = text.splitlines()
+out = []
+inserted = False
+for line in lines:
+    out.append(line)
+    if not inserted and line.rstrip() == "defaults:":
+        out.append("  bench_trigger: 50")
+        inserted = True
+if not inserted:
+    # No 'defaults:' key found; prepend a fresh block.
+    out = ["defaults:", "  bench_trigger: 50"] + out
+p.write_text("\n".join(out) + "\n", encoding="utf-8")
+print(f"[bench-e2e] registered bench_trigger=50 in {p}")
+PYEOF
+else
+    cat > "$DEFAULTS_FILE" <<EOF
+defaults:
+  bench_trigger: 50
+EOF
+    echo "[bench-e2e] created $DEFAULTS_FILE with bench_trigger=50"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: pre-create bench-run-{0..COUNT} placeholder tenants.
