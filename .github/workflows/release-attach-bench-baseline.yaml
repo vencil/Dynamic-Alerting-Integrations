@@ -1,0 +1,100 @@
+# release-attach-bench-baseline.yaml — closes issue #60 Phase 1 acceptance #6
+#
+# Triggers on `release: published` and attaches the most-recent successful
+# `bench-record.yaml` nightly artifact's `bench-baseline.txt` to the just-
+# published GitHub Release as a release asset.
+#
+# Why this design (vs running the bench fresh on the release runner):
+#   - Fresh bench takes ~10-15 min (13 benchmarks × count=6 × 3s); using the
+#     latest nightly artifact takes ~30s and gives a more representative
+#     measurement (the nightly schedule deliberately picks 03:00 UTC for low
+#     runner contention; release-time runner could be noisy).
+#   - The nightly's `cron: 0 3 * * *` + `retention-days: 90` (see
+#     bench-record.yaml) guarantees a recent artifact is always available
+#     unless the cron has been broken for >90 days.
+#   - If no recent nightly artifact exists, the job logs a warning and exits
+#     0 — release publishing is never blocked by bench attachment.
+#
+# Why `release: published` not `tag: v*` push:
+#   - GitHub Releases in this repo are created **manually** by the maintainer
+#     after CI green (per github-release-playbook.md §Step 4). The platform
+#     `v*` tag itself does not auto-create a Release.
+#   - Triggering on `release: published` ensures the asset attaches when the
+#     Release actually exists (vs racing tag push and release create).
+#   - Works for all five version lines (v*, exporter/v*, tools/v*, portal/v*,
+#     tenant-api/v*) since `release: published` fires regardless of tag prefix.
+
+name: Attach Bench Baseline to Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # gh release upload requires write
+  actions: read     # gh run download requires read
+
+jobs:
+  attach-bench-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (for gh CLI auth context)
+        uses: actions/checkout@v6
+
+      - name: Find latest successful bench-record artifact
+        id: find_artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Most recent successful bench-record run on main, take its run_id
+          # so we can construct the artifact name (`bench-baseline-<run_id>`
+          # per bench-record.yaml's upload step).
+          RUN_ID=$(gh run list \
+            --workflow bench-record.yaml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "::warning::No successful bench-record run found on main; skipping bench-baseline attachment for this release."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Found bench-record run $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "skip=0" >> "$GITHUB_OUTPUT"
+
+      - name: Download bench-baseline artifact
+        if: steps.find_artifact.outputs.skip == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .build
+          gh run download ${{ steps.find_artifact.outputs.run_id }} \
+            --name "bench-baseline-${{ steps.find_artifact.outputs.run_id }}" \
+            --dir .build
+          if [ ! -f .build/bench-baseline.txt ]; then
+            echo "::warning::Artifact downloaded but bench-baseline.txt missing; skipping attachment."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ls -la .build/
+
+      - name: Rename + attach to release
+        if: steps.find_artifact.outputs.skip == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Rename so the asset name in the Release is meaningful (vs generic
+          # `bench-baseline.txt` which clashes if multiple components add
+          # files). Format: bench-baseline-<tag>.txt
+          TAG="${{ github.event.release.tag_name }}"
+          # Sanitize tag for filename (replace `/` with `-` for tags like
+          # `exporter/v2.8.0` → `exporter-v2.8.0`).
+          SAFE_TAG="${TAG//\//-}"
+          cp .build/bench-baseline.txt ".build/bench-baseline-${SAFE_TAG}.txt"
+          gh release upload "$TAG" ".build/bench-baseline-${SAFE_TAG}.txt" \
+            --clobber  # overwrite if a previous run of this workflow already uploaded
+          echo "::notice::Attached bench-baseline-${SAFE_TAG}.txt to release $TAG (source: bench-record run ${{ steps.find_artifact.outputs.run_id }})"
