@@ -328,10 +328,19 @@ func canonicalMatcher(ov map[string]any) string {
 	// canonical form regardless of how the YAML was authored.
 	b, err := json.Marshal(subset)
 	if err != nil {
-		// Defensive: any value we got from a YAML unmarshal is by
-		// construction JSON-marshalable. If this fires it's a
-		// programmer error, not a config error — fall back to a
-		// best-effort string so we don't drop the override silently.
+		// Defensive: any value we got from a yaml.v3 unmarshal is by
+		// construction JSON-marshalable (string keys, scalar leaves).
+		// json.Marshal can only fail here if the caller fed us a map
+		// with non-string keys (e.g. yaml.v2's map[any]any) — a caller
+		// violation, not a config error.
+		//
+		// LIMITATION: when this fires, two different malformed
+		// overrides will both fall back to the same error string and
+		// trip the duplicate-matcher check (false positive warning).
+		// We accept that over panicking or silently dropping the
+		// override — a noisy false positive is the right failure mode
+		// for "your input shape is wrong". Caller's responsibility to
+		// supply yaml.v3-style maps; CLI wrapper (PR-4) will enforce.
 		return fmt.Sprintf("err:%v", err)
 	}
 	sum := sha256.Sum256(b)
@@ -343,6 +352,11 @@ func canonicalMatcher(ov map[string]any) string {
 // canonicalMatcher: sort keys via encoding/json, hash. Returns ""
 // when receiver is nil so check 5 is skipped (the
 // missing-receiver finding from check 1 covers that path).
+//
+// Same json.Marshal collision limitation as canonicalMatcher: a
+// caller-supplied map[any]any value would trip the err-fallback
+// path, and two such broken receivers would falsely sig-match. See
+// canonicalMatcher's comment for the rationale.
 func receiverSignature(receiver map[string]any) string {
 	if receiver == nil {
 		return ""
