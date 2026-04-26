@@ -69,7 +69,7 @@ oauth2Proxy:
   enabled: true
   image:
     repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.1"
+    tag: "v7.15.2"
     pullPolicy: IfNotPresent
   # Provider: github | google | oidc | gitlab
   # 根據組織選擇提供商（建議：OIDC 用於企業環境）
