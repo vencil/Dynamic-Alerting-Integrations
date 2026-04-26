@@ -202,6 +202,8 @@ func silenceLogs(b *testing.B) {
 > ⛔ **此 baseline 非 definitive SLO 承諾** ⛔
 >
 > 本節數字為 Phase 1 synthetic fixture 量測，**不能直接寫進客戶合約 SLA**。definitive SLO sign-off 必須等 Phase 2 customer anonymized sample 校準後重跑（DEC-B in v2.8.0-planning §10）。下游文件（pitch deck / proposal / 客戶 onboarding 文件）若引用本節數字，**必須**附帶「Phase 1 synthetic baseline」前綴。
+>
+> **Pre-tag bench regression gate**: Phase 1 (報告但不阻擋) 已落地。完整 3-phase rollout（含 Phase 2 main-only hard gate + Phase 3 PR-level gate 的 entry conditions / acceptance criteria / window invalidation）見 [`bench-gate-rollout.md`](bench-gate-rollout.md)。
 
 > **Scope + honest caveats**：
 >
