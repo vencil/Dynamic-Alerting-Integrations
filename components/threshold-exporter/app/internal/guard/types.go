@@ -47,9 +47,16 @@
 //     actually catch real bugs in this model. See routing.go
 //     header for the full rationale.
 //
+//  4. Cardinality guard (PR-3; see cardinality.go)
+//     Predicts each tenant's post-merge metric count and flags
+//     tenants approaching or exceeding the configured per-tenant
+//     ceiling. Conservative upper-bound counter (doesn't model
+//     dimensional expansion); intent is to catch "this defaults
+//     change blows past the runtime truncation threshold" before
+//     it lands. Two tiers: SeverityWarn at WarnRatio×Limit (80%
+//     by default), SeverityError above Limit.
+//
 // Future PRs in the C-12 family:
-//   - PR-3: Cardinality Guard — post-merge label cardinality must
-//     not exceed ADR-003 thresholds (planning §C-12 layer iii).
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
 //     before invoking this library.
@@ -93,6 +100,10 @@ const (
 	FindingEmptyOverrideMatcher      FindingKind = "empty_override_matcher"
 	FindingDuplicateOverrideMatcher  FindingKind = "duplicate_override_matcher"
 	FindingRedundantOverrideReceiver FindingKind = "redundant_override_receiver"
+
+	// Cardinality findings (PR-3; see cardinality.go).
+	FindingCardinalityExceeded FindingKind = "cardinality_exceeded"
+	FindingCardinalityWarning  FindingKind = "cardinality_warning"
 )
 
 // Finding is one issue the guard surfaced. Stable JSON serialisation
@@ -198,4 +209,23 @@ type CheckInput struct {
 	// stays YAML-agnostic; the CLI wrapper (deferred PR-4) does the
 	// extraction before invoking CheckDefaultsImpact.
 	RoutingByTenant map[string]map[string]any `json:"routing_by_tenant,omitempty"`
+
+	// CardinalityLimit is the per-tenant ceiling the cardinality
+	// check (PR-3) compares each tenant's predicted metric count
+	// against. ≤ 0 disables the cardinality check entirely.
+	//
+	// Mirrors `DefaultMaxMetricsPerTenant = 500` from the main
+	// package's config_types.go — caller should usually pass that
+	// constant or whatever the tenant's deployment overrides it to
+	// (`max_metrics_per_tenant` field at the top of the threshold
+	// config).
+	CardinalityLimit int `json:"cardinality_limit,omitempty"`
+
+	// CardinalityWarnRatio is the fraction of CardinalityLimit that
+	// triggers a Severity=warn finding (the error finding fires at
+	// 100% + 1). Out of [0, 1] or zero defaults to 0.8 — early
+	// warning at 80% gives operators a buffer to act before runtime
+	// truncation kicks in. Set to 1.0 to disable the warning tier
+	// (errors only).
+	CardinalityWarnRatio float64 `json:"cardinality_warn_ratio,omitempty"`
 }
