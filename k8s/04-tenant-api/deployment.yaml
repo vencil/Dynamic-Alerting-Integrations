@@ -45,7 +45,7 @@ spec:
       # container and use a hostPath volume instead (see volumes section).
       initContainers:
         - name: git-clone
-          image: alpine/git:2.43.0
+          image: alpine/git:v2.52.0
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false  # git needs to write .git/
