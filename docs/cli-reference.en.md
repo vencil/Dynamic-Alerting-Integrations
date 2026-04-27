@@ -141,6 +141,7 @@ These tools operate on local YAML files and don't require network.
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard wrapper (C-12 PR-4); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
+| `tenant-verify` | Print tenant effective config + merged_hash (Phase B Track A; B-4 rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | Routing merge pipeline debugger (four-layer expansion + profile, ADR-007) | `--config-dir <dir>` |
@@ -2482,6 +2483,42 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 ```
 
 **Scope simplification (vs planning §C-12)**: PR-4 ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to the planning's "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by C-7b `/simulate`). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
+
+---
+
+#### tenant-verify
+
+Print a tenant's effective config + `merged_hash` (v2.8.0 Phase B Track A). Supports the verification checklist in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures item 6: after a rollback wave, every tenant's `merged_hash` must return to the pre-Base-PR snapshot. Reuses `describe_tenant.py`'s `ConfDScanner` for inheritance + canonical-hash; this tool is a thin CLI ergonomics layer (terse output + exit code).
+
+```bash
+# Print effective config + merged_hash for one tenant
+da-tools tenant-verify db-fin-a --conf-d conf.d/
+
+# Snapshot pre-Base-PR state (save before the rollback wave)
+da-tools tenant-verify --all --conf-d conf.d/ --json > pre-base.json
+
+# Compare after rollback: exit 0 = pass, exit 2 = mismatch
+da-tools tenant-verify db-fin-a --conf-d conf.d/ \
+    --expect-merged-hash 0123456789abcdef
+```
+
+**Flags**
+
+| Flag | Default | Description |
+|---|---|---|
+| `<tenant-id>` | — | Required unless `--all` is given |
+| `--all` | false | Verify every tenant under conf.d/ |
+| `--conf-d <PATH>` | `conf.d` | Path to the conf.d/ directory |
+| `--expect-merged-hash <H>` | empty | Compare actual `merged_hash` against this value; exits 2 on mismatch |
+| `--json` | false | Emit JSON (for piping to jq diff) |
+
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| 0 | Tenant exists; if `--expect-merged-hash` supplied, it matched |
+| 1 | Usage / IO error (missing tenant_id, conf-d not found, `--all` + `--expect-*` mutually exclusive, etc.) |
+| 2 | Tenant not found OR `--expect-merged-hash` mismatch (this is the B-4 checklist item 6 stop-signal) |
 
 ---
 

@@ -276,7 +276,18 @@ func loadDir(dir string) (ThresholdConfig, string, error) {
 
 		var partial ThresholdConfig
 		if err := yaml.Unmarshal(data, &partial); err != nil {
-			log.Printf("WARN: skip unparseable file %s: %v", path, err)
+			// _defaults.yaml parse failure silently nullifies the entire
+			// defaults block → every dependent tenant override breaks
+			// (`unknown key not in defaults`). Cycle-6 RCA (planning archive
+			// §S#37d) cost 5+ hours wall-clock because this signal lived at
+			// WARN. Promote to ERROR for `_*` files; emit parse_failure_total
+			// (v2.8.0 A-8d metric) so ops can alert.
+			IncParseFailure(filepath.Base(path))
+			if strings.HasPrefix(name, "_") {
+				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
+			} else {
+				log.Printf("WARN: skip unparseable file %s: %v", path, err)
+			}
 			continue
 		}
 
@@ -511,7 +522,14 @@ func (m *ConfigManager) IncrementalLoad() error {
 		}
 		var partial ThresholdConfig
 		if err := yaml.Unmarshal(data, &partial); err != nil {
-			log.Printf("WARN: skip unparseable file %s: %v", fullPath, err)
+			// See loadDir — defaults parse failure silently nullifies the
+			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
+			IncParseFailure(filepath.Base(fullPath))
+			if strings.HasPrefix(name, "_") {
+				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+			} else {
+				log.Printf("WARN: skip unparseable file %s: %v", fullPath, err)
+			}
 			delete(newConfigs, name)
 			continue
 		}
@@ -635,7 +653,14 @@ func (m *ConfigManager) fullDirLoad() error {
 		}
 		var partial ThresholdConfig
 		if err := yaml.Unmarshal(data, &partial); err != nil {
-			log.Printf("WARN: skip unparseable file %s: %v", fullPath, err)
+			// See loadDir — defaults parse failure silently nullifies the
+			// block; promote to ERROR + emit metric (cycle-6 RCA, archive §S#37d).
+			IncParseFailure(filepath.Base(fullPath))
+			if strings.HasPrefix(name, "_") {
+				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", fullPath, err)
+			} else {
+				log.Printf("WARN: skip unparseable file %s: %v", fullPath, err)
+			}
 			continue
 		}
 		applyBoundaryRules(name, &partial)

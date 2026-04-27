@@ -593,12 +593,12 @@ Rehearsal 內容：
 [ ] 3. da_config_reload_trigger_total{reason="defaults"} 從 wave 開始增量 == 預期 cascading defaults 變更檔數
 [ ] 4. da_config_reload_duration_seconds_count 從 wave 開始增量 == 1（debounce 收斂正確）
 [ ] 5. da_config_blast_radius_tenants_affected{effect="applied"} 增量 sum ≈ 預期受影響 tenant 數
-[ ] 6. 抽樣 5 個 tenant：da-tools tenant verify <id> 的 merged_hash == Base PR merge 前歷史快照
+[ ] 6. 抽樣 5 個 tenant：da-tools tenant-verify <id> --expect-merged-hash <pre-base-snapshot> （exit code 0 = 通過，2 = 不一致）
 [ ] 7. 過去 10 分鐘 ALERTS{severity!="info"} 總數 ≤ wave 開始前的 baseline + 5%
 [ ] 8. Alertmanager Silenced alerts 列表為空（沒有遺留 silence 干擾觀測）
 ```
 
-**第 6 項是核心**：checksum 必須回到 Base PR merge 前的 `merged_hash`，若不一致即代表 drift（可能某個 tenant PR 被部分退版、或某 cascading defaults 漏退），需要人工逐個 tenant 比對 `da-tools effective <id> --diff-against-sha=<pre-base-sha>`。
+**第 6 項是核心**：checksum 必須回到 Base PR merge 前的 `merged_hash`，若不一致即代表 drift（可能某個 tenant PR 被部分退版、或某 cascading defaults 漏退）；先把 pre-Base-PR snapshot 用 `da-tools tenant-verify --all --json > pre-base.json` 存起來，rollback 後再跑同樣指令對照即可定位漂移 tenant。
 
 ### 工具層 follow-up（未實裝，列入 v2.8.x backlog）
 

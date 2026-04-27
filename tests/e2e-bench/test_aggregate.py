@@ -370,3 +370,103 @@ def test_aggregate_all_failed_marks_skipped(aggregate_module, tmp_path):
     )
     assert agg["fire"]["skipped"] is True
     assert agg["resolve"]["n_valid"] == 30  # resolve still works
+
+
+# ============================================================
+# Stage C semantic guard (Track A A7 — absorbed_into_AB note)
+# ============================================================
+
+
+def _make_run_with_stage_c(stage_c_value: int, run_id: int = 1) -> dict:
+    """Build a per-run dict with controllable Stage C value."""
+    return {
+        "run_id": run_id,
+        "warm_up": False,
+        "fixture_kind": "synthetic-v2",
+        "fire": {
+            "stage_ms": {"A": 50, "B": 145, "C": stage_c_value, "D": 45},
+            "e2e_ms": 4000,
+        },
+        "resolve": {
+            "stage_ms": {"A": -1, "B": -1, "C": 4920, "D": 45},
+            "e2e_ms": 5000,
+        },
+    }
+
+
+def test_aggregate_phase_stage_c_all_zero_emits_absorbed_note(aggregate_module):
+    """5000-tenant signature: every run has Stage C ≤ 0 (T3 lands before
+    T2). Aggregator should mark Stage C n=0 + emit `stage_c_note:
+    absorbed_into_AB` to surface the artifact in reviewer-visible output."""
+    import random as _r
+
+    runs = [_make_run_with_stage_c(0, i) for i in range(5)]
+    rng = _r.Random(0xCC)
+    out = aggregate_module.aggregate_phase(runs, "fire", rng, n_resamples=100)
+    assert out["stage_ms"]["C"]["n"] == 0
+    assert out["stage_ms"]["C"]["p95"] is None  # not 0!
+    assert out.get("stage_c_note") == "absorbed_into_AB"
+
+
+def test_aggregate_phase_stage_c_partial_zero_emits_partial_note(aggregate_module):
+    """Mixed signature: some runs have positive Stage C, some ≤0. Note
+    encodes the ratio so reviewer can judge severity."""
+    import random as _r
+
+    runs = (
+        [_make_run_with_stage_c(3000, i) for i in range(3)]
+        + [_make_run_with_stage_c(0, i + 100) for i in range(2)]
+    )
+    rng = _r.Random(0xCD)
+    out = aggregate_module.aggregate_phase(runs, "fire", rng, n_resamples=100)
+    # Only positive samples counted in the percentile.
+    assert out["stage_ms"]["C"]["n"] == 3
+    assert out["stage_ms"]["C"]["p50"] == 3000
+    assert out.get("stage_c_note") == "absorbed_into_AB_partial:2/5"
+
+
+def test_aggregate_phase_stage_c_all_positive_no_note(aggregate_module):
+    """Healthy 1000-tenant case: every Stage C is positive. No note."""
+    import random as _r
+
+    runs = [_make_run_with_stage_c(2500 + i * 100, i) for i in range(5)]
+    rng = _r.Random(0xCE)
+    out = aggregate_module.aggregate_phase(runs, "fire", rng, n_resamples=100)
+    assert out["stage_ms"]["C"]["n"] == 5
+    assert "stage_c_note" not in out
+
+
+def test_stage_c_note_partial_format_locked_to_regex(aggregate_module):
+    """Schema lock: `stage_c_note` for partial-absorption MUST match
+    `absorbed_into_AB_partial:<int>/<int>` exactly (no spaces, no other
+    separators). Downstream dashboards depend on this for parsing.
+    Track A A7 schema contract."""
+    import random as _r
+    import re
+
+    runs = (
+        [_make_run_with_stage_c(3000, i) for i in range(7)]
+        + [_make_run_with_stage_c(0, i + 100) for i in range(3)]
+    )
+    rng = _r.Random(0xCF)
+    out = aggregate_module.aggregate_phase(runs, "fire", rng, n_resamples=100)
+    note = out.get("stage_c_note")
+    assert note is not None
+    m = re.fullmatch(r"absorbed_into_AB_partial:(\d+)/(\d+)", note)
+    assert m is not None, f"stage_c_note {note!r} does not match locked schema"
+    n_zero, n_total = int(m.group(1)), int(m.group(2))
+    assert n_zero == 3
+    assert n_total == 10
+    assert n_zero < n_total, "partial form requires N < M (use all-zeros marker if N==M)"
+
+
+def test_stage_c_note_full_absorption_uses_bare_token(aggregate_module):
+    """Schema lock: 100% absorption uses exactly the string
+    `absorbed_into_AB` (no count suffix). This distinguishes the two
+    states so dashboards can use string equality vs regex parsing."""
+    import random as _r
+
+    runs = [_make_run_with_stage_c(0, i) for i in range(4)]
+    rng = _r.Random(0xD0)
+    out = aggregate_module.aggregate_phase(runs, "fire", rng, n_resamples=100)
+    assert out.get("stage_c_note") == "absorbed_into_AB"  # exact match, no suffix

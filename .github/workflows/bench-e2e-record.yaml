@@ -92,6 +92,7 @@ jobs:
           mkdir -p tests/e2e-bench/bench-results
           (cd tests/e2e-bench && docker compose logs --no-color threshold-exporter > bench-results/exporter.log 2>&1 || true)
           (cd tests/e2e-bench && docker compose logs --no-color prometheus > bench-results/prometheus.log 2>&1 || true)
+          (cd tests/e2e-bench && docker compose logs --no-color pushgateway > bench-results/pushgateway.log 2>&1 || true)
           (cd tests/e2e-bench && docker compose logs --no-color alertmanager > bench-results/alertmanager.log 2>&1 || true)
           (cd tests/e2e-bench && docker compose logs --no-color receiver > bench-results/receiver.log 2>&1 || true)
           (cd tests/e2e-bench && docker compose logs --no-color driver > bench-results/driver.log 2>&1 || true)

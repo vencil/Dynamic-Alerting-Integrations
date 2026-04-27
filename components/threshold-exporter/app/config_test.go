@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"gopkg.in/yaml.v3"
 )
 
@@ -545,6 +547,83 @@ func TestConfigManager_LoadDir_EmptyDir(t *testing.T) {
 	mgr := NewConfigManager(dir)
 	if err := mgr.Load(); err == nil {
 		t.Error("expected error for empty directory")
+	}
+}
+
+// TestConfigManager_LoadDir_UnparseableDefaultsErrorAndMetric (v2.8.0
+// Track A A4) locks the cycle-6-RCA fix (planning archive §S#37d): when
+// `_defaults.yaml` (or any `_*` file) fails to parse, the entire defaults
+// block silently drops and every dependent tenant override breaks. The
+// signal must be ERROR-level (not WARN, which is too easy to miss in
+// `gh run view --log` output) and must increment
+// `da_config_parse_failure_total{file_basename=...}` so ops can alert.
+//
+// Sibling tenant files must still parse normally (poison-pill isolation,
+// same invariant as TestScanDirHierarchical_MixedValidInvalid for the
+// hierarchical path).
+func TestConfigManager_LoadDir_UnparseableDefaultsErrorAndMetric(t *testing.T) {
+	dir := t.TempDir()
+
+	// Reset metrics so parseFailures counter is fresh.
+	origMetrics := getConfigMetrics()
+	freshMetrics := newConfigMetrics()
+	setConfigMetrics(freshMetrics)
+	t.Cleanup(func() { setConfigMetrics(origMetrics) })
+
+	// Capture log output to verify ERROR-level promotion.
+	var logBuf bytes.Buffer
+	origOutput := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOutput) })
+
+	// Poison-pill `_defaults.yaml`. Use a structurally broken YAML
+	// (unclosed brace) so yaml.Unmarshal definitively errors regardless
+	// of strict-mode settings. Type-mismatch (`mysql_connections:
+	// "X:critical"` against `map[string]float64`) is the cycle-6
+	// real-world signature, but yaml.v3 with `KnownFields(false)`
+	// silently coerces some forms — using a syntax error makes the test
+	// path-deterministic.
+	writeTestFile(t, dir, "_defaults.yaml",
+		"defaults:\n  mysql_connections: {unclosed-brace\n")
+
+	// Valid sibling tenant — must survive the broken defaults.
+	writeTestFile(t, dir, "db-a.yaml", `
+tenants:
+  db-a:
+    mysql_connections: "70"
+`)
+
+	mgr := NewConfigManager(dir)
+	// Load may succeed (defaults dropped, sibling tenant parses) — what we
+	// care about is the ERROR log + the metric.
+	_ = mgr.Load()
+
+	// Invariant #1: log line at ERROR level (not WARN).
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "ERROR: skip unparseable defaults/profiles file") {
+		t.Errorf("expected ERROR-level log for _defaults.yaml parse failure; got:\n%s", logOutput)
+	}
+	if strings.Contains(logOutput, "WARN: skip unparseable file") &&
+		strings.Contains(logOutput, "_defaults.yaml") {
+		t.Errorf("_defaults.yaml parse failure logged at WARN — should be ERROR; cycle-6 RCA")
+	}
+
+	// Invariant #2: parse-failure metric incremented for `_defaults.yaml`
+	// basename. This may run via loadDir (initial scan) — the counter
+	// pattern matches A-8d.
+	ch := make(chan prometheus.Metric, 1)
+	freshMetrics.parseFailures.WithLabelValues("_defaults.yaml").Collect(ch)
+	close(ch)
+	var count float64
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("metric.Write: %v", err)
+		}
+		count = d.GetCounter().GetValue()
+	}
+	if count < 1 {
+		t.Errorf("da_config_parse_failure_total{file_basename=_defaults.yaml} = %v, want >= 1", count)
 	}
 }
 

@@ -58,6 +58,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --scenario | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 | `guard` | Dangling Defaults Guard (C-12 PR-4); shells out to the `da-guard` Go binary to validate conf.d/ schema + routing + cardinality | defaults-impact subcommand + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
+| `tenant-verify` | Print tenant effective config + merged_hash (Phase B Track A; B-4 rollback checklist item 6) | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
 
 ## Quick Tips
 

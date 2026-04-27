@@ -480,6 +480,14 @@ Per-file SHA-256 index + parsed config cache incremental reload path (introduced
   - `da_config_blast_radius_tenants_affected{reason,scope,effect}` (histogram; v2.8.0 new)
 - **v2.7.0 trade-off**: FullDirLoad increased from 35ms to 112ms is an acceptable cost (cold start happens once per pod) in exchange for the 86× hot-path speedup + dual-hash skip-reload capability
 
+### v2.8.0 Phase 2 end-to-end alert fire-through harness (internal — pending calibration before promotion)
+
+v2.8.0 B-1 Phase 2 landed a **5-anchor end-to-end alert fire-through measurement harness** (`tests/e2e-bench/`) covering the full dispatch chain from `conf.d/` write → Prometheus alert fire → Alertmanager webhook dispatch. The harness includes a docker-compose stack (threshold-exporter / Prometheus / pushgateway / Alertmanager / receiver / driver — six services) + statistical aggregator (n≥30 + bootstrap 95% CI) + Tier 1 fail-fast smoke gate.
+
+**Why specific P50/P95/P99 numbers are NOT listed here yet**: a synthetic-v2 fixture (Zipf+power-law tenant distribution) baseline exists for 1000-tenant + 5000-tenant runs, but plan §B-1 exit condition #5 requires customer anonymized sample calibration to pass ±30% gate before the numbers can be promoted to canonical (to avoid the synthetic baseline becoming an implicit SLA anchor without customer validation). Once calibration passes, this section will be extended with the official SLO table.
+
+**Ops detail** (5-anchor measurement model, calibration gate flow, kill switch, Tier 1 fail-fast for the 4 anchor-failure modes) lives in [Benchmark Playbook §v2.8.0 Phase 2 e2e Alert Fire-through](internal/benchmark-playbook.md#v280-phase-2-e2e-alert-fire-through-b-1-phase-2) (internal doc).
+
 ## pytest-benchmark Micro-Benchmarks
 
 `pytest -m benchmark` (min_rounds=20, warmup=on). For version-to-version trend detection. Route generation data see § 7.

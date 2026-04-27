@@ -582,7 +582,7 @@ Rehearsal contents:
 | Single tenant PR revert + git-sync apply | < 5s | < 5s | git-sync polling 5s + scan_dir ≈ 51-273ms |
 | Single `_defaults.yaml` revert (region-level) → 21t affected @ 1000 / 105t @ 5000 | < 600ms reload | < 1.5s reload | BlastRadius bench 266ms / 1308ms |
 | Full wave rollback (Base PR + 10 tenant PRs + 2 cascading defaults) | < 90s | < 4 min | git-sync poll × N + reload × N |
-| `merged_hash` convergence verification | < 30s | < 2 min | `da-tools tenant verify --all` |
+| `merged_hash` convergence verification | < 30s | < 2 min | `da-tools tenant-verify --all` |
 
 **Threshold**: measurements > 1.5× of the table = anomaly → **pause rollback**, inspect `da_config_reload_duration_seconds` p99 and `da_config_blast_radius_tenants_affected{effect="applied"}` distribution; escalate to maintainer if abnormal.
 
@@ -594,12 +594,12 @@ Rehearsal contents:
 [ ] 3. da_config_reload_trigger_total{reason="defaults"} delta from wave start == expected cascading defaults file count
 [ ] 4. da_config_reload_duration_seconds_count delta from wave start == 1 (debounce coalesced correctly)
 [ ] 5. da_config_blast_radius_tenants_affected{effect="applied"} delta sum ≈ expected affected-tenant count
-[ ] 6. Sample 5 tenants: da-tools tenant verify <id> merged_hash == pre-Base-PR historical snapshot
+[ ] 6. Sample 5 tenants: da-tools tenant-verify <id> --expect-merged-hash <pre-base-snapshot> (exit 0 = pass, exit 2 = mismatch)
 [ ] 7. ALERTS{severity!="info"} count over last 10 min ≤ pre-wave baseline + 5%
 [ ] 8. Alertmanager Silenced alerts list is empty (no leftover silences obscuring observation)
 ```
 
-**Item 6 is the core**: checksums must return to the pre-Base-PR `merged_hash`. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed); resolve manually via `da-tools effective <id> --diff-against-sha=<pre-base-sha>` per tenant.
+**Item 6 is the core**: checksums must return to the pre-Base-PR `merged_hash`. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed). Capture a pre-Base-PR snapshot with `da-tools tenant-verify --all --json > pre-base.json` first, then compare after rollback to pinpoint drifted tenants.
 
 ### Tooling follow-up (not yet implemented, on v2.8.x backlog)
 

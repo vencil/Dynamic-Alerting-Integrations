@@ -20,7 +20,7 @@ package main
 //   * No goroutine leaks (Close() drains).
 //
 // Production parameters (planning §B-7): 200 files, 50-500ms gaps.
-// Test parameters: scaled-down (50 files, 5-25ms gaps, 50ms window)
+// Test parameters: scaled-down (50 files, 5-25ms gaps, 100ms window)
 // so CI completes in ~2s but the ratio (gap < window) is preserved.
 //
 // Determinism: rand seeded with a fixed constant. Re-running the test
@@ -42,7 +42,7 @@ import (
 )
 
 // TestSlowWriteTornStateStress_FinalConvergenceNoTornFires writes 50
-// tenant files with random 5-25ms inter-arrival gaps under a 50ms
+// tenant files with random 5-25ms inter-arrival gaps under a 100ms
 // debounce window, and verifies:
 //
 //	(1) sliding debounce holds: fire count stays at 0 while writes are

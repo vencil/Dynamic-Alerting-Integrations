@@ -193,3 +193,96 @@ def test_synthetic_v2_different_seeds_produce_different_trees(fixture_module, tm
     blob_a = b"".join(sorted(p.read_bytes() for p in a.rglob("*.yaml")))
     blob_b = b"".join(sorted(p.read_bytes() for p in b.rglob("*.yaml")))
     assert blob_a != blob_b
+
+
+# ── _gen_defaults_yaml numeric contract regression (cycle-6 RCA, PR #105) ──
+#
+# The exporter's _defaults.yaml parser only accepts numeric (float64) values
+# in the `defaults:` block. Scheduled-threshold strings ("17838:critical")
+# and "disable" sentinels are valid only in tenant override files. If those
+# forms appear in defaults, the parser silently rejects the entire file
+# (`cannot unmarshal !!str into float64`) — every default is dropped, and
+# downstream tenant overrides break with `unknown key not in defaults`.
+#
+# This was the root cause that took 6 RCA cycles to surface during B-1
+# Phase 2 e2e harness rollout (planning archive §S#37d cycle-6 cause #1).
+# The fix in PR #105 made `_gen_defaults_yaml` emit ints only; this test
+# locks that contract so a future regression (e.g. someone adding a
+# scheduled-form metric to METRIC_TEMPLATES + reusing the same generator)
+# fails fast instead of silently breaking the e2e harness.
+
+def test_gen_defaults_yaml_emits_only_numeric_values(fixture_module):
+    """Every value in the `defaults:` block must be int/float — never
+    str (scheduled threshold) or list/dict. Regression guard for cycle-6
+    RCA; see archive §S#37d."""
+    import random
+
+    rng = random.Random(0xDEFA17)  # arbitrary fixed seed
+    out = fixture_module._gen_defaults_yaml(rng)
+
+    assert "defaults" in out, "result must have top-level 'defaults' key"
+    defaults_block = out["defaults"]
+    assert isinstance(defaults_block, dict), "'defaults' must be a dict"
+    assert len(defaults_block) > 0, "defaults block must be non-empty"
+
+    for key, value in defaults_block.items():
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+            f"_defaults.yaml value {key!r}={value!r} is type {type(value).__name__}; "
+            f"must be numeric (cycle-6 RCA: parser drops file on str). "
+            f"If you need scheduled or 'disable' sentinels, put them in tenant "
+            f"override files, NOT in _defaults.yaml."
+        )
+
+
+def test_gen_defaults_yaml_with_db_types_subset_still_numeric(fixture_module):
+    """Same numeric contract holds when caller passes a db_types subset
+    (the cascading-defaults path used by hierarchical / synthetic-v2)."""
+    import random
+
+    rng = random.Random(0xDEFA18)
+    out = fixture_module._gen_defaults_yaml(rng, db_types=["mysql", "redis"])
+
+    defaults_block = out["defaults"]
+    assert len(defaults_block) > 0, "defaults block must be non-empty for subset"
+    for key, value in defaults_block.items():
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+            f"_defaults.yaml value {key!r}={value!r} is non-numeric"
+        )
+
+
+# ── --extra-defaults flag (Track A A6, replaces orchestrator inline-Python) ──
+
+def test_gen_defaults_yaml_extra_defaults_appended(fixture_module):
+    """Numeric extras are merged into the defaults block."""
+    import random
+
+    rng = random.Random(0xEEE)
+    out = fixture_module._gen_defaults_yaml(
+        rng, extra_defaults={"bench_trigger": 50, "another_metric": 1.5}
+    )
+    block = out["defaults"]
+    assert block.get("bench_trigger") == 50
+    assert block.get("another_metric") == 1.5
+
+
+def test_gen_defaults_yaml_extra_defaults_rejects_string(fixture_module):
+    """Non-numeric extras must be rejected (cycle-6 contract)."""
+    import random
+
+    rng = random.Random(0xEEF)
+    with pytest.raises(ValueError, match="not numeric"):
+        fixture_module._gen_defaults_yaml(
+            rng, extra_defaults={"bad_key": "not-a-number"}
+        )
+
+
+def test_gen_defaults_yaml_extra_defaults_rejects_bool(fixture_module):
+    """bool is a subclass of int but represents a different contract;
+    the parser would coerce True→1 silently. Reject explicitly."""
+    import random
+
+    rng = random.Random(0xEF0)
+    with pytest.raises(ValueError, match="not numeric"):
+        fixture_module._gen_defaults_yaml(
+            rng, extra_defaults={"bad_bool": True}
+        )

@@ -145,6 +145,7 @@ da-tools <command> --help
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard 包裝（C-12 PR-4），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
+| `tenant-verify` | 印 tenant effective config + merged_hash（Phase B Track A，B-4 rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
@@ -2227,6 +2228,42 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 ```
 
 **範圍簡化（vs planning §C-12）**：PR-4 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 C-7b `/simulate`。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
+
+---
+
+#### tenant-verify
+
+印一個 tenant 的 effective config + `merged_hash`（v2.8.0 Phase B Track A）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner` 做 inheritance + canonical-hash，本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。
+
+```bash
+# 印單一 tenant 的 effective config + merged_hash
+da-tools tenant-verify db-fin-a --conf-d conf.d/
+
+# 拍 pre-Base-PR 快照（rollback 前存起來）
+da-tools tenant-verify --all --conf-d conf.d/ --json > pre-base.json
+
+# rollback 後比對：exit 0 = 通過，exit 2 = 不一致
+da-tools tenant-verify db-fin-a --conf-d conf.d/ \
+    --expect-merged-hash 0123456789abcdef
+```
+
+**Flags**
+
+| Flag | Default | 說明 |
+|---|---|---|
+| `<tenant-id>` | — | 必填，除非用 `--all` |
+| `--all` | false | 對 conf.d/ 內所有 tenant 各印一次 |
+| `--conf-d <PATH>` | `conf.d` | conf.d/ 目錄路徑 |
+| `--expect-merged-hash <H>` | 空 | 與實際比對；不一致時 exit 2 |
+| `--json` | false | JSON 輸出（給 pipe 給 jq diff 用） |
+
+**Exit codes**
+
+| Code | 意義 |
+|---|---|
+| 0 | tenant 存在；若有 `--expect-merged-hash` 則一致 |
+| 1 | usage / IO 錯誤（缺 tenant_id、conf-d 找不到、`--all` + `--expect-*` 互斥等）|
+| 2 | tenant 不存在，或 `--expect-merged-hash` 不一致（B-4 checklist 第 6 項擋下訊號）|
 
 ---
 

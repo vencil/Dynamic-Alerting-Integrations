@@ -215,7 +215,11 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
     return config
 
 
-def _gen_defaults_yaml(rng: random.Random, db_types: list[str] | None = None) -> dict:
+def _gen_defaults_yaml(
+    rng: random.Random,
+    db_types: list[str] | None = None,
+    extra_defaults: dict[str, int | float] | None = None,
+) -> dict:
     """Generate a _defaults.yaml content.
 
     NOTE: the exporter's `_defaults.yaml` parser only accepts numeric
@@ -226,7 +230,15 @@ def _gen_defaults_yaml(rng: random.Random, db_types: list[str] | None = None) ->
     float64`, which silently drops every default and breaks downstream
     tenant overrides that depend on key-presence-in-defaults validation
     (see exporter `WARN: tenant=…: unknown key … not in defaults`).
-    Always emit ints here.
+    Always emit ints/floats here.
+
+    `extra_defaults` (v2.8.0 Phase B Track A A6): caller-supplied
+    additional numeric defaults that get merged into the block. Use case:
+    bench harness orchestrator wants to register `bench_trigger=50` so
+    bench-run-N tenants' overrides pass the unknown-key check. The flag
+    replaces the inline-Python YAML rewrite that bench_e2e_run.sh
+    previously did post-staging (which surfaced the cycle-3 bug). All
+    values must be numeric (same contract as the rest of the block).
     """
     defaults: dict[str, Any] = {"defaults": {}}
     all_db_types = db_types or DB_TYPES
@@ -235,16 +247,36 @@ def _gen_defaults_yaml(rng: random.Random, db_types: list[str] | None = None) ->
         for m in metrics[:3]:  # top 3 metrics per db type as defaults
             # Numeric-only — see docstring above for rationale.
             defaults["defaults"][m] = rng.randint(50, 100000)
+    if extra_defaults:
+        for k, v in extra_defaults.items():
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise ValueError(
+                    f"--extra-defaults value {k}={v!r} is not numeric; "
+                    f"_defaults.yaml parser rejects non-numeric values "
+                    f"(cycle-6 RCA, archive §S#37d)"
+                )
+            defaults["defaults"][k] = v
     return defaults
 
 
-def generate_flat(count: int, output_dir: Path, with_defaults: bool, seed: int) -> None:
-    """Generate a flat conf.d/ layout."""
+def generate_flat(
+    count: int,
+    output_dir: Path,
+    with_defaults: bool,
+    seed: int,
+    extra_defaults: dict[str, int | float] | None = None,
+) -> None:
+    """Generate a flat conf.d/ layout. `extra_defaults` is appended to
+    the root `_defaults.yaml` only (not cascaded; see _gen_defaults_yaml
+    docstring)."""
     rng = _seed_rng(seed)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if with_defaults:
-        _write_yaml(output_dir / "_defaults.yaml", _gen_defaults_yaml(rng))
+        _write_yaml(
+            output_dir / "_defaults.yaml",
+            _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
+        )
 
     for i in range(count):
         db_type = DB_TYPES[i % len(DB_TYPES)]
@@ -256,8 +288,19 @@ def generate_flat(count: int, output_dir: Path, with_defaults: bool, seed: int) 
     print(f"✅ Generated {count} tenant files (flat) in {output_dir}")
 
 
-def generate_hierarchical(count: int, output_dir: Path, with_defaults: bool, seed: int) -> None:
-    """Generate a hierarchical conf.d/ layout: domain/region/env/tenant.yaml."""
+def generate_hierarchical(
+    count: int,
+    output_dir: Path,
+    with_defaults: bool,
+    seed: int,
+    extra_defaults: dict[str, int | float] | None = None,
+) -> None:
+    """Generate a hierarchical conf.d/ layout: domain/region/env/tenant.yaml.
+
+    `extra_defaults` (if given) lands on the ROOT `_defaults.yaml` only so
+    every tenant inherits the key without having to repeat it at each
+    cascading level. Use case: bench harness `bench_trigger` registration.
+    """
     rng = _seed_rng(seed)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -296,7 +339,10 @@ def generate_hierarchical(count: int, output_dir: Path, with_defaults: bool, see
 
     # Inject _defaults.yaml at domain and env levels
     if with_defaults:
-        _write_yaml(output_dir / "_defaults.yaml", _gen_defaults_yaml(rng))
+        _write_yaml(
+            output_dir / "_defaults.yaml",
+            _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
+        )
         for domain in DOMAINS:
             domain_dir = output_dir / domain
             if domain_dir.exists():
@@ -370,7 +416,13 @@ def _power_law_depths(count: int, alpha: float, max_depth: int, rng: random.Rand
     return out
 
 
-def generate_synthetic_v2(count: int, output_dir: Path, with_defaults: bool, seed: int) -> None:
+def generate_synthetic_v2(
+    count: int,
+    output_dir: Path,
+    with_defaults: bool,
+    seed: int,
+    extra_defaults: dict[str, int | float] | None = None,
+) -> None:
     """Generate a synthetic-v2 hierarchical fixture with skewed distributions.
 
     Layered on top of `generate_hierarchical` (same domain/region/env tree)
@@ -454,7 +506,10 @@ def generate_synthetic_v2(count: int, output_dir: Path, with_defaults: bool, see
             idx += 1
 
     if with_defaults:
-        _write_yaml(output_dir / "_defaults.yaml", _gen_defaults_yaml(rng))
+        _write_yaml(
+            output_dir / "_defaults.yaml",
+            _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
+        )
         for domain in DOMAINS:
             domain_dir = output_dir / domain
             if domain_dir.exists():
@@ -549,7 +604,42 @@ def main() -> None:
         "--seed", type=int, default=42,
         help="Random seed for reproducible output (default: 42)",
     )
+    parser.add_argument(
+        "--extra-defaults",
+        action="append",
+        default=[],
+        metavar="KEY=NUMERIC",
+        help=(
+            "Append a numeric default to root _defaults.yaml only. "
+            "Repeat for multiple keys (e.g. --extra-defaults bench_trigger=50). "
+            "v2.8.0 Phase B Track A A6: replaces the inline-YAML rewrite "
+            "that bench_e2e_run.sh did post-staging (cycle-3 RCA). Values "
+            "must parse as int or float; non-numeric raises an error."
+        ),
+    )
     args = parser.parse_args()
+
+    extra_defaults: dict[str, int | float] = {}
+    for spec in args.extra_defaults:
+        if "=" not in spec:
+            parser.error(f"--extra-defaults expects KEY=NUMERIC, got {spec!r}")
+        key, raw = spec.split("=", 1)
+        key = key.strip()
+        raw = raw.strip()
+        if not key:
+            parser.error(f"--extra-defaults key is empty in {spec!r}")
+        # Try int first (preserves int identity which is what _defaults
+        # parser most often expects); fall back to float for `1.5` etc.
+        try:
+            extra_defaults[key] = int(raw)
+        except ValueError:
+            try:
+                extra_defaults[key] = float(raw)
+            except ValueError:
+                parser.error(
+                    f"--extra-defaults {spec!r}: value must be numeric "
+                    f"(_defaults.yaml parser rejects non-numeric — cycle-6 RCA)"
+                )
 
     if args.output:
         output_dir = Path(args.output)
@@ -563,11 +653,20 @@ def main() -> None:
         sys.exit(1)
 
     if args.layout == "flat":
-        generate_flat(args.count, output_dir, args.with_defaults, args.seed)
+        generate_flat(
+            args.count, output_dir, args.with_defaults, args.seed,
+            extra_defaults=extra_defaults or None,
+        )
     elif args.layout == "synthetic-v2":
-        generate_synthetic_v2(args.count, output_dir, args.with_defaults, args.seed)
+        generate_synthetic_v2(
+            args.count, output_dir, args.with_defaults, args.seed,
+            extra_defaults=extra_defaults or None,
+        )
     else:
-        generate_hierarchical(args.count, output_dir, args.with_defaults, args.seed)
+        generate_hierarchical(
+            args.count, output_dir, args.with_defaults, args.seed,
+            extra_defaults=extra_defaults or None,
+        )
 
     # Summary stats
     file_count = sum(1 for _ in output_dir.rglob("*.yaml"))

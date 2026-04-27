@@ -349,6 +349,27 @@ tools:
 
 設計原則：規則本體即為 hook 程式碼，避免「文字規範 → 記性 → 執行」三段 rot。新增 drift 項目時改 code，不改本節。
 
+### P3. 高成本 / 高 blast-radius workflow_dispatch 需明確 user 授權（v2.8.0 Phase .b Track A A10 新增）
+
+**規則**：對「執行成本高 + 影響可被外部觀察 + 一旦啟動無法廉價中斷」的 production GitHub Actions workflows，**agent 必須在每次觸發前取得 user 明確授權**，不得僅憑「PR 已 merged」「CI 已綠」推斷可以自跑。
+
+**目前的 perimeter（隨情境演化，更新時直接改 code-driven 偵測，不改本條）**：
+- `bench-e2e-record.yaml`（5000-tenant run = 60 分鐘 budget × 多個 GHA runner = 客觀貴）
+- `bench-record.yaml`（nightly trend；非 production-blocking 但同 cost class）
+- 任何未來進入 `.github/workflows/*-record.yaml` 命名 pattern 的 workflow
+
+**Why**：v2.8.0 Phase 2 e2e harness saga（cycle-1 ~ cycle-6）累積燒掉 ~5 hours wall-clock + 對應 GHA minutes。S#45 archive permission lesson — agent 在 PR #105 merge 後直接 trigger 1000-tenant + 5000-tenant 兩支 workflow，runtime 擋住 5000 等候明確 user "go"。CI passing ≠ user consent；user 同意一個 trigger ≠ 同意後續 trigger。
+
+**How to apply**：標準互動 SOP：
+1. PR merges
+2. agent 等 user "merged" 確認（不主動執行下一步）
+3. agent 等 user 對下一個動作的明確指令（"go trigger 5000" / "rerun the failed one" / etc.）
+4. agent 才 `gh workflow run …`
+
+不適用於：cheap workflows（lint / commitlint / unit-test re-run）、user-explicit `/loop` 或 schedule 已 codified 的 cron。本條只擋成本高且需要 ad-hoc 評估的人為觸發。
+
+**自動化攔截**：runtime 已示範（cycle-6 阻擋 5000-tenant trigger）；本條為文字版 codification — 未來若加 hook 可走 `pre-bash-tool` 攔 `gh workflow run` + 檢查 workflow basename。
+
 ## §A 產出物治理（Planning Artifact Policy，v2.8.0 Phase .a 新增）
 
 §S 管程式碼風格、§T 管工具生命週期、§P 管 commit 紀律；§A 管**產出物（plan / decomposition / scope-discovery 等中繼文件）的歸屬與生命週期**。原始脈絡：v2.8.0 Session #06c maintainer FYI「中繼文件不應該長期在 repo」。
