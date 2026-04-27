@@ -443,7 +443,7 @@ spec:
 
 ---
 
-## da-guard CLI（v2.8.0 Phase .c C-12 PR-4）
+## da-guard CLI（v2.8.0 Phase .c C-12 PR-4 + PR-5）
 
 `da-guard` 是 `internal/guard` 的 CLI 包裝，把「Dangling Defaults Guard」帶到客戶 repo 端：把 `_defaults.yaml` 變更前 / pre-commit / GitHub Actions 階段就攔截 schema / routing / cardinality 三層問題，不讓壞改動 reach WatchLoop。
 
@@ -479,13 +479,16 @@ da-guard --config-dir conf.d/ --format json --output guard-report.json
 | 1 | guard 偵測到 error — block merge / commit |
 | 2 | caller error — flag 錯、路徑找不到、scope 跑出 root 之外等 |
 
-**三層檢查（內建於 `internal/guard`）**：
+**三層 error 檢查 + 一層 warn 檢查（內建於 `internal/guard`）**：
 
-1. **Schema validation**（`--required-fields`）— 點分路徑欄位 deepMerge 後不可缺；ADR-018 null-as-delete 後欄位變 nil 也算缺。
-2. **Routing schema guardrails** — 5 檢查：unknown receiver type / 必填欄位缺 / empty matcher / duplicate matcher / redundant override。
-3. **Cardinality guard**（`--cardinality-limit`）— 預測 post-merge metric 數，warn @ ratio×limit（預設 0.8）/ error 超 limit。
+1. **Schema validation**（error；`--required-fields`）— 點分路徑欄位 deepMerge 後不可缺；ADR-018 null-as-delete 後欄位變 nil 也算缺。
+2. **Routing schema guardrails**（error）— 5 檢查：unknown receiver type / 必填欄位缺 / empty matcher / duplicate matcher / redundant override。
+3. **Cardinality guard**（error；`--cardinality-limit`）— 預測 post-merge metric 數，warn @ ratio×limit（預設 0.8）/ error 超 limit。
+4. **Redundant override**（warn；PR-5 啟用）— tenant.yaml 覆寫某欄位的值剛好等於繼承的 `_defaults.yaml`，提示「移掉 override 改靠繼承」；warn 不擋 merge 除非 `--warn-as-error`。**Cascading 正確性**：tenants 在不同 sub-tree 下繼承不同 merged defaults，`pkg/config` 把每個租戶的 pre-merge defaults snapshot 透過 `EffectiveConfig.MergedDefaults` 暴露，guard 用 `NewDefaultsByTenant` per-tenant resolve（非 single-map fallback），保證 cascading L0/L1/L2 場景下不誤判。
 
 **`da-tools guard defaults-impact` 包裝**：Python `da-tools` CLI 透過 `scripts/tools/ops/guard_dispatch.py` shell-out 到 `da-guard` 二進位。Binary 解析順序：`--da-guard-binary` flag → `$DA_GUARD_BINARY` env → `$PATH` 上的 `da-guard`。詳見 `da-tools guard --help`。
+
+**GitHub Actions 自動化（PR-5）**：[`/.github/workflows/guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml) — `pull_request` 觸發於 `**/_defaults.yaml` 變更時自動跑 guard、posting 一個 sticky PR comment（marker `<!-- da-guard-defaults-impact -->`，每次 push update-in-place 不堆 stale）、artifact 上傳保 14 天。Exit code 1 (errors) 或 2 (caller error) 都失敗 workflow 擋 merge；exit 0 (clean 或只有 warnings) 通過。Workflow 也支援 `workflow_dispatch` 手動跑 + `config_dir` input override。**客戶 template**：客戶可把這份 workflow 整份 copy 到自己 repo gate `_defaults.yaml`；`Build da-guard` 步驟假設 threshold-exporter Go module 同 repo，純消費 release binary 的客戶可改下載 `tools/v*` release asset（C-11 後配套）。
 
 **範圍簡化（vs. v2.8.0 planning §C-12）**：PR-4 是 *當前工作樹* 驗證器，讀取磁碟現狀。CI / pre-commit 流程下這跟「給定 _defaults.yaml 變更、預測影響」等價（commit / push 前該變更已經寫在磁碟上）。Speculative simulation 留 C-7b `/simulate` 或後續 PR。
 

@@ -1,0 +1,225 @@
+# guard-defaults-impact.yml — C-12 Dangling Defaults Guard PR-5
+#
+# Triggered on PRs that touch any `**/_defaults.yaml`. Builds the
+# da-guard Go binary (PR-4), runs it against the changed
+# _defaults.yaml's directory subtree, and posts a sticky Markdown
+# report as a PR comment.
+#
+# Same posting pattern as blast-radius.yml (marker-based update vs
+# create) so reviewers see ONE comment per PR that updates in-place
+# on each push, not a stack of stale comments.
+#
+# Exit-code policy:
+#   - guard exit 0 → workflow success, comment posted with "no findings".
+#   - guard exit 1 → workflow FAIL (blocks merge); comment lists errors.
+#   - guard exit 2 → workflow FAIL (caller error); comment + log link.
+#
+# Customer template note:
+#   Customers can copy this workflow into their own repo to gate
+#   _defaults.yaml changes. The Build da-guard step assumes the
+#   threshold-exporter Go module is co-located in the repo; for
+#   customers consuming a pre-built binary, replace the build step
+#   with a release-asset download (see C-11 packaging).
+
+name: Dangling Defaults Guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/_defaults.yaml"
+      - "components/threshold-exporter/app/cmd/da-guard/**"
+      - "components/threshold-exporter/app/internal/guard/**"
+      - "components/threshold-exporter/app/pkg/config/scope.go"
+      - "components/threshold-exporter/app/pkg/config/hierarchy.go"
+      - ".github/workflows/guard-defaults-impact.yml"
+  workflow_dispatch:
+    inputs:
+      config_dir:
+        description: "Override conf.d/ root (default: auto-detect)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  guard:
+    name: Defaults Impact Guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-guard
+        run: |
+          cd components/threshold-exporter/app
+          go build -buildvcs=false \
+              -ldflags "-X main.Version=ci-$GITHUB_SHA" \
+              -o "$RUNNER_TEMP/da-guard" \
+              ./cmd/da-guard
+          "$RUNNER_TEMP/da-guard" --version
+
+      - name: Detect conf.d path
+        id: detect
+        # workflow_dispatch input is fed via env var rather than
+        # `${{ ... }}` shell interpolation — the env-var pattern
+        # bypasses any shell parsing of input contents and is the
+        # GitHub-recommended way to forward user-supplied input
+        # to bash without code-injection surface.
+        env:
+          INPUT_DIR: ${{ github.event.inputs.config_dir }}
+        run: |
+          # Resolution order:
+          #   1. workflow_dispatch input override (manual run)
+          #   2. repo-root conf.d/ (customer GitOps layout)
+          #   3. components/threshold-exporter/config/conf.d/ (this repo)
+          #   4. nothing → skip
+          if [ -n "$INPUT_DIR" ] && [ -d "$INPUT_DIR" ]; then
+            echo "conf_d=$INPUT_DIR" >> "$GITHUB_OUTPUT"
+          elif [ -d "conf.d" ]; then
+            echo "conf_d=conf.d" >> "$GITHUB_OUTPUT"
+          elif [ -d "components/threshold-exporter/config/conf.d" ]; then
+            echo "conf_d=components/threshold-exporter/config/conf.d" >> "$GITHUB_OUTPUT"
+          else
+            echo "conf_d=" >> "$GITHUB_OUTPUT"
+            echo "::warning::No conf.d/ directory found; nothing to validate"
+          fi
+
+      - name: Determine scope from changed _defaults.yaml
+        if: steps.detect.outputs.conf_d != '' && github.event_name == 'pull_request'
+        id: scope
+        # Same env-var hygiene as the Detect step — keep all
+        # `${{ ... }}` substitutions out of inline shell.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          CONF_D: ${{ steps.detect.outputs.conf_d }}
+        run: |
+          # Find every changed _defaults.yaml relative to the PR base.
+          # If there's exactly one, narrow scope to its directory.
+          # Otherwise fall back to the whole conf.d/ root (validating
+          # multiple cascading edits in one pass uses per-tenant
+          # defaults resolution; the redundant-override check stays
+          # accurate via NewDefaultsByTenant).
+          mapfile -t CHANGED < <(git diff --name-only "origin/${BASE_REF}"...HEAD -- '**/_defaults.yaml' || true)
+          if [ "${#CHANGED[@]}" -eq 1 ]; then
+            DIR=$(dirname "${CHANGED[0]}")
+            echo "scope=$DIR" >> "$GITHUB_OUTPUT"
+            echo "Narrow scope: $DIR (single _defaults.yaml change)"
+          else
+            echo "scope=${CONF_D}" >> "$GITHUB_OUTPUT"
+            echo "Whole-tree scope: ${CONF_D} (${#CHANGED[@]} _defaults.yaml changed)"
+          fi
+
+      - name: Run da-guard
+        if: steps.detect.outputs.conf_d != ''
+        id: guard
+        env:
+          CONF_D: ${{ steps.detect.outputs.conf_d }}
+          INNER_SCOPE: ${{ steps.scope.outputs.scope }}
+        run: |
+          set +e
+          SCOPE="${INNER_SCOPE}"
+          if [ -z "$SCOPE" ]; then
+            SCOPE="${CONF_D}"
+          fi
+          "$RUNNER_TEMP/da-guard" \
+              --config-dir "${CONF_D}" \
+              --scope "$SCOPE" \
+              --cardinality-limit 500 \
+              --format md \
+              --output "$RUNNER_TEMP/guard-report.md"
+          GUARD_EXIT=$?
+          echo "exit=$GUARD_EXIT" >> "$GITHUB_OUTPUT"
+          # Always continue so the comment-posting step runs even when
+          # the guard returned 1 (errors). The "Fail if guard found
+          # errors" step at the end converts the captured exit code
+          # into a workflow failure.
+          exit 0
+
+      - name: Post sticky PR comment
+        if: |
+          steps.detect.outputs.conf_d != '' &&
+          github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        env:
+          GUARD_EXIT: ${{ steps.guard.outputs.exit }}
+          REPORT_PATH: ${{ runner.temp }}/guard-report.md
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = process.env.REPORT_PATH;
+            const guardExit = process.env.GUARD_EXIT || 'unknown';
+
+            let body = '';
+            if (fs.existsSync(reportPath)) {
+              body = fs.readFileSync(reportPath, 'utf8');
+            } else {
+              body = `_(da-guard did not produce a report; exit code = ${guardExit}. See workflow log.)_\n`;
+            }
+
+            const marker = '<!-- da-guard-defaults-impact -->';
+            const footer = `\n\n---\n*Generated by [da-guard](../blob/main/components/threshold-exporter/app/cmd/da-guard) • C-12 Dangling Defaults Guard PR-5 • exit code: \`${guardExit}\`*\n`;
+            const fullBody = `${marker}\n${body}${footer}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+            }
+
+      - name: Upload report artifact
+        if: always() && steps.guard.outputs.exit != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: da-guard-report
+          path: ${{ runner.temp }}/guard-report.md
+          retention-days: 14
+
+      - name: Fail if guard found errors
+        if: steps.guard.outputs.exit != ''
+        env:
+          GUARD_EXIT: ${{ steps.guard.outputs.exit }}
+        run: |
+          case "$GUARD_EXIT" in
+            0)
+              echo "✅ Dangling Defaults Guard: clean."
+              ;;
+            1)
+              echo "::error::Dangling Defaults Guard found errors. See PR comment for details."
+              exit 1
+              ;;
+            2)
+              echo "::error::da-guard caller error (exit 2). Check workflow log + PR comment."
+              exit 1
+              ;;
+            *)
+              echo "::error::da-guard returned unexpected exit code: $GUARD_EXIT"
+              exit 1
+              ;;
+          esac

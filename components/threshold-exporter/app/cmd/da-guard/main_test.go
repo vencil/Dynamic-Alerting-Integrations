@@ -239,6 +239,106 @@ func TestRun_EmptyScope_ExitsZero(t *testing.T) {
 	}
 }
 
+// PR-5: redundant-override warn-tier should surface in the report.
+// Tenant overrides cpu=80 with the same value as the merged defaults
+// → guard.checkRedundantOverrides emits a SeverityWarn. Default exit
+// code stays 0 (warnings don't block); --warn-as-error flips to 1.
+func TestRun_RedundantOverride_SurfacesAsWarning(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": "defaults:\n  cpu: 80\n",
+		// tenant-a explicitly sets cpu=80 — same as the inherited
+		// default → redundant override.
+		"conf.d/tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: 80\n",
+		// tenant-b sets cpu=99 — meaningful override → NO finding.
+		"conf.d/tenant-b.yaml": "tenants:\n  tenant-b:\n    cpu: 99\n",
+	})
+	code, stdout, _ := runOnce(t,
+		"--config-dir", filepath.Join(tmp, "conf.d"),
+	)
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d (warnings don't block by default)", code, exitOK)
+	}
+	if !strings.Contains(stdout, "redundant_override") {
+		t.Errorf("stdout should surface redundant_override finding: %q", stdout)
+	}
+	if !strings.Contains(stdout, "tenant-a") {
+		t.Errorf("stdout should name tenant-a: %q", stdout)
+	}
+	// tenant-b override is meaningful — it should NOT appear in
+	// findings (we sanity-check with substring proximity).
+	if strings.Contains(stdout, "tenant-b") &&
+		strings.Contains(stdout, "redundant_override") {
+		// Verify no row mentions tenant-b alongside redundant_override.
+		// A loose check is fine here since the report uses GFM tables
+		// and findings sort errors-first then by tenant.
+		lines := strings.Split(stdout, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "tenant-b") &&
+				strings.Contains(line, "redundant_override") {
+				t.Errorf("tenant-b should not have redundant_override; line: %q", line)
+			}
+		}
+	}
+}
+
+func TestRun_RedundantOverride_WithWarnAsError_ExitsOne(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": "defaults:\n  cpu: 80\n",
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+	})
+	code, _, _ := runOnce(t,
+		"--config-dir", filepath.Join(tmp, "conf.d"),
+		"--warn-as-error",
+	)
+	if code != exitFindings {
+		t.Errorf("exit = %d, want %d (warn-as-error promotes redundant warns)", code, exitFindings)
+	}
+}
+
+// PR-5: cascading defaults — tenants under different sub-trees see
+// different merged defaults. This verifies da-guard threads
+// per-tenant defaults (NewDefaultsByTenant) through to the guard.
+func TestRun_RedundantOverride_HonorsCascadingDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml":    "defaults:\n  cpu: 70\n",
+		"conf.d/db/_defaults.yaml": "defaults:\n  cpu: 80\n",
+		// tenant-db overrides cpu=80 — matches db/ inherited → redundant
+		"conf.d/db/tenant-db.yaml": "tenants:\n  tenant-db:\n    cpu: 80\n",
+		// tenant-web overrides cpu=80 but inherits root cpu=70 → meaningful
+		"conf.d/web/tenant-web.yaml": "tenants:\n  tenant-web:\n    cpu: 80\n",
+	})
+	code, stdout, _ := runOnce(t,
+		"--config-dir", filepath.Join(tmp, "conf.d"),
+	)
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d", code, exitOK)
+	}
+	// tenant-db redundant; tenant-web NOT redundant. We assert this
+	// at the row level rather than via raw stdout substring because
+	// both names also appear in the "Scanned files" details list,
+	// which would make a substring check vacuously pass.
+	lines := strings.Split(stdout, "\n")
+	tenantDBFlagged := false
+	for _, line := range lines {
+		hasRedundant := strings.Contains(line, "redundant_override")
+		if !hasRedundant {
+			continue
+		}
+		if strings.Contains(line, "tenant-web") {
+			t.Errorf("tenant-web should NOT be flagged (its 80 ≠ inherited 70); line: %q", line)
+		}
+		if strings.Contains(line, "tenant-db") {
+			tenantDBFlagged = true
+		}
+	}
+	if !tenantDBFlagged {
+		t.Errorf("tenant-db should appear in a redundant_override row (its 80 = inherited 80); stdout: %q", stdout)
+	}
+}
+
 // Regression: self-review caught writeEmptyReport silently ignoring
 // IO errors. A bad --output path on an empty scope must surface as
 // exitCallerErr, not exitOK.

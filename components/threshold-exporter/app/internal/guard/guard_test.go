@@ -222,6 +222,111 @@ func TestCheckRedundantOverrides_SkipsOverridesAbsentFromDefaults(t *testing.T) 
 	}
 }
 
+// --- PR-5: per-tenant defaults map (NewDefaultsByTenant) -----------
+
+func TestCheckRedundantOverrides_NewDefaultsByTenant_PerTenantMaps(t *testing.T) {
+	// Two tenants with DIFFERENT cascading defaults — t-db inherits
+	// `db/_defaults.yaml` (cpu=80), t-web inherits `web/_defaults.yaml`
+	// (cpu=70). Both tenants override cpu=80. Only t-db's override is
+	// redundant; t-web's matches a different tenant's defaults but
+	// not its own. PR-1's single NewDefaults map can't distinguish.
+	got := checkRedundantOverrides(CheckInput{
+		TenantOverrides: map[string]map[string]any{
+			"t-db":  {"cpu": 80},
+			"t-web": {"cpu": 80},
+		},
+		NewDefaultsByTenant: map[string]map[string]any{
+			"t-db":  {"cpu": 80},
+			"t-web": {"cpu": 70},
+		},
+	})
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1 (t-db redundant only)", len(got))
+	}
+	if got[0].TenantID != "t-db" {
+		t.Errorf("tenant = %q, want t-db", got[0].TenantID)
+	}
+	if got[0].Severity != SeverityWarn {
+		t.Errorf("severity = %q, want warn", got[0].Severity)
+	}
+}
+
+func TestCheckRedundantOverrides_NewDefaultsByTenant_PrecedesGlobal(t *testing.T) {
+	// When both fields are populated, per-tenant entry wins for
+	// tenants that have one; the global map covers the rest.
+	got := checkRedundantOverrides(CheckInput{
+		TenantOverrides: map[string]map[string]any{
+			"t-specific": {"cpu": 99},
+			"t-fallback": {"cpu": 50},
+		},
+		NewDefaults: map[string]any{"cpu": 50}, // t-fallback uses this
+		NewDefaultsByTenant: map[string]map[string]any{
+			"t-specific": {"cpu": 99}, // t-specific uses this (override per-tenant)
+		},
+	})
+	tenantsFlagged := make(map[string]bool)
+	for _, f := range got {
+		tenantsFlagged[f.TenantID] = true
+	}
+	if !tenantsFlagged["t-specific"] {
+		t.Error("t-specific should be flagged via per-tenant defaults")
+	}
+	if !tenantsFlagged["t-fallback"] {
+		t.Error("t-fallback should be flagged via global NewDefaults fallback")
+	}
+}
+
+func TestCheckRedundantOverrides_NewDefaultsByTenant_NilEntrySkips(t *testing.T) {
+	// An explicit nil entry in the per-tenant map (e.g. tenant has no
+	// inherited defaults at all) suppresses the check for that tenant
+	// even if NewDefaults global is populated. Documents the
+	// "explicit opt-out per tenant" path.
+	got := checkRedundantOverrides(CheckInput{
+		TenantOverrides: map[string]map[string]any{
+			"t1": {"cpu": 80},
+			"t2": {"cpu": 80},
+		},
+		NewDefaults: map[string]any{"cpu": 80},
+		NewDefaultsByTenant: map[string]map[string]any{
+			"t1": nil, // explicitly skip t1
+		},
+	})
+	for _, f := range got {
+		if f.TenantID == "t1" {
+			t.Errorf("t1 should be skipped (nil per-tenant entry); got %+v", f)
+		}
+	}
+	// t2 still gets flagged via global fallback.
+	flaggedT2 := false
+	for _, f := range got {
+		if f.TenantID == "t2" {
+			flaggedT2 = true
+		}
+	}
+	if !flaggedT2 {
+		t.Error("t2 should still be flagged via NewDefaults global fallback")
+	}
+}
+
+func TestCheckRedundantOverrides_NewDefaultsByTenant_TenantMissingFromBoth(t *testing.T) {
+	// A tenant in TenantOverrides but absent from BOTH defaults
+	// sources gets the redundant-override check skipped silently.
+	// Avoids the "single tenant in scope without defaults context"
+	// false-positive risk.
+	got := checkRedundantOverrides(CheckInput{
+		TenantOverrides: map[string]map[string]any{
+			"orphan": {"cpu": 80},
+		},
+		NewDefaultsByTenant: map[string]map[string]any{
+			// orphan absent
+		},
+		// NewDefaults nil too
+	})
+	if len(got) != 0 {
+		t.Errorf("got %d findings, want 0 (orphan tenant has no defaults source)", len(got))
+	}
+}
+
 // --- run.go integration tests --------------------------------------
 
 func TestCheckDefaultsImpact_ErrorsOnEmptyConfigs(t *testing.T) {

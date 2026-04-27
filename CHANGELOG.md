@@ -55,6 +55,20 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Added
 
+- **Phase .c — C-12 Dangling Defaults Guard PR-5 — GitHub Actions wrapper + redundant-override warn 啟用（v2.8.0）** — 把 PR-4 ship 的 `da-guard` CLI 包成 PR-time gate：
+  - **新 workflow** `.github/workflows/guard-defaults-impact.yml`：`pull_request` 觸發於 `**/_defaults.yaml` 變更（plus self-PR-of-the-workflow / da-guard source paths），build da-guard binary → run guard → post sticky PR comment（marker `<!-- da-guard-defaults-impact -->`，每次 push update-in-place）。Pattern 直接借用 `blast-radius.yml`。Workflow 也支援 `workflow_dispatch` + `config_dir` input 手動跑、artifact 上傳保 14 天 (`da-guard-report`)。Exit 1/2 都 fail workflow 擋 merge；exit 0 (clean 或只有 warnings) 通過
+  - **Scope 推算**：偵測 PR 變更的 `_defaults.yaml` 數，**單一變更**時 narrow scope 到該檔 dirname；**多檔變更**時 fall back 整棵 conf.d/。後者依賴 PR-5 啟用的 cascading 正確性（見下）。Conf.d 路徑解析三層：`workflow_dispatch.config_dir` input → repo-root `conf.d/` → `components/threshold-exporter/config/conf.d/`
+  - **Redundant-override warn 啟用 + cascading 正確性**：PR-4 留下 `TenantOverrides` + `NewDefaults` 兩個 guard input nil-未填，PR-5 把這條 wire 接通，並且**為 cascading L0/L1/L2 場景設計新欄位**：
+    - `pkg/config.EffectiveConfig` 加 `TenantOverridesRaw map[string]any` + `MergedDefaults map[string]any`（兩者皆 `json:"-"`，**不**進 tenant-api `/effective` JSON 回應，guard-only）
+    - `computeEffectiveConfigBytesDetailed()` 新 helper（`computeEffectiveConfigBytes` 改為 thin shim）—— 在 deepMerge tenant override **之前** 取 `deepCopyMapH(merged)` snapshot，避免後續 merge 透過 alias 污染 snapshot。Defends against shared sub-map mutation
+    - `internal/guard.CheckInput` 加 `NewDefaultsByTenant map[string]map[string]any`：per-tenant merged-defaults map（PR-1 的 single `NewDefaults` 留作 fallback，preserves backwards-compat）。Resolution rule：per-tenant entry 存在則用之、否則 fall back global、兩者皆無則 silent skip
+    - `redundant.go::checkRedundantOverrides` 改為 per-tenant defaults resolution；nil per-tenant entry 視為 explicit opt-out（`tenantDefaultsLeaves` helper）
+    - `cmd/da-guard/main.go::buildCheckInput` 從 `ScopedTenants` 取 `TenantOverridesRaw` + `MergedDefaults` 直接 thread 進 guard input
+  - **Customer template note**：客戶可整份 copy workflow 到自己 repo gate `_defaults.yaml`；`Build da-guard` 步驟假設 threshold-exporter Go module 同 repo，純消費 release binary 的客戶可改下載 `tools/v*` release asset（C-11 後配套）
+  - **新測試**（`-race -count=2` 穩定）：guard_test 4 cases 涵蓋 NewDefaultsByTenant per-tenant maps / 與 NewDefaults 的 precedence / nil entry skip / tenant 兩 source 都缺 silent skip；scope_test 2 cases 驗 EffectiveConfig 新欄位 populated + snapshot 不 alias EffectiveConfig；da-guard cmd 3 cases 驗 redundant warn surface / `--warn-as-error` exit 1 / cascading 正確性（tenant-db redundant、tenant-web 不 redundant）
+  - **C-12 軌道完結**（PR-1 schema → PR-2 routing → PR-3 cardinality → PR-4 CLI → PR-5 GH Actions + warn-tier）。客戶從 pre-commit hook 走 da-guard binary、從 PR 走自動 sticky comment。下一步是 C-11 release packaging 把 binary ship 出去
+  - 詳見 `components/threshold-exporter/README.md` § da-guard CLI / planning §12.2 Phase .c row C-12
+
 - **Phase .c — C-12 Dangling Defaults Guard PR-4 — `da-guard` CLI + `da-tools guard` 包裝（v2.8.0）** — 把 PR-1/2/3 累積的 `internal/guard` library 變成 customer-runnable 工具：
   - **新 Go binary** `components/threshold-exporter/app/cmd/da-guard/`（同 module，import `pkg/config` + `internal/guard`），flags：`--config-dir`（必填）`--scope`、`--required-fields`、`--cardinality-limit`、`--cardinality-warn-ratio`、`--format md\|json`、`--output`、`--warn-as-error`、`--version`。Stable exit codes：0 clean / 1 errors found / 2 caller error
   - **新 helper** `pkg/config/scope.go::ScopeEffective()`：給定 conf.d root + 子目錄 scope，遍歷子目錄列出所有 tenant ID，per-tenant 走 `ResolveEffective` 拿到 effective config map。Containment guard（scope 跑出 root 之外 → caller error）+ duplicate-tenant detection（match `ResolveEffective` 既有 loud-fail 立場）+ 排序 deterministic 輸出

@@ -17,7 +17,9 @@ tenants:
 
     # --- 維度閾值: 按 queue 分設 ---
     # 語法: "metric{label=\"value\"}": "threshold" 或 "threshold:severity"
-    "redis_queue_length{queue=\"order-processing\"}": "100"
+    # NOTE: 維度 key 不支援 `_critical` 兩階 severity（runtime 只走 dimensional
+    # 單行 inline severity，見 config_resolve.go ResolveAt dimensional 分支），
+    # 想要兩階請拆 label 或寫一條 inline severity。
     "redis_queue_length{queue=\"order-processing\"}": "500:critical"
     "redis_queue_length{queue=\"email-notifications\"}": "1000"
     "redis_queue_length{queue=\"analytics\"}": "5000"
