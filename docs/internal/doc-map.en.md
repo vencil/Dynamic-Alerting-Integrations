@@ -30,7 +30,7 @@ lang: en
 | `docs/adr/016-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant |
 | `docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy |
 | `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload |
-| `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default + PromRule→threshold translator |
+| `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | Performance Analysis & Benchmarks |

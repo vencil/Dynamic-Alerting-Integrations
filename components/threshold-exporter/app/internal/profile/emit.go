@@ -79,10 +79,21 @@ type EmissionInput struct {
 	// (`defaults: {<metric_key>: <threshold>}` /
 	// `tenants: {<id>: {<metric_key>: "<value>"}}`) when the
 	// translator can pull a numeric threshold out of every member
-	// rule. Per-proposal fall-back: a proposal whose
-	// TranslateProposal returns Status==TranslationSkipped retains
-	// the intermediate shape, so a partial corpus still emits
-	// useful artifacts. ADR-019 §emission-mode pins this contract.
+	// rule.
+	//
+	// Per-proposal dispatch (NOT batch all-or-nothing): each cluster
+	// runs TranslateProposal independently. TranslationOK / Partial
+	// → conf.d-shape. TranslationSkipped → fall back to PR-2
+	// intermediate. A mixed easy/hard customer corpus still gets
+	// maximum value — translatable clusters land conf.d-ready,
+	// others surface for human review without sinking the batch.
+	//
+	// false (default) preserves PR-2 backwards-compat for tooling
+	// already integrated against intermediate format. The cross-
+	// cutting "Profile-as-Directory-Default" principle that the
+	// conf.d-shape emission realises is documented in ADR-019;
+	// translator heuristics + cluster aggregation rules + status
+	// semantics live in the `translate.go` package header.
 	Translate bool `json:"translate,omitempty"`
 }
 

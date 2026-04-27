@@ -25,34 +25,105 @@ package profile
 //      ambiguous so the human reviewer can intervene before the
 //      proposal lands as real conf.d/.
 //
-// SCOPE — see ADR-019 for the full design rationale and the
-// non-goals (which expressions we deliberately don't translate).
+// The cross-cutting design principle this translator enables —
+// "Profile-as-Directory-Default" (cluster median in `_defaults.yaml`,
+// only divergent tenants get override files) — lives in ADR-019.
+// Heuristic + algorithmic decisions for the translator itself are
+// documented inline below (single source of truth for translator
+// behaviour; ADR-019 stays slim and only carries the cross-component
+// principles).
 //
-// CONTRACT
-// --------
-// `TranslateRule` operates on a single ParsedRule and returns a
-// RuleTranslation. Pure function; never mutates the input.
 //
-// `TranslateProposal` aggregates per-rule translations across a
-// cluster and decides:
+// metric_key RESOLUTION (5-step ladder, first match wins)
+// -------------------------------------------------------
+// `metric_key` is the conf.d-side scalar key the translator emits
+// under `defaults:` / `tenants:`. PromRule has no native concept of
+// one, so the translator must choose. resolveMetricKey() applies:
 //
-//   - The proposal-level metric_key (must be unanimous across
-//     members; mismatch is a translation failure surfaced via
-//     Warnings, not a panic).
-//   - The cluster's default threshold (median of member values
-//     for stability against outliers; falls back to first member
-//     when len == 1).
-//   - Per-tenant override entries (only when their value differs
-//     from the cluster default — keeps tenant.yaml minimal).
+//   1. rule.Labels["metric_key"]   → TranslationOK (no warning)
+//   2. rule.Alert snake_case       → TranslationPartial + warning
+//   3. rule.Record snake_case      → TranslationPartial + warning
+//   4. First MetricExpr.__name__   → TranslationPartial + warning
+//   5. Nothing of the above        → TranslationSkipped
 //
-// PR-3 INTENTIONAL NON-GOALS:
+// Explicit label (1) emits NO warning — the customer chose this on
+// purpose. Heuristic fallbacks (2-4) emit warnings so a renamed
+// alert that silently changes the conf.d key surfaces clearly to
+// the reviewer. Empty (5): the translator REFUSES to invent a key;
+// caller falls back to PR-2 intermediate format.
 //
-//   - Multi-comparison expressions (`a > 1 and b > 2`) — too
-//     ambiguous; leave for human-driven custom translation.
+// snake_case handles the acronym→Word boundary
+// (`MySQLHigh→my_sql_high`, not `my_sqlhigh`) via one-char
+// lookahead — see snakeCaseIdentifier comment.
+//
+//
+// CLUSTER-LEVEL AGGREGATION (TranslateProposal)
+// ---------------------------------------------
+// When a cluster has N members, the translator decides cluster-
+// level facts:
+//
+//   - metric_key, operator, severity → MAJORITY VOTE. Inconsistent
+//     axes downgrade Status to Partial with a dissent warning
+//     (we DON'T hard-fail; PR-1 already certified the cluster as
+//     "structurally similar" so dissent is rare and reviewer-action
+//     able). Ties broken alphabetically for stable output.
+//   - default_threshold → MEDIAN of translated members. Median is
+//     outlier-immune (mean would let one tenant's 5000 pull a
+//     [80, 80, 5000] cluster's default to 1700). Even-length
+//     slices use the lower-of-two-middles for determinism.
+//   - PerTenantOverrides → only emit for members whose value
+//     diverges from default_threshold. Tenants matching default
+//     get NO override entry (deepMerge fall-through). This is
+//     the "Profile-as-Directory-Default" line-savings ADR-019 §1
+//     promises, made concrete.
+//
+//
+// COMPARISON OPERATORS
+// --------------------
+// 4 supported: `>`, `>=`, `<`, `<=`.
+//
+//   - `0.85 < metric` (inverted form) → auto-flip to `metric > 0.85`
+//     so downstream consumers see one canonical "metric op threshold"
+//     shape (flipComparisonOp helper).
+//   - Multiple comparisons (`a > 1 and b > 2`) → pre-order tree walk
+//     picks the first numeric comparison, status Partial, warning
+//     listed. Which one is the "primary" threshold is a human
+//     decision.
+//
+//
+// STATUS + FALLBACK LADDER
+// ------------------------
+// Per-rule Status enum (see TranslationStatus consts):
+//
+//   - TranslationOK      — explicit metric_key + numeric comparison
+//                          + non-empty severity for alerts.
+//   - TranslationPartial — heuristic-derived metric_key, OR
+//                          non-unanimous cluster axes, OR partial
+//                          translation success across members.
+//   - TranslationSkipped — parse error / no numeric comparison /
+//                          vector comparison / equality (==/!=
+//                          deliberate non-goal) / no metric_key
+//                          source. Caller MUST treat as "fall
+//                          back to PR-2 intermediate format".
+//
+// Cluster-level: zero translatable members → cluster status Skipped
+// → emit fall-back to intermediate format. emit.go::emitOneProposal
+// implements per-proposal dispatch so a mixed easy/hard customer
+// corpus still gets max value.
+//
+//
+// PR-3 INTENTIONAL NON-GOALS (also pinned in ADR-019)
+// ---------------------------------------------------
+//   - `==` / `!=` operator translation. Equality on a numeric
+//     metric vs scalar is rarely "threshold" semantics.
+//   - Multi-comparison root-pick smarter than "first match wins".
 //   - Histogram quantile bucketing translation.
 //   - Auto-rewriting the source PrometheusRule expression to use
 //     `user_threshold{}` lookup. Translator surfaces the threshold
 //     scalar; rule rewrite is a separate concern out of scope.
+//   - Translating dimensional / regex labels (`{queue=~"q.*"}`).
+//   - Two-tier severity (warning + critical from one cluster) —
+//     PR-3 picks majority severity when members disagree.
 
 import (
 	"errors"
