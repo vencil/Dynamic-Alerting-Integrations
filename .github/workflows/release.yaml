@@ -105,11 +105,25 @@ jobs:
           ignore-unfixed: true
 
   # ----------------------------------------------------------------
-  # Job 2: Build & push da-tools image
+  # Job 2: Build & push da-tools image + da-guard binaries (C-11)
   # ----------------------------------------------------------------
+  # v2.8.0 C-11 extends this job with three customer-delivery formats
+  # for the migration toolkit (tools/v* release line):
+  #
+  #   (a) Docker image at ghcr.io (existing path)
+  #   (b) Cross-compiled da-guard binaries for direct download
+  #       (linux/darwin/windows × amd64/arm64 → 6 archives + SHA256SUMS)
+  #   (c) docker save of the image as gzipped tar for air-gapped
+  #       environments (customers who can't pull from ghcr.io)
+  #
+  # Customer chooses install path at the GitHub Release page; see
+  # docs/migration-toolkit-installation.md for the install matrix.
   release-da-tools:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/tools/')
+    permissions:
+      contents: write   # gh release create / upload
+      packages: write   # ghcr push (inherited)
     steps:
       - uses: actions/checkout@v6
 
@@ -117,12 +131,34 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#tools/v}" >> "$GITHUB_OUTPUT"
 
+      # C-11: pin tools/v* tag against the in-tree VERSION file so
+      # forgot-to-bump errors surface at release time, not after the
+      # image is already on ghcr.io.
+      - name: Verify VERSION file matches tag
+        run: |
+          FILE_VER=$(tr -d '[:space:]' < components/da-tools/app/VERSION)
+          if [ "$FILE_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: components/da-tools/app/VERSION ($FILE_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            echo "Run: make bump-docs TOOLS=${{ steps.version.outputs.VERSION }} && commit before re-tagging"
+            exit 1
+          fi
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Go is required for build.sh's da-guard bundling step (the
+      # linux/amd64 binary baked into the image) AND for the
+      # cross-compile matrix below.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
 
       - name: Assemble da-tools build context
         run: |
@@ -149,6 +185,93 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      # ----------------------------------------------------------------
+      # C-11 extras: cross-compile binaries + air-gapped tar + Release
+      # ----------------------------------------------------------------
+
+      - name: Cross-compile da-guard binaries (6 OS/ARCH combos)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/da-guard-bin"
+          cd components/threshold-exporter/app
+          for OS in linux darwin windows; do
+            for ARCH in amd64 arm64; do
+              EXT=""
+              [ "$OS" = "windows" ] && EXT=".exe"
+              OUT="$RUNNER_TEMP/da-guard-bin/da-guard-${OS}-${ARCH}${EXT}"
+              echo "▸ Building da-guard $OS/$ARCH..."
+              CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build \
+                  -buildvcs=false \
+                  -ldflags "-X main.Version=v${VERSION}" \
+                  -o "$OUT" \
+                  ./cmd/da-guard
+            done
+          done
+          ls -la "$RUNNER_TEMP/da-guard-bin/"
+
+      - name: Package binaries (tarball / zip + SHA256SUMS)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/da-guard-bin"
+          # Linux + macOS: tar.gz. Windows: zip (Windows users
+          # commonly lack tar/gzip; zip is universal).
+          for f in da-guard-linux-* da-guard-darwin-*; do
+            tar czf "${f}.tar.gz" "$f"
+          done
+          for f in da-guard-windows-*; do
+            zip -q "${f%.exe}.zip" "$f"
+          done
+          # Sum every artefact reviewers can download, including the
+          # raw binaries for security-team teams that prefer to verify
+          # the binary directly rather than the archive.
+          sha256sum da-guard-linux-* da-guard-darwin-* da-guard-windows-* \
+                    *.tar.gz *.zip > SHA256SUMS
+          echo "--- Archive listing ---"
+          ls -la
+
+      - name: Save image as gzipped tar (air-gapped customers)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${VERSION}"
+          OUT="$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz"
+          docker pull "$IMG"
+          docker save "$IMG" | gzip > "$OUT"
+          ( cd "$RUNNER_TEMP" && sha256sum "$(basename "$OUT")" > "${OUT}.sha256" )
+          ls -la "$OUT" "$OUT.sha256"
+
+      - name: Create or update GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # Idempotent: if the maintainer pre-created the Release
+          # (e.g. with hand-curated notes), skip create + just
+          # upload --clobber the assets. If not, create with
+          # --generate-notes for a starter changelog.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "▸ Release $TAG already exists; uploading assets with --clobber"
+          else
+            echo "▸ Creating Release $TAG with auto-generated notes"
+            gh release create "$TAG" \
+                --title "da-tools v${VERSION} — Migration Toolkit" \
+                --generate-notes
+          fi
+          gh release upload "$TAG" --clobber \
+              "$RUNNER_TEMP/da-guard-bin/"*.tar.gz \
+              "$RUNNER_TEMP/da-guard-bin/"*.zip \
+              "$RUNNER_TEMP/da-guard-bin/SHA256SUMS" \
+              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz" \
+              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sha256"
+          echo "✓ Release $TAG ready: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
   # ----------------------------------------------------------------
   # Job 3: Build & push da-portal image (Interactive Tools Portal)

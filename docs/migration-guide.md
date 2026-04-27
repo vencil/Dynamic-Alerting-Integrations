@@ -18,6 +18,21 @@ lang: zh
 >
 > **提示：** 所有 `da-tools` 指令可透過 Docker 直接執行（`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.7.0 <cmd>`），以下範例使用簡寫 `da-tools <cmd>` 形式。
 
+## 安裝 Migration Toolkit（v2.8.0+）
+
+開始遷移前先安裝工具集。三條路徑（Docker / static binary / air-gapped tar）任選一條，詳見 [`migration-toolkit-installation.md`](migration-toolkit-installation.md)。最常見的兩個指令：
+
+```bash
+# 路徑 A：Docker pull from ghcr.io（最簡單）
+docker pull ghcr.io/vencil/da-tools:v2.7.0
+
+# 路徑 B：下載靜態 binary 到 PATH
+curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.7.0/da-guard-linux-amd64.tar.gz
+tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/bin/da-guard
+```
+
+完整指令、hash 驗證、air-gapped 流程：見 [`migration-toolkit-installation.md`](migration-toolkit-installation.md)。
+
 ## 你在哪個階段？(Where Are You?)
 
 | 你的情境 | 推薦路徑 | 工具 (`da-tools` 命令) | 預估時間 |
