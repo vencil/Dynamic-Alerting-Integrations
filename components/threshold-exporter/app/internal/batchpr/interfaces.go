@@ -59,6 +59,53 @@ type GitClient interface {
 	// origin. Used by Apply() to skip work for PRs that have
 	// already been opened (idempotency).
 	BranchExistsRemote(ctx context.Context, branch string) (bool, error)
+
+	// RebaseOnto runs `git rebase --onto <newBase> <oldBase>
+	// <branch>`, leaving the working tree on `branch`. Used by
+	// PR-3 Refresh() to re-anchor tenant branches onto the merged
+	// Base PR's main HEAD.
+	//
+	// Returns RebaseOutcome describing what happened. Conflicts
+	// are NOT errors at the interface level — they're an expected
+	// outcome the orchestration handles. The impl SHOULD `git
+	// rebase --abort` on conflicts so the working tree returns to
+	// a clean state regardless of conflict outcome (apply.go's
+	// other operations assume a clean tree).
+	//
+	// A non-nil error reflects a "couldn't even start" condition
+	// (git not on PATH, repo not a git repo, etc.) — distinct from
+	// "started but conflicts emerged".
+	RebaseOnto(ctx context.Context, branch, oldBase, newBase string) (*RebaseOutcome, error)
+
+	// ForcePushWithLease pushes `branch` to origin with `--force-
+	// with-lease`. Used after RebaseOnto rewrites history; the
+	// `--with-lease` variant refuses to overwrite remote work that
+	// landed since our last fetch — a safer alternative to plain
+	// `--force` for collaborative branches.
+	ForcePushWithLease(ctx context.Context, branch string) error
+}
+
+// RebaseOutcome describes the outcome of a single RebaseOnto call.
+// The orchestration translates this into the higher-level
+// RebaseStatus on RefreshItemResult.
+type RebaseOutcome struct {
+	// Conflicted is true iff git reported conflicts that aborted
+	// the rebase. ConflictedFiles is populated in this case.
+	Conflicted bool
+
+	// ConflictedFiles is the list of conflicted paths git named
+	// (parsed out of `git status --porcelain` after the rebase
+	// failed, or `git rerere` style output — impl's choice). Sorted
+	// for stable report output. Empty when Conflicted=false.
+	ConflictedFiles []string
+
+	// AlreadyUpToDate is true when `git rebase --onto` reported
+	// "Current branch is up to date" — the rebase was a no-op
+	// because the branch was already anchored on newBase. Treated
+	// as Clean by the orchestration (the desired state was
+	// already achieved). The impl sets this OR returns a clean
+	// rebase; either way the orchestration sees "no work needed".
+	AlreadyUpToDate bool
 }
 
 // PRClient performs GitHub PR API operations.
@@ -79,6 +126,43 @@ type PRClient interface {
 	// `body`. Used by Apply() to fill the `<base>` placeholder in
 	// tenant PR descriptions after the base PR opens.
 	UpdatePRDescription(ctx context.Context, num int, body string) error
+
+	// GetPR fetches metadata about an existing PR. Used by
+	// Refresh() to decide whether a tenant PR is still open
+	// (rebase needed) or closed/merged (skip).
+	//
+	// Errors when the PR doesn't exist or the API call fails;
+	// neither case is meaningful for refresh, so the orchestration
+	// records both as `step="get_pr"` failures.
+	GetPR(ctx context.Context, num int) (*PRDetails, error)
+
+	// CommentPR posts a Markdown comment on an existing PR. Used
+	// by Refresh() to leave a "rebased onto merged main" note so
+	// reviewers see the refresh happened.
+	CommentPR(ctx context.Context, num int, body string) error
+}
+
+// PRDetails reports the subset of PR metadata Refresh() cares about.
+type PRDetails struct {
+	// Number echoes the queried PR number.
+	Number int
+
+	// State is "open", "closed", or "merged". Mirrors GitHub's PR
+	// state machine. A merged PR also has State=="merged" (not
+	// "closed") so callers can distinguish merged-then-closed
+	// (success) from explicitly-closed (abandoned).
+	State PRState
+
+	// HeadBranch is the head branch the PR is built on. Refresh
+	// cross-checks this against RefreshTarget.BranchName; a
+	// mismatch surfaces as a warning so operators notice when
+	// someone manually rebased + force-pushed (or otherwise rewrote
+	// the branch) before our refresh ran.
+	HeadBranch string
+
+	// URL is the GitHub HTML URL — populated for completeness so
+	// the refresh-report.md can link back to each PR.
+	URL string
 }
 
 // OpenPRInput is the contract for a new PR.

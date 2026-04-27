@@ -133,6 +133,78 @@ func (c *GHPRClient) UpdatePRDescription(ctx context.Context, num int, body stri
 	return nil
 }
 
+// GetPR implements PRClient. Issues
+// `gh pr view <num> --repo owner/name --json number,state,headRefName,url`.
+//
+// gh's `--json state` returns "OPEN", "CLOSED", or "MERGED" (upper-
+// case). We normalise to PRState lowercase. A merged PR has
+// state="MERGED" (NOT "CLOSED"), which lets Refresh() distinguish
+// merged-then-closed (success path, skip rebase) from manually-
+// closed (abandoned, also skip rebase but reported separately).
+func (c *GHPRClient) GetPR(ctx context.Context, num int) (*PRDetails, error) {
+	if c.Repo.FullName() == "" {
+		return nil, fmt.Errorf("get PR: GHPRClient.Repo missing owner/name")
+	}
+	args := []string{
+		"pr", "view", fmt.Sprintf("%d", num),
+		"--repo", c.Repo.FullName(),
+		"--json", "number,state,headRefName,url",
+	}
+	out, err := c.runGH(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("gh pr view %d: %w", num, err)
+	}
+	var row struct {
+		Number      int    `json:"number"`
+		State       string `json:"state"`
+		HeadRefName string `json:"headRefName"`
+		URL         string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &row); err != nil {
+		return nil, fmt.Errorf("gh pr view %d: parse JSON: %w (raw: %s)", num, err, out)
+	}
+	return &PRDetails{
+		Number:     row.Number,
+		State:      normalisePRState(row.State),
+		HeadBranch: row.HeadRefName,
+		URL:        row.URL,
+	}, nil
+}
+
+// CommentPR implements PRClient. Issues
+// `gh pr comment <num> --repo owner/name --body <body>`.
+func (c *GHPRClient) CommentPR(ctx context.Context, num int, body string) error {
+	if c.Repo.FullName() == "" {
+		return fmt.Errorf("comment PR: GHPRClient.Repo missing owner/name")
+	}
+	args := []string{
+		"pr", "comment", fmt.Sprintf("%d", num),
+		"--repo", c.Repo.FullName(),
+		"--body", body,
+	}
+	if _, err := c.runGH(ctx, args...); err != nil {
+		return fmt.Errorf("gh pr comment %d: %w", num, err)
+	}
+	return nil
+}
+
+// normalisePRState maps gh's upper-case state strings to the
+// lower-case PRState consts. Unknown / future states fall through
+// to PRStateUnknown so Refresh()'s conservative "skip non-open"
+// branch handles them safely.
+func normalisePRState(s string) PRState {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "OPEN":
+		return PRStateOpen
+	case "CLOSED":
+		return PRStateClosed
+	case "MERGED":
+		return PRStateMerged
+	default:
+		return PRStateUnknown
+	}
+}
+
 // runGH wraps the cmdRunner with `gh` as the command name. Working
 // directory is irrelevant for `gh pr *` (we always pass `--repo`),
 // so we pass `""` as dir — the runner promotes that to "no chdir".
