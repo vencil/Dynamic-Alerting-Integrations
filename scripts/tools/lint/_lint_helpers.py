@@ -27,6 +27,15 @@ BUILD_EXEMPT = frozenset({
     "_lib_io.py",
     "metric-dictionary.yaml",
     "generate_tenant_mapping_rules.py",
+    # v2.8.0 Phase B Track A A5: ship-but-not-public CLI design tradeoff.
+    # describe_tenant.py is a v2.7.0 internal tool that ships in the docker
+    # image as a transitive dependency for tenant_verify.py (which IS
+    # public via `da-tools tenant-verify`). The arg shape may change before
+    # describe_tenant gets its own promotion to a stable da-tools subcommand,
+    # so we deliberately keep it out of COMMAND_MAP. See
+    # components/da-tools/app/build.sh near the dx/describe_tenant.py entry
+    # for the full rationale.
+    "describe_tenant.py",
 })
 
 
