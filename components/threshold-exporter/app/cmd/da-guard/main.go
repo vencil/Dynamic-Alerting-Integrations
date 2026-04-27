@@ -203,25 +203,30 @@ func run(args []string, stdout, errOut io.Writer) int {
 }
 
 // buildCheckInput assembles a guard.CheckInput from the scoped
-// resolution. It's where the YAML-shape → guard-input mapping
-// lives — pulling the per-tenant `_routing` block out of the
-// merged map, building the `tenant_id → effective_config` map,
-// and (deliberately, for v1) leaving TenantOverrides + NewDefaults
-// nil so the redundant-override check is skipped.
+// resolution. It's where the YAML-shape → guard-input mapping lives:
 //
-// Why redundant-override is opt-out in PR-4:
+//   - EffectiveConfigs[id]      ← ec.EffectiveConfig
+//   - RoutingByTenant[id]       ← ec.EffectiveConfig["_routing"] (when nested map)
+//   - TenantOverrides[id]       ← ec.TenantOverridesRaw (PR-5)
+//   - NewDefaultsByTenant[id]   ← ec.MergedDefaults      (PR-5)
 //
-//	That check needs the *raw* tenant.yaml override map and the
-//	*new* defaults map separately, not the merged result.
-//	Recovering them at this layer is two more YAML reads per
-//	tenant + a defaults-chain accumulator, and the value
-//	delivered (warnings on duplicated values) is lower than the
-//	3 error-tier checks shipping here. Defer to PR-4.5 / PR-5
-//	alongside GitHub Actions wrapper, when we can also surface
-//	the warnings on PR comments without spamming.
+// The PR-5 wiring (TenantOverrides + NewDefaultsByTenant) enables
+// the redundant-override warn-tier without changing the cardinality /
+// schema / routing error tiers. Fields used to be nil-left in PR-4
+// because pkg/config.EffectiveConfig didn't expose the pre-merge
+// shapes; PR-5 adds those (json:"-" so tenant-api's API contract
+// stays unchanged) and we now thread them through.
+//
+// We deliberately use NewDefaultsByTenant rather than NewDefaults: a
+// scope spanning multiple cascading _defaults.yaml levels means
+// different tenants inherit different merged-defaults views, and
+// the guard's per-tenant resolution honors that. See
+// guard.CheckInput documentation for the resolution rule.
 func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	effective := make(map[string]map[string]any, len(scoped.Tenants))
 	routing := make(map[string]map[string]any)
+	tenantOverrides := make(map[string]map[string]any)
+	newDefaultsByTenant := make(map[string]map[string]any)
 	for _, ec := range scoped.Tenants {
 		effective[ec.TenantID] = ec.EffectiveConfig
 		// _routing is stored as a nested map inside the merged
@@ -233,6 +238,18 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		if r, ok := ec.EffectiveConfig["_routing"].(map[string]any); ok {
 			routing[ec.TenantID] = r
 		}
+		// PR-5: redundant-override warn-tier inputs. We populate
+		// both fields as soon as the resolver hands them to us; an
+		// absent tenant.yaml block (TenantOverridesRaw == nil) or
+		// a defaults-less tree (MergedDefaults == nil) leaves the
+		// per-tenant entry out of the map, which the guard treats
+		// as "skip this tenant for redundant-override".
+		if ec.TenantOverridesRaw != nil {
+			tenantOverrides[ec.TenantID] = ec.TenantOverridesRaw
+		}
+		if ec.MergedDefaults != nil {
+			newDefaultsByTenant[ec.TenantID] = ec.MergedDefaults
+		}
 	}
 
 	required := splitNonEmpty(f.requiredFields)
@@ -241,6 +258,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		EffectiveConfigs:     effective,
 		RequiredFields:       required,
 		RoutingByTenant:      routing,
+		TenantOverrides:      tenantOverrides,
+		NewDefaultsByTenant:  newDefaultsByTenant,
 		CardinalityLimit:     f.cardinalityLimit,
 		CardinalityWarnRatio: f.cardinalityWarnRatio,
 	}

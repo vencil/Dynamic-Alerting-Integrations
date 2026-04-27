@@ -50,8 +50,11 @@ import (
 var ErrTenantNotFound = errors.New("tenant not found in config tree")
 
 // EffectiveConfig is the merged tenant view returned by the resolver and the
-// /effective handler. All fields are JSON-serializable; hash lengths match
-// describe_tenant.py (16 hex chars).
+// /effective handler. JSON-serialized fields match describe_tenant.py (16 hex
+// chars for hashes); the trailing `json:"-"` fields are populated for the
+// guard caller (v2.8.0 PR-5 redundant-override warn-tier) but stay out of the
+// HTTP response so tenant-api's /effective contract doesn't grow surface for
+// downstream consumers that don't need it.
 type EffectiveConfig struct {
 	TenantID        string         `json:"tenant_id"`
 	SourceFile      string         `json:"source_file"`
@@ -60,6 +63,20 @@ type EffectiveConfig struct {
 	DefaultsChain   []string       `json:"defaults_chain"`
 	EffectiveConfig map[string]any `json:"effective_config"`
 	Warnings        []string       `json:"warnings,omitempty"`
+
+	// TenantOverridesRaw is the tenant.yaml override block before any
+	// defaults-chain merge. Populated by ResolveEffective so the C-12
+	// redundant-override check can compare raw overrides to the
+	// inherited defaults at the same path. Not serialized — guard-only.
+	TenantOverridesRaw map[string]any `json:"-"`
+
+	// MergedDefaults is the defaults chain merged together for this
+	// tenant's directory, BEFORE the tenant override is applied. This
+	// is the "what the tenant inherits" view that the guard's
+	// redundant-override check needs (different tenants under cascading
+	// _defaults.yaml may inherit different merged defaults; see
+	// guard.CheckInput.NewDefaultsByTenant). Not serialized — guard-only.
+	MergedDefaults map[string]any `json:"-"`
 }
 
 // ResolveEffective walks `configDir` looking for the tenant file that defines
@@ -194,7 +211,7 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 		defaultsYAML = append(defaultsYAML, b)
 	}
 
-	merged, err := computeEffectiveConfigBytes(tenantBytes, tenantID, defaultsYAML)
+	merged, mergedDefaults, tenantRaw, err := computeEffectiveConfigBytesDetailed(tenantBytes, tenantID, defaultsYAML)
 	if err != nil {
 		return nil, err
 	}
@@ -221,12 +238,14 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 	}
 
 	return &EffectiveConfig{
-		TenantID:        tenantID,
-		SourceFile:      relSource,
-		SourceHash:      fmt.Sprintf("%x", sourceSum)[:16],
-		MergedHash:      fmt.Sprintf("%x", mergedSum)[:16],
-		DefaultsChain:   relChain,
-		EffectiveConfig: merged,
+		TenantID:           tenantID,
+		SourceFile:         relSource,
+		SourceHash:         fmt.Sprintf("%x", sourceSum)[:16],
+		MergedHash:         fmt.Sprintf("%x", mergedSum)[:16],
+		DefaultsChain:      relChain,
+		EffectiveConfig:    merged,
+		TenantOverridesRaw: tenantRaw,
+		MergedDefaults:     mergedDefaults,
 	}, nil
 }
 
@@ -240,11 +259,35 @@ func computeEffectiveConfigBytes(
 	tenantID string,
 	defaultsChainYAML [][]byte,
 ) (map[string]any, error) {
-	merged := make(map[string]any)
+	merged, _, _, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	return merged, err
+}
+
+// computeEffectiveConfigBytesDetailed extends the legacy helper with
+// the two intermediate maps the C-12 PR-5 redundant-override check
+// needs:
+//
+//   - mergedDefaults: the defaults chain merged together, BEFORE the
+//     tenant override is applied. Captured as a deep-copy snapshot so
+//     subsequent merging into `merged` doesn't mutate it.
+//   - tenantRaw:      the tenant.yaml override block, raw. Returned
+//     by extractTenantRawH and never mutated past this point.
+//
+// Caller-friendly contract: these two maps are *also* what the guard
+// library treats as the tuple (NewDefaults, TenantOverrides) per
+// tenant. We deliberately return them separately rather than letting
+// downstream callers re-derive: re-derivation requires re-running the
+// merge engine and would invite drift.
+func computeEffectiveConfigBytesDetailed(
+	tenantYAMLBytes []byte,
+	tenantID string,
+	defaultsChainYAML [][]byte,
+) (merged, mergedDefaults, tenantRaw map[string]any, err error) {
+	merged = make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		var raw any
 		if err := yaml.Unmarshal(defBytes, &raw); err != nil {
-			return nil, fmt.Errorf("parse defaults[%d]: %w", i, err)
+			return nil, nil, nil, fmt.Errorf("parse defaults[%d]: %w", i, err)
 		}
 		block := extractDefaultsBlockH(normalizeYAMLToJSONH(raw))
 		if block == nil {
@@ -253,16 +296,21 @@ func computeEffectiveConfigBytes(
 		merged = deepMergeH(merged, block)
 	}
 
+	// Snapshot the merged-defaults state BEFORE the tenant override
+	// is applied. deepCopyMapH defends against shared sub-maps that
+	// the subsequent deepMergeH could mutate via aliasing.
+	mergedDefaults = deepCopyMapH(merged)
+
 	var tenantDoc any
 	if err := yaml.Unmarshal(tenantYAMLBytes, &tenantDoc); err != nil {
-		return nil, fmt.Errorf("parse tenant: %w", err)
+		return nil, nil, nil, fmt.Errorf("parse tenant: %w", err)
 	}
-	tenantRaw, err := extractTenantRawH(normalizeYAMLToJSONH(tenantDoc), tenantID)
+	tenantRaw, err = extractTenantRawH(normalizeYAMLToJSONH(tenantDoc), tenantID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	merged = deepMergeH(merged, tenantRaw)
-	return merged, nil
+	return merged, mergedDefaults, tenantRaw, nil
 }
 
 func deepMergeH(base, override map[string]any) map[string]any {

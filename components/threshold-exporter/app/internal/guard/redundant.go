@@ -32,22 +32,44 @@ import "fmt"
 // checkRedundantOverrides runs the reverse-warn pass.
 //
 // Returns warnings (possibly empty). Caller-supplied
-// TenantOverrides + NewDefaults are required; passing nil for
-// either disables the check entirely (no findings emitted).
+// TenantOverrides is required. Defaults source is one of:
+//
+//   - NewDefaultsByTenant[id] — per-tenant merged defaults (PR-5).
+//     Used when present for that tenant.
+//   - NewDefaults — single global merged defaults (PR-1).
+//     Fallback when NewDefaultsByTenant lacks the tenant's entry.
+//
+// A tenant with no defaults source from either field has the check
+// silently skipped (no finding emitted) — this lets callers wire
+// the field opportunistically without forcing every tenant in scope
+// to have a defaults entry.
 //
 // Determinism: walks tenants in sorted-ID order, then iterates the
 // flattened override leaves in sorted-path order so the output is
 // reproducible across runs.
 func checkRedundantOverrides(input CheckInput) []Finding {
-	if len(input.TenantOverrides) == 0 || input.NewDefaults == nil {
+	if len(input.TenantOverrides) == 0 {
+		return nil
+	}
+	if input.NewDefaults == nil && len(input.NewDefaultsByTenant) == 0 {
 		return nil
 	}
 
-	defaultLeaves := flattenLeaves(input.NewDefaults)
-	tenants := sortedTenantIDs(input.TenantOverrides)
+	// Cache the global flattened defaults so we don't re-walk the
+	// map per tenant when only the legacy single-map field is set.
+	var globalLeaves map[string]any
+	if input.NewDefaults != nil {
+		globalLeaves = flattenLeaves(input.NewDefaults)
+	}
 
+	tenants := sortedTenantIDs(input.TenantOverrides)
 	var out []Finding
 	for _, tenantID := range tenants {
+		defaultLeaves := tenantDefaultsLeaves(input, tenantID, globalLeaves)
+		if defaultLeaves == nil {
+			// No defaults context for this tenant → skip silently.
+			continue
+		}
 		overrideLeaves := flattenLeaves(input.TenantOverrides[tenantID])
 		paths := sortedKeys(overrideLeaves)
 		for _, path := range paths {
@@ -71,6 +93,20 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 		}
 	}
 	return out
+}
+
+// tenantDefaultsLeaves resolves the right defaults-leaves map for a
+// given tenant: per-tenant entry wins, otherwise fall back to the
+// global precomputed map. Returns nil when neither source has a
+// defaults map for this tenant — caller treats that as "skip".
+func tenantDefaultsLeaves(input CheckInput, tenantID string, globalLeaves map[string]any) map[string]any {
+	if perTenant, ok := input.NewDefaultsByTenant[tenantID]; ok {
+		if perTenant == nil {
+			return nil
+		}
+		return flattenLeaves(perTenant)
+	}
+	return globalLeaves
 }
 
 // scalarsEqual is the PR-1 equality test for redundant-override

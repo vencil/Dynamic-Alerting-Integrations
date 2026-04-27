@@ -184,8 +184,31 @@ type CheckInput struct {
 	// NewDefaults is the proposed new `_defaults.yaml` content
 	// (already merged with any cascading parent defaults if the
 	// affected scope sits below the root). Required for the
-	// redundant-override check; pass nil to skip.
+	// redundant-override check WHEN every tenant in scope shares
+	// one merged-defaults map (the simple "single _defaults.yaml
+	// at level X" case). Pass nil to skip the check.
+	//
+	// When tenants under the scope inherit *different* merged
+	// defaults (cascading L0/L1/L2 trees with multiple defaults
+	// files at different depths), use NewDefaultsByTenant instead
+	// — the per-tenant variant is checked first and falls back to
+	// NewDefaults only when a tenant lacks a per-tenant entry.
 	NewDefaults map[string]any `json:"new_defaults,omitempty"`
+
+	// NewDefaultsByTenant maps tenant ID → the merged defaults map
+	// that THAT tenant inherits before its own override is applied.
+	// PR-5 (v2.8.0) extension: the C-12 PR-4 CLI populates this
+	// from `pkg/config.EffectiveConfig.MergedDefaults` so the
+	// redundant-override check correctly compares each tenant's
+	// override against ITS chain of cascading defaults rather
+	// than a single global defaults map.
+	//
+	// Resolution rule per tenant: NewDefaultsByTenant[id] wins when
+	// present; otherwise fall back to NewDefaults (preserves the
+	// PR-1 single-map API for callers that haven't migrated).
+	// Tenants absent from both have the redundant-override check
+	// skipped silently — no finding emitted.
+	NewDefaultsByTenant map[string]map[string]any `json:"new_defaults_by_tenant,omitempty"`
 
 	// RequiredFields is the dotted-path list the schema validator
 	// asserts non-nil presence for in every tenant's effective

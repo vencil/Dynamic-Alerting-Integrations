@@ -78,6 +78,88 @@ func TestScopeEffective_WholeTree(t *testing.T) {
 	}
 }
 
+// PR-5: confirm the EffectiveConfig.MergedDefaults + TenantOverridesRaw
+// pre-merge snapshots are populated and reflect the chain at each
+// tenant's level. This is the contract C-12 redundant-override depends
+// on (different tenants under cascading _defaults.yaml see different
+// merged defaults).
+func TestScopeEffective_ExposesPreMergeSnapshots(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml":    "defaults:\n  cpu: 70\n",
+		"conf.d/db/_defaults.yaml": "defaults:\n  cpu: 80\n",
+		"conf.d/db/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n", // redundant! same as L1 db defaults
+		"conf.d/web/tenant-c.yaml": "tenants:\n  tenant-c:\n    cpu: 80\n", // NOT redundant — web inherits L0 (cpu=70)
+	})
+	root := filepath.Join(tmp, "conf.d")
+	got, err := ScopeEffective(root, "")
+	if err != nil {
+		t.Fatalf("ScopeEffective: %v", err)
+	}
+	for _, ec := range got.Tenants {
+		// Both new fields must be non-nil for any tenant the resolver
+		// returns successfully; the guard caller keys off nilness as
+		// "skip this tenant".
+		if ec.TenantOverridesRaw == nil {
+			t.Errorf("tenant %q: TenantOverridesRaw nil; expected raw override map", ec.TenantID)
+		}
+		if ec.MergedDefaults == nil {
+			t.Errorf("tenant %q: MergedDefaults nil; expected pre-merge defaults snapshot", ec.TenantID)
+		}
+		switch ec.TenantID {
+		case "tenant-a":
+			// tenant-a's MergedDefaults = L0+L1 merged → cpu=80
+			if v, _ := ec.MergedDefaults["cpu"].(int); v != 80 {
+				t.Errorf("tenant-a MergedDefaults.cpu = %v, want 80 (L1 wins L0)", ec.MergedDefaults["cpu"])
+			}
+			// tenant-a's raw override = {cpu: 80} → matches MergedDefaults → redundant
+			if v, _ := ec.TenantOverridesRaw["cpu"].(int); v != 80 {
+				t.Errorf("tenant-a TenantOverridesRaw.cpu = %v, want 80", ec.TenantOverridesRaw["cpu"])
+			}
+		case "tenant-c":
+			// tenant-c's MergedDefaults = L0 only → cpu=70
+			if v, _ := ec.MergedDefaults["cpu"].(int); v != 70 {
+				t.Errorf("tenant-c MergedDefaults.cpu = %v, want 70 (L0 only, no db/_defaults)", ec.MergedDefaults["cpu"])
+			}
+			// tenant-c's override is 80; doesn't match its 70 inherited → NOT redundant
+		}
+	}
+}
+
+// PR-5: MergedDefaults must NOT alias EffectiveConfig — they share
+// inputs but a mutation to one must not be visible in the other.
+// This guards the "snapshot before tenant merge" contract that
+// computeEffectiveConfigBytesDetailed promises.
+func TestScopeEffective_MergedDefaultsIsIndependentSnapshot(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n  shared:\n    nested: 1\n",
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 99\n",
+	})
+	root := filepath.Join(tmp, "conf.d")
+	got, err := ScopeEffective(root, "")
+	if err != nil {
+		t.Fatalf("ScopeEffective: %v", err)
+	}
+	if len(got.Tenants) != 1 {
+		t.Fatalf("got %d tenants, want 1", len(got.Tenants))
+	}
+	ec := got.Tenants[0]
+	// Mutate MergedDefaults; EffectiveConfig must be untouched.
+	if m, ok := ec.MergedDefaults["shared"].(map[string]any); ok {
+		m["nested"] = 999
+	}
+	// Re-read effective.shared.nested via path traversal; should still be 1
+	// because effective is a separate map post-deepMerge.
+	if shared, ok := ec.EffectiveConfig["shared"].(map[string]any); ok {
+		if v, _ := shared["nested"].(int); v != 1 {
+			t.Errorf("EffectiveConfig.shared.nested = %v, want 1 (snapshot aliasing leak)", shared["nested"])
+		}
+	} else {
+		t.Errorf("EffectiveConfig.shared missing or wrong type: %T", ec.EffectiveConfig["shared"])
+	}
+}
+
 func TestScopeEffective_SubScope(t *testing.T) {
 	tmp := t.TempDir()
 	writeTree(t, tmp, map[string]string{
