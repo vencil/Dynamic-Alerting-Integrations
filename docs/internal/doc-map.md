@@ -108,6 +108,7 @@ lang: zh
 | `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit 安裝指南（da-tools / da-guard） |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
+| `docs/scenarios/flat-to-conf-d-cutover-decision.md` (.en.md) | platform-ops, sre | Flat → conf.d/ Cutover Decision Guide |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |
 | `docs/scenarios/hands-on-lab.md` (.en.md) | Platform Engineers, Tenants | 動手實驗：從零到生產告警 |
 | `docs/scenarios/incremental-migration-playbook.md` (.en.md) | Platform Engineers, SREs | 場景：漸進式遷移 Playbook |

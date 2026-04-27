@@ -108,6 +108,7 @@ lang: en
 | `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit Installation Guide (da-tools / da-guard) |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
+| `docs/scenarios/flat-to-conf-d-cutover-decision.md` (.en.md) | platform-ops, sre | Flat → conf.d/ Cutover Decision Guide |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | Scenario: GitOps CI/CD Integration Guide |
 | `docs/scenarios/hands-on-lab.md` (.en.md) | Platform Engineers, Tenants | Hands-on Lab: From Zero to Production Alerting |
 | `docs/scenarios/incremental-migration-playbook.md` (.en.md) | Platform Engineers, SREs | Scenario: Incremental Migration Playbook |
