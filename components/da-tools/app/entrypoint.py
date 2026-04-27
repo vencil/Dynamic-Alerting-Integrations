@@ -70,6 +70,10 @@ def _build_help_text(lang):
 命令 (Federation — 多叢集):
     rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
 
+命令 (Guard — Dangling Defaults Guard, v2.8.0 C-12):
+    guard             驗證 conf.d/ 樹是否安全 (schema + routing + cardinality)
+                      子命令: defaults-impact
+
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
     DA_LANG           設定 CLI 語言 (zh/en，優先於 LC_ALL/LANG)"""
@@ -133,6 +137,10 @@ Commands (Operator-Native — CRD generation & validation):
 
 Commands (Federation — multi-cluster):
     rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
+
+Commands (Guard — Dangling Defaults Guard, v2.8.0 C-12):
+    guard             Validate a conf.d/ tree (schema + routing + cardinality)
+                      Subcommands: defaults-impact
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -209,6 +217,9 @@ COMMAND_MAP = {
     "rule-pack-split": "generate_rule_pack_split.py",
     # Group F: Policy (OPA/Rego)
     "opa-evaluate": "policy_opa_bridge.py",
+    # Group G: Guard (v2.8.0 Phase .c C-12 — Dangling Defaults Guard)
+    # Wraps the da-guard Go binary; see scripts/tools/ops/guard_dispatch.py.
+    "guard": "guard_dispatch.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)
