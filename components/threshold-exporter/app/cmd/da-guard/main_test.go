@@ -316,16 +316,26 @@ func TestRun_RedundantOverride_HonorsCascadingDefaults(t *testing.T) {
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d", code, exitOK)
 	}
-	// tenant-db redundant; tenant-web NOT redundant.
+	// tenant-db redundant; tenant-web NOT redundant. We assert this
+	// at the row level rather than via raw stdout substring because
+	// both names also appear in the "Scanned files" details list,
+	// which would make a substring check vacuously pass.
 	lines := strings.Split(stdout, "\n")
+	tenantDBFlagged := false
 	for _, line := range lines {
-		if strings.Contains(line, "redundant_override") &&
-			strings.Contains(line, "tenant-web") {
+		hasRedundant := strings.Contains(line, "redundant_override")
+		if !hasRedundant {
+			continue
+		}
+		if strings.Contains(line, "tenant-web") {
 			t.Errorf("tenant-web should NOT be flagged (its 80 ≠ inherited 70); line: %q", line)
 		}
+		if strings.Contains(line, "tenant-db") {
+			tenantDBFlagged = true
+		}
 	}
-	if !strings.Contains(stdout, "tenant-db") {
-		t.Errorf("tenant-db should appear in findings (its 80 = inherited 80): %q", stdout)
+	if !tenantDBFlagged {
+		t.Errorf("tenant-db should appear in a redundant_override row (its 80 = inherited 80); stdout: %q", stdout)
 	}
 }
 

@@ -71,13 +71,19 @@ jobs:
 
       - name: Detect conf.d path
         id: detect
+        # workflow_dispatch input is fed via env var rather than
+        # `${{ ... }}` shell interpolation — the env-var pattern
+        # bypasses any shell parsing of input contents and is the
+        # GitHub-recommended way to forward user-supplied input
+        # to bash without code-injection surface.
+        env:
+          INPUT_DIR: ${{ github.event.inputs.config_dir }}
         run: |
           # Resolution order:
           #   1. workflow_dispatch input override (manual run)
           #   2. repo-root conf.d/ (customer GitOps layout)
           #   3. components/threshold-exporter/config/conf.d/ (this repo)
           #   4. nothing → skip
-          INPUT_DIR='${{ github.event.inputs.config_dir }}'
           if [ -n "$INPUT_DIR" ] && [ -d "$INPUT_DIR" ]; then
             echo "conf_d=$INPUT_DIR" >> "$GITHUB_OUTPUT"
           elif [ -d "conf.d" ]; then
@@ -92,6 +98,11 @@ jobs:
       - name: Determine scope from changed _defaults.yaml
         if: steps.detect.outputs.conf_d != '' && github.event_name == 'pull_request'
         id: scope
+        # Same env-var hygiene as the Detect step — keep all
+        # `${{ ... }}` substitutions out of inline shell.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          CONF_D: ${{ steps.detect.outputs.conf_d }}
         run: |
           # Find every changed _defaults.yaml relative to the PR base.
           # If there's exactly one, narrow scope to its directory.
@@ -99,27 +110,30 @@ jobs:
           # multiple cascading edits in one pass uses per-tenant
           # defaults resolution; the redundant-override check stays
           # accurate via NewDefaultsByTenant).
-          mapfile -t CHANGED < <(git diff --name-only "origin/${{ github.base_ref }}"...HEAD -- '**/_defaults.yaml' || true)
+          mapfile -t CHANGED < <(git diff --name-only "origin/${BASE_REF}"...HEAD -- '**/_defaults.yaml' || true)
           if [ "${#CHANGED[@]}" -eq 1 ]; then
             DIR=$(dirname "${CHANGED[0]}")
             echo "scope=$DIR" >> "$GITHUB_OUTPUT"
             echo "Narrow scope: $DIR (single _defaults.yaml change)"
           else
-            echo "scope=${{ steps.detect.outputs.conf_d }}" >> "$GITHUB_OUTPUT"
-            echo "Whole-tree scope: ${{ steps.detect.outputs.conf_d }} (${#CHANGED[@]} _defaults.yaml changed)"
+            echo "scope=${CONF_D}" >> "$GITHUB_OUTPUT"
+            echo "Whole-tree scope: ${CONF_D} (${#CHANGED[@]} _defaults.yaml changed)"
           fi
 
       - name: Run da-guard
         if: steps.detect.outputs.conf_d != ''
         id: guard
+        env:
+          CONF_D: ${{ steps.detect.outputs.conf_d }}
+          INNER_SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
           set +e
-          SCOPE='${{ steps.scope.outputs.scope }}'
+          SCOPE="${INNER_SCOPE}"
           if [ -z "$SCOPE" ]; then
-            SCOPE='${{ steps.detect.outputs.conf_d }}'
+            SCOPE="${CONF_D}"
           fi
           "$RUNNER_TEMP/da-guard" \
-              --config-dir '${{ steps.detect.outputs.conf_d }}' \
+              --config-dir "${CONF_D}" \
               --scope "$SCOPE" \
               --cardinality-limit 500 \
               --format md \
@@ -189,8 +203,9 @@ jobs:
 
       - name: Fail if guard found errors
         if: steps.guard.outputs.exit != ''
+        env:
+          GUARD_EXIT: ${{ steps.guard.outputs.exit }}
         run: |
-          GUARD_EXIT='${{ steps.guard.outputs.exit }}'
           case "$GUARD_EXIT" in
             0)
               echo "✅ Dangling Defaults Guard: clean."
