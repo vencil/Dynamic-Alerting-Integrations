@@ -40,6 +40,17 @@ COPY VERSION .
 # Tool scripts + metric-dictionary.yaml (assembled by build.sh from scripts/tools/)
 COPY tools/ ./
 
+# ── Bundle da-guard binary (v2.8.0 C-11) ──────────────────────────
+# `da-tools guard <subcommand>` shells out to da-guard (see
+# scripts/tools/ops/guard_dispatch.py). Bundling the binary at
+# /usr/local/bin/da-guard lets the image work in air-gapped
+# environments (no $PATH lookup outside the container, no extra
+# install step). The binary is built linux/amd64 by build.sh from
+# components/threshold-exporter/app/cmd/da-guard before docker
+# build runs.
+COPY da-guard /usr/local/bin/da-guard
+RUN chmod +x /usr/local/bin/da-guard
+
 # ── Entrypoint ────────────────────────────────────────────────────
 # Create a symlink so 'da-tools' works as a command
 RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \

@@ -105,6 +105,7 @@ lang: zh
 | `docs/interactive-tools.md` (.en.md) | All | 互動式工具 |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST 遷移引擎架構 |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — 遷移指南 |
+| `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit 安裝指南（da-tools / da-guard） |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | 進階場景與測試覆蓋 |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | 場景：同一 Alert、不同語義 — Platform/NOC vs Tenant 雙視角通知 |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | 場景：GitOps CI/CD 整合指南 |
