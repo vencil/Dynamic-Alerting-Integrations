@@ -2,7 +2,7 @@
 title: "ADR-019: Profile-as-Directory-Default + PromRule→threshold translator"
 tags: [adr, profile-builder, translator, conf-d, phase-c, v2.8.0]
 audience: [platform-engineers, sre, contributors]
-version: v2.8.0
+version: v2.7.0
 lang: en
 ---
 
