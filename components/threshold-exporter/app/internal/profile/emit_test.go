@@ -543,6 +543,210 @@ func TestEmit_PROPOSAL_md_ContainsKeyFields(t *testing.T) {
 	}
 }
 
+// --- PR-3 translated-emit path -------------------------------------
+
+// fixtureTranslatableProposalSet builds a proposal where every member
+// has a top-level numeric comparison + explicit metric_key label —
+// i.e. the translator should produce TranslationOK for the cluster.
+func fixtureTranslatableProposalSet() (*ProposalSet, []parser.ParsedRule) {
+	rules := []parser.ParsedRule{
+		{
+			SourceRuleID: "src.yaml#g[0].r[0]",
+			Alert:        "MySQLHighConnections",
+			Expr:         `mysql_global_status_threads_connected{tenant="tenant-a"} > 800`,
+			Labels: map[string]string{
+				"tenant":     "tenant-a",
+				"severity":   "warning",
+				"metric_key": "mysql_connections",
+			},
+		},
+		{
+			SourceRuleID: "src.yaml#g[0].r[1]",
+			Alert:        "MySQLHighConnections",
+			Expr:         `mysql_global_status_threads_connected{tenant="tenant-b"} > 800`,
+			Labels: map[string]string{
+				"tenant":     "tenant-b",
+				"severity":   "warning",
+				"metric_key": "mysql_connections",
+			},
+		},
+		{
+			SourceRuleID: "src.yaml#g[0].r[2]",
+			Alert:        "MySQLHighConnections",
+			Expr:         `mysql_global_status_threads_connected{tenant="tenant-c"} > 1500`, // outlier
+			Labels: map[string]string{
+				"tenant":     "tenant-c",
+				"severity":   "warning",
+				"metric_key": "mysql_connections",
+			},
+		},
+	}
+	ps := &ProposalSet{
+		Proposals: []ExtractionProposal{
+			{
+				MemberRuleIDs:    []string{"src.yaml#g[0].r[0]", "src.yaml#g[0].r[1]", "src.yaml#g[0].r[2]"},
+				SharedLabels:     map[string]string{"severity": "warning", "metric_key": "mysql_connections"},
+				VaryingLabelKeys: []string{"tenant"},
+				Dialect:          string(parser.DialectProm),
+				Confidence:       ConfidenceHigh,
+				Reason:           "3 rules share the same comparison shape",
+			},
+		},
+	}
+	return ps, rules
+}
+
+func TestEmit_Translated_HappyPathProducesConfDShape(t *testing.T) {
+	ps, rules := fixtureTranslatableProposalSet()
+	got, err := EmitProposals(EmissionInput{
+		ProposalSet: ps,
+		AllRules:    rules,
+		Layout:      EmissionLayout{ProposalDirs: []string{"db/"}},
+		Translate:   true,
+	})
+	if err != nil {
+		t.Fatalf("EmitProposals: %v", err)
+	}
+	defaultsBody := string(got.Files["db/_defaults.yaml"])
+	// Conf.d shape: top-level `defaults:` with metric_key → numeric.
+	if !strings.Contains(defaultsBody, "defaults:") {
+		t.Errorf("_defaults.yaml should contain `defaults:` block; got:\n%s", defaultsBody)
+	}
+	if !strings.Contains(defaultsBody, "mysql_connections: 800") {
+		t.Errorf("_defaults.yaml should carry median threshold 800; got:\n%s", defaultsBody)
+	}
+	// Header comment should call out PR-3 + dialect + status.
+	if !strings.Contains(defaultsBody, "PR-3") || !strings.Contains(defaultsBody, "prom") {
+		t.Errorf("_defaults.yaml header should mention PR-3 + dialect; got:\n%s", defaultsBody)
+	}
+	// tenant-c diverges (1500 vs default 800) → must have its own
+	// override file. tenant-a/b match default → no file.
+	if _, ok := got.Files["db/tenant-c.yaml"]; !ok {
+		t.Errorf("expected db/tenant-c.yaml (override 1500); got files: %v", keysOfFiles(got.Files))
+	}
+	if _, ok := got.Files["db/tenant-a.yaml"]; ok {
+		t.Errorf("tenant-a matches default → should NOT have override file; got %v", keysOfFiles(got.Files))
+	}
+	if _, ok := got.Files["db/tenant-b.yaml"]; ok {
+		t.Errorf("tenant-b matches default → should NOT have override file")
+	}
+	// Override file must use the `tenants:` wrapper + string value.
+	tcBody := string(got.Files["db/tenant-c.yaml"])
+	if !strings.Contains(tcBody, "tenants:") {
+		t.Errorf("tenant-c.yaml missing `tenants:` wrapper; got:\n%s", tcBody)
+	}
+	if !strings.Contains(tcBody, `mysql_connections: "1500"`) {
+		t.Errorf("tenant-c.yaml should carry override 1500 as quoted string; got:\n%s", tcBody)
+	}
+}
+
+func TestEmit_Translated_PROPOSAL_md_HasTranslationSummary(t *testing.T) {
+	ps, rules := fixtureTranslatableProposalSet()
+	got, _ := EmitProposals(EmissionInput{
+		ProposalSet: ps,
+		AllRules:    rules,
+		Layout:      EmissionLayout{ProposalDirs: []string{"db/"}},
+		Translate:   true,
+	})
+	md := string(got.Files["db/PROPOSAL.md"])
+	wantSnippets := []string{
+		"translated to conf.d", // header
+		"## Translation summary",
+		"mysql_connections", // metric_key
+		"800",               // default threshold
+		"tenant-c",          // override list
+		"1500",              // override value
+	}
+	for _, snip := range wantSnippets {
+		if !strings.Contains(md, snip) {
+			t.Errorf("translated PROPOSAL.md missing snippet %q\n--- output ---\n%s", snip, md)
+		}
+	}
+}
+
+// Falling-back behaviour: a proposal whose translator returns
+// Skipped should NOT poison the batch — emit goes back to the
+// PR-2 intermediate format for that one and surfaces a warning.
+func TestEmit_Translated_FallsBackToIntermediateOnSkip(t *testing.T) {
+	// Use the original fixture which has rollup_rate (no top-level
+	// comparison) — translator skips this cluster.
+	ps, rules := fixtureProposalSetForEmit()
+	got, err := EmitProposals(EmissionInput{
+		ProposalSet: ps,
+		AllRules:    rules,
+		Layout:      EmissionLayout{ProposalDirs: []string{"dom-a", "dom-b"}},
+		Translate:   true,
+	})
+	if err != nil {
+		t.Fatalf("EmitProposals: %v", err)
+	}
+	// Proposal 0 (HighCPU > 0.85): comparison present → translated.
+	defaults0 := string(got.Files["dom-a/_defaults.yaml"])
+	if !strings.Contains(defaults0, "defaults:") {
+		t.Errorf("dom-a/_defaults.yaml should be conf.d-shape (translated); got:\n%s", defaults0)
+	}
+	// Proposal 1 (rollup_rate, no comparison): translator skipped →
+	// intermediate format, which has shared_expr_template.
+	defaults1 := string(got.Files["dom-b/_defaults.yaml"])
+	if !strings.Contains(defaults1, "shared_expr_template") {
+		t.Errorf("dom-b/_defaults.yaml should be intermediate-shape (translator skipped); got:\n%s", defaults1)
+	}
+	// Warning explaining the fall-back must appear.
+	fallBackWarn := false
+	for _, w := range got.Warnings {
+		if strings.Contains(w, "falling back to intermediate emission") {
+			fallBackWarn = true
+		}
+	}
+	if !fallBackWarn {
+		t.Errorf("expected fall-back warning; got %v", got.Warnings)
+	}
+}
+
+func TestEmit_Translated_DefaultsYAMLIsValidYAML(t *testing.T) {
+	// The translated _defaults.yaml prepends a comment header to the
+	// yaml.Marshal output. Verify the result still round-trips
+	// through yaml.Unmarshal — header comments must not break parse.
+	ps, rules := fixtureTranslatableProposalSet()
+	got, _ := EmitProposals(EmissionInput{
+		ProposalSet: ps,
+		AllRules:    rules,
+		Layout:      EmissionLayout{ProposalDirs: []string{"db/"}},
+		Translate:   true,
+	})
+	body := got.Files["db/_defaults.yaml"]
+	var parsed struct {
+		Defaults map[string]float64 `yaml:"defaults"`
+	}
+	if err := yaml.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("translated _defaults.yaml does not parse: %v\nbody:\n%s", err, string(body))
+	}
+	if v, ok := parsed.Defaults["mysql_connections"]; !ok || v != 800 {
+		t.Errorf("parsed defaults = %v, want mysql_connections=800", parsed.Defaults)
+	}
+}
+
+// formatThresholdString covers float→string conversion rules
+// matter (avoid "80.000000" creeping into tenant.yaml).
+func TestFormatThresholdString(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{80, "80"},
+		{0, "0"},
+		{0.85, "0.85"},
+		{1500, "1500"},
+		{-1.5, "-1.5"},
+	}
+	for _, c := range cases {
+		got := formatThresholdString(c.in)
+		if got != c.want {
+			t.Errorf("formatThresholdString(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // --- helper --------------------------------------------------------
 
 func keysOfFiles(m map[string][]byte) []string {

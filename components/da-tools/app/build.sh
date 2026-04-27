@@ -161,6 +161,34 @@ for py in "$SCRIPT_DIR"/tools/*.py; do
 done
 echo "  Stripped repo-layout sys.path from Docker copies"
 
+# ── Build da-guard binary (v2.8.0 C-11) ──────────────────────────────
+# da-tools' `guard` subcommand shells out to the da-guard Go binary
+# (see scripts/tools/ops/guard_dispatch.py). Bundle the linux/amd64
+# binary into the image so customers running `da-tools guard ...` in
+# the container don't need to install or download it separately.
+#
+# Local devs without Go on PATH get a clear "Go not found" error
+# (rather than a cryptic Dockerfile COPY failure later). Production
+# CI has Go via actions/setup-go in release.yaml.
+EXPORTER_APP="$PROJECT_ROOT/components/threshold-exporter/app"
+echo "▸ Building da-guard binary for da-tools image bundling..."
+if [ ! -d "$EXPORTER_APP" ]; then
+    echo "  ✗ threshold-exporter source not found at $EXPORTER_APP" >&2
+    exit 1
+fi
+if ! command -v go >/dev/null 2>&1; then
+    echo "  ✗ go not on PATH; install Go 1.26+ to bundle da-guard, or use the prebuilt binary from a tools/v* release" >&2
+    exit 1
+fi
+DA_TOOLS_VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
+(cd "$EXPORTER_APP" && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -buildvcs=false \
+        -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
+        -o "$SCRIPT_DIR/da-guard" \
+        ./cmd/da-guard)
+echo "  Built da-guard linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
+
 # ── Assemble-only mode (for CI — Buildx handles the docker build) ──
 if [ "$ASSEMBLE_ONLY" = true ]; then
     echo "✓ Build context assembled (--assemble-only). tools/ kept for Buildx."
@@ -173,6 +201,7 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
+rm -f "$SCRIPT_DIR/da-guard"
 
 echo "✓ Built: $IMAGE_NAME"
 echo ""

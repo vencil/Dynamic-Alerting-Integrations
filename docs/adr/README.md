@@ -46,6 +46,7 @@ lang: zh
 | [016](#016-data-theme-單軌-dark-mode) | `[data-theme]` 單軌 Dark Mode（移除 `dark:` 變體） | ✅ Accepted | 統一以 `[data-theme="dark"]` attribute 管理 dark mode，禁用 Tailwind `dark:` 變體，消除 token/class 雙軌問題 |
 | [017](#017-confd-目錄分層-混合模式) | conf.d/ 目錄分層 + 混合模式 + 遷移策略 | 🟡 Proposed | Directory Scanner 同時支援 flat 與 domain/region/env 3 層結構；零中斷升級 + `migrate-conf-d` 可選工具 |
 | [018](#018-defaultsyaml-繼承語意-dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | 🟡 Proposed | Deep merge with override（array replace、null-as-delete）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
+| [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | 🟢 Accepted | C-9 PR-3：cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override（median + sparse override）；跨 C-9/C-10/C-12 共通的「default vs override 邊界」決策。Translator 演算法細節留 `translate.go` package header（避免雙寫漂移）|
 
 ---
 
@@ -190,6 +191,16 @@ v2.7.0 Phase .b B-1。Directory Scanner 同時支援 flat 與 `{domain}/{region}
 **文件**: [`018-defaults-yaml-inheritance-dual-hash.md`](./018-defaults-yaml-inheritance-dual-hash.md)
 
 v2.7.0 Phase .b B-1。定義多層 `_defaults.yaml` 的繼承語意（L0 全域 → L1 domain → L2 region → L3 env → tenant），deep merge with override（array replace、null-as-delete、`_metadata` 不繼承）。雙 hash：`source_hash`（tenant YAML 檔案本身）+ `merged_hash`（effective config canonical JSON）精準判定 reload 觸發，避免 `_defaults.yaml` 變動時的 reload 風暴；300ms debounce 處理 batch git pull。
+
+---
+
+---
+
+## 019: Profile-as-Directory-Default
+
+**文件**: [`019-profile-as-directory-default.md`](./019-profile-as-directory-default.md)
+
+v2.8.0 Phase .c C-9 PR-3。釘死「cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override」這條跨組件 design principle — 影響 C-9 emission 形狀、C-10 directory placement、C-11 packaging、C-12 redundant-override guard 一致性。配合 ADR-018 deepMerge / ADR-017 目錄分層。Translator 演算法細節（metric_key ladder、median、cluster aggregation、operator handling）留在 `internal/profile/translate.go` package header — 單一 source of truth，避免雙寫漂移。Cross-component non-goals 明示：directory inference（C-10 PR-3 範疇）、dimensional/regex labels emission、auto-rewrite source PromRule、two-tier severity translation。
 
 ---
 

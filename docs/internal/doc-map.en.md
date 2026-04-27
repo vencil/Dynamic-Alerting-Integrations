@@ -30,6 +30,7 @@ lang: en
 | `docs/adr/016-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-016: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant |
 | `docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy |
 | `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload |
+| `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | Performance Analysis & Benchmarks |
@@ -102,27 +103,9 @@ lang: en
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
 | `docs/interactive/tools/YamlValidatorTab.jsx` | Platform Engineers, Tenants | YAML Validator Tab |
 | `docs/interactive-tools.md` (.en.md) | All | Interactive Tools |
-| `docs/internal/archive/automation-origins/trap-60-fuse-fsync.md` | maintainers, AI Agent | Trap #60 原 RCA — `generate_doc_map.py` FUSE fsync 中斷 |
-| `docs/internal/archive/automation-origins/trap-61-bom.md` | maintainers, AI Agent | Trap #61 原 RCA — PowerShell BOM 污染 commit message |
-| `docs/internal/archive/lessons-learned.md` | Platform Engineers, SREs, Contributors | Lessons Learned Archive |
-| `docs/internal/benchmark-playbook.md` | Platform Engineers, SREs | Benchmark 操作手冊 (Benchmark Playbook) |
-| `docs/internal/commit-convention.md` | contributors, maintainers | Conventional Commits Guide |
-| `docs/internal/component-health-snapshot.md` | maintainer, ui-engineer | Component Health Snapshot (v2.7.0 Phase .a baseline) |
-| `docs/internal/design-system-guide.md` | maintainers | Design System Guide |
-| `docs/internal/dev-rules.md` | All | 開發規範 (Development Rules) |
-| `docs/internal/doc-template.md` | All | 文件模板規範 |
-| `docs/internal/dx-tooling-backlog.md` | maintainers, contributors | DX Tooling Backlog |
-| `docs/internal/frontend-quality-backlog.md` | maintainers, AI Agent | 前端品質待辦 (Frontend Quality Backlog) |
-| `docs/internal/github-release-playbook.md` | All | GitHub Release — 操作手冊 (Playbook) |
-| `docs/internal/pitch-deck-talking-points.md` | maintainers, business | Pitch Deck Talking Points — v2.8.0 Phase 1 Baseline |
-| `docs/internal/ssot-language-evaluation.md` | maintainers | SSOT 切換影響評估 |
-| `docs/internal/ssot-migration-pilot-report.md` | maintainers | SSOT 語言遷移 Phase 1 Pilot Report |
-| `docs/internal/test-coverage-matrix.md` | Platform Engineers, SREs | 測試覆蓋矩陣與進階場景 |
-| `docs/internal/test-map.md` | maintainers, AI Agent | 測試架構導覽 (Test Map) |
-| `docs/internal/testing-playbook.md` | All | 測試注意事項 — 排錯手冊 (Testing Playbook) |
-| `docs/internal/windows-mcp-playbook.md` | All | Windows-MCP — Dev Container 操作手冊 (Playbook) |
 | `docs/migration-engine.md` (.en.md) | Platform Engineers, DevOps | AST Migration Engine Architecture |
 | `docs/migration-guide.md` (.en.md) | Tenants, DevOps | Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform |
+| `docs/migration-toolkit-installation.md` (.en.md) | Platform Engineers, SREs, customer-ops | Migration Toolkit Installation Guide (da-tools / da-guard) |
 | `docs/scenarios/advanced-scenarios.md` (.en.md) | Platform Engineers, SREs | Advanced Scenarios & Test Coverage |
 | `docs/scenarios/alert-routing-split.md` (.en.md) | Platform Engineers | Scenario: Same Alert, Different Semantics — Platform/NOC vs Tenant Dual-Perspective Notifications |
 | `docs/scenarios/gitops-ci-integration.md` (.en.md) | Platform Engineers | Scenario: GitOps CI/CD Integration Guide |
