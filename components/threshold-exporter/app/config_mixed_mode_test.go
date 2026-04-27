@@ -35,7 +35,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -466,19 +465,3 @@ tenants:
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Helper: assert nested tenant survives a multi-step mutation.
-// (Currently unused by the 5 cases above but kept for future
-// add-on tests — e.g. triple-step migration paths. Suppress the
-// `unused` complaint by referencing it in a no-op helper test.)
-// ─────────────────────────────────────────────────────────────────
-
-func nestedTenantHash(mgr *ConfigManager, id string) string {
-	mgr.mu.RLock()
-	defer mgr.mu.RUnlock()
-	return mgr.mergedHashes[id]
-}
-
-// Acknowledge nestedTenantHash to keep `go vet` quiet under
-// future test harness expansion.
-var _ = func() string { return fmt.Sprintf("%T", nestedTenantHash) }

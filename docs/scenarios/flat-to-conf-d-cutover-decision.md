@@ -77,7 +77,7 @@ verified-at-version: v2.8.0
 如果同一個 tenant ID 同時出現在 `<root>/<id>.yaml`（扁平）和 `<root>/<dir>/<id>.yaml`（階層），manager 行為：
 
 1. `populateHierarchyState` 內部的 `scanDirHierarchical` **正確偵測** duplicate 並回 error，包含**兩個檔案路徑**的 message
-2. 但 `Load()` 把該 error 打成 `WARN: hierarchical scan during Load failed: ...` 然後**繼續執行**（[config.go L194](../../components/threshold-exporter/app/config.go))
+2. 但 `Load()` 把該 error 打成 `WARN: hierarchical scan during Load failed: ...` 然後**繼續執行**（`components/threshold-exporter/app/config.go` L194）
 3. 扁平 mode `loadDir()` 在此前已成功，靜默 last-wins-merge 把 duplicate 收掉
 4. 結果：`Load()` 回傳 `nil` error，tenant 從**其中一個檔案**留下（map iteration order 決定，不可預期）
 
@@ -87,7 +87,7 @@ verified-at-version: v2.8.0
 - `da-tools tenant-verify <id> --conf-d conf.d/` 能印出 tenant 來源檔案路徑——若兩個檔案都列出，duplicate 確實存在
 - `migrate_conf_d.py --dry-run` 在規劃階段就能偵測同 tenant 出現在兩處
 
-**長期 fix（排在 v2.8.x 強化 PR）**：把 hierarchical scan 的 duplicate error **propagate 為 hard error**，讓 `Load()` fail-fast。`config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated` 鎖死目前 WARN-only 行為——強化 PR land 時需把 test 改寫為「Load 必須回 error」，這是該 PR 必須觸碰的訊號。
+**長期 fix（已開 [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127) 追蹤，排在 v2.8.x 強化 PR）**：把 hierarchical scan 的 duplicate error **propagate 為 hard error**，讓 `Load()` fail-fast。`config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated` 鎖死目前 WARN-only 行為——強化 PR land 時需把 test 改寫為「Load 必須回 error」，這是該 PR 必須觸碰的訊號。
 
 ❌ **`_metadata.{domain,region,environment}` 沒有從路徑自動推斷**
 
@@ -102,27 +102,23 @@ verified-at-version: v2.8.0
 
 ## 4. Mixed-mode 效能特徵
 
-### 4.1 預期 degradation
+### 4.1 預期 degradation — 量測待定
 
 planning §B-5 設「mixed mode 與同 tenant 數的 pure hierarchical 比較，degradation **≥ 10%** 即觸發 follow-up 改善 PR」。
 
-當前量測（v2.8.0 dev container, n=1, **single-shot, NOT statistically valid**——只用於檢驗方向，不是承諾數字）：
+**目前 dev container 量測 inconclusive**——n=3 single-shot 的數字過度受 fixture-create 成本（once.Do 1000 yaml 寫入）污染，且 mixed fixture 的 cascading defaults 數量（9 個 `_defaults.yaml` = 1 root + 8 L1）遠少於 pure-hier 1000T 的 201 個（L0+L1+L2+L3 完整 cascading），post-warmup 比較反而看到 mixed 在某些 op 上更快。
 
-| Benchmark | Pure-hier 1000T 基線 | Mixed 500flat+500hier | 比例 |
-|---|---|---|---|
-| `ScanDirHierarchical` | ~51ms (v2.8.0 PR #59) | ~107ms | ~2.0× ⚠️ |
-| `FullDirLoad` | ~237ms (v2.8.0 PR #59) | ~437ms | ~1.85× ⚠️ |
-| `DiffAndReload_NoChange` | ~189ms (v2.8.0 PR #59) | ~583ms | ~3.0× ⚠️ |
+**Authoritative numbers gated on nightly bench-record**——已開 [issue #128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) 追蹤把 4 個 mixed-mode benchmarks 加進 nightly workflow，累積 28+ data points 後 `analyze_bench_history.py` 才能下定論。在那之前，**本節暫不發表具體數字**——避免單次量測 artifact 變成 customer 引用的「事實」。
 
-⚠️ **觸發 §B-5 follow-up threshold**——數字暫定，待 nightly `bench-record.yaml` 累積 28 點後 `analyze_bench_history.py` 跑統計才為定論。但若數字趨近這個範圍，**mixed mode 確實是「儘快走完 cutover」的場景，不適合長駐**。
+### 4.2 等量測 land 後預期會看到的 trade-offs（hypothesis）
 
-### 4.2 為什麼慢
+待 §4.1 nightly data 抵達後驗證／推翻：
 
-initial guess（待 perf profile 確認）：
+1. **Hypothesis A：mixed mode 的 ScanDir 較慢** — `scanDirHierarchical` walk root 遇到混合 entry（檔案 + 子目錄）比純 nested 多一些 branch；單 op cost 增量小（毫秒級），但每 reload tick 都會打到
+2. **Hypothesis B：mixed mode 的 FullDirLoad/DiffAndReload 反而較快** — mixed fixture 的 cascading defaults 通常未滿四層（L0+L1，少 L2/L3），整體 parse 成本低於 fully-cascaded pure-hier。換句話說：「**mixed mode 性能特徵高度依賴 cascading defaults 的密度**，不是 layout 本身慢**」
+3. **Hypothesis C：相對 ratio 取決於 fixture shape** — 若客戶的 mixed mode 在 cutover 中 **同時** 引入更多層 cascading defaults，degradation 可能浮現；若 cutover 維持 minimal defaults 但 reorganize 檔案 tree，可能反而更快
 
-1. **L0 root 同時 host 扁平 tenant 檔 + 子目錄項**：`scanDirHierarchical` walk root 時遇到混合 entry，一些 cache locality 假設失效
-2. **`fullDirLoad` 在 diffAndReload 尾段**：archive S#27 finding 1 已知問題——這個 cost 在混合 mode 多了個面向（root 多了 500 個檔要 parse）
-3. **per-tenant defaults chain 長度不一**：扁平 tenant chain=1 (root only)，nested chain=2 (root + L1 domain)；compute path 多了 branch
+實際結果見 [issue #128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) acceptance criteria 結束後 update 本節。
 
 ### 4.3 Cutover 期間性能監控建議
 

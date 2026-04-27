@@ -77,7 +77,7 @@ The platform **fully supports** flat layout (since v2.7.0; no EOL planned), but 
 If the same tenant ID appears in both `<root>/<id>.yaml` (flat) and `<root>/<dir>/<id>.yaml` (nested), the manager's behavior is:
 
 1. `populateHierarchyState`'s internal `scanDirHierarchical` **correctly detects** the duplicate and returns an error naming **both file paths**
-2. But `Load()` demotes that error to `WARN: hierarchical scan during Load failed: ...` and **continues** ([config.go L194](../../components/threshold-exporter/app/config.go))
+2. But `Load()` demotes that error to `WARN: hierarchical scan during Load failed: ...` and **continues** (`components/threshold-exporter/app/config.go` L194)
 3. The flat-mode `loadDir()` (which ran first) silently last-wins-merged the duplicate via map iteration
 4. Result: `Load()` returns `nil`, the tenant is preserved from **one** of the duplicate files (which one is unpredictable — depends on map iteration order)
 
@@ -87,7 +87,7 @@ If the same tenant ID appears in both `<root>/<id>.yaml` (flat) and `<root>/<dir
 - `da-tools tenant-verify <id> --conf-d conf.d/` prints the source file path — if both files appear, the duplicate exists
 - `migrate_conf_d.py --dry-run` detects this at planning time
 
-**Long-term fix (queued for a v2.8.x hardening PR)**: propagate the hierarchical scan's duplicate error to a **hard error** so `Load()` fail-fasts. `config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated` locks the current WARN-only behavior — the hardening PR will need to update this test to assert "Load must error", which is the explicit signal that PR must touch.
+**Long-term fix (tracked in [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127), queued for a v2.8.x hardening PR)**: propagate the hierarchical scan's duplicate error to a **hard error** so `Load()` fail-fasts. `config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated` locks the current WARN-only behavior — the hardening PR will need to update this test to assert "Load must error", which is the explicit signal that PR must touch.
 
 ❌ **`_metadata.{domain,region,environment}` is NOT auto-inferred from path**
 
@@ -102,27 +102,23 @@ Flat tenants at root have no path-derived metadata. Effects:
 
 ## 4. Mixed-mode performance characterization
 
-### 4.1 Expected degradation
+### 4.1 Expected degradation — measurement pending
 
 planning §B-5 sets the threshold "mixed mode vs same total-tenant-count pure hierarchical, **≥ 10% degradation** triggers a follow-up improvement PR".
 
-Current measurement (v2.8.0 dev container, n=1, **single-shot, NOT statistically valid** — directional only, not committed numbers):
+**Current dev-container measurement is inconclusive** — `n=3` single-shot data was overly contaminated by fixture-create cost (`once.Do` writing 1000 yaml files), and the mixed fixture's cascading defaults count (9 `_defaults.yaml` = 1 root + 8 L1) is far fewer than the pure-hier 1000T's 201 (L0+L1+L2+L3 fully cascaded). Post-warmup comparison sometimes shows mixed mode being *faster* on some ops.
 
-| Benchmark | Pure-hier 1000T baseline | Mixed 500flat+500hier | Ratio |
-|---|---|---|---|
-| `ScanDirHierarchical` | ~51ms (v2.8.0 PR #59) | ~107ms | ~2.0× ⚠️ |
-| `FullDirLoad` | ~237ms (v2.8.0 PR #59) | ~437ms | ~1.85× ⚠️ |
-| `DiffAndReload_NoChange` | ~189ms (v2.8.0 PR #59) | ~583ms | ~3.0× ⚠️ |
+**Authoritative numbers gated on nightly bench-record** — [issue #128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) tracks adding the 4 mixed-mode benchmarks to the nightly workflow. After 28+ data points accumulate, `analyze_bench_history.py` can deliver authoritative numbers. Until then, **this section deliberately publishes no concrete numbers** — avoiding single-shot artifacts being quoted as "fact" by customers.
 
-⚠️ **Triggers the §B-5 follow-up threshold** — numbers are tentative pending nightly `bench-record.yaml` accumulation of 28+ data points + statistical analysis via `analyze_bench_history.py`. But if the numbers settle in this range, **mixed mode is genuinely a "complete cutover ASAP" scenario**, not a long-term steady state.
+### 4.2 Hypotheses to verify when measurement lands
 
-### 4.2 Why mixed mode is slower
+To validate / refute once §4.1 nightly data arrives:
 
-Initial hypothesis (pending perf profiling):
+1. **Hypothesis A: mixed mode's ScanDir is slower** — `scanDirHierarchical` walking a root that mixes file entries with subdirectory entries needs more branching than a pure nested layout; the per-op cost increase is small (sub-ms), but every reload tick incurs it
+2. **Hypothesis B: mixed mode's FullDirLoad / DiffAndReload may actually be faster** — typical mid-migration mixed fixtures have under-saturated cascading defaults (L0+L1, missing L2/L3), so the overall parse cost is lower than a fully-cascaded pure-hier 1000T. In other words, "**mixed-mode performance characteristics depend heavily on cascading defaults density, not on layout itself**"
+3. **Hypothesis C: relative ratio depends on fixture shape** — if a customer's cutover *also* introduces more cascading defaults levels mid-migration, degradation may emerge; if cutover keeps minimal defaults while reorganizing tree, the result may even improve
 
-1. **L0 root simultaneously hosts flat tenant files + subdirectories**: when `scanDirHierarchical` walks root with mixed entry types, some cache-locality assumptions break
-2. **`fullDirLoad` at the tail of `diffAndReload`**: known issue from archive S#27 finding 1 — adds another dimension in mixed mode (root has ~500 extra files to parse)
-3. **Per-tenant defaults chain length varies**: flat tenant chain=1 (root only), nested chain=2 (root + L1 domain); compute path adds branching
+Actual outcome — see [issue #128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) acceptance criteria; this section will be updated post-data.
 
 ### 4.3 Performance monitoring during cutover
 
