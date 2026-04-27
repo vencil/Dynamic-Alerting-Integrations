@@ -80,7 +80,7 @@ pre-commit run --hook-stage manual --all-files    # manual-stage
 
 ## 文件 / 工具 / Makefile
 
-- **114 份公開文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（`docs/internal/**` 不入 catalog；那些是 maintainer / AI agent 用的 playbook/planning，由 CLAUDE.md / skills 直接引用）
+- **115 份公開文件** 對照表 → [`docs/internal/doc-map.md`](docs/internal/doc-map.md)（`docs/internal/**` 不入 catalog；那些是 maintainer / AI agent 用的 playbook/planning，由 CLAUDE.md / skills 直接引用）
 - **123 個 Python 工具** → [`docs/internal/tool-map.md`](docs/internal/tool-map.md)；CLI 速查：`da-tools <cmd> --help`
 - **39 個 JSX 互動工具** SOT：[`docs/assets/tool-registry.yaml`](docs/assets/tool-registry.yaml)
 - **Makefile** 必記 Top 7：

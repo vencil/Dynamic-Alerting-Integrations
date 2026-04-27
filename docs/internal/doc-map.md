@@ -30,6 +30,7 @@ lang: zh
 | `docs/adr/016-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-016: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 |
 | `docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: conf.d/ 目錄分層 + 混合模式 + 遷移策略 |
 | `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload |
+| `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |

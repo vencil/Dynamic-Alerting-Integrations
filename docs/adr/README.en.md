@@ -46,6 +46,7 @@ New here? Pick based on your needs:
 | [016](#016-data-theme-single-track-dark-mode) | `[data-theme]` Single-track Dark Mode (removing `dark:` variant) | ✅ Accepted | Unify dark mode under `[data-theme="dark"]` attribute, disabling Tailwind `dark:` variant to eliminate token/class dual-track issues |
 | [017](#017-confd-directory-hierarchy-mixed-mode) | conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy | 🟡 Proposed | Directory Scanner supports both flat and domain/region/env 3-level hierarchy; zero-downtime upgrade + optional `migrate-conf-d` tool |
 | [018](#018-defaultsyaml-inheritance-semantics-dual-hash-hot-reload) | `_defaults.yaml` Inheritance Semantics + dual-hash hot-reload | 🟡 Proposed | Deep merge with override (array replace, null-as-delete) + dual hash (source_hash + merged_hash) for precise reload trigger determination, paired with 300ms debounce |
+| [019](#019-profile-as-directory-default) | Profile-as-Directory-Default | 🟢 Accepted | C-9 PR-3: cluster-wide thresholds in `_defaults.yaml`; only divergent tenants write `<id>.yaml` overrides (median + sparse override). The cross-component "default vs override boundary" rule consumed by C-9/C-10/C-12. Translator heuristic details live in `translate.go`'s package header (single source of truth, no drift) |
 
 ---
 
@@ -190,6 +191,14 @@ v2.7.0 Phase .b B-1. Directory Scanner supports both flat and `{domain}/{region}
 **Document**: [`018-defaults-yaml-inheritance-dual-hash.en.md`](./018-defaults-yaml-inheritance-dual-hash.en.md)
 
 v2.7.0 Phase .b B-1. Define multi-level `_defaults.yaml` inheritance semantics (L0 global → L1 domain → L2 region → L3 env → tenant) with deep merge with override (array replace, null-as-delete, `_metadata` not inherited). Dual hash: `source_hash` (tenant YAML file itself) + `merged_hash` (effective config canonical JSON) precisely determines reload trigger, avoiding reload storms when `_defaults.yaml` changes; 300ms debounce handles batch git pulls.
+
+---
+
+## 019: Profile-as-Directory-Default
+
+**Document**: [`019-profile-as-directory-default.en.md`](./019-profile-as-directory-default.en.md)
+
+v2.8.0 Phase .c C-9 PR-3. Pins the cross-component design principle: cluster-wide thresholds live in `_defaults.yaml`; only tenants whose value diverges from the default write a `<id>.yaml` override (median + sparse override). The shape this principle dictates is consumed by C-9 emission, C-10 directory placement, C-11 packaging, and C-12 redundant-override guard semantics — getting this right at the ADR layer keeps all four components consistent. Translator heuristic details (metric_key 5-step ladder, median, cluster aggregation, operator handling) live in `internal/profile/translate.go`'s package header — single source of truth, no drift. Cross-component non-goals: directory inference (deferred to C-10 PR-3), dimensional/regex labels emission, auto-rewriting source PromRules, two-tier severity translation.
 
 ---
 
