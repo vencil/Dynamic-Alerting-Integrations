@@ -170,7 +170,49 @@ def aggregate_phase(runs: list[dict], phase: str, rng: random.Random, n_resample
     p50_lo, p50_hi = bootstrap_ci(e2e_values, 50, n_resamples, 95, rng)
     p95_lo, p95_hi = bootstrap_ci(e2e_values, 95, n_resamples, 95, rng)
 
-    return {
+    # Stage C semantic guard (v2.8.0 Phase B Track A A7): at large
+    # tenant counts, Stage C (T3 - T2 = scrape+eval) can compute ≤ 0
+    # because Prometheus's alert `activeAt` (T3) sometimes lands BEFORE
+    # the post-reload scrape that produced T2 — Prometheus uses the
+    # PRIOR scrape's metric value to evaluate, while T2 marks when the
+    # exporter finished writing the NEW value. The e2e number (T4 - T0)
+    # is unaffected; Stage C just becomes a misleading 0 in the report.
+    # Surface this explicitly: aggregate Stage C only over POSITIVE
+    # samples and emit `stage_c_note` so reviewers know why the bucket
+    # may be sparse. See benchmark-playbook §v2.8.0 Phase 2 e2e
+    # observation #3 + §「Pending follow-ups」.
+    #
+    # `stage_c_note` schema contract (locked by tests
+    # test_aggregate_phase_stage_c_*):
+    #   * absent  → all Stage C samples positive (healthy)
+    #   * "absorbed_into_AB"            → 100% of Stage C samples ≤ 0
+    #   * "absorbed_into_AB_partial:N/M" → N samples ≤ 0 out of M total
+    #     where N and M are non-negative integers, N < M (use the
+    #     all-zeros marker for N == M instead). Format is exactly
+    #     `<token>:<int>/<int>` (no spaces, no other separators) so
+    #     downstream dashboards can parse with a single regex
+    #     `r"absorbed_into_AB_partial:(\d+)/(\d+)"`.
+    stage_c_positive = [v for v in stage_values["C"] if v > 0]
+    stage_c_zero_count = sum(1 for v in stage_values["C"] if v <= 0)
+    stage_c_note = None
+    if stage_values["C"] and not stage_c_positive:
+        stage_c_note = "absorbed_into_AB"  # every sample was ≤0
+    elif stage_c_zero_count > 0:
+        stage_c_note = f"absorbed_into_AB_partial:{stage_c_zero_count}/{len(stage_values['C'])}"
+
+    def _stage_block(stage_key: str, samples: list[float]) -> dict:
+        # Stage C uses positive-only samples; A/B/D use raw.
+        effective = stage_c_positive if stage_key == "C" else samples
+        if not effective:
+            return {"n": 0, "p50": None, "p95": None, "p99": None}
+        return {
+            "n": len(effective),
+            "p50": percentile(effective, 50),
+            "p95": percentile(effective, 95),
+            "p99": percentile(effective, 99),
+        }
+
+    result = {
         "n_valid": n_valid,
         "e2e_ms": {
             "p50": p50,
@@ -181,16 +223,14 @@ def aggregate_phase(runs: list[dict], phase: str, rng: random.Random, n_resample
             "ci_too_wide": _ci_too_wide(p50, p50_lo, p50_hi),
         },
         "stage_ms": {
-            stage: {
-                "n": len(lst),
-                "p50": percentile(lst, 50),
-                "p95": percentile(lst, 95),
-                "p99": percentile(lst, 99),
-            }
+            stage: _stage_block(stage, lst)
             for stage, lst in stage_values.items()
         },
-        "stage_c_histogram": histogram(stage_values["C"], STAGE_C_HISTOGRAM_BUCKETS),
+        "stage_c_histogram": histogram(stage_c_positive, STAGE_C_HISTOGRAM_BUCKETS),
     }
+    if stage_c_note is not None:
+        result["stage_c_note"] = stage_c_note
+    return result
 
 
 def _ci_too_wide(point: float, lo: float, hi: float) -> bool:

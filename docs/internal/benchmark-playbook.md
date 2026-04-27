@@ -401,11 +401,18 @@ gh workflow run bench-e2e-record.yaml -f fixture_kind=synthetic-v2 -f count=30
 
 Driver 跑完 warm_up run 0 後立刻檢查 `per-run-0000.json` 的 5 個 T anchor — 任一為 0（== 沒觀察到）→ exit code 2 → `--abort-on-container-exit driver` → `bench_e2e_run.sh` 整段失敗 → workflow 在 ~2 min（而非 30-60 min timeout）內 fail。**之前 6 個 cycle 每個都浪費 30+ min wall-clock 才 timeout；Tier 1 把這個延遲縮到 ~90s**。
 
-**對應信號**：
-- T1=0：exporter scan-complete gauge 從未 advance（multi-tenant 大 fixture cold-load 沒撐過 wait_for_services 的 60s window）
-- T2=0：reload gauge 從未 advance（content hash 同前次 → diffAndReload short-circuit）
-- T3=0：Prometheus 沒 fire alert（label/expr mismatch、defaults 未載入、tenant 沒 register `bench_trigger`）
-- T4=0：webhook receiver 沒收到（Alertmanager 路由斷或 alert 沒持續到 dispatch）
+**對應信號**（v2.8.0 Track A A8 起，driver SMOKE FAIL 輸出以 `fire.<anchor>` / `resolve.<anchor>` 前綴標示 phase；phase 名稱即運行時看到的 key）：
+
+Fire phase（fixture 寫入 → alert dispatch，全 5 anchors 必須非 0）:
+- `fire.T1=0`：exporter scan-complete gauge 從未 advance（multi-tenant 大 fixture cold-load 沒撐過 `wait_for_services` 的 60s window）
+- `fire.T2=0`：reload gauge 從未 advance（content hash 同前次 → diffAndReload short-circuit）
+- `fire.T3=0`：Prometheus alert `activeAt` 沒前進（label/expr mismatch、defaults 未載入、tenant 沒 register `bench_trigger`）
+- `fire.T4=0`：webhook receiver 沒收到 fire POST（Alertmanager 路由斷或 alert 沒持續到 dispatch）
+
+Resolve phase（fixture 不變、driver push 低值、alert 應 resolve；T1/T2 在 `stage_ab_skipped: True` 路徑跳過合理，只檢 T0/T3/T4）:
+- `resolve.T0=0`：driver 沒記錄 resolve phase 起始時間（driver 內部 bug，少見）
+- `resolve.T3=0`：Prometheus alert `activeAt` 沒被 evict / state 沒進 resolve（rule TTL 設太短或 `for: 0s` 與 expression 互動異常）
+- `resolve.T4=0`：webhook receiver 沒收到 resolve POST（**Alertmanager `send_resolved: false` 是最常見原因**；其次是 `inhibit_rules` 把 resolve 也 inhibit 掉了）
 
 **診斷工件**：workflow 失敗時自動把 `docker compose logs threshold-exporter / prometheus / alertmanager / receiver / driver` dump 到 `bench-results/*.log`，與 `per-run-0000.json` 一起 upload artifact。Exporter `WARN: skip unparseable file` / `WARN: tenant=X: unknown key` 兩條是最高訊息密度的線索。
 

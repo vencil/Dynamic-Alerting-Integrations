@@ -444,17 +444,64 @@ def wait_for_services(deadline_s: float = 60.0) -> None:
 
 ANCHOR_KEYS = ("T0_unix_ns", "T1_unix_ns", "T2_unix_ns", "T3_unix_ns", "T4_unix_ns")
 
+# Resolve phase legitimately skips stages A/B (fixture isn't mutated, so
+# scan/reload gauges shouldn't advance). T0/T3/T4 are still required:
+#   - T0: driver records resolve-phase start (driver-internal; only zero
+#     if driver itself is broken).
+#   - T3: Prometheus alert `activeAt` flips back / rule moves out of
+#     firing state (Prom internal — alert rule TTL or expression
+#     mis-evaluation can keep this at 0).
+#   - T4: webhook receiver gets the resolve POST. The most common cause
+#     of `resolve.T4 = 0` while fire stays green is Alertmanager
+#     `send_resolved: false` being silently introduced by a future
+#     commit; second-most-common is an `inhibit_rules` config that
+#     suppresses resolve dispatch alongside firing alerts.
+#
+# Track A A8: extend Tier 1 smoke gate to cover resolve phase too.
+# Cycle-3/4/6 RCA all surfaced via fire-phase failure; resolve-only
+# regressions (e.g. `send_resolved` flipping off) would slip past a
+# fire-only gate. Note that `send_resolved=false` in particular only
+# breaks T4 (no AM dispatch) — T3 stays non-zero because Prometheus
+# state still resolves internally.
+RESOLVE_REQUIRED_ANCHORS = ("T0_unix_ns", "T3_unix_ns", "T4_unix_ns")
+
 
 def check_warm_up_anchors(result: dict) -> list[str]:
     """Return list of anchor names that are zero (== never observed) in
-    the warm_up run's fire phase. Empty list = all anchors fired = OK.
+    the warm_up run. Empty list = all anchors fired = OK.
 
-    The fire phase is the canonical smoke surface — resolve anchors are
-    derived from it, and Stages A/B can be skipped legitimately, but a
-    missing T anchor in fire is always a harness failure.
+    Fire phase: every T0..T4 must be non-zero (canonical smoke surface).
+    Resolve phase: T0/T3/T4 must be non-zero; T1/T2 are skipped (fixture
+    not mutated, gauges legitimately stale). Failure-mode names are
+    prefixed with `fire.` / `resolve.` so the operator can tell which
+    phase is broken (e.g. resolve-only failure points at Alertmanager
+    `send_resolved` or routing).
     """
+    missing: list[str] = []
+
     fire = result.get("fire") or {}
-    return [k for k in ANCHOR_KEYS if not fire.get(k)]
+    for k in ANCHOR_KEYS:
+        if not fire.get(k):
+            missing.append(f"fire.{k}")
+
+    resolve = result.get("resolve") or {}
+    if resolve.get("stage_ab_skipped", False) is False:
+        # Some future caller might run resolve without A/B skip; in that
+        # case all five anchors apply.
+        check_resolve = ANCHOR_KEYS
+    else:
+        check_resolve = RESOLVE_REQUIRED_ANCHORS
+    # If the resolve block is entirely missing (run errored before
+    # resolve), treat all required anchors as missing.
+    if not resolve:
+        for k in check_resolve:
+            missing.append(f"resolve.{k}")
+    else:
+        for k in check_resolve:
+            if not resolve.get(k):
+                missing.append(f"resolve.{k}")
+
+    return missing
 
 
 def main() -> int:
@@ -502,12 +549,20 @@ def main() -> int:
         e2e = result.get("fire", {}).get("e2e_ms", -1)
         print(f"[driver] run {i:3d} (warm_up={warm_up}): fire e2e_ms={e2e}", flush=True)
 
-        # Tier 1 fail-fast: warm_up smoke gate.
+        # Tier 1 fail-fast: warm_up smoke gate (covers fire + resolve;
+        # see check_warm_up_anchors docstring for which anchors apply
+        # per phase).
         if warm_up and not args.no_smoke_abort:
             zero_anchors = check_warm_up_anchors(result)
             if zero_anchors:
                 fire = result.get("fire") or {}
-                anchors_state = {k: fire.get(k, 0) for k in ANCHOR_KEYS}
+                resolve = result.get("resolve") or {}
+                anchors_state = {
+                    f"fire.{k}": fire.get(k, 0) for k in ANCHOR_KEYS
+                }
+                anchors_state.update(
+                    {f"resolve.{k}": resolve.get(k, 0) for k in ANCHOR_KEYS}
+                )
                 print(
                     f"[driver] SMOKE FAIL: warm_up produced zero anchors: {zero_anchors}",
                     file=sys.stderr,

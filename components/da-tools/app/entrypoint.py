@@ -220,6 +220,11 @@ COMMAND_MAP = {
     # Group G: Guard (v2.8.0 Phase .c C-12 — Dangling Defaults Guard)
     # Wraps the da-guard Go binary; see scripts/tools/ops/guard_dispatch.py.
     "guard": "guard_dispatch.py",
+    # Group H: Tenant verify (v2.8.0 Phase .b Track A A5)
+    # B-4 Emergency Rollback Procedures verification primitive.
+    # See docs/scenarios/incremental-migration-playbook.md §Emergency
+    # Rollback Procedures, checklist item 6.
+    "tenant-verify": "tenant_verify.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)

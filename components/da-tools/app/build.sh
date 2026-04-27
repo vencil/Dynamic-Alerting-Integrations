@@ -116,6 +116,22 @@ TOOL_FILES=(
     # v2.8.0 Phase .c C-12 — Dangling Defaults Guard dispatcher
     # (shells out to the `da-guard` Go binary; see scripts/tools/ops/guard_dispatch.py)
     ops/guard_dispatch.py
+    # v2.8.0 Phase .b Track A A5 — tenant verify (B-4 rollback checklist)
+    # tenant_verify imports ConfDScanner from describe_tenant (transitive
+    # dep); both ship together. See scripts/tools/dx/tenant_verify.py
+    # docstring + planning Track A A5.
+    #
+    # IMPORTANT: `describe_tenant.py` is intentionally **shipped but NOT
+    # registered** in entrypoint.py COMMAND_MAP. Customers can still
+    # invoke it via `python /app/describe_tenant.py ...` inside the
+    # image, but `da-tools describe-tenant ...` is not supported. This
+    # is the chosen design tradeoff — describe_tenant is a v2.7.0
+    # internal tool that we don't yet want to commit as a stable
+    # public CLI surface (its arg shape may change). Promotion to
+    # public command happens via a future entrypoint.py registration
+    # PR; until then it's a transitive lib for tenant-verify only.
+    dx/describe_tenant.py
+    dx/tenant_verify.py
     # Shared library sub-modules
     _lib_constants.py
     _lib_validation.py

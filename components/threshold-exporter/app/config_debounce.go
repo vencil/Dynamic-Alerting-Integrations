@@ -40,8 +40,11 @@ package main
 // an orphaned timer channel in early prototypes; AfterFunc is cleaner).
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -447,6 +450,17 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 // Returns empty string + error if the tenant file or any chain entry is
 // unreadable; computeMergedHash itself errors only on parse failures,
 // which are returned to the caller.
+//
+// v2.8.0 Phase B Track A A4 (hierarchical-path companion of the flat-mode
+// fix in config.go): when computeMergedHash fails on a defaults-chain
+// parse error, classify the offending file, increment
+// `da_config_parse_failure_total` and ERROR-log it. Cycle-6 RCA showed
+// that broken `_defaults.yaml` silently dropped the entire defaults
+// block — the upstream `WARN: skipping merged_hash for tenant=X` line
+// alone (logMergeSkip) was too easy to miss in `gh run view --log`.
+// Per-tenant duplication is intentional: ops alerts on the metric
+// (`sum(rate(da_config_parse_failure_total{file_basename="_defaults.yaml"}
+// [5m])) > 0`) and the count itself is the blast-radius signal.
 func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, defaultsChain []string) (string, error) {
 	tenantBytes, err := os.ReadFile(tenantFile)
 	if err != nil {
@@ -460,5 +474,40 @@ func (m *ConfigManager) recomputeMergedHash(tenantID, tenantFile string, default
 		}
 		chainBytes = append(chainBytes, b)
 	}
-	return computeMergedHash(tenantBytes, tenantID, chainBytes)
+	h, mergeErr := computeMergedHash(tenantBytes, tenantID, chainBytes)
+	if mergeErr != nil {
+		emitParseFailureSignal(tenantID, tenantFile, defaultsChain, mergeErr)
+	}
+	return h, mergeErr
+}
+
+// emitParseFailureSignal classifies a computeMergedHash error and, if
+// it's a defaults-chain parse failure, emits the structured signal pair
+// (metric + ERROR log) that ops dashboards depend on. Tenant-file parse
+// errors stay at WARN via logMergeSkip — those are per-tenant noise,
+// not infra-wide.
+//
+// Format contract: computeEffectiveConfig wraps defaults parse errors
+// with `parse defaults[%d]: %w` and tenant errors with `parse tenant: %w`
+// (config_inheritance.go). We string-match the prefix to map the index
+// back to defaultsChain[i] for filename attribution.
+func emitParseFailureSignal(tenantID, tenantFile string, defaultsChain []string, mergeErr error) {
+	msg := mergeErr.Error()
+	for i, dp := range defaultsChain {
+		needle := fmt.Sprintf("parse defaults[%d]:", i)
+		if strings.Contains(msg, needle) {
+			IncParseFailure(filepath.Base(dp))
+			log.Printf(
+				"ERROR: skip unparseable defaults/profiles file %s (chain index %d) for tenant=%s: %v (entire block dropped — fix file or remove)",
+				dp, i, tenantID, mergeErr,
+			)
+			return
+		}
+	}
+	// Tenant-file parse failure: kept at WARN-class via the upstream
+	// logMergeSkip caller path; still bump the per-file counter so ops
+	// can detect persistently broken tenant files.
+	if strings.Contains(msg, "parse tenant:") {
+		IncParseFailure(filepath.Base(tenantFile))
+	}
 }

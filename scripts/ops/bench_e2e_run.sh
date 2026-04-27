@@ -76,6 +76,13 @@ if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
     # `_defaults.yaml` would trigger that refusal even though we WANT
     # to (re)generate. Clear the dir before invoking the generator;
     # `--with-defaults` will reinstate `_defaults.yaml` correctly.
+    #
+    # `--extra-defaults bench_trigger=50` (v2.8.0 Phase B Track A A6,
+    # replaces the post-staging inline-Python YAML rewrite, cycle-3 RCA)
+    # registers the bench harness's actual-vs-threshold metric directly
+    # in the generated root _defaults.yaml. Without this key, bench-run-N
+    # tenants' overrides would be rejected as `unknown key not in
+    # defaults` and T3/T4 anchors would never advance.
     echo "[bench-e2e] fixture empty (only placeholder _defaults.yaml) — clearing + generating $FIXTURE_KIND ($FIXTURE_TENANT_COUNT tenants, seed=$SEED)..."
     rm -rf "$FIXTURE_SOURCE_DIR"
     python3 "$REPO_ROOT/scripts/tools/dx/generate_tenant_fixture.py" \
@@ -83,7 +90,8 @@ if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
         --count "$FIXTURE_TENANT_COUNT" \
         --with-defaults \
         --output "$FIXTURE_SOURCE_DIR" \
-        --seed "$SEED"
+        --seed "$SEED" \
+        --extra-defaults bench_trigger=50
 fi
 
 # ---------------------------------------------------------------------------
@@ -102,6 +110,13 @@ cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
 # metric="bench_trigger"} → alert rule never matches → driver T3/T4
 # poll forever (60s × 4 polls × 31 runs = workflow timeout territory).
 #
+# v2.8.0 Phase B Track A A6: when the generator ran above with
+# `--extra-defaults bench_trigger=50`, this step is idempotent (the
+# `if "bench_trigger:" in text: skipping` branch fires). It remains as
+# a guard for the OTHER path — pre-existing fixtures (customer-anon or
+# previously-generated trees) where the generator was never invoked
+# and the orchestrator is still responsible for the registration.
+#
 # Diagnosed via partial artifact from cancelled run #24944542524:
 # per-run-*.json showed T1+T2 advance correctly (PR #86 fix worked) but
 # T3=0, T4=0 → alert never fired → metric absent from Prometheus.
@@ -115,41 +130,13 @@ cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
 # override would also have threshold 50 — irrelevant since each tenant
 # config sets its own override before driver pushes actual.
 DEFAULTS_FILE="fixture/active/conf.d/_defaults.yaml"
-if [[ -f "$DEFAULTS_FILE" ]]; then
-    # File exists from --with-defaults; append bench_trigger to the
-    # `defaults:` block. We use a Python helper for safe YAML write
-    # since we don't have yq/jq guaranteed in this orchestrator.
-    python3 - <<PYEOF
-import sys
-from pathlib import Path
-p = Path("$DEFAULTS_FILE")
-text = p.read_text(encoding="utf-8")
-if "bench_trigger:" in text:
-    print("[bench-e2e] bench_trigger already in _defaults.yaml; skipping")
-    sys.exit(0)
-# Find the 'defaults:' block and append a new key. Simple line-based
-# approach: insert after the 'defaults:' line, indented 2 spaces.
-lines = text.splitlines()
-out = []
-inserted = False
-for line in lines:
-    out.append(line)
-    if not inserted and line.rstrip() == "defaults:":
-        out.append("  bench_trigger: 50")
-        inserted = True
-if not inserted:
-    # No 'defaults:' key found; prepend a fresh block.
-    out = ["defaults:", "  bench_trigger: 50"] + out
-p.write_text("\n".join(out) + "\n", encoding="utf-8")
-print(f"[bench-e2e] registered bench_trigger=50 in {p}")
-PYEOF
-else
-    cat > "$DEFAULTS_FILE" <<EOF
-defaults:
-  bench_trigger: 50
-EOF
-    echo "[bench-e2e] created $DEFAULTS_FILE with bench_trigger=50"
-fi
+# Helper handles the three cases (existing-with-key / existing-without-key /
+# missing-file) and is idempotent — re-running this orchestrator after a
+# successful generator run is a no-op (key already present).
+python3 "$REPO_ROOT/scripts/ops/inject_default_key.py" \
+    "$DEFAULTS_FILE" \
+    bench_trigger \
+    50
 
 # ---------------------------------------------------------------------------
 # Step 3: pre-create bench-run-{0..COUNT} placeholder tenants.
