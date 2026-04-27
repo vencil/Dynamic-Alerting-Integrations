@@ -95,6 +95,34 @@ type EmissionInput struct {
 	// translator heuristics + cluster aggregation rules + status
 	// semantics live in the `translate.go` package header.
 	Translate bool `json:"translate,omitempty"`
+
+	// Decisions, when non-nil, filters which proposals get emitted
+	// based on per-proposal accept/reject decisions captured in a
+	// reviewer-edited YAML file (see decisions.go). nil = emit all
+	// proposals (PR-2/PR-3 backward-compat).
+	//
+	// Filter semantics:
+	//   - decision="accept" → emit
+	//   - decision="reject" → skip (no warning — reviewer's intent)
+	//   - decision="pending" / unknown / not-recorded
+	//     → controlled by Decisions.UndecidedPolicy
+	//       (default "emit" matches PR-2/PR-3 behaviour)
+	//
+	// Mismatched member_rule_ids (recorded vs. live cluster) and
+	// stale keys (decision references a cluster no longer in the
+	// ProposalSet) surface as Warnings without overriding the
+	// reviewer's verdict — see decisions.go::applyDecisions.
+	Decisions *ProposalDecisions `json:"decisions,omitempty"`
+
+	// EmitDecisionsScaffold, when true, asks EmitProposals to emit
+	// a `proposal-decisions.yaml` file at RootPrefix's root (one
+	// per emit run, NOT per-proposal). The file lists every
+	// proposal in the live ProposalSet with decision="pending" so
+	// reviewers have a starter file to edit.
+	//
+	// false (default) skips scaffold emission — useful for the
+	// "I already have decisions, just emit the accepted set" call.
+	EmitDecisionsScaffold bool `json:"emit_decisions_scaffold,omitempty"`
 }
 
 // EmissionLayout maps proposals to target directories. Caller-
@@ -169,7 +197,22 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 		Files: make(map[string][]byte),
 	}
 
+	// Decisions filter (PR-4). When Decisions is nil, emitIdx is
+	// every proposal index — backward-compatible behaviour. When
+	// non-nil, only the accepted (and policy-permitted-pending) set
+	// passes through; rejected and skip-policy clusters drop out.
+	emitIdx, decisionWarnings := applyDecisions(props, input.Decisions)
+	out.Warnings = append(out.Warnings, decisionWarnings...)
+
+	emitSet := make(map[int]struct{}, len(emitIdx))
+	for _, i := range emitIdx {
+		emitSet[i] = struct{}{}
+	}
+
 	for i, prop := range props {
+		if _, ok := emitSet[i]; !ok {
+			continue
+		}
 		dir := input.Layout.ProposalDirs[i]
 		if dir == "" {
 			out.Warnings = append(out.Warnings,
@@ -180,6 +223,20 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 		warnings := emitOneProposal(out.Files, rootPrefix, dir, prop, ruleIndex, i, input.Translate)
 		out.Warnings = append(out.Warnings, warnings...)
 	}
+
+	// PR-4 scaffold emission. Lives at RootPrefix's root (not under
+	// any proposal dir) so reviewers see a single file to edit
+	// regardless of how many proposals the run produced.
+	if input.EmitDecisionsScaffold {
+		scaffold := ScaffoldDecisions(input.ProposalSet)
+		if scaffoldBytes, err := EncodeDecisions(scaffold); err == nil {
+			out.Files[joinClean(rootPrefix, "proposal-decisions.yaml")] = scaffoldBytes
+		} else {
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"failed to emit proposal-decisions.yaml scaffold: %v", err))
+		}
+	}
+
 	return out, nil
 }
 
