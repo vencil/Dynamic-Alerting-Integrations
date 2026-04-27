@@ -100,6 +100,7 @@ lang: zh
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
 | `sync_schema.py` | Sync JSON Schema with Go source definitions. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META + JSX frontmatter |
+| `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 
 ## 文件 Lint / CI 工具
 

@@ -74,6 +74,11 @@ def _build_help_text(lang):
     guard             驗證 conf.d/ 樹是否安全 (schema + routing + cardinality)
                       子命令: defaults-impact
 
+命令 (Phase B Track A — rollback verification, v2.8.0):
+    tenant-verify     列印 tenant 的 effective config + merged_hash；
+                      `--expect-merged-hash` 與快照比對 (B-4 rollback checklist)
+                      `--all --json` 拍 pre-base snapshot 給 rollback 後 diff
+
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
     DA_LANG           設定 CLI 語言 (zh/en，優先於 LC_ALL/LANG)"""
@@ -141,6 +146,13 @@ Commands (Federation — multi-cluster):
 Commands (Guard — Dangling Defaults Guard, v2.8.0 C-12):
     guard             Validate a conf.d/ tree (schema + routing + cardinality)
                       Subcommands: defaults-impact
+
+Commands (Phase B Track A — rollback verification, v2.8.0):
+    tenant-verify     Print tenant effective config + merged_hash;
+                      `--expect-merged-hash` compares against a snapshot
+                      (B-4 rollback checklist item 6).
+                      `--all --json` snapshots pre-base state for diffing
+                      after rollback.
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
