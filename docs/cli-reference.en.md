@@ -2481,7 +2481,7 @@ da-tools guard defaults-impact --config-dir conf.d/ \
     --format json --output guard-report.json
 ```
 
-**Scope simplification (vs planning §C-12)**: PR-4 ships a *current-working-tree* validator. Equivalent to the planning's "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by C-7b `/simulate`). See [components/threshold-exporter/README.md § da-guard CLI](../components/threshold-exporter/README.md#da-guard-cliv280-phase-c-c-12-pr-4) for the design rationale.
+**Scope simplification (vs planning §C-12)**: PR-4 ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to the planning's "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by C-7b `/simulate`). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
 
 ---
 

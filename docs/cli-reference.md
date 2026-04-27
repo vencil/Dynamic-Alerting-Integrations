@@ -2226,7 +2226,7 @@ da-tools guard defaults-impact --config-dir conf.d/ \
     --format json --output guard-report.json
 ```
 
-**範圍簡化（vs planning §C-12）**：PR-4 是 *當前工作樹* 驗證器；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 C-7b `/simulate`。詳見 [components/threshold-exporter/README.md § da-guard CLI](../components/threshold-exporter/README.md#da-guard-cliv280-phase-c-c-12-pr-4)。
+**範圍簡化（vs planning §C-12）**：PR-4 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 C-7b `/simulate`。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
 
 ---
 
