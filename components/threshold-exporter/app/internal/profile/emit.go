@@ -73,6 +73,17 @@ type EmissionInput struct {
 
 	// Layout pins each proposal to a target directory.
 	Layout EmissionLayout `json:"layout"`
+
+	// Translate flips each proposal's emission shape from the PR-2
+	// intermediate format to the PR-3 conf.d-ready format
+	// (`defaults: {<metric_key>: <threshold>}` /
+	// `tenants: {<id>: {<metric_key>: "<value>"}}`) when the
+	// translator can pull a numeric threshold out of every member
+	// rule. Per-proposal fall-back: a proposal whose
+	// TranslateProposal returns Status==TranslationSkipped retains
+	// the intermediate shape, so a partial corpus still emits
+	// useful artifacts. ADR-019 §emission-mode pins this contract.
+	Translate bool `json:"translate,omitempty"`
 }
 
 // EmissionLayout maps proposals to target directories. Caller-
@@ -155,7 +166,7 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 					i, len(prop.MemberRuleIDs)))
 			continue
 		}
-		warnings := emitOneProposal(out.Files, rootPrefix, dir, prop, ruleIndex, i)
+		warnings := emitOneProposal(out.Files, rootPrefix, dir, prop, ruleIndex, i, input.Translate)
 		out.Warnings = append(out.Warnings, warnings...)
 	}
 	return out, nil
@@ -163,16 +174,53 @@ func EmitProposals(input EmissionInput) (*EmissionOutput, error) {
 
 // emitOneProposal writes the three artifact files for proposal i
 // into the shared Files map. Returns per-proposal warnings.
+//
+// When `translate` is true the emitter first runs TranslateProposal
+// on the cluster; on success it emits the conf.d-ready shape
+// (`defaults: {key: scalar}` + `tenants: {id: {key: "string"}}`).
+// On TranslationSkipped it falls back to the PR-2 intermediate
+// shape so a single un-translatable proposal doesn't sink the
+// whole batch.
 func emitOneProposal(
 	files map[string][]byte,
 	rootPrefix, dir string,
 	prop ExtractionProposal,
 	ruleIndex map[string]parser.ParsedRule,
 	propIdx int,
+	translate bool,
 ) []string {
 	var warnings []string
 	pathFor := func(name string) string {
 		return joinClean(rootPrefix, dir, name)
+	}
+
+	tenantKey := pickTenantLabelKey(prop)
+
+	// PR-3 translated path: when caller opts in AND the cluster
+	// produces a TranslationOK / Partial result, emit conf.d-ready
+	// YAML. Skip-status (no member translatable) falls through to
+	// the intermediate path so the caller's batch still gets
+	// useful artifacts.
+	if translate {
+		members := membersForProposal(prop, ruleIndex)
+		translation, terr := TranslateProposal(prop, members, tenantKey)
+		if terr != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"proposal[%d]: translator hard-error: %v (falling back to intermediate emission)",
+				propIdx, terr))
+		} else if translation.Status != TranslationSkipped {
+			tw := emitTranslatedProposal(files, pathFor, prop, translation, ruleIndex, tenantKey, propIdx)
+			warnings = append(warnings, tw...)
+			return warnings
+		} else {
+			warnings = append(warnings, fmt.Sprintf(
+				"proposal[%d]: TranslateProposal returned skipped (no translatable members); falling back to intermediate emission",
+				propIdx))
+			for _, w := range translation.Warnings {
+				warnings = append(warnings,
+					fmt.Sprintf("proposal[%d]: %s", propIdx, w))
+			}
+		}
 	}
 
 	// 1. _defaults.yaml — shared structure across all members.
@@ -194,7 +242,6 @@ func emitOneProposal(
 	// meaningful per-tenant axis to emit on. Skip the per-tenant
 	// loop entirely with one explanatory warning rather than
 	// spamming N "looked for label \"\"" messages.
-	tenantKey := pickTenantLabelKey(prop)
 	if tenantKey == "" {
 		warnings = append(warnings, fmt.Sprintf(
 			"proposal[%d]: no varying label keys — cluster members are structurally identical; skipped per-tenant file emission",
@@ -228,6 +275,143 @@ func emitOneProposal(
 	// 3. PROPOSAL.md — human-readable summary.
 	files[pathFor("PROPOSAL.md")] = []byte(renderProposalMarkdown(propIdx, prop, tenantKey))
 	return warnings
+}
+
+// membersForProposal extracts the ParsedRule slice corresponding to
+// a proposal's MemberRuleIDs (preserving order so cluster
+// translation behaviour is deterministic). Missing IDs are dropped
+// silently here; the caller surfaces them as warnings via the
+// regular emission path.
+func membersForProposal(prop ExtractionProposal, ruleIndex map[string]parser.ParsedRule) []parser.ParsedRule {
+	out := make([]parser.ParsedRule, 0, len(prop.MemberRuleIDs))
+	for _, rid := range prop.MemberRuleIDs {
+		if r, ok := ruleIndex[rid]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// emitTranslatedProposal writes the conf.d-ready artifact tree:
+//
+//   - `_defaults.yaml` carries `defaults: {<metric_key>: <threshold>}`
+//     plus a comment header with provenance / dialect / translator
+//     warnings so reviewers see the soft spots.
+//   - per-tenant `<id>.yaml` carries `tenants: {<id>: {<metric_key>:
+//     "<value>"}}` only when the tenant's threshold differs from the
+//     cluster default — keeping tenant.yaml minimal per ADR-019's
+//     "Profile-as-Directory-Default" goal.
+//   - `PROPOSAL.md` is unchanged from the intermediate path; it
+//     summarises the cluster for reviewers.
+func emitTranslatedProposal(
+	files map[string][]byte,
+	pathFor func(string) string,
+	prop ExtractionProposal,
+	translation *ProposalTranslation,
+	ruleIndex map[string]parser.ParsedRule,
+	tenantKey string,
+	propIdx int,
+) []string {
+	var warnings []string
+
+	defaultsDoc := map[string]any{
+		"defaults": map[string]any{
+			translation.MetricKey: translation.DefaultThreshold,
+		},
+	}
+	if defaultsBytes, err := yamlMarshalCanonical(defaultsDoc); err == nil {
+		files[pathFor("_defaults.yaml")] = withTranslatedHeader(defaultsBytes, prop, translation)
+	} else {
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: failed to marshal translated _defaults.yaml: %v", propIdx, err))
+	}
+
+	if tenantKey == "" {
+		warnings = append(warnings, fmt.Sprintf(
+			"proposal[%d]: translated emit — no varying label keys; skipped per-tenant files (override values land in PROPOSAL.md only)",
+			propIdx))
+	} else {
+		for _, rid := range prop.MemberRuleIDs {
+			rule, ok := ruleIndex[rid]
+			if !ok {
+				warnings = append(warnings, fmt.Sprintf(
+					"proposal[%d]: translated emit — MemberRuleID %q not found in AllRules; skipped tenant file",
+					propIdx, rid))
+				continue
+			}
+			tenantID := tenantIDForRule(rule, tenantKey)
+			if tenantID == "" {
+				warnings = append(warnings, fmt.Sprintf(
+					"proposal[%d]: translated emit — rule %q has no value for tenant key %q; skipped tenant file",
+					propIdx, rid, tenantKey))
+				continue
+			}
+			override, hasOverride := translation.PerTenantOverrides[tenantID]
+			if !hasOverride {
+				// Tenant matches the default → no tenant.yaml needed
+				// (deepMerge falls through to _defaults.yaml). This is
+				// the GitOps anti-pattern fix that ADR-019 §1
+				// motivated.
+				continue
+			}
+			tenantDoc := map[string]any{
+				"tenants": map[string]any{
+					tenantID: map[string]any{
+						// Threshold-exporter tenant overrides are
+						// strings (supports "value:severity" suffix
+						// per config_resolve.go::ResolveAt). Translator
+						// emits the bare numeric string; severity
+						// override would need explicit translator
+						// extension and is ADR-019 §non-goals for PR-3.
+						translation.MetricKey: formatThresholdString(override),
+					},
+				},
+			}
+			if tenantBytes, err := yamlMarshalCanonical(tenantDoc); err == nil {
+				files[pathFor(safeFilename(tenantID)+".yaml")] = tenantBytes
+			} else {
+				warnings = append(warnings, fmt.Sprintf(
+					"proposal[%d]: translated emit — failed to marshal tenant %q: %v",
+					propIdx, tenantID, err))
+			}
+		}
+	}
+
+	files[pathFor("PROPOSAL.md")] = []byte(renderTranslatedProposalMarkdown(propIdx, prop, translation, tenantKey))
+	return warnings
+}
+
+// withTranslatedHeader prepends a YAML comment block to the
+// _defaults.yaml body so reviewers see provenance + warnings
+// directly in the file (helpful when reviewing a Git diff without
+// PROPOSAL.md context).
+func withTranslatedHeader(body []byte, prop ExtractionProposal, translation *ProposalTranslation) []byte {
+	header := strings.Builder{}
+	header.WriteString("# Generated by C-9 Profile Builder PR-3 (PromRule → conf.d translator).\n")
+	header.WriteString(fmt.Sprintf("# Cluster: %d member rules; dialect=%s; confidence=%s; translation=%s.\n",
+		len(prop.MemberRuleIDs), prop.Dialect, prop.Confidence, translation.Status))
+	if translation.Operator != "" {
+		header.WriteString(fmt.Sprintf("# Comparison operator: `%s` (recorded for ADR-019 §emit-direction follow-ups).\n",
+			translation.Operator))
+	}
+	if translation.Severity != "" {
+		header.WriteString(fmt.Sprintf("# Severity: `%s`.\n", translation.Severity))
+	}
+	for _, w := range translation.Warnings {
+		header.WriteString("# WARN: " + w + "\n")
+	}
+	header.WriteString("# See PROPOSAL.md for member listing + per-tenant overrides.\n\n")
+	return append([]byte(header.String()), body...)
+}
+
+// formatThresholdString renders a float64 threshold value into the
+// quoted-string form ResolveAt expects in tenant overrides. Drops
+// trailing zeros so common values like 80.0 emit as "80".
+func formatThresholdString(v float64) string {
+	if v == float64(int64(v)) {
+		return fmt.Sprintf("%d", int64(v))
+	}
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", v), "0"), ".")
 }
 
 // marshalDefaults builds the YAML content for `_defaults.yaml`.
@@ -404,6 +588,87 @@ func renderProposalMarkdown(propIdx int, prop ExtractionProposal, tenantKey stri
 	out.WriteString("\n---\n\n")
 	out.WriteString("_PR-2 emission: this artifact tree is intermediate. PR-3 will translate it into the final ADR-018 conf.d/ shape._\n")
 	return out.String()
+}
+
+// renderTranslatedProposalMarkdown is the PR-3 sibling of
+// renderProposalMarkdown — same overall shape, but adds a
+// "Translation summary" section that surfaces metric_key, default
+// threshold, severity, and per-tenant overrides so a reviewer can
+// see the conf.d-shape decisions without opening the YAML files.
+func renderTranslatedProposalMarkdown(propIdx int, prop ExtractionProposal, translation *ProposalTranslation, tenantKey string) string {
+	out := strings.Builder{}
+	out.WriteString(fmt.Sprintf("# Proposal %d (translated to conf.d)\n\n", propIdx))
+	out.WriteString(fmt.Sprintf("**Confidence**: %s  \n", prop.Confidence))
+	out.WriteString(fmt.Sprintf("**Dialect**: %s  \n", prop.Dialect))
+	out.WriteString(fmt.Sprintf("**Translation status**: %s  \n", translation.Status))
+	out.WriteString(fmt.Sprintf("**Members**: %d rules  \n", len(prop.MemberRuleIDs)))
+	if tenantKey != "" {
+		out.WriteString(fmt.Sprintf("**Tenant key**: `%s`  \n", tenantKey))
+	}
+	out.WriteString("\n")
+
+	out.WriteString("## Translation summary\n\n")
+	out.WriteString(fmt.Sprintf("- Metric key: `%s`\n", translation.MetricKey))
+	out.WriteString(fmt.Sprintf("- Default threshold (cluster median): `%g`\n", translation.DefaultThreshold))
+	if translation.Operator != "" {
+		out.WriteString(fmt.Sprintf("- Comparison operator: `%s`\n", translation.Operator))
+	}
+	if translation.Severity != "" {
+		out.WriteString(fmt.Sprintf("- Severity: `%s`\n", translation.Severity))
+	}
+	if len(translation.PerTenantOverrides) > 0 {
+		out.WriteString("- Per-tenant overrides (only tenants whose value differs from default):\n")
+		for _, k := range sortedTenantKeys(translation.PerTenantOverrides) {
+			out.WriteString(fmt.Sprintf("  - `%s` → `%g`\n", k, translation.PerTenantOverrides[k]))
+		}
+	}
+	out.WriteString("\n")
+
+	if len(translation.Warnings) > 0 {
+		out.WriteString("## Translator warnings\n\n")
+		for _, w := range translation.Warnings {
+			out.WriteString("- " + w + "\n")
+		}
+		out.WriteString("\n")
+	}
+
+	out.WriteString("## Member rules\n\n")
+	for _, m := range translation.MemberStatuses {
+		switch m.Status {
+		case TranslationOK:
+			out.WriteString(fmt.Sprintf("- ✅ `%s` — threshold=`%g`\n", m.SourceRuleID, m.Threshold))
+		case TranslationPartial:
+			out.WriteString(fmt.Sprintf("- ⚠️ `%s` — threshold=`%g` (partial: %s)\n", m.SourceRuleID, m.Threshold, strings.Join(m.Warnings, "; ")))
+		case TranslationSkipped:
+			out.WriteString(fmt.Sprintf("- ⏭️ `%s` — skipped (%s)\n", m.SourceRuleID, m.SkipReason))
+		}
+	}
+	out.WriteString("\n")
+
+	out.WriteString("## Reason\n\n")
+	out.WriteString(prop.Reason)
+	if !strings.HasSuffix(prop.Reason, "\n") {
+		out.WriteString("\n")
+	}
+	out.WriteString("\n")
+
+	out.WriteString("---\n\n")
+	out.WriteString("_PR-3 emission: this proposal is conf.d-ready (deepMerge-compatible). Review_  \n")
+	out.WriteString("_`_defaults.yaml` and per-tenant `<id>.yaml` then commit; the threshold-exporter_  \n")
+	out.WriteString("_runtime ResolveAt path consumes them via ADR-018 inheritance._\n")
+	return out.String()
+}
+
+// sortedTenantKeys returns map keys sorted alphabetically (helper
+// for renderTranslatedProposalMarkdown so the per-tenant override
+// list is deterministic).
+func sortedTenantKeys(m map[string]float64) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // sortedKeys returns map keys alphabetically. Local copy so emit.go
