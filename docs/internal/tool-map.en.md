@@ -42,6 +42,7 @@ lang: en
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
 | `gitops_check.py` | GitOps Native Mode readiness validator. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
+| `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
 | `inject_metadata_join.py` | One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
@@ -69,6 +70,7 @@ lang: en
 |------|------|
 | `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
+| `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |

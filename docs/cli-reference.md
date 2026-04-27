@@ -144,6 +144,7 @@ da-tools <command> --help
 | `config-diff` | 兩目錄配置差異比對（GitOps PR review） | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
+| `guard` | Dangling Defaults Guard 包裝（C-12 PR-4），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
@@ -2162,6 +2163,70 @@ da-tools opa-evaluate --config-dir conf.d/ --opa-binary /usr/local/bin/opa --pol
 # Dry-run：僅顯示 OPA input JSON
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
 ```
+
+---
+
+#### guard
+
+Dangling Defaults Guard（v2.8.0 Phase .c C-12 PR-4）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / routing / cardinality 三層）。
+
+**用法**
+
+```bash
+da-tools guard <subcommand> [flags]
+```
+
+**子命令**
+
+| 子命令 | 說明 |
+|---|---|
+| `defaults-impact` | 對 conf.d/（或 `--scope` 子目錄）下所有租戶執行 deepMerge → guard checks，輸出 Markdown / JSON 報告 |
+
+**Binary 解析順序**
+
+1. `--da-guard-binary <path>`（顯式覆寫）
+2. `$DA_GUARD_BINARY` 環境變數
+3. `$PATH` 上的 `da-guard`
+
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-guard ./cmd/da-guard`）。
+
+**`defaults-impact` 主要 flags**
+
+| Flag | 預設 | 說明 |
+|---|---|---|
+| `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
+| `--scope <path>` | 整棵樹 | 限定子目錄（CI 由變更 `_defaults.yaml` 的 dirname 推算） |
+| `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV |
+| `--cardinality-limit <n>` | 0（停用） | per-tenant 預測 metric 上限；建議 500 對齊 runtime |
+| `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
+| `--format md\|json` | md | 輸出格式 |
+| `--output <path>` | stdout | 寫入指定檔；parent dir 必須存在 |
+| `--warn-as-error` | false | 把 warning 視為 error 影響 exit code |
+
+**Exit codes**
+
+| Code | 意義 |
+|---|---|
+| 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
+| 1 | guard 偵測到 error — block merge / commit |
+| 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
+
+**範例**
+
+```bash
+# 整棵 conf.d/ 跑 schema check
+da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
+
+# CI hook：限定 _defaults.yaml 變更目錄 + 上限
+da-tools guard defaults-impact --config-dir conf.d/ \
+    --scope conf.d/db/ --cardinality-limit 500
+
+# JSON 輸出供下游 PR comment poster
+da-tools guard defaults-impact --config-dir conf.d/ \
+    --format json --output guard-report.json
+```
+
+**範圍簡化（vs planning §C-12）**：PR-4 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 C-7b `/simulate`。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
 
 ---
 

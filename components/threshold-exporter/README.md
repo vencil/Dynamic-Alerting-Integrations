@@ -443,6 +443,52 @@ spec:
 
 ---
 
+## da-guard CLI（v2.8.0 Phase .c C-12 PR-4）
+
+`da-guard` 是 `internal/guard` 的 CLI 包裝，把「Dangling Defaults Guard」帶到客戶 repo 端：把 `_defaults.yaml` 變更前 / pre-commit / GitHub Actions 階段就攔截 schema / routing / cardinality 三層問題，不讓壞改動 reach WatchLoop。
+
+**位置**：`components/threshold-exporter/app/cmd/da-guard/`（同 module，import `pkg/config` + `internal/guard`）。
+
+**建置**：
+
+```bash
+cd components/threshold-exporter/app
+go build -o da-guard ./cmd/da-guard
+./da-guard --help
+```
+
+**典型用法**：
+
+```bash
+# 驗證整棵 conf.d/，所有租戶都套 cpu 必填
+da-guard --config-dir conf.d/ --required-fields cpu
+
+# 只驗 db/ 子目錄（CI 由 dirname 變更的 _defaults.yaml 推算）
+da-guard --config-dir conf.d/ --scope conf.d/db/ \
+    --required-fields cpu,memory --cardinality-limit 500
+
+# JSON 輸出供下游 PR comment poster 消費
+da-guard --config-dir conf.d/ --format json --output guard-report.json
+```
+
+**Exit codes**：
+
+| Code | 意義 |
+|------|------|
+| 0 | clean — 沒有 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
+| 1 | guard 偵測到 error — block merge / commit |
+| 2 | caller error — flag 錯、路徑找不到、scope 跑出 root 之外等 |
+
+**三層檢查（內建於 `internal/guard`）**：
+
+1. **Schema validation**（`--required-fields`）— 點分路徑欄位 deepMerge 後不可缺；ADR-018 null-as-delete 後欄位變 nil 也算缺。
+2. **Routing schema guardrails** — 5 檢查：unknown receiver type / 必填欄位缺 / empty matcher / duplicate matcher / redundant override。
+3. **Cardinality guard**（`--cardinality-limit`）— 預測 post-merge metric 數，warn @ ratio×limit（預設 0.8）/ error 超 limit。
+
+**`da-tools guard defaults-impact` 包裝**：Python `da-tools` CLI 透過 `scripts/tools/ops/guard_dispatch.py` shell-out 到 `da-guard` 二進位。Binary 解析順序：`--da-guard-binary` flag → `$DA_GUARD_BINARY` env → `$PATH` 上的 `da-guard`。詳見 `da-tools guard --help`。
+
+**範圍簡化（vs. v2.8.0 planning §C-12）**：PR-4 是 *當前工作樹* 驗證器，讀取磁碟現狀。CI / pre-commit 流程下這跟「給定 _defaults.yaml 變更、預測影響」等價（commit / push 前該變更已經寫在磁碟上）。Speculative simulation 留 C-7b `/simulate` 或後續 PR。
+
 ## 開發
 
 ```bash

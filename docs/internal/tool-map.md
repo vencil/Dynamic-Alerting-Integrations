@@ -42,6 +42,7 @@ lang: zh
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
 | `gitops_check.py` | GitOps Native Mode readiness validator. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
+| `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
 | `inject_metadata_join.py` | One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |

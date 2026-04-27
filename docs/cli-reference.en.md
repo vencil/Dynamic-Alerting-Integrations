@@ -140,6 +140,7 @@ These tools operate on local YAML files and don't require network.
 | `config-diff` | Directory-level config diff (GitOps PR review) | `--old-dir <dir> --new-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
+| `guard` | Dangling Defaults Guard wrapper (C-12 PR-4); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
 | `explain-route` | Routing merge pipeline debugger (four-layer expansion + profile, ADR-007) | `--config-dir <dir>` |
@@ -2417,6 +2418,70 @@ da-tools opa-evaluate --config-dir conf.d/ --opa-binary /usr/local/bin/opa --pol
 # Dry-run: show OPA input JSON only
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
 ```
+
+---
+
+#### guard
+
+Dangling Defaults Guard (v2.8.0 Phase .c C-12 PR-4). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / routing / cardinality.
+
+**Usage**
+
+```bash
+da-tools guard <subcommand> [flags]
+```
+
+**Subcommands**
+
+| Subcommand | Description |
+|---|---|
+| `defaults-impact` | Run deepMerge → guard checks against every tenant under conf.d/ (or the `--scope` subdirectory); emit Markdown / JSON report |
+
+**Binary resolution order**
+
+1. `--da-guard-binary <path>` (explicit override)
+2. `$DA_GUARD_BINARY` env var
+3. `da-guard` on `$PATH`
+
+If none resolves, prints install hints (download from `tools/v*` release / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-guard ./cmd/da-guard`).
+
+**`defaults-impact` key flags**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config-dir <path>` | (required) | conf.d/ root |
+| `--scope <path>` | whole tree | Limit to this subdirectory (CI uses dirname of changed `_defaults.yaml`) |
+| `--required-fields <a,b,c>` | empty | CSV of dotted-path fields every tenant must have |
+| `--cardinality-limit <n>` | 0 (disabled) | Per-tenant predicted-metric ceiling; pass 500 to mirror runtime |
+| `--cardinality-warn-ratio <r>` | 0.8 | Warn-tier ratio (0 < r < 1) |
+| `--format md\|json` | md | Output format |
+| `--output <path>` | stdout | Write report to file (parent dir must exist) |
+| `--warn-as-error` | false | Treat warnings as errors for exit code |
+
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
+| 1 | guard found errors — block merge / commit |
+| 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
+
+**Examples**
+
+```bash
+# Validate the whole conf.d/ tree against a required-fields list
+da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
+
+# CI hook: limit to the subtree of the changed _defaults.yaml + cardinality ceiling
+da-tools guard defaults-impact --config-dir conf.d/ \
+    --scope conf.d/db/ --cardinality-limit 500
+
+# JSON output for downstream PR comment poster
+da-tools guard defaults-impact --config-dir conf.d/ \
+    --format json --output guard-report.json
+```
+
+**Scope simplification (vs planning §C-12)**: PR-4 ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to the planning's "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by C-7b `/simulate`). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
 
 ---
 

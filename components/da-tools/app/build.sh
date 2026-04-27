@@ -113,6 +113,9 @@ TOOL_FILES=(
     ops/migrate_to_operator.py
     # v2.3.0 Federation tools
     ops/generate_rule_pack_split.py
+    # v2.8.0 Phase .c C-12 — Dangling Defaults Guard dispatcher
+    # (shells out to the `da-guard` Go binary; see scripts/tools/ops/guard_dispatch.py)
+    ops/guard_dispatch.py
     # Shared library sub-modules
     _lib_constants.py
     _lib_validation.py
