@@ -41,6 +41,21 @@ func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) 
 	return w
 }
 
+// permissiveRBACManager returns an RBAC manager that grants admin
+// (read+write) on all tenants to the test caller's IDP group
+// `platform-admins` (set by setRequestIdentity). Used by tests that
+// invoke handlers requiring v2.8.0 B-6 PR-2 tenant-scoped write
+// authz on member tenants — open-read mode (empty rbac.yaml) only
+// grants reads, so those tests need an explicit permissive config.
+func permissiveRBACManager(t *testing.T) *rbac.Manager {
+	t.Helper()
+	return newRBACManager(t, `groups:
+  - name: platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+`)
+}
+
 // initGitRepo initializes a git repo in the given directory with an initial commit.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
@@ -212,7 +227,10 @@ func TestPutGroup_Create(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutGroup(mgr, writer)
+	// permissiveRBACManager: v2.8.0 B-6 PR-2 hardening requires
+	// PermWrite on every member tenant. Open-mode RBAC only grants
+	// PermRead, so the test caller needs an explicit admin grant.
+	h := PutGroup(mgr, writer, permissiveRBACManager(t))
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -254,7 +272,7 @@ func TestPutGroup_Update(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutGroup(mgr, writer)
+	h := PutGroup(mgr, writer, permissiveRBACManager(t))
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -281,7 +299,7 @@ func TestPutGroup_MissingLabel(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutGroup(mgr, writer)
+	h := PutGroup(mgr, writer, newRBACManager(t, ""))
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -299,7 +317,7 @@ func TestPutGroup_InvalidJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutGroup(mgr, writer)
+	h := PutGroup(mgr, writer, newRBACManager(t, ""))
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -319,7 +337,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/staging-all", "id", "staging-all", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteGroup(mgr, writer)
+	h := DeleteGroup(mgr, writer, permissiveRBACManager(t))
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -347,7 +365,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	h := DeleteGroup(mgr, writer)
+	h := DeleteGroup(mgr, writer, newRBACManager(t, ""))
 	h(w, req)
 
 	if w.Code != http.StatusNotFound {

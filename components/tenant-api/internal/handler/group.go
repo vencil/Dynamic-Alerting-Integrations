@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -130,6 +131,15 @@ type PutGroupRequest struct {
 //
 // Creates or updates a group. Writes to _groups.yaml via gitops writer.
 //
+// **v2.8.0 B-6 PR-2 hardening**: requires PermWrite on **every member
+// tenant**, not just route-level PermWrite. Without this check, any
+// PermWrite user could rewrite any group's `members` field to point at
+// tenants they cannot read — an info-disclosure escalation surface
+// (e.g. group could later be referenced by a dashboard query that
+// reveals the tenants' merged_hash). The check returns 403 with a
+// list of forbidden tenant IDs so the operator knows exactly what to
+// fix.
+//
 // @Summary     Create or update a group
 // @Tags        groups
 // @Accept      json
@@ -138,9 +148,10 @@ type PutGroupRequest struct {
 // @Param       body body     PutGroupRequest true "Group definition"
 // @Success     200  {object} map[string]string
 // @Failure     400  {object} map[string]string
+// @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/groups/{id} [put]
-func PutGroup(mgr *groups.Manager, writer *gitops.Writer) http.HandlerFunc {
+func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -149,6 +160,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer) http.HandlerFunc {
 		}
 
 		email := rbac.RequestEmail(r)
+		idpGroups := rbac.RequestGroups(r)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
@@ -164,6 +176,18 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer) http.HandlerFunc {
 
 		if req.Label == "" {
 			writeJSONError(w, http.StatusBadRequest, "label is required")
+			return
+		}
+
+		// v2.8.0 B-6 PR-2: tenant-scoped authz on members.
+		// Caller must have PermWrite on every member tenant; reject
+		// if any member is forbidden. List ALL forbidden ids in the
+		// error so the operator can fix in one round-trip rather
+		// than discovering them one-at-a-time.
+		if forbidden := tenantsLackingPermission(rbacMgr, idpGroups, req.Members, rbac.PermWrite); len(forbidden) > 0 {
+			writeJSONError(w, http.StatusForbidden,
+				"insufficient permission to write group with forbidden member tenants: "+
+					strings.Join(forbidden, ", "))
 			return
 		}
 
@@ -221,7 +245,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer) http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     409 {object} map[string]string
 // @Router      /api/v1/groups/{id} [delete]
-func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer) http.HandlerFunc {
+func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -230,10 +254,25 @@ func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer) http.HandlerFunc {
 		}
 
 		email := rbac.RequestEmail(r)
+		idpGroups := rbac.RequestGroups(r)
 
 		cfg := mgr.Get()
-		if _, ok := cfg.Groups[groupID]; !ok {
+		existing, ok := cfg.Groups[groupID]
+		if !ok {
 			writeJSONError(w, http.StatusNotFound, "group not found: "+groupID)
+			return
+		}
+
+		// v2.8.0 B-6 PR-2: tenant-scoped authz. Caller must have
+		// PermWrite on every member of the to-be-deleted group.
+		// Without this, a malicious operator could destroy a
+		// group whose members they don't own — a denial-of-
+		// service surface against teams who depend on dashboards
+		// keyed off that group.
+		if forbidden := tenantsLackingPermission(rbacMgr, idpGroups, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
+			writeJSONError(w, http.StatusForbidden,
+				"insufficient permission to delete group with forbidden member tenants: "+
+					strings.Join(forbidden, ", "))
 			return
 		}
 

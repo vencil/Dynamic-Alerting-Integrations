@@ -61,6 +61,11 @@ func main() {
 		"GitLab project path (group/project) or numeric ID (required for pr-gitlab mode)")
 	glTargetBranch := flag.String("gitlab-target-branch", envOrDefault("TA_GITLAB_TARGET_BRANCH", "main"),
 		"Target branch for GitLab MRs (default: main)")
+
+	// v2.8.0 Phase B Track C (B-6 hardening): per-caller rate limit.
+	// Numeric requests-per-minute; "0" disables; default 100.
+	rateLimitPerMin := flag.String("rate-limit-per-min", envOrDefault("TA_RATE_LIMIT_PER_MIN", ""),
+		"Per-caller rate limit (requests / 60s rolling window). 0 disables. Default 100.")
 	flag.Parse()
 
 	log.Printf("tenant-api starting — config-dir=%s addr=%s", *configDir, *listenAddr)
@@ -166,11 +171,24 @@ func main() {
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(handler.MetricsMiddleware)
+
+	// v2.8.0 B-6 PR-1: per-caller rate limiter. Mounted AFTER
+	// the chi standard chain so the limiter sees the caller
+	// identity (X-Forwarded-Email, populated by oauth2-proxy
+	// upstream of tenant-api).
+	rlCfg := handler.RateLimitConfigFromEnv(*rateLimitPerMin)
+	if rlCfg.RequestsPerMinute > 0 {
+		log.Printf("tenant-api rate limiter: %d req/min per caller", rlCfg.RequestsPerMinute)
+	} else {
+		log.Printf("tenant-api rate limiter: DISABLED (set TA_RATE_LIMIT_PER_MIN > 0 to enable)")
+	}
+	r.Use(handler.RateLimit(rlCfg))
 
 	// Health / readiness / metrics (no auth)
 	r.Get("/health", handler.Health)
@@ -224,10 +242,10 @@ func main() {
 				Get("/", handler.GetGroup(groupMgr))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Put("/", handler.PutGroup(groupMgr, writer))
+				Put("/", handler.PutGroup(groupMgr, writer, rbacMgr))
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Delete("/", handler.DeleteGroup(groupMgr, writer))
+				Delete("/", handler.DeleteGroup(groupMgr, writer, rbacMgr))
 
 			// Batch operations on group members
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
@@ -251,13 +269,13 @@ func main() {
 
 		// Task polling (v2.6.0 — async batch operations)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tasks/{id}", handler.GetTask(taskMgr))
+			Get("/tasks/{id}", handler.GetTask(taskMgr, rbacMgr))
 
 		// PR/MR tracking (v2.6.0 Phase C — ADR-011 PR-based write-back)
 		// Works for both GitHub PRs and GitLab MRs via platform.Tracker
 		if prTracker != nil {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/prs", handler.ListPRs(prTracker))
+				Get("/prs", handler.ListPRs(prTracker, rbacMgr))
 		}
 
 		// Real-time event stream (v2.6.0 — SSE for config change notifications)
