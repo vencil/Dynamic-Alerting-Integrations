@@ -32,6 +32,7 @@ lang: zh
 | `docs/adr/018-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: _defaults.yaml 繼承語意 + dual-hash hot-reload |
 | `docs/adr/019-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-019: Profile-as-Directory-Default |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
+| `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers | 架構與設計 — 動態多租戶警報平台技術白皮書 |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs | 性能分析與基準測試 (Performance Analysis & Benchmarks) |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
