@@ -52,6 +52,11 @@ type fakeGit struct {
 	rebaseErr         map[string]error          // branch → fail RebaseOnto
 	forcePushCalls    []string                 // branch
 	forcePushErr      map[string]error          // branch → fail ForcePushWithLease
+
+	// PR-4 — RefreshSource-related fakes.
+	checkoutCalls   []string         // branch
+	checkoutErr     map[string]error // branch → fail CheckoutBranch
+	commitMessages  map[string][]string // branch → commit messages received (PR-4 self-review)
 }
 
 func newFakeGit() *fakeGit {
@@ -65,6 +70,8 @@ func newFakeGit() *fakeGit {
 		rebaseOutcomes: map[string]*RebaseOutcome{},
 		rebaseErr:      map[string]error{},
 		forcePushErr:   map[string]error{},
+		checkoutErr:    map[string]error{},
+		commitMessages: map[string][]string{},
 	}
 }
 
@@ -90,6 +97,7 @@ func (g *fakeGit) Commit(ctx context.Context, branch, message, author string) er
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.commitCalls = append(g.commitCalls, branch)
+	g.commitMessages[branch] = append(g.commitMessages[branch], message)
 	return g.commitErr[branch]
 }
 
@@ -107,6 +115,13 @@ func (g *fakeGit) BranchExistsRemote(ctx context.Context, branch string) (bool, 
 		return false, g.branchExistsErr
 	}
 	return g.branchExists[branch], nil
+}
+
+func (g *fakeGit) CheckoutBranch(ctx context.Context, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.checkoutCalls = append(g.checkoutCalls, branch)
+	return g.checkoutErr[branch]
 }
 
 func (g *fakeGit) RebaseOnto(ctx context.Context, branch, oldBase, newBase string) (*RebaseOutcome, error) {
