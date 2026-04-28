@@ -52,9 +52,14 @@ def test_help_no_args_returns_zero(capsys):
     captured = capsys.readouterr()
     assert rc == 0
     assert "batch-pr" in captured.out
-    # All 3 subcommands should appear in help text.
+    # All 3 subcommands should appear in help text. "refresh" is a
+    # substring of "refresh-source", so we check the standalone
+    # subcommand line specifically (matches the description column
+    # padding in our usage block) to avoid a false-positive match.
     assert "apply" in captured.out
-    assert "refresh" in captured.out
+    # Standalone "refresh" — followed by spaces THEN description text
+    # ("Rebase ..."). Distinguishes from "refresh-source" line.
+    assert "refresh         " in captured.out or "refresh        Rebase" in captured.out
     assert "refresh-source" in captured.out
 
 
@@ -126,6 +131,49 @@ def test_explicit_binary_equals_form(fake_binary):
     assert rc == 0
     call_args = run.call_args[0][0]
     assert call_args[0] == fake_binary
+
+
+def test_explicit_binary_empty_value_falls_through_to_env_or_path(fake_binary):
+    """`--da-batchpr-binary=` with empty value (trailing equals) is
+    silently ignored — the empty string falls through to env / PATH
+    resolution. This is intentional: empty value is meaningless and
+    forcing an error would diverge from guard_dispatch's
+    behaviour. Pin the current contract so a future stricter
+    re-implementation is a deliberate decision."""
+    with mock.patch("subprocess.run") as run, \
+         mock.patch.dict(os.environ, {"DA_BATCHPR_BINARY": fake_binary}):
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+        rc = bp.main([
+            "apply",
+            "--da-batchpr-binary=",  # Empty value: should be ignored.
+            "--plan", "/tmp/plan.json",
+        ])
+    assert rc == 0
+    # Env var was used because the empty explicit value was ignored.
+    assert run.call_args[0][0][0] == fake_binary
+
+
+def test_explicit_binary_trailing_flag_without_value_falls_through(fake_binary):
+    """`--da-batchpr-binary` as the LAST arg with no value following
+    is silently dropped from forward_args (per the inline comment in
+    _resolve_binary). Same fall-through-to-env/PATH behaviour as the
+    empty-value case. Pin so future cleanups don't accidentally
+    forward the bare flag (which would cause the Go binary to fail
+    with a flag-parse error instead of running cleanly)."""
+    with mock.patch("subprocess.run") as run, \
+         mock.patch.dict(os.environ, {"DA_BATCHPR_BINARY": fake_binary}):
+        run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+        rc = bp.main([
+            "apply",
+            "--plan", "/tmp/plan.json",
+            "--da-batchpr-binary",  # Trailing — no value follows.
+        ])
+    assert rc == 0
+    # Env var was used because the explicit (no-value) was ignored.
+    assert run.call_args[0][0][0] == fake_binary
+    # Critical: the bare `--da-batchpr-binary` MUST NOT appear in
+    # the forwarded args (would cause flag-parse error in da-batchpr).
+    assert "--da-batchpr-binary" not in run.call_args[0][0]
 
 
 def test_explicit_binary_not_found_returns_two(tmp_path, capsys):
