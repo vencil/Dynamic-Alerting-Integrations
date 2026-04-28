@@ -51,6 +51,12 @@ COPY tools/ ./
 COPY da-guard /usr/local/bin/da-guard
 RUN chmod +x /usr/local/bin/da-guard
 
+# ── Bundle da-batchpr binary (v2.8.0 C-10 PR-5) ───────────────────
+# `da-tools batch-pr <subcommand>` (apply / refresh / refresh-source)
+# shells out to da-batchpr. Same air-gapped friendliness as da-guard.
+COPY da-batchpr /usr/local/bin/da-batchpr
+RUN chmod +x /usr/local/bin/da-batchpr
+
 # ── Entrypoint ────────────────────────────────────────────────────
 # Create a symlink so 'da-tools' works as a command
 RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \

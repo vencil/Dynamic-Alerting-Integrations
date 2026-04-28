@@ -189,6 +189,20 @@ DA_TOOLS_VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
         ./cmd/da-guard)
 echo "  Built da-guard linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
 
+# ── Build da-batchpr binary (v2.8.0 C-10 PR-5) ──────────────────────
+# da-tools' `batch-pr` subcommand shells out to the da-batchpr Go
+# binary (subcommands: apply / refresh / refresh-source). Bundle the
+# linux/amd64 binary so customers running `da-tools batch-pr ...` in
+# the container don't need to install or download it separately.
+echo "▸ Building da-batchpr binary for da-tools image bundling..."
+(cd "$EXPORTER_APP" && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -buildvcs=false \
+        -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
+        -o "$SCRIPT_DIR/da-batchpr" \
+        ./cmd/da-batchpr)
+echo "  Built da-batchpr linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
+
 # ── Assemble-only mode (for CI — Buildx handles the docker build) ──
 if [ "$ASSEMBLE_ONLY" = true ]; then
     echo "✓ Build context assembled (--assemble-only). tools/ kept for Buildx."
@@ -201,7 +215,7 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
-rm -f "$SCRIPT_DIR/da-guard"
+rm -f "$SCRIPT_DIR/da-guard" "$SCRIPT_DIR/da-batchpr"
 
 echo "✓ Built: $IMAGE_NAME"
 echo ""
