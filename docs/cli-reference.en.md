@@ -141,6 +141,7 @@ These tools operate on local YAML files and don't require network.
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard wrapper (C-12 PR-4); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
+| `batch-pr` | Migration Batch PR Pipeline wrapper (C-10 PR-5); shells out to the `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
 | `tenant-verify` | Print tenant effective config + merged_hash (Phase B Track A; B-4 rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
@@ -2483,6 +2484,88 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 ```
 
 **Scope simplification (vs planning §C-12)**: PR-4 ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to the planning's "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by C-7b `/simulate`). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
+
+---
+
+#### batch-pr
+
+C-10 Migration Batch PR Pipeline (v2.8.0 Phase .c C-10 PR-1..5). Python wrapper that shells out to the `da-batchpr` Go binary; takes a customer's PromRule corpus through the full "emit → open PRs → review → Base merge → tenant rebase → optional data-layer hot-fix" loop.
+
+**Usage**
+
+```bash
+da-tools batch-pr <subcommand> [flags]
+```
+
+**Subcommands**
+
+| Subcommand | Purpose |
+|---|---|
+| `apply` | Open (or update) tenant chunk PRs from a Plan + C-9 emit output. Uses Hierarchy-Aware chunking (Base Infrastructure PR + per-domain tenant chunks). |
+| `refresh` | After the Base PR merges, run `git rebase --onto <merged-sha>` against every `Blocked by` tenant branch; conflicts surface in `refresh-report.md`. |
+| `refresh-source` | When a parser bug fix changes the emission for a known set of source rules, rewrite the affected files in the corresponding tenant PRs and push the patch (data-layer hot-fix). |
+
+**Binary resolution order**
+
+1. `--da-batchpr-binary <path>` (explicit override)
+2. `$DA_BATCHPR_BINARY` env var
+3. `da-batchpr` on `$PATH`
+
+If not found, prints install hints (download from a `tools/v*` release / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`).
+
+**`apply` flags (most common)**
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--plan <path>` | (required) | Plan JSON (serialised from `BuildPlan`). |
+| `--emit-dir <dir>` | (required) | C-9 emit output directory; CLI walks it + runs AllocateFiles bucketing. |
+| `--repo <owner/name>` | (required) | GitHub repo. |
+| `--workdir <dir>` | (required) | Local clone (CWD for git ops). |
+| `--base-branch <name>` | `main` | Branch the new PRs target. |
+| `--branch-prefix <p>` | batchpr default | Custom branch prefix. |
+| `--commit-author "Name <email>"` | git config | Commit author. |
+| `--dry-run` | false | Run orchestration without git or GitHub API calls. |
+| `--inter-call-delay-ms <n>` | 0 | Per-item delay (softens GitHub secondary rate limits). |
+| `--report <path>` | `-` (stdout) | Markdown report. |
+| `--result-json <path>` | empty (skip) | JSON ApplyResult; `-` = stdout, empty = skip. Skip is the default to avoid gluing markdown + JSON when `--report` also defaults to stdout. |
+
+**`refresh` / `refresh-source` flags (most common)**
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--input <path>` | `-` (stdin) | RefreshInput / RefreshSourceInput JSON. |
+| `--workdir <dir>` | (required) | Local clone. |
+| `--patches-dir <dir>` | (required, refresh-source only) | `<dir>/<pr-number>/<file-paths>` layout; CLI loads files into each target's Files map. |
+| `--report <path>` | `-` | Markdown report. |
+| `--result-json <path>` | empty (skip) | Same contract as `apply`. |
+
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| 0 | Clean — every target succeeded or was skipped acceptably (closed/merged PR / no-change / dry-run). |
+| 1 | Per-target failures, or refresh produced conflicts (a CI hook should NOT treat conflicts as a green run). |
+| 2 | Caller error (bad flags, JSON parse failure, missing path, missing binary). |
+
+**Examples**
+
+```bash
+# Open PRs: push C-9 emit output into the customer repo
+da-tools batch-pr apply \
+    --plan plan.json --emit-dir ./emit/ \
+    --repo vencil/customer --workdir ./customer-repo
+
+# After Base PR merges: rebase tenant branches onto the new main HEAD
+da-tools batch-pr refresh \
+    --input refresh.json --workdir ./customer-repo
+
+# Parser bug fix: re-emit the 200 affected source rules into existing tenant PRs
+da-tools batch-pr refresh-source \
+    --input refresh-source.json --patches-dir ./patches/ \
+    --workdir ./customer-repo
+```
+
+**Honest scope (C-10 PR-5 v1)**: JSON-input-first is the v1 contract (machine + automation friendly); convenience flags (`--base-merged-sha N`, `--source-rule-ids id1,id2,id3`) are deferred to a future polish PR. The Python wrapper shells out using the same pattern as `guard`; binaries ship via `tools/v*` Releases and the da-tools docker image.
 
 ---
 
