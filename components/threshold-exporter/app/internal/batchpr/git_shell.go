@@ -157,6 +157,32 @@ func (g *ShellGitClient) BranchExistsRemote(ctx context.Context, branch string) 
 	return false, fmt.Errorf("git ls-remote: %w", err)
 }
 
+// CheckoutBranch implements GitClient.
+//
+// Strategy: `git fetch origin` → `git checkout <branch>`. The
+// fetch ensures the local branch tracks the latest origin state
+// (PR-4 is typically called from a customer's CI runner that may
+// not have fetched recently). The checkout uses the bare form
+// (no `-B`) so an existing branch with commits is preserved
+// rather than reset.
+//
+// Errors when the branch doesn't exist locally OR on origin (PR-4
+// callers always reference a real, open tenant PR; a missing
+// branch is a real bug — surface it loudly via the underlying
+// `git checkout` error).
+func (g *ShellGitClient) CheckoutBranch(ctx context.Context, branch string) error {
+	if branch == "" {
+		return fmt.Errorf("checkout: empty branch name")
+	}
+	if _, err := g.runGit(ctx, "fetch", "origin"); err != nil {
+		return fmt.Errorf("git fetch origin: %w", err)
+	}
+	if _, err := g.runGit(ctx, "checkout", branch); err != nil {
+		return fmt.Errorf("git checkout %s: %w", branch, err)
+	}
+	return nil
+}
+
 // RebaseOnto implements GitClient.
 //
 // Strategy:

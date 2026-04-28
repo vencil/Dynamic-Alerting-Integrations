@@ -60,6 +60,21 @@ type GitClient interface {
 	// already been opened (idempotency).
 	BranchExistsRemote(ctx context.Context, branch string) (bool, error)
 
+	// CheckoutBranch switches the working tree to an EXISTING
+	// branch — distinct from CreateBranch, which resets the branch
+	// to baseBranch. Used by PR-4 RefreshSource() to switch to a
+	// tenant branch before writing the data-layer hot-fix files.
+	//
+	// Implementations should:
+	//   - Fetch the remote first so the local branch tracks the
+	//     latest origin state (PR-4 may run after the customer's
+	//     git client missed a fetch).
+	//   - Error if `branch` does not exist locally OR on origin
+	//     (the PR-4 caller's RefreshSourceTarget always references
+	//     a real, open tenant PR, so a missing branch is a real
+	//     bug — surface it loudly).
+	CheckoutBranch(ctx context.Context, branch string) error
+
 	// RebaseOnto runs `git rebase --onto <newBase> <oldBase>
 	// <branch>`, leaving the working tree on `branch`. Used by
 	// PR-3 Refresh() to re-anchor tenant branches onto the merged
