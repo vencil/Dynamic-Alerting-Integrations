@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -154,6 +155,145 @@ func (g *ShellGitClient) BranchExistsRemote(ctx context.Context, branch string) 
 		return false, nil
 	}
 	return false, fmt.Errorf("git ls-remote: %w", err)
+}
+
+// RebaseOnto implements GitClient.
+//
+// Strategy:
+//
+//  1. Fetch origin so newBase is locally available (typical
+//     newBase is a SHA from the merged base PR; the local repo
+//     may not have it yet).
+//  2. Checkout the target branch.
+//  3. `git rebase --onto <newBase> <oldBase> <branch>`. On
+//     success → return clean RebaseOutcome. On conflict → parse
+//     `git status --porcelain` for the conflicted-file list,
+//     `git rebase --abort` to clean the working tree, return
+//     RebaseOutcome with Conflicted=true.
+//  4. "Already up to date" (rebase exit 0 + a specific stderr
+//     marker) is treated as AlreadyUpToDate=true so the
+//     orchestration knows no force-push is needed (caller still
+//     pushes — the operation is a no-op which is fine).
+//
+// Errors at the interface level are limited to "git couldn't even
+// run" conditions (PATH issue, repo missing, ref missing). Conflicts
+// are NOT errors — they're an outcome the caller handles.
+func (g *ShellGitClient) RebaseOnto(ctx context.Context, branch, oldBase, newBase string) (*RebaseOutcome, error) {
+	if branch == "" {
+		return nil, fmt.Errorf("rebase: empty branch name")
+	}
+	if oldBase == "" {
+		return nil, fmt.Errorf("rebase: empty oldBase")
+	}
+	if newBase == "" {
+		return nil, fmt.Errorf("rebase: empty newBase")
+	}
+
+	if _, err := g.runGit(ctx, "fetch", "origin"); err != nil {
+		return nil, fmt.Errorf("git fetch origin: %w", err)
+	}
+	if _, err := g.runGit(ctx, "checkout", branch); err != nil {
+		return nil, fmt.Errorf("git checkout %s: %w", branch, err)
+	}
+
+	out, err := g.runGit(ctx, "rebase", "--onto", newBase, oldBase, branch)
+	if err == nil {
+		// Clean rebase. Distinguish "real rebase happened" from
+		// "already up to date" via git's stdout message — purely
+		// informational, both are AlreadyUpToDate semantically
+		// equivalent for the orchestration (no conflicts, branch
+		// at the desired state).
+		alreadyUTD := strings.Contains(out, "is up to date") ||
+			strings.Contains(out, "Current branch") && strings.Contains(out, "up to date")
+		return &RebaseOutcome{AlreadyUpToDate: alreadyUTD}, nil
+	}
+
+	// Rebase produced conflicts (or a different non-zero exit).
+	// Parse git status to identify conflicted files, then abort
+	// the rebase so the working tree is clean for the next op.
+	conflicts, statusErr := g.collectRebaseConflicts(ctx)
+	if abortErr := g.abortRebase(ctx); abortErr != nil {
+		// Best-effort abort failure is logged into the returned
+		// error but doesn't override the conflict signal — the
+		// orchestration's report still surfaces the conflict.
+		return nil, fmt.Errorf("git rebase --onto %s %s %s failed AND abort failed: rebase=%w; abort=%v",
+			newBase, oldBase, branch, err, abortErr)
+	}
+	if statusErr != nil {
+		// Couldn't even read the conflicted-file list. Surface as
+		// a hard error since the caller has no useful payload.
+		return nil, fmt.Errorf("git rebase --onto failed and conflict-list query also failed: rebase=%w; status=%v",
+			err, statusErr)
+	}
+
+	return &RebaseOutcome{
+		Conflicted:      true,
+		ConflictedFiles: conflicts,
+	}, nil
+}
+
+// collectRebaseConflicts parses `git status --porcelain` for files
+// in conflicting states (XX where X is U or both files modified).
+// Returns sorted file paths.
+//
+// Porcelain format: each line is `XY <path>` where X / Y are status
+// codes. Conflicts have at least one of {U, A, D} on both sides:
+// "UU", "AA", "DD", "UD", "DU", "AU", "UA". We accept any line with
+// at least one 'U' to keep the matcher broad.
+func (g *ShellGitClient) collectRebaseConflicts(ctx context.Context) ([]string, error) {
+	out, err := g.runGit(ctx, "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		status := line[:2]
+		// Conflicts always include 'U' on at least one side OR
+		// both 'A' / both 'D'. Match any of those.
+		conflicted := strings.ContainsAny(status, "U") ||
+			status == "AA" || status == "DD"
+		if !conflicted {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if path == "" {
+			continue
+		}
+		files = append(files, path)
+	}
+	// Stable order for the report.
+	sort.Strings(files)
+	return files, nil
+}
+
+// abortRebase issues `git rebase --abort`. Best-effort; the caller
+// converts a non-nil error into a wrapped error message rather than
+// retrying.
+func (g *ShellGitClient) abortRebase(ctx context.Context) error {
+	if _, err := g.runGit(ctx, "rebase", "--abort"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ForcePushWithLease implements GitClient.
+//
+// Uses `git push --force-with-lease origin <branch>`. The
+// `--with-lease` variant refuses to overwrite remote work that
+// landed since our last fetch — a safer alternative to plain
+// `--force`. Refresh() runs `git fetch` (via RebaseOnto's fetch
+// step) before this so the lease is freshly anchored.
+func (g *ShellGitClient) ForcePushWithLease(ctx context.Context, branch string) error {
+	if branch == "" {
+		return fmt.Errorf("force-push: empty branch name")
+	}
+	if _, err := g.runGit(ctx, "push", "--force-with-lease", "origin", branch); err != nil {
+		return fmt.Errorf("git push --force-with-lease origin %s: %w", branch, err)
+	}
+	return nil
 }
 
 // currentBranch returns the branch HEAD points at via `git

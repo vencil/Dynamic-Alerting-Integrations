@@ -45,6 +45,13 @@ type fakeGit struct {
 	commitErr       map[string]error             // branch → fail Commit
 	pushErr         map[string]error             // branch → fail Push
 	lastWriteFiles  map[string]map[string][]byte // branch → files
+
+	// PR-3 — Refresh-related fakes.
+	rebaseCalls       []string                 // formatted "branch:oldBase->newBase"
+	rebaseOutcomes    map[string]*RebaseOutcome // branch → outcome to return
+	rebaseErr         map[string]error          // branch → fail RebaseOnto
+	forcePushCalls    []string                 // branch
+	forcePushErr      map[string]error          // branch → fail ForcePushWithLease
 }
 
 func newFakeGit() *fakeGit {
@@ -55,6 +62,9 @@ func newFakeGit() *fakeGit {
 		commitErr:      map[string]error{},
 		pushErr:        map[string]error{},
 		lastWriteFiles: map[string]map[string][]byte{},
+		rebaseOutcomes: map[string]*RebaseOutcome{},
+		rebaseErr:      map[string]error{},
+		forcePushErr:   map[string]error{},
 	}
 }
 
@@ -99,6 +109,27 @@ func (g *fakeGit) BranchExistsRemote(ctx context.Context, branch string) (bool, 
 	return g.branchExists[branch], nil
 }
 
+func (g *fakeGit) RebaseOnto(ctx context.Context, branch, oldBase, newBase string) (*RebaseOutcome, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.rebaseCalls = append(g.rebaseCalls, fmt.Sprintf("%s:%s->%s", branch, oldBase, newBase))
+	if err := g.rebaseErr[branch]; err != nil {
+		return nil, err
+	}
+	if outcome, ok := g.rebaseOutcomes[branch]; ok {
+		return outcome, nil
+	}
+	// Default: clean rebase, no conflicts, not already-up-to-date.
+	return &RebaseOutcome{}, nil
+}
+
+func (g *fakeGit) ForcePushWithLease(ctx context.Context, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.forcePushCalls = append(g.forcePushCalls, branch)
+	return g.forcePushErr[branch]
+}
+
 // fakePR records OpenPR + UpdatePRDescription invocations and
 // hands out incrementing PR numbers (starting at 100 so they're
 // distinguishable from PlanItem indices in test output).
@@ -111,6 +142,12 @@ type fakePR struct {
 	openErrAll           error
 	findByBranchExisting map[string]*PROpened // branch → existing PR (for idempotency)
 	updateErr            map[int]error
+
+	// PR-3 — Refresh-related fakes.
+	prDetails    map[int]*PRDetails // num → details to return from GetPR
+	getPRErr     map[int]error      // num → fail GetPR
+	commentCalls map[int][]string   // num → posted bodies
+	commentErr   map[int]error      // num → fail CommentPR
 }
 
 func newFakePR() *fakePR {
@@ -120,6 +157,10 @@ func newFakePR() *fakePR {
 		openErr:              map[string]error{},
 		findByBranchExisting: map[string]*PROpened{},
 		updateErr:            map[int]error{},
+		prDetails:            map[int]*PRDetails{},
+		getPRErr:             map[int]error{},
+		commentCalls:         map[int][]string{},
+		commentErr:           map[int]error{},
 	}
 }
 
@@ -151,6 +192,35 @@ func (p *fakePR) UpdatePRDescription(ctx context.Context, num int, body string) 
 		return err
 	}
 	p.updates[num] = body
+	return nil
+}
+
+func (p *fakePR) GetPR(ctx context.Context, num int) (*PRDetails, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.getPRErr[num]; err != nil {
+		return nil, err
+	}
+	if d, ok := p.prDetails[num]; ok {
+		return d, nil
+	}
+	// Default: open PR. The test sets prDetails explicitly when
+	// it needs closed/merged or a specific HeadBranch.
+	return &PRDetails{
+		Number:     num,
+		State:      PRStateOpen,
+		HeadBranch: fmt.Sprintf("default-branch-%d", num),
+		URL:        fmt.Sprintf("https://github.com/o/r/pull/%d", num),
+	}, nil
+}
+
+func (p *fakePR) CommentPR(ctx context.Context, num int, body string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.commentErr[num]; err != nil {
+		return err
+	}
+	p.commentCalls[num] = append(p.commentCalls[num], body)
 	return nil
 }
 
@@ -601,6 +671,12 @@ func (c *cancelOnFirstOpenPR) FindPRByBranch(ctx context.Context, branch string)
 }
 func (c *cancelOnFirstOpenPR) UpdatePRDescription(ctx context.Context, num int, body string) error {
 	return c.wrap.UpdatePRDescription(ctx, num, body)
+}
+func (c *cancelOnFirstOpenPR) GetPR(ctx context.Context, num int) (*PRDetails, error) {
+	return c.wrap.GetPR(ctx, num)
+}
+func (c *cancelOnFirstOpenPR) CommentPR(ctx context.Context, num int, body string) error {
+	return c.wrap.CommentPR(ctx, num, body)
 }
 
 // --- Branch hash is deterministic across runs ---
