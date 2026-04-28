@@ -263,6 +263,147 @@ func TestRunApply_MissingEmitDir(t *testing.T) {
 	}
 }
 
+// --- Default-output behaviour (PR-5 self-review fix) -------------
+
+func TestRunApply_DefaultResultJSONIsSkipped_StdoutIsMarkdownOnly(t *testing.T) {
+	// Pre-fix bug: --result-json defaulted to "-" (stdout), so
+	// running with no overrides glued markdown report + JSON onto
+	// stdout. Fix: default to "" → skip JSON write entirely. This
+	// test pins the new default-output contract.
+	tmp := t.TempDir()
+	planFile := filepath.Join(tmp, "plan.json")
+	mustWriteFile(t, planFile, fixturePlanJSON())
+	emitDir := filepath.Join(tmp, "emit")
+	mustWriteFile(t, filepath.Join(emitDir, "conf.d/_defaults.yaml"), []byte("base"))
+	mustWriteFile(t, filepath.Join(emitDir, "conf.d/tenant-a.yaml"), []byte("override"))
+
+	flags := &applyFlags{
+		planPath:       planFile,
+		emitDir:        emitDir,
+		dryRun:         true,
+		reportPath:     "-", // markdown to stdout (default)
+		resultJSONPath: "",  // empty = skip (new default)
+	}
+	repo := batchpr.Repo{Owner: "o", Name: "r", BaseBranch: "main"}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := runApply(flags, repo, stdout, stderr, &stubGit{}, &stubPR{}, &bytes.Buffer{})
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, exitOK, stderr.String())
+	}
+	body := stdout.String()
+	if !strings.Contains(body, "# Apply report") {
+		t.Errorf("stdout should contain Markdown report; got %q", body)
+	}
+	// JSON-result was skipped → stdout should NOT contain the
+	// JSON shape (e.g. `"items":` from MarshalIndent output).
+	// A glued markdown+JSON output (the pre-fix behaviour) would
+	// have `"summary": {` from the indented JSON.
+	if strings.Contains(body, `"items":`) || strings.Contains(body, `"summary":`) {
+		t.Errorf("stdout should NOT contain JSON output when --result-json is empty; got %q", body)
+	}
+}
+
+func TestRunApply_ExplicitResultJSONDashWritesJSONToStdout(t *testing.T) {
+	// Customer who explicitly opts into both stdout outputs gets
+	// what they asked for (markdown then JSON, glued — their
+	// problem). Test pins that "-" still works.
+	tmp := t.TempDir()
+	planFile := filepath.Join(tmp, "plan.json")
+	mustWriteFile(t, planFile, fixturePlanJSON())
+	emitDir := filepath.Join(tmp, "emit")
+	mustWriteFile(t, filepath.Join(emitDir, "conf.d/_defaults.yaml"), []byte("base"))
+	mustWriteFile(t, filepath.Join(emitDir, "conf.d/tenant-a.yaml"), []byte("override"))
+
+	flags := &applyFlags{
+		planPath:       planFile,
+		emitDir:        emitDir,
+		dryRun:         true,
+		reportPath:     "-",
+		resultJSONPath: "-", // explicit opt-in to stdout JSON
+	}
+	repo := batchpr.Repo{Owner: "o", Name: "r", BaseBranch: "main"}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := runApply(flags, repo, stdout, stderr, &stubGit{}, &stubPR{}, &bytes.Buffer{})
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, exitOK, stderr.String())
+	}
+	body := stdout.String()
+	if !strings.Contains(body, "# Apply report") {
+		t.Errorf("stdout should contain Markdown report; got %q", body[:200])
+	}
+	if !strings.Contains(body, `"items":`) {
+		t.Errorf("explicit --result-json - should write JSON to stdout; got %q", body[:200])
+	}
+}
+
+// --- mdCell helper -------------------------------------------------
+
+func TestMdCell_HandlesNewlinesAndPipes(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"plain", "plain"},
+		{"line1\nline2", "line1 line2"},
+		{"win\r\nstyle", "win style"},
+		{"col|with|pipes", `col\|with\|pipes`},
+		{"git error: stderr|stuff\nnext line", `git error: stderr\|stuff next line`},
+	}
+	for _, tc := range cases {
+		got := mdCell(tc.in)
+		if got != tc.want {
+			t.Errorf("mdCell(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestRenderApplyReport_MultiLineErrorMessageStaysOnOneRow(t *testing.T) {
+	// Pin: a multi-line ErrorMessage (typical for git/gh stderr)
+	// must not break the Markdown table by introducing newlines
+	// mid-row. Counts the number of `|` row separators between the
+	// table header and the closing newline; should equal exactly
+	// (rows × 7) — 6 columns + 7 pipes per row including the
+	// surrounding ones.
+	repo := batchpr.Repo{Owner: "o", Name: "r", BaseBranch: "main"}
+	in := batchpr.ApplyInput{}
+	r := &batchpr.ApplyResult{
+		Items: []batchpr.ApplyItemResult{
+			{
+				PlanItemIndex: 0,
+				Kind:          batchpr.PlanItemBase,
+				BranchName:    "branch-a",
+				Status:        batchpr.ApplyStatusFailed,
+				ErrorMessage:  "git push: command failed\nstderr: refusing to update\nremote rejected",
+			},
+		},
+	}
+	report := renderApplyReport(repo, in, r)
+	// Find the row containing branch-a; count `|` chars on that line.
+	var rowLine string
+	for _, line := range strings.Split(report, "\n") {
+		if strings.Contains(line, "branch-a") {
+			rowLine = line
+			break
+		}
+	}
+	if rowLine == "" {
+		t.Fatalf("could not find branch-a row in report:\n%s", report)
+	}
+	// 6 columns → 7 pipes per row (one between each + surrounding).
+	if got := strings.Count(rowLine, "|"); got != 7 {
+		t.Errorf("row should have exactly 7 pipes (6 columns); got %d in %q", got, rowLine)
+	}
+	// The error message's newlines should be gone.
+	if strings.Contains(rowLine, "\n") {
+		t.Errorf("row line should not contain newlines; got %q", rowLine)
+	}
+	if !strings.Contains(rowLine, "git push: command failed stderr: refusing") {
+		t.Errorf("row should contain the joined error message; got %q", rowLine)
+	}
+}
+
 // --- AllocateFiles warning ordering ----------------------------
 
 func TestRunApply_AllocateWarningsPrependedNotAppended(t *testing.T) {

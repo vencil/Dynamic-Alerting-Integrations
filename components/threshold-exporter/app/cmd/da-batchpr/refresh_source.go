@@ -51,8 +51,9 @@ func parseRefreshSourceFlags(args []string, errOut io.Writer) (*refreshSourceFla
 		"Local clone of the target repo (CWD for git ops). Required.")
 	fs.StringVar(&f.reportPath, "report", "-",
 		"Write the Markdown patch-plan report to this file ('-' = stdout).")
-	fs.StringVar(&f.resultJSONPath, "result-json", "-",
-		"Write the JSON RefreshSourceResult to this file ('-' = stdout).")
+	fs.StringVar(&f.resultJSONPath, "result-json", "",
+		"Write the JSON RefreshSourceResult to this file ('-' = stdout, empty = skip). "+
+			"Empty default avoids gluing markdown + JSON when --report defaults to stdout.")
 	fs.BoolVar(&f.help, "help", false, "Print usage and exit.")
 	fs.BoolVar(&f.help, "h", false, "Alias for --help.")
 
@@ -143,9 +144,11 @@ func runRefreshSource(f *refreshSourceFlags, in batchpr.RefreshSourceInput, stdo
 		fmt.Fprintf(errOut, "%s refresh-source: write report: %v\n", programName, err)
 		return exitCallerErr
 	}
-	if err := writeJSON(f.resultJSONPath, stdout, result); err != nil {
-		fmt.Fprintf(errOut, "%s refresh-source: write result JSON: %v\n", programName, err)
-		return exitCallerErr
+	if f.resultJSONPath != "" {
+		if err := writeJSON(f.resultJSONPath, stdout, result); err != nil {
+			fmt.Fprintf(errOut, "%s refresh-source: write result JSON: %v\n", programName, err)
+			return exitCallerErr
+		}
 	}
 	return exitCodeForRefreshSource(result.Summary)
 }

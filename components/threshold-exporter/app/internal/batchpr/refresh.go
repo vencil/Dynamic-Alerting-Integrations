@@ -345,12 +345,12 @@ func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 			notes = fmt.Sprintf("%d conflicted file(s) — manual rebase required",
 				len(it.ConflictedFiles))
 		case RebaseFailed:
-			notes = fmt.Sprintf("step=%s: %s", it.Step, it.ErrorMessage)
+			notes = mdCell(fmt.Sprintf("step=%s: %s", it.Step, it.ErrorMessage))
 		case RebaseDryRun:
 			notes = "would rebase + push + comment"
 		}
 		out.WriteString(fmt.Sprintf("| #%d | `%s` | %s | %s | %s |\n",
-			it.PRNumber, it.BranchName, it.PRState, it.Status, notes))
+			it.PRNumber, mdCell(it.BranchName), it.PRState, it.Status, notes))
 	}
 	out.WriteString("\n")
 
@@ -387,4 +387,20 @@ func renderRefreshReport(in RefreshInput, r *RefreshResult) string {
 		out.WriteString("\n")
 	}
 	return out.String()
+}
+
+// mdCell sanitises a string for inclusion in a Markdown table cell.
+// Markdown tables can't carry newlines (they break the row) or
+// unescaped pipes (they introduce phantom columns). Replace
+// newlines with spaces and escape pipes as `\|`. Used by
+// renderRefreshReport + renderRefreshSourceReport for fields like
+// ErrorMessage that come from git/gh stderr (often multi-line).
+func mdCell(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return s
 }

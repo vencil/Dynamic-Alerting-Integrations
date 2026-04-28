@@ -399,14 +399,14 @@ func renderRefreshSourceReport(in RefreshSourceInput, r *RefreshSourceResult) st
 		notes := "—"
 		switch it.Status {
 		case PatchFailed:
-			notes = fmt.Sprintf("step=%s: %s", it.Step, it.ErrorMessage)
+			notes = mdCell(fmt.Sprintf("step=%s: %s", it.Step, it.ErrorMessage))
 		case PatchDryRun:
 			notes = "would update + commit + push + comment"
 		case PatchSkippedNoChange:
 			notes = "caller's diff was empty for this tenant"
 		}
 		out.WriteString(fmt.Sprintf("| #%d | `%s` | %s | %s | %d | %s |\n",
-			it.PRNumber, it.BranchName, it.PRState, it.Status, it.FilesUpdated, notes))
+			it.PRNumber, mdCell(it.BranchName), it.PRState, it.Status, it.FilesUpdated, notes))
 	}
 	out.WriteString("\n")
 
