@@ -27,11 +27,10 @@ C-11 Migration Toolkit packages this pipeline into a customer-runnable bundle th
 
 | Tool | Interface | Purpose |
 |---|---|---|
-| `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` subcommands wrapping da-guard / da-batchpr |
+| `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` + `parser` subcommands wrapping da-guard / da-batchpr / da-parser |
 | `da-guard` | Go binary | C-12 Dangling Defaults Guard CLI (schema / routing / cardinality / redundant-override 4-tier check) |
 | `da-batchpr` | Go binary | C-10 Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
-
-When future PRs add `da-toolkit parser` Go subcommands, this guide will update.
+| `da-parser` | Go binary | C-8 PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
 
 ## Three delivery paths
 
@@ -72,7 +71,7 @@ docker run --rm \
 
 ## Path B: Static binary download
 
-Each Release ships two sets of 6 cross-compiled binaries (12 archives total):
+Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
 
 **`da-guard`** (C-12 Dangling Defaults Guard):
 
@@ -96,7 +95,18 @@ Each Release ships two sets of 6 cross-compiled binaries (12 archives total):
 | Windows | amd64 | `da-batchpr-windows-amd64.zip` |
 | Windows | arm64 | `da-batchpr-windows-arm64.zip` |
 
-Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing hashes for all 12 archives. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-batchpr` to drive the migration batch PR flow).
+**`da-parser`** (C-8 PromRule parser, v2.8.0+):
+
+| OS | ARCH | Filename |
+|---|---|---|
+| Linux | amd64 | `da-parser-linux-amd64.tar.gz` |
+| Linux | arm64 | `da-parser-linux-arm64.tar.gz` |
+| macOS | amd64 | `da-parser-darwin-amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `da-parser-darwin-arm64.tar.gz` |
+| Windows | amd64 | `da-parser-windows-amd64.zip` |
+| Windows | arm64 | `da-parser-windows-arm64.zip` |
+
+Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing hashes for all 18 archives. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-batchpr` for the migration batch PR flow; add `da-parser` for PromRule import + portability checks).
 
 ### Install (Linux/macOS)
 

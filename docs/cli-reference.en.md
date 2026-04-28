@@ -142,6 +142,7 @@ These tools operate on local YAML files and don't require network.
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard wrapper (C-12 PR-4); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
 | `batch-pr` | Migration Batch PR Pipeline wrapper (C-10 PR-5); shells out to the `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
+| `parser` | PromRule parser wrapper (C-8 PR-2); shells out to the `da-parser` Go binary; strict-PromQL portability check + dialect classification | `import\|allowlist [flags]` |
 | `tenant-verify` | Print tenant effective config + merged_hash (Phase B Track A; B-4 rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
@@ -2566,6 +2567,89 @@ da-tools batch-pr refresh-source \
 ```
 
 **Honest scope (C-10 PR-5 v1)**: JSON-input-first is the v1 contract (machine + automation friendly); convenience flags (`--base-merged-sha N`, `--source-rule-ids id1,id2,id3`) are deferred to a future polish PR. The Python wrapper shells out using the same pattern as `guard`; binaries ship via `tools/v*` Releases and the da-tools docker image.
+
+---
+
+#### parser
+
+C-8 MetricsQL-as-Superset PromRule parser (v2.8.0 Phase .c C-8 PR-2). The Python wrapper shells out to the `da-parser` Go binary, which parses customer `PrometheusRule` CRD YAML into a canonical `ParsedRule` JSON record per rule, annotated with dialect (`prom` / `metricsql` / `ambiguous`), the list of VM-only functions used, and `prom_compatible: bool` (computed via the upstream `prometheus/promql/parser`).
+
+**Usage**
+
+```bash
+da-tools parser <subcommand> [flags]
+```
+
+**Subcommands**
+
+| Subcommand | Description |
+|---|---|
+| `import` | Parse PrometheusRule YAML → JSON ParseResult; optional `--validate-strict-prom` (default on) plus `--fail-on-non-portable` / `--fail-on-ambiguous` portability gates |
+| `allowlist` | Print the embedded VM-only function allowlist (text or json format); useful for independent audits and custom lints |
+
+**Binary resolution order**
+
+1. `--da-parser-binary <path>` (explicit override)
+2. `$DA_PARSER_BINARY` environment variable
+3. `da-parser` on `$PATH`
+
+If none resolves, prints install hints (download from `tools/v*` release / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-parser ./cmd/da-parser`).
+
+**`import` key flags**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--input <path>` | (required) | PrometheusRule YAML path; `-` reads from stdin |
+| `--output <path>` | `-` (stdout) | JSON ParseResult output path |
+| `--generated-by <stamp>` | `da-parser@<version>` | Stamped into `Provenance.GeneratedBy` (e.g. CI job ID) |
+| `--validate-strict-prom` | true | Run `prometheus/promql/parser` per rule (PR-2 default — anti-vendor-lock-in) |
+| `--fail-on-non-portable` | false | Exit 1 if any rule has `prom_compatible=false` (auto-implies `--validate-strict-prom`) |
+| `--fail-on-ambiguous` | false | Exit 1 if any rule has `dialect=ambiguous` |
+
+**`allowlist` key flags**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--format` | `text` | `text` (one fn per line) or `json` (includes `metricsql_version` + sorted functions array) |
+
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| 0 | Parse OK; no portability gate failures |
+| 1 | `--fail-on-non-portable` or `--fail-on-ambiguous` gate triggered |
+| 2 | Caller error (bad flags, malformed YAML, missing path, binary missing) |
+
+**Examples**
+
+```bash
+# 1. Basic import: customer PromRule CRD → JSON ParseResult
+da-tools parser import --input prom-rules.yaml > parsed.json
+
+# 2. "Pure-PromQL only" conservative path: any VM-only function fails the run
+da-tools parser import --input prom-rules.yaml --fail-on-non-portable
+
+# 3. Pipe-friendly stdin path (CI workflow + helm/kustomize render chain)
+helm template ... | da-tools parser import --input -
+
+# 4. Print the VM-only function allowlist for the pinned metricsql version
+da-tools parser allowlist --format json
+```
+
+**ParsedRule schema highlights** (v2.8.0 PR-2):
+
+| Field | Type | Description |
+|---|---|---|
+| `dialect` | `prom` / `metricsql` / `ambiguous` | Inferred from metricsql AST + VM-only function set |
+| `prom_portable` | bool | Convenience flag for dialect == prom (no VM-only functions) |
+| `prom_compatible` | bool | Strict mode: `prometheus/promql/parser` also accepts the expression. Tighter than `prom_portable` |
+| `vm_only_functions` | []string | Sorted list of VM-only functions used in this rule |
+| `analyze_error` | string | metricsql parse error (populated when `dialect=ambiguous`) |
+| `strict_prom_error` | string | `prometheus/promql/parser` error (populated when `PromCompatible=false`) |
+| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — reverse-lookup key for C-10 `refresh --source-rule-ids` |
+| `provenance` | object | `generated_by` / `source_file` / `parsed_at` / `source_checksum` (shared across the rule batch) |
+
+**Anti-vendor-lock-in promise**: when a customer corpus passes `--fail-on-non-portable` cleanly, every rule is also evaluable on a vanilla Prometheus server. Validity rests on `vm_only_functions.yaml`'s version pin matching the metricsql dep in go.mod — the **freshness CI gate** (`vm_only_functions_freshness_test.go`) ensures upstream version bumps don't silently miss new functions.
 
 ---
 

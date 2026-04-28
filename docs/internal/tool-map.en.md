@@ -55,6 +55,7 @@ lang: en
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
 | `operator_check.py` | Verify Prometheus Operator CRD deployment status. |
 | `operator_generate.py` | operator-generate — Generate Kubernetes CRD YAML for Prometheus + Alertmanager. |
+| `parser_dispatch.py` | `da-tools parser` Python entrypoint. |
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
 | `policy_opa_bridge.py` | OPA (Open Policy Agent) bridge for tenant config policy evaluation. |

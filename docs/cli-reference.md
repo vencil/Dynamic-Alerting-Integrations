@@ -146,6 +146,7 @@ da-tools <command> --help
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard 包裝（C-12 PR-4），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
 | `batch-pr` | Migration Batch PR Pipeline 包裝（C-10 PR-5），shell-out 至 `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
+| `parser` | PromRule parser 包裝（C-8 PR-2），shell-out 至 `da-parser` Go binary；strict-PromQL 相容性檢查 + dialect 分類 | `import\|allowlist [flags]` |
 | `tenant-verify` | 印 tenant effective config + merged_hash（Phase B Track A，B-4 rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
@@ -2311,6 +2312,89 @@ da-tools batch-pr refresh-source \
 ```
 
 **Honest scope（C-10 PR-5 v1）**：JSON-input-first 是 v1 contract（machine-friendly + automation-friendly）；convenience flags（`--base-merged-sha N`、`--source-rule-ids id1,id2,id3`）defer 後續 polish PR。Python 包裝走 shell-out 同 `guard` pattern，binary 由 `tools/v*` Release / da-tools docker image bundle 提供。
+
+---
+
+#### parser
+
+C-8 MetricsQL-as-Superset PromRule parser（v2.8.0 Phase .c C-8 PR-2）。Python 包裝 shell-out 到 `da-parser` Go binary，把 customer 的 `PrometheusRule` CRD YAML 解析為標準 `ParsedRule` JSON，per rule 標註 dialect（`prom` / `metricsql` / `ambiguous`）+ VM-only function 列表 + `prom_compatible: bool`（用 `prometheus/promql/parser` 跑 strict 相容性檢查）。
+
+**用法**
+
+```bash
+da-tools parser <subcommand> [flags]
+```
+
+**子命令**
+
+| 子命令 | 說明 |
+|---|---|
+| `import` | 解析 PrometheusRule YAML → JSON ParseResult；可選 `--validate-strict-prom`（預設開）+ `--fail-on-non-portable` / `--fail-on-ambiguous` 兩道 portability gate |
+| `allowlist` | 列印內嵌的 VM-only 函數白名單（text 或 json 格式）；獨立 audit / 客製 lint 用 |
+
+**Binary 解析順序**
+
+1. `--da-parser-binary <path>`（顯式覆寫）
+2. `$DA_PARSER_BINARY` 環境變數
+3. `$PATH` 上的 `da-parser`
+
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-parser ./cmd/da-parser`）。
+
+**`import` 主要 flags**
+
+| Flag | 預設 | 說明 |
+|---|---|---|
+| `--input <path>` | （必填）| PrometheusRule YAML 路徑；`-` = stdin |
+| `--output <path>` | `-`（stdout） | JSON ParseResult 輸出路徑 |
+| `--generated-by <stamp>` | `da-parser@<version>` | 寫入 `Provenance.GeneratedBy`（CI job id 等） |
+| `--validate-strict-prom` | true | 對每條 rule 跑 `prometheus/promql/parser`（PR-2 預設開，anti-vendor-lock-in） |
+| `--fail-on-non-portable` | false | 任一 rule `prom_compatible=false` → exit 1（自動 imply `--validate-strict-prom`） |
+| `--fail-on-ambiguous` | false | 任一 rule `dialect=ambiguous` → exit 1 |
+
+**`allowlist` 主要 flags**
+
+| Flag | 預設 | 說明 |
+|---|---|---|
+| `--format` | `text` | `text`（一行一個 fn）或 `json`（含 `metricsql_version` 與排序後的 functions 陣列）|
+
+**Exit codes**
+
+| Code | 意義 |
+|---|---|
+| 0 | parse OK，沒有 portability gate failure |
+| 1 | `--fail-on-non-portable` 或 `--fail-on-ambiguous` gate 觸發 |
+| 2 | caller error（flag 錯、YAML malformed、路徑找不到、binary 找不到）|
+
+**範例**
+
+```bash
+# 1. 基本 import：把 customer 的 PromRule CRD → JSON ParseResult
+da-tools parser import --input prom-rules.yaml > parsed.json
+
+# 2. 「我只收純 PromQL」保守路徑：任一 rule 用了 VM-only 函數立即 fail
+da-tools parser import --input prom-rules.yaml --fail-on-non-portable
+
+# 3. 從 stdin pipe 進來（CI workflow / kustomize render 串接友善）
+helm template ... | da-tools parser import --input -
+
+# 4. 列印當前 metricsql 版本對應的 VM-only 函數白名單
+da-tools parser allowlist --format json
+```
+
+**輸出 ParsedRule schema 重點欄位**（v2.8.0 PR-2）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `dialect` | `prom` / `metricsql` / `ambiguous` | 從 metricsql AST + VM-only 函數比對推導 |
+| `prom_portable` | bool | dialect == prom 的 convenience flag（無 VM-only 函數）|
+| `prom_compatible` | bool | strict 模式：跑 `prometheus/promql/parser` 也通過。比 `prom_portable` 嚴格 |
+| `vm_only_functions` | []string | 該 rule 用到的 VM-only 函數，sorted |
+| `analyze_error` | string | metricsql parse 失敗訊息（dialect=ambiguous 時填）|
+| `strict_prom_error` | string | `prometheus/promql/parser` 失敗訊息（PromCompatible=false 時填）|
+| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — C-10 `refresh --source-rule-ids` 的反向查詢 key |
+| `provenance` | object | `generated_by` / `source_file` / `parsed_at` / `source_checksum`（rule batch 共用）|
+
+**Anti-vendor-lock-in 承諾**：customer 用 `--fail-on-non-portable` 跑完一個 corpus 全綠時，這批 rule 在 vanilla Prometheus 上**也**能 evaluate。前提是 `vm_only_functions.yaml` 的版本 pin 與 go.mod 中的 metricsql 版本一致——**freshness CI gate** (`vm_only_functions_freshness_test.go`) 確保 metricsql 升版時不會 silently 漏掉新函數。
 
 ---
 
