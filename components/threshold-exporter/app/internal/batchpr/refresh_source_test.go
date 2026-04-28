@@ -371,24 +371,45 @@ func TestRefreshSource_OneFailureDoesNotSinkBatch(t *testing.T) {
 // --- Custom CommitMessageOverride + CommentBody substitution ---
 
 func TestRefreshSource_CustomCommitMessageSubstitutesSourceRuleIDs(t *testing.T) {
+	// End-to-end assertion: the override flows through the
+	// orchestration into the actual Commit call, with
+	// `<source-rule-ids>` substituted. Earlier draft of this test
+	// only spot-checked patchCommitMessage in isolation, missing
+	// the orchestration wiring (self-review caught).
 	r, g, _ := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, _ *fakePR) {
 		in.CommitMessageOverride = "PATCH(<source-rule-ids>): re-emit"
 	})
 	if r.Items[0].Status != PatchUpdated {
 		t.Fatalf("Items[0].Status=%q, want %q", r.Items[0].Status, PatchUpdated)
 	}
-	// The orchestration calls Commit with the substituted message.
-	// fakeGit doesn't capture the message, but the contract is that
-	// patchCommitMessage was invoked with the override; spot-check
-	// via patchCommitMessage directly.
-	got := patchCommitMessage(RefreshSourceInput{
-		CommitMessageOverride: "PATCH(<source-rule-ids>): re-emit",
-	}, RefreshSourceTarget{SourceRuleIDs: []string{"r1", "r2"}})
-	if !strings.Contains(got, "PATCH(r1, r2): re-emit") {
-		t.Errorf("override should substitute <source-rule-ids>; got %q", got)
+	msgs := g.commitMessages[branchFor(101)]
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 commit on branch %q; got %d", branchFor(101), len(msgs))
 	}
-	// Suppress unused-var warning for the harness g.
-	_ = g
+	want := "PATCH(rules.yaml#groups[0].rules[101]): re-emit"
+	if msgs[0] != want {
+		t.Errorf("commit message: got %q, want %q", msgs[0], want)
+	}
+	// Tenant 102 also sees its own substituted message.
+	wantTenant2 := "PATCH(rules.yaml#groups[0].rules[102]): re-emit"
+	if got := g.commitMessages[branchFor(102)][0]; got != wantTenant2 {
+		t.Errorf("PR #102 commit message: got %q, want %q", got, wantTenant2)
+	}
+}
+
+func TestRefreshSource_DefaultCommitMessageIncludesSourceRuleIDs(t *testing.T) {
+	// Pin the default commit message format end-to-end (no override).
+	_, g, _ := runRefreshSource(t, nil)
+	msgs := g.commitMessages[branchFor(101)]
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 commit on branch %q; got %d", branchFor(101), len(msgs))
+	}
+	if !strings.Contains(msgs[0], "Data-layer hot-fix") {
+		t.Errorf("default commit message should mention hot-fix; got %q", msgs[0])
+	}
+	if !strings.Contains(msgs[0], "rules.yaml#groups[0].rules[101]") {
+		t.Errorf("default commit message should include source rule ID; got %q", msgs[0])
+	}
 }
 
 func TestRefreshSource_CustomCommentBodySubstitutesSourceRuleIDs(t *testing.T) {
@@ -529,5 +550,20 @@ func TestJoinSourceRuleIDs_SingleVeryLongID(t *testing.T) {
 	}
 	if !strings.Contains(got, "+ 1 more") {
 		t.Errorf("should report the truncated tail; got %q", got)
+	}
+}
+
+func TestJoinSourceRuleIDs_OnlyOneIDExceedingCap_NoBogusTail(t *testing.T) {
+	// Self-review caught: when there's exactly ONE ID and it
+	// exceeds cap, the original code returned "X ... + 0 more"
+	// — the "+ 0 more" tail is meaningless. Fix: return just
+	// the ID without the tail when there's nothing else to count.
+	id := strings.Repeat("X", 200)
+	got := joinSourceRuleIDs([]string{id})
+	if got != id {
+		t.Errorf("single very-long ID should return verbatim (no tail); got %q", got)
+	}
+	if strings.Contains(got, "+ 0 more") {
+		t.Errorf("should not produce '+ 0 more' tail when there are no additional IDs; got %q", got)
 	}
 }

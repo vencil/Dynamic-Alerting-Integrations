@@ -54,8 +54,9 @@ type fakeGit struct {
 	forcePushErr      map[string]error          // branch → fail ForcePushWithLease
 
 	// PR-4 — RefreshSource-related fakes.
-	checkoutCalls []string         // branch
-	checkoutErr   map[string]error // branch → fail CheckoutBranch
+	checkoutCalls   []string         // branch
+	checkoutErr     map[string]error // branch → fail CheckoutBranch
+	commitMessages  map[string][]string // branch → commit messages received (PR-4 self-review)
 }
 
 func newFakeGit() *fakeGit {
@@ -70,6 +71,7 @@ func newFakeGit() *fakeGit {
 		rebaseErr:      map[string]error{},
 		forcePushErr:   map[string]error{},
 		checkoutErr:    map[string]error{},
+		commitMessages: map[string][]string{},
 	}
 }
 
@@ -95,6 +97,7 @@ func (g *fakeGit) Commit(ctx context.Context, branch, message, author string) er
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.commitCalls = append(g.commitCalls, branch)
+	g.commitMessages[branch] = append(g.commitMessages[branch], message)
 	return g.commitErr[branch]
 }
 

@@ -33,6 +33,20 @@ package batchpr
 // invalid Repo). Any per-target failure becomes PatchFailed in the
 // result; the loop continues so a single bad PR doesn't sink the
 // batch.
+//
+// Known limitation: all-bytes-identical commit
+// ---------------------------------------------
+// If the caller's RefreshSourceTarget.Files happens to exactly
+// match the existing branch contents byte-for-byte (every file's
+// new bytes == its current bytes on the branch), `git commit`
+// errors with "nothing to commit". The orchestration surfaces
+// this as PatchFailed step="commit". This is rare in practice —
+// callers typically pre-filter to only include actually-changed
+// files in target.Files (set len(Files)==0 → PatchSkippedNoChange
+// is the right path). A future PR could add HasStagedChanges to
+// the GitClient interface to detect + map this case to
+// PatchSkippedNoChange automatically; deferred for now since the
+// caller-side filter is the cleaner contract.
 
 import (
 	"context"
@@ -282,8 +296,13 @@ func joinSourceRuleIDs(ids []string) string {
 		}
 	}
 	// Even one entry is too long; just return the first one
-	// untruncated and report the rest in the tail.
-	return ids[0] + tail(len(ids)-1)
+	// untruncated. Append the tail ONLY when there are more
+	// entries to report (avoids a "... + 0 more" suffix when
+	// len(ids)==1 and the single ID exceeds cap).
+	if len(ids) > 1 {
+		return ids[0] + tail(len(ids)-1)
+	}
+	return ids[0]
 }
 
 // validateRefreshSourceInput rejects malformed RefreshSourceInput.
