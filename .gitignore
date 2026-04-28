@@ -98,6 +98,14 @@ _*.err
 _ci_logs/
 .dev_*
 
+# Agent scratch commit-message files (e.g. `_track_c_review_msg.txt`).
+# Pattern observed twice (Track B PR #126, Track C PR #135) where
+# `git add -A` after preparing a scratch message file accidentally
+# stages it. Added 2026-04-29 to prevent the pattern. See planning
+# archive §S#48 §六 + §S#5x for the 2 occurrences.
+_track_*_msg.txt
+_*_msg.txt
+
 # Structure audit (time-bound internal doc)
 docs/internal/_project-structure-audit-*
 
