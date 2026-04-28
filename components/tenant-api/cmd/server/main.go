@@ -182,7 +182,11 @@ func main() {
 	// the chi standard chain so the limiter sees the caller
 	// identity (X-Forwarded-Email, populated by oauth2-proxy
 	// upstream of tenant-api).
-	rlCfg := handler.RateLimitConfigFromEnv(*rateLimitPerMin)
+	rlCfg, rlMalformed := handler.RateLimitConfigFromEnv(*rateLimitPerMin)
+	if rlMalformed {
+		log.Printf("WARN: TA_RATE_LIMIT_PER_MIN=%q is malformed (must be a non-negative integer); falling back to default %d req/min",
+			*rateLimitPerMin, rlCfg.RequestsPerMinute)
+	}
 	if rlCfg.RequestsPerMinute > 0 {
 		log.Printf("tenant-api rate limiter: %d req/min per caller", rlCfg.RequestsPerMinute)
 	} else {

@@ -28,7 +28,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -468,8 +467,3 @@ func stringIndex(haystack, needle string) int {
 	return -1
 }
 
-// Unused-import silencers (chi is referenced indirectly through
-// newRequestWithChiParam in handler_test.go; explicit anchor here
-// for clarity even though Go's unused-import check won't fire on
-// indirectly-used imports).
-var _ = chi.URLParam

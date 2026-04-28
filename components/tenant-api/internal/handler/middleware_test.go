@@ -301,9 +301,12 @@ func TestRateLimit_SlidingWindowEviction(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestRateLimitConfigFromEnv_Default(t *testing.T) {
-	cfg := RateLimitConfigFromEnv("")
+	cfg, malformed := RateLimitConfigFromEnv("")
 	if cfg.RequestsPerMinute != 100 {
 		t.Errorf("empty env: RequestsPerMinute = %d, want 100", cfg.RequestsPerMinute)
+	}
+	if malformed {
+		t.Error("empty env should NOT be flagged malformed (it's the legitimate 'unset' case)")
 	}
 	if !cfg.SkipPaths["/health"] {
 		t.Error("empty env: /health should be in skip paths")
@@ -311,31 +314,43 @@ func TestRateLimitConfigFromEnv_Default(t *testing.T) {
 }
 
 func TestRateLimitConfigFromEnv_PositiveOverride(t *testing.T) {
-	cfg := RateLimitConfigFromEnv("250")
+	cfg, malformed := RateLimitConfigFromEnv("250")
 	if cfg.RequestsPerMinute != 250 {
 		t.Errorf("env=250: RequestsPerMinute = %d, want 250", cfg.RequestsPerMinute)
+	}
+	if malformed {
+		t.Error("explicit valid integer should NOT be flagged malformed")
 	}
 }
 
 func TestRateLimitConfigFromEnv_Zero(t *testing.T) {
-	cfg := RateLimitConfigFromEnv("0")
+	cfg, malformed := RateLimitConfigFromEnv("0")
 	if cfg.RequestsPerMinute != 0 {
 		t.Errorf("env=0: RequestsPerMinute = %d, want 0 (disabled)", cfg.RequestsPerMinute)
+	}
+	if malformed {
+		t.Error("explicit 0 (disable) should NOT be flagged malformed")
 	}
 }
 
 func TestRateLimitConfigFromEnv_Malformed(t *testing.T) {
-	// Garbage → fall back to default.
-	cfg := RateLimitConfigFromEnv("nonsense")
+	// Garbage → fall back to default AND flag malformed so caller can warn.
+	cfg, malformed := RateLimitConfigFromEnv("nonsense")
 	if cfg.RequestsPerMinute != 100 {
 		t.Errorf("malformed env: RequestsPerMinute = %d, want 100 (fallback)", cfg.RequestsPerMinute)
+	}
+	if !malformed {
+		t.Error("'nonsense' must be flagged malformed so operators don't ship typo'd env vars silently")
 	}
 }
 
 func TestRateLimitConfigFromEnv_Negative(t *testing.T) {
-	// Negative → fall back to default.
-	cfg := RateLimitConfigFromEnv("-1")
+	// Negative → fall back to default AND flag malformed.
+	cfg, malformed := RateLimitConfigFromEnv("-1")
 	if cfg.RequestsPerMinute != 100 {
 		t.Errorf("negative env: RequestsPerMinute = %d, want 100 (fallback)", cfg.RequestsPerMinute)
+	}
+	if !malformed {
+		t.Error("negative number must be flagged malformed")
 	}
 }

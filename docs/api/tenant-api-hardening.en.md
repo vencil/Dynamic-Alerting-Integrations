@@ -35,7 +35,8 @@ Each caller is limited to N requests per rolling 60-second window; over-cap resp
 
 Special values:
 - `TA_RATE_LIMIT_PER_MIN=0` → fully disable rate limiting (single-tenant dev / CI runners)
-- Unset or non-numeric → fallback to default 100, logged at startup
+- Unset → fallback to default 100 (**not** flagged malformed — "unset" is a legitimate state)
+- Non-numeric or negative → fallback to default 100 **+ startup log `WARN: TA_RATE_LIMIT_PER_MIN=... is malformed ...`** — prevents operators from shipping typo'd env vars silently
 
 ### 1.3 Caller identity precedence
 

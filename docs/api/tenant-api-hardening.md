@@ -35,7 +35,8 @@ verified-at-version: v2.8.0
 
 特殊值：
 - `TA_RATE_LIMIT_PER_MIN=0` → 完全停用速率限制（單租戶 dev / CI runner 用）
-- 未設或設為非數值 → fallback 預設 100，啟動 log 記錄
+- 未設 → fallback 預設 100（**不**算 malformed，`unset` 是合法狀態）
+- 設為非數值或負數 → fallback 預設 100 **+ 啟動 log 印 `WARN: TA_RATE_LIMIT_PER_MIN=... is malformed ...`** — 防止操作者打錯字後預設 100 看似生效卻沒注意到 typo
 
 ### 1.3 Caller 識別優先序
 

@@ -247,26 +247,28 @@ func RequestIDResponse(next http.Handler) http.Handler {
 }
 
 // RateLimitConfigFromEnv reads `TA_RATE_LIMIT_PER_MIN` and
-// returns the matching config. Falls back to `DefaultRateLimit()`
-// if unset or unparseable. Logging the choice is left to the
-// caller (typically `cmd/server/main.go` startup banner).
+// returns (config, malformed). When `malformed` is true, the
+// returned config is the default fallback and the caller SHOULD
+// emit a startup warning so operators don't ship typo'd env vars
+// silently. Logging is left to the caller (typically
+// `cmd/server/main.go` startup banner) so this function stays
+// pure for unit tests.
 //
 // Recognised values:
-//   - empty / absent → 100 (default)
-//   - "0" → 0 (limiter disabled)
-//   - any positive integer → that integer
-//   - any other value → 100 (default), caller should log a
-//     warning that the env was malformed
-func RateLimitConfigFromEnv(envValue string) RateLimitConfig {
-	cfg := DefaultRateLimit()
+//   - empty / absent → 100 (default), malformed=false
+//   - "0" → 0 (limiter disabled), malformed=false
+//   - any positive integer → that integer, malformed=false
+//   - any other value → 100 (default), **malformed=true**
+func RateLimitConfigFromEnv(envValue string) (cfg RateLimitConfig, malformed bool) {
+	cfg = DefaultRateLimit()
 	v := strings.TrimSpace(envValue)
 	if v == "" {
-		return cfg
+		return cfg, false
 	}
 	var n int
 	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 0 {
-		return cfg
+		return cfg, true
 	}
 	cfg.RequestsPerMinute = n
-	return cfg
+	return cfg, false
 }
