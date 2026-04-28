@@ -1,0 +1,393 @@
+/*
+ * design-tokens.css — Dynamic Alerting Design System v2.7.0
+ *
+ * Single Source of Truth for all CSS variables across JSX tools and HTML pages.
+ * All interactive tools load this via jsx-loader.html <link>.
+ *
+ * Theme switching: [data-theme="dark"] on <html> (explicit toggle).
+ * Default: inherit from user preference via JS (Light / Dark / System).
+ *
+ * Token naming convention:
+ *   --da-{category}-{element}-{modifier}
+ *   Categories: color, space, font, shadow, radius, transition
+ */
+
+/* ══════════════════════════════════════════════════════════════════════
+   §1  COLOR TOKENS — Light (default)
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  /* ── Base ── */
+  --da-color-bg:              #fafbfc;
+  --da-color-fg:              #1a1a2e;
+  --da-color-muted:           #475569;  /* Slate 600 — WCAG AA compliant on #fafbfc/white */
+
+  /* ── Surface (cards, panels) ── */
+  --da-color-surface:         #ffffff;
+  --da-color-surface-hover:   #f8fafc;
+  --da-color-surface-border:  #e2e6ea;
+  --da-color-surface-shadow:  0 1px 3px rgba(0,0,0,0.06);
+
+  /* ── Accent / Interactive ── */
+  --da-color-accent:          #2563eb;
+  --da-color-accent-hover:    #1d4ed8;
+  --da-color-accent-soft:     #eff6ff;
+  --da-color-accent-fg:       #ffffff;
+
+  /* ── Hero (dark header area) ── */
+  --da-color-hero-bg:         #0f172a;
+  --da-color-hero-fg:         #e2e8f0;
+  --da-color-hero-muted:      #94a3b8; /* Hero dark bg (#0f172a) context ONLY: 7.2:1 on dark navy (AA pass). Do NOT use for light-bg text -- see --da-color-tile-muted below. */
+  --da-color-hero-accent:     #38bdf8;
+
+  /* ── Tile / Card muted text (light-bg contexts regardless of theme) ── */
+  --da-color-tile-muted:      #6b7280; /* TECH-DEBT-007 resolution (PR#1c): for muted text on always-light backgrounds like table cells with hsl(x, 60%, 90%) or SVG on bg-white. 4.83:1 on white (AA pass). See v2.8.0-planning.md section 12.4 Trap #10 + dev-rules.md token-split clause. */
+
+  /* ── Card ── */
+  --da-color-card-bg:         #ffffff;
+  --da-color-card-border:     #e2e6ea;
+  --da-color-card-hover-border: #3b82f6;
+  --da-color-card-shadow:     0 1px 3px rgba(0,0,0,0.06);
+  --da-color-card-hover-shadow: 0 4px 12px rgba(59,130,246,0.15);
+
+  /* ── Tag / Badge ── */
+  --da-color-tag-bg:          #f1f5f9;
+  --da-color-tag-fg:          #475569;
+
+  /* ── Section / Dividers ── */
+  --da-color-section-border:  #e2e8f0;
+
+  /* ── Semantic: Status ── */
+  --da-color-success:         #047857;
+  --da-color-success-soft:    #ecfdf5;
+  --da-color-warning:         #f59e0b;
+  --da-color-warning-soft:    #fffbeb;
+  --da-color-error:           #ef4444;
+  --da-color-error-soft:      #fef2f2;
+  --da-color-info:            #2563eb;
+  --da-color-info-soft:       #eff6ff;
+
+  /* ── Icon category colors ── */
+  --da-color-icon-validation: #10b981;
+  --da-color-icon-validation-bg: #ecfdf5;
+  --da-color-icon-cli:        #f59e0b;
+  --da-color-icon-cli-bg:     #fffbeb;
+  --da-color-icon-rules:      #8b5cf6;
+  --da-color-icon-rules-bg:   #f5f3ff;
+  --da-color-icon-wizard:     #ec4899;
+  --da-color-icon-wizard-bg:  #fdf2f8;
+  --da-color-icon-dashboard:  #6366f1;
+  --da-color-icon-dashboard-bg: #e0e7ff;
+  --da-color-icon-chart:      #db2777;
+  --da-color-icon-chart-bg:   #fce7f3;
+
+  /* ── Journey Phase Badge ── */
+  --da-color-journey-deploy:          #9d174d;
+  --da-color-journey-deploy-bg:       rgba(236, 72, 153, 0.25);
+  --da-color-journey-configure:       #1d4ed8;
+  --da-color-journey-configure-bg:    rgba(59, 130, 246, 0.2);
+  --da-color-journey-monitor:         #065f46;
+  --da-color-journey-monitor-bg:      rgba(16, 185, 129, 0.2);
+  --da-color-journey-troubleshoot:    #92400e;
+  --da-color-journey-troubleshoot-bg: rgba(245, 158, 11, 0.2);
+  --da-color-journey-reference:       #6d28d9;
+  --da-color-journey-reference-bg:    rgba(139, 92, 246, 0.2);
+
+  /* ── Operational mode ── */
+  --da-color-mode-normal:     #10b981;
+  --da-color-mode-normal-bg:  #ecfdf5;
+  --da-color-mode-silent:     #f59e0b;
+  --da-color-mode-silent-bg:  #fffbeb;
+  --da-color-mode-maintenance:#ef4444;
+  --da-color-mode-maintenance-bg: #fef2f2;
+
+  /* ── Stat bar (hero section) ── */
+  --da-color-stat-bg:         rgba(255,255,255,0.08);
+  --da-color-stat-border:     rgba(255,255,255,0.12);
+
+  /* ── Modal / Overlay ── */
+  --da-color-modal-backdrop:  rgba(0,0,0,0.5);
+  --da-color-modal-shadow:    0 20px 25px rgba(0,0,0,0.15);
+
+  /* ── Focus ── */
+  --da-color-focus-ring:      rgba(59,130,246,0.5);
+
+  /* ── Toast ── */
+  --da-color-toast-bg:        #1e293b;
+  --da-color-toast-fg:        #e2e8f0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §2  COLOR TOKENS — Dark ([data-theme="dark"])
+   ══════════════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
+  --da-color-bg:              #0b0f1a;
+  --da-color-fg:              #e2e8f0;
+  --da-color-muted:           #94a3b8;
+
+  --da-color-surface:         #1e293b;
+  --da-color-surface-hover:   #334155;
+  --da-color-surface-border:  #334155;
+  --da-color-surface-shadow:  0 1px 3px rgba(0,0,0,0.3);
+
+  --da-color-accent:          #60a5fa;
+  --da-color-accent-hover:    #93c5fd;
+  --da-color-accent-soft:     #1e3a5f;
+  --da-color-accent-fg:       #0f172a;
+
+  --da-color-hero-bg:         #0f172a;
+  --da-color-hero-fg:         #e2e8f0;
+  --da-color-hero-muted:      #94a3b8; /* Hero dark bg context ONLY (same as light mode; hero bg does not flip themes). See light-mode comment. */
+  --da-color-hero-accent:     #38bdf8;
+
+  /* Tile / Card muted text: same value as light mode -- always-light-bg consumers */
+  --da-color-tile-muted:      #6b7280;
+
+  --da-color-card-bg:         #1e293b;
+  --da-color-card-border:     #334155;
+  --da-color-card-hover-border: #60a5fa;
+  --da-color-card-shadow:     0 1px 3px rgba(0,0,0,0.3);
+  --da-color-card-hover-shadow: 0 4px 12px rgba(96,165,250,0.2);
+
+  --da-color-tag-bg:          #1e293b;
+  --da-color-tag-fg:          #94a3b8;
+
+  --da-color-section-border:  #1e293b;
+
+  --da-color-success:         #34d399;
+  --da-color-success-soft:    #064e3b;
+  --da-color-warning:         #fbbf24;
+  --da-color-warning-soft:    #451a03;
+  --da-color-error:           #f87171;
+  --da-color-error-soft:      #450a0a;
+  --da-color-info:            #60a5fa;
+  --da-color-info-soft:       #1e3a5f;
+
+  --da-color-icon-validation: #34d399;
+  --da-color-icon-validation-bg: #064e3b;
+  --da-color-icon-cli:        #fbbf24;
+  --da-color-icon-cli-bg:     #451a03;
+  --da-color-icon-rules:      #a78bfa;
+  --da-color-icon-rules-bg:   #2e1065;
+  --da-color-icon-wizard:     #f472b6;
+  --da-color-icon-wizard-bg:  #500724;
+  --da-color-icon-dashboard:  #818cf8;
+  --da-color-icon-dashboard-bg: #312e81;
+  --da-color-icon-chart:      #f472b6;
+  --da-color-icon-chart-bg:   #500724;
+
+  --da-color-journey-deploy:          #f472b6;
+  --da-color-journey-deploy-bg:       rgba(236, 72, 153, 0.2);
+  --da-color-journey-configure:       #93c5fd;
+  --da-color-journey-configure-bg:    rgba(59, 130, 246, 0.2);
+  --da-color-journey-monitor:         #6ee7b7;
+  --da-color-journey-monitor-bg:      rgba(16, 185, 129, 0.2);
+  --da-color-journey-troubleshoot:    #fcd34d;
+  --da-color-journey-troubleshoot-bg: rgba(245, 158, 11, 0.2);
+  --da-color-journey-reference:       #c4b5fd;
+  --da-color-journey-reference-bg:    rgba(139, 92, 246, 0.2);
+
+  --da-color-mode-normal:     #34d399;
+  --da-color-mode-normal-bg:  #064e3b;
+  --da-color-mode-silent:     #fbbf24;
+  --da-color-mode-silent-bg:  #451a03;
+  --da-color-mode-maintenance:#f87171;
+  --da-color-mode-maintenance-bg: #450a0a;
+
+  --da-color-stat-bg:         rgba(255,255,255,0.05);
+  --da-color-stat-border:     rgba(255,255,255,0.08);
+
+  --da-color-modal-backdrop:  rgba(0,0,0,0.7);
+  --da-color-modal-shadow:    0 20px 25px rgba(0,0,0,0.4);
+
+  --da-color-focus-ring:      rgba(96,165,250,0.5);
+
+  --da-color-toast-bg:        #334155;
+  --da-color-toast-fg:        #e2e8f0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §3  SPACING TOKENS (8px baseline grid)
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --da-space-1:  4px;
+  --da-space-2:  8px;
+  --da-space-3:  12px;
+  --da-space-4:  16px;
+  --da-space-5:  20px;
+  --da-space-6:  24px;
+  --da-space-8:  32px;
+  --da-space-10: 40px;
+  --da-space-12: 48px;
+  --da-space-16: 64px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §4  TYPOGRAPHY TOKENS
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --da-font-family:       -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --da-font-mono:         'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
+  /* Font sizes (10 levels; extends Developer Handoff Spec with xs-sm bridge + 3xl hero) */
+  --da-font-size-xs:      0.7rem;    /* tag / badge */
+  --da-font-size-xs-sm:   0.75rem;   /* compact button labels (bridges xs↔sm; added v2.8.0 PR#1) */
+  --da-font-size-sm:      0.78rem;   /* section titles, small labels */
+  --da-font-size-sm-md:   0.8125rem; /* compact labels, table cells (bridges sm↔base gap) */
+  --da-font-size-base:    0.95rem;   /* body text */
+  --da-font-size-md:      1rem;      /* card titles */
+  --da-font-size-lg:      1.05rem;   /* hero description */
+  --da-font-size-xl:      1.5rem;    /* stat values, h2 */
+  --da-font-size-2xl:     2rem;      /* hero h1 */
+  --da-font-size-3xl:     2.5rem;    /* landing hero h1 (added v2.8.0 PR#1 for operator-setup-wizard) */
+
+  /* Font weights */
+  --da-font-weight-normal: 400;
+  --da-font-weight-medium: 500;
+  --da-font-weight-semibold: 600;
+  --da-font-weight-bold:  700;
+
+  /* Line heights */
+  --da-line-height-tight: 1.2;
+  --da-line-height-base:  1.5;
+  --da-line-height-relaxed: 1.6;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §5  SHADOW TOKENS (3 levels from Developer Handoff Spec)
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --da-shadow-subtle:     0 1px 3px rgba(0,0,0,0.06);
+  --da-shadow-hover:      0 4px 12px rgba(59,130,246,0.15);
+  --da-shadow-modal:      0 20px 25px rgba(0,0,0,0.15);
+}
+[data-theme="dark"] {
+  --da-shadow-subtle:     0 1px 3px rgba(0,0,0,0.3);
+  --da-shadow-hover:      0 4px 12px rgba(96,165,250,0.2);
+  --da-shadow-modal:      0 20px 25px rgba(0,0,0,0.4);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §6  RADIUS TOKENS (from Developer Handoff Spec)
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --da-radius-sm:   4px;   /* tags */
+  --da-radius-md:   8px;   /* buttons, inputs */
+  --da-radius-icon: 10px;  /* icon containers */
+  --da-radius-lg:   12px;  /* cards */
+  --da-radius-pill: 20px;  /* badges, pills */
+  --da-radius-full: 9999px; /* circular */
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §7  TRANSITION TOKENS
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --da-transition-fast:   0.15s ease;
+  --da-transition-base:   0.2s ease;
+  --da-transition-slow:   0.3s ease-in-out;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §8  GLOBAL UTILITIES — Focus-visible (unified for all tools)
+   ══════════════════════════════════════════════════════════════════════ */
+*:focus-visible {
+  outline: 2px solid var(--da-color-accent);
+  outline-offset: 2px;
+  border-radius: var(--da-radius-sm);
+}
+/* Suppress default outline when :focus-visible handles it */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §9  SKIP LINK (reusable)
+   ══════════════════════════════════════════════════════════════════════ */
+.da-skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: 1000;
+  padding: 8px 16px;
+  background: var(--da-color-accent);
+  color: var(--da-color-accent-fg);
+  font-size: var(--da-font-size-sm);
+  font-weight: var(--da-font-weight-semibold);
+  border-radius: var(--da-radius-md);
+  text-decoration: none;
+  transition: top var(--da-transition-fast);
+}
+.da-skip-link:focus {
+  top: 8px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §10  THEME TOGGLE BUTTON (reusable component)
+   ══════════════════════════════════════════════════════════════════════ */
+.da-theme-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0 10px;
+  font-size: 0.85rem;
+  font-weight: var(--da-font-weight-medium);
+  color: var(--da-color-muted);
+  background: var(--da-color-surface);
+  border: 1px solid var(--da-color-surface-border);
+  border-radius: var(--da-radius-md);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: border-color var(--da-transition-fast),
+              color var(--da-transition-fast);
+}
+.da-theme-toggle:hover {
+  border-color: var(--da-color-accent);
+  color: var(--da-color-accent);
+}
+.da-theme-toggle[aria-pressed="true"] .da-theme-icon-light,
+.da-theme-toggle[aria-pressed="false"] .da-theme-icon-dark {
+  display: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §11  TOAST NOTIFICATION (reusable for API feedback)
+   ══════════════════════════════════════════════════════════════════════ */
+.da-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  min-width: 280px;
+  max-width: 420px;
+  font-size: var(--da-font-size-base);
+  color: var(--da-color-toast-fg);
+  background: var(--da-color-toast-bg);
+  border-radius: var(--da-radius-lg);
+  box-shadow: var(--da-shadow-modal);
+  animation: da-toast-in var(--da-transition-slow) forwards;
+}
+.da-toast.da-toast-success { border-left: 4px solid var(--da-color-success); }
+.da-toast.da-toast-error   { border-left: 4px solid var(--da-color-error); }
+.da-toast.da-toast-warning { border-left: 4px solid var(--da-color-warning); }
+.da-toast.da-toast-out {
+  animation: da-toast-out var(--da-transition-fast) forwards;
+}
+@keyframes da-toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes da-toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(12px); }
+}

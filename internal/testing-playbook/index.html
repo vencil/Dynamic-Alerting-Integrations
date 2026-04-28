@@ -1,0 +1,4064 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/testing-playbook/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../../en/internal/testing-playbook/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>測試注意事項 — 排錯手冊 (Testing Playbook) - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#testing-playbook" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              測試注意事項 — 排錯手冊 (Testing Playbook)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../en/internal/testing-playbook/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-action-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Action Index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        測試前置準備
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#k8s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        K8s 環境問題
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#projected-volume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Projected Volume 架構
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configmap-reload-sidecar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        configmap-reload Sidecar 行為
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#load-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        負載注入 (Load Injection)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="負載注入 (Load Injection)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        負載類型
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關鍵設計約束
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#container-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container Image
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#yaml-heredoc-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        YAML Heredoc 中嵌入 Python
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        清理機制
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        場景執行順序
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ha" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HA 相關測試
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HA 相關測試">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recording-rules-max-vs-sum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recording Rules — max vs sum
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ha_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HA 部署驗證
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ha-scenario-f" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HA 故障切換 (Scenario F)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jsx-dependency-loading-portal-modularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSX Dependency Loading &amp; Portal Modularization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-matrix-snapshot-testingphase-d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI Matrix × Snapshot Testing（Phase .d）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CI Matrix × Snapshot Testing（Phase .d）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#github-actions-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub Actions CI 運行
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot 測試工作流
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Benchmark
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Benchmark">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#alert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        負載下的 Alert 驗證基線
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#demo-scenario" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Demo &amp; Scenario 工作流
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        程式碼品質規範
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="程式碼品質規範">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shell-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell → Python 注入防護
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python import 規範
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell 測試注意
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI 同步守衛
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        文件計數驗證
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        版號管理
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sast" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SAST 合規
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#confd-yaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        conf.d/ YAML 格式陷阱
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="conf.d/ YAML 格式陷阱">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenants-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tenants: wrapper 格式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#segment-vs-substring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        字串匹配：segment vs substring
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        自檢方法論
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        文件敘述風格
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="文件敘述風格">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#da-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        da-tools 容器優先
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v210-lessons-learned-go-backstage-2026-03-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.1.0 Lessons Learned — Go / Backstage / 覆蓋率（2026-03-15）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.1.0 Lessons Learned — Go / Backstage / 覆蓋率（2026-03-15）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#go-incremental-reload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Go Incremental Reload 設計模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backstage-plugin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backstage Plugin 整合模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        覆蓋率攻略技巧
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DX 工具測試模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v210-lessons-learned-lint2026-03-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.1.0 Lessons Learned — 關聯分析 / 漂移偵測 / Lint（2026-03-15）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.1.0 Lessons Learned — 關聯分析 / 漂移偵測 / Lint（2026-03-15）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關聯分析演算法測試
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        漂移偵測測試模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        覆蓋率提升技巧
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dx-lint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DX lint 測試模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v210-lessons-learned-ops-dx-2026-03-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.1.0 Lessons Learned — Ops 工具 / DX 增強（2026-03-15）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.1.0 Lessons Learned — Ops 工具 / DX 增強（2026-03-15）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ops" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ops 工具測試模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lint 工具模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dx_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DX 增強模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#playwright-e2e-portal-smoke-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Playwright E2E 測試（Portal Smoke Tests）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Playwright E2E 測試（Portal Smoke Tests）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        架構概覽
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        本地執行
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        關鍵陷阱與已知解法
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        測試設計原則
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v270-lesson-learnedlocator-calibration-testfixme-2026-04-17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.7.0 Lesson Learned：Locator Calibration + test.fixme() 治理（2026-04-17）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v280-lessons-learned2026-04-23-phase-a" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.8.0 Lessons Learned（2026-04-23, Phase .a）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.8.0 Lessons Learned（2026-04-23, Phase .a）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-subprocess-based-cli-test-coveragepr-49-s19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Subprocess-based CLI test 不計 coverage（PR #49 S#19）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-encoding-pr-49-anchor-drift-pr-50-journey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 本地工具輸出被截斷 / 被 encoding 吃掉後必須二次驗證（PR #49 anchor drift + PR #50 journey —）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-no-verify-fuse-commit-msgpr-50" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. --no-verify 使用規範 — 只跳 FUSE 已知卡死，不跳 commit-msg（PR #50 自己踩到）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-dev-container-mount-scopetrap-62" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Dev Container mount scope（Trap #62 連帶工作流）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v280-lessons-learned-race-flake-battles2026-04-26-phase-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-withisolatedmetrics-async-callback-isolation-lockstep-invariant-exact-equality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. withIsolatedMetrics + async-callback isolation 不完整 — 用 lockstep + &gt;= invariant，不要 exact-equality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-test-quiescence-detectionsleep-assert-exactly-n" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 時間敏感 test 用 quiescence detection，不要「sleep + assert exactly N」
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-testutilcollectandcount-plain-histogram-family-count-sample-count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. testutil.CollectAndCount 對 plain Histogram 回 family count, 不是 sample count
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pr-review-checklist-item" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR review checklist item
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cross-refs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-refs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v220-lessons-learned2026-03-18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.2.0 Lessons Learned（2026-03-18）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v26x-lessons-learned-go-flake2026-04-11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.6.x Lessons Learned — Go 並發測試 flake（2026-04-11）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.6.x Lessons Learned — Go 並發測試 flake（2026-04-11）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#race" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        初始狀態斷言的 race 陷阱
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#happen-before" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        時間戳斷言的 happen-before 陷阱
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#-race" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        -race 放大機制與驗證強度
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        適用範圍
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關資源
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">documentation</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/testing-playbook.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/testing-playbook.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="testing-playbook">測試注意事項 — 排錯手冊 (Testing Playbook)<a class="headerlink" href="#testing-playbook" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>K8s 環境排錯、負載注入陷阱、程式碼品質規範。
+<strong>相關文件：</strong> <a href="../benchmark-playbook/">Benchmark Playbook</a>（方法論、踩坑）· <a href="../windows-mcp-playbook/">Windows-MCP Playbook</a>（docker exec 模式）· <a href="../github-release-playbook/">GitHub Release Playbook</a>（push + release 流程）</p>
+</blockquote>
+<h3 id="quick-action-index">Quick Action Index<a class="headerlink" href="#quick-action-index" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>AI agent 直接跳到需要的操作步驟，跳過敘事。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>我要做什麼</th>
+<th>跳到</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>跑測試前準備</td>
+<td><a href="#測試前置準備">§測試前置準備</a></td>
+</tr>
+<tr>
+<td>K8s 環境問題排錯</td>
+<td><a href="#k8s-環境問題">§K8s 環境問題</a></td>
+</tr>
+<tr>
+<td>負載注入（connections/cpu）</td>
+<td><a href="#負載注入-load-injection">§負載注入</a></td>
+</tr>
+<tr>
+<td>conf.d/ YAML 格式問題</td>
+<td><a href="#confd-yaml-格式陷阱">§conf.d/ YAML 格式陷阱</a></td>
+</tr>
+<tr>
+<td>SAST 規則合規</td>
+<td><a href="#sast-合規">§SAST 合規</a></td>
+</tr>
+<tr>
+<td>Playwright E2E</td>
+<td><a href="#playwright-e2e-測試portal-smoke-tests">§Playwright E2E</a></td>
+</tr>
+<tr>
+<td>Go 並發 flake 修法</td>
+<td><a href="#v26x-lessons-learned-go-並發測試-flake2026-04-11">§v2.6.x Go 並發測試 flake</a></td>
+</tr>
+<tr>
+<td>程式碼品質規範</td>
+<td><a href="#程式碼品質規範">§程式碼品質規範</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="_1">測試前置準備<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Dev Container</strong>: <code>docker ps</code> → <code>vibe-dev-container</code> 運行中</li>
+<li><strong>Kind 叢集</strong>: <code>docker exec vibe-dev-container kubectl get nodes</code> 正常</li>
+<li><strong>PyYAML</strong>: <code>docker exec vibe-dev-container python3 -c "import yaml"</code> (失敗則 <code>pip3 install pyyaml</code>)</li>
+<li><strong>清理殘留</strong>: <code>docker exec vibe-dev-container pkill -f port-forward</code> + <code>make load-cleanup</code></li>
+</ol>
+<h2 id="k8s">K8s 環境問題<a class="headerlink" href="#k8s" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>問題</th>
+<th>修復</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Helm upgrade 不清理舊 ConfigMap key</td>
+<td><code>kubectl delete cm threshold-config -n monitoring</code> → <code>helm upgrade</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td>Helm field-manager conflict</td>
+<td>見 <a href="../windows-mcp-playbook/#helm-upgrade-防衝突">Windows-MCP Playbook → Helm 防衝突</a></td>
+</tr>
+<tr>
+<td>3</td>
+<td>ConfigMap volume 更新延遲 30-90s</td>
+<td>hot-reload 驗證需等 45+ 秒</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Metrics label 順序 (<code>component,metric,severity,tenant</code>)</td>
+<td>grep 用 <code>metric=.*tenant=</code>，不要反過來</td>
+</tr>
+<tr>
+<td>5</td>
+<td>場景測試殘留值</td>
+<td>測試前用 <code>patch_config.py</code> 恢復預設，負載測試用 <code>make load-cleanup</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="projected-volume">Projected Volume 架構<a class="headerlink" href="#projected-volume" title="Permanent link">&para;</a></h2>
+<p>15 個獨立 ConfigMap 透過 <code>projected</code> volume 投射至 <code>/etc/prometheus/rules/</code>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,clickhouse,postgresql,kafka,rabbitmq,jvm,nginx,custom,platform}.yaml
+</code></pre></div>
+<p>每個 DB Rule Pack 含 <code>*-recording.yml</code> + <code>*-alert.yml</code>；Platform 含 <code>platform-alert.yml</code>。全部設定 <code>optional: true</code>（Zero-Crash Opt-Out）。</p>
+<p>修改單個 Rule Pack 只需 apply 對應 ConfigMap。刪除後 Prometheus 自動移除規則（volume 同步延遲 30-90s）。</p>
+<h2 id="configmap-reload-sidecar">configmap-reload Sidecar 行為<a class="headerlink" href="#configmap-reload-sidecar" title="Permanent link">&para;</a></h2>
+<p><strong>關鍵洞察：</strong> configmap-reload sidecar 監聽的是 Projected Volume 的<strong>檔案內容變更</strong>，不是 ConfigMap annotation 或 metadata。</p>
+<ul>
+<li><code>--apply</code> 模式：直接更新 ConfigMap <code>data</code> → 觸發 <code>/-/reload</code> API → <strong>不依賴 sidecar 輪詢週期</strong></li>
+<li>僅修改 annotation 而 data 不變 → sidecar <strong>不會偵測到變更</strong></li>
+<li>測試 reload 時，必須改變實際 config 內容；kubectl annotate 無法觸發 sidecar</li>
+</ul>
+<h2 id="load-injection">負載注入 (Load Injection)<a class="headerlink" href="#load-injection" title="Permanent link">&para;</a></h2>
+<h3 id="_2">負載類型<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>指令</th>
+<th>觸發 Alert</th>
+<th>機制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>connections</code></td>
+<td><code>run_load.sh --type connections</code></td>
+<td>MariaDBHighConnections</td>
+<td>95 idle connections via PyMySQL</td>
+</tr>
+<tr>
+<td><code>cpu</code></td>
+<td><code>run_load.sh --type cpu</code></td>
+<td>MariaDBHighSlowQueries</td>
+<td>sysbench OLTP 16 threads</td>
+</tr>
+<tr>
+<td><code>stress-ng</code></td>
+<td><code>run_load.sh --type stress-ng</code></td>
+<td>PodContainerHighCPU</td>
+<td>Alpine CPU burn (100m limit)</td>
+</tr>
+<tr>
+<td><code>composite</code></td>
+<td><code>run_load.sh --type composite</code></td>
+<td>MariaDBSystemBottleneck</td>
+<td>connections + cpu 同時</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">關鍵設計約束<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<p><strong>連線數 &lt; <code>max_connections</code> - 5：</strong> MariaDB <code>max_connections=100</code>，<code>mysqld_exporter</code> 需至少 1 個連線槽。設 95 條連線時 exporter 正常，alert fires（<code>Threads_connected=96</code>）。100 以上 exporter 被鎖死，指標 stale。</p>
+<p><strong>單進程持連：</strong> 一個 Python process 持有 95 個 <code>pymysql.connect()</code> objects（~50MB）。不要用多進程 <code>mariadb -e "SELECT SLEEP(600)" &amp;</code>（OOM）。</p>
+<p><strong>Composite 在 Kind 可能觸發 MariaDBDown：</strong> 95 idle + sysbench 額外連線可超 <code>max_connections</code>。僅觸發 connections alert 用 <code>--type connections</code> 單獨注入。</p>
+<h3 id="container-image">Container Image<a class="headerlink" href="#container-image" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>Image</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Connection Storm</td>
+<td><code>python:3.12-alpine</code> + PyMySQL</td>
+<td>單進程持多連線，~128Mi</td>
+</tr>
+<tr>
+<td>CPU Burn (sysbench)</td>
+<td><code>severalnines/sysbench</code></td>
+<td>標準 OLTP image</td>
+</tr>
+<tr>
+<td>Container CPU 壓測</td>
+<td><code>alpine:3.19</code> + shell loop</td>
+<td><code>stress-ng</code> image 有 PATH 問題；<code>while true; do :; done</code> 最可靠</td>
+</tr>
+</tbody>
+</table>
+<h3 id="yaml-heredoc-python">YAML Heredoc 中嵌入 Python<a class="headerlink" href="#yaml-heredoc-python" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># ❌ heredoc 內嵌 heredoc → YAML parser 崩潰</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="no">python3 - &lt;&lt;&#39;PYEOF&#39;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="no">import pymysql</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="no">PYEOF</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># ✅ 用 python3 -c &quot;...&quot; inline</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="no">python3 -c &quot;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="no">import pymysql, time</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="no">conns = [pymysql.connect(host=&#39;$HOST&#39;, ...) for _ in range(95)]</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="no">time.sleep(600)</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">  </span><span class="no">&quot;</span>
+</code></pre></div>
+<h3 id="_4">清理機制<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>所有負載路徑必須有 cleanup trap：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cleanup<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/run_load.sh&quot;</span><span class="w"> </span>--cleanup<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>cleanup_port_forwards
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="o">}</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nb">trap</span><span class="w"> </span>cleanup<span class="w"> </span>EXIT
+</code></pre></div>
+<p><code>run_load.sh --cleanup</code> 透過 label selector 一次清除：<code>kubectl delete jobs,pods -l app=load-generator --all-namespaces</code>。</p>
+<h3 id="_5">場景執行順序<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<p>同時跑多場景時，Connection Storm 會搶光連線：1) stress-ng → 2) cpu → 3) connections。或直接用 <code>composite</code>（自動按正確順序）。</p>
+<h2 id="ha">HA 相關測試<a class="headerlink" href="#ha" title="Permanent link">&para;</a></h2>
+<h3 id="recording-rules-max-vs-sum">Recording Rules — max vs sum<a class="headerlink" href="#recording-rules-max-vs-sum" title="Permanent link">&para;</a></h3>
+<p>threshold-exporter 多 replica 時，每個 Pod 匯出相同 <code>user_threshold</code>。聚合必須用 <code>max by(tenant)</code>，否則閾值翻倍。真實 DB 指標仍用 <code>sum by(tenant)</code>。</p>
+<h3 id="ha_1">HA 部署驗證<a class="headerlink" href="#ha_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>驗證指令</th>
+<th>期望</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2 Pods Running</td>
+<td><code>kubectl get pods -n monitoring -l app=threshold-exporter</code></td>
+<td>2/2 Ready</td>
+</tr>
+<tr>
+<td>PDB 存在</td>
+<td><code>kubectl get pdb -n monitoring</code></td>
+<td><code>minAvailable: 1</code></td>
+</tr>
+<tr>
+<td>AntiAffinity</td>
+<td><code>kubectl get deploy ... -o jsonpath='{.spec.template.spec.affinity}'</code></td>
+<td>含 <code>podAntiAffinity</code></td>
+</tr>
+<tr>
+<td>RollingUpdate</td>
+<td><code>kubectl get deploy ... -o jsonpath='{.spec.strategy}'</code></td>
+<td><code>maxUnavailable: 0</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="ha-scenario-f">HA 故障切換 (Scenario F)<a class="headerlink" href="#ha-scenario-f" title="Permanent link">&para;</a></h3>
+<p>Kill Pod → 驗證：1) PDB 保護 1 Pod Running；2) Alert 持續不中斷；3) 閾值不翻倍。</p>
+<p><code>helm upgrade</code> 後 replicas 可能被覆蓋 → <code>kubectl scale deploy threshold-exporter -n monitoring --replicas=2</code>。</p>
+<h2 id="jsx-dependency-loading-portal-modularization">JSX Dependency Loading &amp; Portal Modularization<a class="headerlink" href="#jsx-dependency-loading-portal-modularization" title="Permanent link">&para;</a></h2>
+<p>Portal 中的三個核心模組（portal-shared、tabs 三層）由 <code>jsx-loader.html</code> 透過 <strong><code>dependencies</code> frontmatter</strong> 控制載入順序：</p>
+<ul>
+<li><strong>Sequential Order</strong>: <code>portal-shared.jsx</code> (共享元件) → <code>{tab1,tab2,tab3}.jsx</code> (三個頁籤)</li>
+<li><strong>Frontmatter 格式</strong>: 各檔案開頭宣告 <code>dependencies: [portal-shared]</code>；portal-shared 無依賴</li>
+<li><strong>測試陷阱</strong>: 修改 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低</li>
+</ul>
+<p>修改任何 portal 檔案後，在 <code>docs/interactive/tools/</code> 驗證載入順序無誤，並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具。</p>
+<h2 id="ci-matrix-snapshot-testingphase-d">CI Matrix × Snapshot Testing（Phase .d）<a class="headerlink" href="#ci-matrix-snapshot-testingphase-d" title="Permanent link">&para;</a></h2>
+<h3 id="github-actions-ci">GitHub Actions CI 運行<a class="headerlink" href="#github-actions-ci" title="Permanent link">&para;</a></h3>
+<p>CI matrix 配置：Python 3.13 × Go 1.26（自 v2.5.0 起統一為單一版本）。新工具應在本地通過 <code>pytest -v --cov-fail-under=85</code> 且 <code>mypy scripts/tools/_lib_*.py</code> 無誤後才提交。</p>
+<h3 id="snapshot">Snapshot 測試工作流<a class="headerlink" href="#snapshot" title="Permanent link">&para;</a></h3>
+<p><code>test_snapshot.py</code> 驗證 help text 穩定性。首次執行用 <code>pytest --snapshot-update</code>，將 help 輸出存至 <code>.snapshot/</code>；後續執行自動比對。修改工具 help text 時：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python3<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_snapshot.py::test_tool_help_mariadb<span class="w"> </span>--snapshot-update
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># 驗證 .snapshot/ 變更後再 commit</span>
+</code></pre></div>
+<p>Exit code 合約測試（<code>test_tool_exit_codes.py</code>）覆蓋全部 84+ 個 CLI entrypoint 的 <code>--help</code> / invalid args，預期 exit code 0 (成功) 或 2 (CLI 誤用)。（全 repo 含 96 個 Python 工具模組，此處僅測有 CLI 進入點的工具。）</p>
+<h2 id="performance-benchmark">Performance Benchmark<a class="headerlink" href="#performance-benchmark" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>已拆分為獨立 Playbook：</strong> <a href="../benchmark-playbook/">Benchmark Playbook</a>（方法論、執行環境、踩坑記錄）
+<strong>量測數據：</strong> <a href="../../benchmarks/">benchmarks.md</a> · <strong>pytest-benchmark 基線表：</strong> <a href="../test-map/#benchmark-基線">test-map.md § Benchmark 基線</a></p>
+</blockquote>
+<h3 id="alert">負載下的 Alert 驗證基線<a class="headerlink" href="#alert" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>場景</th>
+<th>觸發指標</th>
+<th>實測值</th>
+<th>閾值</th>
+<th>Alert</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Connection Storm (95 conn)</td>
+<td><code>mysql_global_status_threads_connected</code></td>
+<td>96</td>
+<td>70</td>
+<td><code>MariaDBHighConnections</code> FIRING</td>
+</tr>
+<tr>
+<td>stress-ng (CPU limit 100m)</td>
+<td><code>tenant:pod_weakest_cpu_percent:max</code></td>
+<td>97.3%</td>
+<td>70%</td>
+<td><code>PodContainerHighCPU</code> FIRING</td>
+</tr>
+<tr>
+<td>sysbench (16 threads)</td>
+<td><code>mysql_global_status_slow_queries</code></td>
+<td>運行中</td>
+<td>—</td>
+<td><code>MariaDBHighSlowQueries</code></td>
+</tr>
+<tr>
+<td>composite</td>
+<td>connections AND cpu</td>
+<td>—</td>
+<td>—</td>
+<td><code>MariaDBSystemBottleneck</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="demo-scenario">Demo &amp; Scenario 工作流<a class="headerlink" href="#demo-scenario" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>指令</th>
+<th>行為</th>
+<th>耗時</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make demo</code></td>
+<td>scaffold → migrate → diagnose → check_alert → patch_config → baseline_discovery</td>
+<td>~45s</td>
+</tr>
+<tr>
+<td><code>make demo-full</code></td>
+<td>上述 + composite load → alerts FIRING → cleanup → resolved</td>
+<td>~5min</td>
+</tr>
+<tr>
+<td><code>make test-scenario-a ARGS=--with-load</code></td>
+<td>真實連線負載觸發 MariaDBHighConnections</td>
+<td>~3min</td>
+</tr>
+<tr>
+<td><code>make test-scenario-b ARGS=--with-load</code></td>
+<td>真實 CPU 壓力觸發 PodContainerHighCPU</td>
+<td>~3min</td>
+</tr>
+<tr>
+<td><code>make test-scenario-e</code></td>
+<td>Multi-tenant 隔離（閾值修改 + disable metric）</td>
+<td>~3min</td>
+</tr>
+<tr>
+<td><code>make test-scenario-f</code></td>
+<td>HA 故障切換（Kill Pod → 恢復 → 不翻倍）</td>
+<td>~4min</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_6">程式碼品質規範<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<h3 id="shell-python">Shell → Python 注入防護<a class="headerlink" href="#shell-python" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># ❌ $1 含單引號時注入/斷行</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import urllib.parse; print(urllib.parse.quote(&#39;</span><span class="nv">$1</span><span class="s2">&#39;))&quot;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># ✅ 透過 stdin 傳遞</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$1</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip()))&quot;</span>
+</code></pre></div>
+<h3 id="python-import">Python import 規範<a class="headerlink" href="#python-import" title="Permanent link">&para;</a></h3>
+<p>所有 import 放模組頂部（標準庫 → 第三方 → 本地），test method 內不應有 import。</p>
+<h3 id="shell">Shell 測試注意<a class="headerlink" href="#shell" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>grep PromQL 特殊字元</strong>：用 <code>grep -F "max by(tenant)"</code> 做 literal match</li>
+<li><strong>修改輸出格式時</strong>：搜尋所有 <code>assert_.*contains</code> 確認同步更新</li>
+<li><strong><code>set -euo pipefail</code></strong>：負載測試輔助腳本不宜用（<code>kubectl logs</code> 對 ContainerCreating Pod 返回非零）</li>
+<li><strong>migrate_rule.py 分類</strong>：Perfect / Complex / Unparseable</li>
+</ul>
+<h3 id="ci">CI 同步守衛<a class="headerlink" href="#ci" title="Permanent link">&para;</a></h3>
+<p>CI workflow 與 build script 的工具清單容易 drift。用守衛測試自動偵測。<code>bump_docs.py</code> 的 rules 應涵蓋所有帶版號的檔案。</p>
+<h3 id="_7">文件計數驗證<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p>CHANGELOG / CLAUDE.md 的測試計數必須在 <code>pytest -v</code> 執行後才寫入。先跑 pytest → 逐 class 加總交叉驗證 → 再更新文件。</p>
+<h3 id="_8">版號管理<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>完整版號治理流程見 <a href="../github-release-playbook/">GitHub Release Playbook</a></strong>。
+五條獨立版號線（<code>v*</code> platform / <code>exporter/v*</code> / <code>tools/v*</code> / <code>portal/v*</code> / <code>tenant-api/v*</code>）各有各的生命週期。</p>
+</blockquote>
+<p>測試相關的版號重點：</p>
+<ul>
+<li><strong><code>bump_docs.py --check</code></strong> 驗證全 repo 版號一致性（pre-commit hook <code>version-consistency</code> 自動執行）</li>
+<li><strong>避免 <code>replace_all</code> 批次改版號</strong>：用 <code>bump_docs.py</code> 按版號線分別處理，改完後 <code>--check</code> 驗證</li>
+<li><strong>文件計數</strong>必須在 <code>pytest -v</code> 執行後才寫入（見上方「文件計數驗證」）</li>
+</ul>
+<h2 id="sast">SAST 合規<a class="headerlink" href="#sast" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>規則</th>
+<th>驗證</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Go G112</td>
+<td><code>ReadHeaderTimeout</code> 必設</td>
+<td><code>grep ReadHeaderTimeout components/threshold-exporter/app/main.go</code></td>
+</tr>
+<tr>
+<td>Python CWE-276</td>
+<td>寫檔後 <code>os.chmod(path, 0o600)</code></td>
+<td><code>grep -rn "os.chmod" scripts/tools/</code></td>
+</tr>
+<tr>
+<td>Python B602</td>
+<td><code>subprocess</code> 禁止 <code>shell=True</code></td>
+<td><code>grep -rn "shell=True" scripts/</code> (期望: 0)</td>
+</tr>
+<tr>
+<td>Python 編碼</td>
+<td><code>open()</code> 帶 <code>encoding="utf-8"</code></td>
+<td><code>grep -rn "open(" scripts/tools/ \| grep -v encoding</code> (期望: 0)</td>
+</tr>
+</tbody>
+</table>
+<p>新增 Python 工具寫檔時，每個 <code>open(..., "w")</code> 後必須接 <code>os.chmod(path, 0o600)</code>。</p>
+<h2 id="confd-yaml">conf.d/ YAML 格式陷阱<a class="headerlink" href="#confd-yaml" title="Permanent link">&para;</a></h2>
+<h3 id="tenants-wrapper">tenants: wrapper 格式<a class="headerlink" href="#tenants-wrapper" title="Permanent link">&para;</a></h3>
+<p><code>conf.d/</code> 實際使用 <strong>wrapped format</strong>，所有新工具必須處理：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># ✅ 實際格式（conf.d/db-a.yaml）</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">_routing</span><span class="p">:</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;webhook&quot;</span><span class="p p-Indicator">,</span><span class="nt"> url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;...&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># ❌ flat 格式（僅用於簡化測試或文件範例）</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span>
+</code></pre></div>
+<p><strong>偵測方法：</strong> 載入 YAML 後檢查 <code>"tenants" in data and isinstance(data["tenants"], dict)</code>，若存在則 drill into nested structure。</p>
+<p><strong>測試要求：</strong> 每個讀取 conf.d/ 的工具至少需要兩組測試：<code>test_*_flat()</code> 和 <code>test_*_wrapped()</code>。已知踩坑工具：<code>config_diff.py</code>、<code>blind_spot_discovery.py</code>。</p>
+<h3 id="segment-vs-substring">字串匹配：segment vs substring<a class="headerlink" href="#segment-vs-substring" title="Permanent link">&para;</a></h3>
+<p>Job name 到 DB type 的推斷不能用 substring matching：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># ❌ &quot;es&quot; in &quot;prometheus&quot; → True（誤判為 elasticsearch）</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># ❌ &quot;db&quot; in &quot;dashboard-backend&quot; → True（誤判為 db2）</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># ✅ Segment matching — 以 -_./空格 切割後做完整匹配</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">segments</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;[-_.\s/]+&#39;</span><span class="p">,</span> <span class="n">job_lower</span><span class="p">))</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="k">for</span> <span class="n">keyword</span><span class="p">,</span> <span class="n">db_type</span> <span class="ow">in</span> <span class="n">JOB_DB_MAP</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">if</span> <span class="n">keyword</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>        <span class="k">return</span> <span class="n">db_type</span>
+</code></pre></div>
+<p><strong>回歸測試必備：</strong> 加一個 false-positive case（如 <code>"prometheus"</code> → <code>"unknown"</code>）防止未來改動退化。</p>
+<h2 id="_9">自檢方法論<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<p>新功能完成後執行兩輪自檢：</p>
+<p><strong>第一輪（正確性）：</strong>
+1. 逐檔重讀原始碼 — 聚焦實際 conf.d/ 格式是否對齊
+2. 重讀測試 — 確認測試用的 fixture 與真實格式一致
+3. 交叉比對 CLAUDE.md 工具表、CHANGELOG 計數、README 工具數</p>
+<p><strong>第二輪（完整性）：</strong>
+1. 測試覆蓋盲區 — edge case（timeout、空輸入、格式混合）
+2. 跨文件一致性 — <code>grep -rn</code> 搜尋版號、工具數、§ 交叉引用
+3. <code>bump_docs.py --check</code> + <code>pytest -v</code> 全套驗證</p>
+<h2 id="_10">文件敘述風格<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<h3 id="da-tools">da-tools 容器優先<a class="headerlink" href="#da-tools" title="Permanent link">&para;</a></h3>
+<p>所有面向使用者的文件（byo-*、migration-guide、shadow-monitoring-sop）中的工具用法，以 <code>docker run ghcr.io/vencil/da-tools:&lt;ver&gt;</code> 為主要範例。raw <code>python3 scripts/tools/...</code> 寫法僅在「本地開發」或「CI pipeline」上下文使用。</p>
+<p><strong>檢查方式：</strong> <code>grep -rn "python3 scripts/tools/" docs/</code> — 面向使用者的文件中不應出現（<code>docs/internal/</code> 例外）。</p>
+<h2 id="v210-lessons-learned-go-backstage-2026-03-15">v2.1.0 Lessons Learned — Go / Backstage / 覆蓋率（2026-03-15）<a class="headerlink" href="#v210-lessons-learned-go-backstage-2026-03-15" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>自動化覆蓋摘要：</strong> 本節 11 條中，#9 frontmatter 解析已有 <code>test_check_frontmatter_versions.py</code> 覆蓋（🛡️），#10 coverage 格式已有 <code>test_coverage_gap_analysis.py</code> 覆蓋（🛡️），#11 triple globals 已有 <code>test_check_frontmatter_versions.py</code> 覆蓋（🛡️）。其餘為設計模式知識，不適合自動化。</p>
+</blockquote>
+<h3 id="go-incremental-reload">Go Incremental Reload 設計模式<a class="headerlink" href="#go-incremental-reload" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>per-file hash + parsed config cache 是增量 reload 的核心</strong>：<code>fileHashes map[string]string</code> 追蹤每個檔案的 SHA-256，<code>fileConfigs map[string]ThresholdConfig</code> 快取已解析的部分配置。變更偵測只需比對 hash，未變更檔案直接從 cache 取用</li>
+<li><strong>4 phase 增量載入保證正確性</strong>：(1) scan hashes → (2) diff changed/added/removed → (3) selective re-parse only changed → (4) mergePartialConfigs from cache。Phase 4 的 deterministic merge（sorted filenames）確保結果與 fullDirLoad 一致</li>
+<li><strong>boundary rules 需要在 merge 後重新套用</strong>：cardinality guard (500 per-tenant) 和 schema validation 必須在最終合併後執行，不能在 partial config 階段做</li>
+</ol>
+<h3 id="backstage-plugin">Backstage Plugin 整合模式<a class="headerlink" href="#backstage-plugin" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>🗄️ #4-5 已歸檔至 <a href="../archive/lessons-learned/">archive/lessons-learned.md</a>（Backstage 整合已穩定）</p>
+</blockquote>
+<h3 id="_11">覆蓋率攻略技巧<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>time.sleep mock 用 module-level patch</strong>：<code>monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)</code> 而非 <code>@patch("time.sleep")</code>，確保只 mock 目標模組的 sleep 不影響其他模組</li>
+<li><strong>觀測迴圈測試需要同時 mock query + sleep + file I/O</strong>：<code>query_prometheus</code> 回傳固定數據、<code>time.sleep</code> no-op、<code>tmp_path</code> 接收 CSV 輸出，三者缺一不可</li>
+<li><strong>CSV 輸出驗證用 csv.reader 而非字串比對</strong>：<code>csv.reader()</code> 自動處理 quoting 和 escaping，比 <code>split(",")</code> 更健壯</li>
+</ol>
+<h3 id="dx">DX 工具測試模式<a class="headerlink" href="#dx" title="Permanent link">&para;</a></h3>
+<ol>
+<li>🛡️ <strong>frontmatter 解析需處理 <code>---</code> delimiter edge cases</strong>：檔案開頭非 <code>---</code>、frontmatter 未閉合、多個 <code>---</code> 區段都需要測試。用 <code>re.compile(r"^---\s*$")</code> 比固定字串比對更寬鬆 <code>[已自動化於 test: test_check_frontmatter_versions]</code></li>
+<li>🛡️ <strong>coverage text output 格式依 pytest-cov 版本不同</strong>：regex pattern 需足夠寬鬆以匹配不同版本的空白和對齊，<code>r"^(\S+\.py)\s+(\d+)\s+(\d+)\s+(\d+)%\s*(.*)?$"</code> 涵蓋主流格式 <code>[已自動化於 test: test_coverage_gap_analysis]</code></li>
+<li>🛡️ <strong>monkeypatch triple globals 隔離檔案系統</strong>：<code>check_frontmatter_versions</code> 同時依賴 <code>DOCS_DIR</code>、<code>REPO_ROOT</code>、<code>CLAUDE_MD</code> 三個 module-level 常數，全部需要 monkeypatch 到 tmp_path <code>[已自動化於 test: test_check_frontmatter_versions]</code></li>
+</ol>
+<hr />
+<h2 id="v210-lessons-learned-lint2026-03-15">v2.1.0 Lessons Learned — 關聯分析 / 漂移偵測 / Lint（2026-03-15）<a class="headerlink" href="#v210-lessons-learned-lint2026-03-15" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>自動化覆蓋摘要：</strong> 本節 11 條中，#1-3 已有 <code>test_alert_correlate.py</code> 覆蓋（🛡️），#4-6 已有 <code>test_drift_detect.py</code> / <code>test_config_diff.py</code> 覆蓋（🛡️），#7-8 已有 <code>test_validate_all.py</code> 覆蓋（🛡️），#9 已有 <code>test_bump_docs.py</code> 覆蓋（🛡️），#10-11 已有 <code>test_check_bilingual_content.py</code> 覆蓋（🛡️）。本節全部已有測試防守。</p>
+</blockquote>
+<h3 id="_12">關聯分析演算法測試<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h3>
+<ol>
+<li>🛡️ <strong>時間相關測試需 freeze 或相對值</strong>：<code>_time_overlap()</code> 內部用 <code>datetime.now()</code> 處理 "still firing" 告警。測試中 <code>end==start</code> 不等於 "零長度" 而是 "still firing"，需理解業務語義再寫斷言 <code>[已自動化於 test: test_alert_correlate]</code></li>
+<li>🛡️ <strong>4 因子關聯分數好測試</strong>：每個因子獨立 0-1 且權重固定，可分別測試 identical、diff namespace、diff everything 三種極端情況快速驗證正確性 <code>[已自動化於 test: test_alert_correlate]</code></li>
+<li>🛡️ <strong>根因推斷用 severity rank + earliest 雙排序</strong>：比單一排序穩定且可預測，測試只需驗證返回的 alertname 和 tenant <code>[已自動化於 test: test_alert_correlate]</code></li>
+</ol>
+<h3 id="_13">漂移偵測測試模式<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h3>
+<ol>
+<li>🛡️ <strong>tmp_path fixture + write_text 是最佳 config-dir mock</strong>：不需要真實 YAML 結構，只需要可 hash 的內容。SHA-256 確定性保證測試穩定 <code>[已自動化於 test: test_drift_detect]</code></li>
+<li>🛡️ <strong>pairwise 組合數 = n*(n-1)/2</strong>：三目錄產生 3 個 report，四目錄產生 6 個——測試時注意斷言 report 數量而非內容 <code>[已自動化於 test: test_drift_detect]</code></li>
+<li>🛡️ <strong>expected vs unexpected 用 prefix tuple</strong>：<code>EXPECTED_PREFIXES = ("_cluster_", "_local_")</code> 可自定義，測試時用自定義 prefix 驗證分類邏輯 <code>[已自動化於 test: test_drift_detect]</code></li>
+</ol>
+<h3 id="_14">覆蓋率提升技巧<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h3>
+<ol>
+<li>🛡️ <strong>main() 的 sys.exit() 要 catch</strong>：validate_all.py main() 結尾固定 <code>sys.exit(0/1)</code>，pytest 需要 <code>pytest.raises(SystemExit)</code> 包裹 <code>[已自動化於 test: test_validate_all]</code></li>
+<li>🛡️ <strong>mock _run_one 跳過子進程</strong>：validate_all 內部用 subprocess 跑其他 Python 腳本，mock <code>_run_one</code> 回傳 <code>(name, "pass", 0.1, "ok", "output")</code> tuple 即可覆蓋 main() 邏輯 <code>[已自動化於 test: test_validate_all]</code></li>
+<li>🛡️ <strong>_init_changelog_entry 需 monkeypatch REPO_ROOT</strong>：bump_docs 的 CHANGELOG 操作依賴 REPO_ROOT，tmp_path mock 後可安全測試插入邏輯 <code>[已自動化於 test: test_bump_docs]</code></li>
+</ol>
+<h3 id="dx-lint">DX lint 測試模式<a class="headerlink" href="#dx-lint" title="Permanent link">&para;</a></h3>
+<ol>
+<li>🛡️ <strong>CJK ratio 測試用純中文/純英文/混合三極端</strong>：count_cjk_ratio("你好世界")=1.0, ("Hello")=0.0, 混合在 0-1 之間，避免浮點精確比較用 range 斷言 <code>[已自動化於 test: test_check_bilingual_content]</code></li>
+<li>🛡️ <strong>monkeypatch 雙 global</strong>：check_bilingual_content 同時用 DOCS_DIR 和 PROJECT_ROOT，兩者都需要 monkeypatch 到 tmp_path 才能隔離真實文件系統 <code>[已自動化於 test: test_check_bilingual_content]</code></li>
+</ol>
+<hr />
+<h2 id="v210-lessons-learned-ops-dx-2026-03-15">v2.1.0 Lessons Learned — Ops 工具 / DX 增強（2026-03-15）<a class="headerlink" href="#v210-lessons-learned-ops-dx-2026-03-15" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>自動化覆蓋摘要：</strong> 本節 8 條中，#1 的 main() 覆蓋模式已在多個 test 檔案實踐（🛡️），#3 Help text 同步已有 <code>check_cli_coverage.py</code> hook 防守（🛡️），#5 反向驗證模式已有 <code>check_cli_coverage.py</code> 實作（🛡️）。其餘為測試技巧知識。</p>
+</blockquote>
+<h3 id="ops">Ops 工具測試模式<a class="headerlink" href="#ops" title="Permanent link">&para;</a></h3>
+<ol>
+<li>🛡️ <strong>main() 覆蓋是低垂果實</strong>：大多數 ops 工具的 <code>main()</code> CLI entry point 佔 30-40% 程式碼但常被忽略。使用 <code>monkeypatch.setattr(sys, "argv", [...])</code> + mock 外部依賴即可快速提升覆蓋率（batch_diagnose 71%→99%，blind_spot 74%→99%） <code>[已自動化於 test: test_batch_diagnose, test_blind_spot_discovery 等]</code></li>
+<li><strong>mock 外部 API 的安全模式</strong>：<code>query_prometheus_targets()</code> 等函式用 <code>@patch("module.http_get_json")</code> 而非 <code>@patch("urllib.request.urlopen")</code>，mock 粒度在自己的 wrapper 層</li>
+<li>🛡️ <strong>Help text 與 COMMAND_MAP 不同步是常見漏洞</strong>：<code>validate-config</code> 在 COMMAND_MAP 中但 help text 沒列。<code>check_cli_coverage.py</code> lint 工具可捕獲此類不同步 <code>[已自動化於 hook: cli-coverage-check]</code></li>
+<li><strong>Triple-quoted string parsing</strong>：解析 Python help text 時，用 <code>re.findall(r'"""(.*?)"""', content, re.DOTALL)</code> 限制在三引號字串內，避免匹配到 Python 程式碼中的變數名</li>
+</ol>
+<h3 id="lint">Lint 工具模式<a class="headerlink" href="#lint" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>🗄️ #5-6 已歸檔至 <a href="../archive/lessons-learned/">archive/lessons-learned.md</a>（反向驗證已固化為 <code>cli-coverage-check</code> hook）</p>
+</blockquote>
+<h3 id="dx_1">DX 增強模式<a class="headerlink" href="#dx_1" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>🗄️ #7-8 已歸檔至 <a href="../archive/lessons-learned/">archive/lessons-learned.md</a>（純功能記錄，不是陷阱）</p>
+</blockquote>
+<h2 id="playwright-e2e-portal-smoke-tests">Playwright E2E 測試（Portal Smoke Tests）<a class="headerlink" href="#playwright-e2e-portal-smoke-tests" title="Permanent link">&para;</a></h2>
+<h3 id="_15">架構概覽<a class="headerlink" href="#_15" title="Permanent link">&para;</a></h3>
+<p>5 個 spec 檔案（33 tests）覆蓋 Portal 首頁、Tenant Manager、Group Management、Auth Flow、Batch Operations。全部使用 Chromium，由 <code>tests/e2e/playwright.config.ts</code> 統一配置。</p>
+<table>
+<thead>
+<tr>
+<th>檔案</th>
+<th>測試數</th>
+<th>涵蓋範圍</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>portal-home.spec.ts</code></td>
+<td>5</td>
+<td>首頁載入、工具卡片渲染、Phase 標題、語言切換、RWD</td>
+</tr>
+<tr>
+<td><code>tenant-manager.spec.ts</code></td>
+<td>6</td>
+<td>載入、名稱過濾、metadata 過濾、計數、狀態持久、降級</td>
+</tr>
+<tr>
+<td><code>group-management.spec.ts</code></td>
+<td>7</td>
+<td>導覽、建立群組、API 隔離、sidebar、成員管理</td>
+</tr>
+<tr>
+<td><code>auth-flow.spec.ts</code></td>
+<td>8</td>
+<td>Dev 模式、OAuth2 redirect、/api/v1/me mock、401 處理、session 過期</td>
+</tr>
+<tr>
+<td><code>batch-operations.spec.ts</code></td>
+<td>7</td>
+<td>群組選取、批次選單、silent mode、確認對話框、API payload</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_16">本地執行<a class="headerlink" href="#_16" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># 一鍵執行（自動啟動 HTTP server + 跑測試）</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>make<span class="w"> </span>test-e2e
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># 手動執行（debug 用）</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nb">cd</span><span class="w"> </span>tests/e2e
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>npm<span class="w"> </span>install<span class="w"> </span>--include<span class="o">=</span>dev<span class="w">          </span><span class="c1"># 首次安裝</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>npx<span class="w"> </span>playwright<span class="w"> </span>install<span class="w"> </span>chromium<span class="w">    </span><span class="c1"># 首次安裝瀏覽器</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>npx<span class="w"> </span>playwright<span class="w"> </span><span class="nb">test</span><span class="w">                </span><span class="c1"># 跑全部</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>npx<span class="w"> </span>playwright<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--headed<span class="w">       </span><span class="c1"># 有頭模式觀察</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>npx<span class="w"> </span>playwright<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--ui<span class="w">           </span><span class="c1"># Playwright UI 互動模式</span>
+</code></pre></div>
+<p><strong>前置條件：</strong> Node.js ≥ 20（<code>npx playwright install chromium</code> 需要網路）。Windows 環境下 <code>npm install</code> 務必加 <code>--include=dev</code>（npm 11 預設 <code>omit=dev</code> 會跳過 devDependencies）。</p>
+<h3 id="_17">關鍵陷阱與已知解法<a class="headerlink" href="#_17" title="Permanent link">&para;</a></h3>
+<h4 id="1-server-root-docs-docsinteractive">1. Server Root 必須是 <code>docs/</code>，不是 <code>docs/interactive/</code><a class="headerlink" href="#1-server-root-docs-docsinteractive" title="Permanent link">&para;</a></h4>
+<p>Portal 首頁 <code>index.html</code> 透過相對路徑 <code>fetch('../assets/tool-registry.yaml')</code> 載入工具資料。若 HTTP server root 設為 <code>docs/interactive/</code>，<code>../assets/</code> 會超出 server root 導致 404。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>✅ python -m http.server 8080 --directory docs     → ../assets/ → docs/assets/
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>❌ python -m http.server 8080 --directory docs/interactive → ../assets/ → 404
+</code></pre></div>
+<p>因此 <code>baseURL</code> 設為 <code>http://localhost:8080/interactive/</code>，讓 server root 留在 <code>docs/</code>。</p>
+<h4 id="2-pagegoto-vs-pagegoto">2. <code>page.goto('/')</code> vs <code>page.goto('./')</code><a class="headerlink" href="#2-pagegoto-vs-pagegoto" title="Permanent link">&para;</a></h4>
+<p>Playwright 的 <code>page.goto('/')</code> 將 <code>/</code> 視為<strong>絕對路徑</strong>，解析為 <code>http://localhost:8080/</code>（忽略 baseURL 的 <code>/interactive/</code> path）。改用 <code>page.goto('./')</code> 是正確做法——相對路徑會正確解析 baseURL：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>baseURL = http://localhost:8080/interactive/
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>page.goto(&#39;/&#39;)   → http://localhost:8080/           ← 錯：看到 &quot;Directory listing for /&quot;
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>page.goto(&#39;./&#39;)  → http://localhost:8080/interactive/ ← 對：載入 Portal
+</code></pre></div>
+<p><strong>所有 spec 檔案統一用 <code>page.goto('./')</code>，禁止 <code>page.goto('/')</code>。</strong></p>
+<h4 id="3-windows-npm-11-omitdev">3. Windows npm 11 的 <code>omit=dev</code> 行為<a class="headerlink" href="#3-windows-npm-11-omitdev" title="Permanent link">&para;</a></h4>
+<p>npm 11 預設 <code>npm config get omit</code> 回傳 <code>dev</code>，導致 <code>npm install</code> 跳過 devDependencies（<code>@playwright/test</code> 就在 devDependencies）。解法：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>npm<span class="w"> </span>install<span class="w"> </span>--include<span class="o">=</span>dev
+</code></pre></div>
+<h4 id="4-selector">4. 動態卡片 selector<a class="headerlink" href="#4-selector" title="Permanent link">&para;</a></h4>
+<p>Portal 工具卡片是從 <code>tool-registry.yaml</code> 動態產生的 <code>.cards a.card</code>，不要用 <code>#linter-cards</code> 裡的靜態 <code>a.card</code>（那個 div 是 <code>display:none</code>）。</p>
+<h4 id="5-ci-vs-local">5. CI vs Local 差異<a class="headerlink" href="#5-ci-vs-local" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>CI (GitHub Actions)</th>
+<th>Local</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Server</td>
+<td><code>npm run serve:portal</code> 背景啟動</td>
+<td><code>playwright.config.ts</code> 的 <code>webServer</code> 自動管理</td>
+</tr>
+<tr>
+<td>Browser</td>
+<td><code>npx playwright install chromium</code> 每次安裝</td>
+<td>本地快取，首次安裝即可</td>
+</tr>
+<tr>
+<td>Workers</td>
+<td>1（避免 race）</td>
+<td>自動（CPU 核心數）</td>
+</tr>
+<tr>
+<td>Retries</td>
+<td>1</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>BASE_URL</code></td>
+<td>env 注入</td>
+<td>讀 config 預設值</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_18">測試設計原則<a class="headerlink" href="#_18" title="Permanent link">&para;</a></h3>
+<p>所有 spec 採 <strong>defensive assertion</strong> 風格：先檢查 UI 元素是否存在（<code>count() &gt; 0</code>），才進行互動。這是因為 Portal 依賴 Mock API 注入資料，非 mock 路徑下只驗「不爆炸」而非「資料正確」。</p>
+<h3 id="v270-lesson-learnedlocator-calibration-testfixme-2026-04-17">v2.7.0 Lesson Learned：Locator Calibration + <code>test.fixme()</code> 治理（2026-04-17）<a class="headerlink" href="#v270-lesson-learnedlocator-calibration-testfixme-2026-04-17" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>觸發</strong>：Phase .a0（Design Token 遷移）新增 3 個 Tier 1 spec 骨架（<code>config-lint.spec.ts</code>、<code>cost-estimator.spec.ts</code>、<code>playground.spec.ts</code>），加上原有 <code>wizard.spec.ts</code> 共 8 檔共 32 個 <code>test.fixme()</code>。寫骨架時 locator 沒在真實瀏覽器校準過，直接 landing 成 "TODO in real browser"。Phase .e review 發現這是個體系問題：<strong>骨架 ≠ 可跑</strong>。</p>
+</blockquote>
+<h4 id="1-locator-calibration-headed-spec">1. Locator calibration 必須在 headed 模式完成，才能寫進 spec<a class="headerlink" href="#1-locator-calibration-headed-spec" title="Permanent link">&para;</a></h4>
+<p><code>page.locator('.preview-header h2')</code> 這種 selector 看起來合理，但實際上 wizard.jsx 的 heading 可能是 <code>&lt;h3&gt;</code>、可能在 <code>.preview-content</code> 裡、可能被 shadow DOM 包住。Cowork session 的 headless smoke 只能驗「元素存在某處」，不能驗「這個 selector 唯一指向預期元素」。<strong>規則</strong>：Tier 1 spec 的每個 assertion 必須在 <code>npx playwright test --ui</code> 裡點過一次 locator panel 確認「1 match」才能脫 <code>test.fixme()</code>。</p>
+<h4 id="2-testfixme-ci">2. <code>test.fixme()</code> 是債務標記，不是「先通過 CI」的工具<a class="headerlink" href="#2-testfixme-ci" title="Permanent link">&para;</a></h4>
+<p>✅ <strong>Codified（v2.8.0 PR #57）</strong>：bare <code>test.fixme()</code> / <code>test.skip()</code> 已由 <code>tests/e2e/eslint.config.mjs</code> + pre-commit <code>playwright-lint</code> hook 在 commit-time 直接擋下（<code>eslint-plugin-playwright/no-skipped-test</code> <code>{ allowConditional: false, disallowFixme: true }</code>）。條件式 <code>test.skip(isChrome, 'reason')</code> 仍允許——「debt 標記」vs「環境閘門」的區分在自動化層生效。E2E 之外要 skip 改走 Python <code>pytest.skip</code>。</p>
+<p><strong>仍是人類判斷的兩件事</strong>（lint 不管）：</p>
+<ul>
+<li><strong>登記義務</strong>：lint 擋 bare 形式，但 <code>test.skip(condition, ...)</code> 與 <code>test.fixme(false, ...)</code> 可繞過。這類仍需在 <a href="../frontend-quality-backlog/"><code>frontend-quality-backlog.md</code></a> 登記（測試名 / spec / 原因 / 預計移除版本），review 階段把關</li>
+<li><strong>Calibration sprint trigger</strong>：單一 spec <code>test.fixme()</code> 跨版本存留超過 1 個 minor 或單檔超過 5 條，排 calibration sprint 走 §5 checklist 清倉</li>
+</ul>
+<h4 id="3-locator-token">3. Locator 穩定性優先順序（遷移 Token 後仍適用）<a class="headerlink" href="#3-locator-token" title="Permanent link">&para;</a></h4>
+<p>Token 遷移改 CSS 屬性不改 HTML 結構，但部分 class 名會變（<code>.btn-primary</code> → 用 token 的 <code>.btn</code> + <code>data-variant="primary"</code>）。<strong>選 locator 的順序</strong>：</p>
+<ol>
+<li><code>page.getByRole('button', { name: 'Submit' })</code> — 語義化、最穩定</li>
+<li><code>page.getByTestId('wizard-next-btn')</code> — 顯式 <code>data-testid</code>，跟 Token 無關</li>
+<li><code>page.getByText('Generate YAML')</code> — 文案改動頻率低於 CSS class</li>
+<li><code>page.locator('[data-variant="primary"]')</code> — Token-native 屬性</li>
+<li><code>page.locator('.btn-primary')</code> — ⛔ 避免：Token 遷移時會壞</li>
+</ol>
+<p>Phase .a0 已將主要互動工具加 <code>data-testid</code>（wizard、playground、config-lint 的 next/preview/generate 按鈕）。Tier 2/3 工具 calibrate 時若缺 testid，補上是先決步驟。</p>
+<h4 id="4-cowork">4. Cowork 側能做什麼、不能做什麼<a class="headerlink" href="#4-cowork" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>Cowork (headless/sandbox)</th>
+<th>Dev Container (headed, 真實瀏覽器)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>寫 spec 骨架（import / test.describe 結構）</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>看 <code>tool-registry.yaml</code> 推論 selector 候選</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>驗 selector 在 DOM 實際匹配幾個元素</td>
+<td>⛔ 無 headed 瀏覽器</td>
+<td>✅ <code>--ui</code> 模式</td>
+</tr>
+<tr>
+<td><code>test.fixme</code> → 真測試</td>
+<td>⛔ 只能標記</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>跑 full e2e suite</td>
+<td>部分（chromium headless）</td>
+<td>✅（headed + slow-mo 可見）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>結論</strong>：Cowork session 適合「長待辦、寫骨架、標 fixme」；<strong>真正的 locator calibration 必須排 Dev Container session</strong>，且該 session 的 spec/wizard/playground 不排其他工作（calibration 需要持續看 UI panel，不能邊改邊 commit）。</p>
+<h4 id="5-testfixme-checklist">5. <code>test.fixme()</code> 清倉 checklist<a class="headerlink" href="#5-testfixme-checklist" title="Permanent link">&para;</a></h4>
+<p>排程 calibration sprint 時，按下列順序執行單一 spec：</p>
+<ol>
+<li><code>cd tests/e2e &amp;&amp; npx playwright test wizard.spec.ts --ui</code></li>
+<li>逐條 unlock <code>test.fixme(true, ...)</code> → 改 <code>test(...)</code> 或 <code>test.fixme(false, ...)</code>（後者保留將來再關）</li>
+<li>Locator panel 驗「exactly 1 match」；不是 1 時先補 <code>data-testid</code>（jsx 側）再回 spec</li>
+<li><code>npx playwright test wizard.spec.ts</code> headless 跑過 → 再 <code>--count=3</code> 驗穩定性</li>
+<li><code>docs/internal/frontend-quality-backlog.md</code> 該檔的登記條目逐條劃掉</li>
+<li>PR 標題：<code>test(e2e): calibrate &lt;spec&gt; (remove N fixme)</code>，body 附 <code>--count=3</code> 輸出</li>
+</ol>
+<h2 id="v280-lessons-learned2026-04-23-phase-a">v2.8.0 Lessons Learned（2026-04-23, Phase .a）<a class="headerlink" href="#v280-lessons-learned2026-04-23-phase-a" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>觸發</strong>：PR #49 / PR #50 / PR #51（Phase .a 軌道一 bundle 鏈）各自踩到一類容易重複的 agent pattern error。都是「工具輸出看似完成、但實際隱藏另一個失敗模式」的形狀；本節 codify 三條鐵律避免下次 session 再踩。</p>
+</blockquote>
+<h3 id="1-subprocess-based-cli-test-coveragepr-49-s19">1. Subprocess-based CLI test <strong>不計 coverage</strong>（PR #49 S#19）<a class="headerlink" href="#1-subprocess-based-cli-test-coveragepr-49-s19" title="Permanent link">&para;</a></h3>
+<p><strong>觸發</strong>：PR #49 新增 <code>scripts/tools/dx/bump_playbook_versions.py</code> + <code>scripts/tools/lint/check_path_metadata_consistency.py</code>，CLI-level 測試走 <code>subprocess.run([sys.executable, str(script), ...])</code> end-to-end，總計 <strong>35 tests</strong>（bump_playbook 19 + check_path_metadata 16）全過。CI 卻 <code>Python Tests (3.13)</code> 失敗：coverage 74.94% &lt; 75% fail_under，兩檔 53% / 64%，<code>main()</code> 整段 uncovered。</p>
+<p><strong>根因</strong>：<code>coverage.py</code> 的 trace hook 不跨 process inherit。subprocess 啟新 interpreter，走的是自己的 <code>sys.settrace</code>，不會把結果回報給父行程的 coverage collector。看起來在跑 <code>main()</code>，coverage 只見 import-time 程式碼。</p>
+<p><strong>正解</strong>：
+1. <strong>新工具的 CLI surface test 一律 in-process</strong> — <code>monkeypatch.setattr(module, 'sys', ...)</code> 設 <code>sys.argv</code>，<code>monkeypatch.chdir(repo_root)</code>，直接呼 <code>module.main()</code>，<code>capsys</code> 吃 stdout/stderr，catch <code>SystemExit</code>（argparse exit path）。
+2. <strong>End-to-end subprocess test 可以保留但不作 coverage 主力</strong> — 只跑 1-2 個「確實從 shell 呼得到」的 smoke。
+3. <strong>若必須 subprocess 驗 PATH / env 行為</strong>：配 <code>COVERAGE_PROCESS_START</code> env var + <code>sitecustomize.py</code> 掛 sub-process coverage；本 repo 目前沒此需求。</p>
+<p><strong>Range 指標</strong>：PR #49 改法後兩檔 coverage 59.2% → 98.2%（<code>bump_playbook_versions</code> 100% / <code>check_path_metadata</code> 96.7%）。詳見 <code>v2.8.0-planning-archive.md §S#19</code>。</p>
+<h3 id="2-encoding-pr-49-anchor-drift-pr-50-journey">2. 本地工具輸出<strong>被截斷 / 被 encoding 吃掉</strong>後必須二次驗證（PR #49 anchor drift + PR #50 journey <code>—</code>）<a class="headerlink" href="#2-encoding-pr-49-anchor-drift-pr-50-journey" title="Permanent link">&para;</a></h3>
+<p><strong>觸發</strong>：
+- <strong>PR #49</strong>：A-11 寫 <code>#已知陷阱</code> anchor 指 windows-mcp-playbook，實際章節名 <code>#已知陷阱速查</code>。裸跑 <code>python3 scripts/tools/lint/check_doc_links.py --ci</code> 的 exit code <strong>同時被兩個來源污染</strong>：(a) broken anchor（真 fail）、(b) 工具本身 final <code>✓ All links ...</code> print 在 cp950 console 觸發 <code>UnicodeEncodeError</code>（即使無 broken anchor 也會 exit 1）。fix 完 anchor 後仍 exit 1，差點下錯結論「工具壞了」；走 <code>pre-commit run doc-links-check</code>（config 自帶 <code>-X utf8</code>）才分清兩個來源。
+- <strong>PR #50</strong>：design-system-guide §3.4 journey 表 <code>dark mode</code> 欄我填 <code>—</code>，實際 canonical 有值（<code>#fcd34d</code> / <code>#c4b5fd</code>）。<code>grep "journey-" | head -10</code> 截斷了 dark-mode rows，我憑記憶 filed 成「無值」。</p>
+<p><strong>共同根因</strong>：本地工具輸出被<strong>截 / 爆 encoding / 分頁</strong>後沒補驗一次就下結論。</p>
+<p><strong>正解</strong>：
+1. <strong>任何 Python lint / generator 輸出</strong>一律 <code>PYTHONIOENCODING=utf-8 python3 -X utf8 &lt;script&gt;</code> 確保 stdout/stderr 走 UTF-8；或走 <code>pre-commit run &lt;hook&gt;</code>（hook 在 <code>.pre-commit-config.yaml</code> 已統一帶 <code>-X utf8</code>）。
+2. <strong>看到 <code>head -N</code> / <code>--head N</code> / <code>head_limit</code></strong>：每次截斷後必須補一次精確 grep 或 <code>| head -50</code> 確認底部內容。寧可輸出多一點也不要靠記憶。
+3. <strong>凡是 exit code 與 stdout 不一致</strong>（e.g. exit 1 但 stdout 印 "0 errors"），第一反應是<strong>工具本身 encoding/console bug</strong>，不要下結論 "工具壞了"；改走 hook 或 UTF-8 env 再跑一次。</p>
+<h3 id="3-no-verify-fuse-commit-msgpr-50">3. <code>--no-verify</code> 使用規範 — 只跳 FUSE 已知卡死，不跳 commit-msg（PR #50 自己踩到）<a class="headerlink" href="#3-no-verify-fuse-commit-msgpr-50" title="Permanent link">&para;</a></h3>
+<p><strong>觸發</strong>：PR #50 commit 用 <code>git commit --no-verify</code> 繞 FUSE Trap #57 <code>head-blob-hygiene</code> 17+ 分鐘 0 output。<code>--no-verify</code> 同時 bypass <code>commit-msg</code> hook（PR #44 C2 裝的 commitlint 本地 validator），commit header 寫了 104 chars，CI 才擋下，需 force-push-with-lease 修。</p>
+<p><strong>正解</strong>：
+1. <strong>首選</strong>：<code>SKIP=&lt;hook-name&gt; git commit ...</code> 精準跳。例：<code>SKIP=head-blob-hygiene git commit -F msg.txt</code>
+2. <strong>次選</strong>：<code>pre-commit run --hook-stage manual</code> 事前跑所有 manual hooks 手動驗證，再 <code>SKIP=...</code> 跳該單一 hook
+3. <strong>鐵則 — 禁用 <code>git commit --no-verify</code></strong>，除非能明確寫出「這次真的同時要跳過哪幾個 hook」。本 repo 目前唯一合法場景是 <strong>FUSE Trap #57</strong>（head-blob-hygiene 卡死），請改用 <code>SKIP=head-blob-hygiene</code>
+4. commit message 必須記錄：(a) 哪個 hook 被跳過、(b) 原因（引 Trap #N）、(c) 手動補跑了哪些 hook 確認通過
+5. <strong>長期 enforcement</strong> 追蹤於 <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/53">Issue #53</a>（narrow <code>--no-verify</code> bypass）</p>
+<blockquote>
+<p><strong>Extension（PR #51 self-review 新發現，PR #55 enforcement 落地）</strong>：本地 <code>commit-msg</code> hook（PR #44 C2 安裝的 <code>scripts/hooks/commit-msg</code> → <code>pr_preflight.py --check-commit-msg</code>）v2.8.0 Issue #53 前<strong>只驗 header</strong>（type / scope / header length），<strong>不驗 body / footer</strong>。CI commitlint 多驗 <code>footer-max-line-length ≤ 100</code>、<code>footer-leading-blank</code> 等 body 規則；long pytest path / long file list 塞在 commit message 末段會被 commitlint 當 footer → 觸發 <code>footer-max-line-length</code>。PR #51 self-review commit 踩到：local 過、CI 擋、force-push-with-lease 修。</p>
+<p><strong>PR #55 Issue #53 enforcement 落地</strong>：</p>
+<ol>
+<li><code>pr_preflight.py --check-commit-msg</code> 擴 <code>validate_commit_msg_body()</code>：每個 post-header 非註解行 &gt; 100 chars → ERROR；缺 blank-line-after-header → WARN。保守策略 — 比 CI 還嚴（CI body-max-line-length 放寬到 200），但可靠防 PR #51 類 class of error。<code>test_preflight_msg_validator.py</code> 從 20 → 29 tests</li>
+<li><code>make commit-bypass-hh ARGS="-F _msg.txt" [EXTRA_SKIP=hook1,hook2]</code>：codified narrow bypass — <code>SKIP=head-blob-hygiene git commit &lt;ARGS&gt;</code>，commit-msg hook 仍跑，防 <code>--no-verify</code> 的 all-or-nothing 災</li>
+</ol>
+<p><strong>規則更新</strong>：從本 PR 起，FUSE Trap #57 繞道改為 <code>make commit-bypass-hh</code>；<code>git commit --no-verify</code> 只在 commit-bypass-hh 本身失效（如 commit-msg 自己 bug）時才用，且 commit message 需寫明 bypass 原因</p>
+</blockquote>
+<h3 id="4-dev-container-mount-scopetrap-62">4. Dev Container mount scope（Trap #62 連帶工作流）<a class="headerlink" href="#4-dev-container-mount-scopetrap-62" title="Permanent link">&para;</a></h3>
+<p>Dev Container 只 bind-mount 主 worktree（<code>C:\Users\vencs\vibe-k8s-lab\</code>），claude worktree 的 Edit <strong>不會進 container</strong>。詳 <code>windows-mcp-playbook.md</code> Trap #62。<strong>Go test / Playwright E2E</strong> 在 claude worktree 做 Edit 後，一律走：</p>
+<ol>
+<li><code>cp &lt;claude-worktree-path&gt; &lt;main-worktree-path&gt;</code> 同步單檔</li>
+<li>在主 worktree 跑 <code>make dc-go-test</code> / <code>bash scripts/ops/dx-run.sh ...</code></li>
+<li>跑完在主 worktree <code>git checkout -- &lt;path&gt;</code> revert，claude worktree 保留為 SoT</li>
+</ol>
+<p><strong>不要</strong>用 <code>git commit + push + fetch</code> 同步 — 會污染 commit history。<strong>不要</strong>改 <code>dx-run.sh</code> 的 <code>-w</code> 參數除非你願意同步調整 container bind-mount。</p>
+<h2 id="v280-lessons-learned-race-flake-battles2026-04-26-phase-b">v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）<a class="headerlink" href="#v280-lessons-learned-race-flake-battles2026-04-26-phase-b" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>觸發</strong>：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 <code>withIsolatedMetrics</code> + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。</p>
+<p><strong>Authority</strong>：本節為「production code 含 async callback（<code>time.AfterFunc</code> / goroutine spawn）+ 測試用 <code>withIsolatedMetrics</code> swap global metric 實例」class of test 的 hard rule。違反任一條的 PR 預期會在 CI 隨機 flake。</p>
+</blockquote>
+<h3 id="1-withisolatedmetrics-async-callback-isolation-lockstep-invariant-exact-equality">1. <code>withIsolatedMetrics</code> + async-callback isolation 不完整 — 用 lockstep + <code>&gt;=</code> invariant，不要 exact-equality<a class="headerlink" href="#1-withisolatedmetrics-async-callback-isolation-lockstep-invariant-exact-equality" title="Permanent link">&para;</a></h3>
+<p><strong>現象</strong>：<code>withIsolatedMetrics</code> swaps the global metric instance to <code>fresh</code> for the test's lifetime. But production code with async callbacks (e.g. <code>fireDebounced</code> spawned by <code>time.AfterFunc</code>) may complete its work <strong>after</strong>:</p>
+<ol>
+<li>The previous test's <code>defer m.Close()</code> returned (Close does <strong>not</strong> wait for in-flight callbacks — see <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/config_debounce.go"><code>config_debounce.go::Close</code> docstring</a>)</li>
+<li>The next test's <code>withIsolatedMetrics</code> already swapped to its own <code>fresh</code></li>
+</ol>
+<p>The leaked callback's late <code>getConfigMetrics()</code> returns the <strong>NEW</strong> test's <code>fresh</code> (the global is now swapped), inflating the metric count.</p>
+<p><strong>Insufficient fix (S#32, PR #75)</strong>: snapshot baseline counts at test start, assert deltas. <strong>Doesn't help</strong> if the leak lands BETWEEN snapshot and final read (5-50ms <code>diffAndReload</code> window). PR #79 reproduced the same flake despite the baseline-snapshot fix.</p>
+<p><strong>Insufficient fix (S#35, PR #79 commit <code>0abc2ff</code>)</strong>: claimed <code>deltaReload == deltaBatch</code> "lockstep" because both are observed in <code>fireDebounced</code>. <strong>WRONG</strong> — only <code>ObserveDebounceBatch</code> + <code>atomic.AddUint64(&amp;m.debounceFired)</code> are atomic (steps 1+2 under <code>m.debounceMu</code>). <code>ObserveReloadDuration</code> happens AFTER <code>diffAndReload</code> (step 4), giving reload a much wider leak window than batch. PR #90 CI run #24946980383 observed <code>deltaReload=2, deltaBatch=1</code> — invalidated the lockstep claim.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>fireDebounced timeline (per config_debounce.go):
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>  1. ObserveDebounceBatch(len(reasons))    ← batch leaks here
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>  2. atomic.AddUint64(&amp;m.debounceFired)    ← per-instance fire counter
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>     ----- diffAndReload runs (~ms-100ms) -----
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>  4. ObserveReloadDuration(elapsed)        ← reload leaks LATE
+</code></pre></div>
+<p><strong>Durable fix (S#37, PR #90)</strong>: assert what's actually atomic + a <code>&gt;=</code> lower bound on what isn't. Three invariants:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1">// Capture baseline before triggering our own work.</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nx">baseFire</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">DebounceFiredCount</span><span class="p">()</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nx">baseReload</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">histogramSampleCount</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">fresh</span><span class="p">.</span><span class="nx">reloadDuration</span><span class="p">)</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="nx">baseBatchCount</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">histogramSampleCount</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">fresh</span><span class="p">.</span><span class="nx">debounceBatch</span><span class="p">)</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="c1">// ... trigger our N calls, wait for quiescence ...</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="nx">deltaFire</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">DebounceFiredCount</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">baseFire</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="nx">deltaReload</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">histogramSampleCount</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">fresh</span><span class="p">.</span><span class="nx">reloadDuration</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">baseReload</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="nx">deltaBatchCount</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">histogramSampleCount</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">fresh</span><span class="p">.</span><span class="nx">debounceBatch</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">baseBatchCount</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="c1">// (1) batch + fire ARE atomic per fireDebounced steps 1+2 → lockstep:</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">deltaBatchCount</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">deltaFire</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;batch-fire lockstep violated: deltaBatch=%d != deltaFire=%d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">deltaBatchCount</span><span class="p">,</span><span class="w"> </span><span class="nx">deltaFire</span><span class="p">)</span>
+<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="p">}</span>
+<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="c1">// (2) reload is observed AFTER diffAndReload → only `&gt;=` invariant holds:</span>
+<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a><span class="k">if</span><span class="w"> </span><span class="nx">deltaReload</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="nx">deltaFire</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a><span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;at-least invariant violated: deltaReload=%d &lt; deltaFire=%d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">deltaReload</span><span class="p">,</span><span class="w"> </span><span class="nx">deltaFire</span><span class="p">)</span>
+<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="p">}</span>
+<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a><span class="c1">// (3) Exact equality only when no leak detected.</span>
+<a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a><span class="k">if</span><span class="w"> </span><span class="nx">deltaReload</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">deltaFire</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">deltaFire</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a><span class="w">    </span><span class="c1">// assert sum/count exactly here</span>
+<a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Reference implementations</strong>: see <code>components/threshold-exporter/app/config_debounce_test.go::TestFireDebounced_EmitsBatchAndDuration</code> for the canonical example.</p>
+<blockquote>
+<p><strong>Generality note</strong>: the example uses <code>m.DebounceFiredCount()</code> which is exporter-specific. The pattern generalizes to <strong>any</strong> Go test that:
+(a) swaps a global metric instance via a <code>withIsolated*</code> helper, AND
+(b) exercises production code that spawns goroutines / <code>time.AfterFunc</code> callbacks whose <code>Close()</code> doesn't wait.</p>
+<p>Identify which observations sit <strong>inside</strong> vs <strong>after</strong> the critical section in the production callback:
+- <strong>Inside critical section</strong> (atomic with the per-instance counter): assert <code>delta == fire</code>
+- <strong>After critical section</strong> (separated by I/O / heavy compute): assert <code>delta &gt;= fire</code>
+Substitute <code>DebounceFiredCount()</code> with whatever per-instance counter your subject exposes (e.g. tenant-api could use a <code>RequestCount()</code> accessor).</p>
+</blockquote>
+<h3 id="2-test-quiescence-detectionsleep-assert-exactly-n">2. 時間敏感 test 用 quiescence detection，<strong>不要</strong>「sleep + assert exactly N」<a class="headerlink" href="#2-test-quiescence-detectionsleep-assert-exactly-n" title="Permanent link">&para;</a></h3>
+<p><strong>Anti-pattern</strong> (PR #75 v1):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="nx">N</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">++</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">trigger</span><span class="p">()</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="nx">window</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">buffer</span><span class="p">)</span><span class="w">         </span><span class="c1">// &lt;-- timing assumption!</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nx">fireCount</span><span class="p">)</span><span class="w">       </span><span class="c1">// &lt;-- &quot;exactly 1&quot; timing claim</span>
+</code></pre></div>
+<p><code>time.Sleep(buffer)</code> may overshoot under <code>-race</code> instrumentation, splitting the batch across two debounce windows. "Exactly 1 fire" tests <strong>timing</strong>, not the actual contract ("one observation per fire").</p>
+<p><strong>Pattern</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="nx">N</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">++</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">trigger</span><span class="p">()</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1">// Wait for stability: no new fires for `stableWindow` consecutive ms.</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="nx">stable</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">uint64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="nx">stableSince</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">{}</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="nx">deadline</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Add</span><span class="p">(</span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Before</span><span class="p">(</span><span class="nx">deadline</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">    </span><span class="nx">now</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">DebounceFiredCount</span><span class="p">()</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">stable</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">        </span><span class="nx">stable</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">now</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">        </span><span class="nx">stableSince</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">()</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">stableSince</span><span class="p">.</span><span class="nx">IsZero</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Since</span><span class="p">(</span><span class="nx">stableSince</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">150</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="w">        </span><span class="k">break</span><span class="w">  </span><span class="c1">// stable</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="w">    </span><span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="mi">10</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">)</span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="p">}</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="nx">fireCount</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">DebounceFiredCount</span><span class="p">()</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="c1">// Assert per-fire invariants regardless of fireCount value.</span>
+</code></pre></div>
+<p>This decouples the test from window-size choice and CI scheduling jitter.</p>
+<h3 id="3-testutilcollectandcount-plain-histogram-family-count-sample-count">3. <code>testutil.CollectAndCount</code> 對 plain Histogram <strong>回 family count, 不是 sample count</strong><a class="headerlink" href="#3-testutilcollectandcount-plain-histogram-family-count-sample-count" title="Permanent link">&para;</a></h3>
+<p><strong>Footgun</strong>: <code>prometheus.testutil.CollectAndCount(h)</code> for a plain <code>prometheus.Histogram</code> returns <strong>1</strong> after registration, regardless of how many <code>Observe()</code> calls happened. It returns the number of metric families, not samples.</p>
+<p><strong>Wrong</strong> (PR #75 first attempt — caught in self-review):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">got</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">testutil</span><span class="p">.</span><span class="nx">CollectAndCount</span><span class="p">(</span><span class="nx">fresh</span><span class="p">.</span><span class="nx">reloadDuration</span><span class="p">);</span><span class="w"> </span><span class="nx">got</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;expected no observations, got %d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">got</span><span class="p">)</span><span class="w">  </span><span class="c1">// always fails!</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Right</strong> — gather and read <code>SampleCount</code> directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">histogramSampleCount</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">,</span><span class="w"> </span><span class="nx">h</span><span class="w"> </span><span class="nx">prometheus</span><span class="p">.</span><span class="nx">Histogram</span><span class="p">)</span><span class="w"> </span><span class="kt">uint64</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Helper</span><span class="p">()</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nx">reg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">prometheus</span><span class="p">.</span><span class="nx">NewRegistry</span><span class="p">()</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">reg</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">h</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;register: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">    </span><span class="nx">families</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">reg</span><span class="p">.</span><span class="nx">Gather</span><span class="p">()</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;gather: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">fam</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">families</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">metric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">fam</span><span class="p">.</span><span class="nx">Metric</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">metric</span><span class="p">.</span><span class="nx">Histogram</span><span class="p">.</span><span class="nx">GetSampleCount</span><span class="p">()</span>
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span>
+<a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a><span class="p">}</span>
+</code></pre></div>
+<p>This helper exists at <code>components/threshold-exporter/app/config_metrics_test.go::histogramSampleCount</code> for reference.</p>
+<p><strong>Note</strong>: <code>HistogramVec</code> (with labels) has different semantics — <code>CollectAndCount</code> returns the active series count, which is meaningful. The footgun is specifically plain <code>Histogram</code>.</p>
+<h3 id="pr-review-checklist-item">PR review checklist item<a class="headerlink" href="#pr-review-checklist-item" title="Permanent link">&para;</a></h3>
+<p>When reviewing a PR that adds a Go test using <code>withIsolatedMetrics</code> + production code with async callbacks (<code>time.AfterFunc</code>, goroutine spawn), verify:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Snapshot baseline counts at test start (don't rely on <code>fresh</code> starting at 0)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Identify which metric observations are <code>inside</code> vs <code>after</code> the production critical section</strong> — assert <code>delta == fire</code> only for those inside; use <code>delta &gt;= fire</code> for those after (e.g. observed post-I/O)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Do NOT assume two metrics in the same callback function are atomic</strong> — check whether they bracket I/O / heavy compute (which makes their leak windows different sizes)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Use quiescence detection for "wait for fire" (poll + stable-window), not <code>time.Sleep(window+buffer)</code> + exact-count assert</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> If using <code>testutil.CollectAndCount</code> on plain <code>Histogram</code>, replace with <code>histogramSampleCount</code> helper</li>
+</ul>
+<p>Apply this checklist as part of any PR that adds new Go tests touching <code>config_metrics.go</code> / <code>config_debounce.go</code> paths.</p>
+<h3 id="cross-refs">Cross-refs<a class="headerlink" href="#cross-refs" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>docs/internal/v2.8.0-planning-archive.md</code> §S#32 (PR #75 — initial fix; partial)</li>
+<li><code>docs/internal/v2.8.0-planning-archive.md</code> §S#35 (PR #79 — durable lockstep+&gt;= upgrade)</li>
+<li><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/81">Issue #81</a> — codification tracking (this section is its deliverable)</li>
+</ul>
+<h2 id="v220-lessons-learned2026-03-18">v2.2.0 Lessons Learned（2026-03-18）<a class="headerlink" href="#v220-lessons-learned2026-03-18" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong><code>apk del</code> 後必須驗證移除成功</strong>：<code>|| true</code> 吃掉錯誤導致 CVE 殘留。Dockerfile 加 <code>if apk info -e &lt;pkg&gt;; then exit 1; fi</code> 做 build-time 斷言</li>
+<li><strong>git-sync <code>--link=current</code> 建立 symlink</strong>：下游 <code>--config-dir</code> 路徑必須含 <code>/current/</code>。加 initContainer <code>--one-time</code> 防 exporter 啟動時讀到空目錄</li>
+<li><strong>不寫虛構 benchmark</strong>：沒有實測數據就用 O() 定性分析 + 引導客戶用工具自行驗證。虛構數字被質疑會失去信任</li>
+<li><strong>Dockerfile 註解必須與 base image 版本同步</strong>：改 pin 版本時連註解一起改，否則 review 時製造混淆</li>
+</ol>
+<h2 id="v26x-lessons-learned-go-flake2026-04-11">v2.6.x Lessons Learned — Go 並發測試 flake（2026-04-11）<a class="headerlink" href="#v26x-lessons-learned-go-flake2026-04-11" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>觸發</strong>：CI 報 <code>FAIL github.com/vencil/tenant-api/internal/async</code> 但仍印出 <code>coverage: 87.8%</code>。症狀是 <code>t.Errorf</code> 而非 <code>t.Fatal</code>，package 跑完但標記失敗。根因三條全是測試對並發行為的假設過緊，production code 無 bug。</p>
+</blockquote>
+<h3 id="race">初始狀態斷言的 race 陷阱<a class="headerlink" href="#race" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>零成本 <code>TaskFunc</code> 不會停在 pending/running</strong>：Manager.Submit 在 <code>mu.Lock</code> 內寫 workCh，釋鎖後 worker 可以在數 μs 內完成 <code>setStatus(running) → fn → setCompleted</code>。測試在 Submit 之後立即呼叫 <code>Get()</code>，看到的 status 可能是 pending / running / completed 任何一個。寫 <code>if status != pending &amp;&amp; status != running { t.Errorf(...) }</code> 必然會 flake，<code>-race</code> 下頻率放大。</li>
+<li><strong>解法 A — barrier 釘住 worker</strong>：在 <code>fn</code> 內 <code>select { case &lt;-barrier: case &lt;-ctx.Done(): }</code>。defer 順序必須 LIFO：<code>defer m.Close()</code> 先寫、<code>defer close(barrier)</code> 後寫；teardown 時 close(barrier) 先跑，worker 才能 drain 結束，接著 m.Close() 的 <code>wg.Wait()</code> 才不會卡住。<code>ctx.Done</code> 是 panic fallback，避免測試異常退出時 worker 永遠卡在 barrier。</li>
+<li><strong>解法 B — 刪掉初始斷言</strong>：若測試的主旨是「最終狀態」而非「初始狀態」，直接刪掉初始檢查，靠 polling loop 驗證 converge 行為即可（e.g. <code>TestWorkerCompletion</code>）。redundant 的斷言 = 多一個 flake source。</li>
+</ol>
+<h3 id="happen-before">時間戳斷言的 happen-before 陷阱<a class="headerlink" href="#happen-before" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong><code>before/after</code> bounds 必須夾到 snapshot 之外</strong>：<code>after := time.Now()</code> 要測在 <code>Get()</code> <strong>之後</strong>，不是 <code>Submit()</code> 之後。證明：worker 最後一次寫 <code>UpdatedAt</code> 發生在鎖下 → <code>Get</code> 在鎖下取 snapshot → <code>Get</code> 返回 → 測量 <code>after</code>。三段 happen-before 鏈保證 <code>UpdatedAt ≤ after</code>。把 <code>after</code> 放在 Submit 後 Get 前，會被 Go <code>sync.RWMutex</code> 的 writer-prefers 排隊機制打爆：worker 已經 pending 在 Lock 上 → 測試的 <code>after</code> 量測 → 測試 RLock 被排在 writer 之後 → snapshot 讀到的 <code>UpdatedAt</code> 已經晚於 <code>after</code>。</li>
+<li><strong>RWMutex 的 writer starvation prevention 是 Go-runtime-level 保證</strong>：Go 1.20+ 後 <code>RLock</code> 在已有 writer 等待時主動 yield，不是 FIFO 也不是 reader-prefers。這讓「測試先量 after 再 Get」的直覺式寫法在 race build 下特別脆。</li>
+</ol>
+<h3 id="-race"><code>-race</code> 放大機制與驗證強度<a class="headerlink" href="#-race" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong><code>-race</code> 不是「讓 race 更容易看到」而是「讓 scheduling 更不對稱」</strong>：race instrumentation 在每次記憶體存取插入 happens-before 檢查，對不同 goroutine 的減速比例不同。原本 1/1000 頻率的 logical race，race build 下可能變成 1/10。本機跑綠不代表 CI 跑綠。</li>
+<li><strong>修並發 flake 的驗證門檻 ≥ <code>-count=20</code></strong>：<code>go test ./... -race -count=1</code> 通過只算 smoke。修 flake 後必須 <code>-count=20</code> 甚至 <code>-count=50</code> 才能排除 survivorship bias。CI 的 <code>-count=1</code> 是成本考量，不是正確性保證。</li>
+<li><strong><code>FAIL</code> + coverage 同時出現 = <code>t.Errorf</code> 非 <code>t.Fatal</code></strong>：package 跑完所以有 coverage，但至少一個 assertion 失敗。這是識別「邏輯斷言錯誤」vs「建置錯誤」vs「panic/timeout」的快速訊號——看到這個組合直接往 flaky assertion 方向找，不要先懷疑 compile error 或 infra。</li>
+</ol>
+<h3 id="_19">適用範圍<a class="headerlink" href="#_19" title="Permanent link">&para;</a></h3>
+<p>本節的三個 pattern 不限於 <code>tenant-api/internal/async</code>。任何具備 <strong>worker goroutine + shared mutex + 可變 timestamp/status</strong> 的 Go 套件（如 <code>ws/hub</code>、<code>gitops/reconcile</code>）都該用同樣的三條 checklist 掃過：(a) 初始狀態斷言是否寫死 pending/running、(b) time bounds 是否跨過 Get/snapshot、(c) 是否只跑 <code>-count=1</code>。</p>
+<h2 id="_20">相關資源<a class="headerlink" href="#_20" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>資源</th>
+<th>相關性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../github-release-playbook/">"GitHub Release — 操作手冊 (Playbook)"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="./">"測試注意事項 — 排錯手冊 (Testing Playbook)"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../windows-mcp-playbook/">"Windows-MCP — Dev Container 操作手冊 (Playbook)"</a></td>
+<td>⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

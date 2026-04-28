@@ -1,0 +1,3550 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/benchmark-playbook/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../internal/benchmark-playbook/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Benchmark 操作手冊 (Benchmark Playbook) - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#benchmark-benchmark-playbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Benchmark 操作手冊 (Benchmark Playbook)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../internal/benchmark-playbook/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-action-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Action Index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        自動化指令
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        方法論
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dev-container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        在 Dev Container 內執行
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmarksh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        benchmark.sh 已知問題
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#routing-bench" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routing Bench 注意事項
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#under-load-bench" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Under-Load Bench 注意事項
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alertmanager-bench" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alertmanager Bench 注意事項
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reload-bench" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reload Bench 注意事項
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v200" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.0.0 功能基線注意事項
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lessons-learned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        踩坑記錄 (Lessons Learned)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="踩坑記錄 (Lessons Learned)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#alertmanager-email_configsto-v200-preview4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alertmanager email_configs.to 格式問題 (v2.0.0-preview.4)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#go-benchmark-log-output-v210-v280-a-15-codified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Go benchmark log 噪音致 output 爆量 (v2.1.0 → v2.8.0 A-15 codified)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmark-port-forward-v200-preview4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        連續多輪 benchmark port-forward 不穩定 (v2.0.0-preview.4)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v280-1000-tenant-hierarchical-baseline-phase-1-b-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.8.0 1000-Tenant Hierarchical Baseline (Phase 1, B-1)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.8.0 1000-Tenant Hierarchical Baseline (Phase 1, B-1)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        量測方法論
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#latency-baseline-1000-tenant3-run-min-median-max-ns-ms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Latency Baseline 1000-tenant（3-run min / median / max, ns → ms）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scaling-characterization-1000-2000-50003-run-median-ms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling Characterization 1000 / 2000 / 5000（3-run median ms）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Baseline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        發現（Phase 1 baseline 量測時順手踩出）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-blocked" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 延伸（blocked）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v280-phase-2-e2e-alert-fire-through-b-1-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#5-anchor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5-anchor 量測模型（摘要）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixture-kinds-calibration-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixture kinds &amp; calibration gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implementation-tracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation 進度 tracker
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#baseline-b-1p2-f" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        跑一輪 baseline 速查（B-1.P2-f）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tier-1-fail-fast-smoke-gatecycle-6-rca-issue-83-s37d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 1 fail-fast smoke gate（cycle-6 RCA 後加，issue #83 §S#37d）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aggregator-gate-banner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregator 輸出與 gate banner
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#customer-sample-calibration-gate-operational-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Customer sample calibration gate operational flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kill-switch-v290-cut-customer-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kill switch — v2.9.0 cut 前 customer sample 未抵達
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#baseline-synthetic-v2-main-workflow_dispatch-2026-04-26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        首批 baseline 數字（synthetic-v2 main workflow_dispatch, 2026-04-26）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#design-9-acceptance-follow-ups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        已完成的 design §9 acceptance follow-ups
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixture-b-1p2-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        產出 fixture 速查（B-1.P2-b）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        重跑本 baseline 指令
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">documentation</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">performance</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/benchmark-playbook.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/benchmark-playbook.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="benchmark-benchmark-playbook">Benchmark 操作手冊 (Benchmark Playbook)<a class="headerlink" href="#benchmark-benchmark-playbook" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Benchmark 方法論、執行環境、已知陷阱與踩坑記錄。與測試排錯分離，便於獨立查閱。
+<strong>相關文件：</strong> <a href="../../benchmarks/">benchmarks.md</a>（量測數據）· <a href="../testing-playbook/">Testing Playbook</a>（K8s/測試排錯）· <a href="../test-map/#benchmark-基線">Test Map § Benchmark 基線</a>· <a href="../windows-mcp-playbook/">Windows-MCP Playbook</a>（docker exec 陷阱）</p>
+</blockquote>
+<h3 id="quick-action-index">Quick Action Index<a class="headerlink" href="#quick-action-index" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>我要做什麼</th>
+<th>跳到</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>跑 benchmark 指令</td>
+<td><a href="#自動化指令">§自動化指令</a></td>
+</tr>
+<tr>
+<td>方法論（輪數/格式）</td>
+<td><a href="#方法論">§方法論</a></td>
+</tr>
+<tr>
+<td>Dev Container 內執行</td>
+<td><a href="#在-dev-container-內執行">§在 Dev Container 內執行</a></td>
+</tr>
+<tr>
+<td>Routing Bench</td>
+<td><a href="#routing-bench-注意事項">§Routing Bench 注意事項</a></td>
+</tr>
+<tr>
+<td>Under-Load Bench</td>
+<td><a href="#under-load-bench-注意事項">§Under-Load Bench 注意事項</a></td>
+</tr>
+<tr>
+<td>踩坑記錄</td>
+<td><a href="#踩坑記錄-lessons-learned">§踩坑記錄</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_1">自動化指令<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>benchmark<span class="w">                    </span><span class="c1"># idle-state 基礎報告</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>benchmark<span class="w"> </span><span class="nv">ARGS</span><span class="o">=</span><span class="s2">&quot;--under-load --routing-bench --alertmanager-bench --reload-bench --json&quot;</span>
+</code></pre></div>
+<h2 id="_2">方法論<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Benchmark 類型</th>
+<th>建議輪數</th>
+<th>報告格式</th>
+<th>耗時</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>idle-state</td>
+<td>5 輪，間隔 45s</td>
+<td>mean ± stddev</td>
+<td>~4min</td>
+</tr>
+<tr>
+<td>under-load (N=100)</td>
+<td>5 輪</td>
+<td>median ± stddev</td>
+<td>~15min</td>
+</tr>
+<tr>
+<td>Go micro-bench (<code>-count=N</code>)</td>
+<td>5 次</td>
+<td>median, stddev</td>
+<td>~1min (8 benchmarks), ~3min (含 1000-tenant)</td>
+</tr>
+<tr>
+<td>routing-bench (N=2/10/50/100/200)</td>
+<td>10 輪</td>
+<td>median ± stddev</td>
+<td>~2min</td>
+</tr>
+<tr>
+<td>alertmanager-bench</td>
+<td>5 輪 (idle) / under-load</td>
+<td>快照</td>
+<td>~1min</td>
+</tr>
+<tr>
+<td>reload-bench</td>
+<td>5 輪</td>
+<td>median</td>
+<td>~2min</td>
+</tr>
+<tr>
+<td>pytest-benchmark</td>
+<td>min_rounds=20, warmup=on</td>
+<td>median</td>
+<td>~30s</td>
+</tr>
+<tr>
+<td>v2.0.0 功能基線</td>
+<td>20 輪</td>
+<td>median</td>
+<td>~1min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>統計原則：</strong></p>
+<ul>
+<li>永遠取多輪 median，避免單次值偏差。minimum 5 輪，routing-bench 建議 10 輪</li>
+<li>報告 median ± stddev，讓讀者判斷穩定性</li>
+<li>pytest-benchmark 自帶統計引擎（min_rounds, warmup），直接引用其 median</li>
+<li>Go micro-bench 用 <code>-count=5</code> 確保統計意義</li>
+</ul>
+<h2 id="dev-container">在 Dev Container 內執行<a class="headerlink" href="#dev-container" title="Permanent link">&para;</a></h2>
+<p>benchmark.sh 需要 K8s + Go 環境，<strong>必須在 Dev Container 內跑</strong>。由於 PowerShell 引號嵌套問題，直接 <code>docker exec bash -c "..."</code> 複雜指令常失敗。</p>
+<p><strong>標準做法：寫輔助腳本 → docker exec 執行 → 讀結果：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Step 1: Write tool 寫輔助腳本</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>cat<span class="w"> </span>&gt;<span class="w"> </span>/workspaces/vibe-k8s-lab/_run_bench.sh<span class="w"> </span><span class="s">&lt;&lt; &#39;SCRIPT&#39;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="s">#!/bin/bash</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s">cd /workspaces/vibe-k8s-lab</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="s">exec &gt; /workspaces/vibe-k8s-lab/_bench_result.txt 2&gt;&amp;1</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="s">./scripts/benchmark.sh --routing-bench --json</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="s">echo &quot;EXIT_CODE=$?&quot;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="s">SCRIPT</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># Step 2: 背景執行</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-d<span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>/workspaces/vibe-k8s-lab/_run_bench.sh
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="c1"># Step 3: 等待 + Read tool 讀 _bench_result.txt</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># Step 4: 清理</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/workspaces/vibe-k8s-lab/_run_bench.sh<span class="w"> </span>/workspaces/vibe-k8s-lab/_bench_result.txt
+</code></pre></div>
+<p><strong>MCP 背景執行（Cowork VM → MCP → WSL → Docker）：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># docker exec -d 背景執行，日誌寫到 /tmp</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>wsl<span class="w"> </span>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-d<span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="s2">&quot;cd /workspaces/vibe-k8s-lab &amp;&amp; bash scripts/benchmark.sh --under-load --tenants 100 &gt; /tmp/bench.log 2&gt;&amp;1&quot;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># 定期檢查進度（MCP PowerShell timeout 預設 30s，長指令必須背景化）</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>wsl<span class="w"> </span>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>tail<span class="w"> </span>-20<span class="w"> </span>/tmp/bench.log
+</code></pre></div>
+<p><strong>Go micro-bench 同理（建議 redirect 到檔案以避免 log 噪音影響）：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>/workspaces/vibe-k8s-lab/components/threshold-exporter/app
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-bench<span class="o">=</span>.<span class="w"> </span>-benchmem<span class="w"> </span>-count<span class="o">=</span><span class="m">5</span><span class="w"> </span>-run<span class="o">=</span><span class="s2">&quot;^</span>$<span class="s2">&quot;</span><span class="w"> </span>./...<span class="w"> </span>&gt;<span class="w"> </span>/tmp/bench.txt<span class="w"> </span><span class="m">2</span>&gt;/tmp/bench_err.txt
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>grep<span class="w"> </span><span class="s2">&quot;ns/op&quot;</span><span class="w"> </span>/tmp/bench.txt<span class="w">   </span><span class="c1"># 僅看結果行</span>
+</code></pre></div></p>
+<blockquote>
+<p>注意：incremental reload benchmark 已內建 <code>silenceLogs(b)</code>，但 <code>Resolve*</code> 系列不需要（無 log 輸出）。</p>
+</blockquote>
+<h2 id="benchmarksh">benchmark.sh 已知問題<a class="headerlink" href="#benchmarksh" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>local</code> 關鍵字限制</strong>：<code>local</code> 只能在 function 內使用。若 for loop 在 top-level scope 使用 <code>local</code>，bash 不報錯但部分 shell 會。移除即可。</li>
+<li><strong><code>grep -E '--- [0-9]+'</code> pattern</strong>：<code>---</code> 被 grep 解讀為選項旗標。用 <code>grep -E -- '--- [0-9]+'</code> 或 <code>grep -E '\-\-\- [0-9]+'</code> 避免。此問題不阻塞執行（routes 有 fallback 解析）。</li>
+<li><strong>MCP timeout</strong>：Under-Load benchmark 含 90s reload 等待 + 35s scrape cycle，MCP PowerShell 預設 30s timeout 不夠。必須用 <code>docker exec -d</code> 背景化。</li>
+</ul>
+<h2 id="routing-bench">Routing Bench 注意事項<a class="headerlink" href="#routing-bench" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>純 Python 操作</strong>，不需 K8s 環境；Cowork VM 可直接跑</li>
+<li>產出解析：用 summary line <code>--- N route(s), M receiver(s), K inhibit rule(s) ---</code> 取計數，不要 grep YAML 內容（<code>- match:</code> vs <code>- matchers:</code> 格式隨版本變化）</li>
+<li>合成 tenant 需包含 routing（6 種 receiver type）+ severity_dedup + routing overrides，才能代表真實複雜度</li>
+<li><strong>CLI E2E vs 純 route generation</strong>：CLI wall time 含 Python 啟動（~130-400ms，佔 ~70%），純 route generation 為 sub-ms。兩者分開報告，避免誤導</li>
+</ul>
+<h2 id="under-load-bench">Under-Load Bench 注意事項<a class="headerlink" href="#under-load-bench" title="Permanent link">&para;</a></h2>
+<ul>
+<li>合成 100 個 tenant → patch ConfigMap → 等 exporter SHA-256 hot-reload → 等 2 個 scrape cycle → 採樣</li>
+<li><strong>reload 偵測依賴 <code>user_threshold</code> series 數量增長</strong>，若 exporter 未連接 ConfigMap volume 則永遠 timeout</li>
+<li><strong>scrape cycle 等待必須 ≥ 35s</strong>（2 × 15s scrape_interval + buffer）</li>
+<li>完成後自動清理合成 tenant（移除 <code>synth-*</code> key）</li>
+<li>Kind 環境 100 tenant 安全；1000+ tenant 可能撐爆記憶體</li>
+</ul>
+<h2 id="alertmanager-bench">Alertmanager Bench 注意事項<a class="headerlink" href="#alertmanager-bench" title="Permanent link">&para;</a></h2>
+<ul>
+<li>idle 狀態下 notification latency histogram 為空（無 alert 觸發）→ 需 <code>--under-load</code> 或 <code>make demo-full</code> 產生流量才有數據</li>
+<li>Alertmanager port-forward: <code>kubectl port-forward svc/alertmanager 9093:9093 -n monitoring</code></li>
+<li>關鍵 metrics: <code>alertmanager_notification_latency_seconds</code>、<code>alertmanager_alerts_received_total</code>、<code>alertmanager_nflog_maintenance_errors_total</code></li>
+</ul>
+<h2 id="reload-bench">Reload Bench 注意事項<a class="headerlink" href="#reload-bench" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>/-/reload</code> API 本身 sub-millisecond（~0.3ms）</li>
+<li><code>--apply</code> E2E 瓶頸在 kubectl API server 交互（~600ms），非 route generation 或 reload</li>
+<li><strong>sidecar 不可靠觸發</strong>：僅改 annotation 不觸發 sidecar（見 testing-playbook sidecar 行為章節）</li>
+<li>Kind 環境 E2E ~760ms；生產環境（dedicated etcd）預期 &lt; 500ms</li>
+</ul>
+<h2 id="v200">v2.0.0 功能基線注意事項<a class="headerlink" href="#v200" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Policy-as-Code、Alert Quality、Cardinality Forecasting 皆為純 Python 計算</li>
+<li>瓶頸在 Prometheus 查詢 I/O（1-3s），非運算本身</li>
+<li>pytest-benchmark 量測 in-process 效能（20 輪），CLI E2E 量測含 I/O 全鏈路</li>
+</ul>
+<hr />
+<h2 id="lessons-learned">踩坑記錄 (Lessons Learned)<a class="headerlink" href="#lessons-learned" title="Permanent link">&para;</a></h2>
+<h3 id="alertmanager-email_configsto-v200-preview4">Alertmanager email_configs.to 格式問題 (v2.0.0-preview.4)<a class="headerlink" href="#alertmanager-email_configsto-v200-preview4" title="Permanent link">&para;</a></h3>
+<p><strong>現象：</strong> Alertmanager CrashLoopBackOff，日誌顯示 <code>cannot unmarshal !!seq into string</code>。</p>
+<p><strong>根因：</strong> <code>generate_alertmanager_routes.py</code> 產生的 <code>email_configs[].to</code> 為 YAML list（<code>["addr@example.com"]</code>），但 Alertmanager 期望純字串（<code>"addr@example.com"</code>）。</p>
+<p><strong>修復：</strong> 在 route generation 時確保 <code>to</code> 欄位為 string type，而非 list。</p>
+<p><strong>延伸問題：</strong> 修復 <code>to</code> 格式後，Alertmanager 仍 crash，錯誤為 <code>no global SMTP from set</code>。需在 <code>global</code> 區塊加入 <code>smtp_from: alertmanager@example.com</code>。</p>
+<p><strong>教訓：</strong></p>
+<ul>
+<li>Alertmanager 的 email_configs schema 對型別嚴格（string vs list），YAML dump 時需注意</li>
+<li>有 email receiver 時，<code>global.smtp_from</code> 為必填</li>
+<li>測試 Alertmanager config 時，先用 <code>amtool check-config</code> 本地驗證再 patch</li>
+</ul>
+<h3 id="go-benchmark-log-output-v210-v280-a-15-codified">Go benchmark log 噪音致 output 爆量 (v2.1.0 → v2.8.0 A-15 codified)<a class="headerlink" href="#go-benchmark-log-output-v210-v280-a-15-codified" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>v2.8.0 A-15 收束</strong>：本節原約 40 行的 per-case guidance 已被 <code>scripts/tools/ops/bench_wrapper.sh</code> + <code>bench_filter.go</code> 取代為<strong>單一標準路徑</strong>。新用法：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>go-bench-clean<span class="w">                     </span><span class="c1"># 對等於原 go-bench，但 stdout 乾淨</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nv">BENCH_OUT_DIR</span><span class="o">=</span>_out<span class="w"> </span>make<span class="w"> </span>go-bench-clean<span class="w">  </span><span class="c1"># 指定輸出目錄</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nv">COUNT</span><span class="o">=</span><span class="m">3</span><span class="w"> </span>make<span class="w"> </span>go-bench-clean<span class="w">             </span><span class="c1"># 覆寫 -count</span>
+</code></pre></div>
+<p>產出：<code>bench.out.txt</code>（僅 <code>goos:</code> / <code>goarch:</code> / <code>pkg:</code> / <code>cpu:</code> / <code>BenchmarkX ns/op</code> / <code>PASS</code> / <code>FAIL</code> 行）、<code>bench.err.log</code>（log.Printf 原 stderr）、<code>bench.raw.jsonl</code>（<code>go test -json</code> 原 event stream 供 debug）。</p>
+<p>底層實作：<code>go test -bench ... -json &lt;args&gt;</code> → <code>bench_filter.go</code> 解析 JSON event，只保留「benchmark result pattern」+ 「suite header/summary」。-json 把 stdout/stderr 分流，彻底消除 log 污染。</p>
+</blockquote>
+<p><strong>以下原 v2.1.0 LL 保留為背景，供 <code>bench_wrapper.sh</code> 出問題時的 root-cause 參考：</strong></p>
+<p><strong>現象：</strong> <code>go test -bench="FullDirLoad|IncrementalLoad" -benchmem -count=5</code> 產出 ~732KB 的 stdout，benchmark 結果行被淹沒在 log 噪音中。<code>2&gt;/dev/null</code> 在某些 Docker exec 管線下無效（stdout 也被丟棄）。</p>
+<p><strong>根因：</strong> <code>fullDirLoad()</code> 和 <code>IncrementalLoad()</code> 每次呼叫都寫一行 <code>log.Printf("Config loaded ...")</code>，100 tenant × N iterations × 5 rounds = 數千行 log。</p>
+<p><strong>原修復（仍建議搭配 wrapper）：</strong> 在 benchmark 函數中加入 <code>silenceLogs(b)</code> helper：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">silenceLogs</span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">B</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nx">b</span><span class="p">.</span><span class="nx">Helper</span><span class="p">()</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nx">orig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">log</span><span class="p">.</span><span class="nx">Writer</span><span class="p">()</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">SetOutput</span><span class="p">(</span><span class="nx">io</span><span class="p">.</span><span class="nx">Discard</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nx">b</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">log</span><span class="p">.</span><span class="nx">SetOutput</span><span class="p">(</span><span class="nx">orig</span><span class="p">)</span><span class="w"> </span><span class="p">})</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>silenceLogs(b)</code> 要放在 setup <code>fullDirLoad()</code> <strong>之前</strong>（不只是 <code>b.ResetTimer()</code> 前），否則每次 benchmark invocation 的 setup phase 仍會產生 log。<code>b.Cleanup()</code> 確保 benchmark 結束後恢復正常 log 輸出。Wrapper + silenceLogs 雙層防禦：即使新 benchmark 作者忘了加 silenceLogs，wrapper 的 -json 分流也能把污染隔離到 <code>bench.err.log</code>。</p>
+<h3 id="benchmark-port-forward-v200-preview4">連續多輪 benchmark port-forward 不穩定 (v2.0.0-preview.4)<a class="headerlink" href="#benchmark-port-forward-v200-preview4" title="Permanent link">&para;</a></h3>
+<p><strong>現象：</strong> 用 for loop 連續跑 5 輪 <code>benchmark.sh --under-load</code>，第 3 輪起 Prometheus metrics 全部返回 0。</p>
+<p><strong>根因：</strong> benchmark.sh 的 cleanup trap 會 kill port-forward process，但下一輪啟動時 port-forward 可能尚未完全釋放埠號，或 Prometheus pod name 已變更（因上一輪的 ConfigMap patch 觸發 restart）。</p>
+<p><strong>解法：</strong> 每輪獨立執行（手動或間隔 30s），不要用 tight loop。或在 loop 間加入 <code>sleep 30</code> + <code>kill_port 9090</code> 確保埠號乾淨。</p>
+<hr />
+<h2 id="v280-1000-tenant-hierarchical-baseline-phase-1-b-1">v2.8.0 1000-Tenant Hierarchical Baseline (Phase 1, B-1)<a class="headerlink" href="#v280-1000-tenant-hierarchical-baseline-phase-1-b-1" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>⛔ <strong>此 baseline 非 definitive SLO 承諾</strong> ⛔</p>
+<p>本節數字為 Phase 1 synthetic fixture 量測，<strong>不能直接寫進客戶合約 SLA</strong>。definitive SLO sign-off 必須等 Phase 2 customer anonymized sample 校準後重跑（DEC-B in v2.8.0-planning §10）。下游文件（pitch deck / proposal / 客戶 onboarding 文件）若引用本節數字，<strong>必須</strong>附帶「Phase 1 synthetic baseline」前綴。</p>
+<p><strong>Pre-tag bench regression gate</strong>: Phase 1 (報告但不阻擋) 已落地。完整 3-phase rollout（含 Phase 2 main-only hard gate + Phase 3 PR-level gate 的 entry conditions / acceptance criteria / window invalidation）見 <a href="../bench-gate-rollout/"><code>bench-gate-rollout.md</code></a>。</p>
+<p><strong>Scope + honest caveats</strong>：</p>
+<ul>
+<li><strong>包含</strong>：infrastructure SLOs（scan / reload / blast-radius）+ resource metrics（heap / goroutines / virtual memory）+ 1000/2000/5000 三點 scaling characterization</li>
+<li><strong>不包含</strong>：(a) Prometheus + Alertmanager alert fire-through latency（需 full-stack e2e，Phase 2）；(b) 客戶真實 workload 校準（fixture 分布 per <code>generate_tenant_fixture.py</code> 不代表客戶 domain/region/env 比例，等 customer anonymized sample 到位後 Phase 2 re-run）</li>
+<li><strong>Variance</strong>：Dev Container CI runner timing 有 20-50% noise（observed 跨兩次重跑 same code: scan 32→51ms, FullDirLoad 146→237ms）。下節數字以 <strong>3-run min/median/max 範圍</strong>呈現。需 statistical SLO 鎖定請走 count=10+ 並排除外部 IO 干擾</li>
+</ul>
+</blockquote>
+<h3 id="_3">量測方法論<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Fixture</strong>: <code>buildDirConfigHierarchical(b, 1000)</code> — 8 domains × 6 regions × 3 envs = 144 leaf dirs，1000 tenant files（~7 per leaf），<code>_defaults.yaml</code> at L0/L1/L2/L3（4 層）</li>
+<li><strong>Harness</strong>: A-15 <code>bench_wrapper.sh</code>（PR #48 stdout-clean <code>-json</code> filter）</li>
+<li><strong>Runs</strong>: <code>-count=3 -timeout=15m</code> — 3 runs per bench for variance; report (min / median / max)</li>
+<li><strong>Env</strong>: Dev Container（Ubuntu 22.04.5 LTS / Intel Core 7 240H / Go 1.26）</li>
+<li><strong>Resource metrics</strong>: <code>runtime.GC()</code> ×2（reap finalizers）+ <code>runtime.ReadMemStats</code> → <code>HeapAlloc</code> after GC / <code>Sys</code> / <code>NumGoroutine</code></li>
+</ul>
+<h3 id="latency-baseline-1000-tenant3-run-min-median-max-ns-ms">Latency Baseline 1000-tenant（3-run min / median / max, ns → ms）<a class="headerlink" href="#latency-baseline-1000-tenant3-run-min-median-max-ns-ms" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>註</strong>：以下 1000-tenant 數字為<strong>第一次量測</strong> run（PR #59 v1）；第二次 run（v2，加 2000/5000 後重跑）數字略高（OS noise）。<strong>scaling 分析下節用第二次 run 完整數據</strong>。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Min ms</th>
+<th>Median ms</th>
+<th>Max ms</th>
+<th>Variance</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scanDirHierarchical</code> (bare walk + hash + graph)</td>
+<td>32.3</td>
+<td><strong>32.4</strong></td>
+<td>35.1</td>
+<td>8.6%</td>
+<td>純掃描熱路徑，A-10 (PR #54) 新的 WatchLoop 入口</td>
+</tr>
+<tr>
+<td><code>fullDirLoad</code> (cold load, 1000 tenants)</td>
+<td>143.0</td>
+<td><strong>146.0</strong></td>
+<td>147.0</td>
+<td>2.7%</td>
+<td>含 YAML parse + merge + populateHierarchyState</td>
+</tr>
+<tr>
+<td><code>diffAndReload</code> (no change)</td>
+<td>186.4</td>
+<td><strong>189.4</strong></td>
+<td>215.8</td>
+<td>13.9%</td>
+<td><strong>註</strong>：diffAndReload L341 最後仍會呼 <code>fullDirLoad</code> — no-change case 時間 ≈ fullDirLoad，per-tenant diff 階段只 ~5μs</td>
+</tr>
+<tr>
+<td><code>diffAndReload</code> (1 tenant file change)</td>
+<td>201.5</td>
+<td><strong>203.0</strong></td>
+<td>224.6</td>
+<td>10.2%</td>
+<td>與 NoChange 相近（dominant cost: 尾段 fullDirLoad）</td>
+</tr>
+<tr>
+<td>Blast-radius (1 region <code>_defaults.yaml</code> change, 21 tenants affected)</td>
+<td>195.8</td>
+<td><strong>212.0</strong></td>
+<td>214.3</td>
+<td>8.4%</td>
+<td>21 tenants re-merged + fullDirLoad</td>
+</tr>
+</tbody>
+</table>
+<h3 id="scaling-characterization-1000-2000-50003-run-median-ms">Scaling Characterization 1000 / 2000 / 5000（3-run median ms）<a class="headerlink" href="#scaling-characterization-1000-2000-50003-run-median-ms" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>目的</strong>：empirically 驗證「線性外推到 10000 = 2 秒可接受」這個 sharding 決策假設是否成立 — <strong>不要從單一 1000 點外推</strong>。本節用 1000 / 2000 / 5000 三點建立趨勢。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>1000</th>
+<th>2000</th>
+<th>5000</th>
+<th>1000→2000 ratio</th>
+<th>1000→5000 ratio</th>
+<th>Linearity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scanDirHierarchical</code></td>
+<td>51</td>
+<td>105</td>
+<td>273</td>
+<td><strong>2.06×</strong></td>
+<td><strong>5.35×</strong></td>
+<td>略 super-linear (~7% over linear)</td>
+</tr>
+<tr>
+<td><code>fullDirLoad</code></td>
+<td>237</td>
+<td>570</td>
+<td>1097</td>
+<td><strong>2.41×</strong></td>
+<td><strong>4.63×</strong></td>
+<td>混合（2× super-linear, 5× sub-linear；variance 影響）</td>
+</tr>
+<tr>
+<td><code>diffAndReload NoChange</code></td>
+<td>(run 中 OOM-fixture-ENOSPC)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>bench 在 5000 跑時 fixture 寫入磁碟壓力大；measurement omitted</td>
+</tr>
+<tr>
+<td><code>BlastRadius (defaults change)</code></td>
+<td>266</td>
+<td>535</td>
+<td>1308</td>
+<td><strong>2.01×</strong></td>
+<td><strong>4.92×</strong></td>
+<td>near linear</td>
+</tr>
+<tr>
+<td><code>affected-tenants</code> (BlastRadius scope)</td>
+<td>21</td>
+<td>42</td>
+<td>105</td>
+<td><strong>2.0×</strong></td>
+<td><strong>5.0×</strong></td>
+<td>嚴格 linear（geometric expectation 1 region × 3 envs × N/144 per leaf）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="_4">觀察<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h4>
+<ol>
+<li><strong>Linear-ish 但不完美</strong>：<code>scanDirHierarchical</code> 5× 規模 → 5.35× 時間（+7% over linear），<code>BlastRadius</code> 5× → 4.92× 時間（near linear）。沒有發現 O(N²) 級的劣化。</li>
+<li><strong>Memory linear</strong>：allocs/op 隨 N 線性（172K → 338K → 834K for scan）。Sys (RSS) 1000=19MB / 2000=29MB / 5000=42MB — 線性。</li>
+<li><strong>Goroutines 穩定 = 2</strong>：1000、2000、5000 都 2 個 goroutine — <strong>無 leak signal at scale</strong>。</li>
+<li><strong><code>diffAndReload NoChange</code></strong> 在 5000-tenant fixture 重跑時遇到 fixture write contention；數據 inconclusive，留 follow-up 加 count=5 重測。</li>
+</ol>
+<h4 id="10000-tenant-caveat">10000-tenant 線性外推（不是實測 — 標 caveat）<a class="headerlink" href="#10000-tenant-caveat" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>5000 實測</th>
+<th>10000 線性外推</th>
+<th>10000 +20% safety</th>
+<th>是否 acceptable for production</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scanDirHierarchical</code></td>
+<td>273 ms</td>
+<td>~550 ms</td>
+<td>~660 ms</td>
+<td>✅ acceptable（per-tick scan，scrape 15-30s 完全容忍）</td>
+</tr>
+<tr>
+<td><code>fullDirLoad</code></td>
+<td>1097 ms</td>
+<td>~2200 ms</td>
+<td>~2640 ms</td>
+<td>⚠️ borderline — Alertmanager rule reload 在 cascading batch 時可能出現 stall</td>
+</tr>
+<tr>
+<td>BlastRadius</td>
+<td>1308 ms</td>
+<td>~2620 ms</td>
+<td>~3144 ms</td>
+<td>⚠️ 同上，每 region defaults 變更需 ~3s reload</td>
+</tr>
+<tr>
+<td>Allocs / FullDirLoad</td>
+<td>4.17 M</td>
+<td>~8.3 M</td>
+<td>~10 M</td>
+<td>⚠️ Go GC pressure 提升；建議搭 GOGC tuning</td>
+</tr>
+<tr>
+<td>Memory (sys RSS)</td>
+<td>42 MB</td>
+<td>~80 MB</td>
+<td>~100 MB</td>
+<td>✅ 仍小，無記憶體瓶頸</td>
+</tr>
+</tbody>
+</table>
+<h4 id="sharding-empirical-not-extrapolated">Sharding 決策建議（empirical, not extrapolated）<a class="headerlink" href="#sharding-empirical-not-extrapolated" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>≤ 2000 tenant</strong>: 完全無瓶頸；現架構充裕應對</li>
+<li><strong>2000-5000 tenant</strong>: 可運行，但每次 reload 1-1.3 秒；批次 PR pipeline 後 cascading reload 需要 staggering</li>
+<li><strong>5000-10000 tenant</strong>:</li>
+<li><strong>可行 IF</strong> (a) 落地 <code>diffAndReload</code> skip-trailing-fullDirLoad 優化（省 ~70% reload time on no-change tick） (b) 接受 ~2-3 秒 reload latency (c) GOGC tuning</li>
+<li><strong>可行 ELSE</strong> sharding 為 2-4 個獨立 conf.d/ tree，各自 mount → 平行掃描</li>
+<li><strong>&gt; 10000</strong>: sharding 強烈建議，不再依賴單 process 路徑</li>
+</ul>
+<h4 id="_5">不要做的判斷<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h4>
+<ul>
+<li>❌ 不要從單一 1000-tenant 數字線性外推到 10000 並斷言「不需 sharding」</li>
+<li>❌ 不要把上面 "10000 線性外推" 表當實測（標 ~ 字符 + 「不是實測」明示）</li>
+<li>❌ 不要在客戶合約寫「10000 tenant 2 秒 reload」— 沒實測過</li>
+</ul>
+<h3 id="resource-baseline">Resource Baseline<a class="headerlink" href="#resource-baseline" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Heap after GC (steady state)</td>
+<td><strong>0.46-0.50 MB</strong></td>
+<td>極小 working set；GC 後</td>
+</tr>
+<tr>
+<td>Sys (total virtual)</td>
+<td><strong>18-20 MB</strong></td>
+<td>OS 視角總 VM</td>
+</tr>
+<tr>
+<td>Goroutines (benchmark steady)</td>
+<td><strong>2</strong></td>
+<td>main + test runner；無 leak signal</td>
+</tr>
+<tr>
+<td>Allocs per diff-reload op</td>
+<td>~1,000,000</td>
+<td>~1K allocs/tenant；主要 YAML parse</td>
+</tr>
+<tr>
+<td>Allocs per bare scan op</td>
+<td>~172,000</td>
+<td>~172/tenant</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-1-baseline">發現（Phase 1 baseline 量測時順手踩出）<a class="headerlink" href="#phase-1-baseline" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong><code>diffAndReload</code> NoChange/OneTenantChanged/BlastRadius 時間相近</strong>：因為 diffAndReload L341 尾段呼 <code>fullDirLoad</code> — per-tenant diff 階段快（5-50μs），但尾段 full-reload 占 dominant 150ms。<strong>Phase 2 優化候選</strong>：當 diff stage 顯示無變化時，skip 尾段 fullDirLoad 可省 ~150ms/tick</li>
+<li><strong>"Quiet defaults edit" noOp 生效</strong>：blast-radius bench 初版用 <code>container_memory</code> key（tenants 有 override）→ defaults 變更被 shadowed → <code>affected-tenants: 0</code>（對應 <code>config_debounce.go</code> L313-318 的 quiet edit detection）。改用 <code>region_alert_schedule</code>（tenants 無 override）後 → 21 affected，符合預期。<strong>Bench design 教訓</strong>：測 blast-radius 必用 tenants 不 override 的 key，否則量到的是噪音。<strong>v2.8.0 (Issue #61) production-equivalent metric</strong>：<code>b.ReportMetric("affected-tenants")</code> 對應 production 的 <code>da_config_blast_radius_tenants_affected{effect="applied"}</code> histogram；當前 bench 量到的 21/42/105 等同於 <code>_sum / _count</code> 的單一觀測值。Shadowed/cosmetic 案例在 production 由 <code>effect={shadowed,cosmetic}</code> 分流，與此 bench 互補</li>
+<li><strong><code>IncrementalLoad</code> ≠ hierarchical 熱路徑</strong>：v2.6.0 保留的 <code>IncrementalLoad</code> 使用 <code>scanDirFileHashes</code>（root-only flat），不走 hierarchical。<strong>A-10 後 production 走 WatchLoop → <code>diffAndReload</code> → <code>scanDirHierarchical</code></strong>。Benchmark 作者注意 call site 選對</li>
+</ol>
+<h3 id="phase-2-blocked">Phase 2 延伸（blocked）<a class="headerlink" href="#phase-2-blocked" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Alert fire-through e2e</strong>：需 Prometheus + Alertmanager + receiver，目前只量內部 SLO</li>
+<li><strong>Customer sample 校準</strong>：synthetic fixture 分布未必等同客戶 workload；Phase 2 帶客戶 anonymized sample re-run</li>
+<li><strong>SLO definitive sign-off</strong>：B-2 hard SLO 需 3+ 輪 customer 環境驗證</li>
+</ul>
+<hr />
+<h2 id="v280-phase-2-e2e-alert-fire-through-b-1-phase-2">v2.8.0 Phase 2 e2e Alert Fire-through (B-1 Phase 2)<a class="headerlink" href="#v280-phase-2-e2e-alert-fire-through-b-1-phase-2" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Status</strong>: 🟢 Implementation 完整 land + 首批 baseline 數字落地（synthetic-v2 1000-tenant + 5000-tenant，2026-04-26）。本節為 SSOT；design 文件已 archive。</p>
+<p><strong>archive-of</strong>: <code>archive/design/phase-b-e2e-harness.md</code> (read-only historical reference for design rationale, decision log, rejected alternatives)</p>
+<p><strong>Implementation PRs</strong>: #78 (gauges) → #79 (compose+driver) → #80 (aggregator+workflow) → #85/#86/#88/#90/#105 (cycle-1-6 RCA chain) → #112 (Tier 1 fail-fast)</p>
+<p><strong>Tier 1 fail-fast guard</strong> is now active — any future bench harness regression that produces a zero T anchor in the warm_up run will abort the workflow within ~90s instead of waiting the full 60-min timeout. See §「Tier 1 fail-fast smoke gate」below.</p>
+</blockquote>
+<h3 id="5-anchor">5-anchor 量測模型（摘要）<a class="headerlink" href="#5-anchor" title="Permanent link">&para;</a></h3>
+<p>完整 5-anchor 鏈與 stage 拆解見 <code>design/phase-b-e2e-harness.md</code> §2.5。Ops 視角速查：</p>
+<table>
+<thead>
+<tr>
+<th>Anchor</th>
+<th>Time</th>
+<th>量測來源</th>
+<th>對應 stage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>T0</strong></td>
+<td>now()</td>
+<td>driver 寫 fixture</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>T1</strong></td>
+<td>exporter <code>last_scan_complete_unixtime_seconds</code> 值</td>
+<td>本 PR (B-1.P2-a) 加的 gauge</td>
+<td>A: scan</td>
+</tr>
+<tr>
+<td><strong>T2</strong></td>
+<td>exporter <code>last_reload_complete_unixtime_seconds</code> 值</td>
+<td>本 PR (B-1.P2-a) 加的 gauge</td>
+<td>B: reload</td>
+</tr>
+<tr>
+<td><strong>T3</strong></td>
+<td>Prometheus <code>/api/v1/alerts</code> <code>activeAt</code></td>
+<td>Prom internal time</td>
+<td>C: scrape+eval</td>
+</tr>
+<tr>
+<td><strong>T4</strong></td>
+<td>receiver POST timestamp</td>
+<td>webhook receiver 記錄</td>
+<td>D: alertmanager dispatch</td>
+</tr>
+</tbody>
+</table>
+<p>stage(s) = T1−T0 (A) / T2−T1 (B) / T3−T2 (C: scrape+eval 不拆分) / T4−T3 (D)
+e2e_ms = T4 − T0</p>
+<p><strong>Ops 為何要會看 T1/T2 兩個 gauge</strong>：
+1. <strong>Production stuck-detection</strong> — <code>time() - da_config_last_scan_complete_unixtime_seconds &gt; 60</code> → scanner 卡死（gauge 永不會 backfill 過去值，所以 stale gauge 一定是 stuck，不是「忘了 emit」）
+2. <strong>E2E harness 對齊</strong> — harness driver 寫 fixture 後輪詢這兩個 gauge，看到值大於寫入 timestamp 才往下走。<strong>Driver / exporter 同 kernel clock</strong>（皆在 docker-compose 內）所以無 clock skew 問題</p>
+<h3 id="fixture-kinds-calibration-gate">Fixture kinds &amp; calibration gate<a class="headerlink" href="#fixture-kinds-calibration-gate" title="Permanent link">&para;</a></h3>
+<p>完整 calibration gate 規格見 design doc §6.5。Ops 速查：</p>
+<table>
+<thead>
+<tr>
+<th><code>fixture_kind</code></th>
+<th>來源</th>
+<th><code>gate_status</code> 預設</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>synthetic-v1</code></td>
+<td>PR #59 <code>buildDirConfigHierarchical</code> (uniform 分布)</td>
+<td><code>pending</code></td>
+<td>Phase 1 baseline，不再為 Phase 2 主基準</td>
+</tr>
+<tr>
+<td><code>synthetic-v2</code></td>
+<td>本 PR (B-1.P2-b) <code>generate_tenant_fixture.py --layout synthetic-v2</code> (Zipf+power-law 分布)</td>
+<td><code>pending</code></td>
+<td>Phase 2 主基準；customer sample 抵達前唯一 baseline；customer sample 抵達後做 ±30% 校準 gate 對照</td>
+</tr>
+<tr>
+<td><code>customer-anon</code></td>
+<td>客戶 anonymized sample（gitignored, manual 取得）</td>
+<td><code>pending</code> → <code>passed/failed/voided</code></td>
+<td>Definitive baseline 來源；填回 <code>synthetic-v2</code> 校準狀態</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Customer sample 校準操作流程</strong>（cutover 前 2 週執行；客戶 fixture 拿到後）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># 1. 把客戶 sample 解壓到 tests/e2e-bench/fixture/customer-anon/conf.d/</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#    (整個 customer-anon/ 目錄 gitignored)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>customer-sample.tar.gz<span class="w"> </span>-C<span class="w"> </span>tests/e2e-bench/fixture/customer-anon/
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># 2. 跑 e2e harness 對 customer-anon (n&gt;=30)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nv">COUNT</span><span class="o">=</span><span class="m">30</span><span class="w"> </span><span class="nv">E2E_FIXTURE_KIND</span><span class="o">=</span>customer-anon<span class="w"> </span>make<span class="w"> </span>bench-e2e<span class="w">  </span><span class="c1"># Makefile target 預定 PR-3 加</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># 3. 比對最近一次 synthetic-v2 P95 — gate 通過條件:</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1">#    customer-anon P95 與 synthetic-v2 P95 差距 ≤30%</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>python3<span class="w"> </span>scripts/tools/dx/compare_e2e_baseline.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span>--customer<span class="w"> </span>bench-results/e2e-customer-anon-*.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span>--baseline<span class="w"> </span>bench-results/e2e-synthetic-v2-*.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">    </span>--threshold-pct<span class="w"> </span><span class="m">30</span><span class="w">  </span><span class="c1"># PR-3 預定加的工具</span>
+</code></pre></div>
+<p>通過後填回 synthetic-v2 對應 run 的 <code>gate_status: "passed"</code>（calibration confirmed）；失敗則 <code>gate_status: "voided"</code> 並在本節章節加紅框。</p>
+<p><strong>Kill switch</strong>：v2.9.0 cut 前若 customer sample 未抵達，強制 go/no-go review — 要嘛 explicit 接受 synthetic-v2 為定案 baseline（含 fixture 假設文件化），要嘛 rescope phase 2。詳 design doc §6.5 + §11。</p>
+<h3 id="implementation-tracker">Implementation 進度 tracker<a class="headerlink" href="#implementation-tracker" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>子項</th>
+<th>內容</th>
+<th>狀態</th>
+<th>PR</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>B-1.P2-a</strong></td>
+<td>exporter timestamp gauges (<code>last_{scan,reload}_complete_unixtime_seconds</code>)</td>
+<td>🟢</td>
+<td>PR #78</td>
+</tr>
+<tr>
+<td><strong>B-1.P2-b</strong></td>
+<td><code>generate_tenant_fixture.py --layout synthetic-v2</code> (Zipf+power-law)</td>
+<td>🟢</td>
+<td>PR #78</td>
+</tr>
+<tr>
+<td><strong>B-1.P2-c</strong></td>
+<td>docker-compose stack (exporter + Prometheus + Alertmanager + pushgateway + receiver)</td>
+<td>🟢</td>
+<td>PR #79</td>
+</tr>
+<tr>
+<td><strong>B-1.P2-d</strong></td>
+<td>host driver (5-anchor 量測 + run isolation + fire+resolve 對稱)</td>
+<td>🟢</td>
+<td>PR #79</td>
+</tr>
+<tr>
+<td><strong>B-1.P2-e</strong></td>
+<td>n≥30 aggregation + bootstrap 95% CI + output JSON <code>fixture_kind</code>/<code>gate_status</code></td>
+<td>🟢</td>
+<td>本 PR (PR-3)</td>
+</tr>
+<tr>
+<td><strong>B-1.P2-f</strong></td>
+<td><code>make bench-e2e</code> + <code>bench-e2e-record.yaml</code> workflow (main only, manual dispatch)</td>
+<td>🟢</td>
+<td>本 PR (PR-3)</td>
+</tr>
+<tr>
+<td><strong>B-1.P2-g</strong></td>
+<td>playbook 完整章節（含實測數字 + customer-sample calibration flow）</td>
+<td>🟢 完整 land — ops flow + 首批 1000+5000 baseline 數字（2026-04-26 main workflow_dispatch runs 24951460457 + 24955478536）+ design doc archived</td>
+<td>PR #80 (skeleton) + S#37 (numbers + design archive)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="baseline-b-1p2-f">跑一輪 baseline 速查（B-1.P2-f）<a class="headerlink" href="#baseline-b-1p2-f" title="Permanent link">&para;</a></h3>
+<p><strong>Local（local-only per design §8.1，5-8 min wall-clock）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Default: synthetic-v2, 1000 tenants, 30 runs.</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>make<span class="w"> </span>bench-e2e
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Override fixture / count / seed.</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nv">COUNT</span><span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="nv">E2E_FIXTURE_KIND</span><span class="o">=</span>synthetic-v1<span class="w"> </span><span class="nv">FIXTURE_TENANT_COUNT</span><span class="o">=</span><span class="m">500</span><span class="w"> </span>make<span class="w"> </span>bench-e2e
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># Customer-anon vs latest synthetic-v2 baseline (calibration gate ±30%):</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="nv">BASELINE_GLOB</span><span class="o">=</span><span class="s1">&#39;tests/e2e-bench/bench-results/e2e-*-synthetic-v2.json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nv">E2E_FIXTURE_KIND</span><span class="o">=</span>customer-anon<span class="w"> </span>make<span class="w"> </span>bench-e2e
+</code></pre></div>
+<p><strong>CI（main only, manual dispatch）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Trigger from CLI (must be on main branch).</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>bench-e2e-record.yaml<span class="w"> </span>-f<span class="w"> </span><span class="nv">fixture_kind</span><span class="o">=</span>synthetic-v2<span class="w"> </span>-f<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">30</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># Inputs: fixture_kind / count / fixture_tenant_count.</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Artifacts retained 30 days; gate_banner surfaces in run summary.</span>
+</code></pre></div>
+<h3 id="tier-1-fail-fast-smoke-gatecycle-6-rca-issue-83-s37d">Tier 1 fail-fast smoke gate（cycle-6 RCA 後加，issue #83 §S#37d）<a class="headerlink" href="#tier-1-fail-fast-smoke-gatecycle-6-rca-issue-83-s37d" title="Permanent link">&para;</a></h3>
+<p>Driver 跑完 warm_up run 0 後立刻檢查 <code>per-run-0000.json</code> 的 5 個 T anchor — 任一為 0（== 沒觀察到）→ exit code 2 → <code>--abort-on-container-exit driver</code> → <code>bench_e2e_run.sh</code> 整段失敗 → workflow 在 ~2 min（而非 30-60 min timeout）內 fail。<strong>之前 6 個 cycle 每個都浪費 30+ min wall-clock 才 timeout；Tier 1 把這個延遲縮到 ~90s</strong>。</p>
+<p><strong>對應信號</strong>（v2.8.0 Track A A8 起，driver SMOKE FAIL 輸出以 <code>fire.&lt;anchor&gt;</code> / <code>resolve.&lt;anchor&gt;</code> 前綴標示 phase；phase 名稱即運行時看到的 key）：</p>
+<p>Fire phase（fixture 寫入 → alert dispatch，全 5 anchors 必須非 0）:
+- <code>fire.T1=0</code>：exporter scan-complete gauge 從未 advance（multi-tenant 大 fixture cold-load 沒撐過 <code>wait_for_services</code> 的 60s window）
+- <code>fire.T2=0</code>：reload gauge 從未 advance（content hash 同前次 → diffAndReload short-circuit）
+- <code>fire.T3=0</code>：Prometheus alert <code>activeAt</code> 沒前進（label/expr mismatch、defaults 未載入、tenant 沒 register <code>bench_trigger</code>）
+- <code>fire.T4=0</code>：webhook receiver 沒收到 fire POST（Alertmanager 路由斷或 alert 沒持續到 dispatch）</p>
+<p>Resolve phase（fixture 不變、driver push 低值、alert 應 resolve；T1/T2 在 <code>stage_ab_skipped: True</code> 路徑跳過合理，只檢 T0/T3/T4）:
+- <code>resolve.T0=0</code>：driver 沒記錄 resolve phase 起始時間（driver 內部 bug，少見）
+- <code>resolve.T3=0</code>：Prometheus alert <code>activeAt</code> 沒被 evict / state 沒進 resolve（rule TTL 設太短或 <code>for: 0s</code> 與 expression 互動異常）
+- <code>resolve.T4=0</code>：webhook receiver 沒收到 resolve POST（<strong>Alertmanager <code>send_resolved: false</code> 是最常見原因</strong>；其次是 <code>inhibit_rules</code> 把 resolve 也 inhibit 掉了）</p>
+<p><strong>診斷工件</strong>：workflow 失敗時自動把 <code>docker compose logs threshold-exporter / prometheus / alertmanager / receiver / driver</code> dump 到 <code>bench-results/*.log</code>，與 <code>per-run-0000.json</code> 一起 upload artifact。Exporter <code>WARN: skip unparseable file</code> / <code>WARN: tenant=X: unknown key</code> 兩條是最高訊息密度的線索。</p>
+<p><strong>Opt-out</strong>：本機 debug harness 本身（不是想抓 cycle-6 那種）想看完整 30 runs 的 timeline，加 <code>--no-smoke-abort</code> 或 <code>NO_SMOKE_ABORT=1</code>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Driver 預設 ON；只在診斷 driver 自己時 opt-out</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nv">NO_SMOKE_ABORT</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">COUNT</span><span class="o">=</span><span class="m">3</span><span class="w"> </span>make<span class="w"> </span>bench-e2e
+</code></pre></div>
+<h3 id="aggregator-gate-banner">Aggregator 輸出與 gate banner<a class="headerlink" href="#aggregator-gate-banner" title="Permanent link">&para;</a></h3>
+<p><code>make bench-e2e</code> 完工後（或 <code>make bench-e2e-aggregate</code> 對既有 per-run JSONs 重算），在 <code>tests/e2e-bench/bench-results/</code> 產出 <code>e2e-{ISO}-{kind}.json</code>，schema：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;generated_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-26T00:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;fixture_kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synthetic-v2&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="nt">&quot;n_runs_total&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="nt">&quot;gate_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pending&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span><span class="nt">&quot;gate_banner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;🟡 synthetic-v2 pending customer-anon validation; baseline not yet calibrated against real workload&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="nt">&quot;gate_threshold_pct&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span><span class="nt">&quot;baseline_p95_fire&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span><span class="nt">&quot;fire&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="nt">&quot;n_valid&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">    </span><span class="nt">&quot;e2e_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">      </span><span class="nt">&quot;p50&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4145</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;p95&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4280</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;p99&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4290</span><span class="p">,</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">      </span><span class="nt">&quot;p50_ci95&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">4135</span><span class="p">,</span><span class="w"> </span><span class="mi">4150</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;p95_ci95&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">4220</span><span class="p">,</span><span class="w"> </span><span class="mi">4290</span><span class="p">],</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="w">      </span><span class="nt">&quot;ci_too_wide&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">    </span><span class="nt">&quot;stage_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;A&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;p95&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">},</span><span class="w"> </span><span class="nt">&quot;B&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;p95&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">145</span><span class="p">},</span><span class="w"> </span><span class="nt">&quot;C&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;p95&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4255</span><span class="p">},</span><span class="w"> </span><span class="nt">&quot;D&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;p95&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">}},</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="w">    </span><span class="nt">&quot;stage_c_histogram&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;le&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5000</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">},</span><span class="w"> </span><span class="err">...</span><span class="p">]</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="w">  </span><span class="nt">&quot;resolve&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Banner 渲染矩陣</strong>（per design §6.5）：</p>
+<table>
+<thead>
+<tr>
+<th><code>fixture_kind</code> × <code>gate_status</code></th>
+<th>Banner</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>synthetic-v*</code> × <code>pending</code></td>
+<td>🟡 「pending customer-anon validation」(synthetic-v* 永遠 pending — 只有 customer-anon 能 flip)</td>
+</tr>
+<tr>
+<td><code>customer-anon</code> × <code>pending</code></td>
+<td>⚠️ 「baseline 未到位 — 先跑 synthetic-v2 再重 aggregate」</td>
+</tr>
+<tr>
+<td><code>customer-anon</code> × <code>passed</code></td>
+<td>✅ 「calibration passed: customer P95 X ms 在 ±30% of synthetic-v2 P95 Y ms」</td>
+</tr>
+<tr>
+<td><code>customer-anon</code> × <code>failed</code></td>
+<td>❌ 「calibration failed: synthetic-v2 baseline marked voided, all external references must be reviewed」</td>
+</tr>
+</tbody>
+</table>
+<h3 id="customer-sample-calibration-gate-operational-flow">Customer sample calibration gate operational flow<a class="headerlink" href="#customer-sample-calibration-gate-operational-flow" title="Permanent link">&para;</a></h3>
+<p>當 customer anonymized sample 抵達後：</p>
+<ol>
+<li>解壓 sample 到 <code>tests/e2e-bench/fixture/customer-anon/conf.d/</code>（<code>gitignored</code>，never commit；詳 <code>tests/e2e-bench/fixture/customer-anon/README.md</code>）</li>
+<li>確保有最近一次 synthetic-v2 baseline aggregate JSON 存在（若無，先跑 <code>make bench-e2e</code> with default fixture）</li>
+<li>跑 customer-anon harness with baseline glob:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">BASELINE_GLOB</span><span class="o">=</span><span class="s1">&#39;tests/e2e-bench/bench-results/e2e-*-synthetic-v2.json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="nv">E2E_FIXTURE_KIND</span><span class="o">=</span>customer-anon<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span>make<span class="w"> </span>bench-e2e
+</code></pre></div></li>
+<li>看 banner：</li>
+<li><code>passed</code> → 該批 customer-anon run 標 <code>gate_status: "passed"</code>；最近一次 synthetic-v2 P95 retroactively 標 calibration confirmed（可手動 commit a JSON sidecar 標記）</li>
+<li><code>failed</code> → 兩件事必做：(a) synthetic-v2 baseline 標 <code>voided</code>，(b) playbook 本節加紅色 banner，(c) 評估 fixture 假設要怎麼修</li>
+<li>若 <code>failed</code>，下個 phase planning 必須含「fixture 校正」工作項（synthetic-v2 的 Zipf alpha / power-law alpha / size 範圍 sweep）</li>
+</ol>
+<h3 id="kill-switch-v290-cut-customer-sample">Kill switch — v2.9.0 cut 前 customer sample 未抵達<a class="headerlink" href="#kill-switch-v290-cut-customer-sample" title="Permanent link">&para;</a></h3>
+<p>Per design §6.5 + §11：v2.9.0 cut 前若 customer sample 未抵達，<strong>強制 go/no-go review</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>選項</th>
+<th>後果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Explicit 接受 synthetic-v2 為定案 baseline</td>
+<td>必須在 <code>pitch-deck-talking-points.md</code> + <code>docs/benchmarks.md</code> 雙處明寫「baseline derived from synthetic-v2 fixture; not customer-validated」disclaimer，DEC-B 在無 customer-data 條件下 sign-off</td>
+</tr>
+<tr>
+<td>Rescope phase 2</td>
+<td>把 customer sample 從 acceptance criteria 移除；e2e harness 仍交付但<strong>不</strong>列為 SLO 來源；DEC-B 延 v2.9.0</td>
+</tr>
+</tbody>
+</table>
+<p>決策時間點：v2.9.0 release-please cut 前 4 週 maintainer review。</p>
+<h3 id="baseline-synthetic-v2-main-workflow_dispatch-2026-04-26">首批 baseline 數字（synthetic-v2 main workflow_dispatch, 2026-04-26）<a class="headerlink" href="#baseline-synthetic-v2-main-workflow_dispatch-2026-04-26" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Source</strong>: <code>gh workflow run bench-e2e-record.yaml</code> on <code>main</code>, <code>n=30</code> runs each (warm_up + 30 measured).</p>
+<table>
+<thead>
+<tr>
+<th>Fixture</th>
+<th>Tenants</th>
+<th>Run</th>
+<th>n</th>
+<th>fire P50</th>
+<th>fire P95</th>
+<th>fire P99</th>
+<th>resolve P50</th>
+<th>resolve P95</th>
+<th>resolve P99</th>
+<th>gate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>synthetic-v2</td>
+<td>1000</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/24951460457">24951460457</a></td>
+<td>30</td>
+<td>4748.5 ms</td>
+<td>4953.95 ms</td>
+<td>4977.88 ms</td>
+<td>4766.0 ms</td>
+<td>4974.5 ms</td>
+<td>4985.39 ms</td>
+<td>🟡 pending</td>
+</tr>
+<tr>
+<td>synthetic-v2</td>
+<td>5000</td>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/24955478536">24955478536</a></td>
+<td>30</td>
+<td>4763.5 ms</td>
+<td>4971.55 ms</td>
+<td>4984.07 ms</td>
+<td>3769.5 ms</td>
+<td>3985.2 ms</td>
+<td>3996.71 ms</td>
+<td>🟡 pending</td>
+</tr>
+<tr>
+<td>customer-anon</td>
+<td>TBD</td>
+<td>(待 sample 抵達)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>⚠️ awaiting sample</td>
+</tr>
+</tbody>
+</table>
+<p>Bootstrap 95% CI not too wide on either run (<code>ci_too_wide: false</code>).</p>
+</blockquote>
+<p><strong>Stage breakdown</strong> (fire phase P95):</p>
+<table>
+<thead>
+<tr>
+<th>tenants</th>
+<th>A (scan)</th>
+<th>B (reload)</th>
+<th>C (scrape+eval)</th>
+<th>D (dispatch)</th>
+<th>total ≈</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1000</td>
+<td>1440.5 ms</td>
+<td>1000.0 ms</td>
+<td>3305.0 ms</td>
+<td>3.0 ms</td>
+<td>4953.95</td>
+</tr>
+<tr>
+<td>5000</td>
+<td>3663.55 ms</td>
+<td>2000.0 ms</td>
+<td>0.0 ms</td>
+<td>3.0 ms</td>
+<td>4971.55</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Observations</strong>:</p>
+<ol>
+<li><strong>Near-flat e2e at P95 across 1000 → 5000 tenants</strong> (+0.4% on fire P95, +0.4% on fire P99). The e2e latency is dominated by the 5s scrape quantization (Stage C in 1000-tenant; absorbed into A+B in 5000-tenant — see note 3), exactly the floor design §5.4 predicted.</li>
+<li><strong>Stage A and B scale ~2.5× and 2× from 1000 → 5000</strong> (scan walks more files; reload diff range is wider). Both scale within <code>ResolveAt</code> per-tenant linear cost expectation. The increase is hidden inside the scrape window.</li>
+<li><strong>Stage C = 0 ms at 5000-tenant</strong> is an artifact, not zero scrape time. With wider Stage A+B, the alert's <code>activeAt</code> (T3) sometimes lands BEFORE the post-reload scrape that produces T2 — Stage C = max(T3 − T2, 0). Real scrape latency is still ~5s but it's hidden in A+B; the e2e number (T4 − T0) is unaffected. Tier 2 follow-up could either redefine Stage C or document that Stage C → 0 means "T2 lagged T3" rather than "scrape was instant".</li>
+<li><strong>Resolve faster than fire at 5000-tenant</strong> (3985 vs 4971 ms P95) is real — resolve only has Stage C+D (Stage A+B skipped because no fixture mutation), so it bypasses the wide scan window.</li>
+<li><strong>Gate status <code>pending</code> for both rows</strong> is the design (synthetic-v2 → pending until customer-anon validation per design §6.5; the row will flip to <code>passed</code> / <code>voided</code> retroactively when customer-anon lands).</li>
+</ol>
+<h3 id="design-9-acceptance-follow-ups">已完成的 design §9 acceptance follow-ups<a class="headerlink" href="#design-9-acceptance-follow-ups" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>§</th>
+<th>Item</th>
+<th>Done in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>§9.3</td>
+<td>1000-tenant + 5000-tenant × 30 runs baseline</td>
+<td>S#37 (this PR) — see §「首批 baseline 數字」above</td>
+</tr>
+<tr>
+<td>§9.4</td>
+<td>Design doc archive</td>
+<td>S#37 (this PR) — moved to <code>archive/design/phase-b-e2e-harness.md</code>; this section now SSOT</td>
+</tr>
+</tbody>
+</table>
+<p>剩餘 follow-up（不阻擋 v2.8.0 ship）：</p>
+<ul>
+<li><strong>Customer-anon sample 抵達後 calibration gate run</strong> — 客戶 sample 還未抵達；待抵達後 maintainer 跑 <code>BASELINE_GLOB=... E2E_FIXTURE_KIND=customer-anon make bench-e2e</code>，把 customer-anon row 數字填入上表，並 retroactively 標 synthetic-v2 row <code>gate_status</code> 為 <code>passed</code> / <code>voided</code>。詳 §「Customer sample calibration gate operational flow」。</li>
+<li><strong>Stage C 渲染語意</strong> — 5000-tenant Stage C=0 是觀測 artifact 不是真零；考慮 Tier 2 follow-up 改用 <code>max(T3-T2, T1-T0)</code> 或 explicit "absorbed-into-AB" 標記。</li>
+</ul>
+<h3 id="fixture-b-1p2-b">產出 fixture 速查（B-1.P2-b）<a class="headerlink" href="#fixture-b-1p2-b" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Synthetic-v2 (Zipf+power-law skews; B-1 Phase 2 主基準)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python3<span class="w"> </span>scripts/tools/dx/generate_tenant_fixture.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span>--layout<span class="w"> </span>synthetic-v2<span class="w"> </span>--count<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--with-defaults<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span>--output<span class="w"> </span>tests/e2e-bench/fixture/synthetic-v2/conf.d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span>--seed<span class="w"> </span><span class="m">42</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># Synthetic-v1 (uniform; PR #59 baseline reuse, 不變)</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>python3<span class="w"> </span>scripts/tools/dx/generate_tenant_fixture.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">    </span>--layout<span class="w"> </span>hierarchical<span class="w"> </span>--count<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--with-defaults<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">    </span>--output<span class="w"> </span>tests/e2e-bench/fixture/synthetic-v1/conf.d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">    </span>--seed<span class="w"> </span><span class="m">42</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="c1"># Customer-anon (manual; 不在 generator 範圍 — 客戶 sample 解壓後直接放)</span>
+</code></pre></div>
+<h3 id="baseline">重跑本 baseline 指令<a class="headerlink" href="#baseline" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># In Dev Container:</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nb">cd</span><span class="w"> </span>/workspaces/vibe-k8s-lab/components/threshold-exporter/app
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nv">BENCH_OUT_DIR</span><span class="o">=</span>/tmp/b1_out<span class="w"> </span>bash<span class="w"> </span>/workspaces/vibe-k8s-lab/scripts/tools/ops/bench_wrapper.sh<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span>-run<span class="o">=</span><span class="s1">&#39;^$&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span>-bench<span class="o">=</span><span class="s1">&#39;BenchmarkFullDirLoad_Hierarchical_1000|BenchmarkDiffAndReload_Hierarchical_1000_NoChange|BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged|BenchmarkScanDirHierarchical_1000|BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span>-benchmem<span class="w"> </span>-count<span class="o">=</span><span class="m">3</span><span class="w"> </span>-timeout<span class="o">=</span>15m<span class="w"> </span>.
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>cat<span class="w"> </span>/tmp/b1_out/bench.out.txt
+</code></pre></div>
+<hr />
+<blockquote>
+<p>本文件從 <a href="../testing-playbook/">Testing Playbook</a> § Performance Benchmark 獨立拆分（v2.0.0-preview.4）。</p>
+</blockquote>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

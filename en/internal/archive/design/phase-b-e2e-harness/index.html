@@ -1,0 +1,3686 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/design/phase-b-e2e-harness/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../../../internal/archive/design/phase-b-e2e-harness/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Phase 2 E2E Harness — Alert Fire-through Latency Design (archived) - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-2-e2e-harness-alert-fire-through-latency-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Phase 2 E2E Harness — Alert Fire-through Latency Design (archived)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../../../internal/archive/design/phase-b-e2e-harness/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-background-phase-1-vs-phase-2-framing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Background — Phase 1 vs Phase 2 framing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Background — Phase 1 vs Phase 2 framing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-phase-1-infrastructure-slo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 Phase 1 已測量項目（infrastructure SLO）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 Phase 1 缺口
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-why-design-doc-lands-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 Why design doc lands first
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-goal-5-anchor-measurement-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Goal — 5-Anchor Measurement Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Goal — 5-Anchor Measurement Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 設計原則
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-5-anchor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 5-Anchor 圖
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-stage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Stage 分解
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-fire-resolve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Fire + Resolve 對稱量測
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-output-json-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5 Output JSON Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-hidden-prerequisite-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6 Hidden prerequisite — exporter 改動
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-architecture-choice-docker-compose-not-k3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Architecture choice — docker-compose, NOT k3d
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Architecture choice — docker-compose, NOT k3d">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 決策
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Rationale
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-compose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Compose 骨架
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-pre-canned-alert-ruleactual-vs-threshold-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Pre-canned alert rule（actual vs threshold 雙 metric 模型）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-alertmanager-webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 Alertmanager → webhook
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-measurement-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Measurement protocol
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Measurement protocol">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-pre-flightfixture-pre-creation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Pre-flight：fixture pre-creation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-single-run-protocolfire-resolve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Single-run protocol（fire + resolve 對稱）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-run-loop-with-warm-up-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Run-loop with warm-up handling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-stage-c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 為什麼 stage C 要顯示直方圖
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-customer-sample-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Customer sample protocol
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Customer sample protocol">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-customer-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 為何要 customer sample
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 Sample 需求（要傳達給客戶）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-repository-convention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 Repository convention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 Fallback 行為
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-calibration-gatehard-blocker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.5 Calibration gate（取代「hard blocker」模型）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-implementation-outline-contract-not-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Implementation outline — contract not code
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Implementation outline — contract not code">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-input-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Input contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-output-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 Output contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-reference-directory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Reference directory layout（建議，不強制）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-receivermaingo-reference90" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.4 receiver/main.go reference（~90 行）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#75-driverdriverpy-reference150" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.5 driver/driver.py reference（~150 行）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Open questions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Open questions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-should-the-harness-run-in-ci-or-local-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 Should the harness run in CI or local-only?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-trigger-metric-injection-pushgateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 Trigger metric injection — pushgateway 確認
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-webhook-receiver-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.3 Webhook receiver authentication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#84-run-baseline-5000-tenant-fixture-too" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.4 Run baseline 5000-tenant fixture too?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#85-p95-confidence-interval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.5 P95 confidence interval 怎麼報？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-acceptance-criteria-for-follow-up-implementation-pr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Acceptance criteria for follow-up implementation PR
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Acceptance criteria for follow-up implementation PR">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Code 改動
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 量測協定
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-output-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Output 與 CI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.4 文件
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#95" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.5 品質閘門
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-relation-to-existing-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Relation to existing infrastructure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-phase-25-phase-3-follow-upout-of-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Phase 2.5 / Phase 3 follow-up（out of scope）
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關資源
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">archived</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">benchmark</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">design</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">internal</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">phase-b</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/archive/design/phase-b-e2e-harness.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/archive/design/phase-b-e2e-harness.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<blockquote>
+<p>⚠️ <strong>ARCHIVED 2026-04-26</strong> — design doc for the e2e harness is archived
+after implementation completed and first baselines landed. See
+<code>docs/internal/benchmark-playbook.md</code> §v2.8.0 Phase 2 e2e for the
+living ops content (including the 1000-tenant + 5000-tenant baseline
+numbers). The design rationale, decision log, and rejected
+alternatives below are preserved for historical reference only — do
+not edit. RCA chain that retroactively challenged design §8.1's
+"first-real-run surprise is accepted cost" premise: see archive
+§S#37d (6-cycle RCA) and §S#45 (Tier 1 fail-fast follow-up).</p>
+</blockquote>
+<h1 id="phase-2-e2e-harness-alert-fire-through-latency-design">Phase 2 E2E Harness — Alert Fire-through Latency Design<a class="headerlink" href="#phase-2-e2e-harness-alert-fire-through-latency-design" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>受眾</strong>：Maintainers、Platform Engineers
+<strong>版本</strong>：v2.7.0（草案 → v2.8.0 phase .b 完整 land）
+<strong>狀態</strong>：<code>archived</code> — 實作完成 (PR #78/#79/#80/#85/#86/#88/#90/#105/#112) + 首批 baseline 落地，本文件停留在最後 implementation 完成時的狀態，後續變更請改 <code>benchmark-playbook.md</code></p>
+<p><strong>相關文件</strong>：<a href="../../../benchmark-playbook/">Benchmark Playbook</a> · <a href="../../../../architecture-and-design/">Architecture &amp; Design</a> · <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/pull/59">PR #59 Phase 1 baseline</a></p>
+</blockquote>
+<p>本文件描述 Phase 2 alert fire-through 端到端 (e2e) latency harness 的設計。Phase 1（PR #59，merge <code>f1f14e7</code>，2026-04-25）已完成 1000/2000/5000-tenant hierarchical baseline 對「reload 自身」的測量，但<strong>沒有</strong>涵蓋從 config change 到 alert dispatched 的完整路徑。本文件先行 land，使 implementation PR 在 design contract 確立後可立即推進。</p>
+<hr />
+<h2 id="1-background-phase-1-vs-phase-2-framing">1. Background — Phase 1 vs Phase 2 framing<a class="headerlink" href="#1-background-phase-1-vs-phase-2-framing" title="Permanent link">&para;</a></h2>
+<h3 id="11-phase-1-infrastructure-slo">1.1 Phase 1 已測量項目（infrastructure SLO）<a class="headerlink" href="#11-phase-1-infrastructure-slo" title="Permanent link">&para;</a></h3>
+<p>Phase 1（B-1 Phase 1 + B-8，PR #59）量測的是 threshold-exporter <strong>reload 路徑本身</strong>的耗時，全部停在 exporter 內部：</p>
+<table>
+<thead>
+<tr>
+<th>Benchmark</th>
+<th>量測對象</th>
+<th>Phase 1 結果（1000-tenant 中位數）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BenchmarkScanDirHierarchical</code></td>
+<td>bare scan（只走目錄、無解析）</td>
+<td>32 ms</td>
+</tr>
+<tr>
+<td><code>BenchmarkFullDirLoad_Hierarchical</code></td>
+<td>parse + merge <code>_defaults.yaml</code> 鏈</td>
+<td>146 ms</td>
+</tr>
+<tr>
+<td><code>BenchmarkDiffAndReload_Hierarchical_NoChange</code></td>
+<td>每 tick reload（quiet path）</td>
+<td>189 ms</td>
+</tr>
+<tr>
+<td><code>BenchmarkBlastRadius_DefaultsChange_Hierarchical</code></td>
+<td>defaults 改變 → affected count（21）</td>
+<td>212 ms</td>
+</tr>
+</tbody>
+</table>
+<p>詳見 <a href="../../../benchmark-playbook/"><code>benchmark-playbook.md</code> § v2.8.0 1000-Tenant Hierarchical Baseline</a>。</p>
+<h3 id="12-phase-1">1.2 Phase 1 缺口<a class="headerlink" href="#12-phase-1" title="Permanent link">&para;</a></h3>
+<p>Phase 1 <strong>沒有</strong>測量 alert fire-through。客戶 (end customer) 真正關心的 SLO 是：</p>
+<blockquote>
+<p><strong>「從 operator 改 config → 對應 alert 從 webhook 收到」</strong>有多快？</p>
+</blockquote>
+<p>而<strong>不是</strong>「從 config change → exporter <code>/effective</code> endpoint 反映新值」。完整路徑橫跨四個獨立服務：exporter、Prometheus、Alertmanager、webhook receiver。Phase 1 只覆蓋到 exporter 出口；剩下三段是 Phase 2 範圍。</p>
+<p>Phase 2 的目的是把這個盲區量化：<strong>operator-perceived latency = T4 − T0</strong>（5-anchor 模型，見 §2）。</p>
+<h3 id="13-why-design-doc-lands-first">1.3 Why design doc lands first<a class="headerlink" href="#13-why-design-doc-lands-first" title="Permanent link">&para;</a></h3>
+<p>Phase 2 implementation 涉及四個獨立 service 的 wiring + 量測協定，在沒有確立 design contract（time anchors / output schema / trigger model）前直接寫 code 風險高。先把 design doc land，可以：</p>
+<ul>
+<li>把 architecture choice (docker-compose vs k3d) 的論證固化，避免實作中重開戰場。</li>
+<li>鎖住 measurement model，避免實作者各自詮釋 7 種「scrape timestamp」。</li>
+<li>讓 follow-up implementation PR 的 acceptance criteria 早早可審。</li>
+</ul>
+<hr />
+<h2 id="2-goal-5-anchor-measurement-model">2. Goal — 5-Anchor Measurement Model<a class="headerlink" href="#2-goal-5-anchor-measurement-model" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 設計原則<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<p>原 7-anchor 模型（v1 草稿）的根本問題是把 <strong>interval-quantized observation</strong> 當作 <strong>point-in-time event</strong>。Prometheus 的 scrape interval 與 evaluation interval 是兩個<strong>獨立</strong>的離散時間網格 — 兩者間 0 到 1× scrape_interval 的「相位差」是隨機的、不是 stage。</p>
+<p>新 5-anchor 模型遵守三條規則：</p>
+<ol>
+<li><strong>能由 emitter 自己記時的，不靠 observer</strong>（exporter 自己 emit timestamp gauge，不靠 Prometheus scrape time）</li>
+<li><strong>interval-quantized 的東西塌成單一 stage</strong>（不假裝 scrape 與 eval 是兩個獨立 stage）</li>
+<li><strong>所有 anchor 在同一 kernel clock domain</strong>（driver 進 compose，不在 host 端）</li>
+</ol>
+<h3 id="22-5-anchor">2.2 5-Anchor 圖<a class="headerlink" href="#22-5-anchor" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>   ┌─────────────────────┐  T0 ← driver wall-clock (config write begins)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>   │  driver (Python)    │  T4 ← driver polls receiver, gets wall-clock
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>   └──────────┬──────────┘
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>              │ write file
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>              ▼
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>   ┌─────────────────────┐  T1 ← exporter wall-clock, exposed as gauge:
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>   │  threshold-exporter │       last_scan_complete_unixtime_seconds
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>   │                     │  T2 ← exporter wall-clock, exposed as gauge:
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>   │                     │       last_reload_complete_unixtime_seconds
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>   │  /metrics exposes:  │
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>   │    last_scan_*      │
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>   │    last_reload_*    │
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>   │    tenant_threshold_value{...}
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>   │    actual_metric_value{...}  ← from pushgateway
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>   └──────────┬──────────┘
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>              │ Prometheus scrapes (5s)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>              ▼
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>   ┌─────────────────────┐  T3 ← driver polls /api/v1/alerts
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>   │  Prometheus         │       reads `activeAt` from response
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>   │  rule eval (5s)     │       (alert 第一次進 firing 的時點)
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>   └──────────┬──────────┘
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>              │ POST alert
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>              ▼
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>   ┌─────────────────────┐
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>   │  Alertmanager       │  (無獨立 anchor; AM→webhook 併入 stage D)
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>   │  group_wait: 0s     │
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>   └──────────┬──────────┘
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>              │ POST webhook
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>              ▼
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>   ┌─────────────────────┐  T4 ← receiver wall-clock
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>   │  receiver           │       (driver 接著 GET /last-post 取得)
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>   └─────────────────────┘
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>   所有 service 共用 host kernel clock（同一 docker daemon）→ 無 skew。
+</code></pre></div>
+<h3 id="23-stage">2.3 Stage 分解<a class="headerlink" href="#23-stage" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>範圍</th>
+<th>量測對象</th>
+<th>預期數量級</th>
+<th>Regression 訊號</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A</strong></td>
+<td>T1 − T0</td>
+<td>fsnotify pickup（OS 通知 exporter 檔案變動）</td>
+<td>ms</td>
+<td>OS / mount 層問題</td>
+</tr>
+<tr>
+<td><strong>B</strong></td>
+<td>T2 − T1</td>
+<td>parse + merge <code>_defaults.yaml</code> + <code>diffAndReload</code></td>
+<td>100 ms 級（<strong>Phase 1 baseline 領域</strong>）</td>
+<td>exporter 內部 regression</td>
+</tr>
+<tr>
+<td><strong>C</strong></td>
+<td>T3 − T2</td>
+<td>Prometheus dispatch（<strong>scrape boundary + eval boundary 糾纏</strong>；0–2× scrape_interval）</td>
+<td>0–10 s（5s scrape × 2）</td>
+<td>scrape_interval 設定議題，<strong>非</strong> exporter</td>
+</tr>
+<tr>
+<td><strong>D</strong></td>
+<td>T4 − T3</td>
+<td>Alertmanager 收 alert + dispatch + webhook 抵達</td>
+<td>ms</td>
+<td>AM / network</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Stage C 為何不拆</strong>：scrape interval 與 evaluation interval 獨立 — alert 從「Prometheus 有資料」到「alert 進 firing」之間是 0 到 1× evaluation_interval 的隨機 phase。把它拆兩 stage 不會比合併資訊量更高，反而讓 P95 數字不可解釋。誠實併。</p>
+</blockquote>
+<h3 id="24-fire-resolve">2.4 Fire + Resolve 對稱量測<a class="headerlink" href="#24-fire-resolve" title="Permanent link">&para;</a></h3>
+<p>每 run 跑一次 fire path + 一次 resolve path，<strong>共用 5 anchors 的鏡像</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>方向</th>
+<th>T0 含義</th>
+<th>T3 anchor</th>
+<th>T4 anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Fire</strong></td>
+<td>寫 trigger config（actual &gt; threshold）</td>
+<td><code>ALERTS{alertstate="firing",...}</code> 出現的 <code>activeAt</code></td>
+<td>webhook payload <code>status="firing"</code></td>
+</tr>
+<tr>
+<td><strong>Resolve</strong></td>
+<td>還原 config（actual &lt; threshold）</td>
+<td><code>ALERTS{alertstate="firing",...}</code> 不再 match 的時點</td>
+<td>webhook payload <code>status="resolved"</code></td>
+</tr>
+</tbody>
+</table>
+<p>→ Alertmanager config 必須 <code>send_resolved: true</code>（見 §4.4）。</p>
+<h3 id="25-output-json-schema">2.5 Output JSON Schema<a class="headerlink" href="#25-output-json-schema" title="Permanent link">&para;</a></h3>
+<p>每 run 產一筆，包含 fire 與 resolve 兩段：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;warm_up&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;fixture_kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synthetic-v2&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;gate_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pending&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;fire&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">&quot;T0_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032001000000000</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">&quot;T1_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032001050000000</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">&quot;T2_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032001195000000</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">&quot;T3_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032005120000000</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">&quot;T4_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032005165000000</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">&quot;stage_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;A&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;B&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">145</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;C&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3925</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;D&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">},</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">&quot;e2e_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4165</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span><span class="nt">&quot;resolve&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="nt">&quot;T0_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032015000000000</span><span class="p">,</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="nt">&quot;T1_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032015048000000</span><span class="p">,</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="nt">&quot;T2_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032015190000000</span><span class="p">,</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="nt">&quot;T3_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032020110000000</span><span class="p">,</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">    </span><span class="nt">&quot;T4_unix_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1714032020155000000</span><span class="p">,</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">    </span><span class="nt">&quot;stage_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;A&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">48</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;B&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">142</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;C&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4920</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;D&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">},</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">    </span><span class="nt">&quot;e2e_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5155</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="p">}</span>
+</code></pre></div>
+<p>聚合（<strong>n ≥ 30</strong>，第 1 run 標 <code>warm_up: true</code> 不入聚合）→ fire 與 resolve <strong>分別</strong>報 P50 / P95 / P99，並對 stage C 顯示直方圖（不只 percentile，因 quantization noise 為 stage C 主導項）。</p>
+<p><code>fixture_kind ∈ {synthetic-v1, synthetic-v2, customer-anon}</code>、<code>gate_status ∈ {pending, passed, failed, voided}</code> — 由 §6.5 calibration gate 機制填入。</p>
+<h3 id="26-hidden-prerequisite-exporter">2.6 Hidden prerequisite — exporter 改動<a class="headerlink" href="#26-hidden-prerequisite-exporter" title="Permanent link">&para;</a></h3>
+<p>5-anchor 模型要求 exporter 新增兩個 gauge（<strong>約 10 行 Go</strong>），與 harness 同 PR：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// components/threshold-exporter/app/metrics.go (additions)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kd">var</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">lastScanCompleteUnixSeconds</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prometheus</span><span class="p">.</span><span class="nx">NewGauge</span><span class="p">(</span><span class="nx">prometheus</span><span class="p">.</span><span class="nx">GaugeOpts</span><span class="p">{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="nx">Name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;last_scan_complete_unixtime_seconds&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nx">Help</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Wall-clock unix seconds at the most recent successful scanDirHierarchical completion.&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="p">})</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nx">lastReloadCompleteUnixSeconds</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prometheus</span><span class="p">.</span><span class="nx">NewGauge</span><span class="p">(</span><span class="nx">prometheus</span><span class="p">.</span><span class="nx">GaugeOpts</span><span class="p">{</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="nx">Name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;last_reload_complete_unixtime_seconds&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">        </span><span class="nx">Help</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Wall-clock unix seconds at the most recent successful diffAndReload completion.&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="p">})</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">)</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="c1">// 於 scanDirHierarchical / diffAndReload 結尾各 .Set(float64(time.Now().Unix()))。</span>
+</code></pre></div>
+<p>值得 export 的副效益：production 也能用這兩個 gauge 監控「exporter 是否 stuck」（age = <code>time() - last_scan_complete_unixtime_seconds</code>）。</p>
+<hr />
+<h2 id="3-architecture-choice-docker-compose-not-k3d">3. Architecture choice — docker-compose, NOT k3d<a class="headerlink" href="#3-architecture-choice-docker-compose-not-k3d" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 決策<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<p>選用 <strong>docker-compose</strong>，<strong>不</strong>用 k3d / kind / minikube。下述論證為 design 重點，避免日後 reviewer 重提。</p>
+<h3 id="32-rationale">3.2 Rationale<a class="headerlink" href="#32-rationale" title="Permanent link">&para;</a></h3>
+<p><strong>(a) k3d 帶入的 K8s 網路雜訊在 5s scrape quantization 解析度下不可區分</strong></p>
+<p>k3d 內含完整 K8s data plane：CNI（flannel）、kube-proxy iptables、Service VIP、CoreDNS。這些在 alert fire-through path 上引入的 jitter 通常 1–2 ms（busy cluster 可能尖峰至幾十 ms），但 stage C 的 quantization 本身就是 0–10 s 級。<strong>k3d 的 K8s noise 落在我們的量測解析度以下</strong>，加它不會讓數字更精準，只會讓重現條件更脆弱。</p>
+<p><strong>(b) ConfigMap-symlink rotation 已被 unit test 覆蓋</strong></p>
+<p>K8s 把 ConfigMap mount 到 Pod 時用的 atomic-rename-via-symlink 行為，已在 PR #54 的 A-8b unit test (<code>TestScanDirHierarchical_K8sSymlinkLayout</code>) 涵蓋。e2e harness 若再測同一件事，是 redundant retest at higher cost。</p>
+<p><strong>(c) docker-compose 的 concrete 優勢</strong></p>
+<table>
+<thead>
+<tr>
+<th>維度</th>
+<th>docker-compose</th>
+<th>k3d</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>啟動時間（cold）</td>
+<td>~10 s</td>
+<td>30–60 s（含 cluster bootstrap）</td>
+</tr>
+<tr>
+<td>Service ordering</td>
+<td><code>depends_on</code> + <code>healthcheck</code> 直接表達</td>
+<td>需 Pod readiness probe + init container 模擬</td>
+</tr>
+<tr>
+<td>Volume 模型</td>
+<td>host bind-mount（FUSE/Cowork 上 native）</td>
+<td>hostPath 或 PVC，FUSE 環境會踩 inode quirks</td>
+</tr>
+<tr>
+<td>Cleanup</td>
+<td><code>docker compose down -v</code></td>
+<td><code>k3d cluster delete</code> + 殘留 docker network</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>bridge，single-host</td>
+<td>overlay + iptables，多層除錯</td>
+</tr>
+<tr>
+<td>Repro on dev laptop</td>
+<td>✓</td>
+<td>✓（但較重）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>(d) docker-compose CANNOT validate（誠實標註）</strong></p>
+<table>
+<thead>
+<tr>
+<th>不被驗證的行為</th>
+<th>是否影響 SLO？</th>
+<th>替代覆蓋</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>K8s Service discovery / endpoint slice 更新延遲</td>
+<td>在 5s quantization 解析度下不可區分</td>
+<td>Phase 3（如有）可接 k3d 補強</td>
+</tr>
+<tr>
+<td>Rolling pod restart 期間 scrape 失敗率</td>
+<td>否，與 config-change SLO 正交</td>
+<td>屬 deployment SLO，另案</td>
+</tr>
+<tr>
+<td>ConfigMap update semantics（projected volume）</td>
+<td>否，已被 A-8b unit test 覆蓋</td>
+<td>A-8b</td>
+</tr>
+<tr>
+<td>K8s-native RBAC / NetworkPolicy 路徑</td>
+<td>否，與 alert fire-through 正交</td>
+<td>governance-security.md</td>
+</tr>
+</tbody>
+</table>
+<p>→ 結論：docker-compose 為 Phase 2 SLO 量測的<strong>正確</strong>選擇；k3d 不是「更高保真」，而是「換個維度的 noise」。</p>
+<hr />
+<h2 id="4-stack">4. Stack<a class="headerlink" href="#4-stack" title="Permanent link">&para;</a></h2>
+<h3 id="41-components">4.1 Components<a class="headerlink" href="#41-components" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>來源</th>
+<th>角色</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>threshold-exporter</strong></td>
+<td><code>build: ../../components/threshold-exporter</code>（current branch + §2.6 gauges）</td>
+<td>暴露 <code>/metrics</code>；watch <code>conf.d/</code>；emit timestamp gauges</td>
+</tr>
+<tr>
+<td><strong>prometheus</strong></td>
+<td><code>prom/prometheus:v2.55.0</code>（pinned，不用 <code>latest</code>）</td>
+<td>scrape exporter + pushgateway / 跑 alert rules</td>
+</tr>
+<tr>
+<td><strong>pushgateway</strong></td>
+<td><code>prom/pushgateway:v1.10.0</code>（pinned）</td>
+<td>接收 driver 注入的 <code>actual_metric_value</code></td>
+</tr>
+<tr>
+<td><strong>alertmanager</strong></td>
+<td><code>prom/alertmanager:v0.27.0</code>（pinned）</td>
+<td>收 firings → route to webhook（fire + resolve 都送）</td>
+</tr>
+<tr>
+<td><strong>receiver</strong></td>
+<td><code>build: ./receiver</code>（custom Go ~80 行）</td>
+<td>log 每筆 POST + ring buffer + ts 查詢 endpoint</td>
+</tr>
+<tr>
+<td><strong>driver</strong></td>
+<td><code>build: ./driver</code>（Python on alpine）</td>
+<td>在 compose <strong>內部</strong>跑量測腳本，避 clock skew</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>為何 receiver 自寫不用現成 image</strong>：commonly-used <code>webhook-logger</code> 第三方 image 無固定維護者；80 行 Go server 為最低風險選項，且能直接寫 NDJSON 到 stdout 便於解析。</p>
+<p><strong>為何 driver 進 compose</strong>：消除 host wall-clock vs container wall-clock 之間的 skew（Docker Desktop / Cowork VM 上 host 與容器 VM 是兩個 kernel clock domain）。driver-as-container 後，T0 / T4 與 exporter / Prometheus / receiver 的 timestamp 全部來自同一 host kernel。</p>
+</blockquote>
+<h3 id="42-compose">4.2 Compose 骨架<a class="headerlink" href="#42-compose" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># tests/e2e-bench/docker-compose.yml</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3.9&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">services</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">threshold-exporter</span><span class="p">:</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> context</span><span class="p">:</span><span class="w"> </span><span class="nv">../../components/threshold-exporter</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./fixture/active:/etc/threshold-exporter/conf.d:rw</span><span class="w">   </span><span class="c1"># driver writes here</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">expose</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;9090&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;CMD&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-qO-&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;http://localhost:9090/-/ready&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2s</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">  </span><span class="nt">pushgateway</span><span class="p">:</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prom/pushgateway:v1.10.0</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">    </span><span class="nt">expose</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;9091&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">  </span><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prom/prometheus:v2.55.0</span>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./prometheus.yml:/etc/prometheus/prometheus.yml:ro</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro</span>
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="w">      </span><span class="nt">threshold-exporter</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> condition</span><span class="p">:</span><span class="w"> </span><span class="nv">service_healthy</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="w">  </span><span class="nt">alertmanager</span><span class="p">:</span>
+<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prom/alertmanager:v0.27.0</span>
+<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro</span>
+<a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a><span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a><span class="w">      </span><span class="nt">prometheus</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> condition</span><span class="p">:</span><span class="w"> </span><span class="nv">service_healthy</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>
+<a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a><span class="w">  </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a><span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> context</span><span class="p">:</span><span class="w"> </span><span class="nv">./receiver</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a><span class="w">    </span><span class="nt">expose</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;5001&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>
+<a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a><span class="w">  </span><span class="nt">driver</span><span class="p">:</span>
+<a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a><span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> context</span><span class="p">:</span><span class="w"> </span><span class="nv">./driver</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./fixture:/fixture:rw</span><span class="w">          </span><span class="c1"># mutates fixture/active/*</span>
+<a id="__codelineno-3-40" name="__codelineno-3-40" href="#__codelineno-3-40"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./bench-results:/results:rw</span><span class="w">    </span><span class="c1"># writes per-run JSON</span>
+<a id="__codelineno-3-41" name="__codelineno-3-41" href="#__codelineno-3-41"></a><span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<a id="__codelineno-3-42" name="__codelineno-3-42" href="#__codelineno-3-42"></a><span class="w">      </span><span class="nt">alertmanager</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> condition</span><span class="p">:</span><span class="w"> </span><span class="nv">service_started</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-43" name="__codelineno-3-43" href="#__codelineno-3-43"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w">     </span><span class="p p-Indicator">{</span><span class="nt"> condition</span><span class="p">:</span><span class="w"> </span><span class="nv">service_started</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-3-44" name="__codelineno-3-44" href="#__codelineno-3-44"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;python3&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;/app/driver.py&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;--count&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;30&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<h3 id="43-pre-canned-alert-ruleactual-vs-threshold-metric">4.3 Pre-canned alert rule（actual vs threshold 雙 metric 模型）<a class="headerlink" href="#43-pre-canned-alert-ruleactual-vs-threshold-metric" title="Permanent link">&para;</a></h3>
+<p><code>tenant_threshold_value</code> 是 exporter 由 config 計算出的閾值；<code>actual_metric_value</code> 由 pushgateway 注入模擬「真實業務 metric」。Alert 條件 = 真實值跨越閾值，這是生產真實樣態（v1 草稿用單一 metric 自比 100，邏輯不通）。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># tests/e2e-bench/alert-rules.yml</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">groups</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e2e-bench</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">rules</span><span class="p">:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TenantThresholdExceeded</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">        </span><span class="c1"># actual 與 threshold 透過 tenant_id label 對齊</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">          </span><span class="no">actual_metric_value</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">            </span><span class="no">&gt; on(tenant_id) group_left</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">          </span><span class="no">tenant_threshold_value{metric=&quot;bench_trigger&quot;}</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0s</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">        </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">          </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critical</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">          </span><span class="nt">run_kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e2e-bench</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;E2E</span><span class="nv"> </span><span class="s">bench:</span><span class="nv"> </span><span class="s">actual</span><span class="nv"> </span><span class="s">exceeded</span><span class="nv"> </span><span class="s">threshold</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">{{</span><span class="nv"> </span><span class="s">$labels.tenant_id</span><span class="nv"> </span><span class="s">}}&quot;</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Run isolation</strong>：每 run 用<strong>獨立</strong> <code>tenant_id</code>（<code>bench-run-1</code> … <code>bench-run-30</code>）→ alert label set 全部不同 → Alertmanager 不 dedup。第 i run 的 fixture 寫 <code>bench-run-{i}</code> tenant，pushgateway push <code>actual_metric_value{tenant_id="bench-run-{i}"}=200</code> 配合 threshold 100 → fire；resolve 階段 push <code>=50</code> → resolve。</p>
+</blockquote>
+<h3 id="44-alertmanager-webhook">4.4 Alertmanager → webhook<a class="headerlink" href="#44-alertmanager-webhook" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># tests/e2e-bench/alertmanager.yml</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e2e-webhook</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">group_wait</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0s</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">group_interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1s</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">repeat_interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">tenant_id</span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># 各 run 不同 tenant_id 自然不混群</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="nt">receivers</span><span class="p">:</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e2e-webhook</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="nt">webhook_configs</span><span class="p">:</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://receiver:5001/hook</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">        </span><span class="nt">send_resolved</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">   </span><span class="c1"># 量 resolve path 必要</span>
+</code></pre></div>
+<p><code>group_wait: 0s</code> + <code>group_by: [tenant_id]</code> 為刻意設定，避免 batching latency 計入量測。</p>
+<hr />
+<h2 id="5-measurement-protocol">5. Measurement protocol<a class="headerlink" href="#5-measurement-protocol" title="Permanent link">&para;</a></h2>
+<h3 id="51-pre-flightfixture-pre-creation">5.1 Pre-flight：fixture pre-creation<a class="headerlink" href="#51-pre-flightfixture-pre-creation" title="Permanent link">&para;</a></h3>
+<p>第一次 run 之前 driver 跑 setup phase：把 <code>fixture/active/conf.d/</code> 預先放入 30 個 placeholder tenant 檔案（<code>bench-run-1.yaml</code> … <code>bench-run-30.yaml</code>），每個內容為 <code>bench_trigger: 100</code>（未觸發狀態）。<strong>Run loop 中只 modify 既有檔案的內容，從不 create 新檔案</strong>——避 fsnotify 對 create vs modify 的 event 路徑差異。</p>
+<h3 id="52-single-run-protocolfire-resolve">5.2 Single-run protocol（fire + resolve 對稱）<a class="headerlink" href="#52-single-run-protocolfire-resolve" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>=== Run i, fire phase ===
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>T0 ← now()
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  write fixture/active/conf.d/bench-run-{i}.yaml with bench_trigger threshold = 100
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>  POST pushgateway: actual_metric_value{tenant_id=&quot;bench-run-{i}&quot;} = 200
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>T1 ← poll exporter /metrics, read last_scan_complete_unixtime_seconds gauge value
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>T2 ← poll exporter /metrics, read last_reload_complete_unixtime_seconds gauge value
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>T3 ← poll Prometheus /api/v1/alerts, find ALERTS{tenant_id=bench-run-{i},alertstate=firing}
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>     → use response.activeAt (Prometheus&#39;s internal time, same kernel clock)
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>T4 ← poll receiver /posts?since={T0}, find first POST with status=firing &amp; matching tenant
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>     → use receiver&#39;s recorded ts
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>=== Run i, resolve phase ===
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>T0&#39; ← now()
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>  POST pushgateway: actual_metric_value{tenant_id=&quot;bench-run-{i}&quot;} = 50
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>  (fixture 不動;  threshold 維持 100;  actual 50 &lt; 100 = resolve)
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>T1&#39;, T2&#39; ← (likely 與 fire 同值, 因 fixture 沒 change; 但量測仍記錄)
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>   實作上若 reload 因無 fixture 變動而沒觸發, T1&#39;/T2&#39; 取 fire 階段的最後值並標 stage_ab_skipped=true
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>T3&#39; ← poll Prometheus /api/v1/alerts, find ALERTS{tenant_id=bench-run-{i}} 不再 match
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>T4&#39; ← poll receiver /posts?since={T0&#39;}, find POST with status=resolved &amp; matching tenant
+</code></pre></div>
+<blockquote>
+<p><strong>Resolve 量測注意</strong>：resolve 路徑的 stage A/B 通常 trivially 0（fixture 沒 change，不觸發 reload）。stage A/B 若標 <code>skipped</code>，aggregator 對 resolve path 只報 stage C+D 與 e2e。客戶看的 resolve SLO 主要是 stage C+D，這仍有意義。</p>
+</blockquote>
+<h3 id="53-run-loop-with-warm-up-handling">5.3 Run-loop with warm-up handling<a class="headerlink" href="#53-run-loop-with-warm-up-handling" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="ch">#!/usr/bin/env bash</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># tests/e2e-bench/run.sh</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nv">COUNT</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">COUNT</span><span class="k">:-</span><span class="nv">30</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nv">OUT</span><span class="o">=</span><span class="s2">&quot;bench-results/e2e-</span><span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y%m%dT%H%M%SZ<span class="k">)</span><span class="s2">.json&quot;</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--wait
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>bench-results
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="c1"># driver 本身在 compose 內跑;  此處等其完成</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>driver<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="nv">LOGS_PID</span><span class="o">=</span><span class="nv">$!</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>driver
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="nb">kill</span><span class="w"> </span><span class="nv">$LOGS_PID</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="c1"># driver 寫到 bench-results/per-run-*.json;  此處彙整</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>python3<span class="w"> </span>aggregate.py<span class="w"> </span>bench-results/per-run-*.json<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$OUT</span><span class="s2">&quot;</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>docker<span class="w"> </span>compose<span class="w"> </span>down<span class="w"> </span>-v
+</code></pre></div>
+<p>driver 本身內部跑 <code>for i in range(COUNT+1)</code>（多一輪做 warm-up，標 <code>warm_up: true</code>）。aggregator 過濾 <code>warm_up=false</code> 後計 P50/P95/P99。</p>
+<h3 id="54-stage-c">5.4 為什麼 stage C 要顯示直方圖<a class="headerlink" href="#54-stage-c" title="Permanent link">&para;</a></h3>
+<p>stage C（T3 − T2）量測值受 scrape interval 對齊 phase 影響：T2 落在 scrape window 早段或晚段會差到接近一個完整 interval。30 runs 的 stage C 分布<strong>不應</strong>是窄峰，而應呈現 0–scrape_interval 區間的近似 uniform — 若不是 uniform，代表觸發時點與 scrape 對齊有系統偏差，需要排查 driver 寫入時序。</p>
+<hr />
+<h2 id="6-customer-sample-protocol">6. Customer sample protocol<a class="headerlink" href="#6-customer-sample-protocol" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Phase 2 implementation 不以 customer sample 為硬阻擋</strong>——採 §6.5 calibration gate 模型。本節列 sample 抵達後的處理規格。</p>
+</blockquote>
+<h3 id="61-customer-sample">6.1 為何要 customer sample<a class="headerlink" href="#61-customer-sample" title="Permanent link">&para;</a></h3>
+<p>real-world 的 <code>_defaults.yaml</code> 鏈深度、tenant overlay 命中率、metric 種類分布，與合成 fixture 之間有顯著差異。沒有客戶 sample 直接做 final SLO sign-off，數字會偏離客戶真實環境。</p>
+<p>但<strong>沒有 sample 不代表完全不能做</strong> — synthetic fixture 可以做到「數量級正確」，作為 v2.8.0 phase .b 的 calibrated baseline；customer sample 作 final calibration gate（§6.5）。</p>
+<h3 id="62-sample">6.2 Sample 需求（要傳達給客戶）<a class="headerlink" href="#62-sample" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>要求</th>
+<th>備註</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tenant ID anonymization</td>
+<td>用 deterministic hash（同 real ID → 同 anon ID across files）</td>
+<td>保留 ID 之間的關係（同 prefix 暗示同 domain）</td>
+</tr>
+<tr>
+<td>Threshold value redaction</td>
+<td>商業敏感閾值替換為合理範圍的隨機值</td>
+<td>保留量級即可，不需精確</td>
+</tr>
+<tr>
+<td>Subset size</td>
+<td>最少 1000 tenant；建議 2000–5000</td>
+<td>對齊 Phase 1 baseline 點</td>
+</tr>
+<tr>
+<td>Defaults 鏈深度</td>
+<td>完整保留（不簡化）</td>
+<td>鏈深度本身是 fixture calibration 的關鍵變數</td>
+</tr>
+<tr>
+<td>Metric 種類</td>
+<td>完整保留</td>
+<td>影響 export cardinality</td>
+</tr>
+</tbody>
+</table>
+<h3 id="63-repository-convention">6.3 Repository convention<a class="headerlink" href="#63-repository-convention" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>tests/e2e-bench/fixture/
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>├── synthetic-v1/conf.d/      # 由 buildDirConfigHierarchical 產生（Phase 1 reuse;  uniform 分布）
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>├── synthetic-v2/conf.d/      # 加 zipfian tenant size + power-law overlay depth（更逼真合成）
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>├── customer-anon/            # 客戶 anonymized sample
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>│   ├── .gitignore            # 忽略所有實際檔案
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>│   └── README.md             # 解釋如何取得 sample
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>└── active/                   # run-time 工作區, driver 寫入此處（內容由 fixture-kind 選擇複製）
+</code></pre></div>
+<p><code>customer-anon/</code> 整個目錄 gitignored；CI 不依賴此 fixture。</p>
+<h3 id="64-fallback">6.4 Fallback 行為<a class="headerlink" href="#64-fallback" title="Permanent link">&para;</a></h3>
+<p>當 customer fixture 缺席時，run.sh 自動 fallback 到 <code>synthetic-v2/</code>，並在輸出 JSON 加 <code>"fixture_kind": "synthetic-v2"</code> 欄位。aggregator 依此渲染對應 banner（見 §6.5）。</p>
+<h3 id="65-calibration-gatehard-blocker">6.5 Calibration gate（取代「hard blocker」模型）<a class="headerlink" href="#65-calibration-gatehard-blocker" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>規格</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>預設狀態</strong></td>
+<td>任何 run 預設 <code>gate_status: "pending"</code></td>
+</tr>
+<tr>
+<td><strong>Gate 通過條件</strong></td>
+<td><code>customer-anon</code> ≥1000 tenants × ≥30 runs × P95 與最近一次 <code>synthetic-v2</code> P95 差距 ≤30%（30% 為 v2.8.0 placeholder，可由 implementation PR 微調）</td>
+</tr>
+<tr>
+<td><strong>Gate 通過後</strong></td>
+<td>該批 customer-anon run 標 <code>gate_status: "passed"</code>；最近一次 synthetic-v2 P95 retroactively 標 <code>gate_status: "passed"</code>（calibration confirmed）</td>
+</tr>
+<tr>
+<td><strong>Gate 失敗條件</strong></td>
+<td>差距 &gt;30% → customer-anon 標 <code>gate_status: "failed"</code>；對應 synthetic-v2 baseline 標 <code>voided</code>，benchmark-playbook 該 section 加紅色 banner，外部 reference 全部須 review</td>
+</tr>
+<tr>
+<td><strong>Kill switch</strong></td>
+<td>v2.9.0 cut 前若 customer sample 未抵達，<strong>強制 go/no-go review</strong>：要嘛 explicit 接受 synthetic-v2 為定案 baseline（含假設文件化），要嘛 rescope phase 2</td>
+</tr>
+<tr>
+<td><strong>Aggregator 渲染</strong></td>
+<td>output JSON <code>fixture_kind</code> × <code>gate_status</code> 矩陣決定 banner 文字： <code>synthetic-*</code> + <code>pending</code> → 黃框「pending customer validation」；<code>customer-anon</code> + <code>passed</code> → 綠勾；任何 <code>failed</code> / <code>voided</code> → 紅框</td>
+</tr>
+</tbody>
+</table>
+<p>設計理由：把 customer sample 從 phase blocker 重新定義為 <strong>calibration gate</strong> — Phase 2 永遠可 land，但數字永遠帶 gate 狀態 metadata。失敗模式（「內部 baseline 變外部 SLA 的滑坡」）由 banner 機制 + kill switch 強制可見性與時限決定。</p>
+<hr />
+<h2 id="7-implementation-outline-contract-not-code">7. Implementation outline — contract not code<a class="headerlink" href="#7-implementation-outline-contract-not-code" title="Permanent link">&para;</a></h2>
+<p>implementation PR 可選 Go testcontainers / bash+Python / 純 Go test 任一實作路徑，<strong>只要符合下列 contract</strong>：</p>
+<h3 id="71-input-contract">7.1 Input contract<a class="headerlink" href="#71-input-contract" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixture 來源：<code>tests/e2e-bench/fixture/{synthetic-v1,synthetic-v2,customer-anon}/conf.d/</code>，由 env var <code>E2E_FIXTURE_KIND</code> 選擇（缺省 <code>synthetic-v2</code>）</li>
+<li>Trigger 注入：pushgateway HTTP API</li>
+<li>Run count：env var <code>COUNT</code>（預設 30）</li>
+</ul>
+<h3 id="72-output-contract">7.2 Output contract<a class="headerlink" href="#72-output-contract" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Per-run JSON 寫到 <code>bench-results/per-run-{run_id}.json</code>，schema 見 §2.5</li>
+<li>聚合輸出 <code>bench-results/e2e-{ISO8601}.json</code>，含 fire / resolve P50/P95/P99 + stage 直方圖 + gate banner</li>
+<li>Last line of stdout = single-line JSON summary（與 A-15 <code>bench_wrapper.sh</code> convention 一致）</li>
+</ul>
+<h3 id="73-reference-directory-layout">7.3 Reference directory layout（建議，不強制）<a class="headerlink" href="#73-reference-directory-layout" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>tests/e2e-bench/
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>├── docker-compose.yml          # §4.2
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>├── prometheus.yml              # 5s scrape, exporter + pushgateway targets
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>├── alertmanager.yml            # §4.4 (send_resolved: true)
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>├── alert-rules.yml             # §4.3 (actual vs threshold)
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>├── fixture/                    # §6.3
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>├── receiver/{Dockerfile,main.go}    # §7.4
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>├── driver/{Dockerfile,driver.py}    # §7.5
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>├── aggregate.py                # P50/P95/P99 + gate banner 渲染
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>└── run.sh                      # §5.3 orchestration（可省，driver 自走 loop）
+</code></pre></div>
+<h3 id="74-receivermaingo-reference90">7.4 <code>receiver/main.go</code> reference（~90 行）<a class="headerlink" href="#74-receivermaingo-reference90" title="Permanent link">&para;</a></h3>
+<p>關鍵：ring buffer + <code>/posts?since={unix_ns}</code> query endpoint（不只 <code>/last-post</code>，避 cross-run 干擾）。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Post</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span><span class="nx">ReceivedUnixNs</span><span class="w"> </span><span class="kt">int64</span><span class="w">           </span><span class="s">`json:&quot;received_unix_ns&quot;`</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nx">Status</span><span class="w">         </span><span class="kt">string</span><span class="w">          </span><span class="s">`json:&quot;status&quot;`</span><span class="w">   </span><span class="c1">// &quot;firing&quot; / &quot;resolved&quot;</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nx">TenantID</span><span class="w">       </span><span class="kt">string</span><span class="w">          </span><span class="s">`json:&quot;tenant_id&quot;`</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nx">Body</span><span class="w">           </span><span class="nx">json</span><span class="p">.</span><span class="nx">RawMessage</span><span class="w"> </span><span class="s">`json:&quot;body&quot;`</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="p">}</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1">// ring buffer of last 200 posts;  GET /posts?since=N&amp;tenant_id=X filters</span>
+</code></pre></div>
+<h3 id="75-driverdriverpy-reference150">7.5 <code>driver/driver.py</code> reference（~150 行）<a class="headerlink" href="#75-driverdriverpy-reference150" title="Permanent link">&para;</a></h3>
+<p>每 run 跑一次 fire phase 跑一次 resolve phase（§5.2），全部在 container 內執行。timestamp 一律來自 <code>time.time_ns()</code> 或 service-internal API（Prometheus <code>activeAt</code>、receiver <code>received_unix_ns</code>、exporter gauge value）。</p>
+<hr />
+<h2 id="8-open-questions">8. Open questions<a class="headerlink" href="#8-open-questions" title="Permanent link">&para;</a></h2>
+<h3 id="81-should-the-harness-run-in-ci-or-local-only">8.1 Should the harness run in CI or local-only?<a class="headerlink" href="#81-should-the-harness-run-in-ci-or-local-only" title="Permanent link">&para;</a></h3>
+<p><strong>Initial position：local-only</strong>。理由：</p>
+<ul>
+<li>e2e harness cold start（compose up + healthcheck + 30 runs × 2 phases + teardown）≈ 5–8 min，在 GitHub Actions runner 是顯著 wall-clock 成本。</li>
+<li>若 harness 在 CI flake，會把 PR pipeline 拖回到 Phase 1 之前的「unstable」感受。</li>
+<li>客戶 baseline 要的是「跑 30 次取 P95 + CI」，不是「每 PR 跑 1 次」。</li>
+</ul>
+<p><strong>Phase 3 升級條件</strong>：當 implementation stable + customer fixture 確定後，可 gate 到 nightly job（不阻擋 PR），輸出寫到 <code>bench-results/</code> 由 release pipeline 採集。詳 §11。</p>
+<h3 id="82-trigger-metric-injection-pushgateway">8.2 Trigger metric injection — pushgateway 確認<a class="headerlink" href="#82-trigger-metric-injection-pushgateway" title="Permanent link">&para;</a></h3>
+<p>§4.3 已採 actual vs threshold 雙 metric 模型，pushgateway 為注入點。其他選項（custom exporter、node_exporter）在新模型下優勢消失。</p>
+<blockquote>
+<p>注意：pushgateway 不是 stale-state 友善，若 driver 忘記 cleanup 上一 run 的 push 值，會干擾下一 run。driver <code>finally:</code> 區塊必須對 pushgateway 做 <code>DELETE /metrics/job/e2e-driver/...</code>。</p>
+</blockquote>
+<h3 id="83-webhook-receiver-authentication">8.3 Webhook receiver authentication<a class="headerlink" href="#83-webhook-receiver-authentication" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Local docker-compose 環境</strong>：不需要。docker bridge 隔離。</li>
+<li><strong>若未來移到共用 CI runner</strong>：建議加 shared bearer token。</li>
+</ul>
+<p><strong>Initial position：no auth</strong>。在開發者文件記：harness 不可暴露於 host network。</p>
+<h3 id="84-run-baseline-5000-tenant-fixture-too">8.4 Run baseline 5000-tenant fixture too?<a class="headerlink" href="#84-run-baseline-5000-tenant-fixture-too" title="Permanent link">&para;</a></h3>
+<p>是。§9 acceptance criteria 要 1000 + 5000 兩個 fixture size 各 30 runs，比對兩組 stage breakdown 確認 stage B 是否在 5000 scale 變 dominant。</p>
+<h3 id="85-p95-confidence-interval">8.5 P95 confidence interval 怎麼報？<a class="headerlink" href="#85-p95-confidence-interval" title="Permanent link">&para;</a></h3>
+<p>n=30 對 P95 的 empirical estimator 方差仍大。aggregator 應跑 bootstrap（resample 1000 次取 percentile of percentile）報 95% CI。若 CI 寬度 &gt; median 的 50%，視為 inconclusive，需更多 runs。</p>
+<hr />
+<h2 id="9-acceptance-criteria-for-follow-up-implementation-pr">9. Acceptance criteria for follow-up implementation PR<a class="headerlink" href="#9-acceptance-criteria-for-follow-up-implementation-pr" title="Permanent link">&para;</a></h2>
+<p>當本 design doc land 後，implementation PR 應滿足：</p>
+<h3 id="91-code">9.1 Code 改動<a class="headerlink" href="#91-code" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> threshold-exporter 新增兩個 timestamp gauges（§2.6）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>tests/e2e-bench/</code> 完整 scaffolding（§7.3 為 reference layout）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> receiver 採 ring buffer + query endpoint（§7.4），不只 <code>/last-post</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> driver 在 compose 內部跑（§4.1, §4.2），不在 host</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> alert rule 採 actual vs threshold 雙 metric model（§4.3）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> alertmanager <code>send_resolved: true</code>（§4.4）</li>
+</ul>
+<h3 id="92">9.2 量測協定<a class="headerlink" href="#92" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> fixture pre-creation：30 個 placeholder tenant 檔案（§5.1）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Run i 用獨立 <code>tenant_id=bench-run-{i}</code>（§4.3 Run isolation）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 第 1 run 標 <code>warm_up: true</code> 不入聚合（§5.3）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> fire + resolve 對稱量測（§2.4, §5.2）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> n ≥ 30 runs；aggregator 報 P50/P95/P99 + 95% CI via bootstrap（§8.5）</li>
+</ul>
+<h3 id="93-output-ci">9.3 Output 與 CI<a class="headerlink" href="#93-output-ci" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 每 run JSON schema 含 <code>fixture_kind</code> + <code>gate_status</code> + <code>warm_up</code>（§2.5）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> aggregator 渲染 §6.5 gate banner</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>make e2e-bench</code> Makefile target（內部呼叫 <code>run.sh</code>）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 1000-tenant + 5000-tenant 各 30 runs 報告（§8.4）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 所有 docker images pin 到具體版本（不 <code>latest</code>）</li>
+</ul>
+<h3 id="94">9.4 文件<a class="headerlink" href="#94" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <a href="../../../benchmark-playbook/"><code>benchmark-playbook.md</code></a> 加 section「Phase 2 alert fire-through baseline」，含 stage 直方圖 + gate banner</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> CHANGELOG <code>[Unreleased]</code> entry：「v2.8.0 alert fire-through e2e baseline (calibration gate model)」</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 本 design doc 在 implementation 後升格為 benchmark-playbook 章節（§10），檔案 archive 至 <code>docs/internal/archive/design/</code></li>
+</ul>
+<h3 id="95">9.5 品質閘門<a class="headerlink" href="#95" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Pre-commit clean</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> customer-anon 缺席時 fallback 到 synthetic-v2，輸出 banner 正確標 pending</li>
+</ul>
+<hr />
+<h2 id="10-relation-to-existing-infrastructure">10. Relation to existing infrastructure<a class="headerlink" href="#10-relation-to-existing-infrastructure" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>既有項目</th>
+<th>與本 harness 的關係</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A-8b unit test</strong> (<code>TestScanDirHierarchical_K8sSymlinkLayout</code>，PR #54)</td>
+<td>已覆蓋 K8s ConfigMap-symlink 行為；e2e <strong>不</strong>重做。e2e 假設 scan 路徑正確，只測 fire-through latency</td>
+</tr>
+<tr>
+<td><strong>A-15 <code>bench_wrapper.sh</code></strong></td>
+<td>確立的 clean stdout 輸出 convention；e2e harness 的 <code>aggregate.py</code> 應遵循同一格式（最後一行為 single-line JSON summary）</td>
+</tr>
+<tr>
+<td><strong>B-1 Phase 1</strong>（PR #59）</td>
+<td>提供 <code>buildDirConfigHierarchical</code> synthetic fixture builder；<code>fixture/synthetic-v1/</code> 直接 reuse；synthetic-v2 在其上加 zipfian + power-law</td>
+</tr>
+<tr>
+<td><strong>B-8 BlastRadius metric</strong>（PR #59）</td>
+<td>提供 <code>affected-tenants</code> ReportMetric；e2e 可 cross-check：trigger 一個 defaults change 後，e2e 觀察到的 alert 數應接近 <code>affected-tenants</code> 計數</td>
+</tr>
+<tr>
+<td><strong><code>docs/internal/benchmark-playbook.md</code></strong></td>
+<td>Phase 2 結果落腳處；implementation PR 後本 design doc 升格至 playbook 章節，原檔 archive</td>
+</tr>
+<tr>
+<td><strong><code>CLAUDE.md</code> § Pre-commit 品質閘門</strong></td>
+<td>e2e harness 不進 pre-commit auto hooks（成本太高）；保留為 manual-stage 候選</td>
+</tr>
+<tr>
+<td><strong>production exporter</strong></td>
+<td>§2.6 新增的 <code>last_scan_complete_unixtime_seconds</code> / <code>last_reload_complete_unixtime_seconds</code> gauges 在 production 也有 monitoring 價值（exporter stuck detection）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="11-phase-25-phase-3-follow-upout-of-scope">11. Phase 2.5 / Phase 3 follow-up（out of scope）<a class="headerlink" href="#11-phase-25-phase-3-follow-upout-of-scope" title="Permanent link">&para;</a></h2>
+<p>實作完 Phase 2 後可立即看見的 follow-up（<strong>不</strong>列入本 PR）：</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>主題</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>2.5</strong></td>
+<td>Failure-mode harness</td>
+<td>注入 exporter SIGTERM mid-reload / Prometheus scrape timeout / AM 暫停 30s / docker network 5% packet drop。每 case 量「time-to-recovery」。客戶 P99 tail behavior 主要由此類事件決定</td>
+</tr>
+<tr>
+<td><strong>2.5</strong></td>
+<td>Blast-radius axis</td>
+<td>不只「1 tenant 變動 → 1 alert」，也測「defaults 變動 → 100 tenants 變動 → 100 alerts」，量 <code>T4_last - T4_first</code>（dispatch fan-out duration），補 Phase 1 B-8 的 e2e 對照</td>
+</tr>
+<tr>
+<td><strong>3</strong></td>
+<td>Regression gate in release pipeline</td>
+<td>每 release candidate 跑 e2e，對比上一 release 的 P50/P95；若 regression &gt; 20% 則 fail release。把 e2e 從一次性 baseline 升級為 ongoing sentinel</td>
+</tr>
+<tr>
+<td><strong>3</strong></td>
+<td>OpenTelemetry spans</td>
+<td>exporter 開 OTel span <code>scan</code> / <code>reload</code>；driver 收 OTLP 直接拿 raw span data（無 quantization）。本 doc 的 timestamp gauges 是 Phase 2 解，OTel 是 Phase 3 解</td>
+</tr>
+<tr>
+<td><strong>3</strong></td>
+<td>k3d 補充驗證（如客戶實際 K8s pattern 出 anomaly）</td>
+<td>僅當 Phase 2 + production telemetry 顯示 K8s-specific regression 時才接</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_1">相關資源<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>資源</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../../benchmark-playbook/">Benchmark Playbook</a></td>
+<td>Phase 1 1000-tenant baseline 方法論 + 量測踩坑；Phase 2 結果未來落腳處</td>
+</tr>
+<tr>
+<td><a href="../../../../architecture-and-design/">Architecture &amp; Design</a></td>
+<td>9 個核心設計概念與 4 層路由 — 解釋 alert fire-through 在系統內的位置</td>
+</tr>
+<tr>
+<td><a href="../../../../design/config-driven/">Config-Driven 架構設計</a></td>
+<td><code>_defaults.yaml</code> 鏈與 hot-reload 行為；fixture calibration 的概念基礎</td>
+</tr>
+<tr>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/pull/59">PR #59 — Phase 1 Hierarchical Baseline</a></td>
+<td>Phase 1 implementation 與本文件的 prerequisite</td>
+</tr>
+<tr>
+<td><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/pull/54">PR #54 — A-8b K8s symlink unit test</a></td>
+<td>已覆蓋 ConfigMap-symlink 行為，e2e 不重做的依據</td>
+</tr>
+<tr>
+<td><a href="https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/">Prometheus alerting rules docs</a></td>
+<td>alert-rules.yml 撰寫參考</td>
+</tr>
+<tr>
+<td><a href="https://prometheus.io/docs/alerting/latest/configuration/">Alertmanager configuration</a></td>
+<td>alertmanager.yml routing 設定參考</td>
+</tr>
+<tr>
+<td><a href="../../../doc-template/">Doc Template Spec</a></td>
+<td>本 design doc 遵循的 frontmatter 與結構規範</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

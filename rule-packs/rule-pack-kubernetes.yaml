@@ -1,0 +1,217 @@
+# ============================================================
+# Rule Pack: Kubernetes (cAdvisor + kube-state-metrics)
+# 預設啟用 — 涵蓋容器 CPU/Memory 弱環節偵測 + Pod 狀態異常
+#
+# 需要的 exporter:
+#   - kubelet cAdvisor (內建)
+#   - kube-state-metrics (https://github.com/kubernetes/kube-state-metrics)
+#
+# 對應的 threshold-exporter defaults:
+#   container_cpu: 80
+#   container_memory: 85
+#
+# 對應的 state_filters:
+#   container_crashloop:
+#     reasons: ["CrashLoopBackOff"]
+#     severity: "critical"
+#   container_imagepull:
+#     reasons: ["ImagePullBackOff", "InvalidImageName"]
+#     severity: "warning"
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: Container resource metrics
+  # -------------------------------------------------------
+  - name: kubernetes-container-normalization
+    interval: 15s
+    rules:
+      # Container CPU usage as % of limit
+      - record: tenant:container_cpu_percent:by_container
+        expr: |
+          label_replace(
+            sum by(namespace, pod, container) (
+              rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m])
+            )
+            /
+            sum by(namespace, pod, container) (
+              kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"}
+            )
+            * 100,
+            "tenant", "$1", "namespace", "(.*)"
+          )
+
+      # Container memory usage as % of limit
+      - record: tenant:container_memory_percent:by_container
+        expr: |
+          label_replace(
+            sum by(namespace, pod, container) (
+              container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"}
+            )
+            /
+            sum by(namespace, pod, container) (
+              kube_pod_container_resource_limits{resource="memory", namespace=~"db-.+"}
+            )
+            * 100,
+            "tenant", "$1", "namespace", "(.*)"
+          )
+
+      # Weakest link: MAX across containers per pod
+      - record: tenant:pod_weakest_cpu_percent:max
+        expr: max by(tenant, pod) (tenant:container_cpu_percent:by_container)
+
+      - record: tenant:pod_weakest_memory_percent:max
+        expr: max by(tenant, pod) (tenant:container_memory_percent:by_container)
+
+  # -------------------------------------------------------
+  # Normalization: Pod state matching (kube-state-metrics)
+  # -------------------------------------------------------
+  - name: kubernetes-state-matching
+    interval: 15s
+    rules:
+      - record: tenant:container_waiting_reason:count
+        expr: |
+          label_replace(
+            count by(namespace, reason) (
+              kube_pod_container_status_waiting_reason{namespace=~"db-.+"} > 0
+            ),
+            "tenant", "$1", "namespace", "(.*)"
+          )
+
+  # -------------------------------------------------------
+  # Threshold normalization: Container resources
+  # -------------------------------------------------------
+  - name: kubernetes-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:container_cpu
+        expr: sum by(tenant) (user_threshold{component="container", metric="cpu"})
+
+      - record: tenant:alert_threshold:container_memory
+        expr: sum by(tenant) (user_threshold{component="container", metric="memory"})
+
+  # -------------------------------------------------------
+  # Alert Rules: Container resources (Weakest Link)
+  # -------------------------------------------------------
+  - name: kubernetes-container-alerts
+    rules:
+      - alert: PodContainerHighCPU
+        expr: |
+          (
+            (
+              max by(tenant) (tenant:pod_weakest_cpu_percent:max)
+              > on(tenant) group_left
+              tenant:alert_threshold:container_cpu
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 60s
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High container CPU in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器 CPU 使用率過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU pressure — evaluate resource limits"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 壓力過高 — 請評估資源限制"
+          description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+          description_zh: "最大容器 CPU 使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      - alert: PodContainerHighMemory
+        expr: |
+          (
+            (
+              max by(tenant) (tenant:pod_weakest_memory_percent:max)
+              > on(tenant) group_left
+              tenant:alert_threshold:container_memory
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 60s
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High container memory in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的容器記憶體使用率過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container memory pressure — evaluate resource limits"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體壓力過高 — 請評估資源限制"
+          description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
+          description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+  # -------------------------------------------------------
+  # Alert Rules: Pod state alerts (State/String Matching)
+  # -------------------------------------------------------
+  - name: kubernetes-pod-state-alerts
+    rules:
+      - alert: ContainerCrashLoop
+        expr: |
+          (
+            (
+              (
+                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                * on(tenant) group_left
+                user_state_filter{filter="container_crashloop"}
+              ) > 0
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 30s
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Container crash loop detected in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 偵測到容器崩潰迴圈"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected — check deployment and image health"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+          description: "{{ $value }} container(s) in CrashLoopBackOff state"
+          description_zh: "{{ $value }} 個容器處於 CrashLoopBackOff 狀態"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      - alert: ContainerImagePullFailure
+        expr: |
+          (
+            (
+              (
+                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                * on(tenant) group_left
+                user_state_filter{filter="container_imagepull"}
+              ) > 0
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 30s
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Image pull failure detected in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 偵測到映像檔案拉取失敗"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing — verify registry and image availability"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 映像檔案拉取失敗 — 請檢查 registry 和映像檔案可用性"
+          description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"
+          description_zh: "{{ $value }} 個容器處於 ImagePullBackOff/InvalidImageName 狀態"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"

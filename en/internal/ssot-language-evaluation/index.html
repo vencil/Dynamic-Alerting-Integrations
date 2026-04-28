@@ -1,0 +1,3552 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-language-evaluation/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../internal/ssot-language-evaluation/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>SSOT 切換影響評估 - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#ssot" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              SSOT 切換影響評估
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../internal/ssot-language-evaluation/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        目錄
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 概述
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1 概述">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        背景
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        決策時機
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 現況盤點
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2 現況盤點">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-mdenmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 文檔 (.md/.en.md 對)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-tool-registryyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 互動工具 (tool-registry.yaml)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-rule-packs-platform-datajson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Rule Packs 註解 (platform-data.json)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-lint-hooks-bilingual-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Lint Hooks (bilingual validation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-go-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5 Go Code 中文註解
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-python-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6 Python CLI 語言偵測
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-alertmanager-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.7 Alertmanager 樣板 (fallback 順序)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 影響分析
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3 影響分析">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-markdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Markdown 文檔
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-tool-registryyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 tool-registry.yaml（互動工具）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-platform-datajsonrule-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 platform-data.json（Rule Pack 註解）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-lint-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Lint Hooks 詳細改動
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-python-cli-detect_cli_lang" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Python CLI 語言偵測 (detect_cli_lang)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-go-code-alertmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Go Code 與 Alertmanager 樣板
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-jsx-i18n" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7 JSX i18n 參數順序
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-migration-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 Migration Path
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4 Migration Path">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1v250" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1：v2.5.0 (準備 + 試點)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2v260" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2：v2.6.0 (大規模遷移)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3v270v280" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3：v2.7.0–v2.8.0 (驗收 + 收尾)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5 風險評估
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5 風險評估">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-breaking-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Breaking Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 CI 風險
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 文檔品質風險
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 團隊適應
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6 建議時程
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6 建議時程">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mvp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        最少可行集合 (MVP)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        建議版本對應
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7 決策建議
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7 決策建議">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-pros" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Pros（切換到英文優先）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-cons" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 Cons（切換的代價）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 替代方案
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.4 建議決策
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相關文件
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">i18n</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">internal</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">language-strategy</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">planning</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/ssot-language-evaluation.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/ssot-language-evaluation.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="ssot">SSOT 切換影響評估：中文↔英文主次互換<a class="headerlink" href="#ssot" title="Permanent link">&para;</a></h1>
+<h2 id="_1">目錄<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="#1-概述">1 概述</a></li>
+<li><a href="#2-現況盤點">2 現況盤點</a></li>
+<li><a href="#3-影響分析">3 影響分析</a></li>
+<li><a href="#4-migration-path">4 Migration Path</a></li>
+<li><a href="#5-風險評估">5 風險評估</a></li>
+<li><a href="#6-建議時程">6 建議時程</a></li>
+<li><a href="#7-決策建議">7 決策建議</a></li>
+</ul>
+<hr />
+<h2 id="1">1 概述<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>本文評估將 Dynamic Alerting 平台的 SSOT (Single Source of Truth) 語言從 <strong>中文優先</strong> 切換為 <strong>英文優先</strong> 的影響面。</p>
+<h3 id="_2">背景<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>現況</strong>：Chinese 為主 + English 為輔 (.en.md 對)</li>
+<li><strong>目標</strong>：English 為主 + Chinese 為輔 (反轉為 .zh.md 對)</li>
+<li><strong>實施版本</strong>：v2.6.0+ (v2.5.0 僅做準備與評估)</li>
+</ul>
+<h3 id="_3">決策時機<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<p>SSOT 切換涉及文檔結構、CI lint 邏輯、程式碼註解、CLI 預設等多層面，<strong>不適合 1-2 版本內完成</strong>，建議分階段推進：
+- <strong>v2.5.0</strong>：評估、準備、試點小型組件（如 CLAUDE.md）
+- <strong>v2.6.0–v2.7.0</strong>：分階段切換（docs → config → code）
+- <strong>v2.8.0</strong>：完整驗收</p>
+<hr />
+<h2 id="2">2 現況盤點<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="21-mdenmd">2.1 文檔 (.md/.en.md 對)<a class="headerlink" href="#21-mdenmd" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>類別</th>
+<th>數量</th>
+<th>範例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>paired</strong> (.md + .en.md)</td>
+<td>~61</td>
+<td>docs/adr/001-<em>.md/en.md, docs/scenarios/</em>.md/en.md</td>
+</tr>
+<tr>
+<td><strong>zh-only</strong> (.md 無對應 .en.md)</td>
+<td>~2</td>
+<td>docs/internal/*.md (內部工具文檔)</td>
+</tr>
+<tr>
+<td><strong>root docs</strong> (.md 但無 .en.md)</td>
+<td>~1</td>
+<td>docs/tags.md</td>
+</tr>
+<tr>
+<td><strong>總計</strong></td>
+<td><strong>123</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-tool-registryyaml">2.2 互動工具 (tool-registry.yaml)<a class="headerlink" href="#22-tool-registryyaml" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 現況結構</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">tools</span><span class="p">:</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wizard</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">title</span><span class="p">:</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">en</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Getting Started Wizard</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">zh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">入門精靈</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">desc</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">en</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Find your learning path</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">zh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">找到你的學習路徑</span>
+</code></pre></div>
+<ul>
+<li><strong>工具總數</strong>：32 個</li>
+<li><strong>所有工具均已雙語</strong>：title.en + title.zh, desc.en + desc.zh</li>
+<li><strong>分布</strong>：platform, domain, tenant 三層用戶均涵蓋</li>
+<li><strong>參考</strong>：<code>docs/assets/tool-registry.yaml</code></li>
+</ul>
+<h3 id="23-rule-packs-platform-datajson">2.3 Rule Packs 註解 (platform-data.json)<a class="headerlink" href="#23-rule-packs-platform-datajson" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;rulePacks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&quot;mariadb&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;MariaDB/MySQL&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="nt">&quot;dependencies&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">          </span><span class="nt">&quot;en&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Container resource alerts complement DB monitoring&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">          </span><span class="nt">&quot;zh&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;容器資源告警補充 DB 監控&quot;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="p">}</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><strong>Rule Pack 總數</strong>：15 個</li>
+<li><strong>雙語支援位點</strong>：<code>dependencies.reason</code> (en + zh)</li>
+<li><strong>其他欄位</strong>：label, category, display 等單語 (通常為英文)</li>
+<li><strong>參考</strong>：<code>docs/assets/platform-data.json</code></li>
+</ul>
+<h3 id="24-lint-hooks-bilingual-validation">2.4 Lint Hooks (bilingual validation)<a class="headerlink" href="#24-lint-hooks-bilingual-validation" title="Permanent link">&para;</a></h3>
+<p><strong>現有 bilingual-aware hooks</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>檔案</th>
+<th>功能</th>
+<th>需改</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bilingual-structure-check</td>
+<td>check_bilingual_structure.py</td>
+<td>確保 .md ↔ .en.md 結構同步</td>
+<td>⚠️ 邏輯反轉</td>
+</tr>
+<tr>
+<td>bilingual-annotations-check</td>
+<td>check_bilingual_annotations.py</td>
+<td>Rule Pack <code>*_zh</code> suffix 完整性</td>
+<td>⚠️ suffix 改為 <code>*</code></td>
+</tr>
+<tr>
+<td>bilingual-content-check</td>
+<td>check_bilingual_content.py</td>
+<td>.en.md 不含過多 CJK；zh-only 檢測</td>
+<td>⚠️ 主次反轉</td>
+</tr>
+<tr>
+<td>i18n-coverage-check</td>
+<td>check_i18n_coverage.py</td>
+<td>JSX/Python 雙語覆蓋檢查</td>
+<td>✓ 邏輯不變</td>
+</tr>
+<tr>
+<td>jsx-i18n-check</td>
+<td>check_jsx_i18n.py</td>
+<td>JSX <code>window.__t(zh, en)</code> 參數順序</td>
+<td>⚠️ 參數反轉</td>
+</tr>
+<tr>
+<td>portal-i18n-check</td>
+<td>check_portal_i18n.py</td>
+<td>Portal JSX i18n 覆蓋</td>
+<td>✓ 邏輯不變</td>
+</tr>
+<tr>
+<td>translation-check</td>
+<td>check_translation.py (manual)</td>
+<td>翻譯品質檢查</td>
+<td>⚠️ 邏輯微調</td>
+</tr>
+</tbody>
+</table>
+<h3 id="25-go-code">2.5 Go Code 中文註解<a class="headerlink" href="#25-go-code" title="Permanent link">&para;</a></h3>
+<p><strong>目前中文出現位點</strong>：
+- Alertmanager 樣板：<code>.CommonAnnotations.summary_zh</code>, <code>.description_zh</code>, <code>.platform_summary_zh</code>
+- 預留位點（尚未實裝）：Rule Pack 欄位中的 <code>*_zh</code> suffix</p>
+<p><strong>掃描結果</strong>：Go 程式碼本身無 hardcoded 中文，中文僅存於 YAML 樣板與 Rule Pack 定義</p>
+<h3 id="26-python-cli">2.6 Python CLI 語言偵測<a class="headerlink" href="#26-python-cli" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_cli_lang</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;檢測 CLI 語言：DA_LANG → LC_ALL → LANG</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="sd">    返回 &#39;zh&#39; | &#39;en&#39;（預設 &#39;en&#39;）</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;DA_LANG&quot;</span><span class="p">,</span> <span class="s2">&quot;LC_ALL&quot;</span><span class="p">,</span> <span class="s2">&quot;LANG&quot;</span><span class="p">):</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="n">val</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">var</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="k">if</span> <span class="n">val</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;zh&quot;</span><span class="p">):</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>            <span class="k">return</span> <span class="s2">&quot;zh&quot;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>        <span class="k">if</span> <span class="n">val</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;en&quot;</span><span class="p">):</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>            <span class="k">return</span> <span class="s2">&quot;en&quot;</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="k">return</span> <span class="s2">&quot;en&quot;</span>  <span class="c1"># ← 現預設為英文</span>
+</code></pre></div>
+<p><strong>使用位點</strong>：<code>da-tools</code> 各命令的 help text、error msg、報表標題</p>
+<h3 id="27-alertmanager-fallback">2.7 Alertmanager 樣板 (fallback 順序)<a class="headerlink" href="#27-alertmanager-fallback" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{{</span><span class="w"> </span><span class="err">$</span><span class="nx">summary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">or</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">summary_zh</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">summary</span><span class="w"> </span><span class="p">}}</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p">{{</span><span class="w"> </span><span class="err">$</span><span class="nx">description</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">or</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">description_zh</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">description</span><span class="w"> </span><span class="p">}}</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">{{</span><span class="w"> </span><span class="err">$</span><span class="nx">platformSummary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">or</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">platform_summary_zh</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">platform_summary</span><span class="w"> </span><span class="p">}}</span>
+</code></pre></div>
+<p><strong>現況</strong>：中文優先 → 英文 fallback</p>
+<hr />
+<h2 id="3">3 影響分析<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31-markdown">3.1 Markdown 文檔<a class="headerlink" href="#31-markdown" title="Permanent link">&para;</a></h3>
+<h4 id="_4">現況運作<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docs/adr/001-severity-dedup.md          ← 中文（主、作者手編）
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>docs/adr/001-severity-dedup.en.md       ← 英文（輔、自動生成或手編）
+</code></pre></div>
+<h4 id="_5">切換後<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docs/adr/001-severity-dedup.md          ← 英文（主）
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>docs/adr/001-severity-dedup.zh.md       ← 中文（輔）
+</code></pre></div>
+<h4 id="_6">變更項目<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>操作</th>
+<th>影響範圍</th>
+<th>複雜度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>檔名</strong></td>
+<td>mv .en.md → .md, .md → .zh.md</td>
+<td>61 doc pairs</td>
+<td>高</td>
+</tr>
+<tr>
+<td><strong>YAML frontmatter</strong></td>
+<td><code>lang: zh</code> → <code>lang: en</code></td>
+<td>123 files</td>
+<td>低</td>
+</tr>
+<tr>
+<td><strong>內部連結</strong></td>
+<td>docs/foo.md → docs/foo.zh.md (zh context)</td>
+<td>可忽略 (markdown link resolver 已支援)</td>
+<td>低</td>
+</tr>
+<tr>
+<td><strong>_toc.yaml</strong></td>
+<td>若存在，需更新 lang 標籤</td>
+<td>0-1 files</td>
+<td>低</td>
+</tr>
+<tr>
+<td><strong>README 中的語言聲明</strong></td>
+<td>更新描述</td>
+<td>3+ files</td>
+<td>低</td>
+</tr>
+</tbody>
+</table>
+<h4 id="_7">執行方案<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Phase 1: 驗收準備（v2.5.0 late）</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># 在試點目錄試跑一遍，如 docs/internal/</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">for</span><span class="w"> </span>f<span class="w"> </span><span class="k">in</span><span class="w"> </span>docs/internal/*.md<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">f</span><span class="p">%.md</span><span class="si">}</span><span class="s2">.en.md&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Would rename: </span><span class="nv">$f</span><span class="s2"> → </span><span class="si">${</span><span class="nv">f</span><span class="p">%.md</span><span class="si">}</span><span class="s2">.zh.md and </span><span class="si">${</span><span class="nv">f</span><span class="p">%.md</span><span class="si">}</span><span class="s2">.en.md → </span><span class="nv">$f</span><span class="s2">&quot;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="k">fi</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">done</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Phase 2: 批量執行（v2.6.0 early）</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># 確保 git 歷史保留，使用 git mv</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>git<span class="w"> </span>mv<span class="w"> </span>docs/adr/001.en.md<span class="w"> </span>docs/adr/001.md
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>git<span class="w"> </span>mv<span class="w"> </span>docs/adr/001.md<span class="w"> </span>docs/adr/001.zh.md
+</code></pre></div>
+<h4 id="_8">風險<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Broken cross-doc links</strong>：若手動連結使用絕對路徑且未更新（low risk，markdown 通常用相對路徑）</li>
+<li><strong>CI 斷檔</strong>：rename 過程中 hook 一時無法觸發（需暫時 SKIP 部分 hooks）</li>
+<li><strong>文檔生成工具</strong>：若有 mkdocs/Hugo 等配置硬編 <code>.en.md</code>，需更新 glob pattern</li>
+</ul>
+<hr />
+<h3 id="32-tool-registryyaml">3.2 tool-registry.yaml（互動工具）<a class="headerlink" href="#32-tool-registryyaml" title="Permanent link">&para;</a></h3>
+<h4 id="_9">現況<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">tools</span><span class="p">:</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wizard</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">title</span><span class="p">:</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">en</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Getting Started Wizard</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">zh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">入門精靈</span>
+</code></pre></div>
+<h4 id="_10">切換後<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h4>
+<p><strong>方案 A</strong>（推薦）：交換順序，保持結構</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wizard</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">title</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">en</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Getting Started Wizard</span><span class="w">  </span><span class="c1"># 標準 YAML 對象順序 (無硬性要求)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">zh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">入門精靈</span>
+</code></pre></div>
+<p><strong>方案 B</strong>（激進）：主次反轉</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wizard</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">title_en</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Getting Started Wizard</span><span class="w">   </span><span class="c1"># 不推薦，易破壞下游消費者</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">title_zh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">入門精靈</span>
+</code></pre></div>
+<h4 id="_11">建議<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h4>
+<p><strong>採用方案 A</strong>（交換順序 in-place）：
+- ✓ 不改結構，YAML parser 相容
+- ✓ 下游（JSX loader, Portal）無感
+- ✓ lint hook <code>check_jsx_i18n</code> 邏輯不變
+- ⚠️ 語義上「第一個」是英文，但 YAML 無序特性，需文檔說明</p>
+<h4 id="_12">變更項目<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>操作</th>
+<th>影響</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>doc 順序</strong></td>
+<td>將 <code>en:</code> 移到 <code>zh:</code> 之前 (或保持)</td>
+<td>可選</td>
+</tr>
+<tr>
+<td><strong>JSX loader</strong></td>
+<td>檢查 <code>window.__t(zh, en)</code> → <code>window.__t(en, zh)</code></td>
+<td>⚠️ 見 3.7</td>
+</tr>
+<tr>
+<td><strong>JSX consumer</strong></td>
+<td>各工具 JSX 檢查 i18n call 順序</td>
+<td>⚠️ 32 tools</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="33-platform-datajsonrule-pack">3.3 platform-data.json（Rule Pack 註解）<a class="headerlink" href="#33-platform-datajsonrule-pack" title="Permanent link">&para;</a></h3>
+<h4 id="_13">現況<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;rulePacks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nt">&quot;mariadb&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">      </span><span class="nt">&quot;dependencies&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">        </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">          </span><span class="nt">&quot;en&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Container alerts...&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">          </span><span class="nt">&quot;zh&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;容器告警...&quot;</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">      </span><span class="p">}</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="p">}</span>
+</code></pre></div>
+<h4 id="_14">切換後<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;rulePacks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">&quot;mariadb&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">      </span><span class="nt">&quot;dependencies&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">        </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">          </span><span class="nt">&quot;en&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Container alerts...&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">          </span><span class="nt">&quot;zh&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;容器告警...&quot;</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">      </span><span class="p">}</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>無實質變更</strong>（JSON 對象無序），但語義上英文為主。</p>
+<h4 id="_15">影響<a class="headerlink" href="#_15" title="Permanent link">&para;</a></h4>
+<ul>
+<li><code>generate_platform_data.py</code>：確保生成時 en 優先於 zh（已有邏輯，無需改）</li>
+<li>Portal 消費邏輯：預期優先顯示 en（需確認）</li>
+<li>Lint：<code>check_bilingual_annotations.py</code> 需改邏輯（見 3.4）</li>
+</ul>
+<hr />
+<h3 id="34-lint-hooks">3.4 Lint Hooks 詳細改動<a class="headerlink" href="#34-lint-hooks" title="Permanent link">&para;</a></h3>
+<h4 id="341-check_bilingual_structurepy">3.4.1 check_bilingual_structure.py（最關鍵）<a class="headerlink" href="#341-check_bilingual_structurepy" title="Permanent link">&para;</a></h4>
+<p><strong>現況</strong>：掃描所有 <code>.en.md</code>，確保每個都有對應的 <code>.md</code> 且結構一致</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">docs</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">&quot;*.en.md&quot;</span><span class="p">):</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="n">pair</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>  <span class="c1"># foo.en.md → foo.md</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">pair</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>        <span class="n">ERROR</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2"> has no zh pair </span><span class="si">{</span><span class="n">pair</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>切換後</strong>：掃描所有 <code>.md</code>，確保每個非內部的都有對應的 <code>.zh.md</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">docs</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">&quot;*.md&quot;</span><span class="p">):</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="k">if</span> <span class="s2">&quot;includes&quot;</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">parts</span> <span class="ow">or</span> <span class="s2">&quot;.en.md&quot;</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">f</span><span class="p">):</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>        <span class="k">continue</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">pair</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">stem</span> <span class="o">+</span> <span class="s2">&quot;.zh.md&quot;</span><span class="p">)</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">pair</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span> <span class="ow">and</span> <span class="n">is_public_doc</span><span class="p">(</span><span class="n">f</span><span class="p">):</span>  <span class="c1"># 新增 is_public_doc</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>        <span class="n">ERROR</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2"> has no zh pair </span><span class="si">{</span><span class="n">pair</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>改動複雜度</strong>：高（邏輯反轉，需測試 60+ 對）</p>
+<h4 id="342-check_bilingual_annotationspyrule-pack">3.4.2 check_bilingual_annotations.py（Rule Pack）<a class="headerlink" href="#342-check_bilingual_annotationspyrule-pack" title="Permanent link">&para;</a></h4>
+<p><strong>現況</strong>：檢查 rule-packs/*.yaml 中是否都有 <code>*_zh</code> suffix 欄位</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">for</span> <span class="n">rule_pack</span> <span class="ow">in</span> <span class="n">rule_packs</span><span class="p">:</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="k">if</span> <span class="n">rule_pack</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;summary_zh&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>        <span class="n">WARNING</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing summary_zh in </span><span class="si">{</span><span class="n">rule_pack_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>切換後</strong>：檢查 <code>*</code> 欄位存在，<code>*_zh</code> 為可選</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">for</span> <span class="n">rule_pack</span> <span class="ow">in</span> <span class="n">rule_packs</span><span class="p">:</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="k">if</span> <span class="n">rule_pack</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;summary&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>        <span class="n">ERROR</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing summary (en) in </span><span class="si">{</span><span class="n">rule_pack_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>    <span class="c1"># *_zh 變為 optional</span>
+</code></pre></div>
+<p><strong>改動複雜度</strong>：中等（邏輯反轉，驗證 15 rule pack）</p>
+<h4 id="343-check_bilingual_contentpycjk">3.4.3 check_bilingual_content.py（CJK 檢測）<a class="headerlink" href="#343-check_bilingual_contentpycjk" title="Permanent link">&para;</a></h4>
+<p><strong>現況</strong>：
+- <code>.en.md</code> 中 &gt;20% CJK → warning（不應有太多中文）
+- <code>.md</code> 中 &lt;5% CJK → info（可能未翻譯）</p>
+<p><strong>切換後</strong>：
+- <code>.md</code> 中 &gt;20% CJK → warning（英文主檔不應有太多中文）
+- <code>.zh.md</code> 中 &lt;5% CJK → info（可能未翻譯）</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># 新邏輯</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">docs</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">&quot;*.md&quot;</span><span class="p">):</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="k">if</span> <span class="s2">&quot;.en.md&quot;</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="ow">or</span> <span class="s2">&quot;.zh.md&quot;</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">:</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>        <span class="k">continue</span>  <span class="c1"># 跳過輔文檔，只檢查主文檔</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>    <span class="n">ratio</span> <span class="o">=</span> <span class="n">count_cjk_ratio</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read_text</span><span class="p">())</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>    <span class="k">if</span> <span class="n">ratio</span> <span class="o">&gt;</span> <span class="mf">0.20</span><span class="p">:</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>        <span class="n">WARNING</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">ratio</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> CJK in primary (EN) doc&quot;</span><span class="p">)</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">docs</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">&quot;*.zh.md&quot;</span><span class="p">):</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>    <span class="n">ratio</span> <span class="o">=</span> <span class="n">count_cjk_ratio</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read_text</span><span class="p">())</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>    <span class="k">if</span> <span class="n">ratio</span> <span class="o">&lt;</span> <span class="mf">0.05</span><span class="p">:</span>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>        <span class="n">INFO</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">: only </span><span class="si">{</span><span class="n">ratio</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> CJK (might be untranslated)&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>改動複雜度</strong>：中等</p>
+<h4 id="344-check_jsx_i18npyjsx-i18n">3.4.4 check_jsx_i18n.py（JSX i18n 參數順序）<a class="headerlink" href="#344-check_jsx_i18npyjsx-i18n" title="Permanent link">&para;</a></h4>
+<p><strong>現況</strong>：JSX 中應使用 <code>window.__t(zh, en)</code> 順序</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">window</span><span class="p">.</span><span class="nx">__t</span><span class="p">(</span><span class="s2">&quot;中文&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;English&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1">// ✓ 當前慣例</span>
+</code></pre></div>
+<p><strong>切換後</strong>：應改為 <code>window.__t(en, zh)</code> 順序</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">window</span><span class="p">.</span><span class="nx">__t</span><span class="p">(</span><span class="s2">&quot;English&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;中文&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1">// ✓ 新慣例</span>
+</code></pre></div>
+<p><strong>改動</strong>：
+1. Lint hook 期望值反轉
+2. JSX 所有 32 工具的 <code>window.__t()</code> 呼叫需反轉參數</p>
+<p><strong>複雜度</strong>：高（32 個檔案 × 多個呼叫點）</p>
+<h4 id="345-check_i18n_coveragepy">3.4.5 check_i18n_coverage.py（不變）<a class="headerlink" href="#345-check_i18n_coveragepy" title="Permanent link">&para;</a></h4>
+<p>邏輯基於「是否有中英對照」，不因 SSOT 改變。</p>
+<p><strong>改動</strong>：無（或少量文檔說明)</p>
+<h4 id="346-check_portal_i18npy">3.4.6 check_portal_i18n.py（不變）<a class="headerlink" href="#346-check_portal_i18npy" title="Permanent link">&para;</a></h4>
+<p>檢查 Portal JSX 是否有 i18n hook，邏輯不因 SSOT 改變。</p>
+<p><strong>改動</strong>：無</p>
+<hr />
+<h3 id="35-python-cli-detect_cli_lang">3.5 Python CLI 語言偵測 (detect_cli_lang)<a class="headerlink" href="#35-python-cli-detect_cli_lang" title="Permanent link">&para;</a></h3>
+<p><strong>現況</strong>：預設 <code>'en'</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_cli_lang</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;DA_LANG&quot;</span><span class="p">,</span> <span class="s2">&quot;LC_ALL&quot;</span><span class="p">,</span> <span class="s2">&quot;LANG&quot;</span><span class="p">):</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>        <span class="n">val</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">var</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>        <span class="k">if</span> <span class="n">val</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;zh&quot;</span><span class="p">):</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>            <span class="k">return</span> <span class="s2">&quot;zh&quot;</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>        <span class="k">if</span> <span class="n">val</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;en&quot;</span><span class="p">):</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>            <span class="k">return</span> <span class="s2">&quot;en&quot;</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>    <span class="k">return</span> <span class="s2">&quot;en&quot;</span>  <span class="c1"># ← 預設</span>
+</code></pre></div>
+<p><strong>切換後</strong>：邏輯無需改，預設仍為 <code>'en'</code>（因為 SSOT 本身就是英文）</p>
+<p><strong>改動</strong>：無（或重新註釋說明預設)</p>
+<h4 id="_16">使用位點<a class="headerlink" href="#_16" title="Permanent link">&para;</a></h4>
+<ul>
+<li>da-tools 命令 help/error：<code>i18n_text(zh_msg, en_msg)</code> → 優先英文</li>
+<li>報表標題、欄位名：預設英文</li>
+</ul>
+<hr />
+<h3 id="36-go-code-alertmanager">3.6 Go Code 與 Alertmanager 樣板<a class="headerlink" href="#36-go-code-alertmanager" title="Permanent link">&para;</a></h3>
+<h4 id="_17">現況<a class="headerlink" href="#_17" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="p">{{</span><span class="w"> </span><span class="err">$</span><span class="nx">summary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">or</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">summary_zh</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">summary</span><span class="w"> </span><span class="p">}}</span>
+</code></pre></div>
+<p>意義：優先中文 summary，fallback 英文。</p>
+<h4 id="_18">切換後<a class="headerlink" href="#_18" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{{</span><span class="w"> </span><span class="err">$</span><span class="nx">summary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">or</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">summary</span><span class="w"> </span><span class="p">.</span><span class="nx">CommonAnnotations</span><span class="p">.</span><span class="nx">summary_zh</span><span class="w"> </span><span class="p">}}</span>
+</code></pre></div>
+<p>意義：優先英文 summary，fallback 中文。</p>
+<h4 id="_19">變更項目<a class="headerlink" href="#_19" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>檔案</th>
+<th>變更</th>
+<th>影響</th>
+<th>複雜度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>configmap-alertmanager.yaml</td>
+<td>or 順序反轉 (× 3 annotations)</td>
+<td>告警通知樣板</td>
+<td>低</td>
+</tr>
+<tr>
+<td>Alertmanager 註釋</td>
+<td>更新 doc comment</td>
+<td>文檔</td>
+<td>低</td>
+</tr>
+<tr>
+<td>無 Go 程式碼改</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<p><strong>影響運維</strong>：告警通知會優先使用英文，中文為後備（適應 SSOT）</p>
+<hr />
+<h3 id="37-jsx-i18n">3.7 JSX i18n 參數順序<a class="headerlink" href="#37-jsx-i18n" title="Permanent link">&para;</a></h3>
+<h4 id="_20">現況<a class="headerlink" href="#_20" title="Permanent link">&para;</a></h4>
+<p>所有 JSX 工具使用 <code>window.__t(zh, en)</code> 模式：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1">// docs/interactive/tools/playground.jsx (example)</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="kd">const</span><span class="w"> </span><span class="nx">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">window</span><span class="p">.</span><span class="nx">__t</span><span class="p">(</span><span class="s2">&quot;YAML 驗證器&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;Tenant YAML Validator&quot;</span><span class="p">);</span>
+</code></pre></div>
+<h4 id="_21">切換後<a class="headerlink" href="#_21" title="Permanent link">&para;</a></h4>
+<p>應改為 <code>window.__t(en, zh)</code>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">title</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">window</span><span class="p">.</span><span class="nx">__t</span><span class="p">(</span><span class="s2">&quot;Tenant YAML Validator&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;YAML 驗證器&quot;</span><span class="p">);</span>
+</code></pre></div>
+<h4 id="_22">變更量<a class="headerlink" href="#_22" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>檔案數</strong>：32 個 JSX 工具 + 1 wizard.jsx + 1 index.html loader = <strong>34 個</strong></li>
+<li><strong>呼叫點</strong>：估計 100–150 個 <code>window.__t()</code> 呼叫</li>
+<li><strong>複雜度</strong>：<strong>高</strong>（需逐檔手編或用 regex + 驗證）</li>
+</ul>
+<h4 id="_23">執行方案<a class="headerlink" href="#_23" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># 方案 1：regex 替換（有風險）</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>find<span class="w"> </span>docs<span class="w"> </span>-name<span class="w"> </span><span class="s2">&quot;*.jsx&quot;</span><span class="w"> </span>-type<span class="w"> </span>f<span class="w"> </span>-exec<span class="w"> </span>sed<span class="w"> </span>-i<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span><span class="s2">&quot;s/window\.__t(\([^,]*\), \([^)]*\))/window.__t(\2, \1)/g&quot;</span><span class="w"> </span><span class="o">{}</span><span class="w"> </span><span class="se">\;</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="c1"># 方案 2：逐檔手編（安全）</span>
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="k">for</span><span class="w"> </span>tool<span class="w"> </span><span class="k">in</span><span class="w"> </span>docs/interactive/tools/*.jsx<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a><span class="w">  </span><span class="c1"># 手動檢視 window.__t 呼叫，交換參數</span>
+<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="k">done</span>
+<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>
+<a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a><span class="c1"># 推薦：方案 2 + semi-automated review</span>
+</code></pre></div>
+<hr />
+<h2 id="4-migration-path">4 Migration Path<a class="headerlink" href="#4-migration-path" title="Permanent link">&para;</a></h2>
+<h3 id="phase-1v250">Phase 1：v2.5.0 (準備 + 試點)<a class="headerlink" href="#phase-1v250" title="Permanent link">&para;</a></h3>
+<h4 id="1a-23">1a. 文檔準備（2–3 天）<a class="headerlink" href="#1a-23" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 CLAUDE.md § 開發規範，說明「v2.6.0 會切換至英文優先」</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 README.md 語言聲明</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 在 <code>docs/internal/</code> 試點 2–3 個文檔進行 rename test</li>
+<li>選擇低風險目標：如 <code>windows-mcp-playbook.md</code> (無其他文檔引用)</li>
+<li>執行 rename：.md → .zh.md, .en.md → .md</li>
+<li>驗證 lint 通過</li>
+<li><strong>回滾</strong>到原狀，記錄踩坑</li>
+</ul>
+<h4 id="1b-lint-35">1b. Lint 工具適配（3–5 天）<a class="headerlink" href="#1b-lint-35" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 新增 feature flag：<code>--target-lang en</code> (可選)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 在 <code>check_bilingual_structure.py</code> 中添加試驗模式
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">target_lang</span> <span class="o">==</span> <span class="s2">&quot;en&quot;</span><span class="p">:</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>    <span class="c1"># 執行新邏輯</span>
+</code></pre></div></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 準備 <code>check_bilingual_annotations.py</code> 的新邏輯（暫不啟用）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 記錄修改清單與驗證步驟</li>
+</ul>
+<h4 id="1c-jsx-registry-2">1c. JSX 與 registry 評估（2 天）<a class="headerlink" href="#1c-jsx-registry-2" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 掃描所有 32 個工具的 <code>window.__t()</code> 呼叫</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 生成 refactor 清單（工具名、行數、參數）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 估算工作量 &amp; 風險（如：是否有嵌套 __t 呼叫）</li>
+</ul>
+<h4 id="1d-cicd-1">1d. CI/CD 準備（1 天）<a class="headerlink" href="#1d-cicd-1" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 確認預 commit hook 執行環境</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 準備 SKIP 清單（v2.6.0 rename 期間跳過部分 hook）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 整理回滾腳本</li>
+</ul>
+<h3 id="phase-2v260">Phase 2：v2.6.0 (大規模遷移)<a class="headerlink" href="#phase-2v260" title="Permanent link">&para;</a></h3>
+<h4 id="2a-1">2a. 文檔遷移（1 周）<a class="headerlink" href="#2a-1" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 停止接受新 doc PR（freeze）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 執行批量 rename（使用 git mv 保留歷史）
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># 以 ADR 為例</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="k">for</span><span class="w"> </span>f<span class="w"> </span><span class="k">in</span><span class="w"> </span>docs/adr/*.en.md<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span><span class="nv">base</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">f</span><span class="p">%.en.md</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="w">  </span>git<span class="w"> </span>mv<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">base</span><span class="si">}</span><span class="s2">.md&quot;</span><span class="w">          </span><span class="c1"># .en.md → .md</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">  </span>git<span class="w"> </span>mv<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">base</span><span class="si">}</span><span class="s2">.md&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">base</span><span class="si">}</span><span class="s2">.zh.md&quot;</span><span class="w">  </span><span class="c1"># .md → .zh.md</span>
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="k">done</span>
+</code></pre></div></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 驗證所有 123 個檔案名正確</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 執行完整 lint（<code>check_bilingual_structure.py</code> 已切換新邏輯）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 修復任何 broken links（預期少量）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 重新開放 doc PR</li>
+</ul>
+<h4 id="2b-lint-hook-23">2b. Lint Hook 啟用（2–3 天）<a class="headerlink" href="#2b-lint-hook-23" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 移除試驗模式，正式啟用新邏輯</li>
+<li><code>check_bilingual_structure.py</code> 反轉邏輯</li>
+<li><code>check_bilingual_annotations.py</code> 反轉邏輯</li>
+<li><code>check_bilingual_content.py</code> 反轉邏輯</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 執行 pre-commit full run，修復任何遺留問題</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> CI 通過</li>
+</ul>
+<h4 id="2c-jsx-12">2c. JSX 工具適配（1–2 周）<a class="headerlink" href="#2c-jsx-12" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 逐工具更新 <code>window.__t()</code> 呼叫順序（32 + 2 = 34 個檔案）</li>
+<li>分批進行（per PR 3–5 工具）</li>
+<li>每批都需 JSX 視覺驗證（若可行）</li>
+<li><code>lint_jsx_babel.py</code> 應已驗證語法</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>check_jsx_i18n.py</code> 驗證新順序</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Portal 若有快取，清除 dist</li>
+</ul>
+<h4 id="2d-go-code-1">2d. Go Code 與樣板（1 天）<a class="headerlink" href="#2d-go-code-1" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 configmap-alertmanager.yaml 的 or 順序</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新任何 Go 程式碼註釋（預期無程式碼改，只有註釋/文檔）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>da-tools</code> 任何中文 help text 的順序確認（通常自動）</li>
+</ul>
+<h4 id="2e-35">2e. 平台測試（3–5 天）<a class="headerlink" href="#2e-35" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 端對端場景驗證
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>make<span class="w"> </span>demo-showcase<span class="w">    </span><span class="c1"># 5-tenant 展演</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>make<span class="w"> </span>validate-config<span class="w">  </span><span class="c1"># 配置驗證</span>
+</code></pre></div></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 告警通知測試：確保中英文 fallback 生效</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Portal 展示測試：工具列表、流程引導</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> CLI 輸出測試：help, error, report</li>
+</ul>
+<h4 id="2f-2">2f. 文檔同步（2 天）<a class="headerlink" href="#2f-2" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 CLAUDE.md</li>
+<li>§ 開發規範：移除 v2.6.0 遷移說明，改為「已切換至英文優先」</li>
+<li>更新版本數字（如 doc pair 統計)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 README.md</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 CHANGELOG.md：記錄 BREAKING CHANGE
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="gu">## v2.6.0</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="k">-</span><span class="w"> </span><span class="gs">**BREAKING: 語言策略切換**</span> — 文檔現以英文為主 SSOT，中文為輔
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">  </span><span class="k">-</span><span class="w"> </span>doc pair 現為 .md (en) + .zh.md (zh)，反向於 v2.7.0
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="w">  </span><span class="k">-</span><span class="w"> </span>lint hook 邏輯已適配
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="w">  </span><span class="k">-</span><span class="w"> </span>JSX i18n 參數順序反轉為 __t(en, zh)
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="w">  </span><span class="k">-</span><span class="w"> </span>告警樣板優先英文 annotation，fallback 中文
+</code></pre></div></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 更新 <code>doc-map.md</code> 若有列出 lang 標籤統計</li>
+</ul>
+<h3 id="phase-3v270v280">Phase 3：v2.7.0–v2.8.0 (驗收 + 收尾)<a class="headerlink" href="#phase-3v270v280" title="Permanent link">&para;</a></h3>
+<h4 id="3a-12">3a. 收集反饋（1–2 周）<a class="headerlink" href="#3a-12" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 監控用戶反饋、CI 失敗</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 記錄任何遺漏的 lint 位點</li>
+</ul>
+<h4 id="3b">3b. 微調與冷靜期<a class="headerlink" href="#3b" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 修復任何邊界情況</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 確認無遺留 hardcoded 中文在程式碼中</li>
+</ul>
+<h4 id="3c">3c. 完整文檔審視<a class="headerlink" href="#3c" title="Permanent link">&para;</a></h4>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Playbook 中是否有涉及 SSOT 的敘述（如 testing-playbook.md）</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> 若有，更新說明</li>
+</ul>
+<hr />
+<h2 id="5">5 風險評估<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<h3 id="51-breaking-changes">5.1 Breaking Changes<a class="headerlink" href="#51-breaking-changes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>影響範圍</th>
+<th>嚴重度</th>
+<th>緩解措施</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>文檔 URL 變更</strong></td>
+<td>外部連結到 .en.md 檔案會 404</td>
+<td>高</td>
+<td>在 README 公告；提供重定向</td>
+</tr>
+<tr>
+<td><strong>JSX 參數順序</strong></td>
+<td>工具內 i18n 邏輯反轉</td>
+<td>中</td>
+<td>全面測試 (34 files)</td>
+</tr>
+<tr>
+<td><strong>告警樣板順序</strong></td>
+<td>舊告警配置若硬編 <code>summary_zh</code> 會優先顯示</td>
+<td>低</td>
+<td>Alertmanager 仍支援 fallback</td>
+</tr>
+<tr>
+<td><strong>CLI 預設</strong></td>
+<td>已是英文，無改變</td>
+<td>無</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-ci">5.2 CI 風險<a class="headerlink" href="#52-ci" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>風險</th>
+<th>機率</th>
+<th>影響</th>
+<th>緩解</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Lint hook 邏輯錯誤</strong></td>
+<td>中</td>
+<td>某些合法文檔被拒</td>
+<td>充分測試，feature flag</td>
+</tr>
+<tr>
+<td><strong>Rename 過程 broken links</strong></td>
+<td>低</td>
+<td>文檔 build 失敗</td>
+<td>預先掃描，手動驗證</td>
+</tr>
+<tr>
+<td><strong>JSX 語法錯誤</strong> (regex 替換)</td>
+<td>中</td>
+<td>工具無法加載</td>
+<td>逐檔手編 + Babel 驗證</td>
+</tr>
+<tr>
+<td><strong>Git 歷史糾纏</strong></td>
+<td>低</td>
+<td>部分開發者 git pull 衝突</td>
+<td>提前公告，清楚文檔</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53">5.3 文檔品質風險<a class="headerlink" href="#53" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>翻譯遺漏</strong>：若 .zh.md 未及時翻譯，用戶看中文 fallback</li>
+<li>緩解：<code>check_bilingual_content.py</code> 檢測 &lt;5% CJK</li>
+<li><strong>結構不一致</strong>：.md vs .zh.md 結構不同</li>
+<li>緩解：<code>check_bilingual_structure.py</code> 自動驗證</li>
+</ul>
+<h3 id="54">5.4 團隊適應<a class="headerlink" href="#54" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>開發者學習曲線</strong>：需理解新文檔對結構</li>
+<li>緩解：CLAUDE.md, CONTRIBUTING.md 清楚說明</li>
+<li><strong>工作流變化</strong>：編輯英文為主，中文為次</li>
+<li>緩解：模板與範例更新</li>
+</ul>
+<hr />
+<h2 id="6">6 建議時程<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<h3 id="mvp">最少可行集合 (MVP)<a class="headerlink" href="#mvp" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>階段</th>
+<th>工作項</th>
+<th>工作天</th>
+<th>版本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>評估</strong></td>
+<td>CLAUDE.md 評估文件、試點 rename</td>
+<td>3</td>
+<td>v2.5.0</td>
+</tr>
+<tr>
+<td><strong>準備</strong></td>
+<td>Lint hook 適配、feature flag</td>
+<td>5</td>
+<td>v2.5.0</td>
+</tr>
+<tr>
+<td><strong>遷移</strong></td>
+<td>doc rename、lint 啟用、JSX 更新</td>
+<td>10</td>
+<td>v2.6.0</td>
+</tr>
+<tr>
+<td><strong>驗證</strong></td>
+<td>端對端測試、文檔同步</td>
+<td>5</td>
+<td>v2.6.0</td>
+</tr>
+<tr>
+<td><strong>收尾</strong></td>
+<td>反饋迴圈、微調</td>
+<td>3</td>
+<td>v2.7.0</td>
+</tr>
+<tr>
+<td><strong>總計</strong></td>
+<td></td>
+<td><strong>26 工作天</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_24">建議版本對應<a class="headerlink" href="#_24" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>v2.5.0</strong> (now → +4 weeks)：評估文檔、試點、準備</li>
+<li>發佈標記：no breaking change</li>
+<li>
+<p>文檔聲明：「v2.6.0 將切換語言優先」</p>
+</li>
+<li>
+<p><strong>v2.6.0</strong> (+4–8 weeks)：大規模遷移</p>
+</li>
+<li>發佈標記：<strong>BREAKING CHANGE</strong> — Language SSOT switch</li>
+<li>
+<p>Migration guide 供用戶參考</p>
+</li>
+<li>
+<p><strong>v2.7.0–v2.8.0</strong> (+8–12 weeks)：驗收、微調</p>
+</li>
+</ul>
+<hr />
+<h2 id="7">7 決策建議<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<h3 id="71-pros">7.1 Pros（切換到英文優先）<a class="headerlink" href="#71-pros" title="Permanent link">&para;</a></h3>
+<p>✅ <strong>國際化友好</strong>
+- 開源社區預設英文；新貢獻者（非華語）體驗更佳
+- GitHub Issues/PRs 主要用英文溝通</p>
+<p>✅ <strong>維護工作減少</strong>
+- 不再需要 maintainer 手動維持中英同步（可 crowd-source 中文翻譯）
+- 英文 SSOT 降低決策負擔</p>
+<p>✅ <strong>工程規範化</strong>
+- Go/Python 主流註解語言是英文
+- 與業界慣例對齊</p>
+<p>✅ <strong>CI 邏輯簡化</strong>
+- 不再需要複雜的 CJK 檢測邏輯（轉型為簡單的「確保二級語言存在」）</p>
+<h3 id="72-cons">7.2 Cons（切換的代價）<a class="headerlink" href="#72-cons" title="Permanent link">&para;</a></h3>
+<p>⚠️ <strong>龐大遷移工作</strong>
+- 123 個文檔、32 個工具、60+ lint 位點、多個 CI hook
+- 預計 2 個版本、26 工作天</p>
+<p>⚠️ <strong>風險集中</strong>
+- 一旦切換，所有文檔 URL 變更（外部連結 404）
+- 現有用戶書籤失效</p>
+<p>⚠️ <strong>中文用戶體驗轉變</strong>
+- 默認看英文（需環境變數切換到中文）
+- 第三方 fork/復刻 需重新適應</p>
+<p>⚠️ <strong>翻譯品質</strong>
+- 如果中文翻譯跟不上英文更新，中文 fallback 會陳舊
+- 需人力維護</p>
+<hr />
+<h3 id="73">7.3 替代方案<a class="headerlink" href="#73" title="Permanent link">&para;</a></h3>
+<h4 id="achinese-ssot"><strong>方案 A：當前狀態維持（Chinese SSOT）</strong><a class="headerlink" href="#achinese-ssot" title="Permanent link">&para;</a></h4>
+<ul>
+<li>✓ 零遷移成本</li>
+<li>✗ 違背開源國際化趨勢</li>
+<li>✗ 新貢獻者體驗欠佳</li>
+</ul>
+<h4 id="b-ssot"><strong>方案 B：雙語並行（無 SSOT）</strong><a class="headerlink" href="#b-ssot" title="Permanent link">&para;</a></h4>
+<ul>
+<li>✓ 避免切換成本</li>
+<li>✗ 無單一真理來源；維護複雜度翻倍</li>
+<li>✗ 分不清哪個是權威版本</li>
+</ul>
+<h4 id="c-ssot"><strong>方案 C：切換至英文 SSOT（本文方案）</strong> ✅ <strong>推薦</strong><a class="headerlink" href="#c-ssot" title="Permanent link">&para;</a></h4>
+<ul>
+<li>✓ 長期維護友好</li>
+<li>✓ 符合國際化戰略</li>
+<li>✗ 短期遷移代價</li>
+</ul>
+<hr />
+<h3 id="74">7.4 建議決策<a class="headerlink" href="#74" title="Permanent link">&para;</a></h3>
+<p><strong>採用方案 C</strong>，理由：</p>
+<ol>
+<li><strong>戰略契合</strong>：Dynamic Alerting 規劃為 open-source，英文 SSOT 是必經之路</li>
+<li><strong>時機合適</strong>：v2.6.0 前、用戶基尚小、改動容易收拾</li>
+<li><strong>可控風險</strong>：分三個版本推進，每步都可驗證與回滾</li>
+<li><strong>長期效益</strong>：一次切換，永久收益</li>
+</ol>
+<p><strong>關鍵決策點</strong>：
+- ✅ <strong>同意</strong>：在 v2.5.0 進行評估與試點
+- ✅ <strong>同意</strong>：v2.6.0 執行遷移（with BREAKING CHANGE 通知）
+- ✅ <strong>同意</strong>：在官方公告中清楚解釋理由與遷移路徑</p>
+<hr />
+<h2 id="_25">相關文件<a class="headerlink" href="#_25" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md"><code>CLAUDE.md</code></a> — 開發上下文指引</li>
+<li><a href="../doc-map/"><code>docs/internal/doc-map.md</code></a> — 文檔對照表</li>
+<li><a href="../tool-map/"><code>docs/internal/tool-map.md</code></a> — 工具清單</li>
+<li><a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml"><code>.pre-commit-config.yaml</code></a> — Lint hook 配置</li>
+<li><a href="../../../assets/tool-registry.yaml"><code>docs/assets/tool-registry.yaml</code></a> — 工具 metadata</li>
+<li><a href="../../../assets/platform-data.json"><code>docs/assets/platform-data.json</code></a> — Rule Pack 數據</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

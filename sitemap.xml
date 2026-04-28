@@ -1,0 +1,1493 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/CHANGELOG/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/CHANGELOG/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/CHANGELOG/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/architecture-and-design/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/architecture-and-design/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/architecture-and-design/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/benchmarks/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/benchmarks/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/benchmarks/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/cheat-sheet/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/cheat-sheet/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/cheat-sheet/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/cli-reference/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/cli-reference/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/cli-reference/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/custom-rule-governance/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/custom-rule-governance/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/custom-rule-governance/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/glossary/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/glossary/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/glossary/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/governance-security/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/governance-security/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/governance-security/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/grafana-dashboards/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/grafana-dashboards/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/grafana-dashboards/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/interactive-tools/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/interactive-tools/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/interactive-tools/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/migration-engine/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-engine/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-engine/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/migration-guide/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-guide/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/migration-toolkit-installation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-toolkit-installation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-toolkit-installation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/shadow-monitoring-sop/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/shadow-monitoring-sop/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/shadow-monitoring-sop/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/tags/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/tags/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/tags/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/troubleshooting/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/troubleshooting/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/troubleshooting/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/vcs-integration-guide/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/vcs-integration-guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/vcs-integration-guide/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/001-severity-dedup-via-inhibit/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/001-severity-dedup-via-inhibit/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/001-severity-dedup-via-inhibit/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/002-oci-registry-over-chartmuseum/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/002-oci-registry-over-chartmuseum/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/002-oci-registry-over-chartmuseum/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/003-sentinel-alert-pattern/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/003-sentinel-alert-pattern/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/003-sentinel-alert-pattern/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/004-federation-central-exporter-first/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/004-federation-central-exporter-first/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/004-federation-central-exporter-first/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/005-projected-volume-for-rule-packs/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/005-projected-volume-for-rule-packs/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/005-projected-volume-for-rule-packs/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/006-tenant-mapping-topologies/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/006-tenant-mapping-topologies/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/006-tenant-mapping-topologies/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/007-cross-domain-routing-profiles/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/007-cross-domain-routing-profiles/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/007-cross-domain-routing-profiles/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/008-operator-native-integration-path/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/008-operator-native-integration-path/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/008-operator-native-integration-path/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/009-tenant-manager-crud-api/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/009-tenant-manager-crud-api/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/009-tenant-manager-crud-api/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/010-multi-tenant-grouping/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/010-multi-tenant-grouping/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/010-multi-tenant-grouping/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/011-pr-based-write-back/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/011-pr-based-write-back/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/011-pr-based-write-back/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/012-colorblind-hotfix-structured-severity-return/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/012-colorblind-hotfix-structured-severity-return/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/012-colorblind-hotfix-structured-severity-return/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/013-component-health-token-density-metric/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/013-component-health-token-density-metric/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/013-component-health-token-density-metric/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/014-tech-debt-category-budget-isolation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/014-tech-debt-category-budget-isolation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/014-tech-debt-category-budget-isolation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/015-wizard-arbitrary-value-token-migration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/015-wizard-arbitrary-value-token-migration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/015-wizard-arbitrary-value-token-migration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/016-data-theme-single-track-dark-mode/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/016-data-theme-single-track-dark-mode/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/016-data-theme-single-track-dark-mode/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/017-conf-d-directory-hierarchy-mixed-mode/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/017-conf-d-directory-hierarchy-mixed-mode/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/017-conf-d-directory-hierarchy-mixed-mode/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/018-defaults-yaml-inheritance-dual-hash/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/018-defaults-yaml-inheritance-dual-hash/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/018-defaults-yaml-inheritance-dual-hash/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/adr/019-profile-as-directory-default/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/019-profile-as-directory-default/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/019-profile-as-directory-default/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/api/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/api/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/api/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/api/tenant-api-hardening/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/api/tenant-api-hardening/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/api/tenant-api-hardening/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/design/config-driven/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/config-driven/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/config-driven/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/design/high-availability/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/high-availability/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/high-availability/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/design/roadmap-future/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/roadmap-future/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/roadmap-future/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/design/rule-packs/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/rule-packs/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/rule-packs/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/decision-matrix/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/decision-matrix/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/decision-matrix/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-domain-experts/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-domain-experts/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-domain-experts/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-platform-engineers/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-platform-engineers/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-platform-engineers/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-tenants/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-tenants/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-tenants/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/includes/abbreviations/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/abbreviations/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/abbreviations/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/includes/docker-usage-pattern/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/docker-usage-pattern/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/docker-usage-pattern/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/includes/prometheus-url-config/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/prometheus-url-config/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/prometheus-url-config/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/includes/rule-pack-stats/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/rule-pack-stats/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/rule-pack-stats/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/includes/three-state-summary/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/three-state-summary/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/three-state-summary/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/includes/verify-checklist/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/verify-checklist/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/verify-checklist/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/byo-alertmanager-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/byo-alertmanager-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/byo-alertmanager-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/byo-prometheus-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/byo-prometheus-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/byo-prometheus-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/federation-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/federation-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/federation-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/gitops-deployment/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/gitops-deployment/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/gitops-deployment/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-alertmanager-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-alertmanager-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-alertmanager-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-gitops-deployment/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-gitops-deployment/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-gitops-deployment/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-prometheus-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-prometheus-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-prometheus-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-shadow-monitoring/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-shadow-monitoring/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-shadow-monitoring/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/integration/prometheus-operator-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/prometheus-operator-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/prometheus-operator-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/bench-gate-rollout/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/bench-gate-rollout/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/bench-gate-rollout/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/benchmark-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/benchmark-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/benchmark-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/commit-convention/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/commit-convention/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/commit-convention/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/component-health-snapshot/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/component-health-snapshot/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/component-health-snapshot/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/design-system-guide/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/design-system-guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/design-system-guide/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/dev-rules/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/dev-rules/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/dev-rules/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/doc-map/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/doc-map/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/doc-map/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/doc-template/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/doc-template/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/doc-template/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/dx-tooling-backlog/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/dx-tooling-backlog/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/dx-tooling-backlog/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/frontend-quality-backlog/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/frontend-quality-backlog/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/frontend-quality-backlog/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/github-release-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/github-release-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/github-release-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/pitch-deck-talking-points/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/pitch-deck-talking-points/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/pitch-deck-talking-points/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/security-audit-runbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/security-audit-runbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/security-audit-runbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/ssot-language-evaluation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/ssot-language-evaluation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-language-evaluation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/ssot-migration-pilot-report/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/ssot-migration-pilot-report/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-migration-pilot-report/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/test-coverage-matrix/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/test-coverage-matrix/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/test-coverage-matrix/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/test-map/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/test-map/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/test-map/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/testing-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/testing-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/testing-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/tool-map/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/tool-map/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/tool-map/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/windows-mcp-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/windows-mcp-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/windows-mcp-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/lessons-learned/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/lessons-learned/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/lessons-learned/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/fuse-cache-recovery/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/fuse-cache-recovery/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/fuse-cache-recovery/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/fuse-rename-trick/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/fuse-rename-trick/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/fuse-rename-trick/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/trap-60-fuse-fsync/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/trap-60-fuse-fsync/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/trap-60-fuse-fsync/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/trap-61-bom/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/trap-61-bom/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/trap-61-bom/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/design/phase-b-e2e-harness/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/design/phase-b-e2e-harness/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/design/phase-b-e2e-harness/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/rule-packs/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/rule-packs/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/rule-packs/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/rule-packs/ALERT-REFERENCE/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/rule-packs/ALERT-REFERENCE/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/rule-packs/ALERT-REFERENCE/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/advanced-scenarios/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/advanced-scenarios/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/advanced-scenarios/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/alert-routing-split/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/alert-routing-split/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/alert-routing-split/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/flat-to-conf-d-cutover-decision/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/flat-to-conf-d-cutover-decision/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/flat-to-conf-d-cutover-decision/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/gitops-ci-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/hands-on-lab/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/hands-on-lab/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/hands-on-lab/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/incremental-migration-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/incremental-migration-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/incremental-migration-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/manage-at-scale/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/manage-at-scale/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/manage-at-scale/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-cluster-federation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-cluster-federation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-cluster-federation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-domain-conf-layout/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-domain-conf-layout/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-domain-conf-layout/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/shadow-audit/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/shadow-audit/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/shadow-audit/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/shadow-monitoring-cutover/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/shadow-monitoring-cutover/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/shadow-monitoring-cutover/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/tenant-lifecycle/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/tenant-lifecycle/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/tenant-lifecycle/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/schemas/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/schemas/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/schemas/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/CHANGELOG/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/CHANGELOG/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/CHANGELOG/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/architecture-and-design/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/architecture-and-design/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/architecture-and-design/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/benchmarks/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/benchmarks/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/benchmarks/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/cheat-sheet/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/cheat-sheet/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/cheat-sheet/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/cli-reference/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/cli-reference/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/cli-reference/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/custom-rule-governance/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/custom-rule-governance/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/custom-rule-governance/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/glossary/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/glossary/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/glossary/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/governance-security/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/governance-security/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/governance-security/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/grafana-dashboards/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/grafana-dashboards/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/grafana-dashboards/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/interactive-tools/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/interactive-tools/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/interactive-tools/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-engine/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-engine/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-engine/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-guide/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-guide/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-toolkit-installation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-toolkit-installation/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/migration-toolkit-installation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/shadow-monitoring-sop/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/shadow-monitoring-sop/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/shadow-monitoring-sop/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/tags/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/tags/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/tags/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/troubleshooting/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/troubleshooting/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/troubleshooting/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/vcs-integration-guide/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/vcs-integration-guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/vcs-integration-guide/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/001-severity-dedup-via-inhibit/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/001-severity-dedup-via-inhibit/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/001-severity-dedup-via-inhibit/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/002-oci-registry-over-chartmuseum/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/002-oci-registry-over-chartmuseum/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/002-oci-registry-over-chartmuseum/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/003-sentinel-alert-pattern/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/003-sentinel-alert-pattern/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/003-sentinel-alert-pattern/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/004-federation-central-exporter-first/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/004-federation-central-exporter-first/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/004-federation-central-exporter-first/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/005-projected-volume-for-rule-packs/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/005-projected-volume-for-rule-packs/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/005-projected-volume-for-rule-packs/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/006-tenant-mapping-topologies/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/006-tenant-mapping-topologies/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/006-tenant-mapping-topologies/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/007-cross-domain-routing-profiles/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/007-cross-domain-routing-profiles/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/007-cross-domain-routing-profiles/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/008-operator-native-integration-path/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/008-operator-native-integration-path/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/008-operator-native-integration-path/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/009-tenant-manager-crud-api/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/009-tenant-manager-crud-api/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/009-tenant-manager-crud-api/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/010-multi-tenant-grouping/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/010-multi-tenant-grouping/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/010-multi-tenant-grouping/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/011-pr-based-write-back/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/011-pr-based-write-back/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/011-pr-based-write-back/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/012-colorblind-hotfix-structured-severity-return/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/012-colorblind-hotfix-structured-severity-return/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/012-colorblind-hotfix-structured-severity-return/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/013-component-health-token-density-metric/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/013-component-health-token-density-metric/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/013-component-health-token-density-metric/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/014-tech-debt-category-budget-isolation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/014-tech-debt-category-budget-isolation/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/014-tech-debt-category-budget-isolation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/015-wizard-arbitrary-value-token-migration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/015-wizard-arbitrary-value-token-migration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/015-wizard-arbitrary-value-token-migration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/016-data-theme-single-track-dark-mode/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/016-data-theme-single-track-dark-mode/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/016-data-theme-single-track-dark-mode/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/017-conf-d-directory-hierarchy-mixed-mode/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/017-conf-d-directory-hierarchy-mixed-mode/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/017-conf-d-directory-hierarchy-mixed-mode/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/018-defaults-yaml-inheritance-dual-hash/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/018-defaults-yaml-inheritance-dual-hash/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/018-defaults-yaml-inheritance-dual-hash/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/019-profile-as-directory-default/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/adr/019-profile-as-directory-default/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/adr/019-profile-as-directory-default/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/api/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/api/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/api/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/api/tenant-api-hardening/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/api/tenant-api-hardening/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/api/tenant-api-hardening/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/config-driven/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/config-driven/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/config-driven/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/high-availability/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/high-availability/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/high-availability/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/roadmap-future/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/roadmap-future/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/roadmap-future/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/rule-packs/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/design/rule-packs/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/rule-packs/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/decision-matrix/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/decision-matrix/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/decision-matrix/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-domain-experts/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-domain-experts/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-domain-experts/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-platform-engineers/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-platform-engineers/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-platform-engineers/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-tenants/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/getting-started/for-tenants/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/getting-started/for-tenants/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/abbreviations/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/abbreviations/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/abbreviations/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/docker-usage-pattern/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/docker-usage-pattern/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/docker-usage-pattern/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/prometheus-url-config/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/prometheus-url-config/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/prometheus-url-config/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/rule-pack-stats/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/rule-pack-stats/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/rule-pack-stats/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/three-state-summary/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/three-state-summary/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/three-state-summary/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/verify-checklist/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/includes/verify-checklist/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/includes/verify-checklist/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/byo-alertmanager-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/byo-alertmanager-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/byo-alertmanager-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/byo-prometheus-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/byo-prometheus-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/byo-prometheus-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/federation-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/federation-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/federation-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/gitops-deployment/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/gitops-deployment/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/gitops-deployment/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-alertmanager-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-alertmanager-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-alertmanager-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-gitops-deployment/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-gitops-deployment/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-gitops-deployment/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-prometheus-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-prometheus-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-prometheus-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-shadow-monitoring/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/operator-shadow-monitoring/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/operator-shadow-monitoring/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/prometheus-operator-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/integration/prometheus-operator-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/integration/prometheus-operator-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/bench-gate-rollout/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/bench-gate-rollout/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/bench-gate-rollout/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/benchmark-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/benchmark-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/benchmark-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/commit-convention/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/commit-convention/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/commit-convention/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/component-health-snapshot/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/component-health-snapshot/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/component-health-snapshot/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/design-system-guide/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/design-system-guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/design-system-guide/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/dev-rules/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/dev-rules/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/dev-rules/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/doc-map/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/doc-map/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/doc-map/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/doc-template/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/doc-template/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/doc-template/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/dx-tooling-backlog/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/dx-tooling-backlog/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/dx-tooling-backlog/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/frontend-quality-backlog/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/frontend-quality-backlog/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/frontend-quality-backlog/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/github-release-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/github-release-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/github-release-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/pitch-deck-talking-points/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/pitch-deck-talking-points/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/pitch-deck-talking-points/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/security-audit-runbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/security-audit-runbook/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/security-audit-runbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-language-evaluation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-language-evaluation/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/ssot-language-evaluation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-migration-pilot-report/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/ssot-migration-pilot-report/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/ssot-migration-pilot-report/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/test-coverage-matrix/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/test-coverage-matrix/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/test-coverage-matrix/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/test-map/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/test-map/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/test-map/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/testing-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/testing-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/testing-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/tool-map/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/tool-map/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/tool-map/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/windows-mcp-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/windows-mcp-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/windows-mcp-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/lessons-learned/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/lessons-learned/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/lessons-learned/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/fuse-cache-recovery/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/fuse-cache-recovery/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/fuse-cache-recovery/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/fuse-rename-trick/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/fuse-rename-trick/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/fuse-rename-trick/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/trap-60-fuse-fsync/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/trap-60-fuse-fsync/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/trap-60-fuse-fsync/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/trap-61-bom/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/automation-origins/trap-61-bom/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/automation-origins/trap-61-bom/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/design/phase-b-e2e-harness/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/internal/archive/design/phase-b-e2e-harness/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/archive/design/phase-b-e2e-harness/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/rule-packs/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/rule-packs/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/rule-packs/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/rule-packs/ALERT-REFERENCE/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/rule-packs/ALERT-REFERENCE/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/rule-packs/ALERT-REFERENCE/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/advanced-scenarios/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/advanced-scenarios/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/advanced-scenarios/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/alert-routing-split/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/alert-routing-split/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/alert-routing-split/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/flat-to-conf-d-cutover-decision/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/flat-to-conf-d-cutover-decision/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/flat-to-conf-d-cutover-decision/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/gitops-ci-integration/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/gitops-ci-integration/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/hands-on-lab/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/hands-on-lab/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/hands-on-lab/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/incremental-migration-playbook/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/incremental-migration-playbook/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/incremental-migration-playbook/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/manage-at-scale/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/manage-at-scale/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/manage-at-scale/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-cluster-federation/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-cluster-federation/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-cluster-federation/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-domain-conf-layout/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/multi-domain-conf-layout/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/multi-domain-conf-layout/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/shadow-audit/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/shadow-audit/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/shadow-audit/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/shadow-monitoring-cutover/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/shadow-monitoring-cutover/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/shadow-monitoring-cutover/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/tenant-lifecycle/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/tenant-lifecycle/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/tenant-lifecycle/"/>
+    </url>
+    <url>
+        <loc>https://vencil.github.io/Dynamic-Alerting-Integrations/en/schemas/</loc>
+        <lastmod>2026-04-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/schemas/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://vencil.github.io/Dynamic-Alerting-Integrations/schemas/"/>
+    </url>
+</urlset>

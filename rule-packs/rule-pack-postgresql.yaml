@@ -1,0 +1,292 @@
+# ============================================================
+# Rule Pack: PostgreSQL (via postgres_exporter)
+# 預設啟用 — 涵蓋連線數、複寫延遲、死鎖偵測、交易回滾
+#
+# 需要的 exporter:
+#   - postgres_exporter (https://github.com/prometheus-community/postgres_exporter)
+#
+# 對應的 threshold-exporter defaults:
+#   pg_connections: 80        (% of max_connections)
+#   pg_replication_lag: 30    (seconds)
+#
+# Tenant config 範例 (conf.d/db-c.yaml):
+#   tenants:
+#     db-c:
+#       pg_connections: "70"                  # 自訂連線使用率警告閾值 (%)
+#       pg_connections_critical: "90"         # Critical 閾值 (%)
+#       pg_replication_lag: "20"              # 複寫延遲警告閾值 (秒)
+#       pg_replication_lag_critical: "60"     # Critical 閾值 (秒)
+# ============================================================
+groups:
+  # -------------------------------------------------------
+  # Normalization: PostgreSQL metrics
+  # -------------------------------------------------------
+  - name: postgresql-normalization
+    interval: 15s
+    rules:
+      # Connection usage ratio: active connections / max_connections (0-100 %)
+      - record: tenant:pg_connection_usage:ratio
+        expr: |
+          100 * max by(tenant) (pg_stat_activity_count)
+          / on(tenant)
+          clamp_min(max by(tenant) (pg_settings_max_connections), 1)
+
+      - record: tenant:pg_connections:max
+        expr: max by(tenant) (pg_stat_activity_count)
+
+      # Replication lag in seconds (max across replicas)
+      - record: tenant:pg_replication_lag:max
+        expr: max by(tenant) (pg_replication_lag)
+
+      # Deadlock rate (5m window)
+      - record: tenant:pg_deadlocks:rate5m
+        expr: sum by(tenant) (rate(pg_stat_database_deadlocks[5m]))
+
+      # Transaction rate (commits + rollbacks)
+      - record: tenant:pg_transactions:rate5m
+        expr: |
+          sum by(tenant) (rate(pg_stat_database_xact_commit[5m]))
+          + sum by(tenant) (rate(pg_stat_database_xact_rollback[5m]))
+
+      # Rollback ratio: rollbacks / total transactions (0 when idle)
+      - record: tenant:pg_rollback_ratio:rate5m
+        expr: |
+          sum by(tenant) (rate(pg_stat_database_xact_rollback[5m]))
+          / on(tenant)
+          clamp_min(
+            sum by(tenant) (rate(pg_stat_database_xact_commit[5m]))
+            + sum by(tenant) (rate(pg_stat_database_xact_rollback[5m])),
+            1
+          )
+
+      - record: tenant:pg_uptime:hours
+        expr: |
+          (time() - min by(tenant) (pg_postmaster_start_time_seconds)) / 3600
+
+  # -------------------------------------------------------
+  # Threshold normalization: PostgreSQL
+  # -------------------------------------------------------
+  - name: postgresql-threshold-normalization
+    interval: 15s
+    rules:
+      - record: tenant:alert_threshold:pg_connections
+        expr: max by(tenant) (user_threshold{metric="pg_connections", severity="warning"})
+
+      - record: tenant:alert_threshold:pg_connections_critical
+        expr: max by(tenant) (user_threshold{metric="pg_connections", severity="critical"})
+
+      - record: tenant:alert_threshold:pg_replication_lag
+        expr: max by(tenant) (user_threshold{metric="pg_replication_lag", severity="warning"})
+
+      - record: tenant:alert_threshold:pg_replication_lag_critical
+        expr: max by(tenant) (user_threshold{metric="pg_replication_lag", severity="critical"})
+
+  # -------------------------------------------------------
+  # Alert Rules: PostgreSQL
+  # -------------------------------------------------------
+  - name: postgresql-alerts
+    rules:
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 15s
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "PostgreSQL instance {{ $labels.instance }} is DOWN"
+          summary_zh: "PostgreSQL 實例 {{ $labels.instance }} 已關閉"
+          description: "pg_up=0 for 15s on {{ $labels.instance }}"
+          description_zh: "pg_up=0，持續 15 秒，實例：{{ $labels.instance }}"
+
+      - alert: PostgreSQLExporterAbsent
+        expr: absent(pg_up{job="tenant-exporters"})
+        for: 30s
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "postgres_exporter target missing"
+          summary_zh: "postgres_exporter 目標缺失"
+          description: "No pg_up metric found for 30s"
+          description_zh: "找不到 pg_up 指標，持續 30 秒"
+
+      - alert: PostgreSQLHighConnections
+        expr: |
+          (
+            (
+              tenant:pg_connection_usage:ratio
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_connections
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 30s
+        labels:
+          severity: warning
+          metric_group: "pg_connections"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High connection usage on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 連線使用率過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection usage high — review max_connections and pool sizing"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：連線使用率過高 — 檢查 max_connections 與連線集區大小設定"
+          description: "{{ $value | printf \"%.1f\" }}% of max_connections used (warning threshold exceeded)"
+          description_zh: "已使用 {{ $value | printf \"%.1f\" }}% 的 max_connections（超過警告閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical tier
+      - alert: PostgreSQLHighConnectionsCritical
+        expr: |
+          (
+            (
+              tenant:pg_connection_usage:ratio
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_connections_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 30s
+        labels:
+          severity: critical
+          metric_group: "pg_connections"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Critical connection usage on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 連線使用率嚴重過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection saturation — immediate action needed"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：連線飽和 — 需立即採取行動"
+          description: "{{ $value | printf \"%.1f\" }}% of max_connections used (critical threshold exceeded)"
+          description_zh: "已使用 {{ $value | printf \"%.1f\" }}% 的 max_connections（超過嚴重閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      - alert: PostgreSQLHighReplicationLag
+        expr: |
+          (
+            (
+              tenant:pg_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_replication_lag
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 30s
+        labels:
+          severity: warning
+          metric_group: "pg_replication_lag"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High replication lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 複寫延遲過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: replication lag elevated — check replica health"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲升高 — 檢查副本健態"
+          description: "{{ $value | printf \"%.1f\" }}s replication lag (warning threshold exceeded)"
+          description_zh: "複寫延遲 {{ $value | printf \"%.1f\" }}s（超過警告閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical tier
+      - alert: PostgreSQLHighReplicationLagCritical
+        expr: |
+          (
+            (
+              tenant:pg_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:pg_replication_lag_critical
+            )
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 30s
+        labels:
+          severity: critical
+          metric_group: "pg_replication_lag"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Critical replication lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 複寫延遲嚴重"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical replication lag — failover risk, escalate"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲嚴重 — 有容錯移轉風險，需升級處理"
+          description: "{{ $value | printf \"%.1f\" }}s replication lag (critical threshold exceeded)"
+          description_zh: "複寫延遲 {{ $value | printf \"%.1f\" }}s（超過嚴重閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Deadlock detection (static threshold — typically 0 is expected)
+      - alert: PostgreSQLHighDeadlocks
+        expr: |
+          (
+            tenant:pg_deadlocks:rate5m > 0.1
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 5m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Deadlocks detected on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 偵測到死鎖"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: deadlocks detected — application-level lock contention"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：偵測到死鎖 — 應用層鎖競爭"
+          description: "{{ $value | printf \"%.2f\" }} deadlocks/sec over 5m"
+          description_zh: "{{ $value | printf \"%.2f\" }} 次死鎖／秒（5 分鐘內）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # High rollback ratio (> 5% of transactions are rollbacks)
+      - alert: PostgreSQLHighRollbackRatio
+        expr: |
+          (
+            tenant:pg_rollback_ratio:rate5m > 0.05
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
+          )
+          * on(tenant) group_left(runbook_url, owner, tier)
+            tenant_metadata_info
+        for: 5m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High rollback ratio on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 回滾比率過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: high rollback ratio — application error pattern"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：回滾比率過高 — 應用程式錯誤樣式"
+          description: "{{ $value | humanizePercentage }} of transactions are rollbacks"
+          description_zh: "{{ $value | humanizePercentage }} 的交易已回滾"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      - alert: PostgreSQLRecentRestart
+        expr: |
+          (time() - pg_postmaster_start_time_seconds) < 300
+        for: 0s
+        labels:
+          severity: info
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "{{ $labels.instance }} restarted recently"
+          summary_zh: "{{ $labels.instance }} 最近已重新啟動"
+          description: "PostgreSQL uptime is only {{ $value | printf \"%.0f\" }}s (< 5 min)"
+          description_zh: "PostgreSQL 運行時間僅 {{ $value | printf \"%.0f\" }}s（少於 5 分鐘）"
