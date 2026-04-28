@@ -27,10 +27,11 @@ C-11 Migration Toolkit packages this pipeline into a customer-runnable bundle th
 
 | Tool | Interface | Purpose |
 |---|---|---|
-| `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` subcommand wrapping da-guard |
+| `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` subcommands wrapping da-guard / da-batchpr |
 | `da-guard` | Go binary | C-12 Dangling Defaults Guard CLI (schema / routing / cardinality / redundant-override 4-tier check) |
+| `da-batchpr` | Go binary | C-10 Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
 
-When future PRs add `da-toolkit batch-pr` / `da-toolkit parser` Go subcommands, this guide will update.
+When future PRs add `da-toolkit parser` Go subcommands, this guide will update.
 
 ## Three delivery paths
 
@@ -71,7 +72,9 @@ docker run --rm \
 
 ## Path B: Static binary download
 
-Each Release ships 6 cross-compiled `da-guard` binaries:
+Each Release ships two sets of 6 cross-compiled binaries (12 archives total):
+
+**`da-guard`** (C-12 Dangling Defaults Guard):
 
 | OS | ARCH | Filename |
 |---|---|---|
@@ -82,7 +85,18 @@ Each Release ships 6 cross-compiled `da-guard` binaries:
 | Windows | amd64 | `da-guard-windows-amd64.zip` |
 | Windows | arm64 | `da-guard-windows-arm64.zip` |
 
-Each archive contains **one** `da-guard` (or `da-guard.exe`) binary, plus a single `SHA256SUMS` file listing hashes for all six archives.
+**`da-batchpr`** (C-10 Migration Batch PR Pipeline, v2.8.0+):
+
+| OS | ARCH | Filename |
+|---|---|---|
+| Linux | amd64 | `da-batchpr-linux-amd64.tar.gz` |
+| Linux | arm64 | `da-batchpr-linux-arm64.tar.gz` |
+| macOS | amd64 | `da-batchpr-darwin-amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `da-batchpr-darwin-arm64.tar.gz` |
+| Windows | amd64 | `da-batchpr-windows-amd64.zip` |
+| Windows | arm64 | `da-batchpr-windows-arm64.zip` |
+
+Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing hashes for all 12 archives. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-batchpr` to drive the migration batch PR flow).
 
 ### Install (Linux/macOS)
 

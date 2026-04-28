@@ -145,6 +145,7 @@ da-tools <command> --help
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard 包裝（C-12 PR-4），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
+| `batch-pr` | Migration Batch PR Pipeline 包裝（C-10 PR-5），shell-out 至 `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
 | `tenant-verify` | 印 tenant effective config + merged_hash（Phase B Track A，B-4 rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
@@ -2228,6 +2229,88 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 ```
 
 **範圍簡化（vs planning §C-12）**：PR-4 是 *當前工作樹* 驗證器（讀取磁碟現狀）；CI / pre-commit 流程下與「給 _defaults.yaml 變更預測影響」delta-aware 模型等價（變更 commit / push 前已寫到磁碟）。Speculative simulation 留 C-7b `/simulate`。同 repo 內 `components/threshold-exporter/README.md` 有完整設計理由與三層檢查說明（不在 MkDocs site 內，請從 GitHub 端開啟）。
+
+---
+
+#### batch-pr
+
+C-10 Migration Batch PR Pipeline（v2.8.0 Phase .c C-10 PR-1..5）。Python 包裝 shell-out 到 `da-batchpr` Go binary，把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
+
+**用法**
+
+```bash
+da-tools batch-pr <subcommand> [flags]
+```
+
+**子命令**
+
+| 子命令 | 說明 |
+|---|---|
+| `apply` | 從 Plan + C-9 emit 輸出開出（或更新）tenant chunk PR；走 Hierarchy-Aware chunking（Base Infrastructure PR + per-domain tenant chunks） |
+| `refresh` | Base PR merge 後對 `Blocked by` tenant branches 跑 `git rebase --onto <merged-sha>`，conflict 落地到 `refresh-report.md` |
+| `refresh-source` | 已知一組 source rule 因 parser 修 bug 導致 emission 變化時，把對應 tenant PR 的受影響檔案重寫 + 推上去（data-layer hot-fix）|
+
+**Binary 解析順序**
+
+1. `--da-batchpr-binary <path>`（顯式覆寫）
+2. `$DA_BATCHPR_BINARY` 環境變數
+3. `$PATH` 上的 `da-batchpr`
+
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`）。
+
+**`apply` 主要 flags**
+
+| Flag | 預設 | 說明 |
+|---|---|---|
+| `--plan <path>` | （必填）| Plan JSON（從 `BuildPlan` 序列化） |
+| `--emit-dir <dir>` | （必填）| C-9 emit 輸出目錄；CLI walk + AllocateFiles bucketing |
+| `--repo <owner/name>` | （必填）| GitHub repo |
+| `--workdir <dir>` | （必填）| 本地 clone（git ops 的 CWD） |
+| `--base-branch <name>` | `main` | 新 PR 的 base |
+| `--branch-prefix <p>` | batchpr 預設 | 自訂 branch 前綴 |
+| `--commit-author "Name <email>"` | git config | commit author |
+| `--dry-run` | false | 跑 orchestration 但不執行 git/GitHub API |
+| `--inter-call-delay-ms <n>` | 0 | per-item delay（軟化 GitHub secondary rate limit） |
+| `--report <path>` | `-`（stdout） | Markdown 報表 |
+| `--result-json <path>` | 空（不寫） | JSON ApplyResult；`-` = stdout，空 = skip（避免與 `--report` 同 stdout 黏在一起） |
+
+**`refresh` / `refresh-source` 主要 flags**
+
+| Flag | 預設 | 說明 |
+|---|---|---|
+| `--input <path>` | `-`（stdin） | RefreshInput / RefreshSourceInput JSON |
+| `--workdir <dir>` | （必填）| 本地 clone |
+| `--patches-dir <dir>` | （必填，僅 refresh-source）| `<dir>/<pr-number>/<file-paths>` 結構，CLI 載入到每個 target 的 Files map |
+| `--report <path>` | `-` | Markdown 報表 |
+| `--result-json <path>` | 空（不寫） | 同 apply |
+
+**Exit codes**
+
+| Code | 意義 |
+|---|---|
+| 0 | clean — 全部 target 成功或合理 skipped（closed/merged PR / no-change / dry-run） |
+| 1 | per-target failures 或 refresh 出現 conflicts（CI hook 不該把 conflicts 當 green）|
+| 2 | caller error（flag 錯、JSON parse 失敗、路徑找不到、binary 找不到）|
+
+**範例**
+
+```bash
+# 開 PR：把 C-9 emit 輸出 push 進 customer repo
+da-tools batch-pr apply \
+    --plan plan.json --emit-dir ./emit/ \
+    --repo vencil/customer --workdir ./customer-repo
+
+# Base PR merge 後：rebase tenant branches 到新 main HEAD
+da-tools batch-pr refresh \
+    --input refresh.json --workdir ./customer-repo
+
+# Parser bug fix：把 200 條 source rule 重新 emit 進現有 tenant PR
+da-tools batch-pr refresh-source \
+    --input refresh-source.json --patches-dir ./patches/ \
+    --workdir ./customer-repo
+```
+
+**Honest scope（C-10 PR-5 v1）**：JSON-input-first 是 v1 contract（machine-friendly + automation-friendly）；convenience flags（`--base-merged-sha N`、`--source-rule-ids id1,id2,id3`）defer 後續 polish PR。Python 包裝走 shell-out 同 `guard` pattern，binary 由 `tools/v*` Release / da-tools docker image bundle 提供。
 
 ---
 
