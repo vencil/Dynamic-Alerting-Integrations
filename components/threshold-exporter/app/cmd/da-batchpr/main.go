@@ -178,7 +178,13 @@ func writeReport(path string, stdout io.Writer, body string) error {
 // load C-9 emit output, and by refresh-source to load patch files.
 //
 // `root` MUST exist and be a directory; missing/file → error.
-// Symlinks are followed (filepath.Walk semantics).
+// Symlinks are NOT followed (filepath.Walk semantics — symlinks to
+// directories appear as regular files with ModeSymlink set and are
+// skipped by the IsDir() check; symlinks to files are read-through
+// because os.ReadFile follows them when the dirent is treated as
+// a regular file). If a customer's emit-dir / patches-dir contains
+// a symlinked subdirectory they expect walked into, they'll need to
+// resolve it before invoking this CLI.
 //
 // Path normalisation: returned keys use forward slashes regardless
 // of host OS (matches the rest of the batchpr / config packages).

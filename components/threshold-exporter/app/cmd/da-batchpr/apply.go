@@ -64,7 +64,9 @@ func parseApplyFlags(args []string, errOut io.Writer) (*applyFlags, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "Run orchestration without git or GitHub API calls.")
 	fs.IntVar(&f.interCallDelayMillis, "inter-call-delay-ms", 0, "Per-item delay (ms) between OpenPR calls.")
 	fs.StringVar(&f.reportPath, "report", "-", "Write the human-readable report to this file ('-' = stdout).")
-	fs.StringVar(&f.resultJSONPath, "result-json", "-", "Write the JSON ApplyResult to this file ('-' = stdout).")
+	fs.StringVar(&f.resultJSONPath, "result-json", "",
+		"Write the JSON ApplyResult to this file ('-' = stdout, empty = skip). "+
+			"Empty default avoids gluing markdown + JSON when --report defaults to stdout.")
 	fs.BoolVar(&f.help, "help", false, "Print usage and exit.")
 	fs.BoolVar(&f.help, "h", false, "Alias for --help.")
 
@@ -159,9 +161,14 @@ func runApply(f *applyFlags, repo batchpr.Repo, stdout, errOut io.Writer, git ba
 		fmt.Fprintf(errOut, "%s apply: write report: %v\n", programName, err)
 		return exitCallerErr
 	}
-	if err := writeJSON(f.resultJSONPath, stdout, result); err != nil {
-		fmt.Fprintf(errOut, "%s apply: write result JSON: %v\n", programName, err)
-		return exitCallerErr
+	// Empty --result-json = skip JSON output. Avoids gluing markdown
+	// + JSON on stdout when both default. Customer opts in via
+	// --result-json out.json or --result-json - explicitly.
+	if f.resultJSONPath != "" {
+		if err := writeJSON(f.resultJSONPath, stdout, result); err != nil {
+			fmt.Fprintf(errOut, "%s apply: write result JSON: %v\n", programName, err)
+			return exitCallerErr
+		}
 	}
 	return exitCodeForApply(result.Summary)
 }
@@ -211,14 +218,14 @@ func renderApplyReport(repo batchpr.Repo, in batchpr.ApplyInput, r *batchpr.Appl
 	for _, it := range r.Items {
 		notes := "—"
 		if it.ErrorMessage != "" {
-			notes = it.ErrorMessage
+			notes = mdCell(it.ErrorMessage)
 		}
 		prCol := "—"
 		if it.PRNumber > 0 {
 			prCol = fmt.Sprintf("[#%d](%s)", it.PRNumber, it.PRURL)
 		}
 		out.WriteString(fmt.Sprintf("| %d | %s | `%s` | %s | %s | %s |\n",
-			it.PlanItemIndex, it.Kind, it.BranchName, it.Status, prCol, notes))
+			it.PlanItemIndex, it.Kind, mdCell(it.BranchName), it.Status, prCol, notes))
 	}
 	out.WriteString("\n")
 
@@ -230,4 +237,21 @@ func renderApplyReport(repo batchpr.Repo, in batchpr.ApplyInput, r *batchpr.Appl
 		out.WriteString("\n")
 	}
 	return out.String()
+}
+
+// mdCell sanitises a string for inclusion in a Markdown table cell.
+// Markdown tables can't carry newlines (they break the row) or
+// unescaped pipes (they introduce phantom columns). We replace
+// newlines with spaces and escape pipes as `\|`. Self-review on
+// PR-5 caught that ErrorMessage values from git/gh stderr can be
+// multi-line — without this helper, a real failure would render an
+// unparseable table.
+func mdCell(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return s
 }
