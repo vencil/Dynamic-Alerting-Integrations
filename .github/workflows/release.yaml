@@ -124,6 +124,13 @@ jobs:
     permissions:
       contents: write   # gh release create / upload
       packages: write   # ghcr push (inherited)
+      # C-11 PR-3 Layer 1: id-token:write enables sigstore "keyless"
+      # signing — cosign exchanges the GitHub OIDC token for an
+      # ephemeral X.509 cert from Fulcio, signs the artefact, and
+      # publishes the entry in the public Rekor transparency log.
+      # No long-term private keys to manage. See
+      # docs/internal/release-signing-runbook.md §Layer 1.
+      id-token: write
     steps:
       - uses: actions/checkout@v6
 
@@ -160,6 +167,21 @@ jobs:
           cache: true
           cache-dependency-path: components/threshold-exporter/app/go.sum
 
+      # C-11 PR-3 Layer 1: install cosign + syft. cosign signs both the
+      # binary archives and the Docker image with sigstore keyless
+      # (no long-term private key); syft generates SPDX + CycloneDX
+      # SBOM for the image. Both pinned to specific versions to
+      # avoid silent supply-chain drift — bump deliberately.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+        with:
+          cosign-release: v2.4.1
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0.17.7
+        with:
+          syft-version: v1.18.1
+
       - name: Assemble da-tools build context
         run: |
           cd components/da-tools/app
@@ -185,6 +207,58 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      # C-11 PR-3 Layer 1: sign the Docker image with cosign keyless.
+      # We sign by digest (not tag) — tags can be moved, digests are
+      # immutable. `cosign sign --yes` skips the interactive Y/N prompt
+      # which doesn't work in non-tty CI.
+      - name: Sign Docker image (cosign keyless)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${VERSION}"
+          # Resolve to immutable digest before signing — protects
+          # against TOCTOU between push and sign.
+          DIGEST=$(docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}')
+          echo "▸ Signing image at digest: $DIGEST"
+          cosign sign --yes "${IMG}@${DIGEST}"
+
+      # C-11 PR-3 Layer 1: generate SBOM (Software Bill of Materials)
+      # for the Docker image in BOTH SPDX and CycloneDX formats.
+      # Different customer security teams prefer different formats;
+      # shipping both costs ~50KB and avoids "we don't accept that
+      # format" rejection on first onboarding review.
+      - name: Generate SBOM for Docker image
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:v${VERSION}"
+          mkdir -p "$RUNNER_TEMP/sbom"
+          syft "$IMG" -o spdx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.spdx.json"
+          syft "$IMG" -o cyclonedx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.cyclonedx.json"
+          ls -la "$RUNNER_TEMP/sbom/"
+
+      # Sign the SBOM files too — a tampered SBOM defeats the whole
+      # supply-chain story. cosign sign-blob produces detached .sig
+      # + .cert files that customers verify alongside the SBOM.
+      - name: Sign SBOM files (cosign keyless)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/sbom"
+          for f in *.spdx.json *.cyclonedx.json; do
+            echo "▸ Signing $f"
+            cosign sign-blob --yes \
+                --output-signature "${f}.sig" \
+                --output-certificate "${f}.cert" \
+                "$f"
+          done
+          ls -la
 
       # ----------------------------------------------------------------
       # C-11 extras: cross-compile binaries + air-gapped tar + Release
@@ -244,6 +318,33 @@ jobs:
           echo "--- Archive listing ---"
           ls -la
 
+      # C-11 PR-3 Layer 1: sign every distributable archive + the
+      # SHA256SUMS index. Customers who can verify cosign get a
+      # cryptographic guarantee that the archive came from THIS repo's
+      # tools/v* release workflow run; SHA256SUMS-only customers are
+      # still served (we don't break their flow). Per-archive .sig +
+      # .cert files are tiny (~5KB combined) and uploaded alongside
+      # the archives in the GitHub Release.
+      - name: Sign archives + SHA256SUMS (cosign keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/da-guard-bin"
+          # Sign each archive + the SHA256SUMS index. Customers can
+          # then verify EITHER an individual archive OR the full
+          # SHA256SUMS (and validate any archive against the verified
+          # index — common GPG-style pattern carried across to cosign).
+          for f in *.tar.gz *.zip SHA256SUMS; do
+            echo "▸ Signing $f"
+            cosign sign-blob --yes \
+                --output-signature "${f}.sig" \
+                --output-certificate "${f}.cert" \
+                "$f"
+          done
+          echo "--- Signature listing ---"
+          ls -la *.sig *.cert | head
+
       - name: Save image as gzipped tar (air-gapped customers)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
@@ -255,6 +356,25 @@ jobs:
           docker save "$IMG" | gzip > "$OUT"
           ( cd "$RUNNER_TEMP" && sha256sum "$(basename "$OUT")" > "${OUT}.sha256" )
           ls -la "$OUT" "$OUT.sha256"
+
+      # Sign the air-gapped image tar with cosign too. Air-gapped
+      # customers can't reach Rekor at verify-time, but they CAN
+      # carry the .sig/.cert in alongside the tar and verify
+      # offline IF they pre-sync the Sigstore TUF root (cosign
+      # initialize) — see release-signing-runbook.md §Layer 1
+      # air-gapped verify path.
+      - name: Sign air-gapped image tar (cosign keyless)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz"
+          cosign sign-blob --yes \
+              --output-signature "${OUT}.sig" \
+              --output-certificate "${OUT}.cert" \
+              "$OUT"
+          ls -la "${OUT}.sig" "${OUT}.cert"
 
       - name: Create or update GitHub Release with assets
         env:
@@ -281,7 +401,24 @@ jobs:
               "$RUNNER_TEMP/da-guard-bin/SHA256SUMS" \
               "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz" \
               "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sha256"
+          # C-11 PR-3 Layer 1: cosign keyless signatures + SBOM. Glob
+          # the *.sig and *.cert files (one pair per archive + per
+          # SHA256SUMS + per SBOM file + for the air-gapped tar);
+          # absent file = nothing to upload. The SBOM directory holds
+          # both spdx-json and cyclonedx-json formats so customer
+          # security teams can pick whichever they consume.
+          gh release upload "$TAG" --clobber \
+              "$RUNNER_TEMP/da-guard-bin/"*.sig \
+              "$RUNNER_TEMP/da-guard-bin/"*.cert \
+              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sig" \
+              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.cert" \
+              "$RUNNER_TEMP/sbom/"*.json \
+              "$RUNNER_TEMP/sbom/"*.sig \
+              "$RUNNER_TEMP/sbom/"*.cert
           echo "✓ Release $TAG ready: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          echo "✓ Artefacts signed with cosign keyless (sigstore.dev/Rekor)"
+          echo "✓ SBOM (SPDX + CycloneDX) generated by syft"
+          echo "  Customer verification: see docs/migration-toolkit-installation.md §Signature Verification"
 
   # ----------------------------------------------------------------
   # Job 3: Build & push da-portal image (Interactive Tools Portal)

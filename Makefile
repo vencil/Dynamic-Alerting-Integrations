@@ -498,6 +498,19 @@ pre-tag: version-check lint-docs playbook-freshness-ll benchmark-report-warn ## 
 playbook-freshness-ll: ## 檢查 Playbook + LL 條目知識退火狀態（pre-tag 時自動執行）
 	@python3 scripts/tools/lint/check_playbook_freshness.py --scan-ll
 
+.PHONY: verify-release
+verify-release: ## 驗證 tools/v* release artefact (sha256 + cosign keyless). 用：make verify-release TAG=tools/v2.8.0 ARTEFACT=da-parser-linux-amd64.tar.gz
+	@if [ -z "$(TAG)" ] || [ -z "$(ARTEFACT)" ]; then \
+		echo "Usage: make verify-release TAG=tools/v2.8.0 ARTEFACT=da-parser-linux-amd64.tar.gz"; \
+		echo "       (optional: DOWNLOAD_DIR=./tmp QUIET=1)"; \
+		exit 2; \
+	fi
+	@bash scripts/tools/dx/verify_release.sh \
+		--tag "$(TAG)" \
+		--artefact "$(ARTEFACT)" \
+		$(if $(DOWNLOAD_DIR),--download-dir $(DOWNLOAD_DIR)) \
+		$(if $(QUIET),--quiet)
+
 sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
