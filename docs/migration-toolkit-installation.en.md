@@ -49,7 +49,7 @@ Every GitHub Release (`tools/v*` tag) ships assets for all three paths; pick whi
 ## Path A: Docker pull from ghcr.io
 
 ```bash
-# Pull latest stable
+# Pull latest stable (version is synced by bump_docs.py at release time)
 docker pull ghcr.io/vencil/da-tools:v2.7.0
 
 # Run a one-shot command
@@ -63,7 +63,7 @@ docker run --rm \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
-**Contents**: Python `da-tools` CLI + bundled `da-guard` Linux/amd64 binary at `/usr/local/bin/da-guard`. The `da-tools guard` subcommand auto-locates the bundled `da-guard` inside the image — no need to set `$DA_GUARD_BINARY`.
+**Contents**: Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries at `/usr/local/bin/`. The `da-tools guard` / `da-tools batch-pr` / `da-tools parser` subcommands auto-locate their respective binaries inside the image — no need to set `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`.
 
 **Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + signatures are listed in the `tools/v2.8.0` Release notes (cosign signing deferred to PR-3).
 
@@ -112,7 +112,7 @@ Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUM
 
 ```bash
 # Download + verify hash + extract + place on PATH
-TAG=tools/v2.7.0
+TAG=tools/v2.7.0    # Synced by bump_docs.py at release time; replace with the tag you want
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -131,7 +131,7 @@ da-guard --version    # should print da-guard v2.7.0
 ### Install (Windows)
 
 ```powershell
-$TAG = "tools/v2.7.0"
+$TAG = "tools/v2.7.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ For environments that cannot pull from `ghcr.io` at all (isolated internal regis
 ### One-time import flow
 
 ```bash
-TAG=tools/v2.7.0
+TAG=tools/v2.7.0    # Synced by bump_docs.py at release time; replace with the tag you want
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
@@ -192,7 +192,7 @@ After that, internal CI / pre-commit hooks use `internal-registry.corp/da-tools:
 
 ### Pure binary also works in air-gapped
 
-If the customer doesn't use Docker, walk Path B: download the 6 binary archives + `SHA256SUMS`, take them in via USB, extract. Each binary is statically linked; no runtime deps.
+If the customer doesn't use Docker, walk Path B: download the 18 binary archives (da-guard / da-batchpr / da-parser × 6 OS/ARCH each) + `SHA256SUMS`, take them in via USB, extract. Each binary is statically linked; no runtime deps.
 
 ---
 
@@ -202,7 +202,7 @@ Each Release ships:
 
 | Asset | Contents |
 |---|---|
-| `SHA256SUMS` | Hashes for all 6 binary archives + 6 raw binaries (used by Paths B / C) |
+| `SHA256SUMS` | Hashes for all 18 binary archives (da-guard / da-batchpr / da-parser × 6 OS/ARCH combos; used by Paths B / C) |
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | Hash of the air-gapped image tar (used by Path C) |
 
 From `tools/v2.8.0` onward every artefact carries SHA-256. GPG / cosign signing is C-11 PR-3 work (DEC-J pending — gated on customer security team requiring signature verification).

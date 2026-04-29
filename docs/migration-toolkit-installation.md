@@ -49,7 +49,7 @@ C-11 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gap
 ## 路徑 A：Docker pull from ghcr.io
 
 ```bash
-# 拉最新 stable
+# 拉最新 stable（版號會由 bump_docs.py 在 release 時同步至最新 tag）
 docker pull ghcr.io/vencil/da-tools:v2.7.0
 
 # 跑單次命令
@@ -63,7 +63,7 @@ docker run --rm \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
-**內含**：Python `da-tools` CLI + bundled `da-guard` Linux/amd64 binary（`/usr/local/bin/da-guard`）。`da-tools guard` 子命令會自動在 image 內找到 `da-guard`，不需另外設 `$DA_GUARD_BINARY`。
+**內含**：Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries（`/usr/local/bin/`）。`da-tools guard` / `da-tools batch-pr` / `da-tools parser` 子命令會自動在 image 內找到對應 binary，不需另外設 `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`。
 
 **Trivy CVE scan** 在 release 時自動跑（`CRITICAL` / `HIGH` 級別 fail-fast）。Image SBOM + 簽章在 `tools/v2.8.0` Release notes 列出（cosign 簽章 PR-3 deferred）。
 
@@ -112,7 +112,7 @@ docker run --rm \
 
 ```bash
 # 下載 + 驗 hash + 解壓 + 放 PATH
-TAG=tools/v2.7.0
+TAG=tools/v2.7.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -131,7 +131,7 @@ da-guard --version    # 應印出 da-guard v2.7.0
 ### 安裝範例（Windows）
 
 ```powershell
-$TAG = "tools/v2.7.0"
+$TAG = "tools/v2.7.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` call
 ### 一次性 import 流程
 
 ```bash
-TAG=tools/v2.7.0
+TAG=tools/v2.7.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
@@ -191,7 +191,7 @@ docker push internal-registry.corp/da-tools:v2.7.0
 
 ### 純 binary 走 air-gapped 也可以
 
-如果客戶不用 Docker，直接走路徑 B 把 6 個 binary archive + `SHA256SUMS` 一起 download → USB 帶進去 → 解壓即可。每個 binary 都是 statically linked，無 runtime dep。
+如果客戶不用 Docker，直接走路徑 B 把 18 個 binary archive（da-guard / da-batchpr / da-parser 各 6 個 OS/ARCH）+ `SHA256SUMS` 一起 download → USB 帶進去 → 解壓即可。每個 binary 都是 statically linked，無 runtime dep。
 
 ---
 
@@ -201,7 +201,7 @@ docker push internal-registry.corp/da-tools:v2.7.0
 
 | Asset | 內容 |
 |---|---|
-| `SHA256SUMS` | 六個 binary archive + 六個 raw binary 的 hash（路徑 B / C 都會用到）|
+| `SHA256SUMS` | 18 個 binary archive 的 hash（da-guard × 6 + da-batchpr × 6 + da-parser × 6 OS/ARCH 組合，路徑 B / C 都會用到）|
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | air-gapped image tar 的 hash（路徑 C 用）|
 
 `tools/v2.8.0` 起所有 Release artefact 都附 SHA-256。GPG / cosign 簽章是 C-11 PR-3 工作（DEC-J 部分待定 — 客戶 security team 要求驗簽方式才會啟用對應路徑）。

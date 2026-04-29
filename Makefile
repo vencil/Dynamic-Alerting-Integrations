@@ -69,6 +69,25 @@ benchmark-report-warn: ## benchmark-report 但失敗不阻擋（pre-tag 用，is
 	@$(MAKE) benchmark-report || \
 		echo "[pre-tag] ⚠ benchmark-report failed (informational, not blocking — issue #60 Phase 1)"
 
+.PHONY: soak-readiness
+soak-readiness: ## v2.8.0 readiness chaos soak (4hr default; ARGS="--duration-min 240 --reload-interval-sec 60 --metrics-poll-sec 30"). 需先啟動 threshold-exporter 並指向 conf.d
+	@mkdir -p .build/v2.8.0-soak
+	@echo "[soak-readiness] 預設跑 240 分鐘 / 60s reload interval / 30s metric poll"
+	@echo "[soak-readiness] 確認 threshold-exporter 已在 TARGET_URL（預設 http://localhost:8080）跑起來"
+	@python3 scripts/tools/dx/run_chaos_soak.py \
+		--target-url $${TARGET_URL:-http://localhost:8080} \
+		--config-dir $${CONFIG_DIR:-components/threshold-exporter/config/conf.d} \
+		--output-dir .build/v2.8.0-soak \
+		$${ARGS:---duration-min 240 --reload-interval-sec 60 --metrics-poll-sec 30}
+	@python3 scripts/tools/dx/render_soak_diff.py \
+		--input-dir .build/v2.8.0-soak \
+		--output .build/v2.8.0-soak/soak-report.md
+	@echo "[soak-readiness] report: .build/v2.8.0-soak/soak-report.md"
+
+.PHONY: soak-readiness-smoke
+soak-readiness-smoke: ## soak-readiness 短版（2 分鐘）— 驗證 harness 本身正常，不替代真實 soak
+	@$(MAKE) soak-readiness ARGS="--duration-min 2 --reload-interval-sec 10 --metrics-poll-sec 5"
+
 .PHONY: bench-history-analyze
 bench-history-analyze: ## 拉最近 N 次 bench-record artifact + 算 per-bench 統計 + GO/NO-GO 決議（issue #67 Phase 2 readiness 工具；ARGS=--limit 28 / --ci / --no-gate / --cache-dir DIR）
 	@python3 ./scripts/tools/dx/analyze_bench_history.py $(ARGS)

@@ -183,7 +183,7 @@ python3 scripts/tools/ops/config_diff.py \
 
 ```bash
 # 查看你的 tenant 告警是否有 noise（震盪）/ stale（閒置）等品質問題
-da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+da-tools alert-quality --prometheus http://localhost:9090 --tenant <your-tenant-id>
 ```
 
 輸出：每個 tenant 的品質分數（0–100）和具體問題清單。
