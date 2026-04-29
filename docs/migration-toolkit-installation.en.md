@@ -49,17 +49,17 @@ Every GitHub Release (`tools/v*` tag) ships assets for all three paths; pick whi
 ## Path A: Docker pull from ghcr.io
 
 ```bash
-# Pull latest stable (substitute the version you want)
-docker pull ghcr.io/vencil/da-tools:v2.8.0
+# Pull latest stable (version is synced by bump_docs.py at release time)
+docker pull ghcr.io/vencil/da-tools:v2.7.0
 
 # Run a one-shot command
-docker run --rm ghcr.io/vencil/da-tools:v2.8.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.8.0 guard --help
+docker run --rm ghcr.io/vencil/da-tools:v2.7.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.7.0 guard --help
 
 # Mount conf.d in to run guard
 docker run --rm \
     -v "$(pwd)/conf.d:/conf.d:ro" \
-    ghcr.io/vencil/da-tools:v2.8.0 \
+    ghcr.io/vencil/da-tools:v2.7.0 \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
@@ -112,7 +112,7 @@ Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUM
 
 ```bash
 # Download + verify hash + extract + place on PATH
-TAG=tools/v2.8.0    # Replace with the actual release tag you want
+TAG=tools/v2.7.0    # Synced by bump_docs.py at release time; replace with the tag you want
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -131,7 +131,7 @@ da-guard --version    # should print da-guard v2.7.0
 ### Install (Windows)
 
 ```powershell
-$TAG = "tools/v2.8.0"    # Replace with the actual release tag you want
+$TAG = "tools/v2.7.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ For environments that cannot pull from `ghcr.io` at all (isolated internal regis
 ### One-time import flow
 
 ```bash
-TAG=tools/v2.8.0    # Replace with the actual release tag you want
+TAG=tools/v2.7.0    # Synced by bump_docs.py at release time; replace with the tag you want
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 

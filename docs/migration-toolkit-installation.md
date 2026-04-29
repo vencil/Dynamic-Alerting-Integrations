@@ -49,17 +49,17 @@ C-11 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gap
 ## 路徑 A：Docker pull from ghcr.io
 
 ```bash
-# 拉最新 stable（換成你要安裝的版本）
-docker pull ghcr.io/vencil/da-tools:v2.8.0
+# 拉最新 stable（版號會由 bump_docs.py 在 release 時同步至最新 tag）
+docker pull ghcr.io/vencil/da-tools:v2.7.0
 
 # 跑單次命令
-docker run --rm ghcr.io/vencil/da-tools:v2.8.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.8.0 guard --help
+docker run --rm ghcr.io/vencil/da-tools:v2.7.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v2.7.0 guard --help
 
 # 掛 conf.d 進去跑 guard
 docker run --rm \
     -v "$(pwd)/conf.d:/conf.d:ro" \
-    ghcr.io/vencil/da-tools:v2.8.0 \
+    ghcr.io/vencil/da-tools:v2.7.0 \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
@@ -112,7 +112,7 @@ docker run --rm \
 
 ```bash
 # 下載 + 驗 hash + 解壓 + 放 PATH
-TAG=tools/v2.8.0    # 換成你要安裝的實際 release tag
+TAG=tools/v2.7.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
 OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
@@ -131,7 +131,7 @@ da-guard --version    # 應印出 da-guard v2.7.0
 ### 安裝範例（Windows）
 
 ```powershell
-$TAG = "tools/v2.8.0"    # Replace with the actual release tag you want
+$TAG = "tools/v2.7.0"    # Synced by bump_docs.py at release time; replace with the tag you want
 $Url = "https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG"
 
 Invoke-WebRequest -Uri "$Url/da-guard-windows-amd64.zip" -OutFile da-guard.zip
@@ -165,7 +165,7 @@ Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` call
 ### 一次性 import 流程
 
 ```bash
-TAG=tools/v2.8.0    # 換成你要安裝的實際 release tag
+TAG=tools/v2.7.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
 VER=2.7.0
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 

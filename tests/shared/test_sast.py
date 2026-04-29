@@ -192,6 +192,11 @@ class TestFileWritePermissions:
             "產生測試用 conf.d/ fixture YAML 至使用者指定的 --output 目錄，"
             "為開發者 DX 工具非敏感資料，沿用目錄預設 umask 即可"
         ),
+        "scripts/tools/dx/run_chaos_soak.py": (
+            "v2.8.0 readiness chaos soak harness：寫 metrics-timeseries.csv / "
+            "summary.txt / run-config.json 至使用者指定的 --output-dir，"
+            "為 DX 觀測非敏感資料，沿用目錄預設 umask 即可"
+        ),
     }
 
     @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)

@@ -14,15 +14,19 @@ Design rationale
 ----------------
 - threshold-exporter doesn't expose pprof in production. Adding pprof is
   a separate hardening question (security/perf surface). This harness
-  uses the existing /metrics endpoint instead, capturing the
-  Prometheus-exposed proxies for "is anything leaking":
-    * process_resident_memory_bytes  (RSS — heap + stack + everything)
-    * process_open_fds
+  uses the existing /metrics endpoint instead, capturing the Go runtime
+  collector signals for "is anything leaking":
     * go_goroutines                  (goroutine leak detector)
+    * go_memstats_sys_bytes          (RSS proxy — total OS memory held)
     * go_memstats_alloc_bytes        (live heap allocations)
     * go_memstats_heap_inuse_bytes
     * go_memstats_heap_idle_bytes    (held but not in use)
-    * go_gc_duration_seconds_count   (GC activity)
+    * go_memstats_heap_objects       (live object count)
+    * go_gc_duration_seconds_count   (GC activity, informational)
+  See TRACKED_METRICS below for the canonical list. process_* collectors
+  (process_resident_memory_bytes / process_open_fds) are NOT tracked
+  because threshold-exporter doesn't register prometheus.NewProcessCollector
+  — go_memstats_sys_bytes serves as the RSS proxy.
 - Reload trigger uses the watched config dir: bumping any file's mtime
   forces threshold-exporter's SHA-256 diff to fire.
 - Run is fully reproducible: same args + same starting config = same
@@ -64,7 +68,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import signal
 import sys
 import time
