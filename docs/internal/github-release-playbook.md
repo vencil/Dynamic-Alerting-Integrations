@@ -16,6 +16,7 @@ lang: zh
 | 我要做什麼 | 跳到 |
 |-----------|------|
 | Release 標準流程 | [§Release 標準流程](#release-標準流程) |
+| 起草 release body / readiness statement | [§Step 3.5](#step-35-起草-release-bodyreadiness-statement-template) |
 | da-tools 獨立 Release | [§da-tools 獨立 Release](#da-tools-獨立-release) |
 | tenant-api 獨立 Release | [§tenant-api 獨立 Release](#tenant-api-獨立-release) |
 | 認證設定 (git/gh) | [§認證設定](#認證設定) |
@@ -146,6 +147,77 @@ git tag tools/v<TOOLS>
 git push origin v<PLATFORM> tools/v<TOOLS>
 # ⚠️ 不推未變更 component 的 tag — 版號不變時不推
 ```
+
+### Step 3.5: 起草 release body（Readiness statement template）
+
+GitHub Release page 是客戶下載 binary 必經的入口；release body 兼任「**v\<MAJOR\>.\<MINOR\>.0** readiness statement」— 不在 repo 內另開 `release-readiness/*.md` 避免文件碎片化。**本 template 為版號中性（version-agnostic）**，套用於 v2.x、v3.x、v4.x 以及未來所有 major / minor release（patch / hotfix release 用簡化版只列「what changed」）。每次 release 從以下 skeleton 拼出 `$bodyText`，貼進 Step 4 的 PowerShell payload。
+
+**為什麼是 release body 不是 repo 檔案：**
+- Repo 已有 `CHANGELOG.md`、`docs/internal/v*-planning-archive.md`、各 feature 的 `docs/api/*` 與 `docs/design/*`；新開 `release-readiness/*.md` 會把「掌握全貌」的入口又切碎一次
+- Release body 與 tag 自動綁定（PostgreSQL / Kubernetes 同 pattern）
+- 客戶下載時自然看到，不用主動找
+
+**版號 placeholder convention**（填 skeleton 時的 substitution rules）：
+- `<MAJOR>` = 大版號（v2 / v3 / v4 …）
+- `<MINOR>` = 中版號（v2.7 / v2.8 / v3.0 …）
+- `<PATCH>` = 小版號（v2.8.0 / v2.8.1 …）
+- `<NEXT-MINOR>` = 下一個中版號（v2.7 → v2.8；v2.X 末班 → v(X+1).0）
+- `<NEXT-MAJOR>` = 下一個大版號（v2.X → v3.0）
+
+**Readiness statement skeleton：**
+
+```markdown
+# v<MAJOR>.<MINOR>.<PATCH> — <one-line theme>
+
+<2-3 sentence narrative: 這個 release 主題、最大價值、誰應該升級>
+
+## What's verified
+<我們實際測過、簽過字的範圍。對照 CHANGELOG `### Added` / `### Changed` 的主要項目>
+
+- ✅ <feature/component> — `<test surface>`（例：`tenant-api`：unit + race + 1000-tenant benchmark baseline）
+- ✅ <feature/component> — `<test surface>`
+- ✅ Trivy <version> CVE audit — <X HIGH + Y CRITICAL → 0/0 clean OR 殘留說明>
+- ✅ `make pr-preflight` 全綠（七項檢查）
+- ✅ `make pre-tag` 全綠（version-check + lint-docs）
+
+## Known limits
+<已知但未在本 release 解的問題。每條一行，連到 issue / docs/api 的 §「Known gaps」>
+
+- 🟡 <constraint> — tracked in [#NNN](url)（rationale 一句話 + 預計版本）
+- 🟡 <constraint> — see [docs/api/foo.md §5.X](path)（rationale）
+
+## Upgrade notes
+<從上一個 minor 升上來會踩到的事。breaking changes 一律寫在這。Major bump (v(X+1).0.0) 必須點名所有 breaking change，沒有 happy-path>
+
+- **No breaking changes** — happy-path API 客戶零調整  OR  **Breaking change**：<具體一句>
+- 新行為：<例：`429` rate-limited 回應、`X-Request-ID` header echo> — 客戶端應 <action>
+- 配置新增（可選）：<例：`TA_RATE_LIMIT_PER_MIN`，預設 100>
+- 配置遷移（必要）：<例：dev 環境需新增 `_rbac.yaml`>
+
+## Deferred to next release (v<NEXT-MINOR>.0 OR v<NEXT-MAJOR>.0.0)
+<本 release 期間 cut 的工作。一律連 GitHub issue（不連 maintainer-local gitignored planning archive）。沒 issue 的項目先開 issue 再寫 release notes>
+
+- <Track / area> — tracked in [#NNN](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/NNN)
+- <Track / area> — tracked in [#NNN](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/NNN)
+
+## Artifacts
+<Distribution Artifacts 對照表 §Distribution Artifacts 列出本 release 推送的 image / chart / binary>
+
+- `ghcr.io/vencil/<component>:<tag>` — <一句說明>
+- ...
+
+## Detailed changelog
+See [CHANGELOG.md `### v<MAJOR>.<MINOR>.<PATCH>`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md) for entry-by-entry breakdown.
+```
+
+**填寫紀律：**
+- **「What's verified」只寫真的測過的** — 沒測過 / 只跑過部分的，誠實放「Known limits」。`make pr-preflight` 通過 ≠ 端到端 customer 場景驗過
+- **「Known limits」每條都要有 issue 或 docs/api anchor** — 沒有 anchor 的 known limit 等於「我們知道但沒人接手」，先開 issue 再寫 release notes
+- **「Deferred to next release」一律連 GitHub issue** — 不連 maintainer-local gitignored planning archive (`v*-planning-archive.md`)；沒 issue 的就先開 issue
+- **Major bump 額外要求**：v(X+1).0.0 必須在 «Upgrade notes» 列出所有 breaking change（不允許「No breaking changes」）；建議 §What's verified 加一條 migration-test 證據（例：`v(X).Y.Z → v(X+1).0.0` 升級腳本端到端測過）
+- **CJK / `&` 字元**：透過 PowerShell `ConvertTo-Json` + UTF8 Bytes（Step 4 方法 B）送 — 別用方法 A 拼字串
+
+**範例填法：** v2.8.0 readiness draft（在 v2.8.0 tag 前準備）— 主題「Customer-ready baseline + Phase B hardening」、verified 包含 RBAC tenant-scoped authz / rate limit / X-Request-ID echo、known limits 連到 issue #134（C4 body validation）+ tenant-api-hardening §5.2-5.3、deferred 連到 issue #127 / #128 / #134 / #67 + 為 Track D/E/F + onboarding 補開 meta-issue 後連過去。對 v3.0.0 / v4.0.0 等 major bump 用同 skeleton，只是 «Upgrade notes» 欄位會比較肥（每條 breaking change 一行）+ «Deferred» 標題改 «v\<NEXT-MAJOR\>.0.0»。
 
 ### Step 4: 建立 GitHub Release（透過 Windows MCP）
 
