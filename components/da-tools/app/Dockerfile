@@ -57,6 +57,12 @@ RUN chmod +x /usr/local/bin/da-guard
 COPY da-batchpr /usr/local/bin/da-batchpr
 RUN chmod +x /usr/local/bin/da-batchpr
 
+# ── Bundle da-parser binary (v2.8.0 C-8 PR-2) ─────────────────────
+# `da-tools parser <subcommand>` (import / allowlist) shells out to
+# da-parser. Same air-gapped friendliness as da-guard / da-batchpr.
+COPY da-parser /usr/local/bin/da-parser
+RUN chmod +x /usr/local/bin/da-parser
+
 # ── Entrypoint ────────────────────────────────────────────────────
 # Create a symlink so 'da-tools' works as a command
 RUN ln -s /opt/da-tools/entrypoint.py /usr/local/bin/da-tools && \

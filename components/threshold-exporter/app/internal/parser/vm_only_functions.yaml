@@ -1,0 +1,155 @@
+# vm_only_functions.yaml — VictoriaMetrics-only function allowlist
+#
+# Single source of truth for "what makes a rule MetricsQL-only" in the
+# v2.8.0 Phase .c C-8 parser. Every entry below is a MetricsQL function
+# identifier with NO counterpart in vanilla PromQL. A rule using any of
+# these is marked `dialect=metricsql` + `prom_portable=false` and
+# cannot be safely migrated back to a stock Prometheus server.
+#
+# Source curation: cross-referenced from
+# https://docs.victoriametrics.com/victoriametrics/metricsql/ as of
+# MetricsQL v0.87.0 (the version pinned in go.mod). Categories grouped
+# below for review readability — the loader flattens them into a single
+# case-insensitive set.
+#
+# Conservative bias is deliberate. Several entries below
+# (`histogram_avg`, `histogram_stddev`, `histogram_stdvar`,
+# `last_over_time`, `first_over_time`) became available in modern
+# Prometheus releases (2.40+). We keep them here so customers running
+# older Prometheus servers — the realistic rollback target for our
+# anti-vendor-lock-in promise — get a "manually review portability"
+# signal rather than an outage. Cost: one extra review per affected
+# rule. The PR-2 freshness gate (test_vm_only_functions_freshness.go)
+# diffs the metricsql parser's known function set against this file
+# whenever metricsql is bumped, so a release adding new VM functions
+# fails CI until they're triaged here.
+#
+# CAUTION when adding entries: list only function-call names that
+# actually appear in `metricsql.FuncExpr.Name` or
+# `metricsql.AggrFuncExpr.Name`. Keywords (`with`, modifier verbs like
+# `offset`/`@`) are parsed as separate Expr shapes and never reach the
+# function-name visitor; adding them here is dead code.
+
+# metricsql_version pins the parser release this allowlist was curated
+# against. The freshness gate uses this to decide whether to re-audit:
+# if metricsql in go.mod doesn't match this string, we expect either a
+# manual recurate (bump this field + the list below) or a CI block.
+metricsql_version: v0.87.0
+
+functions:
+  # ── rollup_* family (VM rollup analogues) ──────────────────────────
+  rollup:
+  rollup_rate:
+  rollup_deriv:
+  rollup_increase:
+  rollup_delta:
+  rollup_candlestick:
+  rollup_scrape_interval:
+
+  # ── range_* (sliding-window over series) ───────────────────────────
+  range_first:
+  range_last:
+  range_avg:
+  range_sum:
+  range_min:
+  range_max:
+  range_median:
+  range_quantile:
+  range_stddev:
+  range_stdvar:
+  range_trim_outliers:
+  range_trim_spikes:
+  range_trim_zscore:
+  range_zscore:
+  range_linear_regression:
+  range_normalize:
+  range_mad:
+  range_over_time:
+
+  # ── *_over_time MetricsQL-only extensions ──────────────────────────
+  quantiles_over_time:
+  histogram_quantiles_over_time:
+  geomean_over_time:
+  mode_over_time:
+  share_le_over_time:
+  share_gt_over_time:
+  share_eq_over_time:
+  count_le_over_time:
+  count_gt_over_time:
+  count_eq_over_time:
+  count_ne_over_time:
+  sum_eq_over_time:
+  sum_gt_over_time:
+  sum_le_over_time:
+  zscore_over_time:
+  first_over_time:
+  last_over_time:
+  distinct_over_time:
+  increases_over_time:
+  decreases_over_time:
+  duration_over_time:
+  lag:
+  lifetime:
+  tlast_change_over_time:
+  tfirst_over_time:
+  tmin_over_time:
+  tmax_over_time:
+  mad_over_time:
+  median_over_time:
+  outlier_iqr_over_time:
+
+  # ── VM histogram analytics (PromQL only has histogram_quantile) ────
+  histogram_share:
+  histogram_avg:
+  histogram_stddev:
+  histogram_stdvar:
+
+  # ── VM gauge utilities ─────────────────────────────────────────────
+  keep_last_value:
+  keep_next_value:
+  interpolate:
+  remove_resets:
+  running_sum:
+  running_avg:
+  running_min:
+  running_max:
+  default_rollup:
+
+  # ── VM label rewriters ─────────────────────────────────────────────
+  label_set:
+  label_del:
+  label_keep:
+  label_copy:
+  label_move:
+  label_lowercase:
+  label_uppercase:
+  label_replace_strict:
+  label_match:
+  label_mismatch:
+  label_value:
+  label_transform:
+  label_graphite_group:
+
+  # ── VM bitmap operators ────────────────────────────────────────────
+  bitmap_and:
+  bitmap_or:
+  bitmap_xor:
+
+  # ── VM time-context (PromQL has no equivalents) ────────────────────
+  at:
+  step:
+  start:
+  end:
+  now:
+
+  # ── Other VM-specific ──────────────────────────────────────────────
+  alias:
+  limit_offset:
+  prometheus_buckets:
+  buckets_limit:
+  sort_by_label:
+  sort_by_label_desc:
+  sort_by_label_numeric:
+  sort_by_label_numeric_desc:
+  smooth_exponential:
+  union:

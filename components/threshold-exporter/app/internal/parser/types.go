@@ -3,16 +3,20 @@
 // ParsedRule record consumed by the v2.8.0 Phase .c migration toolkit
 // (C-9 Profile Builder, C-10 Batch PR Pipeline).
 //
-// PR-1 ships the parser core + dialect detection. Subsequent PRs add:
-//   - PR-2: external `vm_only_functions.yaml` + freshness CI gate,
-//     `prom_compatible: bool` (requires prometheus/promql/parser dep),
-//     CLI `da-tools parser import`.
+// PR-1 shipped the parser core + dialect detection. PR-2 adds:
+//   - external `vm_only_functions.yaml` + freshness CI gate,
+//   - `prom_compatible: bool` (requires prometheus/promql/parser dep),
+//   - CLI `da-tools parser import` (cmd/da-parser).
 //
 // Single source of truth for "what makes a rule MetricsQL-only" is
-// vm_only_functions.go in this package. Keeping the allowlist tight is
-// a hard requirement for C-8's "anti-vendor-lock-in" promise — any
-// rule we mis-classify as `prom` may surprise customers when they try
-// to roll back to vanilla Prometheus.
+// vm_only_functions.yaml (loaded by vm_only_functions.go). Keeping
+// the allowlist tight is a hard requirement for C-8's
+// "anti-vendor-lock-in" promise — any rule we mis-classify as `prom`
+// may surprise customers when they try to roll back to vanilla
+// Prometheus. The freshness CI gate
+// (vm_only_functions_freshness_test.go) compares the embedded
+// `metricsql_version` against the dep in go.mod and fails when an
+// upstream version-bump might have introduced unaudited functions.
 package parser
 
 // Dialect labels which rule language a parsed expression most closely
@@ -72,13 +76,41 @@ type ParsedRule struct {
 	// vanilla Prometheus server unchanged: parses with metricsql AND
 	// uses no VM-only functions. Convenience flag for C-9 / C-10
 	// consumers that don't want to switch on Dialect themselves.
+	//
+	// PromPortable is the structural / "no VM-only function names"
+	// signal. PromCompatible (below) adds a tighter check using the
+	// upstream Prometheus parser. A rule should normally have either
+	// both true or both false; a divergence — PromPortable=true but
+	// PromCompatible=false — means metricsql happens to accept a
+	// shape Prometheus rejects, and the human reviewer should treat
+	// the rule as non-portable in practice.
 	PromPortable bool `json:"prom_portable"`
+
+	// PromCompatible reports whether the expression parses with the
+	// upstream `prometheus/promql/parser` (i.e. would be accepted by
+	// a vanilla Prometheus server). Strict superset gate on top of
+	// PromPortable: if PromCompatible is false, no amount of "no
+	// VM-only function" wishful thinking will make the rule portable.
+	//
+	// Computed by ValidateStrictPromQL; populated only when
+	// ParseOptions.StrictPromQL is true (default for the CLI), nil
+	// when off (callers can skip the cost when they don't need it).
+	PromCompatible bool `json:"prom_compatible"`
 
 	// AnalyzeError, when non-empty, is the parser error message from
 	// metricsql.Parse for a DialectAmbiguous rule. Surfaced so the
 	// reviewer can see *why* the rule was rejected, not just that it
 	// was. Empty for prom / metricsql dialects.
 	AnalyzeError string `json:"analyze_error,omitempty"`
+
+	// StrictPromError, when non-empty, is the upstream
+	// `prometheus/promql/parser` error for a rule whose strict
+	// PromQL validation failed. Always empty when
+	// ParseOptions.StrictPromQL was off, or when the rule passed
+	// strict validation. Populated alongside PromCompatible=false so
+	// callers can surface the actionable diagnostic without rerunning
+	// the strict parser.
+	StrictPromError string `json:"strict_prom_error,omitempty"`
 }
 
 // Provenance stamps where a ParsedRule came from + when + with
@@ -118,4 +150,24 @@ type ParseResult struct {
 	// parse errors (malformed YAML, missing `spec.groups`) return
 	// an error from ParsePromRules instead.
 	Warnings []string `json:"warnings,omitempty"`
+}
+
+// ParseOptions modulates ParsePromRulesWithOptions behaviour. The
+// zero value is the conservative library-friendly default
+// (strict-PromQL validation OFF) so that programmatic callers don't
+// pay the upstream Prometheus parser cost unless they ask for it.
+//
+// The `da-parser import` CLI flips StrictPromQL on by default —
+// customers running the migration toolkit always want the tighter
+// portability signal, and the per-rule cost is negligible for the
+// rule-corpus sizes we target (10K rules in seconds).
+type ParseOptions struct {
+	// StrictPromQL toggles the prometheus/promql/parser strict-
+	// compatibility gate. When true:
+	//   - ParsedRule.PromCompatible is populated.
+	//   - ParsedRule.StrictPromError captures the diagnostic for
+	//     rules that fail strict validation.
+	// When false the two fields are left at zero value and the
+	// upstream Prometheus parser is never invoked.
+	StrictPromQL bool
 }

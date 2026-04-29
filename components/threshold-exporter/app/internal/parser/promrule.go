@@ -90,7 +90,18 @@ type promRuleItem struct {
 //     Conventional format: `da-tools@tools-vX.Y.Z parser@<git-sha>`.
 //     Library callers may pass any identifier appropriate to their
 //     deployment.
+//
+// PR-1 contract; thin wrapper around ParsePromRulesWithOptions using
+// zero-value options (strict PromQL validation off). New callers
+// wanting `prom_compatible: bool` should use the With-options form.
 func ParsePromRules(yamlBytes []byte, sourceFile, generatedBy string) (*ParseResult, error) {
+	return ParsePromRulesWithOptions(yamlBytes, sourceFile, generatedBy, ParseOptions{})
+}
+
+// ParsePromRulesWithOptions is the PR-2 form that exposes
+// ParseOptions. ParsePromRules is the conservative default-options
+// shim around it (strict PromQL off — preserves PR-1 behaviour).
+func ParsePromRulesWithOptions(yamlBytes []byte, sourceFile, generatedBy string, opts ParseOptions) (*ParseResult, error) {
 	if len(yamlBytes) == 0 {
 		return nil, fmt.Errorf("parser: empty input")
 	}
@@ -132,7 +143,7 @@ func ParsePromRules(yamlBytes []byte, sourceFile, generatedBy string) (*ParseRes
 
 		for gi, grp := range groups {
 			for ri, raw := range grp.Rules {
-				pr := buildParsedRule(raw, sourceFile, gi, ri)
+				pr := buildParsedRule(raw, sourceFile, gi, ri, opts)
 				if pr.Alert == "" && pr.Record == "" {
 					result.Warnings = append(result.Warnings,
 						fmt.Sprintf("%s: rule has neither `alert` nor `record` name", pr.SourceRuleID))
@@ -149,8 +160,9 @@ func ParsePromRules(yamlBytes []byte, sourceFile, generatedBy string) (*ParseRes
 // buildParsedRule populates one ParsedRule from a raw YAML rule item,
 // running dialect analysis on the expression. Errors from the
 // dialect analyzer become DialectAmbiguous + AnalyzeError on the
-// rule (NOT a top-level failure).
-func buildParsedRule(raw promRuleItem, sourceFile string, groupIdx, ruleIdx int) ParsedRule {
+// rule (NOT a top-level failure). Strict-PromQL validation runs
+// only when opts.StrictPromQL is true.
+func buildParsedRule(raw promRuleItem, sourceFile string, groupIdx, ruleIdx int, opts ParseOptions) ParsedRule {
 	pr := ParsedRule{
 		Alert:        raw.Alert,
 		Record:       raw.Record,
@@ -168,6 +180,21 @@ func buildParsedRule(raw promRuleItem, sourceFile string, groupIdx, ruleIdx int)
 	if parseErr != nil {
 		pr.AnalyzeError = parseErr.Error()
 	}
+
+	if opts.StrictPromQL {
+		// A DialectAmbiguous rule already failed the metricsql parser;
+		// running the strict PromQL parser too is redundant and just
+		// produces a second confusing error. Just mark it incompatible.
+		if dialect == DialectAmbiguous {
+			pr.PromCompatible = false
+		} else if err := ValidateStrictPromQL(raw.Expr); err != nil {
+			pr.PromCompatible = false
+			pr.StrictPromError = err.Error()
+		} else {
+			pr.PromCompatible = true
+		}
+	}
+
 	return pr
 }
 

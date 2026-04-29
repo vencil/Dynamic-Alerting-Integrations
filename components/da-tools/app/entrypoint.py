@@ -79,6 +79,15 @@ def _build_help_text(lang):
                       `--expect-merged-hash` 與快照比對 (B-4 rollback checklist)
                       `--all --json` 拍 pre-base snapshot 給 rollback 後 diff
 
+命令 (Batch PR — C-10 Migration Batch PR Pipeline, v2.8.0):
+    batch-pr          開出/更新 tenant chunk PRs，或於 Base merge 後 rebase。
+                      子命令: apply / refresh / refresh-source
+
+命令 (Parser — C-8 PromRule parser, v2.8.0):
+    parser            解析 PrometheusRule YAML，輸出 JSON ParseResult；
+                      可選 strict-PromQL 相容性檢查 (anti-vendor-lock-in)。
+                      子命令: import / allowlist
+
 全域環境變數:
     PROMETHEUS_URL    預設 Prometheus 端點 (--prometheus 的後備)
     DA_LANG           設定 CLI 語言 (zh/en，優先於 LC_ALL/LANG)"""
@@ -153,6 +162,15 @@ Commands (Phase B Track A — rollback verification, v2.8.0):
                       (B-4 rollback checklist item 6).
                       `--all --json` snapshots pre-base state for diffing
                       after rollback.
+
+Commands (Batch PR — C-10 Migration Batch PR Pipeline, v2.8.0):
+    batch-pr          Open/update tenant chunk PRs, or rebase after Base merges.
+                      Subcommands: apply / refresh / refresh-source
+
+Commands (Parser — C-8 PromRule parser, v2.8.0):
+    parser            Parse PrometheusRule YAML to JSON ParseResult;
+                      optional strict-PromQL portability check
+                      (anti-vendor-lock-in). Subcommands: import / allowlist
 
 Global environment variables:
     PROMETHEUS_URL    Default Prometheus endpoint (fallback for --prometheus)
@@ -237,6 +255,12 @@ COMMAND_MAP = {
     # See docs/scenarios/incremental-migration-playbook.md §Emergency
     # Rollback Procedures, checklist item 6.
     "tenant-verify": "tenant_verify.py",
+    # Group I: Batch PR pipeline (v2.8.0 Phase .c C-10 PR-5)
+    # Wraps the da-batchpr Go binary; see scripts/tools/ops/batchpr_dispatch.py.
+    "batch-pr": "batchpr_dispatch.py",
+    # Group J: PromRule parser (v2.8.0 Phase .c C-8 PR-2)
+    # Wraps the da-parser Go binary; see scripts/tools/ops/parser_dispatch.py.
+    "parser": "parser_dispatch.py",
 }
 
 # Commands that accept --prometheus flag (inject env var fallback)

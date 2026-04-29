@@ -27,11 +27,10 @@ C-11 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gap
 
 | 工具 | 介面 | 用途 |
 |---|---|---|
-| `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `batch-pr` 子命令 wrapping da-guard / da-batchpr |
+| `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `batch-pr` + `parser` 子命令 wrapping da-guard / da-batchpr / da-parser |
 | `da-guard` | Go binary | C-12 Dangling Defaults Guard CLI（schema / routing / cardinality / redundant-override 四層檢查）|
 | `da-batchpr` | Go binary | C-10 Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）|
-
-未來 PR 加入 `da-toolkit parser` 等 Go 子命令時，本指南會更新。
+| `da-parser` | Go binary | C-8 PromRule parser CLI（import / allowlist 子命令；strict-PromQL 相容性檢查 + dialect / VM-only 函數分類；anti-vendor-lock-in）|
 
 ## 三種交付路徑
 
@@ -72,7 +71,7 @@ docker run --rm \
 
 ## 路徑 B：Static binary download
 
-每個 Release 提供兩組 6 個 cross-compiled binary（共 12 個 archive）：
+每個 Release 提供三組 6 個 cross-compiled binary（共 18 個 archive）：
 
 **`da-guard`**（C-12 Dangling Defaults Guard）：
 
@@ -96,7 +95,18 @@ docker run --rm \
 | Windows | amd64 | `da-batchpr-windows-amd64.zip` |
 | Windows | arm64 | `da-batchpr-windows-arm64.zip` |
 
-每份 archive 內含**一個** binary（或 `<name>.exe`），再加一份**單一** `SHA256SUMS` 檔案 list 全部 12 個 archive 的 hash。客戶可以只下載自己需要的（純驗 conf.d/ 拿 `da-guard` 就好；要走 batch PR 再加 `da-batchpr`）。
+**`da-parser`**（C-8 PromRule parser，v2.8.0 起）：
+
+| OS | ARCH | 檔名 |
+|---|---|---|
+| Linux | amd64 | `da-parser-linux-amd64.tar.gz` |
+| Linux | arm64 | `da-parser-linux-arm64.tar.gz` |
+| macOS | amd64 | `da-parser-darwin-amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `da-parser-darwin-arm64.tar.gz` |
+| Windows | amd64 | `da-parser-windows-amd64.zip` |
+| Windows | arm64 | `da-parser-windows-arm64.zip` |
+
+每份 archive 內含**一個** binary（或 `<name>.exe`），再加一份**單一** `SHA256SUMS` 檔案 list 全部 18 個 archive 的 hash。客戶可以只下載自己需要的（純驗 conf.d/ 拿 `da-guard` 就好；要走 batch PR 再加 `da-batchpr`；要做 PromRule 解析+portability check 再加 `da-parser`）。
 
 ### 安裝範例（Linux/macOS）
 

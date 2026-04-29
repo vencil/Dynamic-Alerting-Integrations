@@ -11,14 +11,15 @@ package parser
 //     uses it to print actionable feedback for the human reviewer.
 //
 //  2. Walk the AST collecting every function-call name. If any name
-//     appears in vmOnlyFuncs (vm_only_functions.go) the expression
-//     is `metricsql`-dialect; otherwise `prom`.
+//     is reported by IsVMOnlyFunction (loaded from
+//     vm_only_functions.yaml in PR-2) the expression is
+//     `metricsql`-dialect; otherwise `prom`.
 //
-//     We don't need a separate PromQL parser pass to confirm "this
-//     also parses with PromQL" — `prom_compatible: bool` (planning
-//     spec) requires it but is left for PR-2 along with the
-//     prometheus/promql/parser dependency. PR-1 returns
-//     prom_compatible-equivalent information indirectly via Dialect.
+//     The `prom_compatible: bool` field on ParsedRule (which DOES
+//     require a separate PromQL parser pass) is populated by the
+//     strict-mode pipeline in promrule.go::buildParsedRule when
+//     ParseOptions.StrictPromQL is set; see strict_prom.go for the
+//     prometheus/promql/parser-based validator added in PR-2.
 //
 // Walker design: metricsql exposes only the `Expr` interface (single
 // `AppendString` method). There is no public Visit; we type-switch on

@@ -1,180 +1,94 @@
 package parser
 
-// VictoriaMetrics-only function names (PR-1 seed allowlist).
+// VictoriaMetrics-only function allowlist (PR-2).
 //
-// This is the list of MetricsQL function identifiers that have NO
-// counterpart in vanilla PromQL. A rule using any of these is marked
-// `dialect=metricsql` + `prom_portable=false` and cannot be safely
-// migrated back to a stock Prometheus server.
+// PR-1 hard-coded the allowlist in this Go file. PR-2 promotes the
+// list to an external `vm_only_functions.yaml` (embedded at build
+// time) so that:
 //
-// Source curation: cross-referenced from
-// https://docs.victoriametrics.com/victoriametrics/metricsql/ as of
-// MetricsQL v0.87.0 (the version pinned in go.mod). Categories:
+//   1. Updating the allowlist no longer requires touching Go source —
+//      a YAML edit + freshness CI gate is enough.
+//   2. The freshness gate (test_vm_only_functions_freshness.go) reads
+//      the same YAML and diffs it against the metricsql release in
+//      go.mod, failing CI when an upstream version-bump introduces
+//      new function names that haven't been triaged here.
 //
-//   - rollup_*           — VM rollup analogues
-//   - range_*            — sliding-window aggregators VM added
-//   - *_over_time exotic — VM extensions beyond the PromQL set
-//   - histogram_* exotic — VM histogram analytics PromQL doesn't have
-//   - keep_last_value /
-//     interpolate /
-//     remove_resets etc. — VM-specific gauge utilities
-//   - label_set / label_copy / label_move — VM label rewriters
-//   - bitmap_*           — VM bitmap operators
-//   - at / step / start /
-//     end / now           — VM time-context functions
-//
-// The seed is intentionally conservative: false positives (mark a fn
-// as VM-only when it's actually portable) cost a customer one extra
-// manual review per rule; false negatives (miss a real VM-only fn)
-// cost the customer an Alertmanager outage when they roll back to
-// Prometheus. Keep extending this list as we encounter rules in the
-// wild.
-//
-// PR-2 promotes this to an external `vm_only_functions.yaml` with a
-// CI freshness gate (`test_vm_only_functions_freshness.go`) that
-// diffs against the metricsql release in go.mod and fails when an
-// upstream version-bump introduces new function names not yet
-// classified here. Until then this hardcoded set is the single
-// source of truth — any change requires a code review.
-
-// vmOnlyFuncs lists every MetricsQL function name that is NOT also a
-// valid PromQL function. Membership is checked case-insensitively
-// because metricsql's own parser lowercases function names before
-// dispatch.
-//
-// **Conservative bias is deliberate.** Several entries below
-// (`histogram_avg`, `histogram_stddev`, `histogram_stdvar`,
-// `last_over_time`, `first_over_time`) became available in modern
-// Prometheus releases (2.40+). We keep them here so that customers
-// running older Prometheus servers — the realistic rollback target
-// for our anti-vendor-lock-in promise — get a "manually review
-// portability" signal rather than an outage. Cost: one extra review
-// per affected rule. The PR-2 freshness gate will let us narrow this
-// list per "minimum supported Prometheus version" if a customer
-// commits to a newer floor.
+// The YAML stays embedded (via go:embed) rather than loaded from disk
+// at runtime so the binary remains self-contained — customer
+// deployments don't need to ship the YAML alongside the executable.
 //
 // CAUTION when adding entries: list only function-call names that
 // actually appear in `metricsql.FuncExpr.Name` or
 // `metricsql.AggrFuncExpr.Name`. Keywords (`with`, modifier verbs
 // like `offset`/`@`) are parsed as separate Expr shapes and never
-// reach the function-name visitor; adding them here is dead code.
-var vmOnlyFuncs = map[string]struct{}{
-	// rollup_* family
-	"rollup":                 {},
-	"rollup_rate":            {},
-	"rollup_deriv":           {},
-	"rollup_increase":        {},
-	"rollup_delta":           {},
-	"rollup_candlestick":     {},
-	"rollup_scrape_interval": {},
+// reach the function-name visitor; adding them there is dead code.
 
-	// range_* (sliding-window over series)
-	"range_first":             {},
-	"range_last":              {},
-	"range_avg":               {},
-	"range_sum":               {},
-	"range_min":               {},
-	"range_max":               {},
-	"range_median":            {},
-	"range_quantile":          {},
-	"range_stddev":            {},
-	"range_stdvar":            {},
-	"range_trim_outliers":     {},
-	"range_trim_spikes":       {},
-	"range_trim_zscore":       {},
-	"range_zscore":            {},
-	"range_linear_regression": {},
-	"range_normalize":         {},
-	"range_mad":               {},
-	"range_over_time":         {},
+import (
+	_ "embed"
+	"fmt"
+	"sort"
+	"sync"
 
-	// *_over_time MetricsQL-only extensions
-	"quantiles_over_time":           {},
-	"histogram_quantiles_over_time": {},
-	"geomean_over_time":             {},
-	"mode_over_time":                {},
-	"share_le_over_time":            {},
-	"share_gt_over_time":            {},
-	"share_eq_over_time":            {},
-	"count_le_over_time":            {},
-	"count_gt_over_time":            {},
-	"count_eq_over_time":            {},
-	"count_ne_over_time":            {},
-	"sum_eq_over_time":              {},
-	"sum_gt_over_time":              {},
-	"sum_le_over_time":              {},
-	"zscore_over_time":              {},
-	"first_over_time":               {},
-	"last_over_time":                {},
-	"distinct_over_time":            {},
-	"increases_over_time":           {},
-	"decreases_over_time":           {},
-	"duration_over_time":            {},
-	"lag":                           {},
-	"lifetime":                      {},
-	"tlast_change_over_time":        {},
-	"tfirst_over_time":              {},
-	"tmin_over_time":                {},
-	"tmax_over_time":                {},
-	"mad_over_time":                 {},
-	"median_over_time":              {},
-	"outlier_iqr_over_time":         {},
+	"gopkg.in/yaml.v3"
+)
 
-	// VM histogram analytics (PromQL only has histogram_quantile)
-	"histogram_share":  {},
-	"histogram_avg":    {},
-	"histogram_stddev": {},
-	"histogram_stdvar": {},
+//go:embed vm_only_functions.yaml
+var vmOnlyFunctionsYAML []byte
 
-	// VM gauge utilities
-	"keep_last_value": {},
-	"keep_next_value": {},
-	"interpolate":     {},
-	"remove_resets":   {},
-	"running_sum":     {},
-	"running_avg":     {},
-	"running_min":     {},
-	"running_max":     {},
-	"default_rollup":  {},
+// vmOnlyAllowlist is the parsed YAML; populated lazily via initOnce
+// because go:embed only delivers raw bytes — we still need a YAML
+// decode + map flatten before the lookup map is usable.
+type vmOnlyAllowlist struct {
+	// MetricsqlVersion is the parser release the YAML was curated
+	// against (e.g. "v0.87.0"). The freshness gate compares this
+	// against the metricsql dep in go.mod; mismatches trigger a CI
+	// audit reminder.
+	MetricsqlVersion string `yaml:"metricsql_version"`
 
-	// VM label rewriters
-	"label_set":            {},
-	"label_del":            {},
-	"label_keep":           {},
-	"label_copy":           {},
-	"label_move":           {},
-	"label_lowercase":      {},
-	"label_uppercase":      {},
-	"label_replace_strict": {},
-	"label_match":          {},
-	"label_mismatch":       {},
-	"label_value":          {},
-	"label_transform":      {},
-	"label_graphite_group": {},
+	// Functions is decoded as a YAML mapping where keys are function
+	// names and values are ignored (idiomatic "set" shape in YAML —
+	// `name:` with empty/null value). yaml.v3 decodes `name:` as
+	// `name: ""` so we use string values; only the keys matter.
+	Functions map[string]string `yaml:"functions"`
+}
 
-	// VM bitmap operators
-	"bitmap_and": {},
-	"bitmap_or":  {},
-	"bitmap_xor": {},
+var (
+	vmOnlyOnce sync.Once
+	vmOnly     map[string]struct{}
+	vmOnlyMeta vmOnlyAllowlist
+	vmOnlyErr  error
+)
 
-	// VM time-context (PromQL has no equivalents)
-	"at":    {},
-	"step":  {},
-	"start": {},
-	"end":   {},
-	"now":   {},
-
-	// Other VM-specific
-	"alias":                      {},
-	"limit_offset":               {},
-	"prometheus_buckets":         {},
-	"buckets_limit":              {},
-	"sort_by_label":              {},
-	"sort_by_label_desc":         {},
-	"sort_by_label_numeric":      {},
-	"sort_by_label_numeric_desc": {},
-	"smooth_exponential":         {},
-	"union":                      {},
+// loadVMOnlyAllowlist decodes the embedded YAML once. Errors here are
+// programmer bugs (the YAML lives in the same module as this file,
+// reviewed together) so we panic on failure to make them impossible
+// to ignore. The freshness CI gate catches the realistic regression
+// (new VM functions upstream); a malformed YAML caught at startup is
+// a localised fix.
+func loadVMOnlyAllowlist() {
+	vmOnlyOnce.Do(func() {
+		var doc vmOnlyAllowlist
+		if err := yaml.Unmarshal(vmOnlyFunctionsYAML, &doc); err != nil {
+			vmOnlyErr = fmt.Errorf("parser: decode vm_only_functions.yaml: %w", err)
+			return
+		}
+		if len(doc.Functions) == 0 {
+			vmOnlyErr = fmt.Errorf("parser: vm_only_functions.yaml has no `functions` entries")
+			return
+		}
+		set := make(map[string]struct{}, len(doc.Functions))
+		for name := range doc.Functions {
+			set[lowerASCII(name)] = struct{}{}
+		}
+		vmOnly = set
+		vmOnlyMeta = doc
+	})
+	if vmOnlyErr != nil {
+		// Embedded YAML failing to decode is unrecoverable — the
+		// binary's classification map is empty and every rule would
+		// be mislabelled `prom`. Better to fail loudly than silently.
+		panic(vmOnlyErr)
+	}
 }
 
 // IsVMOnlyFunction reports whether the given function name is known
@@ -184,8 +98,30 @@ var vmOnlyFuncs = map[string]struct{}{
 // to lower-case before dispatch, so "Rollup_Rate" and "rollup_rate"
 // behave identically and we match accordingly.
 func IsVMOnlyFunction(name string) bool {
-	_, ok := vmOnlyFuncs[lowerASCII(name)]
+	loadVMOnlyAllowlist()
+	_, ok := vmOnly[lowerASCII(name)]
 	return ok
+}
+
+// VMOnlyFunctionNames returns a sorted slice of every function name
+// in the allowlist. Used by the freshness CI gate and by the
+// `da-parser allowlist` introspection subcommand.
+func VMOnlyFunctionNames() []string {
+	loadVMOnlyAllowlist()
+	out := make([]string, 0, len(vmOnly))
+	for name := range vmOnly {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// VMOnlyMetricsqlVersion returns the metricsql parser release tag the
+// allowlist was curated against. The freshness gate uses this to decide
+// whether the allowlist needs a re-audit cycle.
+func VMOnlyMetricsqlVersion() string {
+	loadVMOnlyAllowlist()
+	return vmOnlyMeta.MetricsqlVersion
 }
 
 // lowerASCII is a tiny ASCII-only lower-caser used to avoid pulling

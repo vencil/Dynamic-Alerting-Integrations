@@ -116,6 +116,12 @@ TOOL_FILES=(
     # v2.8.0 Phase .c C-12 — Dangling Defaults Guard dispatcher
     # (shells out to the `da-guard` Go binary; see scripts/tools/ops/guard_dispatch.py)
     ops/guard_dispatch.py
+    # v2.8.0 Phase .c C-10 PR-5 — Batch PR Pipeline dispatcher
+    # (shells out to the `da-batchpr` Go binary; see scripts/tools/ops/batchpr_dispatch.py)
+    ops/batchpr_dispatch.py
+    # v2.8.0 Phase .c C-8 PR-2 — PromRule parser dispatcher
+    # (shells out to the `da-parser` Go binary; see scripts/tools/ops/parser_dispatch.py)
+    ops/parser_dispatch.py
     # v2.8.0 Phase .b Track A A5 — tenant verify (B-4 rollback checklist)
     # tenant_verify imports ConfDScanner from describe_tenant (transitive
     # dep); both ship together. See scripts/tools/dx/tenant_verify.py
@@ -203,6 +209,20 @@ echo "▸ Building da-batchpr binary for da-tools image bundling..."
         ./cmd/da-batchpr)
 echo "  Built da-batchpr linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
 
+# ── Build da-parser binary (v2.8.0 C-8 PR-2) ────────────────────────
+# da-tools' `parser` subcommand shells out to the da-parser Go binary
+# (subcommands: import / allowlist). Bundle the linux/amd64 binary so
+# customers running `da-tools parser import ...` in the container
+# don't need to install or download it separately.
+echo "▸ Building da-parser binary for da-tools image bundling..."
+(cd "$EXPORTER_APP" && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -buildvcs=false \
+        -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
+        -o "$SCRIPT_DIR/da-parser" \
+        ./cmd/da-parser)
+echo "  Built da-parser linux/amd64 (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
+
 # ── Assemble-only mode (for CI — Buildx handles the docker build) ──
 if [ "$ASSEMBLE_ONLY" = true ]; then
     echo "✓ Build context assembled (--assemble-only). tools/ kept for Buildx."
@@ -215,7 +235,7 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
-rm -f "$SCRIPT_DIR/da-guard" "$SCRIPT_DIR/da-batchpr"
+rm -f "$SCRIPT_DIR/da-guard" "$SCRIPT_DIR/da-batchpr" "$SCRIPT_DIR/da-parser"
 
 echo "✓ Built: $IMAGE_NAME"
 echo ""
