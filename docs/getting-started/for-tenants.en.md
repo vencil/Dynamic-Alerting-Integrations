@@ -183,7 +183,7 @@ python3 scripts/tools/ops/config_diff.py \
 
 ```bash
 # Check your tenant's alert quality for noise (flapping) / stale (idle) issues
-da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+da-tools alert-quality --prometheus http://localhost:9090 --tenant <your-tenant-id>
 ```
 
 Output: per-tenant quality score (0–100) and specific issue list.

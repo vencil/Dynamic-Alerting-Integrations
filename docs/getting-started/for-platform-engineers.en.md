@@ -46,10 +46,14 @@ defaults:
 ### Deploy threshold-exporter ×2 HA
 
 ```bash
-kubectl apply -f k8s/02-threshold-exporter/
+# threshold-exporter ships as a Helm chart at helm/threshold-exporter/
+helm install threshold-exporter ./helm/threshold-exporter/ \
+  -n monitoring --create-namespace
 # Verify replicas are running
 kubectl get pod -n monitoring | grep threshold-exporter
 ```
+
+> If you bring your own GitOps (Argo CD / Flux), point the Application/Kustomization at the chart path — no raw manifests required. The chart is also published as an OCI artifact (`ghcr.io/vencil/dynamic-alerting`); air-gapped environments follow [migration-toolkit-installation.md](../migration-toolkit-installation.en.md) Path C.
 
 ### Mount Rule Packs
 
@@ -81,7 +85,7 @@ defaults:
 Validate defaults syntax:
 
 ```bash
-python3 scripts/tools/ops/validate_config.py --config-dir conf.d/ --schema
+python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
 ### Managing Rule Packs
@@ -194,7 +198,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-Validate: `da-tools check-routing-profiles --config-dir conf.d/`. Debug: `da-tools explain-route --config-dir conf.d/ --tenant db-finance`. JSON Schema available in `docs/schemas/` for VS Code validation.
+Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_routing_profile` references + domain policy constraints). Debug: `da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`. JSON Schema available in `docs/schemas/` for VS Code validation.
 
 ### Setting Up Webhook Domain Allowlist
 
@@ -216,22 +220,21 @@ fnmatch patterns support wildcards. ⚠️ Empty list means no restriction — *
 
 ```bash
 python3 scripts/tools/ops/validate_config.py \
-  --config-dir conf.d/ \
-  --schema
+  --config-dir conf.d/
 ```
 
-Checked items:
+Checked items (schema validation runs by default — no flag needed):
 - YAML syntax correctness
 - Parameter schema conformance
 - Route generation success
 - Policy checks pass
-- Version consistency
+- Version consistency (add `--version-check` to enable)
 
 ### Alert Quality Scoring (v2.1.0)
 
 ```bash
 # Scan all tenants for alert quality (Noise / Stale / Latency / Suppression)
-da-tools alert-quality --prometheus http://localhost:9090 --config-dir conf.d/
+da-tools alert-quality --prometheus http://localhost:9090
 
 # CI gate: exit 1 if score below 60
 da-tools alert-quality --prometheus http://localhost:9090 --ci --min-score 60

@@ -310,7 +310,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-Validate: `da-tools check-routing-profiles --config-dir conf.d/`. Debug: `da-tools explain-route --config-dir conf.d/ --tenant db-finance`.
+Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_routing_profile` references + domain policy constraints). Debug: `da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`.
 
 ### Cardinality Forecasting (v2.1.0)
 
