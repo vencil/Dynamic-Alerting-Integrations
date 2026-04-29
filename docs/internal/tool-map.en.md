@@ -96,7 +96,9 @@ lang: en
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
 | `migrate_ssot_language.py` | SSOT 語言切換遷移工具 |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
+| `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
+| `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
