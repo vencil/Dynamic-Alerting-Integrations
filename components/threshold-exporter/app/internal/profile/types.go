@@ -75,13 +75,22 @@ type ExtractionProposal struct {
 	// (see ClusterOptions).
 	MemberRuleIDs []string `json:"member_rule_ids"`
 
-	// SharedExprTemplate is the normalised expression every member
-	// rule reduces to under the parser's normalisation rules. This
-	// is *not* the raw expr of any single member; it's a template
-	// where threshold literals and per-tenant label values have been
-	// replaced with placeholders so the cluster signature is stable.
-	// Useful as a human-readable "what this group of rules computes"
-	// summary when displayed in UI.
+	// SharedExprTemplate is the normalised expression representing
+	// the cluster, with threshold literals and per-tenant label
+	// values replaced with placeholders. Useful as a human-readable
+	// "what this group of rules computes" summary in UI.
+	//
+	// For ConfidenceHigh proposals, every member rule reduces to
+	// this exact byte sequence under the strict normalisation pass.
+	//
+	// For ConfidenceMedium (fuzzy) proposals, members reduce to the
+	// same form only under the fuzzy normalisation; the displayed
+	// template here is the *strict* normalisation of one
+	// representative member (chosen for human readability — showing
+	// `rate(foo[<NUM>m])` is friendlier than the canonicalised
+	// `rate(foo[<DUR_xy>])` placeholder). The Reason field surfaces
+	// the duration-variance breadth so reviewers know why the
+	// template doesn't byte-match every member.
 	SharedExprTemplate string `json:"shared_expr_template"`
 
 	// SharedFor is the alert `for:` duration shared by every member.

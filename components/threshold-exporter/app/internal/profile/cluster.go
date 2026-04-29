@@ -3,9 +3,10 @@ package profile
 // Cluster engine — group ParsedRules by signature, emit
 // ExtractionProposal per cluster.
 //
-// PR-1 algorithm (deterministic, two passes when fuzzy enabled):
+// Algorithm (deterministic; one strict pass always, plus an optional
+// fuzzy second pass when ClusterOptions.EnableFuzzy=true):
 //
-//   PASS 1 (strict — always runs):
+//   PASS 1 (strict — PR-1, always runs):
 //   1. For each input rule, compute a `signature` = the normalised
 //      expression + the rule's `for:` + the rule's dialect.
 //      Rules with empty expr are dropped to Unclustered (no usable

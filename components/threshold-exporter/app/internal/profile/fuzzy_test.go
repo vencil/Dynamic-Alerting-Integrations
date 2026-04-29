@@ -426,6 +426,45 @@ func TestSignatureForFuzzy_DialectAndForStillSeparate(t *testing.T) {
 	}
 }
 
+func TestBuildProposals_FuzzyOnWithEmptyResidueNoOp(t *testing.T) {
+	// Pin the contract: when EnableFuzzy=true but every input rule
+	// already strict-clusters, fuzzyPassClusters runs over an empty
+	// residue and produces no proposals + no leftover. The output
+	// must be byte-identical to what EnableFuzzy=false would have
+	// produced.
+	//
+	// Without this test, a regression that always emitted at least
+	// one fuzzy proposal (even for empty residue) would slip through.
+	rules := []parser.ParsedRule{
+		makeRule("a", `rate(foo[5m]) > 0.9`, "5m", "prom", nil),
+		makeRule("b", `rate(foo[5m]) > 0.9`, "5m", "prom", nil),
+		makeRule("c", `rate(foo[5m]) > 0.9`, "5m", "prom", nil),
+	}
+	withFuzzy, err := BuildProposals(rules, ClusterOptions{EnableFuzzy: true})
+	if err != nil {
+		t.Fatalf("BuildProposals: %v", err)
+	}
+	withoutFuzzy, err := BuildProposals(rules, ClusterOptions{EnableFuzzy: false})
+	if err != nil {
+		t.Fatalf("BuildProposals: %v", err)
+	}
+
+	bWith, _ := json.Marshal(withFuzzy)
+	bWithout, _ := json.Marshal(withoutFuzzy)
+	if string(bWith) != string(bWithout) {
+		t.Errorf("fuzzy on/off should produce identical output when residue is empty\n  with    fuzzy: %s\n  without fuzzy: %s", bWith, bWithout)
+	}
+
+	// Sanity: verify there's actually a strict cluster of 3 (else this
+	// test isn't exercising the empty-residue path).
+	if len(withFuzzy.Proposals) != 1 || len(withFuzzy.Proposals[0].MemberRuleIDs) != 3 {
+		t.Fatalf("expected 1 strict cluster of 3; got %+v", withFuzzy.Proposals)
+	}
+	if withFuzzy.Proposals[0].Confidence != ConfidenceHigh {
+		t.Errorf("expected ConfidenceHigh; got %q", withFuzzy.Proposals[0].Confidence)
+	}
+}
+
 func TestFuzzyReason_DistinctRawDurationsCount(t *testing.T) {
 	// fuzzyReason mentions the count when 2+ distinct raw durations
 	// collapse. Reviewers use this to gauge merge breadth.
