@@ -28,20 +28,29 @@
 //     before customer rules are available.
 package profile
 
-// Confidence labels how strong the parser's evidence for grouping
-// is. Driven entirely by the cluster signature today (PR-1):
+// Confidence labels how strong the cluster engine's evidence for
+// grouping a set of rules together is. Two passes contribute:
 //
-//   - high   : ≥ N members AND identical normalised expression AND
-//     identical labels AND identical `for:` AND identical
-//     dialect.
-//   - medium : ≥ 2 members but differs from high on one of the
-//     softer axes (annotation drift, label-set drift).
-//   - low    : single rule that didn't fit any cluster but the
-//     builder thinks the caller may want to inspect.
+//   - high   : ≥ MinClusterSize members share an EXACT strict
+//     signature (normalised expression + `for:` + dialect).
+//     Auto-emit candidates — no per-tenant decision required.
+//   - medium : Strict pass left these rules in sub-MinClusterSize
+//     buckets, but the fuzzy pass (PR-5) found
+//     ≥ MinClusterSize members under a *duration-canonicalised*
+//     signature. Same dialect, same `for:`, same labels-shape
+//     as the strict path; the only loosening is that
+//     `[5m]` ≡ `[300s]` ≡ `[300000ms]` inside the expression.
+//     Surface for human review — the merge is sound but the
+//     reviewer should confirm the duration-equivalence isn't
+//     hiding a semantically meaningful difference.
+//   - low    : reserved for future fuzzy axes (e.g. for-variance,
+//     label-key asymmetry). PR-5 does NOT emit ConfidenceLow —
+//     each axis we add deserves its own design + test pass.
 //
-// PR-1 only ever emits high-confidence proposals (the cluster engine
-// requires identical signatures). The medium/low labels are reserved
-// for PR-2's fuzzier matching pass.
+// PR-1 only emitted ConfidenceHigh. PR-5 adds ConfidenceMedium when
+// `ClusterOptions.EnableFuzzy=true`. The high/medium boundary is
+// stable across runs given the same input + opts, so callers can
+// build per-tier review workflows.
 type Confidence string
 
 const (
@@ -151,13 +160,18 @@ type ProposalStats struct {
 
 // ClusterOptions tune the cluster engine. Defaults (ClusterOptions{})
 // give the conservative PR-1 behaviour: identical-signature only,
-// minimum 2 members per cluster, no dialect mixing.
+// minimum 2 members per cluster, no dialect mixing, no fuzzy pass.
 type ClusterOptions struct {
 	// MinClusterSize is the smallest number of rules that must share
 	// a signature before the engine emits a proposal. Below this,
 	// rules go to Unclustered. Default 2 (any pair of identical
 	// rules is worth proposing — though high-value clusters are
 	// usually 5+).
+	//
+	// The same threshold applies to BOTH the strict pass (PR-1) and
+	// the fuzzy pass (PR-5). Callers wanting different gates per
+	// pass should run BuildProposals twice with different options
+	// rather than complicating the single-pass contract.
 	MinClusterSize int
 
 	// SkipAmbiguous, when true, drops DialectAmbiguous rules from
@@ -166,4 +180,18 @@ type ClusterOptions struct {
 	// default), ambiguous rules pass through to Unclustered so the
 	// caller sees them surface for human review.
 	SkipAmbiguous bool
+
+	// EnableFuzzy, when true, runs the fuzzy second-pass clustering
+	// (PR-5) over the strict-pass residue (rules in sub-MinClusterSize
+	// buckets). Fuzzy uses duration-canonicalised signatures so
+	// `rate(foo[5m])` and `rate(foo[300s])` collapse into a single
+	// ConfidenceMedium proposal that strict mode wouldn't surface.
+	//
+	// Default false — preserves PR-1 behaviour for existing callers
+	// (the `da-tools profile` CLI, simulate-time builders, etc.) so
+	// turning it on is an explicit decision. The expected production
+	// path is "off by default; on for migration-time customer corpus
+	// processing where missing duration-equivalent collapses costs
+	// real `_defaults.yaml` line savings".
+	EnableFuzzy bool
 }
