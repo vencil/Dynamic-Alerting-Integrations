@@ -45,6 +45,13 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Fixed
 
+- **threshold-exporter mixed-mode duplicate tenant ID 從 WARN 升 hard error（v2.8.0, Phase B Track B follow-up, [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127)）** — 同一 tenant ID 同時出現在 flat 路徑（`<root>/<id>.yaml`）+ nested 路徑（`<root>/<dir>/<id>.yaml`）時，v2.8.0 之前的行為是 flat-mode `loadDir` 已 silently last-wins-merge → `populateHierarchyState` 抓到 duplicate 但只 emit WARN log（config.go L194）→ `Load()` 回傳 nil。客戶部署一個帶 duplicate 的 conf.d 看似成功但實際 tenant 內容是 map 迭代順序決定的「last-wins」，極易在 production 漏察。
+  - **修法**：新增 typed error `*DuplicateTenantError`（`config_hierarchy.go`，含 `TenantID` / `PathA` / `PathB` 欄位），`scanDirHierarchical` 改回 typed error 取代 generic `fmt.Errorf`。`Load()` 與 `fullDirLoad()` 用 `errors.As` 區分：duplicate-tenant misconfig **propagate 為 hard error**，generic scan errors（permissions / malformed file）仍走原本 log-and-continue 政策（hierarchical mode 是 opt-in，半個 malformed 分支不該擊倒整個 flat-only deploy）
+  - **狀態 invariant**：cold-start `Load()` 拒絕時 `m.config` / `m.loaded` 維持 pre-Load 值（nil / false），無 partial state 洩漏。Hot-reload `fullDirLoad()` 拒絕時保留 prior 已知正常狀態 — 跑著的 service 不會被半途切換到 broken state
+  - **`scanDirHierarchical` 順序調整**：`Load()` / `fullDirLoad()` 都把 `populateHierarchyState()` 呼叫**移到 flat-mode commit 之前**，確保拒絕時不需 unwind 已 swap 的 `m.config`
+  - **新 `config_mixed_mode_test.go` test**：`TestMixedMode_DuplicateAcrossModes_RejectedAtLoad` 取代原本 `_DetectedButNotPropagated` 鎖死 v2.8.0 之前 gap 的 test；驗證新合約四要點（hard error / `errors.As` 解出 typed error / 兩條路徑都 populated 且 distinct / 拒絕時無 state 洩漏）。新增 `TestMixedMode_DuplicateAcrossModes_RejectedAtFullDirLoad` 鎖 hot-reload 路徑，驗證 reload 拒絕後 `m.config` / `m.lastHash` 仍指向 prior known-good 狀態
+  - 完整 test suite (`-race -count=1`) 全綠；上層 `cmd/da-guard` `TestRun_DuplicateTenantID_ExitsTwo`、`config_hierarchy_test.go` `TestScanDirHierarchical_DuplicateTenant` 不受影響（typed error 的 `Error()` 文字與舊 `fmt.Errorf` 完全一致）
+
 - **CLAUDE.md L57 stale ref to `doc-map.md § Change Impact Matrix`（[#66](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/66) part 2）** — 該章節從未存在於 `doc-map.md`（auto-generated catalog，無 manual section）。移除 parenthetical 連結；保留主規範文字「影響 API / schema / CLI / 計數的變更須同步 `CHANGELOG.md` + `CLAUDE.md` + `README.md`」自身已完整。`#66` 另一半（tool-count drift 121 vs actual 122）已於 PR #71 一併修。`#66` 可 close
 
 ### Changed

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -174,6 +175,27 @@ func (m *ConfigManager) Load() error {
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.applyProfiles()
 
+	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode commit
+	// so a `*DuplicateTenantError` (mixed-mode misconfig: same tenant ID in
+	// both `<root>/<id>.yaml` and `<root>/<dir>/<id>.yaml`) rejects Load
+	// at the boundary instead of silently last-wins-merging via the flat
+	// path. Other scan errors (permissions, malformed file, missing path)
+	// keep the prior log-and-continue policy because hierarchical mode is
+	// opt-in — a malformed branch shouldn't tear down a flat-only deploy.
+	//
+	// On hard reject: m.config / m.loaded stay at their pre-Load values
+	// (nil / false on cold start) — caller observes "Load returned error"
+	// without any partial state being committed.
+	if m.isDir {
+		if hierErr := m.populateHierarchyState(); hierErr != nil {
+			var dupErr *DuplicateTenantError
+			if errors.As(hierErr, &dupErr) {
+				return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", hierErr)
+			}
+			log.Printf("WARN: hierarchical scan during Load failed: %v", hierErr)
+		}
+	}
+
 	m.mu.Lock()
 	m.config = &cfg
 	m.loaded = true
@@ -183,17 +205,6 @@ func (m *ConfigManager) Load() error {
 
 	// Detect config source mode and git commit (v2.3.0)
 	m.detectConfigSource()
-
-	// v2.7.0 Phase 5: populate hierarchical state on the very first Load
-	// so /effective works at startup (before any file mutation triggers
-	// IncrementalLoad). Flat-mode callers cost ~one extra scanDir pass;
-	// hierarchicalMode stays false if no _defaults.yaml is present. A
-	// scan failure is logged-and-ignored — the flat path is already live.
-	if m.isDir {
-		if err := m.populateHierarchyState(); err != nil {
-			log.Printf("WARN: hierarchical scan during Load failed: %v", err)
-		}
-	}
 
 	logConfigStats(&cfg, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 
@@ -671,6 +682,19 @@ func (m *ConfigManager) fullDirLoad() error {
 	merged := mergePartialConfigs(fileConfigs)
 	merged.applyProfiles()
 
+	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode commit
+	// for the same reason as Load() — a `*DuplicateTenantError` rejects the
+	// reload at the boundary, leaving the prior known-good state intact and
+	// serving. Generic scan errors keep the log-and-continue policy
+	// (hierarchical mode is opt-in).
+	if err := m.populateHierarchyState(); err != nil {
+		var dupErr *DuplicateTenantError
+		if errors.As(err, &dupErr) {
+			return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", err)
+		}
+		log.Printf("WARN: hierarchical scan during fullDirLoad failed: %v", err)
+	}
+
 	m.mu.Lock()
 	m.config = &merged
 	m.loaded = true
@@ -683,14 +707,6 @@ func (m *ConfigManager) fullDirLoad() error {
 
 	// Detect config source mode and git commit (v2.3.0)
 	m.detectConfigSource()
-
-	// v2.7.0 Phase 5: populate hierarchical state alongside the flat view.
-	// This lets /effective and the debounced reload path work from the
-	// very first load. On failure we log and continue — hierarchical mode
-	// is opt-in, a bad tree should not break the flat collector path.
-	if err := m.populateHierarchyState(); err != nil {
-		log.Printf("WARN: hierarchical scan during fullDirLoad failed: %v", err)
-	}
 
 	logConfigStats(&merged, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 

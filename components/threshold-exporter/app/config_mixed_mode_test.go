@@ -35,6 +35,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -137,35 +138,29 @@ func TestMixedMode_RootDefaultsCascadeToBoth(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Test 2 — DuplicateAcrossModes_DetectedButNotPropagated
+// Test 2 — DuplicateAcrossModes_RejectedAtLoad (issue #127, v2.8.x)
 // Same tenant ID in both flat (`<root>/<id>.yaml`) and nested
-// (`<root>/<dir>/<id>.yaml`) — track the CURRENT behavior so a
-// future hardening doesn't regress silently:
+// (`<root>/<dir>/<id>.yaml`). v2.8.x hardening: `Load()` must
+// REJECT this misconfig hard rather than silently last-wins-merge.
 //
-//   * scanDirHierarchical DOES detect the duplicate (returns a
-//     `duplicate tenant ID` error naming both paths). Locked by
-//     TestScanDirHierarchical_DuplicateTenant in config_hierarchy_
-//     test.go for the scan primitive.
-//   * BUT `Load()` runs flat-mode `loadDir()` first (which silently
-//     last-wins-merges the duplicate via `map[tid]=...`), THEN
-//     calls `populateHierarchyState` whose error is "log-and-
-//     ignore" per config.go L191-195 ("scan failure is logged-and-
-//     ignored — the flat path is already live").
+// History (pre-v2.8.x gap, recorded for context):
+//   - scanDirHierarchical correctly detected the duplicate but
+//     returned a generic fmt.Errorf
+//   - Load()'s populateHierarchyState call ran AFTER `m.config = &cfg`
+//     and swallowed the error with WARN log
+//   - Customer could deploy with a duplicate silently merged via map
+//     last-wins iteration — easy to miss in production
 //
-// Result: Load() returns nil, manager has the tenant from one of
-// the duplicate files (last-wins on map iteration order), and the
-// only signal of the duplicate is a WARN line — easy to miss in
-// production.
-//
-// **This is a known production gap from B-5 plan**, documented
-// in `docs/scenarios/flat-to-conf-d-cutover-decision.md` §
-// "Known gaps". This test locks the current observable behavior
-// (no error from Load + WARN log line emitted) so a future
-// hardening PR — which should propagate the duplicate error to a
-// hard error — can drop this test in favor of a stricter one.
+// v2.8.x contract (issue #127):
+//   - scanDirHierarchical returns typed *DuplicateTenantError
+//   - Load() / fullDirLoad() detect the typed error and propagate it
+//     wrapped, BEFORE committing flat state — so on cold start
+//     m.config / m.loaded stay nil/false and no partial state leaks
+//   - errors.As(err, &DuplicateTenantError{}) yields the offending
+//     tenant ID + both file paths, so operators can grep / git-rm
 // ─────────────────────────────────────────────────────────────────
 
-func TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated(t *testing.T) {
+func TestMixedMode_DuplicateAcrossModes_RejectedAtLoad(t *testing.T) {
 	root := t.TempDir()
 	writeTestYAML(t, filepath.Join(root, "_defaults.yaml"), `
 defaults:
@@ -188,7 +183,8 @@ tenants:
     mysql_connections: "200"
 `)
 
-	// Capture log to confirm the WARN signal exists.
+	// Capture log to confirm the WARN-only path is NOT taken (post-fix
+	// the code returns error directly; WARN line should be absent).
 	var logBuf bytes.Buffer
 	origOutput := log.Writer()
 	log.SetOutput(&logBuf)
@@ -197,36 +193,133 @@ tenants:
 	mgr := NewConfigManager(root)
 	err := mgr.Load()
 
-	// Lock the **current** (gap) behavior. Flip to t.Fatal-on-nil-
-	// err if/when the hardening lands.
-	if err != nil {
-		t.Errorf(
-			"current behavior: Load returns nil despite duplicate; got error %v. "+
-				"If you've shipped the hardening that propagates the "+
-				"`duplicate tenant ID` error, this test needs updating to "+
-				"assert the new contract.",
-			err,
-		)
+	// v2.8.x contract: Load must return error.
+	if err == nil {
+		t.Fatal("expected Load to reject mixed-mode duplicate tenant, got nil")
 	}
 
-	// WARN signal must be present so ops can at least grep for it
-	// even though Load() silently succeeds.
+	// errors.As must yield the typed *DuplicateTenantError exposing
+	// the offending tenant ID + both file paths.
+	var dupErr *DuplicateTenantError
+	if !errors.As(err, &dupErr) {
+		t.Fatalf("expected error to wrap *DuplicateTenantError, got %T: %v", err, err)
+	}
+	if dupErr.TenantID != "shared-tenant" {
+		t.Errorf("DuplicateTenantError.TenantID = %q, want %q", dupErr.TenantID, "shared-tenant")
+	}
+	// Both paths must be populated and distinct.
+	if dupErr.PathA == "" || dupErr.PathB == "" {
+		t.Errorf("DuplicateTenantError paths empty: A=%q B=%q", dupErr.PathA, dupErr.PathB)
+	}
+	if dupErr.PathA == dupErr.PathB {
+		t.Errorf("DuplicateTenantError paths identical: %q", dupErr.PathA)
+	}
+	// Each path must end in shared.yaml so operators can grep / git rm.
+	if !strings.HasSuffix(dupErr.PathA, "shared.yaml") {
+		t.Errorf("PathA does not end in shared.yaml: %q", dupErr.PathA)
+	}
+	if !strings.HasSuffix(dupErr.PathB, "shared.yaml") {
+		t.Errorf("PathB does not end in shared.yaml: %q", dupErr.PathB)
+	}
+
+	// State invariant: on hard reject, m.config / m.loaded stay at
+	// pre-Load values. Caller observes "Load returned error" without
+	// any partial state being committed.
+	if mgr.loaded {
+		t.Error("manager.loaded=true after rejected Load — partial state leak")
+	}
+	if mgr.config != nil {
+		t.Error("manager.config != nil after rejected Load — partial state leak")
+	}
+
+	// Error message contract: includes "duplicate tenant ID" + tenant ID
+	// (so operator log search works without unwrapping the typed error).
+	if !strings.Contains(err.Error(), "duplicate tenant ID") {
+		t.Errorf("error message should contain 'duplicate tenant ID': %v", err)
+	}
+	if !strings.Contains(err.Error(), "shared-tenant") {
+		t.Errorf("error message should name offending tenant 'shared-tenant': %v", err)
+	}
+
+	// The pre-v2.8.x WARN line must NOT appear — the new path returns
+	// hard error before reaching the log.Printf branch.
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "WARN: hierarchical scan during Load failed") {
-		t.Errorf(
-			"expected WARN log line for hierarchical-scan duplicate detection; got log:\n%s",
-			logOutput,
-		)
+	if strings.Contains(logOutput, "WARN: hierarchical scan during Load failed") {
+		t.Errorf("WARN-and-continue path leaked; should be hard error now. Log:\n%s", logOutput)
 	}
-	if !strings.Contains(logOutput, "duplicate tenant ID") {
-		t.Errorf("expected 'duplicate tenant ID' phrase in WARN; got log:\n%s", logOutput)
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Test 2b — DuplicateAcrossModes_RejectedAtFullDirLoad (issue #127)
+// fullDirLoad is the hot-reload path (called from IncrementalLoad
+// when file-hash cache misses). Same v2.8.x contract as Load: hard
+// reject on *DuplicateTenantError + don't trash prior known-good
+// state.
+//
+// Sequence:
+//  1. Cold start with a clean tree — Load succeeds, m.config holds
+//     the clean state.
+//  2. Hot-introduce a duplicate (write the same tenant ID under a
+//     nested subdir) to simulate a customer git-pushing a bad
+//     commit during ops hours.
+//  3. fullDirLoad must return error wrapping *DuplicateTenantError.
+//  4. Manager state must still hold the PRE-duplicate config (not
+//     the half-merged new one) — running service stays serving.
+// ─────────────────────────────────────────────────────────────────
+
+func TestMixedMode_DuplicateAcrossModes_RejectedAtFullDirLoad(t *testing.T) {
+	root := t.TempDir()
+	writeTestYAML(t, filepath.Join(root, "_defaults.yaml"), `
+defaults:
+  mysql_connections: 80
+`)
+	writeTestYAML(t, filepath.Join(root, "shared.yaml"), `
+tenants:
+  shared-tenant:
+    mysql_connections: "100"
+`)
+
+	mgr := NewConfigManager(root)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("initial Load: %v", err)
 	}
-	if !strings.Contains(logOutput, "shared-tenant") {
-		t.Errorf("WARN must name the offending tenant ID; got log:\n%s", logOutput)
+	priorConfig := mgr.config
+	priorHash := mgr.lastHash
+	if priorConfig == nil {
+		t.Fatal("prior Load did not set m.config")
 	}
-	// Both source paths should appear in the WARN so operator can grep / git rm.
-	if strings.Count(logOutput, "shared.yaml") < 2 {
-		t.Errorf("WARN must name BOTH colliding paths; got log:\n%s", logOutput)
+
+	// Hot-introduce the duplicate — same tenant ID under a nested dir.
+	if err := os.MkdirAll(filepath.Join(root, "finance"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeTestYAML(t, filepath.Join(root, "finance", "shared.yaml"), `
+tenants:
+  shared-tenant:
+    mysql_connections: "200"
+`)
+
+	// fullDirLoad is the path IncrementalLoad uses when cache misses.
+	err := mgr.fullDirLoad()
+	if err == nil {
+		t.Fatal("expected fullDirLoad to reject mixed-mode duplicate, got nil")
+	}
+
+	var dupErr *DuplicateTenantError
+	if !errors.As(err, &dupErr) {
+		t.Fatalf("expected error to wrap *DuplicateTenantError, got %T: %v", err, err)
+	}
+	if dupErr.TenantID != "shared-tenant" {
+		t.Errorf("DuplicateTenantError.TenantID = %q, want %q", dupErr.TenantID, "shared-tenant")
+	}
+
+	// Critical invariant: prior known-good state must be preserved so
+	// the running service keeps serving.
+	if mgr.config != priorConfig {
+		t.Error("manager.config swapped despite reload rejection — running service would have flipped to bad state")
+	}
+	if mgr.lastHash != priorHash {
+		t.Errorf("manager.lastHash mutated despite reload rejection: pre=%q post=%q", priorHash, mgr.lastHash)
 	}
 }
 
