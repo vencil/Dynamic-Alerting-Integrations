@@ -76,6 +76,7 @@ TOOLS = [
     ("bilingual_content", "lint/check_bilingual_content.py", ["--ci"], "Bilingual content CJK ratio check"),
     ("frontmatter_versions", "lint/check_frontmatter_versions.py", ["--ci"], "Frontmatter version global scan"),
     ("path_metadata", "lint/check_path_metadata_consistency.py", ["--ci"], "conf.d path vs _metadata consistency (warning-only)"),
+    ("commit_scope", "lint/check_commit_scope_doc.py", ["--ci"], "Commit scope drift (commit-convention.md vs .commitlintrc.yaml)"),
 ]
 
 
