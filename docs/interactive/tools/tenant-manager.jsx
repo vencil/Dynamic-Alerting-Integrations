@@ -639,6 +639,16 @@ export default function TenantManager() {
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [apiNotification, setApiNotification] = useState(null); // { type: 'error'|'success', message }
+  // BUG FIX: `compareMode` was referenced at L1441/1444 (Compare Mode
+  // toggle button) but never declared via useState. The pre-existing
+  // loading-state bug kept the page on the loading spinner forever, so
+  // the main render never reached those lines and the missing state
+  // was never tripped. Once the loading-state fix lets the page render,
+  // ReferenceError: `compareMode is not defined` blanks the whole
+  // component. Adding the missing declaration restores the Compare
+  // Mode toggle to a no-op-but-functional state (the rest of the
+  // compare-mode UI plumbing is a separate follow-up).
+  const [compareMode, setCompareMode] = useState(false);
   // Auth state
   const [authUser, setAuthUser] = useState(null);
   const [canWrite, setCanWrite] = useState(true); // default true for demo/no-auth mode
@@ -692,8 +702,55 @@ export default function TenantManager() {
     return () => clearInterval(interval);
   }, []);
 
+  // v2.8.0 Phase .c C-2 PR-2: data-source priority chain.
+  //
+  //   1) Try /api/v1/tenants/search?page_size=500 (live tenant-api,
+  //      with RBAC scoping per the request's IdP groups). When this
+  //      succeeds, we get the authoritative customer-deployed view.
+  //   2) Fall back to platform-data.json (the docs-time static
+  //      demo source) on ANY error: 4xx, 5xx, network, or response
+  //      parse failure. Static demo paths in the docs site never
+  //      have a tenant-api in front of them, so the fallback is
+  //      the documented graceful-degradation model from ADR-009.
+  //   3) Final fallback to DEMO_TENANTS so the UI never breaks.
+  //
+  // Honest scope (PR-2 v1):
+  //   - We fetch a single page of up to 500 tenants. For the 99%
+  //     of customer deployments at ≤500 tenants this is identical
+  //     to the previous platform-data.json path: existing
+  //     client-side filter (L751 useMemo) operates over the full
+  //     visible set, no UX change.
+  //   - For customers with >500 tenants we surface a banner via
+  //     `searchOverflow` state pointing them at the filter
+  //     controls (search/env/tier/domain/db_type) — they refine
+  //     until the matched set drops under the 500 cap. Proper
+  //     pagination + virtualization is PR-2b territory.
+  //   - 429: parse Retry-After (seconds), wait, retry once. If
+  //     the second attempt also fails we fall through to the
+  //     static-data path so the UI still shows SOMETHING.
+  const [searchOverflow, setSearchOverflow] = useState(null); // {totalMatched: N} | null
+  const [dataSource, setDataSource] = useState(null);         // 'api' | 'static' | 'demo' — for diagnostics + tests
+
   useEffect(() => {
     const loadData = async () => {
+      // ---- Step 1: try the live API ----
+      try {
+        const apiData = await fetchTenantsFromAPI();
+        if (apiData) {
+          setTenants(apiData.tenants);
+          setSearchOverflow(apiData.overflow);
+          setDataSource('api');
+          // Custom groups still come from the static path (the
+          // tenant-api doesn't yet expose group definitions —
+          // they live in `_groups.yaml` adjacent to the tenants).
+          await loadGroupsBestEffort();
+          return;
+        }
+      } catch (e) {
+        console.warn('[tenant-manager] live API unavailable, falling back to platform-data.json:', e?.message || e);
+      }
+
+      // ---- Step 2: fall back to platform-data.json ----
       try {
         const response = await fetch('platform-data.json');
         const data = await response.json();
@@ -726,25 +783,151 @@ export default function TenantManager() {
             }
             setTenants(merged);
           }
-          // Load custom groups if present
           if (data.custom_groups && Object.keys(data.custom_groups).length > 0) {
             setGroups(data.custom_groups);
           } else {
             setGroups(DEMO_GROUPS);
           }
-        } else {
-          setTenants(DEMO_TENANTS);
-          setGroups(DEMO_GROUPS);
+          setDataSource('static');
+          return;
         }
+        // Empty static file → fall through to demo path.
+        setTenants(DEMO_TENANTS);
+        setGroups(DEMO_GROUPS);
+        setDataSource('demo');
       } catch (e) {
         console.warn('Failed to load platform-data.json, using demo data:', e);
         setTenants(DEMO_TENANTS);
         setGroups(DEMO_GROUPS);
+        setDataSource('demo');
       } finally {
         setLoading(false);
       }
     };
-    loadData();
+
+    // ---- API client helpers (defined inside the effect so they
+    //      close over setApiNotification for the 429 toast). ----
+
+    // fetchTenantsFromAPI returns null when the endpoint isn't
+    // available (404 / 5xx / network) so the caller's try/catch
+    // doesn't turn benign "this is the static demo site" cases into
+    // visible errors. Returns {tenants, overflow} on success.
+    async function fetchTenantsFromAPI() {
+      const url = '/api/v1/tenants/search?page_size=500';
+      let resp;
+      try {
+        resp = await fetchWithRateLimitRetry(url);
+      } catch (e) {
+        return null; // network error / total failure
+      }
+      if (!resp || !resp.ok) {
+        // 4xx (incl. 401/403/404 — wrong host or unauthenticated):
+        // silent fall-through is correct, the static path will
+        // show demo data instead of a confusing error toast.
+        return null;
+      }
+      const body = await resp.json();
+      const items = Array.isArray(body.items) ? body.items : [];
+      const tenants = {};
+      for (const summary of items) {
+        // The /search endpoint returns TenantSummary shape (id +
+        // metadata only). We coerce it into the rich shape the
+        // existing render path expects, defaulting fields the API
+        // doesn't surface. routing_channel / metric_count / etc.
+        // are docs-time decorations from platform-data.json —
+        // they're empty in the live API path until the relevant
+        // metric pipeline lands (ADR-009 §gradual-migration).
+        tenants[summary.id] = {
+          environment: summary.environment || 'unknown',
+          region: summary.region || '',
+          tier: summary.tier || '',
+          domain: summary.domain || '',
+          db_type: summary.db_type || '',
+          rule_packs: [],
+          owner: summary.owner || '',
+          routing_channel: '',
+          // operational_mode is the UI's three-state column. The
+          // tenant-api summary surfaces silent_mode + maintenance
+          // separately; map maintenance first since it's the
+          // stronger override (a tenant in maintenance overrides
+          // any silent-mode setting).
+          operational_mode: summary.maintenance ? 'maintenance' : (summary.silent_mode ? 'silent' : 'normal'),
+          metric_count: 0,
+          last_config_commit: '',
+          tags: summary.tags || [],
+          groups: summary.groups || [],
+        };
+      }
+      const overflow = (typeof body.total_matched === 'number' && body.total_matched > items.length)
+        ? { totalMatched: body.total_matched, shown: items.length }
+        : null;
+      return { tenants, overflow };
+    }
+
+    // fetchWithRateLimitRetry handles 429 by parsing Retry-After
+    // (seconds) and retrying ONCE. Surface a toast so the user
+    // knows a retry is happening rather than thinking the page
+    // hung. A second 429 falls through to the caller (which
+    // returns null → static fallback path).
+    async function fetchWithRateLimitRetry(url) {
+      let resp = await fetch(url);
+      if (resp.status !== 429) return resp;
+
+      const retryAfterRaw = resp.headers.get('Retry-After');
+      const retrySec = parseRetryAfterSeconds(retryAfterRaw);
+      if (retrySec === null) return resp; // malformed Retry-After → don't retry
+
+      // Cap the wait so a hostile server can't hang the page.
+      const waitMs = Math.min(retrySec, 30) * 1000;
+      setApiNotification({
+        type: 'warning',
+        message: t(
+          `達到 API 速率上限，將於 ${Math.ceil(waitMs / 1000)} 秒後重試…`,
+          `API rate limit hit, retrying in ${Math.ceil(waitMs / 1000)}s…`
+        ),
+      });
+      await new Promise(r => setTimeout(r, waitMs));
+      // Single retry — if this 429s too, return that response and
+      // the caller falls through to static-data path.
+      resp = await fetch(url);
+      // Clear the toast on either outcome of the retry.
+      setApiNotification(null);
+      return resp;
+    }
+
+    // parseRetryAfterSeconds accepts the integer-seconds form
+    // (RFC 7231) — the HTTP-date form is rare for rate limits and
+    // not worth implementing in v1. Returns null when malformed.
+    function parseRetryAfterSeconds(raw) {
+      if (!raw) return null;
+      const n = parseInt(raw.trim(), 10);
+      if (Number.isNaN(n) || n < 0) return null;
+      return n;
+    }
+
+    // loadGroupsBestEffort tries to seed `groups` even in API
+    // mode by reading platform-data.json's custom_groups block.
+    // If platform-data.json doesn't exist either, fall back to
+    // DEMO_GROUPS so the group-management UI has SOMETHING.
+    async function loadGroupsBestEffort() {
+      try {
+        const resp = await fetch('platform-data.json');
+        if (!resp.ok) {
+          setGroups(DEMO_GROUPS);
+          return;
+        }
+        const data = await resp.json();
+        if (data?.custom_groups && Object.keys(data.custom_groups).length > 0) {
+          setGroups(data.custom_groups);
+        } else {
+          setGroups(DEMO_GROUPS);
+        }
+      } catch (_e) {
+        setGroups(DEMO_GROUPS);
+      }
+    }
+
+    loadData().finally(() => setLoading(false));
   }, []);
 
   // Filter tenants: by active group membership AND search/filters
@@ -914,6 +1097,47 @@ export default function TenantManager() {
     }
   };
 
+  // BUG FIX: useRef and the modal useEffect below MUST be called on
+  // every render (Rules of Hooks). They were originally placed AFTER
+  // the `if (loading) return` early returns, which meant the FIRST
+  // render (loading=true → early return) registered fewer hooks than
+  // the SECOND render (loading=false → falls through to useRef call).
+  // React would then throw error #310 ("Rendered more hooks than
+  // during the previous render") and unmount the component, leaving
+  // the page blank. The pre-existing loading-state bug masked this by
+  // keeping `loading` permanently true. Moving them above the early
+  // returns ensures hook order is stable across renders.
+  const modalRef = useRef(null);
+
+  // Modal focus trap, escape key, and auto-focus management
+  useEffect(() => {
+    if (modalType && modalRef.current) {
+      modalRef.current.focus();
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setModalType(null);
+          return;
+        }
+        // Focus trap: cycle Tab within modal
+        if (e.key === 'Tab' && modalRef.current) {
+          const focusable = modalRef.current.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          if (focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey) {
+            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+          } else {
+            if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+          }
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      return () => document.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [modalType]);
+
   if (loading) {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -951,37 +1175,6 @@ export default function TenantManager() {
     maintenance: 'var(--da-color-mode-maintenance)',
   };
 
-  const modalRef = useRef(null);
-
-  // Modal focus trap, escape key, and auto-focus management
-  useEffect(() => {
-    if (modalType && modalRef.current) {
-      modalRef.current.focus();
-      const handleKeyDown = (e) => {
-        if (e.key === 'Escape') {
-          setModalType(null);
-          return;
-        }
-        // Focus trap: cycle Tab within modal
-        if (e.key === 'Tab' && modalRef.current) {
-          const focusable = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusable.length === 0) return;
-          const first = focusable[0];
-          const last = focusable[focusable.length - 1];
-          if (e.shiftKey) {
-            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
-          } else {
-            if (document.activeElement === last) { e.preventDefault(); first.focus(); }
-          }
-        }
-      };
-      document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [modalType]);
-
   return (
     <main role="main" style={styles.container}>
       {/* API notification toast */}
@@ -989,13 +1182,13 @@ export default function TenantManager() {
         <div role="alert" aria-live="assertive" style={{
           position: 'fixed', top: 'var(--da-space-4)', right: 'var(--da-space-4)', zIndex: 10000,
           padding: 'var(--da-space-3) var(--da-space-5)', borderRadius: 'var(--da-radius-md)', maxWidth: '420px',
-          backgroundColor: apiNotification.type === 'error' ? 'var(--da-color-error-soft)' : 'var(--da-color-success-soft)',
-          border: `1px solid ${apiNotification.type === 'error' ? 'var(--da-color-error)' : 'var(--da-color-success)'}`,
-          color: apiNotification.type === 'error' ? 'var(--da-color-error)' : 'var(--da-color-success)',
+          backgroundColor: apiNotification.type === 'error' ? 'var(--da-color-error-soft)' : (apiNotification.type === 'warning' ? 'var(--da-color-warning-soft)' : 'var(--da-color-success-soft)'),
+          border: `1px solid ${apiNotification.type === 'error' ? 'var(--da-color-error)' : (apiNotification.type === 'warning' ? 'var(--da-color-warning)' : 'var(--da-color-success)')}`,
+          color: apiNotification.type === 'error' ? 'var(--da-color-error)' : (apiNotification.type === 'warning' ? 'var(--da-color-warning)' : 'var(--da-color-success)'),
           fontSize: '14px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
           display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)',
         }}>
-          <span>{apiNotification.type === 'error' ? '\u26A0\uFE0F' : '\u2705'}</span>
+          <span>{apiNotification.type === 'error' ? '\u26A0\uFE0F' : (apiNotification.type === 'warning' ? '\u23F1\uFE0F' : '\u2705')}</span>
           <span style={{ flex: 1 }}>{apiNotification.message}</span>
           <button onClick={() => setApiNotification(null)} aria-label={t('關閉通知', 'Dismiss notification')}
             style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'var(--da-font-size-md)', color: 'inherit' }}>&times;</button>
@@ -1025,6 +1218,42 @@ export default function TenantManager() {
             </div>
           ))}
         </div>
+
+        {/* v2.8.0 C-2 PR-2: search-result overflow banner.
+            Shown when /api/v1/tenants/search returns total_matched > shown
+            (i.e. customer has more than the page_size=500 cap).
+            Tells the operator to refine filters until the matched
+            set fits — proper pagination is a future PR. */}
+        {searchOverflow && (() => {
+          // Extract style objects to named consts — inline
+          // double-curly object literals on `style` break the
+          // browser-side Babel-standalone parser; see
+          // scripts/tools/lint/lint_jsx_babel.py for details.
+          const overflowBanner = {
+            backgroundColor: 'var(--da-color-info-soft, #fef3c7)',
+            border: '1px solid var(--da-color-info, #f59e0b)',
+            borderRadius: 'var(--da-radius-md)',
+            padding: 'var(--da-space-3) var(--da-space-4)',
+            marginBottom: 'var(--da-space-4)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--da-space-2)',
+            fontSize: '14px',
+            color: 'var(--da-color-text)',
+          };
+          const overflowMsg = { flex: 1 };
+          return (
+            <div role="status" aria-live="polite" aria-atomic="true" style={overflowBanner}>
+              <span>📊</span>
+              <span style={overflowMsg}>
+                {t(
+                  `顯示 ${searchOverflow.shown} / ${searchOverflow.totalMatched} 個租戶。請使用搜尋或篩選縮小範圍。`,
+                  `Showing ${searchOverflow.shown} of ${searchOverflow.totalMatched} tenants. Refine search or filters to narrow the result set.`
+                )}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* v2.6.0: Pending PRs banner (ADR-011) */}
         {pendingPRs.length > 0 && (
