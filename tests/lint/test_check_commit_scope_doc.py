@@ -97,23 +97,24 @@ class TestExtractDocScopes:
         scopes = ccs.extract_doc_scopes(doc)
         assert scopes == {"real"}
 
-    def test_handles_hyphens_in_scope_names(self, tmp_path):
+    def test_handles_hyphens_and_plus_in_scope_names(self, tmp_path):
+        """Scope names may contain `-` (rule-packs, phase-a) and `+`
+        (dx+e2e, lint+tooling for compound scopes); both must extract."""
         doc = tmp_path / "convention.md"
         doc.write_text(
             "### Scope\n"
             "- **rule-packs**: rule pack defs\n"
             "- **session-init**: session startup\n"
-            "- **dx+e2e**: compound — note: + is NOT in [\\w-], so this WON'T match\n"
+            "- **dx+e2e**: compound DX + e2e scope\n"
+            "- **lint+tooling**: compound lint + tooling scope\n"
             "## End\n",
             encoding="utf-8",
         )
         scopes = ccs.extract_doc_scopes(doc)
-        # rule-packs and session-init match; dx+e2e doesn't because '+' isn't \w or -
-        # That's fine — the SOT-side check will WARN it as unmentioned, which is correct
-        # given the regex constraint.
         assert "rule-packs" in scopes
         assert "session-init" in scopes
-        assert "dx+e2e" not in scopes  # known limitation, exercised here
+        assert "dx+e2e" in scopes
+        assert "lint+tooling" in scopes
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -251,10 +252,14 @@ class TestMain:
         assert "imaginary-scope" in out
         assert "Type A drift" in out
 
-    def test_exit_1_on_type_a_drift_without_ci_flag_too(self, fake_repo, capsys):
-        """Type A is always exit 1 — the --ci flag exists for future
-        soft-mode toggling but currently both modes hard-fail on Type A.
-        Locks current behavior."""
+    def test_exit_1_on_type_a_drift_independent_of_ci_flag(self, fake_repo, capsys):
+        """Type A drift always returns exit 1 — invariant verification.
+
+        The --ci flag exists for future soft-mode toggling; today both
+        modes share the same exit-code semantics. This test asserts the
+        invariant ("Type A always fails the gate") rather than locking a
+        gap — the behavior is intentional and correct, not transitional.
+        """
         sot, doc = fake_repo
         self._write_sot(sot, ["exporter"])
         self._write_doc(doc, ["exporter", "fake"])

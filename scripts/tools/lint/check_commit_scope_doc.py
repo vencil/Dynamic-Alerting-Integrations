@@ -6,7 +6,7 @@ Root cause:
   wrote `fix(threshold-exporter):` while the SOT (`.commitlintrc.yaml`
   `scope-enum`) only accepts `exporter`. The author had checked
   `docs/internal/commit-convention.md` first — which listed only 7 of the
-  30 enforced scopes and didn't call out the verbose-vs-short-name
+  31 enforced scopes and didn't call out the verbose-vs-short-name
   pitfall. Doc drift directly caused the misstep.
 
 This hook keeps the pitfall fix from regressing:
@@ -55,7 +55,10 @@ DEFAULT_DOC = REPO_ROOT / "docs" / "internal" / "commit-convention.md"
 SCOPE_HEADING = re.compile(r"^### Scope\b")
 NEXT_SECTION_HEADING = re.compile(r"^###?\s")
 LIST_ITEM = re.compile(r"^\s*-\s")
-BOLD_TOKEN = re.compile(r"\*\*([\w-]+)\*\*")
+# Allow `+` in scope names so compound scopes like `dx+e2e` / `lint+tooling`
+# can be extracted when the doc lists them. (`\w` = [A-Za-z0-9_], adding
+# `-` for `rule-packs` / `phase-a` and `+` for compound scopes.)
+BOLD_TOKEN = re.compile(r"\*\*([\w+-]+)\*\*")
 
 
 def extract_doc_scopes(doc_path: Path) -> set[str]:
@@ -200,7 +203,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ci",
         action="store_true",
-        help="CI mode: exit 1 on any Type A drift (illegal scope in doc).",
+        help="CI-mode banner (currently same exit-code behavior as default; "
+             "Type A drift always returns 1, Type B only is 0). Reserved for "
+             "future soft-mode toggling.",
     )
     parser.add_argument(
         "--json",
