@@ -27,6 +27,24 @@ async function loadTenantManager(page: Page) {
   }
 }
 
+/**
+ * Direct loader for the API-mode tests. The permissive `loadTenantManager`
+ * above does `page.goto('./')` then tries to click a card, but if no card
+ * matches its selectors the JSX never mounts and `page.route()` mocks have
+ * nothing to intercept. The API-mode tests below MUST have tenant-manager.jsx
+ * actually executing, so we bypass the index page and navigate straight to
+ * the jsx-loader URL with `?component=...` — same convention `jsx-loader.html`
+ * uses internally.
+ */
+async function loadTenantManagerDirect(page: Page) {
+  // baseURL = http://localhost:8080/interactive/, so ../assets/jsx-loader.html
+  // resolves to http://localhost:8080/assets/jsx-loader.html. The `component`
+  // path is resolved relative to where jsx-loader.html lives, hence
+  // `../interactive/tools/tenant-manager.jsx` from /assets/.
+  await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx');
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+}
+
 test.describe('Tenant Manager @critical', () => {
   test('should load tenant-manager tool and display data', async ({ page }) => {
     await loadTenantManager(page);
@@ -180,8 +198,7 @@ test.describe('Tenant Manager @critical', () => {
       });
     });
 
-    await loadTenantManager(page);
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await loadTenantManagerDirect(page);
     await page.waitForTimeout(2000);
 
     // The API-mode tenants should appear in the rendered card list.
@@ -220,8 +237,7 @@ test.describe('Tenant Manager @critical', () => {
       });
     });
 
-    await loadTenantManager(page);
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await loadTenantManagerDirect(page);
     await page.waitForTimeout(3000);
 
     // The overflow banner contains "500" and "2000" plus a hint to
@@ -263,7 +279,7 @@ test.describe('Tenant Manager @critical', () => {
       });
     });
 
-    await loadTenantManager(page);
+    await loadTenantManagerDirect(page);
     // Allow up to ~5s for the retry path: 1s Retry-After + buffer.
     await page.waitForTimeout(5000);
 
