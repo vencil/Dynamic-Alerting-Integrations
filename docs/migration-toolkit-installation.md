@@ -204,7 +204,108 @@ docker push internal-registry.corp/da-tools:v2.7.0
 | `SHA256SUMS` | 18 個 binary archive 的 hash（da-guard × 6 + da-batchpr × 6 + da-parser × 6 OS/ARCH 組合，路徑 B / C 都會用到）|
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | air-gapped image tar 的 hash（路徑 C 用）|
 
-`tools/v2.8.0` 起所有 Release artefact 都附 SHA-256。GPG / cosign 簽章是 C-11 PR-3 工作（DEC-J 部分待定 — 客戶 security team 要求驗簽方式才會啟用對應路徑）。
+## Signature Verification
+
+`tools/v2.8.0` 起，每個 Release artefact 都附帶 **cosign keyless 簽章**
+（[sigstore](https://www.sigstore.dev/) ecosystem，業界標準）+ **SBOM**
+（SPDX + CycloneDX 雙格式）。簽章證明 artefact 來自我方 GitHub
+Actions release workflow 在指定 `tools/v*` tag 觸發時的簽章紀錄
+（不只「沒被改」，更「真的是 vencil 發的」）。
+
+### Quick verification（推薦，使用我方 helper script）
+
+```bash
+# 從 release page 抓 verify_release.sh 也行；或從 source repo:
+curl -fsSLo verify_release.sh \
+    https://raw.githubusercontent.com/vencil/Dynamic-Alerting-Integrations/main/scripts/tools/dx/verify_release.sh
+chmod +x verify_release.sh
+
+# 驗證單一 binary archive
+./verify_release.sh --tag tools/v2.8.0 --artefact da-parser-linux-amd64.tar.gz
+
+# 驗證 air-gapped image tar
+./verify_release.sh --tag tools/v2.8.0 --artefact da-tools-image-v2.8.0.tar.gz
+
+# 驗證 SBOM（CycloneDX 格式）
+./verify_release.sh --tag tools/v2.8.0 --artefact da-tools-image-v2.8.0.cyclonedx.json
+```
+
+Script 自動完成：(1) 下載 archive + .sig + .cert + SHA256SUMS；
+(2) sha256 比對；(3) cosign 驗章 + 比對 certificate identity = 我方
+release.yaml workflow path @ 指定 tag。
+
+### Manual verification（建議客戶 CI 走這條，不依賴我方 script）
+
+**要求**：[cosign v2.x](https://docs.sigstore.dev/cosign/installation/) 已安裝。
+
+**Binary archive**：
+
+```bash
+TAG=tools/v2.8.0
+ARTEFACT=da-parser-linux-amd64.tar.gz
+URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG
+
+# 下載 artefact + 簽章 + cert
+curl -fsSLo "$ARTEFACT"        "$URL/$ARTEFACT"
+curl -fsSLo "${ARTEFACT}.sig"  "$URL/${ARTEFACT}.sig"
+curl -fsSLo "${ARTEFACT}.cert" "$URL/${ARTEFACT}.cert"
+
+# 驗章（certificate-identity 指向我方 release workflow + tag；
+#       任一參數對不上 = 不是這個 release 簽的）
+cosign verify-blob \
+    --certificate-identity \
+        "https://github.com/vencil/Dynamic-Alerting-Integrations/.github/workflows/release.yaml@refs/tags/$TAG" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --signature "${ARTEFACT}.sig" \
+    --certificate "${ARTEFACT}.cert" \
+    "$ARTEFACT"
+# Verified OK ← 成功訊息
+```
+
+**Docker image**：
+
+```bash
+TAG=tools/v<X.Y.Z>
+IMG=ghcr.io/vencil/da-tools:v<X.Y.Z>  # tag 部分對應 tools/v<X.Y.Z> → v<X.Y.Z>
+
+cosign verify \
+    --certificate-identity \
+        "https://github.com/vencil/Dynamic-Alerting-Integrations/.github/workflows/release.yaml@refs/tags/$TAG" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "$IMG"
+```
+
+### SBOM（Software Bill of Materials）
+
+每個 Release 附帶 Docker image 的 SBOM 兩種格式：
+
+| Asset | 格式 | 適用對象 |
+|---|---|---|
+| `da-tools-image-v<X.Y.Z>.spdx.json` | SPDX (Linux Foundation 標準) | 一般企業 vulnerability scanning，FedRAMP / NIST workflows |
+| `da-tools-image-v<X.Y.Z>.cyclonedx.json` | CycloneDX (OWASP) | 開源 supply chain tools 偏好（Dependency-Track, OWASP Defect Dojo, etc.）|
+
+兩個 SBOM 也都附 `.sig` + `.cert`（避免 SBOM 被 tamper 後失去意義），
+驗章方式同 binary archive。
+
+### Air-gapped 環境驗章
+
+cosign keyless 預設依賴 sigstore TUF root + Rekor transparency log
+（需要 outbound HTTPS）。完全 air-gapped 環境兩個選項：
+
+1. **TUF mirror 預先 sync**：客戶 ops 在能聯外環境跑
+   `cosign initialize --mirror <local-https-mirror>` + 把 `~/.sigstore`
+   目錄打包進 air-gap import bundle
+2. **Skip transparency log**（降級驗證，仍保留簽章驗證）：
+   ```bash
+   COSIGN_EXPERIMENTAL=1 cosign verify-blob --insecure-ignore-tlog \
+       --certificate-identity "..." \
+       --certificate-oidc-issuer "..." \
+       ...
+   ```
+
+如果你的 security team 對 cosign keyless 模式有疑慮，或要求 GPG /
+Authenticode 等其他簽章方式，請[開 issue](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/new?template=signing-request.md)
+告知 — 我們的內部 release-signing-runbook §Layer 2 已預埋對應啟動路徑。
 
 ## 升級
 

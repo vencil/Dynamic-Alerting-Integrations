@@ -205,7 +205,115 @@ Each Release ships:
 | `SHA256SUMS` | Hashes for all 18 binary archives (da-guard / da-batchpr / da-parser × 6 OS/ARCH combos; used by Paths B / C) |
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | Hash of the air-gapped image tar (used by Path C) |
 
-From `tools/v2.8.0` onward every artefact carries SHA-256. GPG / cosign signing is C-11 PR-3 work (DEC-J pending — gated on customer security team requiring signature verification).
+## Signature Verification
+
+From `tools/v2.8.0` onward, every Release artefact ships with a
+**cosign keyless signature** ([sigstore](https://www.sigstore.dev/)
+ecosystem, the industry standard) plus an **SBOM** (both SPDX and
+CycloneDX formats). The signature proves an artefact came from our
+GitHub Actions release workflow at the specified `tools/v*` tag —
+not just "unmodified in transit" (sha256 already proves that), but
+"signed by the vencil release pipeline at this exact tag".
+
+### Quick verification (recommended — using our helper script)
+
+```bash
+# Grab the script from the release page or the source repo:
+curl -fsSLo verify_release.sh \
+    https://raw.githubusercontent.com/vencil/Dynamic-Alerting-Integrations/main/scripts/tools/dx/verify_release.sh
+chmod +x verify_release.sh
+
+# Verify a single binary archive
+./verify_release.sh --tag tools/v2.8.0 --artefact da-parser-linux-amd64.tar.gz
+
+# Verify the air-gapped image tar
+./verify_release.sh --tag tools/v2.8.0 --artefact da-tools-image-v2.8.0.tar.gz
+
+# Verify the SBOM (CycloneDX format)
+./verify_release.sh --tag tools/v2.8.0 --artefact da-tools-image-v2.8.0.cyclonedx.json
+```
+
+The script handles: (1) downloading the artefact + .sig + .cert +
+SHA256SUMS; (2) sha256 verification; (3) cosign signature verification
+with the certificate identity pinned to our release.yaml workflow path
+at the requested tag.
+
+### Manual verification (recommended for customer CI — don't depend on our script)
+
+**Requirement**: [cosign v2.x](https://docs.sigstore.dev/cosign/installation/) installed.
+
+**Binary archive**:
+
+```bash
+TAG=tools/v2.8.0
+ARTEFACT=da-parser-linux-amd64.tar.gz
+URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/$TAG
+
+# Download artefact + signature + cert
+curl -fsSLo "$ARTEFACT"        "$URL/$ARTEFACT"
+curl -fsSLo "${ARTEFACT}.sig"  "$URL/${ARTEFACT}.sig"
+curl -fsSLo "${ARTEFACT}.cert" "$URL/${ARTEFACT}.cert"
+
+# Verify (certificate-identity points at our release workflow + tag;
+#         any param mismatch = not signed by THIS release)
+cosign verify-blob \
+    --certificate-identity \
+        "https://github.com/vencil/Dynamic-Alerting-Integrations/.github/workflows/release.yaml@refs/tags/$TAG" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --signature "${ARTEFACT}.sig" \
+    --certificate "${ARTEFACT}.cert" \
+    "$ARTEFACT"
+# Verified OK ← success message
+```
+
+**Docker image**:
+
+```bash
+TAG=tools/v<X.Y.Z>
+IMG=ghcr.io/vencil/da-tools:v<X.Y.Z>  # tag part: tools/v<X.Y.Z> → v<X.Y.Z>
+
+cosign verify \
+    --certificate-identity \
+        "https://github.com/vencil/Dynamic-Alerting-Integrations/.github/workflows/release.yaml@refs/tags/$TAG" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "$IMG"
+```
+
+### SBOM (Software Bill of Materials)
+
+Each Release includes a Docker-image SBOM in two formats:
+
+| Asset | Format | Used by |
+|---|---|---|
+| `da-tools-image-v<X.Y.Z>.spdx.json` | SPDX (Linux Foundation) | Most enterprise vulnerability scanners, FedRAMP / NIST workflows |
+| `da-tools-image-v<X.Y.Z>.cyclonedx.json` | CycloneDX (OWASP) | Open-source supply chain tools (Dependency-Track, OWASP Defect Dojo, etc.) |
+
+Both SBOMs are also signed (matching `.sig` + `.cert`) — a tampered
+SBOM defeats the supply-chain story, so we sign it the same way as
+the binaries.
+
+### Air-gapped verification
+
+cosign keyless verification depends on the sigstore TUF root + Rekor
+transparency log (requires outbound HTTPS). For fully air-gapped
+environments:
+
+1. **Pre-sync the TUF mirror**: in an environment with internet
+   access, run `cosign initialize --mirror <local-https-mirror>` and
+   ship the `~/.sigstore` directory inside your air-gap import bundle.
+2. **Skip transparency log** (degraded but signature still verified):
+   ```bash
+   COSIGN_EXPERIMENTAL=1 cosign verify-blob --insecure-ignore-tlog \
+       --certificate-identity "..." \
+       --certificate-oidc-issuer "..." \
+       ...
+   ```
+
+If your security team has concerns about cosign keyless or requires a
+different signing scheme (GPG, Authenticode, FIPS-validated keys, etc.),
+please [open an issue](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/new?template=signing-request.md)
+— our internal release-signing runbook §Layer 2 has predeclared
+activation paths for the most common alternatives.
 
 ## Upgrades
 
