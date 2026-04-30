@@ -33,6 +33,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DuplicateTenantError signals that the same tenant ID was discovered in two
+// different files during a hierarchical scan. This is a misconfig (e.g. forgot
+// to delete the old flat copy after `git mv` to the nested layout) that the
+// platform should reject hard rather than silently last-wins-merge.
+//
+// Returned by `scanDirHierarchical` and detected at higher layers via
+// `errors.As(err, &DuplicateTenantError{})` (issue #127, v2.8.x hardening).
+//
+// Before v2.8.x: scanDirHierarchical returned a generic fmt.Errorf, and Load()
+// swallowed it with a WARN log. Customers could deploy with a duplicate tenant
+// silently merged via map last-wins iteration — easy to miss in production.
+//
+// After v2.8.x: typed error lets Load() / fullDirLoad() reject the misconfig
+// at the boundary; other scan errors (permissions, malformed file) keep the
+// log-and-continue policy because hierarchical mode is opt-in and shouldn't
+// tear down a flat-only deploy.
+type DuplicateTenantError struct {
+	TenantID string
+	PathA    string // First-discovered file
+	PathB    string // Second-discovered file (the one rejected)
+}
+
+func (e *DuplicateTenantError) Error() string {
+	return fmt.Sprintf("duplicate tenant ID %q: defined in both %s and %s", e.TenantID, e.PathA, e.PathB)
+}
+
 // InheritanceGraph tracks the defaults↔tenants dependency for a hierarchical
 // conf.d layout (ADR-017). Two maps, one per direction:
 //
@@ -255,11 +281,16 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	// twice is caught by yaml.v3 (duplicate map key → parser error or
 	// last-wins depending on strictness; we rely on strictness in describe_*
 	// and accept the last-wins here since downstream sees one tenant either
-	// way). Cross-file duplicates are the interesting case and are rejected.
+	// way). Cross-file duplicates are the interesting case and are rejected
+	// via the typed `*DuplicateTenantError` so callers can distinguish a
+	// misconfig from generic scan errors (issue #127 hardening).
 	for _, td := range decls {
 		if prev, exists := tenants[td.ID]; exists && prev != td.FilePath {
-			return nil, nil, nil, nil, nil, fmt.Errorf(
-				"duplicate tenant ID %q: defined in both %s and %s", td.ID, prev, td.FilePath)
+			return nil, nil, nil, nil, nil, &DuplicateTenantError{
+				TenantID: td.ID,
+				PathA:    prev,
+				PathB:    td.FilePath,
+			}
 		}
 		tenants[td.ID] = td.FilePath
 	}
