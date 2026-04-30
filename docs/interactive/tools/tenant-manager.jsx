@@ -1087,6 +1087,47 @@ export default function TenantManager() {
     }
   };
 
+  // BUG FIX: useRef and the modal useEffect below MUST be called on
+  // every render (Rules of Hooks). They were originally placed AFTER
+  // the `if (loading) return` early returns, which meant the FIRST
+  // render (loading=true → early return) registered fewer hooks than
+  // the SECOND render (loading=false → falls through to useRef call).
+  // React would then throw error #310 ("Rendered more hooks than
+  // during the previous render") and unmount the component, leaving
+  // the page blank. The pre-existing loading-state bug masked this by
+  // keeping `loading` permanently true. Moving them above the early
+  // returns ensures hook order is stable across renders.
+  const modalRef = useRef(null);
+
+  // Modal focus trap, escape key, and auto-focus management
+  useEffect(() => {
+    if (modalType && modalRef.current) {
+      modalRef.current.focus();
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setModalType(null);
+          return;
+        }
+        // Focus trap: cycle Tab within modal
+        if (e.key === 'Tab' && modalRef.current) {
+          const focusable = modalRef.current.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          if (focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey) {
+            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+          } else {
+            if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+          }
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      return () => document.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [modalType]);
+
   if (loading) {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1123,37 +1164,6 @@ export default function TenantManager() {
     silent: 'var(--da-color-mode-silent)',
     maintenance: 'var(--da-color-mode-maintenance)',
   };
-
-  const modalRef = useRef(null);
-
-  // Modal focus trap, escape key, and auto-focus management
-  useEffect(() => {
-    if (modalType && modalRef.current) {
-      modalRef.current.focus();
-      const handleKeyDown = (e) => {
-        if (e.key === 'Escape') {
-          setModalType(null);
-          return;
-        }
-        // Focus trap: cycle Tab within modal
-        if (e.key === 'Tab' && modalRef.current) {
-          const focusable = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusable.length === 0) return;
-          const first = focusable[0];
-          const last = focusable[focusable.length - 1];
-          if (e.shiftKey) {
-            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
-          } else {
-            if (document.activeElement === last) { e.preventDefault(); first.focus(); }
-          }
-        }
-      };
-      document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [modalType]);
 
   return (
     <main role="main" style={styles.container}>
