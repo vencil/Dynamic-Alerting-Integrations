@@ -166,6 +166,14 @@ repos:
         pass_filenames: false
         files: \.(md|yaml|yml|py|jsx|html|json)$
 
+      - id: commit-scope-doc-drift
+        name: Commit scope drift (commit-convention.md vs .commitlintrc.yaml)
+        entry: python3 -X utf8 scripts/tools/lint/check_commit_scope_doc.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(\.commitlintrc\.yaml|docs/internal/commit-convention\.md)$
+        additional_dependencies: ['pyyaml']
+
       - id: tool-consistency-check
         name: Tool registry ↔ Hub ↔ TOOL_META ↔ JSX ↔ Markdown links
         entry: python3 -X utf8 scripts/tools/lint/lint_tool_consistency.py

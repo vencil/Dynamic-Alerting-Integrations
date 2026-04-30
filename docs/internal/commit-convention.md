@@ -40,15 +40,23 @@ The type specifies the category of change. Must be one of:
 
 ### Scope
 
-The scope is optional but recommended. It specifies which component(s) are affected:
+The scope is optional but recommended. **Source of truth**: `.commitlintrc.yaml` `scope-enum` rule (this list drifts; CI is the authority).
 
-- **exporter**: Changes to threshold-exporter code or deployment
-- **tools**: Changes to tools in `scripts/tools/`
-- **docs**: Documentation and guides (same as `docs` type, but with scope specifier)
-- **rule-packs**: Changes to rule pack definitions
-- **ci**: CI/CD infrastructure (GitHub Actions, GitLab CI)
-- **k8s**: Kubernetes manifests or deployments
+Common scopes (most-used subset; see `.commitlintrc.yaml` for the full enforced list):
+
+- **exporter**: threshold-exporter code or deployment (NOT `threshold-exporter` — that's a common mistake)
+- **tools**: tools in `scripts/tools/`
+- **docs**: docs / guides
+- **rule-packs**: rule pack definitions
+- **ci**: GitHub Actions / GitLab CI infrastructure
+- **k8s**: Kubernetes manifests / deployments
 - **helm**: Helm chart configuration
+- **ops** / **dx** / **lint**: tool-map sub-categories (matches `scripts/tools/{ops,dx,lint}/`)
+- **phase-a** / **phase-b** / **phase-c**: development phase scopes (use these for phase-bundle PRs that span multiple components)
+- **scanner** / **golden** / **config** / **session-init**: component / sub-area scopes for narrow refactors
+- **adr** / **playbook** / **planning**: doc-only sub-categories (use when commit is purely about ADR / playbook / planning archive content)
+
+> **Common pitfall**: typing the verbose component name (`threshold-exporter`, `tenant-api`) instead of the short scope (`exporter`). commitlint will reject; check `.commitlintrc.yaml` if unsure. The CI failure message lists every allowed scope — copy from there.
 
 ### Description
 
@@ -135,17 +143,23 @@ Other types (`style`, `refactor`, `test`, `build`, `ci`, `chore`) are grouped an
 
 ## CI Validation
 
-All pull requests are automatically validated by GitHub Actions:
+All pull requests are automatically validated by GitHub Actions (`.github/workflows/commitlint.yaml`).
 
-1. **PR Title Validation** (for squash-merge repositories): The PR title must follow Conventional Commits format
-2. **Commit Validation**: All new commits on the PR must follow the format
+**Two independent jobs run on every PR — both must pass:**
+
+| Job | What it lints | When it triggers |
+|---|---|---|
+| `Validate PR title (for squash-merge)` | The PR title (becomes the squash-merged commit message on main) | Every `pull_request` open / edit / synchronize / reopen |
+| `Validate commits on PR` | **Each individual commit** on the PR branch (`base.sha`..`head.sha`) | Same triggers |
+
+> **Pitfall (codified after PR #147)**: editing only the PR title fixes job 1 but **not** job 2. If the underlying commits have a bad scope, you must amend (or soft-reset + recommit) the commit messages and force-push. The branch's commit history is its own SOT — the PR title is just the squash-merge message. Both surfaces validate, neither inherits from the other.
 
 The validation enforces:
 - Valid type from the approved list
-- Valid scope from the approved list (or none)
+- Valid scope from the `.commitlintrc.yaml` `scope-enum` (or none)
 - Non-empty description
 
-If validation fails, the CI check will block merging until commits are corrected.
+If validation fails, the CI check will block merging until both surfaces are corrected.
 
 ## Fixing Invalid Commits
 
@@ -163,9 +177,18 @@ If your commits don't pass validation, you can:
    git push --force-with-lease
    ```
 
-3. **Update PR title** (if using squash-merge):
-   - Edit the PR title on GitHub to match Conventional Commits format
-   - The CI will re-run automatically
+3. **Update PR title** (squash-merge surface):
+   - Edit the PR title on GitHub — `Validate PR title` job re-runs automatically
+   - **This does NOT fix the per-commit job** if the underlying commits also have a bad scope. You must also amend / rebase the commit messages and force-push (steps 1 / 2). Both surfaces validate independently.
+
+4. **Soft-reset + recommit** (when amend hangs in pre-commit; FUSE escape pattern):
+   ```bash
+   # Files unchanged from prior commit — sandbox hooks already verified them
+   git reset --soft HEAD~1
+   # Use the project's Windows escape so commit-msg passes UTF-8 cleanly
+   scripts/ops/win_git_escape.bat commit-file _msg.txt
+   git push origin <branch> --force-with-lease
+   ```
 
 ## Examples for This Project
 

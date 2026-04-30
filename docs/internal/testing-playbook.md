@@ -741,6 +741,110 @@ Apply this checklist as part of any PR that adds new Go tests touching `config_m
 - `docs/internal/v2.8.0-planning-archive.md` §S#35 (PR #79 — durable lockstep+>= upgrade)
 - [Issue #81](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/81) — codification tracking (this section is its deliverable)
 
+## v2.8.0 Lessons Learned — Validation ordering + typed errors（2026-04-30, Phase .b, PR #147 / issue #127）
+
+> **觸發**：Phase B Track B follow-up PR #147 重新打了同一個 class 的 production gap — duplicate-tenant misconfig 被「flat-mode loadDir 先 silently last-wins-merge → 隨後的 hierarchical scan WARN-and-ignore」鏈路吞掉。修法不只是「把 WARN 升 error」這麼簡單；牽涉到三條互相依賴的紀律。本節 codify 這三條，避免同類 reorder 問題在 v2.9.0 重複。
+>
+> **Authority**：本節為「validator 跑在已 commit 的 state 之後 + state 已 atomic-swap」class 的 design rule。違反會出現「reject 完成但 partial state 已 leak」這類 invariant 破壞，customer hard-to-reproduce。
+
+### 1. 驗證跑在 commit 之前，不要跑之後再吞 error
+
+**現象（PR #147 修的 v2.8.0-pre 行為）**：
+
+```go
+// config.go Load() — pre-v2.8.x order
+m.config = &cfg                            // (1) flat-mode commit (silently last-wins-merged duplicate)
+m.loaded = true
+// ...
+if err := m.populateHierarchyState(); err != nil {  // (2) detects duplicate AFTER commit
+    log.Printf("WARN: ...")                          //     → swallowed as WARN, returns nil
+}
+return nil
+```
+
+Customer deploy 看到 `Load()` returns nil → "deploy succeeded" — 但 served config 是 map iteration 順序決定的「last-wins」，極易在 production 漏察。
+
+**Durable fix**：把 validator 的 call **移到 commit 之前**，reject 時 caller 看到 `Load returned error` + 完全沒有 partial state 洩漏：
+
+```go
+// config.go Load() — v2.8.x order
+if hierErr := m.populateHierarchyState(); hierErr != nil {
+    var dupErr *DuplicateTenantError
+    if errors.As(hierErr, &dupErr) {
+        return fmt.Errorf("config rejected: %w", hierErr)  // (1) reject BEFORE commit
+    }
+    log.Printf("WARN: ...")  // generic scan errors keep prior policy
+}
+
+m.mu.Lock()                  // (2) commit only if validation passed
+m.config = &cfg
+m.loaded = true
+// ...
+```
+
+**State invariant** under the new order：cold start (`Load`) reject → `m.config = nil`, `m.loaded = false`；hot reload (`fullDirLoad`) reject → prior known-good state preserved，跑著的 service 不會被半途切到 broken state。
+
+**反例（不能用的「先 commit 再 unwind」設計）**：commit 了 `m.config`，validator 失敗，再 `m.config = oldConfig` rollback。問題：commit 與 rollback 之間若有 reader 讀到新 config，就觀察到了「應該被 reject 的中間狀態」。Atomic-swap 的點是同一個鎖內，validator 必須跑在那個 swap 之前。
+
+### 2. 用 typed error 區分「misconfig（hard fail）」vs「flaky（log + continue）」
+
+**Pre-v2.8.x**：`scanDirHierarchical` 對所有失敗都 return generic `fmt.Errorf`，caller 沒有訊息可以區分「customer 寫錯設定（fail hard 強迫 fix）」 vs「個別檔案 permission / malformed（log + 跳過繼續跑）」。結果 caller 只能一律 `log.Printf("WARN: ...")` — 兩個截然不同的 class 被同一個 log line 吞掉。
+
+**Durable fix**：misconfig 用 typed error，scan 機制錯誤保留 generic error：
+
+```go
+// config_hierarchy.go
+type DuplicateTenantError struct {
+    TenantID string
+    PathA    string
+    PathB    string
+}
+
+func (e *DuplicateTenantError) Error() string {
+    return fmt.Sprintf("duplicate tenant ID %q: defined in both %s and %s",
+        e.TenantID, e.PathA, e.PathB)
+}
+```
+
+Caller 用 `errors.As` 區分：
+
+```go
+if hierErr := m.populateHierarchyState(); hierErr != nil {
+    var dupErr *DuplicateTenantError
+    if errors.As(hierErr, &dupErr) {
+        return fmt.Errorf("config rejected: %w", hierErr)  // misconfig: fail hard
+    }
+    log.Printf("WARN: ...")  // flaky: log + continue
+}
+```
+
+**設計要點**：
+- Typed error 必須**包含定位資訊**（`TenantID` / `PathA` / `PathB`），讓 operator 不需要 unwrap 就能 grep / `git rm`。`Error()` 文字格式跟 generic `fmt.Errorf` 保持 byte-identical，向後相容做 string-match 的舊 test（例：`cmd/da-guard/main_test.go::TestRun_DuplicateTenantID_ExitsTwo`）
+- 不要 over-type：只有 misconfig class 開 typed error。malformed file / permission / IO failure 仍走 generic `fmt.Errorf` — 過度 typed 會讓 caller 寫一堆無意義的 `errors.As` switch
+- 用「opt-in 機制」做語意分流：hierarchical mode 是 opt-in（沒有 `_defaults.yaml` 就不會啟用），所以 hierarchical scan 的 generic error 不該擊倒整個 flat-only deploy → 對應 `log + continue`；duplicate tenant 是真實 misconfig → 對應 `fail hard`
+
+### 3. Test 規範：「鎖死當前 gap」test 過渡到「鎖死新 contract」test 必須同時存在於同一 PR
+
+**Pre-v2.8.x test (`TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated`)**：刻意鎖死 v2.8.0-pre 的 gap 行為（assert `Load() == nil` + WARN log 存在）。test name 直接寫 `DetectedButNotPropagated` — future hardening PR 必須改寫這個 test 才能 land，無法 silently 留 gap。
+
+**Durable fix（PR #147）**：
+
+1. **重寫**（不是新增）原 test，改名為 `_RejectedAtLoad`，鎖 4 個新合約：
+   - `Load()` 返回 hard error
+   - `errors.As(err, &DuplicateTenantError{})` 解出 typed error
+   - `dupErr.PathA` / `PathB` 兩條路徑 populated 且 distinct
+   - `m.config == nil` / `m.loaded == false`（state 不洩漏 invariant）
+2. **新增**對稱 test (`_RejectedAtFullDirLoad`) 鎖 hot-reload state preservation：load clean → introduce duplicate → fullDirLoad 拒絕 → `m.config` / `m.lastHash` 仍指向 prior known-good
+
+**為什麼不能只新增 test 不重寫舊 test**：舊 test 名字 (`_DetectedButNotPropagated`) 與新合約矛盾，留著 → future reader 困惑「到底誰才是當前合約」。**重寫的 PR diff 本身就是 contract migration 的 audit trail**。
+
+### Cross-refs
+
+- PR [#147](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/147) (closes [#127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127)) — landed lessons; commit `2458466` on main
+- `components/threshold-exporter/app/config_hierarchy.go::DuplicateTenantError` — typed error 範例
+- `components/threshold-exporter/app/config.go::Load`, `::fullDirLoad` — reorder-before-commit pattern 範例
+- `components/threshold-exporter/app/config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_RejectedAtLoad` + `_RejectedAtFullDirLoad` — test 重寫範例
+
 ## v2.2.0 Lessons Learned（2026-03-18）
 
 1. **`apk del` 後必須驗證移除成功**：`|| true` 吃掉錯誤導致 CVE 殘留。Dockerfile 加 `if apk info -e <pkg>; then exit 1; fi` 做 build-time 斷言
