@@ -639,6 +639,16 @@ export default function TenantManager() {
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [apiNotification, setApiNotification] = useState(null); // { type: 'error'|'success', message }
+  // BUG FIX: `compareMode` was referenced at L1441/1444 (Compare Mode
+  // toggle button) but never declared via useState. The pre-existing
+  // loading-state bug kept the page on the loading spinner forever, so
+  // the main render never reached those lines and the missing state
+  // was never tripped. Once the loading-state fix lets the page render,
+  // ReferenceError: `compareMode is not defined` blanks the whole
+  // component. Adding the missing declaration restores the Compare
+  // Mode toggle to a no-op-but-functional state (the rest of the
+  // compare-mode UI plumbing is a separate follow-up).
+  const [compareMode, setCompareMode] = useState(false);
   // Auth state
   const [authUser, setAuthUser] = useState(null);
   const [canWrite, setCanWrite] = useState(true); // default true for demo/no-auth mode
