@@ -182,7 +182,9 @@ test.describe('Tenant Manager @critical', () => {
   test('renders tenants from /api/v1/tenants/search when API responds 200', async ({ page }) => {
     // Stub the live API BEFORE navigating so the very first fetch hits
     // our mock (page.route() applies to all subsequent requests).
+    let apiCalled = false;
     await page.route('**/api/v1/tenants/search**', async (route) => {
+      apiCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -201,10 +203,15 @@ test.describe('Tenant Manager @critical', () => {
     await loadTenantManagerDirect(page);
     await page.waitForTimeout(2000);
 
-    // The API-mode tenants should appear in the rendered card list.
-    // We pin against ID strings unique to the mock (`api-tenant-*`)
-    // — if static fallback ever takes over instead, this test fails
-    // because DEMO_TENANTS doesn't contain those IDs.
+    // Layered assertions:
+    //   (a) Wire-level — JSX must call our endpoint with page_size=500.
+    //       This catches "data-source layer never wired up" regressions
+    //       even if the rendered DOM is hard to introspect through the
+    //       jsx-loader / Babel-standalone path.
+    //   (b) Render-level — pin against IDs unique to the mock so a
+    //       silent fallback to platform-data.json/DEMO_TENANTS fails
+    //       the test (those sources don't contain `api-tenant-*` IDs).
+    expect(apiCalled).toBe(true);
     const body = await page.locator('body').textContent();
     expect(body).toContain('api-tenant-alpha');
     expect(body).toContain('api-tenant-beta');

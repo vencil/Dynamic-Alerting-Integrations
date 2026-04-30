@@ -734,9 +734,6 @@ export default function TenantManager() {
           // tenant-api doesn't yet expose group definitions —
           // they live in `_groups.yaml` adjacent to the tenants).
           await loadGroupsBestEffort();
-          // IMPORTANT: must set loading=false here. Step 2's
-          // finally only runs when Step 2 executes. Without this,
-          // the API success path leaves the spinner up forever.
           setLoading(false);
           return;
         }
