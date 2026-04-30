@@ -180,6 +180,23 @@ test.describe('Tenant Manager @critical', () => {
   //   3. overflow banner → total_matched > items.length surfaces banner
 
   test('renders tenants from /api/v1/tenants/search when API responds 200', async ({ page }) => {
+    // Capture browser console + page errors so a JSX runtime error
+    // surfaces in test output rather than as a silent render failure.
+    // Many earlier iterations of this PR failed with body.toContain
+    // missing the mock IDs, but the actual root cause was buried in
+    // the browser console.
+    const consoleMessages: string[] = [];
+    const pageErrors: string[] = [];
+    page.on('console', (msg) => {
+      const type = msg.type();
+      if (type === 'error' || type === 'warning') {
+        consoleMessages.push(`[${type}] ${msg.text()}`);
+      }
+    });
+    page.on('pageerror', (err) => {
+      pageErrors.push(`[pageerror] ${err.message}\n${err.stack || ''}`);
+    });
+
     // Stub the live API BEFORE navigating so the very first fetch hits
     // our mock (page.route() applies to all subsequent requests).
     let apiCalled = false;
@@ -213,6 +230,14 @@ test.describe('Tenant Manager @critical', () => {
     //       the test (those sources don't contain `api-tenant-*` IDs).
     expect(apiCalled).toBe(true);
     const body = await page.locator('body').textContent();
+    if (!body?.includes('api-tenant-alpha')) {
+      // Surface the diagnostic state into the assertion failure so we
+      // can see WHY the render didn't produce the expected text.
+      console.error('=== Browser console messages ===');
+      consoleMessages.forEach((m) => console.error(m));
+      console.error('=== Browser page errors ===');
+      pageErrors.forEach((e) => console.error(e));
+    }
     expect(body).toContain('api-tenant-alpha');
     expect(body).toContain('api-tenant-beta');
   });

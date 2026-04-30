@@ -734,7 +734,6 @@ export default function TenantManager() {
           // tenant-api doesn't yet expose group definitions —
           // they live in `_groups.yaml` adjacent to the tenants).
           await loadGroupsBestEffort();
-          setLoading(false);
           return;
         }
       } catch (e) {
@@ -918,7 +917,7 @@ export default function TenantManager() {
       }
     }
 
-    loadData();
+    loadData().finally(() => setLoading(false));
   }, []);
 
   // Filter tenants: by active group membership AND search/filters
