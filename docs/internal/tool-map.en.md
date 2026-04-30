@@ -119,6 +119,7 @@ lang: en
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
+| `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
