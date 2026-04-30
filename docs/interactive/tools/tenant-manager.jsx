@@ -723,6 +723,14 @@ export default function TenantManager() {
 
   useEffect(() => {
     const loadData = async () => {
+      // BUG FIX (regression-locked by Playwright API-mode tests):
+      // setLoading(false) MUST run on every termination path. The
+      // original code had it inside the platform-data.json `finally`
+      // block, which never executed if Step 1 returned early on
+      // success — leaving the page stuck on "Loading tenant data…"
+      // forever in API mode. We now wrap both steps in a top-level
+      // try/finally so `loading` is always cleared.
+      try {
       // ---- Step 1: try the live API ----
       try {
         const apiData = await fetchTenantsFromAPI();
@@ -790,7 +798,12 @@ export default function TenantManager() {
         setTenants(DEMO_TENANTS);
         setGroups(DEMO_GROUPS);
         setDataSource('demo');
+      }
       } finally {
+        // Outer finally: runs on EVERY exit path, including the
+        // Step 1 early `return` on API success. Without this, the
+        // API mode renders a permanent "Loading tenant data…"
+        // spinner — see the bug-fix comment at the top of loadData.
         setLoading(false);
       }
     };
