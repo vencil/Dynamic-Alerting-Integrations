@@ -210,6 +210,15 @@ func main() {
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
 			Get("/tenants", handler.ListTenants(*configDir, rbacMgr))
 
+		// v2.8.0 Phase .c C-1: server-side search / filter / pagination.
+		// Same RBAC scoping as /tenants; designed for the
+		// virtualized Tenant Manager (PR-2 / C-2) so the JSX doesn't
+		// have to ship the full set client-side at 500+ tenant scale.
+		// Snapshot cache (30s TTL) shared across requests — see
+		// tenant_search.go for the design notes.
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/tenants/search", handler.SearchTenants(*configDir, rbacMgr, handler.NewTenantSnapshotCache()))
+
 		// Per-tenant routes
 		r.Route("/tenants/{id}", func(r chi.Router) {
 			// Read endpoints
