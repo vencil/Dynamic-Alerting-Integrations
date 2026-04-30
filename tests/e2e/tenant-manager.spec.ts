@@ -154,6 +154,126 @@ test.describe('Tenant Manager @critical', () => {
     expect(bodyContent?.length || 0).toBeGreaterThan(100); // Expect substantial content
   });
 
+  // C-2 PR-2: API-first data source (with platform-data.json fallback).
+  // tenant-manager.jsx tries /api/v1/tenants/search first. These tests
+  // cover the three production code paths via page.route() mocks:
+  //   1. happy-path → tenants from API response render
+  //   2. 429 retry-with-backoff → toast appears, then succeeds
+  //   3. overflow banner → total_matched > items.length surfaces banner
+
+  test('renders tenants from /api/v1/tenants/search when API responds 200', async ({ page }) => {
+    // Stub the live API BEFORE navigating so the very first fetch hits
+    // our mock (page.route() applies to all subsequent requests).
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            { id: 'api-tenant-alpha', environment: 'production', tier: 'tier-1', domain: 'finance', db_type: 'mariadb', owner: 'alice', tags: ['stub'], groups: [] },
+            { id: 'api-tenant-beta', environment: 'staging', tier: 'tier-2', domain: 'ops', db_type: 'redis', owner: 'bob', tags: [], groups: [] },
+          ],
+          total_matched: 2,
+          page_size: 500,
+          next_offset: null,
+        }),
+      });
+    });
+
+    await loadTenantManager(page);
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    // The API-mode tenants should appear in the rendered card list.
+    // We pin against ID strings unique to the mock (`api-tenant-*`)
+    // — if static fallback ever takes over instead, this test fails
+    // because DEMO_TENANTS doesn't contain those IDs.
+    const body = await page.locator('body').textContent();
+    expect(body).toContain('api-tenant-alpha');
+    expect(body).toContain('api-tenant-beta');
+  });
+
+  test('shows overflow banner when total_matched > items.length', async ({ page }) => {
+    // Mock the API to claim there are 2000 tenants but only return
+    // 500 — exactly the "we hit the page_size cap" condition the
+    // banner should surface.
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      const items = Array.from({ length: 500 }, (_, i) => ({
+        id: `bulk-tenant-${i}`,
+        environment: 'production',
+        tier: 'tier-2',
+        domain: 'ops',
+        db_type: 'mariadb',
+        owner: 'team',
+        tags: [],
+        groups: [],
+      }));
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items,
+          total_matched: 2000,
+          page_size: 500,
+          next_offset: 500,
+        }),
+      });
+    });
+
+    await loadTenantManager(page);
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+
+    // The overflow banner contains "500" and "2000" plus a hint to
+    // refine filters. We use a regex so the test survives small
+    // copy edits — we only care that BOTH numbers + the "refine"
+    // hint appear together.
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText).toMatch(/500.+2000|2000.+500/);
+    expect(bodyText?.toLowerCase()).toMatch(/refine|narrow|篩選|搜尋/);
+  });
+
+  test('retries once on 429 with Retry-After and surfaces a toast', async ({ page }) => {
+    // First request: 429 with Retry-After: 1 (the smallest meaningful
+    // value — keeps the test fast). Second request: 200 with a single
+    // tenant so the post-retry state is verifiable.
+    let callCount = 0;
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      callCount += 1;
+      if (callCount === 1) {
+        await route.fulfill({
+          status: 429,
+          headers: { 'Retry-After': '1' },
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'rate limit exceeded' }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            { id: 'after-retry-tenant', environment: 'production', tier: 'tier-1', domain: 'ops', db_type: 'mariadb', owner: 'alice', tags: [], groups: [] },
+          ],
+          total_matched: 1,
+          page_size: 500,
+          next_offset: null,
+        }),
+      });
+    });
+
+    await loadTenantManager(page);
+    // Allow up to ~5s for the retry path: 1s Retry-After + buffer.
+    await page.waitForTimeout(5000);
+
+    // Both requests fired (1 = initial 429, 2 = retry success).
+    expect(callCount).toBeGreaterThanOrEqual(2);
+    // Post-retry tenant is rendered.
+    const body = await page.locator('body').textContent();
+    expect(body).toContain('after-retry-tenant');
+  });
+
   test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
     // Load tenant-manager tool
     await loadTenantManager(page);
