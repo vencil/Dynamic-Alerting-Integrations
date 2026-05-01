@@ -102,6 +102,7 @@ lang: en
 | `docs/interactive/tools/tenant-manager/components/ApiNotificationToast.jsx` | All | Tenant Manager — ApiNotificationToast |
 | `docs/interactive/tools/tenant-manager/components/GroupSidebar.jsx` | All | Tenant Manager — GroupSidebar |
 | `docs/interactive/tools/tenant-manager/components/OverflowBanner.jsx` | All | Tenant Manager — OverflowBanner |
+| `docs/interactive/tools/tenant-manager/components/TenantCard.jsx` | All | Tenant Manager — TenantCard |
 | `docs/interactive/tools/tenant-manager.jsx` | Platform Engineers, SREs | Tenant Manager |
 | `docs/interactive/tools/threshold-calculator.jsx` | Domain Experts (DBA), Tenants | Threshold Calculator |
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |

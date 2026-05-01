@@ -13,7 +13,8 @@ dependencies: [
   "tenant-manager/hooks/useModalFocusTrap.js",
   "tenant-manager/components/GroupSidebar.jsx",
   "tenant-manager/components/ApiNotificationToast.jsx",
-  "tenant-manager/components/OverflowBanner.jsx"
+  "tenant-manager/components/OverflowBanner.jsx",
+  "tenant-manager/components/TenantCard.jsx"
 ]
 ---
 
@@ -39,6 +40,7 @@ const GroupSidebar = window.__GroupSidebar;
 const ApiNotificationToast = window.__ApiNotificationToast;
 const OverflowBanner = window.__OverflowBanner;
 
+const TenantCard = window.__TenantCard;
 export default function TenantManager() {
   // PR-2d Phase 2 (#153): apiNotification owned by orchestrator (shared
   // with bulk-action / group-create / group-delete handlers below) but
@@ -613,101 +615,18 @@ export default function TenantManager() {
 
         <div style={styles.grid} role="region" aria-live="polite" aria-label={t('租戶列表', 'Tenant list')}>
           {filtered.map(([name, data]) => (
-            <article
+            <TenantCard
               key={name}
-              tabIndex={0}
-              style={{
-                ...styles.card,
-                ...(hoveredCard === name ? styles.cardHover : {}),
-              }}
-              onMouseEnter={() => setHoveredCard(name)}
-              onMouseLeave={() => setHoveredCard(null)}
-              onFocus={() => setHoveredCard(name)}
-              onBlur={() => setHoveredCard(null)}
-              aria-label={`Tenant: ${name} — ${data.environment} ${data.operational_mode}`}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(name)}
-                onChange={() => toggleSelect(name)}
-                style={styles.cardCheckbox}
-                aria-label={`Select ${name}`}
-              />
-              <div style={styles.cardTitle}>{name}</div>
-
-              <div>
-                <span style={{ ...styles.badge, ...styles.environmentBadge[data.environment] }}>
-                  {data.environment.toUpperCase()}
-                </span>
-                <span style={{ ...styles.badge, ...styles.tierBadge[data.tier] }}>
-                  {data.tier.toUpperCase()}
-                </span>
-                {/* v2.6.0: Pending PR indicator (ADR-011) */}
-                {prByTenant[name] && (
-                  <a href={prByTenant[name].html_url} target="_blank" rel="noopener noreferrer"
-                    title={t('有待審核的 PR', 'Pending PR')}
-                    style={{
-                      ...styles.badge,
-                      backgroundColor: 'var(--da-color-warning)',
-                      color: 'white',
-                      textDecoration: 'none',
-                      fontSize: 'var(--da-font-size-xs)',
-                    }}>
-                    PR #{prByTenant[name].number}
-                  </a>
-                )}
-              </div>
-
-              <div style={styles.pills}>
-                {data.rule_packs?.map(pack => (
-                  <div key={pack} style={styles.pill}>{pack}</div>
-                ))}
-              </div>
-
-              <div style={styles.row}>
-                <span style={styles.rowLabel}>{t('模式', 'Mode')}</span>
-                <span style={styles.rowValue}>
-                  <span style={{ ...styles.modeIndicator, backgroundColor: modeColors[data.operational_mode] }} />
-                  {data.operational_mode}
-                </span>
-              </div>
-
-              <div style={styles.row}>
-                <span style={styles.rowLabel}>{t('域', 'Domain')}</span>
-                <span style={styles.rowValue}>{data.domain}</span>
-              </div>
-
-              <div style={styles.row}>
-                <span style={styles.rowLabel}>{t('數據庫類型', 'DB Type')}</span>
-                <span style={styles.rowValue}>{data.db_type}</span>
-              </div>
-
-              <div style={styles.row}>
-                <span style={styles.rowLabel}>{t('所有者', 'Owner')}</span>
-                <span style={styles.rowValue}>{data.owner}</span>
-              </div>
-
-              <div style={styles.row}>
-                <span style={styles.rowLabel}>{t('路由', 'Routing')}</span>
-                <span style={{ ...styles.rowValue, fontSize: '12px', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={data.routing_channel}>
-                  {data.routing_channel}
-                </span>
-              </div>
-
-              <div style={styles.row}>
-                <span style={styles.rowLabel}>{t('指標數', 'Metrics')}</span>
-                <span style={styles.rowValue}>{data.metric_count}</span>
-              </div>
-
-              {data.last_config_commit && (
-                <div style={{ ...styles.row, borderTop: 'none' }}>
-                  <span style={styles.rowLabel}>{t('提交哈希', 'Config')}</span>
-                  <span style={{ ...styles.rowValue, fontSize: '11px', fontFamily: 'monospace' }}>
-                    {data.last_config_commit.substring(0, 7)}
-                  </span>
-                </div>
-              )}
-            </article>
+              name={name}
+              data={data}
+              isSelected={selected.has(name)}
+              isHovered={hoveredCard === name}
+              pendingPR={prByTenant[name] || null}
+              modeColors={modeColors}
+              onToggleSelect={() => toggleSelect(name)}
+              onHoverEnter={() => setHoveredCard(name)}
+              onHoverLeave={() => setHoveredCard(null)}
+            />
           ))}
         </div>
 
