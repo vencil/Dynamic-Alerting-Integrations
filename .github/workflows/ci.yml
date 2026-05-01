@@ -58,6 +58,11 @@ jobs:
           pre-commit run routing-profiles-check --all-files
           pre-commit run bilingual-content-check --all-files
           pre-commit run bilingual-annotations-check --all-files
+          # Manual-stage line-count regression gate from PR #TBD —
+          # locks in PR-2d (#153 Phase 1+2+3 / S#69-S#72) line-count
+          # progress. Codebase has 0 soft-cap warnings as of S#72;
+          # this hook keeps it that way going forward.
+          pre-commit run jsx-babel-check-strict-linecount --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

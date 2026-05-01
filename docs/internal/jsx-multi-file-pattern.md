@@ -136,6 +136,36 @@ go through:
 `.js` files (utils, hooks, fixtures) are NOT scanned by `lint_jsx_babel`.
 Their boilerplate is enforced by the scaffold tool's templates.
 
+### Strict-mode flags (granular activation)
+
+The lint supports three strictness levels via mutually-stackable flags:
+
+| Flag | Effect | Activated in |
+|---|---|---|
+| `--ci` | Babel parse + hard-cap line-count fatal | `jsx-babel-check` (auto pre-commit hook, runs every commit) |
+| `--ci --strict-linecount` | Above + soft-cap line-count fatal | `jsx-babel-check-strict-linecount` (auto-stage hook — runs on every commit + CI) |
+| `--ci --strict-static` | Above + `style={{}}` patterns fatal | not yet activated — see "Static-pattern cleanup track" |
+| `--ci --strict` | Both `--strict-static` AND `--strict-linecount` (legacy shorthand) | not used in CI |
+
+**Why granular instead of one `--strict`?** As of S#72 the codebase has
+**0 soft-cap line-count warnings** but **~330 pre-existing `style={{}}`
+warnings** across many tools. Activating full `--strict` would block
+every PR until all 330 fixed. Splitting `--strict` into granular flags
+lets us:
+
+- Lock in line-count progress IMMEDIATELY (the regression gate that
+  protects PR-2d's hard work).
+- Defer the static-pattern cleanup to a separate track that doesn't
+  block feature work.
+
+### Static-pattern cleanup track (future)
+
+When all 330 `style={{}}` warnings are cleared, swap the manual-stage
+hook's `--strict-linecount` for `--strict` (= both granular flags).
+Cleanup PRs typically extract style consts to module scope (the
+pattern PR #156's GroupSidebar / PR #158's ApiNotificationToast
+already established). Track issue: TBD.
+
 ## Common gotchas
 
 ### 1. Hooks must obey Rules of Hooks

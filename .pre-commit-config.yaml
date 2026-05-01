@@ -318,6 +318,26 @@ repos:
         # broken JSX syntax before they reach HEAD. Skips silently if
         # Node.js unavailable (~0s), otherwise ~2-4s against cached @babel/standalone.
 
+      - id: jsx-babel-check-strict-linecount
+        name: JSX line-count soft-cap regression gate
+        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
+        language: python
+        pass_filenames: false
+        files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
+        # Auto-stage (NOT manual) — runs on every commit to catch
+        # line-count regressions immediately. Locks in the progress
+        # from PR-2d (#153 Phase 1+2+3 / S#69-S#72): codebase had 0
+        # soft-cap line-count warnings as of S#72, this keeps it that
+        # way. Pre-existing ~330 `style={{}}` warnings stay non-fatal
+        # because `--strict-linecount` is granular (NOT `--strict`).
+        # Separate cleanup track will eventually activate
+        # `--strict-static` once all 330 cleared. See PR #160 / S#71
+        # for the granular-flag design rationale.
+        # Initially proposed as `stages: [manual]` but PR #162 first
+        # CI run failed with "No hook with id ... in stage pre-commit"
+        # — empirically the codebase's CI-invoked hooks are auto-stage,
+        # not manual-stage. Aligning with that convention now.
+
       - id: i18n-coverage-check
         name: i18n coverage report
         entry: python3 -X utf8 scripts/tools/lint/check_i18n_coverage.py
