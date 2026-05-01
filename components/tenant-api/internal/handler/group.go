@@ -120,11 +120,16 @@ func GetGroup(mgr *groups.Manager) http.HandlerFunc {
 }
 
 // PutGroupRequest is the body for PUT /api/v1/groups/{id}.
+//
+// `Filters` per-key length checks live in
+// `body_validator.go::validateFilterMap` (struct-tag `dive` could
+// cover values but the per-pair field-path reporting needs custom
+// rendering for the JSON `field` response value).
 type PutGroupRequest struct {
-	Label       string            `json:"label"`
-	Description string            `json:"description"`
+	Label       string            `json:"label" validate:"required,min=1,max=256"`
+	Description string            `json:"description" validate:"max=4096"`
 	Filters     map[string]string `json:"filters"`
-	Members     []string          `json:"members"`
+	Members     []string          `json:"members" validate:"max=1000,dive,min=1,max=256"`
 }
 
 // PutGroup handles PUT /api/v1/groups/{id}
@@ -174,8 +179,14 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager)
 			return
 		}
 
-		if req.Label == "" {
-			writeJSONError(w, http.StatusBadRequest, "label is required")
+		// v2.8.0 issue #134 — body-content range validation. Struct-tag
+		// rules cover Label / Description / Members; per-pair Filters
+		// length checks need the imperative path because validator's
+		// `dive` doesn't render the offending key in the field path.
+		violations := validateStructTags(&req)
+		violations = append(violations, validateFilterMap(req.Filters, "filters")...)
+		if len(violations) > 0 {
+			writeValidationErrors(w, violations)
 			return
 		}
 

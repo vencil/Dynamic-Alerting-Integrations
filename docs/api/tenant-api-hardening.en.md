@@ -189,16 +189,41 @@ Without the fix, PUT/DELETE Groups will hit the new PR-2 check and return 403. T
 
 ## 5. Known gaps (out of Track C scope)
 
-### 5.1 Body-content range validation (C4, tracked in [issue #134](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/134))
+### 5.1 ~~Body-content range validation~~ (C4 ✅ landed v2.8.x via [issue #134](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/134))
 
-`POST /api/v1/tenants/batch` body fields like `BatchOperation.Patch` are currently only validated for size (≤1MB) + JSON well-formedness — **not** value ranges:
+**Status**: v2.8.x hardening PR landed. `POST /api/v1/tenants/batch` / `PUT /api/v1/groups/{id}` / `PUT /api/v1/views/{id}` request bodies now run through `go-playground/validator` + struct tags + a per-key Patch validator registry.
 
-```jsonc
-// v2.8.0 still accepts:
-{"operations":[{"tenant_id":"db-a","patch":{"_timeout_ms":"99999999999"}}]}
+**Validation rules**:
+
+| Field | Rule |
+|---|---|
+| `BatchRequest.operations` | 1-1000 entries |
+| `BatchOperation.tenant_id` | required, 1-256 chars |
+| `BatchOperation.patch` generic key/value | key ≤ 256 chars, value ≤ 1024 chars |
+| `BatchOperation.patch._silent_mode` | enum `{warning, critical, all, disable}` (case-insensitive; matches threshold-exporter resolve) |
+| `BatchOperation.patch._timeout_ms` | integer 0..3,600,000 (≤ 1h) |
+| `BatchOperation.patch._quench_min` | integer 0..86,400 (≤ 1d) |
+| `BatchOperation.patch._routing_profile` / `_profile` | 1-256 chars |
+| Other `_*`-prefixed reserved keys | **soft whitelist** — pass through (decouples tenant-api release cadence from threshold-exporter's evolving key set) |
+| `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
+| `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |
+| `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
+| `Filters` map values | ≤ 1024 chars per value |
+
+**Failure response shape**:
+
+```json
+{
+  "error": "validation failed",
+  "code": "INVALID_BODY",
+  "violations": [
+    {"field": "operations[0].patch[\"_timeout_ms\"]", "reason": "must be ≤ 3600000; got 99999999999"},
+    {"field": "operations[1].patch[\"_silent_mode\"]", "reason": "must be one of {warning, critical, all, disable}; got \"purple\""}
+  ]
+}
 ```
 
-**Mitigation**: downstream schema validation (threshold-exporter / GitOps writer) will eventually reject, but this is not fail-fast. A v2.8.x hardening PR will introduce `go-playground/validator` + struct tags to reject at the boundary.
+ALL violations are listed (not first-only) — same UX as PR-2's forbidden-tenant listing. One round-trip lets the operator fix everything.
 
 ### 5.2 Server-level timeout / body-size still hardcoded
 
