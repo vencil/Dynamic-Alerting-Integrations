@@ -572,7 +572,24 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 >
 > **規則更新**：從本 PR 起，FUSE Trap #57 繞道改為 `make commit-bypass-hh`；`git commit --no-verify` 只在 commit-bypass-hh 本身失效（如 commit-msg 自己 bug）時才用，且 commit message 需寫明 bypass 原因
 
-### 4. Dev Container mount scope（Trap #62 連帶工作流）
+### 4. Subprocess hang 要設 SLA — 沒進度的等待是浪費（PR #164 / S#74）
+
+**觸發**：PR #164 commit 時 `pre-commit` hook `head-blob-hygiene` 卡 14+ 分鐘 0 output。Trap #57 過去的記錄都是 FUSE 側 stale temp，但這次跑在 NTFS Cowork VM（無 FUSE），不對應任何已知 mitigation 路徑。Monitor 持續輪詢 → 持續沒事件 → 很容易停在「再等一下，可能快好了」的狀態。**關鍵介入**：user 一句「你的觀察應該要有合理期限，如果太久都沒跑過要審視合理性」逼出 escalation，bisect 30 分鐘內找到 Popen pipe deadlock，PR #164 順手把 fix 包進去 ship。
+
+**根因**：agent 在「等待」mode 下傾向繼續等而不是切換成 investigate。本身沒有「這個操作的合理 SLA 是多少」的 prior，超出後又沒有 escalation policy。
+
+**正解**：
+1. **任何 subprocess / hook 在等待時都要有 SLA prior**：pre-commit hook 通常秒級，整個流程 < 1 min；CI step < 10 min；`make` target 視內容，不過 ad-hoc 字串建議 `< 5 min`。沒有 prior 時，第一次跑就記下實際時間做為下次 baseline。
+2. **超出 SLA 即 escalate to investigation**，三步固定：
+   (a) `ps -ef | grep <suspect>` 看哪個子程序還活著
+   (b) 把卡住的程序 isolate 出來單獨重現（例：把 hook 的 entry script 直接跑），確認是 deterministic hang 還是 transient 慢
+   (c) 該程序內部 instrument（加 `print(..., flush=True)`、用 `--verbose`、或讀 source 找 deadlock 模式）
+3. **拒絕「再等一下」誘惑** — wait loop 內 elapsed > SLA 時就要切到 (2)；繼續等只是把時間白燒進 prompt cache。
+4. **`Monitor` / `run_in_background` 工具預設要設 timeout**，不要用 default 5min 不思考；有 prior 就設 prior，沒 prior 就想 1 分鐘有沒有理由要這麼久。
+
+**衍生規則 — verify-reference applies to hook scripts too**：S#73（`vibe-dev-rules` 的 self-review check #6）原本只要求 verify 自己寫的 code 引用的 API；S#74 extension：**讀別人寫的 hook / lint script 假設「它跑得通」前，最好先讀關鍵 path（subprocess Popen / pipe handling / file I/O）跟自己 verify 一遍**。本次 Popen 死鎖是 PR #164 之前就在的 latent bug，但所有 session 都假設「pre-commit hook = 跑得通」沒檢查；這個 prior 是錯的，要 calibrate 下來。
+
+### 5. Dev Container mount scope（Trap #62 連帶工作流）
 
 Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），claude worktree 的 Edit **不會進 container**。詳 `windows-mcp-playbook.md` Trap #62。**Go test / Playwright E2E** 在 claude worktree 做 Edit 後，一律走：
 

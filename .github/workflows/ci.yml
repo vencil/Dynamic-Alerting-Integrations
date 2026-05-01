@@ -138,7 +138,11 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install pyyaml croniter pytest pytest-cov promql-parser hypothesis
+        # pytest-timeout: per-test wall-clock timeout to fast-fail
+        # hangs (e.g. PR #165 deadlock-regression tests assert
+        # _batch_cat_blobs returns; without pytest-timeout the test
+        # would hang for the full CI workflow timeout if regressed)
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout promql-parser hypothesis
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:

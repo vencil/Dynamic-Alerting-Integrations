@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -413,9 +414,37 @@ def main() -> int:
     scan_paths = [p for p in paths if not _is_skippable(p)]
     skipped += len(paths) - len(scan_paths)
 
+    # PR #165 (S#74 follow-up): localize-the-hang milestones. The hook
+    # has historically gone silent during long runs, making "is it
+    # stuck or just slow" indistinguishable. Three observation points
+    # below let the operator pin down the failure mode:
+    #
+    #   - "Reading N HEAD blobs..."           → entered _batch_cat_blobs
+    #   - "✓ batch read complete (took Xs)"   → batch returned cleanly
+    #   - "scan I/N" every 100 in --verbose   → mid-scan progress
+    #   - final "✓ N HEAD blob(s) clean"      → all done
+    #
+    # Hang patterns now diagnosable:
+    #   (a) "Reading..." but never "✓ batch read complete" → hang
+    #       inside _batch_cat_blobs (the PR #164 deadlock class — now
+    #       guarded by communicate(timeout=60), but logs make it
+    #       diagnosable if a new variant shows up)
+    #   (b) "✓ batch read complete" but verbose progress stalls →
+    #       hang inside scan_blob for some pathological input
+    #   (c) silent past "Reading..." for >60s in non-verbose mode →
+    #       run with --verbose to localize
+    print(f"Reading {len(scan_paths)} HEAD blob(s)...", flush=True)
+    t_batch_start = time.time()
     blobs = _batch_cat_blobs(scan_paths)
+    t_batch_elapsed = time.time() - t_batch_start
+    print(
+        f"✓ batch read complete: {len(blobs)} blob(s) loaded "
+        f"in {t_batch_elapsed:.1f}s",
+        flush=True,
+    )
 
-    for path in scan_paths:
+    PROGRESS_EVERY = 100
+    for i, path in enumerate(scan_paths):
         blob = blobs.get(path)
         if blob is None:
             # Missing from the batch — fall back to the per-path reader
@@ -428,6 +457,10 @@ def main() -> int:
         scanned += 1
         if args.verbose:
             print(f"  scan {path} ({len(blob)}B)")
+        elif scanned > 0 and scanned % PROGRESS_EVERY == 0:
+            # Default-mode progress: every 100 blobs without --verbose,
+            # so a stuck scan in non-verbose mode still shows it's alive.
+            print(f"  ...scanned {scanned}/{len(scan_paths)}", flush=True)
 
         violations.extend(scan_blob(path, blob, strict=args.strict))
 
