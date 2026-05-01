@@ -37,7 +37,7 @@ pre-commit run --hook-stage manual --all-files        # Manual hooks (heavier)
 
 ## Pre-merge Self-Review
 
-> **Discipline**: pre-merge deep self-review is **default for every PR**, not opt-in. If user has to prompt "做 self-review 了嗎?" before merge, you skipped this section. See [`testing-playbook.md` §v2.8.0 LL §5+§6](../docs/internal/testing-playbook.md#v2-8-0-lessons-learned-2026-04-23-phase-a) for rationale.
+> **Discipline**: pre-merge deep self-review is **default for every PR**, not opt-in. If user has to prompt "做 self-review 了嗎?" before merge, you skipped this section. See [`docs/internal/testing-playbook.md`](../docs/internal/testing-playbook.md) §v2.8.0 LL §5 (Self-review pass 2) + §6 (Intentional-break dogfood) for rationale — search for "Self-review pass 2" inside the file.
 
 ### Pass 1 — 5+1 standard checks (S#73)
 
