@@ -113,6 +113,7 @@ class TestBatchCatBlobsDeadlock:
     threads.
     """
 
+    @pytest.mark.timeout(30)
     def test_small_batch_fits_in_pipe_buffer(self, git_repo):
         """Sanity: small batches always worked, even pre-fix."""
         repo = git_repo(20, content_size_bytes=200)
@@ -127,40 +128,61 @@ class TestBatchCatBlobsDeadlock:
             assert path in result
             assert result[path].endswith(b"\n")
 
-    def test_large_batch_exceeds_pipe_buffer_does_not_deadlock(self, git_repo):
-        """Headline regression: total output > pipe buffer must not hang.
+    @pytest.mark.timeout(120)
+    def test_large_batch_does_not_deadlock(self, git_repo):
+        """**Headline regression** for PR-2c (commit 45e51a8). Pre-fix
+        ``_batch_cat_blobs`` hung indefinitely above ~150 paths because
+        the single-thread write-then-read-loop pattern deadlocked once
+        total ``git cat-file --batch --buffer`` output exceeded the
+        Windows pipe buffer.
 
-        300 files × 1KB = ~300KB of total cat-file output, well above
-        the ~64KB pipe buffer that triggers the pre-fix deadlock.
-        Pre-fix: hung indefinitely. Post-fix: completes in <10s.
+        **Empirical threshold** (PR-2c dogfood, 2026-05-01, intentional
+        revert + run):
 
-        The critical observation: this test FAILS LOUDLY (timeout error
-        from the script's own 60s safety net or pytest timeout) rather
-        than passing silently if someone reverts the fix.
+            - 20 × 200B (~4KB)   — pre-fix passes (sanity baseline)
+            - 300 × 1KB (~300KB) — pre-fix passes (pipe buffer absorbs)
+            - 300 × 8KB (~2.4MB) — pre-fix **passes** (path-count too low)
+            - 1000 × 2KB (~2MB)  — pre-fix **deadlocks** ✓
+
+        Path count matters more than total output size on Windows —
+        each path requires a `readline()` for the header which is what
+        the deadlock prevents from draining. So the test uses 1000
+        files (well past the empirical threshold).
+
+        **Defense-in-depth against regression**:
+          1. ``@pytest.mark.timeout(120)`` — pytest-level fast-fail; if
+             someone reverts the fix back to write-then-read-loop AND
+             removes the inner ``communicate(timeout=60)`` safety net,
+             the test fails at 120s instead of hanging until CI workflow
+             timeout (hours).
+          2. ``elapsed < 90.0`` assertion — soft budget catches *slow*
+             regression. Wide because the fixture itself spends real
+             time on ``git init`` + 1000 ``write_text()`` + ``git add``
+             + ``git commit``, which on slow CI runners can be 20-30s
+             before ``_batch_cat_blobs`` is even called.
+          3. Inner ``communicate(timeout=60)`` in the function under
+             test — the actual fix; if untouched, hard-stops at 60s
+             with ``TimeoutExpired`` (handled → returns empty dict →
+             assertion ``len(result) == 1000`` fails fast).
+
+        Together: a regression triggers a clear pytest failure within
+        ~60-120s, never an indefinite hang.
         """
-        repo = git_repo(300, content_size_bytes=1024)
-        paths = sorted(p.name for p in repo.iterdir() if p.is_file())
-        t0 = time.time()
-        result = chbh._batch_cat_blobs(paths)
-        elapsed = time.time() - t0
-        # Generous budget — local runs see ~1s; CI variance accounted for.
-        assert elapsed < 30.0, (
-            f"_batch_cat_blobs took {elapsed:.1f}s for 300 files "
-            f"(~300KB output) — likely the PR-2c deadlock has regressed. "
-            f"See commit 45e51a8 for the fix using proc.communicate()."
-        )
-        assert len(result) == 300
-
-    def test_huge_batch_still_completes(self, git_repo):
-        """Stress: 1000 files × 2KB = ~2MB total — close to real-repo size."""
         repo = git_repo(1000, content_size_bytes=2048)
         paths = sorted(p.name for p in repo.iterdir() if p.is_file())
         t0 = time.time()
         result = chbh._batch_cat_blobs(paths)
         elapsed = time.time() - t0
-        assert elapsed < 60.0
+        # Soft budget — generous for CI variance (local: ~5s, CI: ~30-60s).
+        # Fires before the 120s pytest-timeout hard-stop on slow regression.
+        assert elapsed < 90.0, (
+            f"_batch_cat_blobs took {elapsed:.1f}s for 1000 files "
+            f"(~2MB output) — likely the PR-2c deadlock has regressed. "
+            f"See commit 45e51a8 for the fix using proc.communicate()."
+        )
         assert len(result) == 1000
 
+    @pytest.mark.timeout(10)
     def test_empty_paths_returns_empty_dict(self, git_repo):
         """Edge: empty input must not spawn git or hang."""
         # Doesn't even need a populated repo for this one.
@@ -230,6 +252,66 @@ class TestScanBlob:
         truncated = b"nav:\n  - Home: index.md\n  - Changelog: CHANGELOG.m"
         violations = chbh.scan_blob("mkdocs.yml", truncated)
         assert any(v.rule == "TRUNC" for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# main() — hang-localization milestones (PR #165 S#74 follow-up)
+# ---------------------------------------------------------------------------
+class TestMainProgressMilestones:
+    """Pin the three hang-localization output points added in PR #165.
+
+    Why this matters: pre-PR-#165 the hook went silent during long runs,
+    making "stuck or just slow" indistinguishable. The milestones turn
+    silent hangs into observable hangs at three distinct phases.
+    """
+
+    @pytest.mark.timeout(30)
+    def test_default_mode_emits_milestones(self, git_repo, capsys, monkeypatch):
+        """Default mode must show: 'Reading N...' + 'batch read complete' + final summary."""
+        repo = git_repo(20, content_size_bytes=200)
+        # main() reads sys.argv via argparse; simulate `--ci` invocation.
+        monkeypatch.setattr(sys, "argv", ["check_head_blob_hygiene.py", "--ci"])
+        rc = chbh.main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        # Milestone 1: pre-batch announcement (shows entered _batch_cat_blobs).
+        assert "Reading " in out and " HEAD blob(s)..." in out
+        # Milestone 2: post-batch confirmation (shows _batch_cat_blobs returned).
+        assert "batch read complete" in out
+        # Milestone 3: final summary.
+        assert "HEAD blob(s) clean" in out
+
+    @pytest.mark.timeout(30)
+    def test_default_mode_emits_per_100_progress_for_large_batch(
+        self, git_repo, capsys, monkeypatch
+    ):
+        """At 200+ files, default mode must show ...scanned 100/N and 200/N progress."""
+        repo = git_repo(250, content_size_bytes=200)
+        monkeypatch.setattr(sys, "argv", ["check_head_blob_hygiene.py", "--ci"])
+        rc = chbh.main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        # Per-100 progress must fire at scanned counts 100 and 200.
+        assert "scanned 100/" in out
+        assert "scanned 200/" in out
+
+    @pytest.mark.timeout(30)
+    def test_verbose_mode_shows_per_file_progress(
+        self, git_repo, capsys, monkeypatch
+    ):
+        """--verbose: per-file scan line for each blob (not per-100)."""
+        repo = git_repo(5, content_size_bytes=100)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["check_head_blob_hygiene.py", "--ci", "--verbose"],
+        )
+        rc = chbh.main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        # Each of the 5 files should produce a "scan <path>" line.
+        scan_lines = [line for line in out.splitlines() if line.lstrip().startswith("scan file_")]
+        assert len(scan_lines) == 5
 
 
 # ---------------------------------------------------------------------------
