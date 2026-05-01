@@ -338,6 +338,25 @@ repos:
         # — empirically the codebase's CI-invoked hooks are auto-stage,
         # not manual-stage. Aligning with that convention now.
 
+      - id: subprocess-timeout-audit
+        name: subprocess timeout= kwarg audit (S#74 codify, warn-only)
+        entry: python3 -X utf8 scripts/tools/lint/check_subprocess_timeout.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(scripts|components/da-tools|tests)/.*\.py$
+        # Warn-only by design (note: NO `--strict-subprocess-timeout` flag).
+        # The codebase has 93 existing violations across 34 files as of
+        # PR #166 audit; cleaning all of them in one PR is impractical,
+        # so this hook surfaces the count without blocking commits during
+        # the cleanup track (mirrors PR #162's `--strict-static` deferral
+        # for the 330 jsx static-pattern warnings). Future PR will swap
+        # this entry's flags to add `--strict-subprocess-timeout` once
+        # the audit count hits 0. New code that adds violations is still
+        # visible in the commit's pre-commit output but doesn't block —
+        # the PR review's job to catch + ask for fix.
+        # See S#74 (testing-playbook.md v2.8.0 Lessons §4) + PR #164
+        # / PR #165 for the underlying Popen deadlock motivation.
+
       - id: i18n-coverage-check
         name: i18n coverage report
         entry: python3 -X utf8 scripts/tools/lint/check_i18n_coverage.py
