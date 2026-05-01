@@ -685,7 +685,7 @@ fireCount := m.DebounceFiredCount()
 
 This decouples the test from window-size choice and CI scheduling jitter.
 
-#### Worked example: `TestSlowWriteTornStateStress_FinalConvergence`（PR #158, issue #157）
+#### Worked example: `TestSlowWriteTornStateStress_FinalConvergence`（PR #159, issue #157）
 
 The B-7 slow-write stress test originally asserted **two** wall-clock claims that lesson §2 prohibits:
 
@@ -720,7 +720,7 @@ assert mergedHash[tid] != baseline[tid] for all tid
 assert h.GetSampleCount() <= 2  // CI-jitter envelope
 ```
 
-**Why `_count <= 2` not `_count == 1`**: a 50-write burst with 5-25ms gaps under a 100ms window legitimately splits into 1 OR 2 fired windows depending on scheduler jitter. Both are contract-compliant. `_count <= 2` is the **CI-jitter envelope** — outside this means debounce is genuinely broken (e.g. window not coalescing). The test FAILS bench injection of "skip every-other trigger" via `_sum=25 != 50` (verified during PR #158 implementation).
+**Why `_count <= 2` not `_count == 1`**: a 50-write burst with 5-25ms gaps under a 100ms window legitimately splits into 1 OR 2 fired windows depending on scheduler jitter. Both are contract-compliant. `_count <= 2` is the **CI-jitter envelope** — outside this means debounce is genuinely broken (e.g. window not coalescing). The test FAILS bench injection of "skip every-other trigger" via `_sum=25 != 50` (verified during PR #159 implementation).
 
 **Reusable helper** (`config_slow_write_stress_test.go`):
 

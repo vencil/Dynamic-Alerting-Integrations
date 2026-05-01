@@ -56,6 +56,13 @@ import (
 // alternative — `time.Sleep(window + buffer)` — flakes under loaded
 // CI runners. See `docs/internal/testing-playbook.md` §v2.8.0 Lessons
 // Learned — Race-flake battles, lesson §2 for the pattern rationale.
+//
+// Caller pitfall: a counter that NEVER moves (e.g. broken trigger,
+// dead system) also satisfies "unchanged for stableWindow" and the
+// function returns true. Callers MUST follow up with a domain-level
+// "did the expected work happen" check (e.g. `fireCount > 0`) to
+// distinguish "settled at the right value" from "settled at zero
+// because nothing fired".
 func waitForQuiescence(
 	t *testing.T,
 	deadline, stableWindow time.Duration,
@@ -108,7 +115,7 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 		maxGap        = 25 * time.Millisecond
 		settleTimeout = 5 * time.Second
 		// stableWindow: how long DebounceFiredCount() must be unchanged
-		// before we declare the system quiescent. Set to ~2× debounceWin
+		// before we declare the system quiescent. Set to ~2.5× debounceWin
 		// so a freshly-trigger'd window still has time to fire+settle
 		// before we sample.
 		stableWindow = 250 * time.Millisecond
