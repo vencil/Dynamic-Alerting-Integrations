@@ -335,7 +335,11 @@ def main() -> int:
     for d in JSX_DIRS:
         if not d.exists():
             continue
-        for jsx in sorted(d.glob("*.jsx")):
+        # rglob (recursive) so PR-2d-style decomposed directories
+        # (e.g. tenant-manager/components/*.jsx) get scanned. Pre-PR-2d
+        # the lint scanned only top-level *.jsx; the new layout requires
+        # walking subdirectories. Issue #153.
+        for jsx in sorted(d.rglob("*.jsx")):
             source = jsx.read_text(encoding="utf-8")
             rel_path = str(jsx.relative_to(PROJECT_ROOT))
             # Pass 1: static pattern checks (on original source, before transform)
