@@ -322,6 +322,79 @@ test.describe('Tenant Manager @critical', () => {
     expect(body).toContain('after-retry-tenant');
   });
 
+  // PR-2b (#TBD): server-side `q` filter — typing in the search box
+  // sends `?q=` to /api/v1/tenants/search after debounce. Pinning the
+  // wire-level contract here because the orchestrator's client-side
+  // filter still works in static / demo modes so a "did the UI filter"
+  // assertion alone wouldn't catch a server-side regression.
+  test('debounces search-text into ?q= query param (PR-2b)', async ({ page }) => {
+    const seenQueries: string[] = [];
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      const url = new URL(route.request().url());
+      seenQueries.push(url.searchParams.get('q') || '');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [{
+            id: 'q-test-tenant', environment: 'production', tier: 'tier-1',
+            domain: 'finance', db_type: 'mariadb', owner: 'alice', tags: [], groups: [],
+          }],
+          total_matched: 1, page_size: 500, next_offset: null,
+        }),
+      });
+    });
+
+    await loadTenantManagerDirect(page);
+    await page.waitForTimeout(2000); // initial fetch (q='')
+
+    // Type into the search input. `q` is debounced 300ms; pre-fix
+    // would have fired one fetch per keystroke.
+    const searchInput = page.locator('input[type="text"], input[placeholder*="search" i]').first();
+    await searchInput.fill('mariadb');
+    await page.waitForTimeout(800); // > 300ms debounce + fetch + render
+
+    // We expect: (1) initial mount fetch with q='' OR no q at all,
+    // and (2) at least one subsequent fetch with q='mariadb'.
+    expect(seenQueries.length).toBeGreaterThanOrEqual(2);
+    expect(seenQueries).toContain('mariadb');
+    // No intermediate single-char queries should appear (debounce
+    // collapses 'm' / 'ma' / 'mar' / ... down to the final value).
+    const intermediates = seenQueries.filter(q =>
+      q.length > 0 && q.length < 'mariadb'.length
+    );
+    expect(intermediates.length).toBe(0);
+  });
+
+  test('reads ?q= from URL on mount (PR-2b URL state)', async ({ page }) => {
+    const seenQueries: string[] = [];
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      const url = new URL(route.request().url());
+      seenQueries.push(url.searchParams.get('q') || '');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [{
+            id: 'url-state-tenant', environment: 'production', tier: 'tier-1',
+            domain: 'finance', db_type: 'mariadb', owner: 'alice', tags: [], groups: [],
+          }],
+          total_matched: 1, page_size: 500, next_offset: null,
+        }),
+      });
+    });
+
+    // Navigate WITH ?q=preset already in the URL.
+    await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx&q=preset');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    // The very first API call should already include q=preset
+    // (initial state seeded from URL, not from empty string).
+    expect(seenQueries.length).toBeGreaterThanOrEqual(1);
+    expect(seenQueries[0]).toBe('preset');
+  });
+
   test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
     // Load tenant-manager tool
     await loadTenantManager(page);
