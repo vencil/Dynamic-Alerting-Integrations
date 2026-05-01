@@ -91,6 +91,7 @@ def _run(
         stderr=subprocess.PIPE,
         env={**os.environ, **(env or {})},
         check=False,
+        timeout=60,
     )
     if check and completed.returncode != 0:
         stderr = completed.stderr.decode("utf-8", errors="replace").strip()

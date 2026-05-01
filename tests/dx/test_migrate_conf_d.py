@@ -214,7 +214,7 @@ class TestCLIIntegration:
 
     def test_cli_help(self):
         """--help exits 0."""
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "migrate_conf_d", "--help"],
             cwd=_TOOLS_DIR,
             capture_output=True,
@@ -234,7 +234,7 @@ class TestCLIIntegration:
             }
         }))
 
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "migrate_conf_d", "--conf-d", str(conf_d), "--dry-run"],
             cwd=_TOOLS_DIR,
             capture_output=True,
@@ -245,7 +245,7 @@ class TestCLIIntegration:
 
     def test_cli_missing_conf_d(self, tmp_path):
         """Missing conf.d -> error."""
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "migrate_conf_d", "--conf-d", str(tmp_path / "nonexistent")],
             cwd=_TOOLS_DIR,
             capture_output=True,
@@ -266,7 +266,7 @@ class TestCLIIntegration:
         }))
 
         plan_file = tmp_path / "plan.json"
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "migrate_conf_d",
              "--conf-d", str(conf_d),
              "--output-plan", str(plan_file)],

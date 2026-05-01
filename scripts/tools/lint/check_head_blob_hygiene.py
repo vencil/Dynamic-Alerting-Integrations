@@ -92,6 +92,7 @@ def _run_git(args: list[str]) -> subprocess.CompletedProcess[bytes]:
         cwd=PROJECT_ROOT,
         capture_output=True,
         check=False,
+        timeout=60,
     )
 
 

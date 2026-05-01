@@ -217,7 +217,7 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
         out = subprocess.run(
             ["git", "ls-files", "--others", "--ignored", "--exclude-standard",
              "--directory", "docs/"],
-            capture_output=True, text=True, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=30,
         )
         if out.returncode == 0:
             for line in out.stdout.splitlines():

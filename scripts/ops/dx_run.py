@@ -67,7 +67,7 @@ def _docker_exists() -> bool:
 def _container_running(name: str) -> bool:
     r = subprocess.run(
         ["docker", "ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=30,
     )
     return name in r.stdout.split()
 
@@ -75,7 +75,7 @@ def _container_running(name: str) -> bool:
 def _container_exists(name: str) -> bool:
     r = subprocess.run(
         ["docker", "ps", "-a", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=30,
     )
     return name in r.stdout.split()
 
@@ -106,7 +106,7 @@ def cmd_up() -> int:
     if _container_running(name):
         print(f"{name}: already running")
         return 0
-    r = subprocess.run(["docker", "start", name], capture_output=True, text=True)
+    r = subprocess.run(["docker", "start", name], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         print(f"{name}: failed to start — {r.stderr.strip()}", file=sys.stderr)
         return r.returncode
@@ -141,14 +141,19 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
         # -d mode: script must self-redirect (the `-d` flag discards stdout).
         inner = f"exec > {shlex.quote(out_path_in_container)} 2>&1; {quoted}"
         args = ["docker", "exec", "-d", "-w", ws, name, "bash", "-c", inner]
-        subprocess.run(args, check=False)
+        # Detached docker exec returns immediately; user command runs in
+        # background and may take arbitrarily long (test/build/long-running).
+        # Ignore lint: timeout governs the *exec dispatch* not the inner cmd.
+        subprocess.run(args, check=False)  # subprocess-timeout: ignore
         print(f"[detached] output will be at (host path): {OUT_FILE} inside workspace")
         return 0
 
     inner = f"{quoted} > {shlex.quote(out_path_in_container)} 2>&1; echo $? > {shlex.quote(out_path_in_container + '.rc')}"
     args = ["docker", "exec", "-w", ws, name, "bash", "-c", inner]
     # We ignore docker exec's stdout here; the real output is in the file.
-    rc_exec = subprocess.run(args, check=False).returncode
+    # User command may legitimately run for tens of minutes (test/build),
+    # so no timeout — that's the contract of `make dc-run CMD="..."`.
+    rc_exec = subprocess.run(args, check=False).returncode  # subprocess-timeout: ignore
     if rc_exec != 0:
         # docker exec itself failed (not the user command).
         print(f"docker exec failed with rc={rc_exec}", file=sys.stderr)
@@ -157,13 +162,13 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
     # Read captured output back via `docker exec cat`.
     cat = subprocess.run(
         ["docker", "exec", name, "cat", out_path_in_container],
-        capture_output=True, check=False,
+        capture_output=True, check=False, timeout=60,
     )
     sys.stdout.buffer.write(cat.stdout)
     sys.stdout.flush()
     rc_cat = subprocess.run(
         ["docker", "exec", name, "cat", out_path_in_container + ".rc"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=30,
     )
     try:
         return int(rc_cat.stdout.strip() or "0")

@@ -366,7 +366,7 @@ class TestCLI:
         import subprocess
         script = os.path.join(
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', full_setup],
             capture_output=True, text=True,
         )
@@ -384,7 +384,7 @@ class TestCLI:
         })
         script = os.path.join(
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', config_dir, '--strict'],
             capture_output=True, text=True,
         )
@@ -396,7 +396,7 @@ class TestCLI:
         import subprocess
         script = os.path.join(
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', '/nonexistent/path'],
             capture_output=True, text=True,
         )
@@ -413,7 +413,7 @@ class TestCLI:
         })
         script = os.path.join(
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', config_dir],
             capture_output=True, text=True,
         )

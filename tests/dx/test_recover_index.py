@@ -18,7 +18,7 @@ _SCRIPT = _REPO_ROOT / "scripts" / "ops" / "recover_index.sh"
 
 
 def _init_tmp_repo(tmp_path: Path) -> Path:
-    subprocess.run(
+    subprocess.run(  # subprocess-timeout: ignore
         ["git", "init", "-q", "-b", "main", str(tmp_path)], check=True
     )
     (tmp_path / "seed.txt").write_text("seed\n")
@@ -31,10 +31,10 @@ def _init_tmp_repo(tmp_path: Path) -> Path:
             "GIT_COMMITTER_EMAIL": "t@example.com",
         }
     )
-    subprocess.run(
+    subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(tmp_path), "add", "seed.txt"], check=True, env=env
     )
-    subprocess.run(
+    subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(tmp_path), "commit", "-q", "-m", "init"],
         check=True,
         env=env,
@@ -45,7 +45,7 @@ def _init_tmp_repo(tmp_path: Path) -> Path:
 def test_check_clean_exits_0(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SCRIPT), "--check"],
         capture_output=True,
         text=True,
@@ -61,7 +61,7 @@ def test_check_corrupt_exits_2(tmp_path: Path, monkeypatch) -> None:
     # Corrupt the index by overwriting with garbage that doesn't parse
     (repo / ".git" / "index").write_bytes(b"DIRC\x00\x00\x00\x99garbage")
 
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SCRIPT), "--check"],
         capture_output=True,
         text=True,
@@ -78,7 +78,7 @@ def test_rebuild_recovers_corrupt_index(tmp_path: Path, monkeypatch) -> None:
     (repo / ".git" / "index").write_bytes(b"DIRC\x00\x00\x00\x99garbage")
 
     # Sanity: git status should fail pre-rebuild
-    pre = subprocess.run(
+    pre = subprocess.run(  # subprocess-timeout: ignore
         ["git", "status", "--short"],
         capture_output=True,
         text=True,
@@ -87,7 +87,7 @@ def test_rebuild_recovers_corrupt_index(tmp_path: Path, monkeypatch) -> None:
     assert pre.returncode != 0
 
     # Run recovery
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SCRIPT)],
         capture_output=True,
         text=True,
@@ -96,7 +96,7 @@ def test_rebuild_recovers_corrupt_index(tmp_path: Path, monkeypatch) -> None:
     assert "recovered" in proc.stdout.lower()
 
     # git status should work now
-    post = subprocess.run(
+    post = subprocess.run(  # subprocess-timeout: ignore
         ["git", "status", "--short"],
         capture_output=True,
         text=True,
@@ -108,7 +108,7 @@ def test_rebuild_recovers_corrupt_index(tmp_path: Path, monkeypatch) -> None:
 def test_rebuild_on_clean_is_noop(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SCRIPT)],
         capture_output=True,
         text=True,

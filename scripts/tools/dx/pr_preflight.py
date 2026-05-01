@@ -508,7 +508,7 @@ def _git_dir(repo_root: Path) -> Path:
     """Resolve .git dir even for worktrees (git rev-parse --git-dir)."""
     r = subprocess.run(
         ["git", "rev-parse", "--git-dir"],
-        cwd=repo_root, capture_output=True, text=True, check=False,
+        cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
     )
     if r.returncode == 0 and r.stdout.strip():
         p = Path(r.stdout.strip())
@@ -519,7 +519,7 @@ def _git_dir(repo_root: Path) -> Path:
 def _head_sha(repo_root: Path) -> Optional[str]:
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=repo_root, capture_output=True, text=True, check=False,
+        cwd=repo_root, capture_output=True, text=True, check=False, timeout=10,
     )
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()

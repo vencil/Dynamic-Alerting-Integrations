@@ -35,7 +35,7 @@ def run_cmd(cmd):
     if isinstance(cmd, str):
         import shlex
         cmd = shlex.split(cmd)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         print(f"Error executing: {' '.join(cmd)}\n{result.stderr}", file=sys.stderr)
         sys.exit(1)

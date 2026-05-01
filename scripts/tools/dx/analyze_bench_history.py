@@ -207,6 +207,7 @@ def _gh(cmd: list[str], capture: bool = True) -> str:
         text=True,
         check=False,
         encoding="utf-8",
+        timeout=120,
     )
     if proc.returncode != 0:
         raise subprocess.CalledProcessError(

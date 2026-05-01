@@ -156,7 +156,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
     # crash when the tool prints non-cp950 bytes (e.g. em-dash U+2014 in
     # error messages). Pass encoding="utf-8" explicitly — same pattern
     # codified in testing-playbook.md §v2.8.0 LL #2.
-    return subprocess.run(
+    return subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), *args],
         capture_output=True,
         text=True,
@@ -181,7 +181,7 @@ def test_cli_check_commit_msg_bad(tmp_path) -> None:
     # test failure; see dx-tooling-backlog.md.
     msg = tmp_path / "bad_msg.txt"
     msg.write_text("blam(unknown-scope): bogus\n", encoding="utf-8")
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         [
             sys.executable,
             str(_SCRIPT),

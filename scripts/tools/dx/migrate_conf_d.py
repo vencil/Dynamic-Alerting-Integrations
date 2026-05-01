@@ -231,7 +231,7 @@ def main() -> None:
         print("🚀 Executing migration...")
         for cmd in commands:
             print(f"  $ {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
                 print(f"  ❌ Failed: {result.stderr.strip()}", file=sys.stderr)
                 sys.exit(1)

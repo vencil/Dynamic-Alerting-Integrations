@@ -79,6 +79,7 @@ def git_cmd(args: List[str]) -> str:
         capture_output=True,
         text=True,
         encoding="utf-8",
+        timeout=60,
     )
     if result.returncode != 0:
         print(f"ERROR: git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)
@@ -94,6 +95,7 @@ def get_latest_tag() -> Optional[str]:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            timeout=30,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -137,7 +139,7 @@ def load_ignored_commits() -> List[str]:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8", timeout=30,
         )
         if result.returncode != 0:
             return []

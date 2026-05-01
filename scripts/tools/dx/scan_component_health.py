@@ -99,7 +99,7 @@ def git_log(fmt: str, path: Path, reverse: bool = False) -> str:
     args += [f"--format={fmt}", "--", str(rel)]
     try:
         out = subprocess.check_output(
-            args, cwd=REPO, text=True, stderr=subprocess.DEVNULL
+            args, cwd=REPO, text=True, stderr=subprocess.DEVNULL, timeout=30,
         ).strip()
         if reverse and out:
             return out.splitlines()[0]
@@ -121,7 +121,7 @@ def build_git_mtime_cache(paths: list[Path]) -> tuple[dict, dict]:
     try:
         out = subprocess.check_output(
             ["git", "log", "--name-only", "--format=__COMMIT__%x00%ai"],
-            cwd=REPO, text=True, stderr=subprocess.DEVNULL,
+            cwd=REPO, text=True, stderr=subprocess.DEVNULL, timeout=120,
         )
     except subprocess.CalledProcessError:
         return last_map, first_map

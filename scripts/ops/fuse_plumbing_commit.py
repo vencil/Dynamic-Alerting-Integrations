@@ -67,6 +67,7 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
     if check and result.returncode != 0:
         raise RuntimeError(

@@ -382,7 +382,7 @@ class TestCLI:
         import subprocess
         script = os.path.join(_REPO, 'scripts', 'tools', 'ops',
                               'generate_tenant_mapping_rules.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script,
              '--config-dir', config_dir,
              '--metrics', 'oracle_sessions,oracle_tablespace_usage',
@@ -397,7 +397,7 @@ class TestCLI:
         import subprocess
         script = os.path.join(_REPO, 'scripts', 'tools', 'ops',
                               'generate_tenant_mapping_rules.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script,
              '--config-dir', config_dir,
              '--metrics', 'cpu_usage',
@@ -413,7 +413,7 @@ class TestCLI:
         import subprocess
         script = os.path.join(_REPO, 'scripts', 'tools', 'ops',
                               'generate_tenant_mapping_rules.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script,
              '--config-dir', config_dir,
              '--metrics', 'cpu_usage',
@@ -429,7 +429,7 @@ class TestCLI:
         import subprocess
         script = os.path.join(_REPO, 'scripts', 'tools', 'ops',
                               'generate_tenant_mapping_rules.py')
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script,
              '--config-dir', config_dir,
              '--metrics', 'cpu_usage'],
