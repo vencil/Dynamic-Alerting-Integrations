@@ -77,6 +77,7 @@ lang: zh
 | `docs/interactive/tools/deployment-wizard.jsx` | Platform Engineers, SREs, DevOps | Deployment Profile Wizard |
 | `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
 | `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
+| `docs/interactive/tools/master-onboarding.jsx` | Platform Engineers, SREs, Tenants | Master Onboarding — Dual Entry |
 | `docs/interactive/tools/migration-roi-calculator.jsx` | Platform Engineers, SREs | Migration ROI Calculator |
 | `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
 | `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |

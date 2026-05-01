@@ -169,6 +169,38 @@ tools:
   hub_section: advanced
   appears_in: []
   journey_phase: configure
+- key: master-onboarding
+  title:
+    en: Master Onboarding — Dual Entry
+    zh: 入門總覽 — 雙路徑分岔
+  file: interactive/tools/master-onboarding.jsx
+  audience:
+  - platform
+  - sre
+  - tenant
+  icon: wizard
+  tags:
+  - onboarding
+  - dual-entry
+  - dispatcher
+  - import
+  - greenfield
+  - c-3
+  desc:
+    en: Onboarding dispatcher splitting Import Journey (existing assets via Migration
+      Toolkit) vs Wizard Journey (greenfield via CI/CD + Deployment wizards); both
+      converge at Tenant Manager
+    zh: 入門總覽 dispatcher，分 Import 路徑（既有資產走 Migration Toolkit）vs Wizard 路徑（從零走 CI/CD
+      + Deployment 精靈）；兩條路徑匯流於 Tenant Manager
+  related:
+  - cicd-setup-wizard
+  - deployment-wizard
+  - onboarding-checklist
+  - tenant-manager
+  - alert-simulator
+  hub_section: interactive
+  appears_in: []
+  journey_phase: deploy
 - key: cicd-setup-wizard
   title:
     en: CI/CD Setup Wizard
