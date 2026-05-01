@@ -113,15 +113,14 @@ const WIZARD_STEPS = [
   },
   {
     id: 'alerts',
-    title: () => t('3. 建立告警規則（Coming v2.8.x）', '3. Build alert rules (Coming v2.8.x)'),
+    title: () => t('3. 建立告警規則', '3. Build alert rules'),
     desc: () => t(
-      'Alert Builder wizard 規劃中（C-3 PR-2）。目前可用 alert-simulator 預覽既有告警 + threshold-calculator 算閾值。',
-      'Alert Builder wizard planned (C-3 PR-2). For now use alert-simulator to preview existing alerts + threshold-calculator for threshold math.'
+      '4 步互動精靈：identity / expression / severity / review YAML。輸出 PrometheusRule snippet 可直接貼入 rule-packs/ 或餵給 da-tools alert-create。',
+      '4-step interactive wizard: identity / expression / severity / review YAML. Outputs PrometheusRule snippet — paste into rule-packs/ or feed da-tools alert-create.'
     ),
-    cta: () => t('用 Alert Simulator (替代)', 'Use Alert Simulator (substitute)'),
-    href: 'alert-simulator.html',
+    cta: () => t('開啟 Alert Builder', 'Open Alert Builder'),
+    href: 'alert-builder.html',
     internal: true,
-    deferred: true,
   },
   {
     id: 'routing',
