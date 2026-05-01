@@ -77,6 +77,8 @@ TOOLS = [
     ("frontmatter_versions", "lint/check_frontmatter_versions.py", ["--ci"], "Frontmatter version global scan"),
     ("path_metadata", "lint/check_path_metadata_consistency.py", ["--ci"], "conf.d path vs _metadata consistency (warning-only)"),
     ("commit_scope", "lint/check_commit_scope_doc.py", ["--ci"], "Commit scope drift (commit-convention.md vs .commitlintrc.yaml)"),
+    ("hardcode_tenant", "lint/check_hardcode_tenant.py", ["--ci"], "Hardcoded tenant literals in PromQL (Rule #2)"),
+    ("changelog_no_tbd", "lint/check_changelog_no_tbd.py", ["--ci"], "TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)"),
 ]
 
 

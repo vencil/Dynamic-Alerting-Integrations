@@ -476,3 +476,29 @@ repos:
         language: system
         pass_filenames: false
         files: ^tests/e2e/.*\.spec\.(ts|js)$
+
+      - id: hardcode-tenant-check
+        name: Detect hardcoded tenant literals in PromQL label selectors (Rule #2)
+        entry: python3 -X utf8 scripts/tools/lint/check_hardcode_tenant.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(components|cmd|internal|pkg|scripts|rule-packs|helm/templates)/.*\.(go|py|yaml|yml|tpl)$
+        # Auto-stage, FATAL on findings (default for new lints when
+        # post-rewrite violation count is 0; mirrors PR #169 / #170).
+        # If existing codebase has violations, add granular `--strict-hardcode_tenant`
+        # flag and ship warn-only first (PR #166 pattern).
+        # Per-line escape via `<!-- hardcode-tenant: ignore -->` for legitimate
+        # exceptions / illustrative quotes.
+
+      - id: changelog-no-tbd-check
+        name: Detect TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)
+        entry: python3 -X utf8 scripts/tools/lint/check_changelog_no_tbd.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(CHANGELOG\.md|CHANGELOG-archive\.md)$
+        # Auto-stage, FATAL on findings (default for new lints when
+        # post-rewrite violation count is 0; mirrors PR #169 / #170).
+        # If existing codebase has violations, add granular `--strict-changelog_no_tbd`
+        # flag and ship warn-only first (PR #166 pattern).
+        # Per-line escape via `<!-- changelog-no-tbd: ignore -->` for legitimate
+        # exceptions / illustrative quotes.

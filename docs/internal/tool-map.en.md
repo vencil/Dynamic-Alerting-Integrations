@@ -120,6 +120,7 @@ lang: en
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
 | `check_bilingual_structure.py` | ZH/EN 文件結構同步 lint |
 | `check_build_completeness.py` | build.sh ↔ COMMAND_MAP 雙向同步檢查。 |
+| `check_changelog_no_tbd.py` | Detect TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c). |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
@@ -131,6 +132,7 @@ lang: en
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
+| `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
