@@ -395,6 +395,82 @@ test.describe('Tenant Manager @critical', () => {
     expect(seenQueries[0]).toBe('preset');
   });
 
+  test('virtualizes tenant grid for large sets (PR-2c)', async ({ page }) => {
+    // Build 200 synthetic tenants — well above VIRTUAL_GRID_THRESHOLD (50)
+    // — and intercept the API. We assert the virtualized container
+    // engaged AND that only a subset of the 200 cards is in the DOM.
+    const items = Array.from({ length: 200 }, (_, i) => ({
+      id: `vg-tenant-${String(i).padStart(3, '0')}`,
+      environment: i % 2 === 0 ? 'production' : 'staging',
+      tier: 'tier-1',
+      domain: 'analytics',
+      db_type: 'mariadb',
+      owner: 'pr2c',
+      tags: [],
+      groups: [],
+    }));
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items,
+          total_matched: items.length,
+          page_size: 500,
+          next_offset: null,
+        }),
+      });
+    });
+
+    await loadTenantManagerDirect(page);
+    await page.waitForTimeout(2000);
+
+    // The virtualized container has data-testid="tenant-grid-virtual"
+    // and is only rendered when `filtered.length > 50`. Its presence
+    // is the contract: orchestrator picked the virtual branch.
+    const virtual = page.locator('[data-testid="tenant-grid-virtual"]');
+    await expect(virtual).toHaveCount(1);
+
+    // Only a viewport-worth-plus-overscan of cards should be in the DOM.
+    // With 200 items, 3 columns, 380px row, ~70vh container at typical
+    // CI viewport (~700px) → ~3 visible rows + 4 overscan rows = ~21 cards.
+    // We give a generous upper bound (60) to absorb viewport variance
+    // but fail loudly if all 200 hit the DOM (= no virtualization).
+    const cardsInDom = await virtual.locator('article').count();
+    expect(cardsInDom).toBeGreaterThan(0);
+    expect(cardsInDom).toBeLessThan(60);
+    expect(cardsInDom).toBeLessThan(items.length);
+  });
+
+  test('does NOT virtualize small tenant sets (PR-2c threshold)', async ({ page }) => {
+    // 10 tenants, well below VIRTUAL_GRID_THRESHOLD (50). The plain
+    // CSS-grid path should render — no virtualized container present.
+    const items = Array.from({ length: 10 }, (_, i) => ({
+      id: `small-${i}`,
+      environment: 'production', tier: 'tier-1',
+      domain: 'analytics', db_type: 'mariadb', owner: 'pr2c',
+      tags: [], groups: [],
+    }));
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items, total_matched: items.length, page_size: 500, next_offset: null,
+        }),
+      });
+    });
+
+    await loadTenantManagerDirect(page);
+    await page.waitForTimeout(2000);
+
+    // Below threshold → no virtual container. All 10 cards in DOM.
+    await expect(page.locator('[data-testid="tenant-grid-virtual"]')).toHaveCount(0);
+    // Sanity: cards did render via the non-virtual path.
+    const allCards = await page.locator('article').count();
+    expect(allCards).toBeGreaterThanOrEqual(items.length);
+  });
+
   test('passes WCAG 2.1 AA accessibility checks', async ({ page }) => {
     // Load tenant-manager tool
     await loadTenantManager(page);
