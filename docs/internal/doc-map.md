@@ -99,6 +99,7 @@ lang: zh
 | `docs/interactive/tools/schema-explorer.jsx` | Platform Engineers, Domain Experts (DBA) | YAML Schema Explorer |
 | `docs/interactive/tools/self-service-portal.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Tenant Self-Service Portal |
 | `docs/interactive/tools/template-gallery.jsx` | Tenants, Platform Engineers | Config Template Gallery |
+| `docs/interactive/tools/tenant-manager/components/GroupSidebar.jsx` | All | Tenant Manager — GroupSidebar |
 | `docs/interactive/tools/tenant-manager.jsx` | Platform Engineers, SREs | Tenant Manager |
 | `docs/interactive/tools/threshold-calculator.jsx` | Domain Experts (DBA), Tenants | Threshold Calculator |
 | `docs/interactive/tools/threshold-heatmap.jsx` | Platform Engineers, Domain Experts (DBA), SREs | Threshold Heatmap |
