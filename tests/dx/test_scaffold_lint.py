@@ -169,6 +169,41 @@ class TestRenderTest:
         assert "class TestLiveRepo" in source
         assert "import check_foo_bar as lint" in source
 
+    @pytest.mark.parametrize("kind", sl.VALID_KINDS)
+    def test_generated_test_stubs_use_pytest_skip_not_silent_pass(self, kind):
+        """TODO stubs MUST be loud (pytest.skip) not silent (pass).
+
+        Self-review pass 2 finding: ``pass`` in a stub method makes
+        unfilled tests silently green; ``pytest.skip("TODO...")`` makes
+        them xfail-style visible in pytest output.
+        """
+        paths = sl.derive_paths("foo_bar", kind)
+        source = sl.render_test(paths, "Test description")
+        # Three TestSuppression methods + one TestMain dirty-stub = 4
+        # stubs all should call pytest.skip, none should be bare `pass`.
+        assert source.count('pytest.skip("TODO') >= 4, (
+            "Generated test scaffold must use pytest.skip(\"TODO...\") in "
+            "stub method bodies, not bare `pass`. Bare pass = silently "
+            "green = author may forget to fill in. See PR #171 self-review "
+            "Fix 2."
+        )
+        # Specifically, the TestSuppression class body should NOT
+        # contain a bare `pass` statement (would be a silent stub).
+        # Check by looking for `def test_` followed by `pass` (a method
+        # that ONLY has `pass` is the silent-stub anti-pattern we forbid).
+        suppression_class_idx = source.find("class TestSuppression")
+        assert suppression_class_idx >= 0
+        # Find next class boundary or EOF
+        next_class_idx = source.find("\nclass ", suppression_class_idx + 1)
+        end = next_class_idx if next_class_idx > 0 else len(source)
+        suppression_block = source[suppression_class_idx:end]
+        # Bare `pass` as a function body would appear as `\n        pass\n`
+        # at indent level 8 (inside method inside class).
+        assert "\n        pass\n" not in suppression_block, (
+            "TestSuppression methods contain bare `pass` (silent stub). "
+            "Use pytest.skip(\"TODO...\") instead."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Hook entry insertion — idempotency + correctness

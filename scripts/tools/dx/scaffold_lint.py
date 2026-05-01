@@ -663,20 +663,26 @@ class TestDetection:
 # Suppression — ignore comment behavior (3-line lookback)
 # ---------------------------------------------------------------------------
 class TestSuppression:
+    """Use ``pytest.skip("TODO: fill in before merge")`` instead of
+    ``pass`` so unfilled stubs are LOUD (xfail-style indicator in test
+    output), not silently green. Author MUST replace with real
+    assertions before merging the new lint."""
+
     def test_ignore_on_same_line_suppresses(self):
         # TODO: replace with a positive-detection case + ignore on same line.
-        # src = "<offending content>  {ignore_marker}\\n"
-        # assert _scan(src) == []
-        pass
+        # Example pattern:
+        #   src = "<offending content>  {ignore_marker}\\n"
+        #   assert _scan(src) == []
+        pytest.skip("TODO: implement before merge — see scaffold guidance")
 
     def test_ignore_within_3_line_lookback_suppresses(self):
         # TODO: ignore marker 1-3 lines above offense suppresses.
-        pass
+        pytest.skip("TODO: implement before merge — see scaffold guidance")
 
     def test_ignore_outside_3_line_lookback_does_not_suppress(self):
         # TODO: marker 4+ lines above offense should NOT suppress
         # (keeps ignore radius tight).
-        pass
+        pytest.skip("TODO: implement before merge — see scaffold guidance")
 
 
 # ---------------------------------------------------------------------------
@@ -711,7 +717,7 @@ class TestMain:
     def test_main_dirty_under_ci_exit_1(self, tmp_path, capsys, monkeypatch):
         # TODO: write a dirty fixture that triggers detection;
         # assert main(['--ci', ...]) returns 1.
-        pass
+        pytest.skip("TODO: implement before merge — see scaffold guidance")
 
 
 # ---------------------------------------------------------------------------
