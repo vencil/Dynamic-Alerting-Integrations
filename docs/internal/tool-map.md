@@ -100,6 +100,7 @@ lang: zh
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |
 | `scaffold_jsx_dep.py` | generate a tenant-manager-style JSX dep file |
+| `scaffold_lint.py` | generate a new pre-commit lint script from template. |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
