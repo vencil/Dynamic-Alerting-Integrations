@@ -661,6 +661,34 @@ git commit 失敗，錯誤訊息是 ...
 
 > **為什麼 `recover_index.sh` 要 cp-to-sibling + mv，而不是直接 `git read-tree` 就好**：`git read-tree` 本身也會嘗試 acquire `.git/index.lock`；若 phantom lock 還在、或 VFS 不允許 `rename(tmp_outside_gitdir, .git/index)` 跨 device/FS，會直接 EPERM。正確做法是先在 `.git/` 內用 `cp "$TMP_IDX" "$INDEX.recover.$$"` 做 staging（同 FS），再 `mv "$INDEX.recover.$$" "$INDEX"` 原子換過去；`trap 'rm -f ...' EXIT` 保證半成品會被清乾淨。
 
+### Pre-commit unstaged-stash recovery（S#31, S#86 codify）
+
+當 pre-commit hook 中途被 kill（FUSE phantom hang / Popen pipe deadlock /
+Ctrl-C / OOM），有時 unstaged changes 不會自動 restore — 看起來「我的修改不見了」。
+
+這個情境**不需要重做修改**：pre-commit 在執行 hook 前會把 unstaged changes
+patch backup 寫到 `~/.cache/pre-commit/patch{TIMESTAMP}-{PID}`（每次 hook
+執行都產生一份），即使後續 hook 崩潰也保留下來。
+
+```bash
+# 1. 找最新的 patch backup（按 mtime 排序）
+ls -lt ~/.cache/pre-commit/patch* | head -3
+
+# 2. 預覽要還原的內容（dry-run 確認方向對）
+git apply --check ~/.cache/pre-commit/patch1234567890-12345
+
+# 3. 套用還原
+git apply ~/.cache/pre-commit/patch1234567890-12345
+```
+
+> **與既有工具的關係**：`make fuse-locks` / `make recover-index` 處理 `.git/`
+> 端的 lock / index 損壞；本路徑處理 **work tree 端的 unstaged-changes 遺失**，
+> 互補不重疊。三者並列是 hook-hang 後 full recovery 三件套。
+
+> **保留期限**：pre-commit 預設不主動清這些 patch backup（檔案會堆積），
+> 確認復原後可手動 `rm ~/.cache/pre-commit/patch*` 清掉。Cowork VM 上
+> `~/.cache/` 是 ephemeral，session reset 也會清掉（所以救援動作要在同 session 內做完）。
+
 ### 修復層 B：FUSE Cache 重建（Level 1 ~ 5）
 
 殘影 / phantom lock 反覆 / `rm` 過的檔案還看得到 / index 與磁碟內容對不上時，輕→重逐層走。每層原由與設計脈絡 → [`archive/automation-origins/fuse-cache-recovery.md`](archive/automation-origins/fuse-cache-recovery.md)。

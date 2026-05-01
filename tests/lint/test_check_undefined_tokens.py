@@ -47,23 +47,23 @@ def _scan(source: str, known_set, fake_path: str = "fake.jsx"):
 # ---------------------------------------------------------------------------
 class TestDetection:
     def test_empty_source_no_findings(self):
-        assert _scan("", {"fg"}) == []
+        assert _scan("", {"color-fg"}) == []
 
     def test_undefined_token_flagged(self):
         src = 'color: var(--da-color-typo);'
-        findings = _scan(src, {"fg"})
+        findings = _scan(src, {"color-fg"})
         assert len(findings) == 1
-        assert findings[0].token_name == "typo"
+        assert findings[0].token_name == "color-typo"
 
     def test_defined_token_not_flagged(self):
         src = 'color: var(--da-color-fg);'
-        assert _scan(src, {"fg"}) == []
+        assert _scan(src, {"color-fg"}) == []
 
     def test_var_with_fallback_still_checks_name(self):
         src = 'color: var(--da-color-typo, #ccc);'
-        findings = _scan(src, {"fg"})
+        findings = _scan(src, {"color-fg"})
         assert len(findings) == 1
-        assert findings[0].token_name == "typo"
+        assert findings[0].token_name == "color-typo"
 
     @pytest.mark.parametrize(
         "src",
@@ -75,9 +75,9 @@ class TestDetection:
         ],
     )
     def test_various_contexts(self, src):
-        findings = _scan(src, {"fg"})
+        findings = _scan(src, {"color-fg"})
         assert len(findings) == 1
-        assert findings[0].token_name == "mising"
+        assert findings[0].token_name == "color-mising"
 
     def test_multiple_findings_in_one_line(self):
         src = "var(--da-color-x); var(--da-color-y);"
@@ -90,23 +90,44 @@ class TestDetection:
         assert findings[0].line == 1
         assert findings[1].line == 2
 
+    @pytest.mark.parametrize(
+        "src,token",
+        [
+            ("padding: var(--da-space-99);", "space-99"),
+            ("font-size: var(--da-font-zzz);", "font-zzz"),
+            ("box-shadow: var(--da-shadow-bogus);", "shadow-bogus"),
+            ("border-radius: var(--da-radius-none-but-typo);", "radius-none-but-typo"),
+            ("transition: var(--da-transition-stale);", "transition-stale"),
+            ("line-height: var(--da-line-bogus);", "line-bogus"),
+        ],
+    )
+    def test_all_categories_flagged_when_undefined(self, src, token):
+        # S#86 generalisation: every --da-<category>-<name> ref must
+        # resolve, not just `--da-color-`.
+        findings = _scan(src, set())
+        assert len(findings) == 1
+        assert findings[0].token_name == token
+
 
 # ---------------------------------------------------------------------------
-# Negative
+# Negative — defined tokens (any category) + non-`--da-` namespace
 # ---------------------------------------------------------------------------
 class TestNegativeCases:
     @pytest.mark.parametrize(
-        "src",
+        "src,known",
         [
-            "padding: var(--da-space-3);",
-            "font-size: var(--da-font-md);",
-            "box-shadow: var(--da-shadow-md);",
-            "border-radius: var(--da-radius-lg);",
-            "transition: var(--da-transition-fast);",
+            ("padding: var(--da-space-3);", {"space-3"}),
+            ("font-size: var(--da-font-md);", {"font-md"}),
+            ("box-shadow: var(--da-shadow-md);", {"shadow-md"}),
+            ("border-radius: var(--da-radius-lg);", {"radius-lg"}),
+            ("transition: var(--da-transition-fast);", {"transition-fast"}),
+            ("line-height: var(--da-line-tight);", {"line-tight"}),
         ],
     )
-    def test_non_color_categories_not_flagged(self, src):
-        assert _scan(src, set()) == []
+    def test_all_categories_pass_when_defined(self, src, known):
+        # Mirror image of TestDetection.test_all_categories_flagged_*:
+        # if defined, no finding.
+        assert _scan(src, known) == []
 
     def test_var_outside_da_namespace_not_flagged(self):
         src = "color: var(--my-other-color); color: var(--bs-primary);"
@@ -175,7 +196,34 @@ class TestLoadKnownTokens:
             encoding="utf-8",
         )
         known = lint.load_known_tokens(css)
-        assert known == {"fg", "bg", "extra"}
+        assert known == {"color-fg", "color-bg", "color-extra"}
+
+    def test_loads_all_categories(self, tmp_path):
+        # S#86 generalisation: load_known_tokens must capture every
+        # --da-<category>-<name> regardless of category prefix.
+        css = tmp_path / "tokens.css"
+        css.write_text(
+            ":root {\n"
+            "  --da-color-fg: #000;\n"
+            "  --da-space-1: 4px;\n"
+            "  --da-font-md: 14px;\n"
+            "  --da-shadow-sm: 0 1px 2px;\n"
+            "  --da-radius-md: 6px;\n"
+            "  --da-transition-fast: 150ms;\n"
+            "  --da-line-tight: 1.2;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        known = lint.load_known_tokens(css)
+        assert known == {
+            "color-fg",
+            "space-1",
+            "font-md",
+            "shadow-sm",
+            "radius-md",
+            "transition-fast",
+            "line-tight",
+        }
 
     def test_missing_file_returns_empty_set(self, tmp_path):
         assert lint.load_known_tokens(tmp_path / "nope.css") == set()
