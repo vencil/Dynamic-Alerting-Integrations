@@ -169,6 +169,36 @@ tools:
   hub_section: advanced
   appears_in: []
   journey_phase: configure
+- key: alert-builder
+  title:
+    en: Alert Builder Wizard
+    zh: 告警規則建構精靈
+  file: interactive/tools/alert-builder.jsx
+  audience:
+  - platform
+  - sre
+  - tenant
+  icon: wizard
+  tags:
+  - alert
+  - prometheus-rule
+  - builder
+  - wizard
+  - c-3
+  desc:
+    en: 4-step PrometheusRule builder (identity / expression / severity / review YAML);
+      copy snippet into rule-packs/ or feed da-tools alert-create
+    zh: 4 步 PrometheusRule 建構（identity / expression / severity / review YAML）；產出 snippet
+      可貼進 rule-packs/ 或餵 da-tools alert-create
+  related:
+  - alert-simulator
+  - threshold-calculator
+  - master-onboarding
+  - cicd-setup-wizard
+  - deployment-wizard
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
 - key: master-onboarding
   title:
     en: Master Onboarding — Dual Entry
