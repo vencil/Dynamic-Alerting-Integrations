@@ -310,6 +310,7 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if result.returncode != 0:
                 print(f"  ✗ git mv failed: {rel_s} → {rel_t}")

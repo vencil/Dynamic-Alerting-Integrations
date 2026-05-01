@@ -109,6 +109,7 @@ def parse_git_log(since: str | None) -> dict[str, list[str]]:
             errors="replace",
             stderr=subprocess.DEVNULL,
             cwd=REPO_ROOT,
+            timeout=60,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return {}

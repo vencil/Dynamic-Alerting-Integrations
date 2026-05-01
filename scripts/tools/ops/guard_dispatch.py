@@ -238,7 +238,9 @@ def main(argv: list[str] | None = None) -> int:
     cmd = [binary] + forward_args
     try:
         # Inherit stdio so the report streams straight to the user.
-        result = subprocess.run(cmd, check=False)
+        # No timeout: guard validation across thousands of tenant configs
+        # may legitimately take 10+ minutes; user CTRL-C is the contract.
+        result = subprocess.run(cmd, check=False)  # subprocess-timeout: ignore
         return result.returncode
     except FileNotFoundError:
         # Race: binary disappeared between resolve and exec. Treat

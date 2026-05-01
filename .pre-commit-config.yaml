@@ -353,23 +353,20 @@ repos:
         # for third-party tools (bandit etc) not in our config.
 
       - id: subprocess-timeout-audit
-        name: subprocess timeout= kwarg audit (S#74 codify, warn-only)
-        entry: python3 -X utf8 scripts/tools/lint/check_subprocess_timeout.py --ci
+        name: subprocess timeout= kwarg audit (S#74 codify, FATAL)
+        entry: python3 -X utf8 scripts/tools/lint/check_subprocess_timeout.py --ci --strict-subprocess-timeout
         language: python
         pass_filenames: false
         files: ^(scripts|components/da-tools|tests)/.*\.py$
-        # Warn-only by design (note: NO `--strict-subprocess-timeout` flag).
-        # The codebase has 93 existing violations across 34 files as of
-        # PR #166 audit; cleaning all of them in one PR is impractical,
-        # so this hook surfaces the count without blocking commits during
-        # the cleanup track (mirrors PR #162's `--strict-static` deferral
-        # for the 330 jsx static-pattern warnings). Future PR will swap
-        # this entry's flags to add `--strict-subprocess-timeout` once
-        # the audit count hits 0. New code that adds violations is still
-        # visible in the commit's pre-commit output but doesn't block —
-        # the PR review's job to catch + ask for fix.
+        # FATAL on findings (activated S#84 PR after Issue #167 cleanup
+        # track lands all 90 violations from PR #166 audit). Production
+        # tooling has explicit `timeout=N` per call site (git=30s/60s,
+        # docker/k8s/network=60s/120s, dispatch=600s); test fixtures use
+        # per-line `# subprocess-timeout: ignore` markers because they
+        # subprocess local git ops on bounded fixtures.
         # See S#74 (testing-playbook.md v2.8.0 Lessons §4) + PR #164
-        # / PR #165 for the underlying Popen deadlock motivation.
+        # / PR #165 / PR #166 / S#84 for the underlying Popen deadlock
+        # motivation and cleanup arc.
 
       - id: i18n-coverage-check
         name: i18n coverage report

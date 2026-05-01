@@ -74,6 +74,7 @@ def commit_file(path_str: str) -> int:
             ["git", "commit", *EXTRA_GIT_ARGS, "-F", "-"],
             input=data,
             check=False,
+            timeout=120,
         )
         return result.returncode
     except FileNotFoundError:

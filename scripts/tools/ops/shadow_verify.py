@@ -56,7 +56,7 @@ def run_cmd(cmd):
     if not isinstance(cmd, list):
         raise TypeError(f"run_cmd() requires list argument, got {type(cmd).__name__}")
     try:
-        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=120).strip()
     except subprocess.CalledProcessError:
         return None
 

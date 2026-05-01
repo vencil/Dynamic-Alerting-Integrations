@@ -587,7 +587,7 @@ class TestCLI:
     def test_cli_json_output(self, json_pair):
         base_path, pr_path = json_pair
         script = os.path.join(REPO_ROOT, "scripts", "tools", "ops", "blast_radius.py")
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, "--base", base_path, "--pr", pr_path, "--format", "json"],
             capture_output=True,
             text=True,
@@ -599,7 +599,7 @@ class TestCLI:
     def test_cli_markdown_output(self, json_pair):
         base_path, pr_path = json_pair
         script = os.path.join(REPO_ROOT, "scripts", "tools", "ops", "blast_radius.py")
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, "--base", base_path, "--pr", pr_path, "--format", "markdown"],
             capture_output=True,
             text=True,
@@ -611,7 +611,7 @@ class TestCLI:
         base_path, pr_path = json_pair
         out_path = str(tmp_path / "report.json")
         script = os.path.join(REPO_ROOT, "scripts", "tools", "ops", "blast_radius.py")
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, "--base", base_path, "--pr", pr_path, "--output", out_path],
             capture_output=True,
             text=True,

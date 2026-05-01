@@ -261,7 +261,9 @@ def main(argv: list[str] | None = None) -> int:
     cmd = [binary, subcmd] + forward_args
     try:
         # Inherit stdio so the report streams straight to the user.
-        result = subprocess.run(cmd, check=False)
+        # No timeout: batch-PR apply across 10K rules / hundreds of dirs
+        # may legitimately take 10+ minutes; user CTRL-C is the contract.
+        result = subprocess.run(cmd, check=False)  # subprocess-timeout: ignore
         return result.returncode
     except FileNotFoundError:
         _print_binary_missing(binary)

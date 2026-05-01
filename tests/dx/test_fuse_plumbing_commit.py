@@ -29,7 +29,7 @@ def _load_module():
 
 def _init_tmp_repo(tmp_path: Path) -> Path:
     """Create a real git repo at tmp_path with one initial commit."""
-    subprocess.run(
+    subprocess.run(  # subprocess-timeout: ignore
         ["git", "init", "-q", "-b", "main", str(tmp_path)], check=True
     )
     (tmp_path / "seed.txt").write_text("seed\n")
@@ -42,10 +42,10 @@ def _init_tmp_repo(tmp_path: Path) -> Path:
             "GIT_COMMITTER_EMAIL": "t@example.com",
         }
     )
-    subprocess.run(
+    subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(tmp_path), "add", "seed.txt"], check=True, env=env
     )
-    subprocess.run(
+    subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(tmp_path), "commit", "-q", "-m", "init"],
         check=True,
         env=env,
@@ -94,7 +94,7 @@ def test_plumbing_commit_happy_path(tmp_path: Path, monkeypatch) -> None:
     assert len(sha) == 40
 
     # Verify the commit is reachable and has the right file
-    log = subprocess.run(
+    log = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "log", "--oneline", "-2"],
         capture_output=True,
         text=True,
@@ -103,7 +103,7 @@ def test_plumbing_commit_happy_path(tmp_path: Path, monkeypatch) -> None:
     assert sha[:7] in log.stdout
     assert "feat: add new.txt" in log.stdout
 
-    show = subprocess.run(
+    show = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "show", f"{sha}:new.txt"],
         capture_output=True,
         text=True,
@@ -128,7 +128,7 @@ def test_plumbing_commit_preserves_exec_bit(tmp_path: Path, monkeypatch) -> None
     sha = mod.plumbing_commit(repo, "feat: add runme\n", ["runme.sh"])
 
     # git ls-tree should show mode 100755
-    ls = subprocess.run(
+    ls = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "ls-tree", sha, "runme.sh"],
         capture_output=True,
         text=True,
@@ -140,7 +140,7 @@ def test_plumbing_commit_preserves_exec_bit(tmp_path: Path, monkeypatch) -> None
 def test_cli_show_locks_exit_0_when_clean(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "--show-locks"],
         capture_output=True,
         text=True,
@@ -153,7 +153,7 @@ def test_cli_show_locks_lists_locks(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
     (repo / ".git" / "index.lock").write_text("")
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "--show-locks"],
         capture_output=True,
         text=True,
@@ -166,7 +166,7 @@ def test_cli_requires_message_for_commit(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
     (repo / "a.txt").write_text("a\n")
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "a.txt"],
         capture_output=True,
         text=True,
@@ -189,7 +189,7 @@ def test_cli_auto_uses_plumbing_when_lock_present(
     (repo / ".git" / "index.lock").write_text("")
 
     (repo / "a.txt").write_text("auto-path\n")
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         [
             sys.executable,
             str(_SCRIPT),
@@ -213,7 +213,7 @@ def test_cli_rejects_message_conflict(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(repo)
     msgfile = repo / "m.txt"
     msgfile.write_text("x\n")
-    proc = subprocess.run(
+    proc = subprocess.run(  # subprocess-timeout: ignore
         [
             sys.executable,
             str(_SCRIPT),

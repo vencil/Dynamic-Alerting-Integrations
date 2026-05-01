@@ -1302,7 +1302,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
     warnings = []
     result = subprocess.run(
         ["kubectl", "get", "configmap", configmap_name, "-n", namespace, "-o", "json"],
-        capture_output=True, text=True
+        capture_output=True, text=True, timeout=60,
     )
     if result.returncode != 0:
         warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}")
@@ -1354,7 +1354,7 @@ def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str
         ["kubectl", "create", "configmap", configmap_name,
          f"--from-literal=alertmanager.yml={merged_yml}",
          "-n", namespace, "--dry-run=client", "-o", "yaml"],
-        capture_output=True, text=True
+        capture_output=True, text=True, timeout=60,
     )
     if apply_result.returncode != 0:
         print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}", file=sys.stderr)
@@ -1362,7 +1362,7 @@ def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str
 
     pipe_result = subprocess.run(
         ["kubectl", "apply", "-f", "-"],
-        input=apply_result.stdout, capture_output=True, text=True
+        input=apply_result.stdout, capture_output=True, text=True, timeout=120,
     )
     if pipe_result.returncode != 0:
         print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
@@ -1380,7 +1380,7 @@ def _reload_alertmanager(namespace: str) -> bool:
     svc_url = f"http://alertmanager.{namespace}.svc.cluster.local:9093"
     reload_result = subprocess.run(
         ["curl", "-sf", "-X", "POST", f"{svc_url}/-/reload"],
-        capture_output=True, text=True
+        capture_output=True, text=True, timeout=60,
     )
     if reload_result.returncode != 0:
         print(f"WARN: Alertmanager reload failed (is --web.enable-lifecycle enabled?)",

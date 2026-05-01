@@ -252,7 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     cmd = [binary, subcmd] + forward_args
     try:
         # Inherit stdio so the JSON streams straight to the user.
-        result = subprocess.run(cmd, check=False)
+        # No timeout: parsing 10K+ rules may legitimately take 10+ min;
+        # user CTRL-C is the contract.
+        result = subprocess.run(cmd, check=False)  # subprocess-timeout: ignore
         return result.returncode
     except FileNotFoundError:
         _print_binary_missing(binary)

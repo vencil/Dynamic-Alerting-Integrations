@@ -240,7 +240,7 @@ class TestScanResults:
 class TestCLISubprocess:
     def test_cli_subprocess_with_ci_flag(self):
         """Test running the script via subprocess with --ci flag."""
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage",
              "--ci"],
             cwd=REPO_ROOT,
@@ -253,7 +253,7 @@ class TestCLISubprocess:
 
     def test_cli_subprocess_without_ci_flag(self):
         """Test running the script via subprocess without --ci flag."""
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage"],
             cwd=REPO_ROOT,
             capture_output=True,
@@ -264,7 +264,7 @@ class TestCLISubprocess:
 
     def test_cli_output_contains_violations_info(self):
         """Verify script outputs violation information when violations exist."""
-        result = subprocess.run(
+        result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-m", "scripts.tools.lint.check_design_token_usage"],
             cwd=REPO_ROOT,
             capture_output=True,

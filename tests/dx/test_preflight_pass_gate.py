@@ -37,12 +37,12 @@ def _init_git(repo: Path) -> str:
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
     }
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)  # subprocess-timeout: ignore
     (repo / "a.txt").write_text("hi")
-    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True, env=env)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"],
+    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True, env=env)  # subprocess-timeout: ignore
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"],  # subprocess-timeout: ignore
                    check=True, env=env)
-    return subprocess.run(
+    return subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True, env=env,
     ).stdout.strip()
@@ -81,7 +81,7 @@ def _run_gate(repo: Path, stdin: str, *,
         env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(
+    return subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(_SH_SCRIPT)],
         cwd=repo, input=stdin, capture_output=True, text=True, env=env,
     )
@@ -231,7 +231,7 @@ def test_gh_missing_falls_back_to_require_marker(tmp_path: Path):
     sha = _init_git(tmp_path)
     shim = _make_gh_missing_path(tmp_path)
     env = {"PATH": str(shim), "HOME": os.environ.get("HOME", "/tmp")}
-    r = subprocess.run(
+    r = subprocess.run(  # subprocess-timeout: ignore
         ["/usr/bin/bash", str(_SH_SCRIPT)],
         cwd=tmp_path, input=_refspec("feat/x", sha),
         capture_output=True, text=True, env=env,
@@ -245,7 +245,7 @@ def test_gh_missing_with_marker_still_allows(tmp_path: Path):
     (tmp_path / ".git" / f".preflight-ok.{sha}").touch()
     shim = _make_gh_missing_path(tmp_path)
     env = {"PATH": str(shim), "HOME": os.environ.get("HOME", "/tmp")}
-    r = subprocess.run(
+    r = subprocess.run(  # subprocess-timeout: ignore
         ["/usr/bin/bash", str(_SH_SCRIPT)],
         cwd=tmp_path, input=_refspec("feat/x", sha),
         capture_output=True, text=True, env=env,

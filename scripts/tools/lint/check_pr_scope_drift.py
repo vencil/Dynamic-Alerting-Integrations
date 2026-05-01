@@ -54,6 +54,7 @@ def run(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=60,
     )
     return proc.returncode, proc.stdout, proc.stderr
 

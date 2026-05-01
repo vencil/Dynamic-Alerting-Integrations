@@ -36,12 +36,12 @@ def _init_git(repo: Path) -> str:
     """Init a git repo at `repo` with one commit. Returns HEAD sha."""
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)  # subprocess-timeout: ignore
     (repo / "a.txt").write_text("hi")
-    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True, env=env)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"],
+    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True, env=env)  # subprocess-timeout: ignore
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"],  # subprocess-timeout: ignore
                    check=True, env=env)
-    sha = subprocess.run(
+    sha = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True, env=env,
     ).stdout.strip()
@@ -106,7 +106,7 @@ class TestGateScript:
         env = {**os.environ}
         if env_extra:
             env.update(env_extra)
-        return subprocess.run(
+        return subprocess.run(  # subprocess-timeout: ignore
             ["bash", str(_SH_SCRIPT)],
             cwd=repo, input=stdin, capture_output=True, text=True, env=env,
         )
