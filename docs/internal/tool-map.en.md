@@ -144,6 +144,7 @@ lang: en
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_structure.py` | Project structure enforcement. |
+| `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_techdebt_drift.py` | TECH-DEBT / REG registry drift checker. |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |

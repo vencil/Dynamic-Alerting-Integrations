@@ -66,6 +66,10 @@ def git_repo(tmp_path, monkeypatch):
     repo.mkdir()
 
     def _git(*args):
+        # Test fixture wrapper for local `git` commands that complete
+        # in milliseconds. Per S#74 lint rule, explicit timeout would
+        # just be noise — silenced via marker.
+        # subprocess-timeout: ignore
         return subprocess.run(
             ["git", *args],
             cwd=repo,
@@ -203,7 +207,9 @@ class TestBatchCatBlobsParsing:
         special = b"line one\nline two\n\x01\x02middle\nlast no newline"
         f = repo / "special.txt"
         f.write_bytes(special)
+        # subprocess-timeout: ignore  — test fixture, local git
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        # subprocess-timeout: ignore  — test fixture, local git
         subprocess.run(
             ["git", "commit", "--quiet", "-m", "special"],
             cwd=repo,
