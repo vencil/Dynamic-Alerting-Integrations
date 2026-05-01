@@ -133,15 +133,52 @@ def _run_static_checks(filepath: str, source: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # Soft cap: the size at which decomposition starts paying off. Picked from
-# observing where tenant-manager.jsx became hard to audit. Most of the 39
-# interactive JSX tools sit between 200 and 1200 lines today; 1500 is the
-# top-decile signal.
+# observing where tenant-manager.jsx became hard to audit. Of the 43 .jsx
+# files the lint scans (39 registered tools + 4 sub-components), only
+# tenant-manager.jsx (1691 lines) sits above 1500; the next-largest is
+# operator-setup-wizard.jsx at 1252. So 1500 picks today's single outlier
+# without flagging anyone else.
 LINE_COUNT_WARN = 1500
 
-# Hard cap: tenant-manager.jsx at 1671 already had 3 latent bugs; 2500 gives
-# ~67% headroom over today's worst offender so it doesn't insta-fail current
+# Hard cap: tenant-manager.jsx at 1691 already had 3 latent bugs; 2500 gives
+# ~50% headroom over today's worst offender so it doesn't insta-fail current
 # reality, but blocks the next such offender from landing.
 LINE_COUNT_FAIL = 2500
+
+
+def _compute_exit_code(
+    *,
+    ci: bool,
+    strict: bool,
+    babel_failures: list,
+    static_failures: list,
+    linecount_hard_failures: list,
+    linecount_soft_failures: list,
+) -> int:
+    """Compute the script's exit code from the four failure categories.
+
+    Pulled out of `main()` so the severity/exit-code matrix can be unit
+    tested without touching disk or invoking Node.js. The contract:
+
+      - Without `--ci`: ALWAYS exit 0 (report-only mode).
+      - With `--ci` alone: fatal on Babel parse errors OR line-count
+        hard-cap violations. Static patterns and soft-cap warnings are
+        non-fatal — they only emit advisory output.
+      - With `--ci --strict`: ALL four categories become fatal.
+
+    Hard-cap line-count violations follow Babel-parse semantics (always
+    fatal under --ci) because files that big virtually guarantee latent
+    bugs accumulate undetected — see PR #150 / S#67 / issue #152.
+    """
+    if not ci:
+        return 0
+    soft_warnings_present = bool(static_failures) or bool(linecount_soft_failures)
+    fatal = (
+        bool(babel_failures)
+        or bool(linecount_hard_failures)
+        or (strict and soft_warnings_present)
+    )
+    return 1 if fatal else 0
 
 
 def _run_line_count_check(filepath: str, source: str) -> list[dict]:
@@ -396,24 +433,23 @@ def main() -> int:
     print(f"Summary: {passed}/{total_files} files OK, "
           f"{len(unique_failing)} file(s) have issues")
 
-    # Severity computation:
-    #   - Babel parse + line-count hard cap → ALWAYS fatal under --ci
-    #   - Static pattern + line-count soft cap → fatal only under --strict
-    soft_warnings = bool(static_failures) or bool(linecount_soft_failures)
-    fatal = (
-        bool(babel_failures)
-        or bool(linecount_hard_failures)
-        or (args.strict and soft_warnings)
+    # Severity computation delegated to pure helper for unit testing.
+    exit_code = _compute_exit_code(
+        ci=args.ci,
+        strict=args.strict,
+        babel_failures=babel_failures,
+        static_failures=static_failures,
+        linecount_hard_failures=linecount_hard_failures,
+        linecount_soft_failures=linecount_soft_failures,
     )
-    if args.ci and fatal:
-        return 1
-    if args.ci and soft_warnings and not args.strict:
+    soft_warnings_present = bool(static_failures) or bool(linecount_soft_failures)
+    if args.ci and soft_warnings_present and not args.strict:
         soft_total = len(static_failures) + len(linecount_soft_failures)
         print(
             f"\nNote: {soft_total} soft warning(s) (static + line-count) — "
             f"use --strict to fail on these."
         )
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

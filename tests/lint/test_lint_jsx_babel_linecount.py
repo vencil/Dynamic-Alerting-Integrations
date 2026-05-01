@@ -95,6 +95,52 @@ class TestLineCountCheck:
         assert len(issues) == 1
         assert issues[0]["severity"] == "soft"
 
+    def test_2499_lines_warns_but_passes_in_default_ci(self):
+        # Verbatim acceptance criterion from issue #152:
+        # "a 2499-line file warns but passes" (under default --ci, without
+        # --strict). 2499 is in the soft band (1500 < N ≤ 2500), so it
+        # emits a soft warning. The severity matrix tests below verify
+        # the exit-code follow-through.
+        src = self._make_source(2499)
+        issues = ljb._run_line_count_check("foo.jsx", src)
+        assert len(issues) == 1
+        assert issues[0]["severity"] == "soft"
+        # And under --ci alone, soft is non-fatal (exit 0):
+        assert (
+            ljb._compute_exit_code(
+                ci=True,
+                strict=False,
+                babel_failures=[],
+                static_failures=[],
+                linecount_hard_failures=[],
+                linecount_soft_failures=issues,
+            )
+            == 0
+        )
+
+    def test_2501_lines_fails_under_ci_strict(self):
+        # Verbatim acceptance criterion from issue #152:
+        # "a 2501-line .jsx fails under `--ci --strict`".
+        # (My impl deviates: it ALSO fails under `--ci` alone because
+        # hard cap follows the Babel-parse-fatal-under-ci semantic
+        # pattern. Both modes are tested.)
+        src = self._make_source(2501)
+        issues = ljb._run_line_count_check("foo.jsx", src)
+        assert len(issues) == 1
+        assert issues[0]["severity"] == "hard"
+        for strict_flag in (False, True):
+            assert (
+                ljb._compute_exit_code(
+                    ci=True,
+                    strict=strict_flag,
+                    babel_failures=[],
+                    static_failures=[],
+                    linecount_hard_failures=issues,
+                    linecount_soft_failures=[],
+                )
+                == 1
+            ), f"Hard cap should fail under --ci (strict={strict_flag})"
+
     def test_just_over_hard_cap_emits_hard(self):
         # 2501 lines — first line over the hard cap
         src = self._make_source(ljb.LINE_COUNT_FAIL + 1)
@@ -150,6 +196,112 @@ class TestIssueDictShape:
             assert key in issues[0]
         assert issues[0]["path"] == "interactive/big.jsx"
         assert issues[0]["line"] == 1  # line-count issues anchor at top of file
+
+
+# ---------------------------------------------------------------------------
+# _compute_exit_code — severity / exit-code matrix
+#
+# This is the contract the PR is paying for. Hard-cap fails under --ci
+# (mirrors Babel parse), soft-cap only fails under --strict (mirrors static
+# pattern warnings). Without --ci, the script is report-only.
+# ---------------------------------------------------------------------------
+class TestComputeExitCode:
+    def _call(
+        self,
+        *,
+        ci=False,
+        strict=False,
+        babel=False,
+        static=False,
+        lc_hard=False,
+        lc_soft=False,
+    ):
+        """Convenience: pass booleans, get exit code.
+
+        Each boolean controls whether that failure category has any items.
+        The actual issue dicts don't matter — `_compute_exit_code` only
+        looks at truthiness of the lists.
+        """
+        nonempty = [{"path": "x", "line": 1, "error": "x", "snippet": ""}]
+        return ljb._compute_exit_code(
+            ci=ci,
+            strict=strict,
+            babel_failures=nonempty if babel else [],
+            static_failures=nonempty if static else [],
+            linecount_hard_failures=nonempty if lc_hard else [],
+            linecount_soft_failures=nonempty if lc_soft else [],
+        )
+
+    # --- Without --ci: report-only, NEVER exit 1 ---------------------------
+    def test_no_ci_clean(self):
+        assert self._call() == 0
+
+    def test_no_ci_with_babel_failures_still_zero(self):
+        # Even Babel parse errors don't fail without --ci — that's the
+        # report-mode contract for local invocation.
+        assert self._call(babel=True) == 0
+
+    def test_no_ci_with_hard_cap_still_zero(self):
+        assert self._call(lc_hard=True) == 0
+
+    def test_no_ci_strict_with_failures_still_zero(self):
+        # --strict alone (no --ci) is a no-op — design choice that matches
+        # `--ci --strict` being the documented combination.
+        assert self._call(
+            strict=True, babel=True, static=True, lc_hard=True, lc_soft=True
+        ) == 0
+
+    # --- With --ci alone: babel + hard-cap fatal; static + soft-cap warn --
+    def test_ci_clean_passes(self):
+        assert self._call(ci=True) == 0
+
+    def test_ci_babel_failure_fatal(self):
+        assert self._call(ci=True, babel=True) == 1
+
+    def test_ci_linecount_hard_fatal(self):
+        # The whole point of issue #152 — hard cap blocks merges.
+        assert self._call(ci=True, lc_hard=True) == 1
+
+    def test_ci_static_warning_non_fatal(self):
+        # style={{ }} pattern is a warning, not a blocker, in default mode.
+        assert self._call(ci=True, static=True) == 0
+
+    def test_ci_linecount_soft_non_fatal(self):
+        # Soft cap warns; doesn't block — matches the v2.8.0 transition story.
+        assert self._call(ci=True, lc_soft=True) == 0
+
+    def test_ci_mixed_soft_only_non_fatal(self):
+        # Static + soft together still non-fatal without --strict.
+        assert self._call(ci=True, static=True, lc_soft=True) == 0
+
+    def test_ci_hard_dominates_soft(self):
+        # If hard fires, exit is 1 regardless of soft warnings.
+        assert self._call(ci=True, lc_hard=True, lc_soft=True, static=True) == 1
+
+    # --- With --ci --strict: ALL four categories fatal --------------------
+    def test_ci_strict_clean_passes(self):
+        assert self._call(ci=True, strict=True) == 0
+
+    def test_ci_strict_static_fatal(self):
+        # --strict elevates static pattern warnings to fatal.
+        assert self._call(ci=True, strict=True, static=True) == 1
+
+    def test_ci_strict_linecount_soft_fatal(self):
+        # --strict elevates soft-cap line-count to fatal — same pattern.
+        assert self._call(ci=True, strict=True, lc_soft=True) == 1
+
+    def test_ci_strict_babel_fatal(self):
+        # Babel parse errors stay fatal under --strict (contract preserved).
+        assert self._call(ci=True, strict=True, babel=True) == 1
+
+    def test_ci_strict_linecount_hard_fatal(self):
+        # Hard cap stays fatal under --strict (contract preserved).
+        assert self._call(ci=True, strict=True, lc_hard=True) == 1
+
+    def test_ci_strict_all_failures_fatal(self):
+        assert self._call(
+            ci=True, strict=True, babel=True, static=True, lc_hard=True, lc_soft=True
+        ) == 1
 
 
 if __name__ == "__main__":
