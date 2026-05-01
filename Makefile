@@ -569,6 +569,28 @@ jsx-extract: ## 拆 JSX dep（PR-2d pattern）— 用法：make jsx-extract KIND
 		$(if $(DRY_RUN),--dry-run) \
 		$(if $(FORCE),--force)
 
+.PHONY: lint-extract
+lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerplate codified）— 用法：make lint-extract NAME=foo_bar KIND=text DESCRIPTION="..." FILES='^docs/.*\.md$$' [DRY_RUN=1] [FORCE=1] [NO_HOOK=1]
+	@if [ -z "$(NAME)" ] || [ -z "$(KIND)" ] || [ -z "$(DESCRIPTION)" ]; then \
+		echo "Usage: make lint-extract NAME=<snake_case> KIND=<ast|text|yaml|meta|freshness> DESCRIPTION=\"<one-line>\" [FILES=<regex>]"; \
+		echo ""; \
+		echo "Examples:"; \
+		echo "  make lint-extract NAME=foo_bar KIND=text DESCRIPTION=\"Detect foo_bar in docs\" FILES='^docs/.*\\.md$$'"; \
+		echo "  make lint-extract NAME=baz KIND=ast DESCRIPTION=\"AST class\" FILES='^scripts/.*\\.py$$' DRY_RUN=1"; \
+		echo "  make lint-extract NAME=qux KIND=meta DESCRIPTION=\"Cross-file consistency\" NO_HOOK=1  # don't auto-add hook entry"; \
+		echo ""; \
+		echo "Generates: scripts/tools/lint/check_<NAME>.py + tests/lint/test_check_<NAME>.py + .pre-commit-config.yaml hook entry"; \
+		echo "Hook id: <NAME-with-hyphens>-check"; \
+		echo "Per-line ignore marker per kind: text=<!-- name: ignore -->, ast/yaml/meta/freshness=# name: ignore"; \
+		exit 1; \
+	fi
+	@python3 ./scripts/tools/dx/scaffold_lint.py \
+		--name $(NAME) --kind $(KIND) --description "$(DESCRIPTION)" \
+		$(if $(FILES),--files '$(FILES)') \
+		$(if $(DRY_RUN),--dry-run) \
+		$(if $(FORCE),--force) \
+		$(if $(NO_HOOK),--no-hook)
+
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,changelog,glossary,includes,platform_data,tool_consistency \
