@@ -78,11 +78,26 @@ class TestDerivePathsLayout:
 # Template rendering — content sanity checks
 # ---------------------------------------------------------------------------
 class TestRenderTemplate:
-    def test_fixture_default_single_symbol(self):
+    def test_fixture_default_kebab_auto_converts_to_screaming_snake(self):
+        # Pre-merge self-review on PR #160 caught: pre-fix this generated
+        # `const demo-foo = ...` which is INVALID JavaScript (parser splits
+        # `demo` and `-foo`). Now kebab fixture names auto-convert to
+        # SCREAMING_SNAKE — matching the established convention
+        # (demo-tenants.js → DEMO_TENANTS in PR #156).
         out = sj.render_template("fixture", "demo-foo", "tenant-manager")
-        assert "const demo-foo" in out or "const demo_foo" in out or 'window.__demo-foo' in out
-        # Either name in symbol form OR the literal name; we want it referenced
-        assert "window.__demo-foo = demo-foo;" in out  # filename literal symbol
+        # Auto-converted symbol used:
+        assert "const DEMO_FOO = {" in out
+        assert "window.__DEMO_FOO = DEMO_FOO;" in out
+        # Original kebab name does NOT appear as an identifier (it's still
+        # in the front-matter title but never as a JS const name).
+        assert "const demo-foo" not in out
+        assert "= demo-foo;" not in out  # not used as a JS reference
+
+    def test_fixture_default_valid_identifier_unchanged(self):
+        # When name is already a valid JS identifier, no conversion.
+        out = sj.render_template("fixture", "DemoFoo", "tenant-manager")
+        assert "const DemoFoo = {" in out
+        assert "window.__DemoFoo = DemoFoo;" in out
 
     def test_fixture_multi_symbol(self):
         out = sj.render_template(
@@ -96,10 +111,30 @@ class TestRenderTemplate:
         assert "window.__DEMO_BARS = DEMO_BARS;" in out
         assert "window.__DEMO_BAR_GROUPS = DEMO_BAR_GROUPS;" in out
 
-    def test_util_template(self):
-        out = sj.render_template("util", "yaml-helpers", "tenant-manager")
-        assert "function yaml-helpers" in out or "function yamlHelpers" in out
-        assert "window.__yaml-helpers" in out  # registered as filename-literal
+    def test_util_kebab_default_rejected(self):
+        # util filenames rarely map 1:1 to a single symbol (yaml-generators.js
+        # exports BOTH generateMaintenanceYaml AND generateSilentModeYaml),
+        # so kebab-case util names without --symbols MUST error out rather
+        # than auto-convert to a single misleading symbol.
+        with pytest.raises(ValueError, match="Pass --symbols explicitly"):
+            sj.render_template("util", "yaml-helpers", "tenant-manager")
+
+    def test_util_with_symbols_ok(self):
+        out = sj.render_template(
+            "util", "yaml-helpers", "tenant-manager",
+            symbols=["generateXYaml", "generateZYaml"],
+        )
+        assert "function generateXYaml" in out
+        assert "function generateZYaml" in out
+        assert "window.__generateXYaml = generateXYaml;" in out
+        assert "window.__generateZYaml = generateZYaml;" in out
+
+    def test_util_camel_default_ok(self):
+        # If util filename is already a valid identifier (no kebab),
+        # use it directly as the symbol.
+        out = sj.render_template("util", "yamlHelpers", "tenant-manager")
+        assert "function yamlHelpers" in out
+        assert "window.__yamlHelpers = yamlHelpers;" in out
 
     def test_hook_template_includes_react_destructure(self):
         out = sj.render_template("hook", "useFoo", "tenant-manager")
@@ -147,6 +182,71 @@ class TestRenderTemplate:
     def test_invalid_kind_raises(self):
         with pytest.raises(ValueError, match="Unknown kind"):
             sj.render_template("invalid", "X", "tenant-manager")
+
+
+# ---------------------------------------------------------------------------
+# Symbol derivation helpers — added in PR #160 self-review (Pass 1)
+# ---------------------------------------------------------------------------
+class TestSymbolDerivation:
+    @pytest.mark.parametrize("ident, ok", [
+        ("foo", True),
+        ("Foo", True),
+        ("FOO_BAR", True),
+        ("useFoo", True),
+        ("$foo", True),
+        ("_foo", True),
+        ("foo123", True),
+        ("foo-bar", False),    # kebab not allowed in JS identifier
+        ("123foo", False),     # can't start with digit
+        ("foo.bar", False),    # dots not allowed
+        ("", False),
+        ("foo bar", False),    # space not allowed
+    ])
+    def test_is_valid_js_identifier(self, ident, ok):
+        assert sj._is_valid_js_identifier(ident) is ok
+
+    def test_kebab_to_screaming_snake(self):
+        assert sj._kebab_to_screaming_snake("demo-foo") == "DEMO_FOO"
+        assert sj._kebab_to_screaming_snake("a-b-c-d") == "A_B_C_D"
+        assert sj._kebab_to_screaming_snake("alreadyOK") == "ALREADYOK"
+        assert sj._kebab_to_screaming_snake("a") == "A"
+
+    def test_derive_default_symbols_fixture_kebab(self):
+        assert sj.derive_default_symbols("fixture", "demo-foo") == ["DEMO_FOO"]
+
+    def test_derive_default_symbols_fixture_already_valid(self):
+        assert sj.derive_default_symbols("fixture", "DemoFoo") == ["DemoFoo"]
+
+    def test_derive_default_symbols_util_kebab_rejected(self):
+        with pytest.raises(ValueError, match="Pass --symbols explicitly"):
+            sj.derive_default_symbols("util", "yaml-helpers")
+
+    def test_derive_default_symbols_util_camel_ok(self):
+        assert sj.derive_default_symbols("util", "yamlHelpers") == ["yamlHelpers"]
+
+    def test_derive_default_symbols_hook(self):
+        # Hooks pass through (already validated by derive_paths).
+        assert sj.derive_default_symbols("hook", "useFoo") == ["useFoo"]
+
+    def test_derive_default_symbols_component(self):
+        assert sj.derive_default_symbols("component", "FooBar") == ["FooBar"]
+
+    def test_main_rejects_invalid_symbols_arg(self, tmp_path, monkeypatch):
+        # Bogus --symbols entries (non-identifier) should error out.
+        tools = tmp_path / "docs" / "interactive" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "foo.jsx").write_text(
+            _ORCH_FIXTURE_MIN.replace("tenant-manager/", "foo/").replace(
+                'title: "Tenant Manager"', 'title: "Foo"'
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sj, "PROJECT_ROOT", tmp_path)
+        rc = sj.main([
+            "--kind", "fixture", "--name", "demo-x", "--parent", "foo",
+            "--symbols", "VALID,bad-name-with-hyphens",
+        ])
+        assert rc == 2
 
 
 # ---------------------------------------------------------------------------

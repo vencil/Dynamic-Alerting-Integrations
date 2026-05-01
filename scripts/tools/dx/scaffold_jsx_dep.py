@@ -108,6 +108,61 @@ class ScaffoldPaths:
     primary_symbol: str        # the main exported symbol name (matches `--name` for non-fixtures)
 
 
+# Pre-PR-2d the script silently produced `const demo-foo = ...` for
+# kebab-case fixture names, which is invalid JavaScript (parser splits
+# `demo` and `-foo`). Self-review on PR #160 caught the bug. The fix:
+# auto-convert kebab → SCREAMING_SNAKE for fixtures (the established
+# convention — `demo-tenants.js` exports DEMO_TENANTS); require
+# explicit --symbols for util (filename-to-symbol rarely 1:1 there).
+_RE_VALID_JS_IDENT = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+
+
+def _is_valid_js_identifier(s: str) -> bool:
+    """True if `s` is a syntactically valid JS identifier (ASCII subset)."""
+    return bool(_RE_VALID_JS_IDENT.match(s))
+
+
+def _kebab_to_screaming_snake(name: str) -> str:
+    """`demo-foo-bar` → `DEMO_FOO_BAR`. Used for fixture default symbols."""
+    return name.upper().replace("-", "_")
+
+
+def derive_default_symbols(kind: str, name: str) -> List[str]:
+    """When `--symbols` isn't passed, derive the default symbol list from
+    the filename. Raises ValueError if no sensible default exists.
+
+    For fixture: kebab-case name auto-converts to SCREAMING_SNAKE
+        (matches the existing convention: `demo-tenants.js` → DEMO_TENANTS).
+    For util: filenames rarely map 1:1 to a single symbol (e.g.
+        `yaml-generators.js` exports `generateMaintenanceYaml` +
+        `generateSilentModeYaml`), so kebab requires explicit --symbols.
+    For hook / component / view: name IS the symbol (already validated
+        by derive_paths to be a valid identifier).
+    """
+    if kind == "fixture":
+        if _is_valid_js_identifier(name):
+            return [name]
+        if "-" in name:
+            converted = _kebab_to_screaming_snake(name)
+            if _is_valid_js_identifier(converted):
+                return [converted]
+        raise ValueError(
+            f"Cannot derive a default symbol from fixture name {name!r}. "
+            f"Pass --symbols explicitly (e.g. --symbols DEMO_X,DEMO_Y)."
+        )
+    if kind == "util":
+        if _is_valid_js_identifier(name):
+            return [name]
+        raise ValueError(
+            f"Util filename {name!r} is not a valid JS identifier (likely "
+            f"contains '-'). Pass --symbols explicitly to specify which "
+            f"function names this file exports "
+            f"(e.g. --symbols generateXYaml,generateZYaml)."
+        )
+    # hook / component / view: name is validated by derive_paths
+    return [name]
+
+
 def derive_paths(kind: str, name: str, parent: str) -> ScaffoldPaths:
     """Derive all paths from CLI args.
 
@@ -255,11 +310,13 @@ def render_template(
 ) -> str:
     """Render the file contents for a new dep file.
 
-    `symbols` only meaningful for fixture / util kinds; defaults to
-    [name] (single symbol matching the filename) when not provided.
+    `symbols` only meaningful for fixture / util kinds. When omitted,
+    defaults are derived via `derive_default_symbols` (kebab → SCREAMING
+    for fixtures; util requires explicit). For hook / component / view
+    the name itself IS the symbol.
     """
     parent_title = parent.replace("-", " ").title()
-    syms = symbols or [name]
+    syms = symbols or derive_default_symbols(kind, name)
 
     if kind == "fixture":
         return _template_fixture(name, parent_title, syms)
@@ -439,6 +496,30 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             return 2
         symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        # Validate each user-provided symbol is a real JS identifier.
+        for sym in symbols:
+            if not _is_valid_js_identifier(sym):
+                print(
+                    f"error: --symbols entry {sym!r} is not a valid JS identifier",
+                    file=sys.stderr,
+                )
+                return 2
+
+    # Derive defaults (and surface auto-conversions) when --symbols not given.
+    if symbols is None:
+        try:
+            derived = derive_default_symbols(args.kind, args.name)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        # Surface a notice when the default differs from the raw name —
+        # most commonly: kebab fixture name auto-converted to SCREAMING.
+        if derived != [args.name]:
+            print(
+                f"note: --symbols not given; derived default = {derived!r} "
+                f"from {args.name!r} (pass --symbols to override)"
+            )
+        symbols = derived
 
     # Render the new file.
     new_file_content = render_template(args.kind, args.name, args.parent, symbols)
@@ -455,7 +536,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         # all imported into the orchestrator. (For most fixtures only the
         # first is referenced — e.g. DEMO_TENANTS but not DEMO_GROUPS in
         # the orchestrator's case.)
-        primary_for_import = symbols[0] if symbols else paths.primary_symbol
+        # `symbols` is always populated by this point (either from
+        # --symbols or derive_default_symbols).
+        primary_for_import = symbols[0]
         orch_final, imports_changed = update_orchestrator_imports(
             orch_text_after_deps, primary_for_import
         )

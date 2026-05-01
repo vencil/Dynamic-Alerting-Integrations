@@ -155,7 +155,26 @@ When extracting a hook (e.g. `useTenantData`):
   Once that bug was fixed, the hook-count mismatch surfaced and
   blanked the page.
 
-### 2. Multiple symbols per fixture file
+### 2. Kebab-case filenames vs JS-identifier symbols
+
+JavaScript identifiers can't contain hyphens — `const demo-foo` is parsed as
+`demo` minus `foo` and fails. But fixture / util filenames often follow
+the kebab-case convention (`demo-tenants.js`, `yaml-generators.js`).
+
+The scaffold tool resolves this differently per kind:
+
+- **fixture**: kebab-case names auto-convert to `SCREAMING_SNAKE`
+  (matches the `demo-tenants.js` → `DEMO_TENANTS` convention from PR #156).
+  A notice is printed showing the chosen symbol; pass `--symbols` to override.
+- **util**: util filenames rarely map 1:1 to a single symbol
+  (`yaml-generators.js` exports BOTH `generateMaintenanceYaml` AND
+  `generateSilentModeYaml`). Kebab-case util names without `--symbols`
+  **error out** with a hint to specify them explicitly.
+- **hook / component / view**: name IS the symbol (already validated to
+  be a valid identifier — hooks must start with `use`, components/views
+  must be PascalCase).
+
+### 3. Multiple symbols per fixture file
 
 Fixtures often export 2+ related consts (e.g. `DEMO_TENANTS` +
 `DEMO_GROUPS`). The scaffold tool's `--symbols` flag accepts a
@@ -173,7 +192,7 @@ symbol is referenced by the orchestrator — DEMO_GROUPS is a counter-example
 where it lives in `useTenantData`'s effect, not the orchestrator's
 top-level imports). Add the others manually if the orchestrator needs them.
 
-### 3. The 400-line aspirational target vs the 1500-line lint cap
+### 4. The 400-line aspirational target vs the 1500-line lint cap
 
 Issue #153's PR description aspires to "no file > 400 lines" inside
 the decomposed directory. This is **not enforced**. The lint cap
@@ -190,5 +209,5 @@ adds artificial boundary. Acceptable trade-off.
 - **PR #154** — line-count lint codify (#152)
 - **PR #156** — PR-2d Phase 1 (data / styles / utils / GroupSidebar)
 - **PR #158** — PR-2d Phase 2 (hooks + presentational components, closes #153)
-- **`scripts/tools/dx/scaffold_jsx_dep.py`** — the boilerplate tool (37 unit tests)
+- **`scripts/tools/dx/scaffold_jsx_dep.py`** — the boilerplate tool (60 unit tests)
 - **`Makefile`** target `jsx-extract` — `make`-friendly wrapper
