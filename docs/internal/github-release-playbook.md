@@ -267,7 +267,7 @@ make benchmark-report  # 寫到 .build/bench-baseline.txt
 gh release upload v2.8.0 .build/bench-baseline.txt --clobber
 ```
 
-**為何用 nightly artifact 不現跑**：fresh bench 在 release-time runner 上 ~10-15 min（13 benches × count=6）；nightly cron 在 03:00 UTC 跑（runner contention 最低），數字更具代表性 + 30 秒就 attach 完。
+**為何用 nightly artifact 不現跑**：fresh bench 在 release-time runner 上 ~12-18 min（17 benches × count=6，包含 4 mixed-mode 自 issue #128 加入後）；nightly cron 在 03:00 UTC 跑（runner contention 最低），數字更具代表性 + 30 秒就 attach 完。
 
 ### Step 5: 驗證
 
