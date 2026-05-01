@@ -149,7 +149,9 @@ LINE_COUNT_FAIL = 2500
 def _compute_exit_code(
     *,
     ci: bool,
-    strict: bool,
+    strict: bool = False,
+    strict_static: bool = False,
+    strict_linecount: bool = False,
     babel_failures: list,
     static_failures: list,
     linecount_hard_failures: list,
@@ -164,19 +166,33 @@ def _compute_exit_code(
       - With `--ci` alone: fatal on Babel parse errors OR line-count
         hard-cap violations. Static patterns and soft-cap warnings are
         non-fatal — they only emit advisory output.
-      - With `--ci --strict`: ALL four categories become fatal.
+      - With `--ci --strict-static`: ALSO fatal on style={{ }} patterns.
+      - With `--ci --strict-linecount`: ALSO fatal on soft-cap line-count
+        warnings (catches files that grew between 1500 and 2500 lines).
+      - With `--ci --strict`: shorthand for both `--strict-static` AND
+        `--strict-linecount` (legacy unified strict mode from PR #154).
 
     Hard-cap line-count violations follow Babel-parse semantics (always
     fatal under --ci) because files that big virtually guarantee latent
     bugs accumulate undetected — see PR #150 / S#67 / issue #152.
+
+    Granular `--strict-*` flags added in PR #TBD (DX track): they let us
+    activate the line-count safety net immediately (codebase has 0
+    soft-cap violations after PR-2d Phase 3 / S#72) WITHOUT being
+    blocked by 330 pre-existing `style={{}}` baseline warnings — those
+    get a separate cleanup track. Backward compat: `--strict` alone
+    still activates both (for any caller that already invoked it).
     """
     if not ci:
         return 0
-    soft_warnings_present = bool(static_failures) or bool(linecount_soft_failures)
+    # Legacy --strict expands to both granular flags.
+    effective_static = strict or strict_static
+    effective_linecount = strict or strict_linecount
     fatal = (
         bool(babel_failures)
         or bool(linecount_hard_failures)
-        or (strict and soft_warnings_present)
+        or (effective_static and bool(static_failures))
+        or (effective_linecount and bool(linecount_soft_failures))
     )
     return 1 if fatal else 0
 
@@ -308,7 +324,17 @@ def main() -> int:
     parser.add_argument(
         "--strict",
         action="store_true",
+        help="Shorthand for --strict-static + --strict-linecount (legacy)",
+    )
+    parser.add_argument(
+        "--strict-static",
+        action="store_true",
         help="Also fail on static pattern warnings (style={{ }} etc.)",
+    )
+    parser.add_argument(
+        "--strict-linecount",
+        action="store_true",
+        help="Also fail on soft-cap line-count warnings (1500 < N ≤ 2500)",
     )
     args = parser.parse_args()
 
@@ -441,17 +467,25 @@ def main() -> int:
     exit_code = _compute_exit_code(
         ci=args.ci,
         strict=args.strict,
+        strict_static=args.strict_static,
+        strict_linecount=args.strict_linecount,
         babel_failures=babel_failures,
         static_failures=static_failures,
         linecount_hard_failures=linecount_hard_failures,
         linecount_soft_failures=linecount_soft_failures,
     )
-    soft_warnings_present = bool(static_failures) or bool(linecount_soft_failures)
-    if args.ci and soft_warnings_present and not args.strict:
-        soft_total = len(static_failures) + len(linecount_soft_failures)
+    # Surface separate hint per warning category that's still non-fatal.
+    effective_static = args.strict or args.strict_static
+    effective_linecount = args.strict or args.strict_linecount
+    if args.ci and static_failures and not effective_static:
         print(
-            f"\nNote: {soft_total} soft warning(s) (static + line-count) — "
-            f"use --strict to fail on these."
+            f"\nNote: {len(static_failures)} static warning(s) — "
+            f"use --strict-static (or --strict) to fail on these."
+        )
+    if args.ci and linecount_soft_failures and not effective_linecount:
+        print(
+            f"\nNote: {len(linecount_soft_failures)} line-count soft warning(s) "
+            f"— use --strict-linecount (or --strict) to fail on these."
         )
     return exit_code
 

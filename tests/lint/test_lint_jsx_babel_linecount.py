@@ -211,6 +211,8 @@ class TestComputeExitCode:
         *,
         ci=False,
         strict=False,
+        strict_static=False,
+        strict_linecount=False,
         babel=False,
         static=False,
         lc_hard=False,
@@ -226,6 +228,8 @@ class TestComputeExitCode:
         return ljb._compute_exit_code(
             ci=ci,
             strict=strict,
+            strict_static=strict_static,
+            strict_linecount=strict_linecount,
             babel_failures=nonempty if babel else [],
             static_failures=nonempty if static else [],
             linecount_hard_failures=nonempty if lc_hard else [],
@@ -302,6 +306,80 @@ class TestComputeExitCode:
         assert self._call(
             ci=True, strict=True, babel=True, static=True, lc_hard=True, lc_soft=True
         ) == 1
+
+
+# ---------------------------------------------------------------------------
+# Granular --strict-static / --strict-linecount flags (PR-A activation track)
+#
+# Activates partial strict mode without forcing all 330 pre-existing
+# style={{}} violations to be fixed. Codebase has 0 line-count soft
+# warnings after PR-2d Phase 3 (S#72), so --strict-linecount alone can
+# be wired into CI's manual-stage hook RIGHT NOW as a regression gate
+# without blocking on the static-pattern cleanup track.
+# ---------------------------------------------------------------------------
+class TestComputeExitCodeGranularStrict(TestComputeExitCode):
+    """Re-uses parent's `_call` helper that supports the new flags."""
+
+    # --- --strict-static alone: only static fatal, line-count still warn --
+    def test_strict_static_alone_static_fatal(self):
+        assert self._call(ci=True, strict_static=True, static=True) == 1
+
+    def test_strict_static_alone_linecount_soft_non_fatal(self):
+        # Static only — line-count soft stays as warn (the partial gate).
+        assert self._call(ci=True, strict_static=True, lc_soft=True) == 0
+
+    def test_strict_static_alone_clean_passes(self):
+        assert self._call(ci=True, strict_static=True) == 0
+
+    # --- --strict-linecount alone: line-count fatal, static still warn ---
+    def test_strict_linecount_alone_lc_soft_fatal(self):
+        # The PR-A activation case — linecount soft becomes fatal even
+        # though style={{}} stays as warn. Codebase has 0 lc_soft today
+        # so this is a regression gate, not a blocker.
+        assert self._call(ci=True, strict_linecount=True, lc_soft=True) == 1
+
+    def test_strict_linecount_alone_static_non_fatal(self):
+        # PR-A's whole point — partial activation. 330 style={{}} stays
+        # warn-only so this PR can ship without forcing static cleanup.
+        assert self._call(ci=True, strict_linecount=True, static=True) == 0
+
+    def test_strict_linecount_alone_clean_passes(self):
+        assert self._call(ci=True, strict_linecount=True) == 0
+
+    # --- Combined granular flags = same as legacy --strict ---
+    def test_combined_granular_flags_same_as_legacy_strict(self):
+        # Mathematical equivalence: --strict-static --strict-linecount
+        # should produce identical exit codes to legacy --strict for
+        # all failure-list combinations.
+        from itertools import product
+        for babel, static, lc_hard, lc_soft in product([False, True], repeat=4):
+            legacy = self._call(
+                ci=True, strict=True,
+                babel=babel, static=static, lc_hard=lc_hard, lc_soft=lc_soft,
+            )
+            granular = self._call(
+                ci=True, strict_static=True, strict_linecount=True,
+                babel=babel, static=static, lc_hard=lc_hard, lc_soft=lc_soft,
+            )
+            assert legacy == granular, (
+                f"Divergence at babel={babel} static={static} "
+                f"lc_hard={lc_hard} lc_soft={lc_soft}: "
+                f"legacy={legacy} granular={granular}"
+            )
+
+    # --- Hard cap + babel parse stay fatal regardless of flags ---
+    def test_strict_linecount_alone_babel_still_fatal(self):
+        # Babel parse always fatal under --ci.
+        assert self._call(ci=True, strict_linecount=True, babel=True) == 1
+
+    def test_strict_linecount_alone_hard_still_fatal(self):
+        assert self._call(ci=True, strict_linecount=True, lc_hard=True) == 1
+
+    def test_strict_static_alone_babel_still_fatal(self):
+        assert self._call(ci=True, strict_static=True, babel=True) == 1
+
+    def test_strict_static_alone_hard_still_fatal(self):
+        assert self._call(ci=True, strict_static=True, lc_hard=True) == 1
 
 
 if __name__ == "__main__":
