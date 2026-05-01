@@ -286,6 +286,218 @@ class TestComputeExitCode:
 
 
 # ---------------------------------------------------------------------------
+# Edge cases — timeout=None / timeout=0 semantics
+# ---------------------------------------------------------------------------
+class TestTimeoutValueSemantics:
+    """``timeout=`` presence alone is not enough — ``timeout=None`` and
+    ``timeout=0`` are functionally identical to no timeout. They MUST
+    be flagged. ``_has_meaningful_timeout`` is the gate.
+    """
+
+    def test_timeout_none_flagged(self):
+        src = "import subprocess\nsubprocess.run(['ls'], timeout=None)\n"
+        violations = _scan(src)
+        assert len(violations) == 1
+        assert violations[0].rule == "subprocess.run-no-timeout"
+
+    def test_timeout_zero_int_flagged(self):
+        src = "import subprocess\nsubprocess.run(['ls'], timeout=0)\n"
+        violations = _scan(src)
+        assert len(violations) == 1
+
+    def test_timeout_zero_float_flagged(self):
+        src = "import subprocess\nsubprocess.run(['ls'], timeout=0.0)\n"
+        violations = _scan(src)
+        assert len(violations) == 1
+
+    def test_timeout_positive_int_accepted(self):
+        src = "import subprocess\nsubprocess.run(['ls'], timeout=30)\n"
+        assert _scan(src) == []
+
+    def test_timeout_positive_float_accepted(self):
+        src = "import subprocess\nsubprocess.run(['ls'], timeout=2.5)\n"
+        assert _scan(src) == []
+
+    def test_timeout_variable_accepted(self):
+        """Variables can't be statically evaluated; structural check
+        only — the author wrote ``timeout=X``, that's the lint's bar."""
+        src = (
+            "import subprocess\n"
+            "MY_TIMEOUT = 60\n"
+            "subprocess.run(['ls'], timeout=MY_TIMEOUT)\n"
+        )
+        assert _scan(src) == []
+
+    def test_timeout_expression_accepted(self):
+        src = (
+            "import subprocess\n"
+            "subprocess.run(['ls'], timeout=int(os.environ.get('T', '60')))\n"
+        )
+        assert _scan(src) == []
+
+    def test_communicate_timeout_none_flagged(self):
+        src = (
+            "import subprocess\n"
+            "p = subprocess.Popen(['ls'])\n"
+            "p.communicate(timeout=None)\n"
+        )
+        violations = _scan(src)
+        assert len(violations) == 1
+        assert violations[0].rule == "communicate-no-timeout"
+
+
+# ---------------------------------------------------------------------------
+# File discovery — _iter_python_files
+# ---------------------------------------------------------------------------
+class TestIterPythonFiles:
+    def test_single_py_file_yielded(self, tmp_path):
+        f = tmp_path / "a.py"
+        f.write_text("x = 1\n")
+        assert list(cst._iter_python_files([f])) == [f]
+
+    def test_non_py_file_not_yielded(self, tmp_path):
+        f = tmp_path / "a.md"
+        f.write_text("# md\n")
+        assert list(cst._iter_python_files([f])) == []
+
+    def test_directory_recursive(self, tmp_path):
+        (tmp_path / "a.py").write_text("")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "b.py").write_text("")
+        (sub / "c.txt").write_text("")
+        results = list(cst._iter_python_files([tmp_path]))
+        names = {p.name for p in results}
+        assert names == {"a.py", "b.py"}
+
+    def test_deterministic_sort_order(self, tmp_path):
+        (tmp_path / "z.py").write_text("")
+        (tmp_path / "a.py").write_text("")
+        (tmp_path / "m.py").write_text("")
+        results = list(cst._iter_python_files([tmp_path]))
+        names = [p.name for p in results]
+        assert names == sorted(names)
+
+    def test_nonexistent_root_silently_skipped(self, tmp_path):
+        bogus = tmp_path / "does-not-exist"
+        # Not is_file and not is_dir → falls through; no crash.
+        assert list(cst._iter_python_files([bogus])) == []
+
+
+# ---------------------------------------------------------------------------
+# Path resolution — _resolve_scan_paths
+# ---------------------------------------------------------------------------
+class TestResolveScanPaths:
+    def test_explicit_absolute_path_used_as_is(self, tmp_path):
+        f = tmp_path / "a.py"
+        f.write_text("")
+        # Mimic argparse Namespace
+        import argparse
+        args = argparse.Namespace(paths=[str(f)])
+        resolved = cst._resolve_scan_paths(args)
+        assert resolved == [f]
+
+    def test_explicit_relative_path_anchored_to_project_root(self):
+        import argparse
+        args = argparse.Namespace(paths=["scripts/tools/lint/check_subprocess_timeout.py"])
+        resolved = cst._resolve_scan_paths(args)
+        assert len(resolved) == 1
+        assert resolved[0].is_absolute()
+        # Anchored to PROJECT_ROOT
+        assert str(resolved[0]).startswith(str(cst.PROJECT_ROOT))
+
+    def test_no_paths_falls_back_to_default_roots(self):
+        import argparse
+        args = argparse.Namespace(paths=[])
+        resolved = cst._resolve_scan_paths(args)
+        # Defaults are scripts/, components/da-tools/, tests/
+        # — at least scripts/ should exist at PROJECT_ROOT
+        assert any(p.name == "scripts" for p in resolved)
+
+
+# ---------------------------------------------------------------------------
+# main() integration — argparse + print + exit code wiring
+# ---------------------------------------------------------------------------
+class TestMain:
+    """End-to-end via monkeypatch sys.argv + capsys, no subprocess.
+
+    Mirrors lint_jsx_babel.py's main()-test pattern from PR #154.
+    The truth-table tests above cover ``_compute_exit_code`` in
+    isolation; these tests pin the wiring (argparse → scan → print →
+    exit code) is correct.
+    """
+
+    @pytest.mark.timeout(30)
+    def test_main_clean_codebase_exits_0(self, tmp_path, capsys, monkeypatch):
+        """No violations + --ci → exit 0 + clean message."""
+        clean = tmp_path / "clean.py"
+        clean.write_text(
+            "import subprocess\n"
+            "subprocess.run(['ls'], timeout=30)\n"
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["check_subprocess_timeout.py", "--ci", str(clean)]
+        )
+        rc = cst.main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "no subprocess calls without timeout=" in out
+
+    @pytest.mark.timeout(30)
+    def test_main_violations_under_ci_only_warns(self, tmp_path, capsys, monkeypatch):
+        """Violations + --ci (no --strict-...) → exit 0, but reports."""
+        dirty = tmp_path / "dirty.py"
+        dirty.write_text(
+            "import subprocess\n"
+            "subprocess.run(['ls'])\n"
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["check_subprocess_timeout.py", "--ci", str(dirty)]
+        )
+        rc = cst.main()
+        out = capsys.readouterr().out
+        assert rc == 0  # warn-only
+        assert "WARN" in out
+        assert "subprocess.run-no-timeout" in out
+
+    @pytest.mark.timeout(30)
+    def test_main_violations_under_strict_exits_1(self, tmp_path, capsys, monkeypatch):
+        """Violations + --ci + --strict-subprocess-timeout → exit 1."""
+        dirty = tmp_path / "dirty.py"
+        dirty.write_text(
+            "import subprocess\n"
+            "subprocess.run(['ls'])\n"
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "check_subprocess_timeout.py",
+                "--ci",
+                "--strict-subprocess-timeout",
+                str(dirty),
+            ],
+        )
+        rc = cst.main()
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "ERROR" in out
+
+    @pytest.mark.timeout(30)
+    def test_main_no_ci_always_exits_0(self, tmp_path, capsys, monkeypatch):
+        """Violations + no --ci → exit 0 (audit mode never fails)."""
+        dirty = tmp_path / "dirty.py"
+        dirty.write_text(
+            "import subprocess\n"
+            "subprocess.run(['ls'])\n"
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["check_subprocess_timeout.py", str(dirty)]
+        )
+        rc = cst.main()
+        assert rc == 0  # audit mode never fails
+
+
+# ---------------------------------------------------------------------------
 # Multi-violation report shape
 # ---------------------------------------------------------------------------
 class TestReportShape:

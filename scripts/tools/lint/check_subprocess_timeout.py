@@ -44,8 +44,10 @@ its constructor has no timeout; the timeout belongs on the later
 Severity model (mirrors lint_jsx_babel.py from PR #162 / PR #154)
 ------------------------------------------------------------------
 
-The codebase has **218 existing subprocess call sites** as of v2.8.0
-PR #165 audit. Cleaning all of them in one PR is impractical, so this
+The codebase audit (PR #166, v2.8.0) found **93 violations across
+34 files** (raw grep for ``subprocess.`` matched 218 sites; the
+delta is comments / strings / docstrings filtered out by the
+AST walk). Cleaning all of them in one PR is impractical, so this
 linter ships with **granular --strict-subprocess-timeout flag** rather
 than as a default-fatal rule. The split:
 
@@ -127,13 +129,58 @@ class TimeoutViolation:
     snippet: str
 
     def render(self) -> str:
-        rel = self.path.relative_to(PROJECT_ROOT) if self.path.is_absolute() else self.path
+        # Default: render absolute paths relative to PROJECT_ROOT for
+        # readable output. If the path is OUTSIDE PROJECT_ROOT (e.g.
+        # an absolute path supplied as a CLI arg, or a tmp_path used
+        # in tests), fall back to the absolute string — `relative_to`
+        # would raise ValueError otherwise. (Pre-PR-#166-amend bug
+        # caught by TestMain.test_main_violations_under_ci_only_warns.)
+        rel: Path
+        if self.path.is_absolute():
+            try:
+                rel = self.path.relative_to(PROJECT_ROOT)
+            except ValueError:
+                rel = self.path
+        else:
+            rel = self.path
         return f"{rel}:{self.line}:{self.col} [{self.rule}] {self.snippet}"
 
 
-def _has_timeout_kwarg(call: ast.Call) -> bool:
-    """True if the call has a ``timeout=...`` keyword arg."""
-    return any(kw.arg == "timeout" for kw in call.keywords)
+def _has_meaningful_timeout(call: ast.Call) -> bool:
+    """True if the call has ``timeout=<truthy-value>`` keyword arg.
+
+    A bare ``timeout=`` presence is not enough: ``timeout=None`` and
+    ``timeout=0`` are functionally identical to no timeout (None
+    means "wait forever" per stdlib semantics; 0 raises immediately
+    which is rarely the intent and equally hang-prone in practice
+    when wrapped in retry logic).
+
+    The check is intentionally **conservative**: any literal that's
+    NOT ``None`` and NOT a numeric zero (int 0 / float 0.0) is treated
+    as meaningful. Variables / function-call results / arithmetic
+    expressions are accepted because we can't statically know their
+    runtime value — the lint is structural ("did the author write
+    timeout=X?"), not value-checking ("does X actually time out?").
+    """
+    for kw in call.keywords:
+        if kw.arg != "timeout":
+            continue
+        # Reject `timeout=None`
+        if isinstance(kw.value, ast.Constant) and kw.value.value is None:
+            return False
+        # Reject `timeout=0` / `timeout=0.0`
+        if isinstance(kw.value, ast.Constant) and isinstance(
+            kw.value.value, (int, float)
+        ) and kw.value.value == 0:
+            return False
+        return True
+    return False
+
+
+# Backward-compat alias — keep the old name available for any external
+# callers that might import it (not currently tested-against; this is
+# defensive future-proofing).
+_has_timeout_kwarg = _has_meaningful_timeout
 
 
 def _is_subprocess_fn_call(call: ast.Call) -> str | None:
@@ -213,7 +260,7 @@ def scan_source(path: Path, source: str) -> list[TimeoutViolation]:
 
         # Class A: subprocess.run / subprocess.call / etc.
         fn_name = _is_subprocess_fn_call(node)
-        if fn_name and not _has_timeout_kwarg(node):
+        if fn_name and not _has_meaningful_timeout(node):
             if not _line_has_ignore(source_lines, node.lineno):
                 snippet = (
                     source_lines[node.lineno - 1].strip()
@@ -232,7 +279,7 @@ def scan_source(path: Path, source: str) -> list[TimeoutViolation]:
             continue  # don't double-flag a single call
 
         # Class B: x.communicate(...)
-        if _is_communicate_call(node) and not _has_timeout_kwarg(node):
+        if _is_communicate_call(node) and not _has_meaningful_timeout(node):
             if not _line_has_ignore(source_lines, node.lineno):
                 snippet = (
                     source_lines[node.lineno - 1].strip()
