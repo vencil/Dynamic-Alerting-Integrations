@@ -2,13 +2,19 @@
 """lint_jsx_babel.py — Validate JSX files parse correctly via Babel standalone.
 
 Replicates the jsx-loader.html transform pipeline (front-matter strip,
-ES import → global reference, export default → function) then runs TWO
+ES import → global reference, export default → function) then runs THREE
 validation passes:
 
   1. **Static pattern check** — catches ``style={{ }}`` and other patterns
      that Babel's programmatic API accepts but the browser script-tag mode
      (``Babel.transformScriptTags()``) silently breaks on.
-  2. **Babel parse** — runs ``Babel.transform()`` via Node.js to catch
+  2. **Line-count guard** (issue #152) — flags files that have grown to
+     the size where latent-bug archaeology becomes infeasible. PR #150
+     uncovered three pre-existing latent bugs in tenant-manager.jsx
+     (1671 lines) that would have been trivially spotted in 200-line
+     modules. Soft cap warns at 1500, hard cap fails at 2500.
+     # TODO(v2.9.0): revisit thresholds once we have a year of data.
+  3. **Babel parse** — runs ``Babel.transform()`` via Node.js to catch
      syntax errors.
 
 Requirements:
@@ -17,20 +23,24 @@ Requirements:
 
 Usage:
     python3 scripts/tools/lint/lint_jsx_babel.py             # report mode
-    python3 scripts/tools/lint/lint_jsx_babel.py --ci         # exit 1 on parse errors (fatal)
-    python3 scripts/tools/lint/lint_jsx_babel.py --ci --strict # also fail on static pattern warnings
+    python3 scripts/tools/lint/lint_jsx_babel.py --ci         # exit 1 on parse errors / hard-cap line-count
+    python3 scripts/tools/lint/lint_jsx_babel.py --ci --strict # also fail on static + soft-cap warnings
     python3 scripts/tools/lint/lint_jsx_babel.py --fix        # hint-only (no auto-fix)
 
 Severity split (added in docs/harness-hardening):
     - Babel parse errors → ALWAYS fatal under --ci (catches NUL bytes,
       broken syntax, the architecture-quiz.jsx regression)
-    - Static pattern warnings (style={{ }} etc.) → only fatal under --strict;
-      pre-commit stays on default so commits are not blocked by pre-existing
-      drift, while CI runs --strict to surface everything.
+    - Line-count hard cap (> 2500 lines) → ALWAYS fatal under --ci
+      (#152 — files that big virtually guarantee latent bugs go undetected)
+    - Static pattern warnings (style={{ }} etc.) → only fatal under --strict
+    - Line-count soft cap (1500 < N ≤ 2500) → only fatal under --strict
+    pre-commit stays on default so commits are not blocked by pre-existing
+    drift; CI runs --strict to surface everything.
 
 Exit codes:
-    0 = all files parse OK
-    1 = Babel parse failure (always) or static warning (under --strict)
+    0 = all files pass
+    1 = Babel parse failure / hard-cap line-count (always fatal under --ci),
+        OR static / soft-cap warnings under --strict
 """
 from __future__ import annotations
 
@@ -111,6 +121,69 @@ def _run_static_checks(filepath: str, source: str) -> list[dict]:
                     "snippet": line.strip()[:120],
                 })
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Line-count guard (issue #152) — files larger than these thresholds become
+# infeasible to maintain because latent bugs hide in them. PR #150 paid the
+# tuition: tenant-manager.jsx (1671 lines) accumulated 3 latent bugs over
+# months that all surfaced together once mocked-API e2e tests let `loading`
+# flip from true → false fast (hook-count mismatch / missing useState /
+# loading-state never cleared on success path).
+# ---------------------------------------------------------------------------
+
+# Soft cap: the size at which decomposition starts paying off. Picked from
+# observing where tenant-manager.jsx became hard to audit. Most of the 39
+# interactive JSX tools sit between 200 and 1200 lines today; 1500 is the
+# top-decile signal.
+LINE_COUNT_WARN = 1500
+
+# Hard cap: tenant-manager.jsx at 1671 already had 3 latent bugs; 2500 gives
+# ~67% headroom over today's worst offender so it doesn't insta-fail current
+# reality, but blocks the next such offender from landing.
+LINE_COUNT_FAIL = 2500
+
+
+def _run_line_count_check(filepath: str, source: str) -> list[dict]:
+    """Return at most one issue describing a line-count threshold breach.
+
+    Severity is tagged into the error message so the main reporter can
+    distinguish hard-cap (always fatal under --ci) from soft-cap (fatal
+    only under --strict).
+    """
+    # Count lines the same way `wc -l` does (newlines), but +1 if the file
+    # doesn't end with one. This matches user intuition ("1691 lines") and
+    # `wc -l` output that the issue body cites.
+    line_count = source.count("\n")
+    if source and not source.endswith("\n"):
+        line_count += 1
+
+    if line_count > LINE_COUNT_FAIL:
+        return [{
+            "path": filepath,
+            "line": 1,
+            "severity": "hard",
+            "error": (
+                f"(line-count/hard) {line_count} lines exceeds hard cap of "
+                f"{LINE_COUNT_FAIL} — split into a directory of focused "
+                f"modules (see PR-2d / issue #153 for the tenant-manager.jsx "
+                f"decomposition pattern)"
+            ),
+            "snippet": "",
+        }]
+    if line_count > LINE_COUNT_WARN:
+        return [{
+            "path": filepath,
+            "line": 1,
+            "severity": "soft",
+            "error": (
+                f"(line-count/soft) {line_count} lines exceeds soft cap of "
+                f"{LINE_COUNT_WARN} — consider extracting hooks/views before "
+                f"the file crosses {LINE_COUNT_FAIL}"
+            ),
+            "snippet": "",
+        }]
+    return []
 
 
 def _transform_jsx(source: str) -> str:
@@ -220,6 +293,8 @@ def main() -> int:
     # Collect JSX files
     files = []
     static_failures = []
+    linecount_hard_failures = []
+    linecount_soft_failures = []
     for d in JSX_DIRS:
         if not d.exists():
             continue
@@ -228,6 +303,12 @@ def main() -> int:
             rel_path = str(jsx.relative_to(PROJECT_ROOT))
             # Pass 1: static pattern checks (on original source, before transform)
             static_failures.extend(_run_static_checks(rel_path, source))
+            # Pass 2: line-count guard (issue #152)
+            for issue in _run_line_count_check(rel_path, source):
+                if issue["severity"] == "hard":
+                    linecount_hard_failures.append(issue)
+                else:
+                    linecount_soft_failures.append(issue)
             transformed = _transform_jsx(source)
             files.append({"path": rel_path, "source": transformed})
 
@@ -258,14 +339,22 @@ def main() -> int:
             print("⚠ Could not parse Node.js output")
 
     # Combine results
-    all_failures = static_failures + babel_failures
+    all_failures = (
+        static_failures
+        + babel_failures
+        + linecount_hard_failures
+        + linecount_soft_failures
+    )
     total_files = len(files)
     unique_failing = set()
     for f in all_failures:
         unique_failing.add(f["path"])
 
     if not all_failures:
-        print(f"✓ All {total_files} JSX files pass (Babel parse + static checks)")
+        print(
+            f"✓ All {total_files} JSX files pass "
+            f"(Babel parse + static checks + line-count)"
+        )
         return 0
 
     # Report static pattern issues
@@ -274,6 +363,26 @@ def main() -> int:
         for f in static_failures:
             print(f"  {f['path']}:{f['line']}: {f['error']}")
             print(f"    → {f['snippet']}")
+        print()
+
+    # Report line-count hard-cap (always fatal under --ci)
+    if linecount_hard_failures:
+        print(
+            f"✗ {len(linecount_hard_failures)} JSX file(s) exceed hard line-count cap "
+            f"({LINE_COUNT_FAIL}):\n"
+        )
+        for f in linecount_hard_failures:
+            print(f"  {f['path']}: {f['error']}")
+        print()
+
+    # Report line-count soft-cap (warn unless --strict)
+    if linecount_soft_failures:
+        print(
+            f"⚠ {len(linecount_soft_failures)} JSX file(s) exceed soft line-count cap "
+            f"({LINE_COUNT_WARN}):\n"
+        )
+        for f in linecount_soft_failures:
+            print(f"  {f['path']}: {f['error']}")
         print()
 
     # Report Babel parse failures
@@ -287,13 +396,22 @@ def main() -> int:
     print(f"Summary: {passed}/{total_files} files OK, "
           f"{len(unique_failing)} file(s) have issues")
 
-    # Parse errors are always fatal under --ci; static warnings need --strict.
-    fatal = bool(babel_failures) or (args.strict and bool(static_failures))
+    # Severity computation:
+    #   - Babel parse + line-count hard cap → ALWAYS fatal under --ci
+    #   - Static pattern + line-count soft cap → fatal only under --strict
+    soft_warnings = bool(static_failures) or bool(linecount_soft_failures)
+    fatal = (
+        bool(babel_failures)
+        or bool(linecount_hard_failures)
+        or (args.strict and soft_warnings)
+    )
     if args.ci and fatal:
         return 1
-    if args.ci and static_failures and not args.strict:
+    if args.ci and soft_warnings and not args.strict:
+        soft_total = len(static_failures) + len(linecount_soft_failures)
         print(
-            f"\nNote: {len(static_failures)} static warning(s) — use --strict to fail on these."
+            f"\nNote: {soft_total} soft warning(s) (static + line-count) — "
+            f"use --strict to fail on these."
         )
     return 0
 
