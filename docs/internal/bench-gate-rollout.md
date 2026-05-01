@@ -51,7 +51,7 @@ Hard gate at PR-level is also blocked on infrastructure: PR-level CI currently r
 - ≥ 28 nightly `bench-record` runs accumulated (4 weeks × 7 days)
 - `analyze_bench_history.py` reports `cross_run_cv ≤ 25%` AND `max_min_ratio ≤ 1.30` for ≥ 26 of 28 runs (per existing tool's GO threshold)
 - `pre-tag` workflow on a `release/*` branch fails when current run > 3× median of last 5 runs for any tracked benchmark
-- **Scope**: only triggered on tag/release branches, not on every PR (PR-level cost is too high — one PR ≈ 30 min × 13 benchmarks × `count=6` = significant CI cost on every PR)
+- **Scope**: only triggered on tag/release branches, not on every PR (PR-level cost is too high — one PR ≈ 30 min × 17 benchmarks × `count=6` = significant CI cost on every PR; mixed-mode benches added via [#128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) prerequisite raised the count from 13 → 17)
 
 **Acceptance criteria for the Phase 2 implementation PR**:
 
