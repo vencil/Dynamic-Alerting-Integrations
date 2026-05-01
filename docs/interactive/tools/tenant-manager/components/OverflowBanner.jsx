@@ -27,7 +27,7 @@ const overflowBannerStyle = {
   alignItems: 'center',
   gap: 'var(--da-space-2)',
   fontSize: '14px',
-  color: 'var(--da-color-text)',
+  color: 'var(--da-color-fg)',
 };
 const overflowMsgStyle = { flex: 1 };
 

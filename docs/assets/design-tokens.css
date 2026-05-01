@@ -114,6 +114,19 @@
   /* ── Toast ── */
   --da-color-toast-bg:        #1e293b;
   --da-color-toast-fg:        #e2e8f0;
+
+  /* ── A-3 Tier B closure (S#85): tokens for wizard.jsx deferred sites ── */
+  /* Link color on dark bg (toast/hero contexts where surface is dark in
+     both themes; value identical to dark-mode --da-color-accent). */
+  --da-color-link-on-dark:    #93c5fd;
+  /* Decorative subtle-blue card border (modal accents). */
+  --da-color-accent-border-soft: #c7d2fe;
+  /* Semantic "other-path" / "compared-only" text color (purple keeps
+     contrast against `--da-color-success` green for shared vs other). */
+  --da-color-semantic-other:  #7e22ce;
+  /* Page-level hero gradient (composite token consumed via
+     `bg-[image:var(--da-color-hero-gradient)]` arbitrary value). */
+  --da-color-hero-gradient:   linear-gradient(to bottom right, #eff6ff, #ffffff, #eef2ff);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -203,6 +216,16 @@
 
   --da-color-toast-bg:        #334155;
   --da-color-toast-fg:        #e2e8f0;
+
+  /* ── A-3 Tier B closure (S#85): dark-mode overrides ── */
+  /* link-on-dark unchanged (toast bg is dark in both themes). */
+  --da-color-link-on-dark:    #93c5fd;
+  /* Darker indigo for visibility on dark surfaces. */
+  --da-color-accent-border-soft: #3730a3;
+  /* Lighter purple for contrast on dark theme. */
+  --da-color-semantic-other:  #c084fc;
+  /* Dark hero gradient: deep navy stops aligned with --da-color-hero-bg. */
+  --da-color-hero-gradient:   linear-gradient(to bottom right, #0f172a, #1e293b, #1e1b4b);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
