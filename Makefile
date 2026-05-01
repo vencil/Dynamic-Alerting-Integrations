@@ -52,13 +52,13 @@ go-bench-clean: ## Go micro-benchmark via bench_wrapper (stdout-clean, -json fil
 		-bench=. -benchmem -count=$${COUNT:-5} -run="^$$" -timeout=15m ./...
 
 .PHONY: benchmark-report
-benchmark-report: ## 1000-scale baseline (13 benches: 8 flat + 5 hierarchical) → .build/bench-baseline.txt（issue #60 Phase 1, informational; COUNT/BENCHTIME 可覆寫）
+benchmark-report: ## 1000-scale baseline (17 benches: 8 flat + 5 hierarchical + 4 mixed-mode) → .build/bench-baseline.txt（issue #60 Phase 1, informational; COUNT/BENCHTIME 可覆寫）
 	@mkdir -p .build
 	@echo "[benchmark-report] running 1000-scale baseline (count=$${COUNT:-6}, benchtime=$${BENCHTIME:-3s}; samples 2..N treated as steady-state by Phase 2 median-of-5)"
 	@cd components/threshold-exporter/app && \
 		BENCH_OUT_DIR="$(CURDIR)/.build" \
 		bash $(CURDIR)/scripts/tools/ops/bench_wrapper.sh \
-		-bench='_1000(_|$$)' -benchmem -count=$${COUNT:-6} -run='^$$' \
+		-bench='_1000(_|$$)|MixedMode' -benchmem -count=$${COUNT:-6} -run='^$$' \
 		-timeout=20m -benchtime=$${BENCHTIME:-3s} ./...
 	@cp .build/bench.out.txt .build/bench-baseline.txt
 	@echo "[benchmark-report] wrote .build/bench-baseline.txt ($$(wc -l < .build/bench-baseline.txt) lines)"
