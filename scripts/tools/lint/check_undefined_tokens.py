@@ -66,7 +66,7 @@ _IGNORE_LOOKBACK_LINES = 3
 
 _TOKENS_CSS = PROJECT_ROOT / "docs" / "assets" / "design-tokens.css"
 _DEFAULT_SCAN_DIR = PROJECT_ROOT / "docs"
-_DEFAULT_SCAN_EXTS = (".jsx", ".js", ".css")
+_DEFAULT_SCAN_EXTS = (".jsx", ".js", ".css", ".html")
 
 # Match a `var(--da-<full-name>)` reference. The full-name part
 # (category-name e.g. `color-fg` / `space-3` / `font-md`) allows
@@ -125,7 +125,7 @@ def scan_source(
     *,
     known_set: set[str] | None = None,
 ) -> list[UndefinedTokensFinding]:
-    """Walk source line-by-line, find `var(--da-color-<name>)` refs whose
+    """Walk source line-by-line, find `var(--da-<name>)` refs whose
     `<name>` is not in known_set."""
     if known_set is None:
         known_set = set()
@@ -151,6 +151,41 @@ def scan_source(
             )
 
     return findings
+
+
+def collect_referenced_tokens(paths: list[Path]) -> set[str]:
+    """Walk every path and return the set of `<category>-<name>` strings
+    referenced via `var(--da-<full-name>)`. Used by orphan detection
+    (S#88) — opposite direction from scan_source: we want the union of
+    refs across the codebase, not a per-file finding list.
+
+    Skips files that fail to read (OSError) silently, matching the
+    forgiving behaviour of `main()`'s scan loop.
+    """
+    referenced: set[str] = set()
+    for p in paths:
+        try:
+            source = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line_idx, line in enumerate(source.splitlines(), start=1):
+            if _line_has_ignore(source.splitlines(), line_idx):
+                continue
+            for m in _VAR_REF_RE.finditer(line):
+                referenced.add(m.group(1))
+    return referenced
+
+
+def find_orphan_tokens(
+    *, known: set[str], referenced: set[str]
+) -> list[str]:
+    """Return sorted list of tokens defined but never referenced.
+
+    A token is "orphan" if its `<category>-<name>` appears in known
+    (loaded from design-tokens.css) but not in referenced (collected
+    from JSX/JS/CSS scan). Sort lexically so output is deterministic.
+    """
+    return sorted(known - referenced)
 
 
 def _resolve_target_paths(args: argparse.Namespace) -> list[Path]:
@@ -205,6 +240,16 @@ def main(argv: list[str] | None = None) -> int:
         default=_TOKENS_CSS,
         help="Path to design-tokens.css (overrides default).",
     )
+    parser.add_argument(
+        "--report-orphans",
+        action="store_true",
+        help=(
+            "Report tokens defined in design-tokens.css but never "
+            "referenced anywhere (warn-only, exit 0 even with findings). "
+            "Discovery tool — orphans may be intentional reserve; "
+            "removal needs case-by-case review (S#88)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     known = load_known_tokens(args.tokens_css)
@@ -221,6 +266,39 @@ def main(argv: list[str] | None = None) -> int:
     # don't reference, so they wouldn't trigger the var() regex anyway,
     # but be explicit).
     paths = [p for p in paths if p != args.tokens_css]
+
+    # ── Orphan-detection mode (warn-only discovery, S#88) ───────────
+    # Collects refs across all scanned paths PLUS design-tokens.css
+    # itself (the SOT may self-reference tokens for utility classes;
+    # those count as live usage). Reports tokens never referenced.
+    if args.report_orphans:
+        ref_paths = list(paths)
+        if args.tokens_css.is_file():
+            ref_paths.append(args.tokens_css)
+        referenced = collect_referenced_tokens(ref_paths)
+        orphans = find_orphan_tokens(known=known, referenced=referenced)
+        if not orphans:
+            print(
+                f"✓ no orphan tokens across {len(known)} definition(s)",
+                file=sys.stderr,
+            )
+            return 0
+        print(
+            f"⚠ {len(orphans)} orphan token(s) defined in "
+            f"design-tokens.css but never referenced (warn-only):",
+            file=sys.stderr,
+        )
+        for name in orphans:
+            print(f"  --da-{name}", file=sys.stderr)
+        print(
+            "\nReview each: may be intentional reserve (e.g. token "
+            "pair half), planned upcoming usage, or genuinely dead. "
+            "Removal is a separate user-judgment PR.",
+            file=sys.stderr,
+        )
+        # Always exit 0 in orphan mode — discovery, not enforcement.
+        return 0
+
     if not paths:
         if args.ci:
             print("✓ no files matched scan target")

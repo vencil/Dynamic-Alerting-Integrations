@@ -263,6 +263,144 @@ class TestMain:
 
 
 # ---------------------------------------------------------------------------
+# S#88 orphan-token detection (warn-only discovery mode)
+# ---------------------------------------------------------------------------
+class TestOrphanDetection:
+    """Pinned contracts:
+
+    - `find_orphan_tokens` returns sorted list of `<category>-<name>`
+      strings present in known but absent from referenced.
+    - `collect_referenced_tokens` walks paths and unions all
+      `var(--da-<name>)` refs (NOT per-file findings — set across
+      codebase).
+    - `--report-orphans` exit code is always 0 (warn-only discovery,
+      not enforcement gate).
+    - design-tokens.css self-references count as live usage (a token
+      pair where one half is consumed only by a utility class inside
+      tokens.css itself is NOT orphan).
+    """
+
+    def test_find_orphans_basic(self):
+        known = {"color-fg", "color-bg", "color-extra"}
+        referenced = {"color-fg"}
+        assert lint.find_orphan_tokens(known=known, referenced=referenced) == [
+            "color-bg",
+            "color-extra",
+        ]
+
+    def test_find_orphans_no_orphans(self):
+        known = {"color-fg", "color-bg"}
+        referenced = {"color-fg", "color-bg", "extra-ref-not-defined"}
+        assert lint.find_orphan_tokens(known=known, referenced=referenced) == []
+
+    def test_find_orphans_empty_known(self):
+        assert lint.find_orphan_tokens(known=set(), referenced={"a", "b"}) == []
+
+    def test_find_orphans_sort_deterministic(self):
+        # Set iteration is unordered; sorted output guarantees
+        # stable ledger / CHANGELOG entries.
+        known = {"z-last", "a-first", "m-mid"}
+        result = lint.find_orphan_tokens(known=known, referenced=set())
+        assert result == ["a-first", "m-mid", "z-last"]
+
+    def test_collect_referenced_tokens_unions_across_files(self, tmp_path):
+        a = tmp_path / "a.jsx"
+        a.write_text("color: var(--da-color-fg);\n", encoding="utf-8")
+        b = tmp_path / "b.css"
+        b.write_text(
+            "padding: var(--da-space-3); margin: var(--da-color-fg);\n",
+            encoding="utf-8",
+        )
+        result = lint.collect_referenced_tokens([a, b])
+        assert result == {"color-fg", "space-3"}
+
+    def test_collect_referenced_tokens_skips_unreadable(self, tmp_path):
+        existing = tmp_path / "exists.css"
+        existing.write_text("color: var(--da-color-fg);\n", encoding="utf-8")
+        nonexistent = tmp_path / "nope.css"  # never created
+        # Should not raise; just skip the unreadable path.
+        result = lint.collect_referenced_tokens([existing, nonexistent])
+        assert result == {"color-fg"}
+
+    def test_collect_referenced_tokens_respects_ignore_marker(self, tmp_path):
+        f = tmp_path / "ignored.css"
+        f.write_text(
+            "/* # undefined-tokens: ignore */\n"  # line 1: marker
+            "color: var(--da-color-typo);\n"      # line 2: in lookback
+            "/* filler */\n"                       # line 3: in lookback
+            "/* filler */\n"                       # line 4: in lookback
+            "padding: var(--da-space-3);\n",       # line 5: outside (4-line gap)
+            encoding="utf-8",
+        )
+        result = lint.collect_referenced_tokens([f])
+        # 3-line lookback: marker on line 1 suppresses lines 1-4;
+        # line 5 (space-3) is outside the 3-line window, so collected.
+        assert "color-typo" not in result
+        assert "space-3" in result
+
+    @pytest.mark.timeout(15)
+    def test_main_report_orphans_exit_0_with_findings(self, tmp_path, capsys):
+        css = tmp_path / "tokens.css"
+        css.write_text(
+            ":root {\n"
+            "  --da-color-used: #000;\n"
+            "  --da-color-orphan: #fff;\n"
+            "  --da-space-orphan: 4px;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        consumer = tmp_path / "app.jsx"
+        consumer.write_text("color: var(--da-color-used);\n", encoding="utf-8")
+        rc = lint.main([
+            "--report-orphans",
+            "--tokens-css", str(css),
+            str(consumer),
+        ])
+        # Always exit 0 in orphan mode — discovery, not enforcement.
+        assert rc == 0
+        captured = capsys.readouterr()
+        # Both orphans listed, sorted; "used" not flagged.
+        assert "color-orphan" in captured.err
+        assert "space-orphan" in captured.err
+        assert "color-used" not in captured.err
+
+    @pytest.mark.timeout(15)
+    def test_main_report_orphans_no_orphans_clean_exit(self, tmp_path, capsys):
+        css = tmp_path / "tokens.css"
+        css.write_text(":root { --da-color-fg: #000; }\n", encoding="utf-8")
+        consumer = tmp_path / "app.jsx"
+        consumer.write_text("color: var(--da-color-fg);\n", encoding="utf-8")
+        rc = lint.main([
+            "--report-orphans",
+            "--tokens-css", str(css),
+            str(consumer),
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "no orphan" in captured.err
+
+    @pytest.mark.timeout(15)
+    def test_main_report_orphans_self_reference_counts(self, tmp_path):
+        # If design-tokens.css uses `var(--da-color-utility)` for an
+        # internal utility class, that token is NOT orphan even if no
+        # JSX/JS/CSS consumer references it.
+        css = tmp_path / "tokens.css"
+        css.write_text(
+            ":root { --da-color-utility: #fff; }\n"
+            ".utility { color: var(--da-color-utility); }\n",
+            encoding="utf-8",
+        )
+        consumer = tmp_path / "app.jsx"
+        consumer.write_text("// no token refs\n", encoding="utf-8")
+        rc = lint.main([
+            "--report-orphans",
+            "--tokens-css", str(css),
+            str(consumer),
+        ])
+        assert rc == 0
+
+
+# ---------------------------------------------------------------------------
 # Live dogfood — actual repo must pass
 # ---------------------------------------------------------------------------
 class TestLiveRepo:

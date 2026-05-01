@@ -501,11 +501,11 @@ repos:
         # exceptions / illustrative quotes.
 
       - id: undefined-tokens-check
-        name: Detect JSX/CSS references to --da-* tokens not defined in design-tokens.css
+        name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css
         entry: python3 -X utf8 scripts/tools/lint/check_undefined_tokens.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/.*\.(jsx|js|css)$
+        files: ^docs/.*\.(jsx|js|css|html)$
         # Auto-stage, FATAL on findings (default for new lints when
         # post-rewrite violation count is 0; mirrors PR #169 / #170).
         # If existing codebase has violations, add granular `--strict-undefined_tokens`
