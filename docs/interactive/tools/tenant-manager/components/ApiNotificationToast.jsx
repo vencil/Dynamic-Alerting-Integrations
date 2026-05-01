@@ -18,11 +18,8 @@ purpose: |
   + aria-live="assertive" preserved for screen-reader interrupts.
 ---
 
-const { useState } = React;
-
 function ApiNotificationToast({ notification, onDismiss, t }) {
   if (!notification) return null;
-  const styles = window.__styles;
 
   const isError = notification.type === 'error';
   const isWarning = notification.type === 'warning';

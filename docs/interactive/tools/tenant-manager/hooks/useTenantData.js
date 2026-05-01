@@ -243,6 +243,13 @@ function useTenantData({ setApiNotification, t }) {
     }
 
     loadData().finally(() => setLoading(false));
+    // Empty deps intentional: this is a one-shot mount-time data load.
+    // The closures over `setApiNotification` + `t` (via outer hook params)
+    // and the 5 setState setters (via outer useState above) are all
+    // stable across renders by React's contract — setters never change
+    // identity, and `t` is a module-top-level alias for window.__t which
+    // also doesn't change. ESLint's exhaustive-deps would flag this; we
+    // accept the warning because the intent is "run once on mount".
   }, []);
 
   return {
