@@ -646,6 +646,31 @@ Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），
 
 **不要**用 `git commit + push + fetch` 同步 — 會污染 commit history。**不要**改 `dx-run.sh` 的 `-w` 參數除非你願意同步調整 container bind-mount。
 
+### 8. Pass 2 wiring-triple — claim vs verify (PR #178 case)
+
+> **觸發**：PR #178 (S#88) 寫 `Self-Review-Pass-2:` trailer 聲稱「Wiring triple synced」但實際上 (a) script docstring 第一行、(b) `tool-map.{md,en.md}` 描述、(c) `validate_all.py` registry 三處全 stale。User 質問「#178 有做 self review 嗎?」抓到。**LL §5 case (i) 連續第 4 PR 重蹈覆轍**（#168 → #171 → #172 → #178）。
+
+**問題**：PR #172 PR template Pass 1 check #4「Wiring triple complete」原是針對 JSX components 設計（front-matter `dependencies` + `import` block + `window.__X` self-register）。**對 Python lint 而言 wiring triple 是另一組 artifact**，但 template 沒寫，agent tick 過不檢查就直接過。
+
+**規範**：當 PR 修改 `scripts/tools/lint/check_*.py` 或 `scripts/tools/dx/*.py` 並改變功能/scope 時，Pass 1 check #4 **必須執行下列三步驗證**（不是聲稱，是執行）：
+
+1. **Docstring 第一行**：scope statement 是否反映新功能？例：S#88 加 `.html` scan + `--report-orphans` mode 時，原 docstring「Detect JSX/CSS references...」需改為「Detect JSX/CSS/HTML references... (with --report-orphans discovery mode)」。**Verification**：`head -3 scripts/tools/lint/check_<name>.py` 人眼檢視。
+2. **`scripts/tools/validate_all.py` 對應 row**：description string 是否與新 scope 一致？**Verification**：`grep -n "<lint_name>" scripts/tools/validate_all.py` 人眼比對。
+3. **Auto-generated tool-map**：跑 `python3 scripts/tools/dx/generate_tool_map.py --check` (zh) + `--check --lang en`。**這個 hook 在 commit-time 自動跑**（`tool-map-check`），但只 catch「已改 docstring 但沒 regen」class — **不 catch「該改 docstring 但沒改」class**。後者唯一防線是 step 1 人眼檢查。
+
+**Anti-pattern**：在 commit message 寫「Wiring triple synced ✓」但實際只 grep 不 verify。**正解**：Pass 2 trailer 寫具體 verification command 跑出的結果，而非泛 tick。例：
+
+```
+Self-Review-Pass-2: 
+- docstring header verified: head -3 .../check_undefined_tokens.py shows "JSX/CSS/HTML"
+- validate_all.py registry: grep shows S#88 trajectory tag
+- tool-map drift: generate_tool_map.py --check both zh+en clean
+```
+
+**Mechanical safety net 缺口（v2.9.0 candidate）**：lint detect "scope changed (functional code added) but docstring header unchanged" — heuristic：staged diff 對 `def` / `class` body 有 `+` lines 但 docstring 第一行 `+` 不存在。Possible follow-up codify。
+
+**Cross-refs**：PR #172 §Pre-merge Self-Review Pass 1 check #4；CHANGELOG `[Unreleased] ### Changed` S#89 entry。
+
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
 > **觸發**：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 `withIsolatedMetrics` + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。
