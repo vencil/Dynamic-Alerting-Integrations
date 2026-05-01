@@ -338,6 +338,20 @@ repos:
         # — empirically the codebase's CI-invoked hooks are auto-stage,
         # not manual-stage. Aligning with that convention now.
 
+      - id: dev-rules-enforcement-check
+        name: dev-rules.md ↔ pre-commit-config.yaml drift check
+        entry: python3 -X utf8 scripts/tools/lint/check_dev_rules_enforcement.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(docs/internal/dev-rules\.md|\.pre-commit-config\.yaml)$
+        # Auto-stage, FATAL on drift (not warn-only). Codifies the
+        # lesson from closed PR #168: snapshot audit doc finds drift
+        # once but goes stale; lint catches drift continuously. No
+        # granular --strict flag because the violation count after
+        # PR #169's re-wording is 0 — we ship strict from day 1.
+        # Per-line escape via `<!-- enforcement-claim: ignore -->`
+        # for third-party tools (bandit etc) not in our config.
+
       - id: subprocess-timeout-audit
         name: subprocess timeout= kwarg audit (S#74 codify, warn-only)
         entry: python3 -X utf8 scripts/tools/lint/check_subprocess_timeout.py --ci

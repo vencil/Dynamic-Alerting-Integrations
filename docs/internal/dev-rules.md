@@ -36,7 +36,7 @@ lang: zh
 
 **為什麼**：平台設計是多租戶 config-driven，tenant id 應由 config 傳入而不是 hardcode。硬編會讓新增租戶時必須改 code，違反平台定位。
 
-**檢查方式**：pre-commit hook `lint_hardcode_tenant` 會掃描。
+**檢查方式**：⚠️ **reviewer convention（v2.8.0, PR #169）** — 此規則目前**未由 pre-commit hook 自動掃描**，靠 reviewer 在 PR review 時確認。新 PR 若改 Go / PromQL / Rule Pack YAML 請主動 grep `db-a` / `db-b` / `tenant-` 確認無 hardcode。Real lint candidate（`check_hardcode_tenant.py`，~80 LOC）已排入 backlog；ship 後本句改為實際 hook 引用。
 
 ### 3. 三態：Custom / Default（省略）/ Disable
 
@@ -60,9 +60,9 @@ lang: zh
 
 **docs/**.md push 前必跑 `make lint-docs-mkdocs`**：mkdocs strict build 用 site-root path 語意（`docs/` 是 root），與 pre-commit `check_doc_links.py` 的 filesystem 語意有 gap — 例如 `../../CHANGELOG.md` 在 filesystem 對但 mkdocs 視為跳出 site 而 fail。CI 會擋但要 push 後才知道；本地跑這個 target 取得 fast feedback。
 
-### 5. SAST：7 條自動掃描規則
+### 5. SAST：7 條安全 review 準則
 
-**規則**：pre-commit stage 會跑 7 條 SAST 規則：
+**規則**：以下 7 條安全準則是歷史踩坑累積，全都至少炸過一次，**code review 時 reviewer 須主動檢查**（v2.8.0, PR #169：原文宣稱 "pre-commit 跑 7 條 SAST 規則" 實為 doc-drift，repo 中無對應 lint scripts；real lint via `bandit` profile 已排入 backlog）：
 1. encoding 檢查（強制 UTF-8 without BOM）
 2. shell 安全（禁用 `shell=True` + unvalidated input）
 3. chmod 檢查（禁止 0o777）
@@ -81,7 +81,7 @@ lang: zh
 
 **為什麼**：這是 OSS 專案，文件必須經得起技術 review。推銷語言會被 reviewer 視為不專業，且無法證明。
 
-**檢查方式**：pre-commit hook `check_marketing_language`（manual stage）。
+**檢查方式**：⚠️ **reviewer convention（v2.8.0, PR #169）** — 此規則目前**未由 pre-commit hook 自動掃描**，靠 reviewer 在 PR review 時審視 README / 文件 / commit message 是否含推銷語言。Real lint candidate（簡單 keyword scan，~50 LOC）已排入 backlog；ship 後本句改為實際 hook 引用。
 
 ### 7. 版號治理：五線 tag
 
