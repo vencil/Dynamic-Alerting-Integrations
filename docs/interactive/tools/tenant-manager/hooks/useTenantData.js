@@ -36,7 +36,7 @@ const { useState, useEffect } = React;
 
 // Pull deps from window globals (registered by orchestrator's earlier
 // dependencies: DEMO_TENANTS / DEMO_GROUPS).
-function useTenantData({ setApiNotification, t }) {
+function useTenantData({ setApiNotification, t, q = '' }) {
   const [tenants, setTenants] = useState({});
   const [groups, setGroups] = useState({});
   const [loading, setLoading] = useState(true);
@@ -128,7 +128,13 @@ function useTenantData({ setApiNotification, t }) {
     // doesn't turn benign "this is the static demo site" cases into
     // visible errors. Returns {tenants, overflow} on success.
     async function fetchTenantsFromAPI() {
-      const url = '/api/v1/tenants/search?page_size=500';
+      // PR-2b: server-side `q` param lets the caller (orchestrator)
+      // delegate free-text search to the API instead of doing
+      // client-side substring scan over the visible page. Empty q
+      // is omitted (cleaner URL + matches C-1's TrimSpace handling).
+      const params = new URLSearchParams({ page_size: '500' });
+      if (q) params.set('q', q);
+      const url = '/api/v1/tenants/search?' + params.toString();
       let resp;
       try {
         resp = await fetchWithRateLimitRetry(url);
@@ -243,14 +249,16 @@ function useTenantData({ setApiNotification, t }) {
     }
 
     loadData().finally(() => setLoading(false));
-    // Empty deps intentional: this is a one-shot mount-time data load.
-    // The closures over `setApiNotification` + `t` (via outer hook params)
-    // and the 5 setState setters (via outer useState above) are all
-    // stable across renders by React's contract — setters never change
-    // identity, and `t` is a module-top-level alias for window.__t which
-    // also doesn't change. ESLint's exhaustive-deps would flag this; we
-    // accept the warning because the intent is "run once on mount".
-  }, []);
+    // PR-2b: re-fetch when `q` changes (debounced upstream so this
+    // doesn't fire on every keystroke). All other deps still stable
+    // (setters / t — see PR-2d Phase 2 rationale that originally
+    // pinned `[]`). When q changes the entire fallback chain re-runs;
+    // for static / demo modes the same static file is re-fetched
+    // (browser-cached so trivially cheap), state re-set with same
+    // values → no-op re-render. The orchestrator's client-side
+    // useMemo filter still applies regardless of q (handles non-API
+    // modes gracefully).
+  }, [q]);
 
   return {
     tenants, setTenants,

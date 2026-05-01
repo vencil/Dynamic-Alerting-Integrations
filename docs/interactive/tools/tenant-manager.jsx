@@ -14,7 +14,9 @@ dependencies: [
   "tenant-manager/components/GroupSidebar.jsx",
   "tenant-manager/components/ApiNotificationToast.jsx",
   "tenant-manager/components/OverflowBanner.jsx",
-  "tenant-manager/components/TenantCard.jsx"
+  "tenant-manager/components/TenantCard.jsx",
+  "tenant-manager/hooks/useDebouncedValue.js",
+  "tenant-manager/hooks/useURLState.js"
 ]
 ---
 
@@ -41,26 +43,70 @@ const ApiNotificationToast = window.__ApiNotificationToast;
 const OverflowBanner = window.__OverflowBanner;
 
 const TenantCard = window.__TenantCard;
+const useDebouncedValue = window.__useDebouncedValue;
+const useURLState = window.__useURLState;
+
+// PR-2b: tracked URL params. Module-level const so identity stays
+// stable across renders — passing `['q']` inline as a literal would
+// create a new array each render and trigger useURLState's internal
+// useCallback churn (functionally a no-op but messes with dep arrays
+// downstream and triggers unnecessary effect firings).
+const TENANT_MANAGER_URL_KEYS = ['q'];
+
 export default function TenantManager() {
   // PR-2d Phase 2 (#153): apiNotification owned by orchestrator (shared
   // with bulk-action / group-create / group-delete handlers below) but
   // useTenantData also writes it for the 429 retry toast.
   const [apiNotification, setApiNotification] = useState(null);
 
+  // PR-2b: URL state sync — bookmarkable filter state. Reads `?q=`
+  // from URL on mount; setter writes back via history.replaceState
+  // (no scroll jump, no back-button-per-keystroke).
+  const urlState = useURLState(TENANT_MANAGER_URL_KEYS);
+
+  // Local UI state for the search input (immediate / un-debounced).
+  // Initialized from URL so a refresh / share-link preserves filter.
+  const [searchText, setSearchText] = useState(() => urlState.state.q);
+
+  // Server-side `q` param: debounced version of `searchText` so we
+  // don't re-fetch on every keystroke. 300ms is the standard "feels
+  // instant but doesn't hammer the API" window.
+  const debouncedQ = useDebouncedValue(searchText, 300);
+
+  // Sync debouncedQ → URL whenever it stabilizes. ONE-WAY (search-input
+  // → URL only); back-button popstate updates `urlState.state.q` but
+  // doesn't push back into `searchText`. Honest scope (PR-2b v1):
+  // bookmark-sharing works (URL captures filter), refresh works
+  // (initial searchText seeds from URL), but back-button-while-typing
+  // doesn't reset the input. Future PR can add popstate→searchText
+  // sync if anyone actually hits the limitation.
+  useEffect(() => {
+    if (debouncedQ !== urlState.state.q) {
+      urlState.setKey('q', debouncedQ);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentionally [debouncedQ] only — adding urlState.setKey or
+    // urlState.state.q would either no-op (setKey stable thanks to
+    // TENANT_MANAGER_URL_KEYS module-const) or fire on popstate
+    // (which would push searchText changes back to the URL,
+    // re-fighting the user's nav).
+  }, [debouncedQ]);
+
   // Data-loading state machine extracted to useTenantData hook (#153
   // Phase 2). Owns the 3-tier priority chain (API → platform-data →
   // DEMO) + 429 retry. Returns setters too because group create/delete
   // handlers below mutate `groups` optimistically.
+  // PR-2b: pass `q` so the API mode can server-side filter; non-API
+  // modes ignore q (client-side `filtered` useMemo still applies).
   const {
     tenants, setTenants,
     groups, setGroups,
     loading,
     searchOverflow,
     dataSource,
-  } = useTenantData({ setApiNotification, t });
+  } = useTenantData({ setApiNotification, t, q: debouncedQ });
 
   const [error, setError] = useState(null);
-  const [searchText, setSearchText] = useState('');
   const [filterEnv, setFilterEnv] = useState('');
   const [filterTier, setFilterTier] = useState('');
   const [filterMode, setFilterMode] = useState('');
@@ -145,11 +191,21 @@ export default function TenantManager() {
           return false;
         }
       }
-      const matchSearch = !searchText ||
-        name.toLowerCase().includes(searchText.toLowerCase()) ||
-        data.owner?.toLowerCase().includes(searchText.toLowerCase()) ||
-        data.routing_channel?.toLowerCase().includes(searchText.toLowerCase()) ||
-        (data.tags || []).some(tag => tag.toLowerCase().includes(searchText.toLowerCase()));
+      // PR-2b: in API mode the server already did the `q` substring
+      // filter via /api/v1/tenants/search?q=..., so skip the
+      // client-side search-text match (else we double-filter and
+      // potentially hide rows that DID match server-side but happen
+      // to not match the client-side variant — e.g. server matches
+      // tags via tag-array contains, client matches via case-insensitive
+      // string-contains-substring; the two could disagree on edge
+      // cases like multi-word matches).
+      const matchSearch = dataSource === 'api'
+        ? true
+        : (!searchText ||
+            name.toLowerCase().includes(searchText.toLowerCase()) ||
+            data.owner?.toLowerCase().includes(searchText.toLowerCase()) ||
+            data.routing_channel?.toLowerCase().includes(searchText.toLowerCase()) ||
+            (data.tags || []).some(tag => tag.toLowerCase().includes(searchText.toLowerCase())));
       const matchEnv = !filterEnv || data.environment === filterEnv;
       const matchTier = !filterTier || data.tier === filterTier;
       const matchMode = !filterMode || data.operational_mode === filterMode;
@@ -157,7 +213,7 @@ export default function TenantManager() {
       const matchDBType = !filterDBType || data.db_type === filterDBType;
       return matchSearch && matchEnv && matchTier && matchMode && matchDomain && matchDBType;
     });
-  }, [tenants, groups, activeGroupId, searchText, filterEnv, filterTier, filterMode, filterDomain, filterDBType]);
+  }, [tenants, groups, activeGroupId, dataSource, searchText, filterEnv, filterTier, filterMode, filterDomain, filterDBType]);
 
   const stats = useMemo(() => {
     const envCounts = {};
