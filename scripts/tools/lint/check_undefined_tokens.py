@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_undefined_tokens.py — Detect JSX/CSS references to --da-* tokens not defined in design-tokens.css.
+"""check_undefined_tokens.py — Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode).
 
 Why this exists
 ---------------
@@ -168,8 +168,12 @@ def collect_referenced_tokens(paths: list[Path]) -> set[str]:
             source = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for line_idx, line in enumerate(source.splitlines(), start=1):
-            if _line_has_ignore(source.splitlines(), line_idx):
+        # Pre-split once per file (was O(N²) calling splitlines() inside
+        # the line loop AND inside _line_has_ignore — Self-Review Pass 2
+        # follow-up amend after PR #178 review).
+        lines = source.splitlines()
+        for line_idx, line in enumerate(lines, start=1):
+            if _line_has_ignore(lines, line_idx):
                 continue
             for m in _VAR_REF_RE.finditer(line):
                 referenced.add(m.group(1))
