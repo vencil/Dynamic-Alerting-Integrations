@@ -45,6 +45,17 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Fixed
 
+- **`TestSlowWriteTornStateStress` race-flake hardening — quiescence detection rewrite（v2.8.0, Phase B testing follow-up, [closes #157](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/157)）** — B-7 slow-write torn-state stress 從 v2.8.0 cycle 起 flaked CI 兩次（PR #151 + PR #155 各 1 次），symptom 都是 `sliding debounce violated: fire count = 1 after write 19/2 (expected 0 throughout the burst)`。**這 PR 不修 production code — debounce 沒 bug**；修的是 test 違反了 PR #149 codify 的 testing-playbook lesson §2 anti-pattern：`for { trigger; t.Sleep(jitter) } + assert fireCount == 0` 是 wall-clock 斷言，loaded CI runner overshooting sleep 就會誤判 burst split。
+  - **修法**：完整套用 lesson §2 canonical quiescence pattern：
+    - 移除 mid-burst `fireSnapshots` 抽樣 + 「expected 0 throughout the burst」斷言（這條是 timing claim，不是 contract claim）
+    - 移除 post-settle `time.Sleep(2*window) + assert fireCount == 1`（同樣 timing claim）
+    - 加入新 helper `waitForQuiescence(t, deadline, stableWindow, counterFn)` — 輪詢計數器直到 stableWindow 連續 ms 沒變動，否則 timeout
+    - Post-quiescence assert 三條 contract-stable invariants：(1) `debounceBatch._sum == numFiles`（每個 trigger 都 coalesce 到某個 fire — 抓 lost-trigger）；(2) `merged_hash` 全 tenant 從 baseline 推進（抓 lost-write）；(3) `_count ≤ 2` CI-jitter envelope（外面就是真 broken debounce）
+    - `fireCount` 變 informational logging — 不再硬斷言
+  - **重新命名**：`TestSlowWriteTornStateStress_FinalConvergenceNoTornFires` → `TestSlowWriteTornStateStress_FinalConvergence` — 誠實對應改寫後的合約（drop 「NoTornFires」承諾，因 fireCount 不再硬斷）。File 開頭加段 issue #157 history block 給 future reader 知道改寫 rationale
+  - **驗證**：本機 dev-container `-race -count=10` 全綠（vs. 改寫前 CI 上 ~每 10-15 PR 觸發 1 次）；regression 注入「skip every-other trigger」bug → test FAIL at `_sum=25 != 50`，確認 invariants 仍能抓到 lost-trigger class
+  - **第三條 worked example** 加進 `testing-playbook.md §v2.8.0 Lessons Learned — Race-flake battles` lesson §2 — 跟 PR #79 / #90 兩個 worked example 並列，強化 visibility
+
 - **tenant-api body-content range validation 在邊界 fail-fast（v2.8.0, Phase B Track C C4 deferred, [closes #134](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/134)）** — Track C 期間明示 deferred 至獨立 PR 處理的 C4 項目落地。v2.8.0 之前的 `POST /api/v1/tenants/batch` / `PUT /api/v1/groups/{id}` / `PUT /api/v1/views/{id}` body 只驗 size (≤1MB) + JSON 格式，不驗值範圍 — customer 送 `{"_timeout_ms":"99999999999"}` 之類的 nonsense value，API 直接通過寫進 git，幾分鐘後 downstream（threshold-exporter resolve / GitOps writer YAML parse）才 reject。客戶看到的錯誤訊息位置離犯錯點極遠，debug 成本高，且 bad write 已經進 git 需要 revert PR。
   - **修法**：新增 `components/tenant-api/internal/handler/body_validator.go`，hybrid 設計：
     - **Fixed-shape 欄位**（`Label` / `Description` / `Members`）用 `go-playground/validator/v10` struct tags：`validate:"required,min=1,max=256"` / `validate:"max=4096"` / `validate:"max=1000,dive,min=1,max=256"`

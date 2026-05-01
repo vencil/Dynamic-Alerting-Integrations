@@ -8,15 +8,14 @@ package main
 // realistic ops scenario: an operator runs `git pull` against a repo
 // that updates 50+ tenant files, where individual file rsync writes
 // land with random inter-arrival jitter (a few ms to a few tens of
-// ms apart). The contract is:
+// ms apart). The contract under test:
 //
-//   * While inter-arrival gaps stay < debounceWindow, the timer keeps
-//     resetting (sliding window), and **no** intermediate fire
-//     happens — i.e. there is never a torn-state reload that observes
-//     half the writes.
-//   * Once writes stop, the next debounce window elapses and exactly
-//     ONE fire converges to the post-write merged_hash for every
-//     tenant whose source moved.
+//   * Every triggerDebouncedReload coalesces into SOME fired window
+//     (no lost triggers). The B-3 batch histogram's `_sum` equals
+//     numFiles regardless of how many windows fired.
+//   * Every mutated tenant's merged_hash advances past its baseline
+//     post-quiescence (no torn-state observation that loses a tenant's
+//     final value).
 //   * No goroutine leaks (Close() drains).
 //
 // Production parameters (planning §B-7): 200 files, 50-500ms gaps.
@@ -24,11 +23,19 @@ package main
 // so CI completes in ~2s but the ratio (gap < window) is preserved.
 //
 // Determinism: rand seeded with a fixed constant. Re-running the test
-// produces identical inter-arrival patterns; flaky? File a real bug.
+// produces identical inter-arrival patterns; observed-state is checked
+// post-quiescence so wall-clock scheduler jitter doesn't flake.
 //
-// This is NOT a benchmark — it asserts correctness, not performance.
-// The reload-duration / debounce-batch histograms added in B-3 are
-// observed as a side effect; we sanity-check them at the end.
+// **History (issue #157)**: this test originally asserted "fire count
+// stays at 0 throughout the burst" + "exactly 1 fire after settle".
+// Both are wall-clock claims — they test scheduler timing, not the
+// debounce contract. On loaded CI runners the burst occasionally split
+// into 2 windows, failing the "exactly 0 / exactly 1" assertions even
+// though final convergence held. PRs #151 + #155 each hit this flake;
+// codified rewrite per testing-playbook §"Race-flake battles" lesson §2
+// (canonical quiescence pattern). The new invariants are stable across
+// runner contention while still catching the genuine bug class
+// (lost-trigger / lost-write).
 
 import (
 	"fmt"
@@ -41,31 +48,71 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// TestSlowWriteTornStateStress_FinalConvergenceNoTornFires writes 50
-// tenant files with random 5-25ms inter-arrival gaps under a 100ms
-// debounce window, and verifies:
+// waitForQuiescence polls counterFn until its observed value is
+// unchanged for stableWindow consecutive ms, or until deadline.
+// Returns true on quiescence, false on timeout.
 //
-//	(1) sliding debounce holds: fire count stays at 0 while writes are
-//	    arriving (because each new write resets the timer).
-//	(2) exactly one fire after writes stop.
-//	(3) every mutated tenant's merged_hash differs from its baseline
-//	    (final state correctly observed).
-//	(4) the B-3 batch histogram observes one sample with sum == #fires
-//	    seen by triggerDebouncedReload (proxy for coalescing efficacy).
-func TestSlowWriteTornStateStress_FinalConvergenceNoTornFires(t *testing.T) {
-	// Window/gap ratio chosen so even a CI runner overshooting a
-	// `time.Sleep(gap)` by ~3× still keeps the inter-arrival under
-	// debounceWin (max gap 25ms × 3 = 75ms < 100ms window). Tightening
-	// gaps further saves no wall-clock time and chokes on scheduler
-	// jitter; loosening the window beyond 100ms adds settle latency
-	// without further margin.
+// Use this for "wait for async work to settle" patterns where the
+// alternative — `time.Sleep(window + buffer)` — flakes under loaded
+// CI runners. See `docs/internal/testing-playbook.md` §v2.8.0 Lessons
+// Learned — Race-flake battles, lesson §2 for the pattern rationale.
+func waitForQuiescence(
+	t *testing.T,
+	deadline, stableWindow time.Duration,
+	counterFn func() uint64,
+) bool {
+	t.Helper()
+	last := counterFn()
+	stableSince := time.Now()
+	timeoutAt := time.Now().Add(deadline)
+	pollInterval := 20 * time.Millisecond
+	for time.Now().Before(timeoutAt) {
+		time.Sleep(pollInterval)
+		now := counterFn()
+		if now != last {
+			last = now
+			stableSince = time.Now()
+			continue
+		}
+		if time.Since(stableSince) >= stableWindow {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSlowWriteTornStateStress_FinalConvergence writes 50 tenant files
+// with random 5-25ms inter-arrival gaps under a 100ms debounce window
+// and verifies the post-quiescence contract:
+//
+//	(1) Every triggerDebouncedReload coalesced into some fired window —
+//	    debounceBatch histogram _sum == numFiles. Catches the
+//	    "lost-trigger" bug class directly.
+//	(2) Every mutated tenant's merged_hash advanced past its baseline
+//	    after quiescence. Catches the "lost-write" bug class (a fire
+//	    that observed an incomplete state and didn't get re-driven).
+//	(3) Final fire count is logged for observability — informational,
+//	    NOT asserted exact (1 = sliding window held throughout;
+//	    2+ = burst legitimately split across windows under load,
+//	    which doesn't violate any contract as long as 1 + 2 hold).
+//	(4) No goroutine leak: Close() drains.
+//
+// Test name retains `TornStateStress` for git-blame continuity even
+// though the rewrite no longer hard-asserts "no torn fires" — see
+// the file-level comment for the issue #157 history.
+func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 	const (
 		numFiles      = 50
 		debounceWin   = 100 * time.Millisecond
 		minGap        = 5 * time.Millisecond
 		maxGap        = 25 * time.Millisecond
-		settleTimeout = 2 * time.Second
-		seed          = int64(0xB7_5_0_5_0)
+		settleTimeout = 5 * time.Second
+		// stableWindow: how long DebounceFiredCount() must be unchanged
+		// before we declare the system quiescent. Set to ~2× debounceWin
+		// so a freshly-trigger'd window still has time to fire+settle
+		// before we sample.
+		stableWindow = 250 * time.Millisecond
+		seed         = int64(0xB7_5_0_5_0)
 	)
 
 	fresh, _ := withIsolatedMetrics(t)
@@ -89,11 +136,12 @@ func TestSlowWriteTornStateStress_FinalConvergenceNoTornFires(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(seed))
-	fireSnapshots := make([]uint64, 0, numFiles)
 
-	// Drive the slow-write sequence. After EACH write we sample
-	// DebounceFiredCount(); if the sliding window is honored, every
-	// sample should be 0 — the timer resets faster than it can fire.
+	// Drive the slow-write sequence. We do NOT sample DebounceFiredCount()
+	// during the burst — that introduces wall-clock-timing-fragile
+	// assertions (testing-playbook §Race-flake lesson §2). Post-burst
+	// quiescence detection + per-fire invariants below catch the genuine
+	// bug classes without flaking on runner contention.
 	for i := 0; i < numFiles; i++ {
 		tid := fmt.Sprintf("tenant-%04d", i)
 		path := filepath.Join(dir, "team-a", tid+".yaml")
@@ -102,39 +150,39 @@ func TestSlowWriteTornStateStress_FinalConvergenceNoTornFires(t *testing.T) {
 			t.Fatalf("write tenant %s: %v", tid, err)
 		}
 		// Synthetic fsnotify-equivalent: drive the trigger explicitly so
-		// the test stays deterministic (real fsnotify timing is OS-
-		// dependent and would defeat the seed-based reproducibility).
+		// the test stays deterministic across OS fsnotify implementations.
 		m.triggerDebouncedReload(ReloadReasonSource)
-		fireSnapshots = append(fireSnapshots, m.DebounceFiredCount())
 
 		gap := minGap + time.Duration(rng.Int63n(int64(maxGap-minGap)))
 		time.Sleep(gap)
 	}
 
-	// (1) Before settle: across ALL inter-write samples, fire count
-	// MUST stay 0. Even one nonzero sample means a torn-state fire
-	// observed an incomplete write batch.
-	for i, c := range fireSnapshots {
-		if c != 0 {
-			t.Fatalf("sliding debounce violated: fire count = %d after write %d (expected 0 throughout the burst)", c, i+1)
-		}
+	// Quiescence: wait for DebounceFiredCount() to stabilize, indicating
+	// no further fires are pending. This is the canonical replacement
+	// for "sleep + assert exactly N" per testing-playbook §Race-flake
+	// lesson §2.
+	if !waitForQuiescence(t, settleTimeout, stableWindow, m.DebounceFiredCount) {
+		t.Fatalf("DebounceFiredCount never stabilized within %v "+
+			"(last value: %d) — debounce may be misbehaving",
+			settleTimeout, m.DebounceFiredCount())
+	}
+	fireCount := m.DebounceFiredCount()
+	if fireCount < 1 {
+		t.Fatalf("expected at least 1 fire after settle, got %d", fireCount)
 	}
 
-	// (2) After settle: exactly one fire (window elapses post-final-write).
-	if !waitFor(t, settleTimeout, func() bool {
-		return m.DebounceFiredCount() >= 1
-	}) {
-		t.Fatalf("debounce never fired after settle (count=%d)", m.DebounceFiredCount())
-	}
-	// Tail-sleep so any rogue extra fire is also visible.
-	time.Sleep(2 * debounceWin)
-	if got := m.DebounceFiredCount(); got != 1 {
-		t.Errorf("expected exactly 1 debounce fire after settle, got %d", got)
-	}
+	// (3) Fire-count observability — informational only.
+	t.Logf("debounce fires after quiescence: %d "+
+		"(1 = sliding window held throughout the burst; "+
+		"2+ = burst legitimately split across windows under runner load — "+
+		"both states are contract-compliant as long as invariants below pass)",
+		fireCount)
 
-	// (3) Final convergence: every mutated tenant's merged_hash moved.
+	// (2) Final convergence: every mutated tenant's merged_hash advanced.
+	//     Catches the "lost-write" bug class — a fire that observes an
+	//     incomplete state but doesn't get re-driven would leave at least
+	//     one tenant's hash matching baseline after settle.
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	mismatches := 0
 	for tid, prev := range baseline {
 		curr := m.mergedHashes[tid]
@@ -144,16 +192,25 @@ func TestSlowWriteTornStateStress_FinalConvergenceNoTornFires(t *testing.T) {
 			continue
 		}
 		if curr == prev {
-			t.Errorf("tenant %s: merged_hash unchanged (baseline=%s); slow-write batch lost a tenant", tid, prev)
+			t.Errorf("tenant %s: merged_hash unchanged (baseline=%s); "+
+				"slow-write batch lost a tenant", tid, prev)
 			mismatches++
 		}
 	}
+	m.mu.RUnlock()
 	if mismatches > 0 {
-		t.Fatalf("slow-write convergence: %d/%d tenants did not advance", mismatches, len(baseline))
+		t.Fatalf("slow-write convergence: %d/%d tenants did not advance",
+			mismatches, len(baseline))
 	}
 
-	// (4) B-3 sanity: exactly one debounce-batch sample with sum equal
-	// to numFiles (every triggerDebouncedReload during the burst).
+	// (1) Batch histogram: every trigger coalesced into SOME fire.
+	//     `_sum` MUST equal numFiles regardless of how many windows
+	//     fired (contract-stable assertion). `_count` is intentionally
+	//     NOT asserted exact — it can legitimately be 1 or 2 under
+	//     loaded CI; both states are compliant per the rewrite rationale
+	//     (see file header for issue #157 history). If `_count > 2` we
+	//     do flag — that's outside the realistic CI-jitter envelope and
+	//     suggests debounce is genuinely misbehaving.
 	reg := prometheus.NewRegistry()
 	if err := reg.Register(fresh.debounceBatch); err != nil {
 		t.Fatalf("register debounceBatch: %v", err)
@@ -165,11 +222,19 @@ func TestSlowWriteTornStateStress_FinalConvergenceNoTornFires(t *testing.T) {
 	for _, fam := range families {
 		for _, metric := range fam.Metric {
 			h := metric.Histogram
-			if h.GetSampleCount() != 1 {
-				t.Errorf("debounceBatch: expected _count=1 (one fired window), got %d", h.GetSampleCount())
-			}
 			if h.GetSampleSum() != float64(numFiles) {
-				t.Errorf("debounceBatch: expected _sum=%d (all triggers coalesced), got %v", numFiles, h.GetSampleSum())
+				t.Errorf("debounceBatch: expected _sum=%d (every trigger "+
+					"coalesced into some fire), got %v",
+					numFiles, h.GetSampleSum())
+			}
+			if h.GetSampleCount() < 1 {
+				t.Errorf("debounceBatch: expected at least 1 fired window, got %d",
+					h.GetSampleCount())
+			}
+			if h.GetSampleCount() > 2 {
+				t.Errorf("debounceBatch: _count=%d exceeds runner-jitter envelope (≤2); "+
+					"debounce may be misbehaving (sliding window not coalescing)",
+					h.GetSampleCount())
 			}
 		}
 	}

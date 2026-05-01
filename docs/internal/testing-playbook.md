@@ -685,6 +685,51 @@ fireCount := m.DebounceFiredCount()
 
 This decouples the test from window-size choice and CI scheduling jitter.
 
+#### Worked example: `TestSlowWriteTornStateStress_FinalConvergence`（PR #158, issue #157）
+
+The B-7 slow-write stress test originally asserted **two** wall-clock claims that lesson §2 prohibits:
+
+1. `for i := 0..N { trigger; t.Sleep(jitter); assert fireCount == 0 }` — "no fire DURING the burst"
+2. `t.Sleep(2 * window); assert fireCount == 1` — "exactly 1 fire AFTER settle"
+
+Both pass under healthy CI but flake when scheduler jitter overshoots a sleep, splitting the 50-write burst into 2 fired windows. PR #151 + #155 each took the flake. After two adjacent occurrences, opened issue #157 and codified the rewrite per this lesson.
+
+**Rewrite shape**:
+
+```go
+// Drive the burst — DO NOT sample fireCount mid-burst.
+for i := 0; i < numFiles; i++ {
+    writeFile(...)
+    m.triggerDebouncedReload(ReloadReasonSource)
+    time.Sleep(jitter)
+}
+
+// Quiescence — fireCount stable for stableWindow consecutive ms.
+if !waitForQuiescence(t, settleTimeout, stableWindow, m.DebounceFiredCount) {
+    t.Fatalf("counter never stabilized — debounce may be broken")
+}
+fireCount := m.DebounceFiredCount()
+t.Logf("debounce fires: %d (informational, not asserted)", fireCount)
+
+// Per-fire invariants — INDEPENDENT of fireCount value:
+// (a) every trigger coalesced into SOME fire
+assert h.GetSampleSum() == numFiles
+// (b) every mutated tenant advanced
+assert mergedHash[tid] != baseline[tid] for all tid
+// (c) fire count not absurd (catches genuinely-broken debounce)
+assert h.GetSampleCount() <= 2  // CI-jitter envelope
+```
+
+**Why `_count <= 2` not `_count == 1`**: a 50-write burst with 5-25ms gaps under a 100ms window legitimately splits into 1 OR 2 fired windows depending on scheduler jitter. Both are contract-compliant. `_count <= 2` is the **CI-jitter envelope** — outside this means debounce is genuinely broken (e.g. window not coalescing). The test FAILS bench injection of "skip every-other trigger" via `_sum=25 != 50` (verified during PR #158 implementation).
+
+**Reusable helper** (`config_slow_write_stress_test.go`):
+
+```go
+func waitForQuiescence(t *testing.T, deadline, stableWindow time.Duration, counterFn func() uint64) bool
+```
+
+Generalizes to any test polling a monotonic counter for "no new events for K ms" semantics.
+
 ### 3. `testutil.CollectAndCount` 對 plain Histogram **回 family count, 不是 sample count**
 
 **Footgun**: `prometheus.testutil.CollectAndCount(h)` for a plain `prometheus.Histogram` returns **1** after registration, regardless of how many `Observe()` calls happened. It returns the number of metric families, not samples.
