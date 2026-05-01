@@ -67,12 +67,7 @@ const GlossaryTip = ({ term }) => {
       {show && (
         <span className="absolute z-10 left-0 top-full mt-1 w-64 p-3 bg-[color:var(--da-color-toast-bg)] text-[color:var(--da-color-hero-fg)] text-xs rounded-lg shadow-lg leading-relaxed">
           {def}
-          {/* A-3 deferred: `text-blue-300` is a toast-link-on-dark-bg color.
-              The toast bg is `--da-color-toast-bg` (dark); this close button
-              needs a light-blue link color that reads on that dark surface.
-              No `--da-color-link-on-dark` exists yet. Keep until token is
-              added (same context as hero-accent considerations). */}
-          <button type="button" onClick={() => setShow(false)} className="block mt-1 text-blue-300 text-xs hover:underline">close</button>
+          <button type="button" onClick={() => setShow(false)} className="block mt-1 text-[color:var(--da-color-link-on-dark)] text-xs hover:underline">close</button>
         </span>
       )}
     </span>
@@ -398,11 +393,8 @@ const PathCompare = ({ currentKey, onClose }) => {
   const onlyA = currentRec.docs.filter(d => !compareDocs.has(d.path));
   const onlyB = compareRec ? compareRec.docs.filter(d => !currentDocs.has(d.path)) : [];
 
-  // A-3 deferred: `border-indigo-200` below is a decorative subtle-blue card
-  // border without a direct token. Dark-mode concern is low (card is a modal,
-  // not theme-flipping). Revisit when `--da-color-accent-border-soft` is added.
   return (
-    <div className="bg-[color:var(--da-color-surface)] rounded-lg shadow-sm border border-indigo-200 p-6 space-y-4">
+    <div className="bg-[color:var(--da-color-surface)] rounded-lg shadow-sm border border-[color:var(--da-color-accent-border-soft)] p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-bold text-[color:var(--da-color-fg)]">{t('路徑比較', 'Compare Paths')}</h3>
         <button onClick={onClose} className="text-[color:var(--da-color-muted)] hover:text-[color:var(--da-color-muted)] text-sm">✕ {t('關閉', 'Close')}</button>
@@ -436,11 +428,7 @@ const PathCompare = ({ currentKey, onClose }) => {
             ))}
           </div>
           <div>
-            {/* A-3 deferred: `text-purple-700` is a semantic "other-path" color
-                (green = shared, purple = compared-only). No --da-color-* for
-                purple; adding one requires design-system sign-off. Keep until
-                --da-color-semantic-other is introduced. */}
-            <h4 className="font-semibold text-purple-700 mb-2">{t('僅在比較路徑', 'Only in compared path')} ({onlyB.length})</h4>
+            <h4 className="font-semibold text-[color:var(--da-color-semantic-other)] mb-2">{t('僅在比較路徑', 'Only in compared path')} ({onlyB.length})</h4>
             {onlyB.map(d => (
               <div key={d.path} className="py-1 text-[color:var(--da-color-fg)]">{d.name}</div>
             ))}
@@ -572,13 +560,8 @@ export default function GettingStartedWizard() {
     ? RECOMMENDATIONS[recommendationKey]
     : null;
 
-  // A-3 deferred: page-level hero gradient below. Tailwind palette stops
-  // (blue-50 / white / indigo-50) are light-mode-specific; dark mode would
-  // need different stops. Migration needs either (a) a composite
-  // `--da-color-hero-gradient` token or (b) inline style with CSS vars.
-  // Keep until composite-token policy is decided.
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
+    <div className="min-h-screen bg-[image:var(--da-color-hero-gradient)]">
       <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
         {/* Header */}
         <div className="text-center mb-8">

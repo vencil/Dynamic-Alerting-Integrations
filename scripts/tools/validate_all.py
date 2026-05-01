@@ -79,6 +79,7 @@ TOOLS = [
     ("commit_scope", "lint/check_commit_scope_doc.py", ["--ci"], "Commit scope drift (commit-convention.md vs .commitlintrc.yaml)"),
     ("hardcode_tenant", "lint/check_hardcode_tenant.py", ["--ci"], "Hardcoded tenant literals in PromQL (Rule #2)"),
     ("changelog_no_tbd", "lint/check_changelog_no_tbd.py", ["--ci"], "TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)"),
+    ("undefined_tokens", "lint/check_undefined_tokens.py", ["--ci"], "JSX/CSS references to undefined --da-color-* tokens (A-3 Tier B regression guard)"),
 ]
 
 
