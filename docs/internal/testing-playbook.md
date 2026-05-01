@@ -589,7 +589,54 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 
 **衍生規則 — verify-reference applies to hook scripts too**：S#73（`vibe-dev-rules` 的 self-review check #6）原本只要求 verify 自己寫的 code 引用的 API；S#74 extension：**讀別人寫的 hook / lint script 假設「它跑得通」前，最好先讀關鍵 path（subprocess Popen / pipe handling / file I/O）跟自己 verify 一遍**。本次 Popen 死鎖是 PR #164 之前就在的 latent bug，但所有 session 都假設「pre-commit hook = 跑得通」沒檢查；這個 prior 是錯的，要 calibrate 下來。
 
-### 5. Dev Container mount scope（Trap #62 連帶工作流）
+### 5. Self-review pass 2 (user-prompted) 抓 pass 1 沒抓到的真 bug（PR #166 amend / S#77）
+
+**觸發**：PR #166 (`check_subprocess_timeout.py`) 第一次 push 後做了 5+1 self-review checks 全過，認為 ready。User 問「再多一些 self-review，doc 也都多想 code-driven 化的機會」→ 我做 second-pass deeper review，**抓到 3 個 real bug + 1 個 robustness crash** 是 pass 1 沒抓到的：
+
+1. **`timeout=None`/`timeout=0` slipping past structural check** — `_has_timeout_kwarg` 只看 `timeout=` 是否出現，沒看 value。`subprocess.run(['ls'], timeout=None)` 直接 pass 但 functionally 等於沒 timeout。改 `_has_meaningful_timeout` value-aware（reject `None` + numeric zero，accept positive number / variable / expression）；
+2. **`_iter_python_files` / `_resolve_scan_paths` / `main()` 沒直接 tests** — 只透過 parametrized helpers 間接 cover；補了 11 個直接測試；
+3. **`BlobViolation.render()` crash on absolute paths outside `PROJECT_ROOT`** — `path.relative_to(PROJECT_ROOT)` 對 `tmp_path` 抛 `ValueError`。新加的 `TestMain` fixtures 用 `tmp_path` 立刻撞到，加 try/except fallback；
+4. **Docstring 「218 instances」是 raw grep count 不是 real audit** — 改正為 93 + AST-filter delta 註解。
+
+**根因**：pass 1 是 implementation-detached fresh-eye review 但仍偏 skim-validate structure，沒 stress-test 假設。User-prompted pass 2 強迫我問「if X regresses, would my test catch?」，這個自驗會 expose pass 1 的 blind spot。
+
+**正解**：
+1. **Pre-merge ship 前最後一輪 deep self-review 應該變 default discipline**，不是 user 推回才做。
+2. **Self-review must include "if production regresses, would this test catch it?" 自驗**。
+3. **內部 helper functions 必須有直接 tests**，不能只靠整合測試 cover；若你寫了 if-branch 但沒 test 走過，那 branch 是隱形 dead code。
+4. **Docstring numbers / counts 在 PR 修 bug 過程中會 drift** — self-review 必檢核「這個數字還對嗎」。
+
+**對比 timing 經濟學**：S#67 (PR #150) 做 post-merge archaeology 後修 fix 要開新 PR + 多 1 round CI；S#68/S#70/S#71 做 pre-merge self-review 同 PR 內 amend，cost ≈ 0；S#74/S#77 做 user-prompted pre-merge pass 2，比 S#67 早一步抓到否則會 customer-facing 的 bug。**Pass 2 應該在 every PR 的 default loop**。
+
+### 6. Intentional-break dogfood：empirically verify regression test catches the regression（PR #166 / S#77）
+
+**觸發**：PR #166 寫 `_batch_cat_blobs` 的 deadlock regression test (`test_large_batch_does_not_deadlock`)。Self-review pass 2 user 提：「你有 empirically dogfood 過這個 regression test 嗎？」**沒**。我憑邏輯推論測試會抓到，但沒實際做 intentional-break loop verify。
+
+**做 intentional-break dogfood**：
+1. Backup current fix — `cp scripts/tools/lint/check_head_blob_hygiene.py /tmp/_chbh_postfix.py`
+2. **Revert `_batch_cat_blobs` 回 broken pattern**（write-then-read-loop, no thread）
+3. Run regression tests
+4. **觀察結果並校正 test design**：headline test 用 300×1KB total 不會在 Windows runner 觸發 deadlock（pipe buffer 吸收）；`test_huge_batch` 用 1000×2KB = 2MB 可靠 deadlock。**path count 比 total bytes 更關鍵**（每個 header readline 是 deadlock surface）→ 把 headline test 參數從 300×1KB 改 1000×2KB，docstring 加 empirical threshold table
+5. Re-run — `test_large_batch_does_not_deadlock` 在 120s pytest-timeout 失敗 → **regression caught fast-fail** ✓
+6. Restore fix → `cp /tmp/_chbh_postfix.py scripts/tools/lint/check_head_blob_hygiene.py`
+7. Re-run all tests → 17/17 pass in 4.63s ✓
+
+**關鍵發現**：原 headline test 是 article-of-faith — 沒做 intentional break 不會發現它**根本 catch 不到 regression**。**這個 dogfood loop 不是 nice-to-have，是 regression test 設計的必要 acceptance**。
+
+**正解**：
+1. **任何 regression test 都必須做一次 intentional-break dogfood**：revert fix → run test → confirm fail → restore → re-run pass。
+2. **Pytest-timeout markers** 是 defense-in-depth — 即使 inner timeout failsafe 失效，pytest-level timeout fires 在合理 budget；不要靠 inner timeout 唯一守關。
+3. **Empirical threshold table in docstring** 比抽象描述「regression-prone scenario」更有教育價值 — 下個讀的人知道為什麼選這個 size。
+4. **CI variance 要進 budget**：local 5s，CI 30-60s，pytest-timeout 120s — 三層分開設。
+
+**衍生 regression 偵測 ladder**：
+- Layer 1 — **`@pytest.mark.timeout(N)` pytest-level fast-fail**（regression hangs 不是無限等到 CI workflow timeout）
+- Layer 2 — **soft `assert elapsed < X.0` budget**（catches 慢 regression 不是 hang regression）
+- Layer 3 — **inner `communicate(timeout=60)` in production code**（actual fix；regression 真的把它移走，layer 1+2 還守得住）
+
+三層任一被 reverted，剩兩層仍能 detect。
+
+### 7. Dev Container mount scope（Trap #62 連帶工作流）
 
 Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），claude worktree 的 Edit **不會進 container**。詳 `windows-mcp-playbook.md` Trap #62。**Go test / Playwright E2E** 在 claude worktree 做 Edit 後，一律走：
 

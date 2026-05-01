@@ -77,11 +77,12 @@ lang: zh
 
 ### 6. 推銷語言不進 repo
 
+<!-- marketing-language: ignore -->
 **規則**：README、文件、commit message 禁止使用推銷性語言（「業界領先」、「革命性」、「唯一」等）。保持客觀工程語言。
 
 **為什麼**：這是 OSS 專案，文件必須經得起技術 review。推銷語言會被 reviewer 視為不專業，且無法證明。
 
-**檢查方式**：⚠️ **reviewer convention（v2.8.0, PR #169）** — 此規則目前**未由 pre-commit hook 自動掃描**，靠 reviewer 在 PR review 時審視 README / 文件 / commit message 是否含推銷語言。Real lint candidate（簡單 keyword scan，~50 LOC）已排入 backlog；ship 後本句改為實際 hook 引用。
+**檢查方式**：✅ **enforced — `check_marketing_language.py` pre-commit hook**（v2.8.0, PR #170）。Curated zh+en 高精準 keyword list（業界領先 / 革命性 / industry-leading / revolutionary / game-changing 等）；fenced code blocks + inline backticks 自動排除；per-line escape via `<!-- marketing-language: ignore -->` 對 illustrative quotes / anti-pattern examples 等 false-positive 場景（含本規則定義段本身）。`--ci` 模式 fatal-on-finds（codebase 0 violations after re-write so ship strict from day 1）。Cross-validated by `check_dev_rules_enforcement.py` (PR #169) 防 hook 名稱與本句 drift。
 
 ### 7. 版號治理：五線 tag
 

@@ -352,6 +352,25 @@ repos:
         # Per-line escape via `<!-- enforcement-claim: ignore -->`
         # for third-party tools (bandit etc) not in our config.
 
+      - id: marketing-language-check
+        name: dev-rules.md §6 marketing-language ban (high-precision keywords)
+        entry: python3 -X utf8 scripts/tools/lint/check_marketing_language.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(README(\.en)?\.md|CHANGELOG\.md|docs/.*\.md)$
+        # Auto-stage, FATAL on finds. Codifies dev-rules.md §6
+        # (closed PR #168 audit identified this as 1 of 4 doc-drift
+        # gaps; PR #169 added the meta-lint to catch the drift class
+        # forever; PR #170 lands the actual rule enforcement).
+        # Codebase has 0 violations after PR #170's re-wording.
+        # Per-line escape via `<!-- marketing-language: ignore -->`
+        # for legitimate quotes / anti-pattern examples (the rule
+        # definition in dev-rules.md uses this exact pattern).
+        # Curated zh+en keyword list — high-precision, technical
+        # FP-prone terms ("the only" / "unmatched" / "premier")
+        # excluded; if you find a false positive, the keyword list
+        # itself is what to revise.
+
       - id: subprocess-timeout-audit
         name: subprocess timeout= kwarg audit (S#74 codify, warn-only)
         entry: python3 -X utf8 scripts/tools/lint/check_subprocess_timeout.py --ci
