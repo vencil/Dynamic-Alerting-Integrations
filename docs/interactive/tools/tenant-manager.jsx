@@ -16,7 +16,8 @@ dependencies: [
   "tenant-manager/components/OverflowBanner.jsx",
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/hooks/useDebouncedValue.js",
-  "tenant-manager/hooks/useURLState.js"
+  "tenant-manager/hooks/useURLState.js",
+  "tenant-manager/hooks/useVirtualGrid.js"
 ]
 ---
 
@@ -46,12 +47,31 @@ const TenantCard = window.__TenantCard;
 const useDebouncedValue = window.__useDebouncedValue;
 const useURLState = window.__useURLState;
 
+const useVirtualGrid = window.__useVirtualGrid;
 // PR-2b: tracked URL params. Module-level const so identity stays
 // stable across renders — passing `['q']` inline as a literal would
 // create a new array each render and trigger useURLState's internal
 // useCallback churn (functionally a no-op but messes with dep arrays
 // downstream and triggers unnecessary effect firings).
 const TENANT_MANAGER_URL_KEYS = ['q'];
+
+// PR-2c: virtualization tuning constants. Module-level for the same
+// stable-identity reason as TENANT_MANAGER_URL_KEYS — useVirtualGrid's
+// internal useMemo depends on rowHeight/columnCount, and inline
+// literals would invalidate the memo every render.
+//   - THRESHOLD: only virtualize once the rendered card count exceeds
+//     this. Below threshold the auto-fill CSS grid is fast enough
+//     and gives nicer responsive behavior than fixed columns.
+//   - ROW_HEIGHT: tallest realistic TenantCard (~360px) + 20px gap.
+//     Cards shorter than this just have whitespace below; nothing
+//     gets clipped because each card sits at row.top with its own
+//     natural height.
+//   - COLUMN_COUNT: matches the auto-fill 300px-min behavior at
+//     typical desktop widths (~960px+ container). v2 will compute
+//     this from container width.
+const VIRTUAL_GRID_THRESHOLD = 50;
+const VIRTUAL_GRID_ROW_HEIGHT = 380;
+const VIRTUAL_GRID_COLUMN_COUNT = 3;
 
 export default function TenantManager() {
   // PR-2d Phase 2 (#153): apiNotification owned by orchestrator (shared
@@ -366,6 +386,22 @@ export default function TenantManager() {
   // even when `loading` or `error` paths early-return below.
   const modalRef = useModalFocusTrap(modalType, setModalType);
 
+  // PR-2c: grid virtualization. Hooks invoked unconditionally above
+  // the `loading` / `error` early returns (same Rules-of-Hooks
+  // discipline as `modalRef`). The result is *used* conditionally
+  // below — when `filtered.length <= VIRTUAL_GRID_THRESHOLD` we ignore
+  // `virtualGrid` entirely and fall back to the plain auto-fill CSS
+  // grid, but the hook still runs so React's internal state slot
+  // count stays stable across renders.
+  const gridContainerRef = useRef(null);
+  const virtualGrid = useVirtualGrid({
+    items: filtered,
+    rowHeight: VIRTUAL_GRID_ROW_HEIGHT,
+    columnCount: VIRTUAL_GRID_COLUMN_COUNT,
+    containerRef: gridContainerRef,
+  });
+  const enableVirtualization = filtered.length > VIRTUAL_GRID_THRESHOLD;
+
   if (loading) {
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -669,22 +705,75 @@ export default function TenantManager() {
           </div>
         )}
 
-        <div style={styles.grid} role="region" aria-live="polite" aria-label={t('租戶列表', 'Tenant list')}>
-          {filtered.map(([name, data]) => (
-            <TenantCard
-              key={name}
-              name={name}
-              data={data}
-              isSelected={selected.has(name)}
-              isHovered={hoveredCard === name}
-              pendingPR={prByTenant[name] || null}
-              modeColors={modeColors}
-              onToggleSelect={() => toggleSelect(name)}
-              onHoverEnter={() => setHoveredCard(name)}
-              onHoverLeave={() => setHoveredCard(null)}
-            />
-          ))}
-        </div>
+        {enableVirtualization ? (
+          // PR-2c: virtualized path — only > VIRTUAL_GRID_THRESHOLD
+          // items rendered. Inner `<div>` is the spacer at full grid
+          // height so the scrollbar represents the whole list; cards
+          // are absolute-positioned at row.top inside it.
+          // `data-testid="tenant-grid-virtual"` so e2e tests can assert
+          // virtualization actually engaged for large sets.
+          <div
+            ref={gridContainerRef}
+            data-testid="tenant-grid-virtual"
+            data-virtual-row-count={virtualGrid.endRow - virtualGrid.startRow + 1}
+            style={{
+              height: '70vh',
+              overflowY: 'auto',
+              position: 'relative',
+              marginBottom: 'var(--da-space-6)',
+              border: '1px solid var(--da-color-surface-border)',
+              borderRadius: 'var(--da-radius-lg)',
+            }}
+            role="region"
+            aria-live="polite"
+            aria-label={t('租戶列表', 'Tenant list')}
+          >
+            <div style={{ position: 'relative', height: virtualGrid.totalHeight, width: '100%' }}>
+              {virtualGrid.visibleItems.map(({ item: [name, data], top, left }) => (
+                <div
+                  key={name}
+                  style={{
+                    position: 'absolute',
+                    top,
+                    left,
+                    width: (100 / VIRTUAL_GRID_COLUMN_COUNT).toFixed(4) + '%',
+                    padding: 'var(--da-space-2)',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  <TenantCard
+                    name={name}
+                    data={data}
+                    isSelected={selected.has(name)}
+                    isHovered={hoveredCard === name}
+                    pendingPR={prByTenant[name] || null}
+                    modeColors={modeColors}
+                    onToggleSelect={() => toggleSelect(name)}
+                    onHoverEnter={() => setHoveredCard(name)}
+                    onHoverLeave={() => setHoveredCard(null)}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={styles.grid} role="region" aria-live="polite" aria-label={t('租戶列表', 'Tenant list')}>
+            {filtered.map(([name, data]) => (
+              <TenantCard
+                key={name}
+                name={name}
+                data={data}
+                isSelected={selected.has(name)}
+                isHovered={hoveredCard === name}
+                pendingPR={prByTenant[name] || null}
+                modeColors={modeColors}
+                onToggleSelect={() => toggleSelect(name)}
+                onHoverEnter={() => setHoveredCard(name)}
+                onHoverLeave={() => setHoveredCard(null)}
+              />
+            ))}
+          </div>
+        )}
 
         {filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: 'var(--da-space-12)', backgroundColor: 'white', borderRadius: 'var(--da-radius-lg)' }}>

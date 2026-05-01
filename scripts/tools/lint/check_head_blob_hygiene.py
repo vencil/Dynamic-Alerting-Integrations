@@ -144,38 +144,62 @@ def _batch_cat_blobs(paths: list[str]) -> dict[str, bytes]:
 
     Empty-result dict on any unrecoverable git error — the caller falls
     back to the per-path ``_cat_blob`` loop and skips paths we cannot read.
+
+    Implementation note (PR-2c bug fix): the previous Popen-based
+    write-then-read-loop pattern deadlocked above ~150 paths on Windows
+    because ``--buffer`` makes git accumulate ALL stdout in memory until
+    stdin EOF, then flush it all at once. With pipe buffer ~64KB and
+    ~2MB+ of total output for a typical repo, git blocked on stdout
+    write while we were still reading from a different path's body —
+    classic single-thread Popen pipe deadlock. ``proc.communicate()``
+    sidesteps it by using internal threads to drain stdout/stderr
+    while writing stdin. Since we already buffer all output for the
+    parse loop anyway, the memory profile is identical; the only
+    semantic change is that everything is read into memory in one go
+    rather than streamed, which is fine here (repo is ~1k files, total
+    cat-file output bounded by tracked-bytes <<= GB).
     """
     if not paths:
         return {}
 
-    # ``--buffer`` lets us write the full batch before reading any output,
-    # which is faster than interleaving read/write on large repos.
-    proc = subprocess.Popen(
-        ["git", "cat-file", "--batch", "--buffer"],
-        cwd=PROJECT_ROOT,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert proc.stdin is not None and proc.stdout is not None
-
     request = "".join(f":{p}\n" for p in paths).encode("utf-8")
     try:
-        proc.stdin.write(request)
-        proc.stdin.close()
-    except OSError:
-        proc.kill()
-        proc.wait()
+        proc = subprocess.Popen(
+            ["git", "cat-file", "--batch", "--buffer"],
+            cwd=PROJECT_ROOT,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        # ``communicate`` handles stdin write + stdout/stderr drain on
+        # threads, avoiding the deadlock that plain write-then-read
+        # would hit once total output exceeds the pipe buffer.
+        out, _err = proc.communicate(input=request, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
         return {}
 
-    out_stream = proc.stdout
+    if proc.returncode != 0:
+        return {}
+
+    # Parse the batched output buffer in-memory. Same protocol as before:
+    #   <sha> blob <size>\n<size bytes>\n   (or `<input> missing\n`)
     result: dict[str, bytes] = {}
+    pos = 0
+    n = len(out)
 
     for path in paths:
-        header = out_stream.readline()
-        if not header:
+        # Read header line up to '\n'.
+        nl = out.find(b"\n", pos)
+        if nl < 0:
             break
-        header_text = header.decode("utf-8", errors="replace").rstrip("\n")
+        header = out[pos:nl]
+        pos = nl + 1
+        header_text = header.decode("utf-8", errors="replace")
 
         parts = header_text.split(" ")
         if len(parts) >= 2 and parts[1] in {"missing", "ambiguous"}:
@@ -190,20 +214,14 @@ def _batch_cat_blobs(paths: list[str]) -> dict[str, bytes]:
         except ValueError:
             break
 
-        # Read exactly <size> bytes, then the trailing newline.
-        body = b""
-        remaining = size
-        while remaining > 0:
-            chunk = out_stream.read(remaining)
-            if not chunk:
-                break
-            body += chunk
-            remaining -= len(chunk)
-        out_stream.read(1)  # consume trailing '\n'
+        if pos + size > n:
+            break
+        result[path] = out[pos:pos + size]
+        pos += size
+        # Consume the trailing '\n' between blobs (if present).
+        if pos < n and out[pos:pos + 1] == b"\n":
+            pos += 1
 
-        result[path] = body
-
-    proc.wait()
     return result
 
 
