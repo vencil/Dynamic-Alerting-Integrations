@@ -319,20 +319,24 @@ repos:
         # Node.js unavailable (~0s), otherwise ~2-4s against cached @babel/standalone.
 
       - id: jsx-babel-check-strict-linecount
-        name: JSX line-count soft-cap regression gate (manual stage)
+        name: JSX line-count soft-cap regression gate
         entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
         language: python
         pass_filenames: false
         files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
-        stages: [manual]
-        # Locks in the line-count progress from PR-2d (#153 Phase 1+2+3).
-        # As of S#72 the codebase has 0 soft-cap line-count warnings —
-        # this hook keeps it that way going forward. Codebase has ~330
-        # pre-existing `style={{}}` warnings; those stay non-fatal under
-        # this hook (--strict-linecount is granular, NOT --strict). A
-        # separate cleanup track will eventually activate `--strict-static`
-        # too, but that requires fixing all 330 first. See PR #160 / S#71
+        # Auto-stage (NOT manual) — runs on every commit to catch
+        # line-count regressions immediately. Locks in the progress
+        # from PR-2d (#153 Phase 1+2+3 / S#69-S#72): codebase had 0
+        # soft-cap line-count warnings as of S#72, this keeps it that
+        # way. Pre-existing ~330 `style={{}}` warnings stay non-fatal
+        # because `--strict-linecount` is granular (NOT `--strict`).
+        # Separate cleanup track will eventually activate
+        # `--strict-static` once all 330 cleared. See PR #160 / S#71
         # for the granular-flag design rationale.
+        # Initially proposed as `stages: [manual]` but PR #162 first
+        # CI run failed with "No hook with id ... in stage pre-commit"
+        # — empirically the codebase's CI-invoked hooks are auto-stage,
+        # not manual-stage. Aligning with that convention now.
 
       - id: i18n-coverage-check
         name: i18n coverage report

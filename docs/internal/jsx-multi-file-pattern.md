@@ -143,7 +143,7 @@ The lint supports three strictness levels via mutually-stackable flags:
 | Flag | Effect | Activated in |
 |---|---|---|
 | `--ci` | Babel parse + hard-cap line-count fatal | `jsx-babel-check` (auto pre-commit hook, runs every commit) |
-| `--ci --strict-linecount` | Above + soft-cap line-count fatal | `jsx-babel-check-strict-linecount` (manual-stage hook, CI runs via `pre-commit run jsx-babel-check-strict-linecount --all-files`) |
+| `--ci --strict-linecount` | Above + soft-cap line-count fatal | `jsx-babel-check-strict-linecount` (auto-stage hook — runs on every commit + CI) |
 | `--ci --strict-static` | Above + `style={{}}` patterns fatal | not yet activated — see "Static-pattern cleanup track" |
 | `--ci --strict` | Both `--strict-static` AND `--strict-linecount` (legacy shorthand) | not used in CI |
 
