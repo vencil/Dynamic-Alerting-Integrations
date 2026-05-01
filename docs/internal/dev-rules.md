@@ -36,7 +36,7 @@ lang: zh
 
 **為什麼**：平台設計是多租戶 config-driven，tenant id 應由 config 傳入而不是 hardcode。硬編會讓新增租戶時必須改 code，違反平台定位。
 
-**檢查方式**：⚠️ **reviewer convention（v2.8.0, PR #169）** — 此規則目前**未由 pre-commit hook 自動掃描**，靠 reviewer 在 PR review 時確認。新 PR 若改 Go / PromQL / Rule Pack YAML 請主動 grep `db-a` / `db-b` / `tenant-` 確認無 hardcode。Real lint candidate（`check_hardcode_tenant.py`，~80 LOC）已排入 backlog；ship 後本句改為實際 hook 引用。
+**檢查方式**：✅ **code-driven（v2.8.0, S#83 PR #173）** — `scripts/tools/lint/check_hardcode_tenant.py` 偵測 PromQL label selector `{tenant="<literal>"}` / `{tenant_id="<literal>"}` 樣式於 production 路徑（`components/`、`cmd/`、`internal/`、`pkg/`、`scripts/`、`rule-packs/`、`helm/templates/`）；test/fixture/example 自動排除。Per-line escape：`<!-- hardcode-tenant: ignore -->`（3-line lookback）。**範圍限縮**：只抓 PromQL label selector 的 `=` exact-match；regex `=~` / 否定 `!=` 不在 scope；docstring 例子 / Python f-string template / 註解列自動忽略。其他 hardcoded tenant id 形式（如 Go 變數預設值、CLI 範例字串）暫由 reviewer 把關。
 
 ### 3. 三態：Custom / Default（省略）/ Disable
 
