@@ -83,9 +83,12 @@ func GetView(mgr *views.Manager) http.HandlerFunc {
 }
 
 // PutViewRequest is the body for PUT /api/v1/views/{id}.
+//
+// `Filters` per-key length checks live in
+// `body_validator.go::validateFilterMap`.
 type PutViewRequest struct {
-	Label       string            `json:"label"`
-	Description string            `json:"description"`
+	Label       string            `json:"label" validate:"required,min=1,max=256"`
+	Description string            `json:"description" validate:"max=4096"`
 	Filters     map[string]string `json:"filters"`
 }
 
@@ -125,10 +128,19 @@ func PutView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 			return
 		}
 
-		if req.Label == "" {
-			writeJSONError(w, http.StatusBadRequest, "label is required")
+		// v2.8.0 issue #134 — body-content range validation.
+		violations := validateStructTags(&req)
+		violations = append(violations, validateFilterMap(req.Filters, "filters")...)
+		if len(violations) > 0 {
+			writeValidationErrors(w, violations)
 			return
 		}
+
+		// Defensive: even though struct-tag covers max=256, keep the
+		// pre-existing 256-char hard fail in case validation is
+		// disabled in some bypass path. Length above 256 already
+		// caught by validateStructTags above, this is unreachable
+		// in normal flow but cheap.
 		if len(req.Label) > 256 {
 			writeJSONError(w, http.StatusBadRequest, "label exceeds 256 characters")
 			return

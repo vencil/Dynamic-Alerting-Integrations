@@ -45,6 +45,28 @@ Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 
 ### Fixed
 
+- **tenant-api body-content range validation 在邊界 fail-fast（v2.8.0, Phase B Track C C4 deferred, [closes #134](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/134)）** — Track C 期間明示 deferred 至獨立 PR 處理的 C4 項目落地。v2.8.0 之前的 `POST /api/v1/tenants/batch` / `PUT /api/v1/groups/{id}` / `PUT /api/v1/views/{id}` body 只驗 size (≤1MB) + JSON 格式，不驗值範圍 — customer 送 `{"_timeout_ms":"99999999999"}` 之類的 nonsense value，API 直接通過寫進 git，幾分鐘後 downstream（threshold-exporter resolve / GitOps writer YAML parse）才 reject。客戶看到的錯誤訊息位置離犯錯點極遠，debug 成本高，且 bad write 已經進 git 需要 revert PR。
+  - **修法**：新增 `components/tenant-api/internal/handler/body_validator.go`，hybrid 設計：
+    - **Fixed-shape 欄位**（`Label` / `Description` / `Members`）用 `go-playground/validator/v10` struct tags：`validate:"required,min=1,max=256"` / `validate:"max=4096"` / `validate:"max=1000,dive,min=1,max=256"`
+    - **Variable-shape `Patch map[string]string`** 用 imperative per-key validator registry：`reservedKeyValidators` 對 `_silent_mode` / `_timeout_ms` / `_quench_min` / `_routing_profile` / `_profile` 分別 enum-check 或 numeric-bound-check
+    - **Soft whitelist 政策**：未在 registry 的 `_*` 開頭 reserved key 通過（generic length cap 仍適用），避免 tenant-api 跟 threshold-exporter release cadence 過度耦合 — 新 reserved key 加進 threshold-exporter 不需先發 tenant-api 版本
+    - 兩條路徑都產出同一個 `Violation{Field, Reason}` shape，feed 進 `writeValidationErrors` 統一 JSON response
+  - **Response shape**（per #134 spec）：`{error: "validation failed", code: "INVALID_BODY", violations: [{field, reason}]}` — `violations` 列**全部**錯誤（不是 first-only），跟 Track C PR-2 forbidden-member 列表 UX 一致，客戶 1 個 round-trip 就能 fix 完
+  - **Reserved-key 規則** SOT cross-checked threshold-exporter `config_resolve.go` (`_silent_mode` 4 個 valid value 對齊 `{warning, critical, all, disable}`，case-insensitive)；`_timeout_ms` 上限 1h、`_quench_min` 上限 1d 對齊 ADR 慣例
+  - **Generic length cap**：所有 patch key ≤ 256 chars，所有 patch value ≤ 1024 chars，`Filters` value ≤ 1024 chars — 擋掉 multi-MB blob 貼進 value 的 resource-exhaustion vector
+  - **新 `body_validator_test.go`**（19 cases，全綠 + `-race -count=1`）：
+    - `validateSilentMode` 9 cases（4 valid + case-insensitive + empty + `off`-rejected + nonsense）
+    - `validateNonNegativeIntCap` 6 fail cases（含 #134 issue 範例 `99999999999`）+ pass cases
+    - `validateNonEmptyString256` 4 cases 含 256-char boundary
+    - `validatePatchMap` 7 cases：valid passthrough / single violation / multiple violations all reported / unknown reserved key passthrough / oversized key / oversized value / boundary numeric (3600000 pass, 3600001 fail)
+    - `validateStructTags` 4 cases 對 `BatchRequest` / `PutGroupRequest`
+    - `validateFilterMap` 2 cases
+    - `writeValidationErrors` JSON shape contract
+    - `BatchTenants` handler integration 2 cases — 確認 validation 跑在 RBAC / per-op work 之前，full violation list 都列出
+  - **Existing tests 全 pass**：13 個 `TestPutGroup_*` / `TestPutView_*` 不變（struct-tag 鬆嚴度跟原本 `if req.Label == ""` 一致，沒 break 既有 happy/sad path）
+  - **新依賴**：`github.com/go-playground/validator/v10 v10.30.2`（+ 4 個 transitive：`go-playground/locales` / `universal-translator` / `leodido/go-urn` / `golang.org/x/crypto`），都已被 Go 圈廣泛 audit。`go.mod` + `go.sum` 同步更新
+  - 同步更新 `docs/api/tenant-api-hardening.md` + `.en.md` §5.1 從「known gap」標 ✅ landed，加完整 validation rules 表格 + failure response shape
+
 - **Mixed-mode benchmarks 加入 nightly bench-record cron（v2.8.0, Phase B Track B follow-up, [issue #128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) prerequisite）** — Track B 期間 Phase B PR 落地 4 個 mixed-mode benchmarks（`BenchmarkScanDirHierarchical_MixedMode_500flat_500hier` / `BenchmarkFullDirLoad_MixedMode_500flat_500hier` / `BenchmarkDiffAndReload_MixedMode_500flat_500hier_NoChange` / `BenchmarkFullDirLoad_MixedMode_100flat_900hier`），但 Phase 1 baseline 的 `make benchmark-report` 用 `-bench='_1000(_|$)'` 過濾，4 個 mixed-mode 名稱結尾為 `_500hier` / `_900hier` / `_NoChange` 全 miss。結果 nightly `bench-record.yaml` workflow 從未真正量過 mixed mode — issue #128 等的「authoritative numbers ... 28+ data points」start clock 從未起跑。
   - **修法**：`Makefile benchmark-report` 的 `-bench` regex 從 `_1000(_|$)` 擴成 `_1000(_|$)|MixedMode`，把 4 個 mixed-mode 帶進來。原 13 benches (8 flat + 5 hierarchical) → 17 benches (+ 4 mixed-mode)，nightly artifact 從這次 cron 起含 mixed-mode 數據
   - **影響範圍**：`make benchmark-report` 改變 → 自動 propagate 到 (a) nightly `bench-record.yaml` workflow（自動，由 cron 觸發）；(b) pre-tag `make pre-tag` chain（手動，下次 tag 時 baseline 會多 4 條）；(c) `release-attach-bench-baseline.yaml` 自動 attach 到 GitHub Release 的 `bench-baseline-<tag>.txt`。下游 `analyze_bench_history.py` 不假設特定 bench 數量（grep `^Benchmark...-N\s+\d+\s` 樣式），相容

@@ -18,14 +18,17 @@ import (
 )
 
 // BatchOperation describes a single operation in a batch request.
+//
+// `Patch` map shape can't be expressed in struct-tag rules; per-key
+// validation lives in `body_validator.go::validatePatchMap`.
 type BatchOperation struct {
-	TenantID string            `json:"tenant_id"`
+	TenantID string            `json:"tenant_id" validate:"required,min=1,max=256"`
 	Patch    map[string]string `json:"patch"` // key → value to set (e.g., "_silent_mode": "warning")
 }
 
 // BatchRequest is the body for POST /api/v1/tenants/batch.
 type BatchRequest struct {
-	Operations []BatchOperation `json:"operations"`
+	Operations []BatchOperation `json:"operations" validate:"required,min=1,max=1000,dive"`
 }
 
 // BatchResult is the per-tenant result in a batch response.
@@ -82,6 +85,20 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 		}
 		if len(req.Operations) == 0 {
 			writeJSONError(rw, http.StatusBadRequest, "operations list is empty")
+			return
+		}
+
+		// v2.8.0 issue #134 — body-content range validation (Phase B
+		// Track C C4). Run BEFORE any RBAC / per-op work so a malformed
+		// body fails fast with the full violation list (one round-trip
+		// for the operator to fix everything, not retry-and-discover).
+		violations := validateStructTags(&req)
+		for i, op := range req.Operations {
+			fieldPrefix := fmt.Sprintf("operations[%d].patch", i)
+			violations = append(violations, validatePatchMap(op.Patch, fieldPrefix)...)
+		}
+		if len(violations) > 0 {
+			writeValidationErrors(rw, violations)
 			return
 		}
 
