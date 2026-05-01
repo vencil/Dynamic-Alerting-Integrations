@@ -15,30 +15,56 @@ import (
 
 func TestValidateSilentMode(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      string
-		wantReason string // "" = expect pass
+		name           string
+		input          string
+		wantSubstrings []string // empty = expect pass; otherwise substrings the reason must contain
 	}{
-		{"warning lower", "warning", ""},
-		{"critical lower", "critical", ""},
-		{"all lower", "all", ""},
-		{"disable lower", "disable", ""},
-		// Case insensitive (production resolve already lower-cases, mirror that).
-		{"WARNING upper", "WARNING", ""},
-		{"Critical mixed", "Critical", ""},
-		// Unknowns rejected with offending value in message.
-		{"off (rejected — production uses 'disable' not 'off')", "off",
-			`must be one of {warning, critical, all, disable}; got "off"`},
+		// Scalar enum form — case-insensitive match per production resolve
+		{"warning lower", "warning", nil},
+		{"critical lower", "critical", nil},
+		{"all lower", "all", nil},
+		{"disable lower", "disable", nil},
+		{"WARNING upper", "WARNING", nil},
+		{"Critical mixed", "Critical", nil},
+		// Structured YAML form — production heuristic:
+		// `strings.Contains(val, "target:")` distinguishes structured vs
+		// scalar. Validator must let structured form pass (downstream
+		// parses it; this layer only ensures length/format basics).
+		{"structured target+expires (multi-line)",
+			"target: warning\nexpires: 2099-12-31T00:00:00Z\nreason: planned migration",
+			nil},
+		{"structured target only", "target: critical", nil},
+		{"structured target=disable", "target: disable", nil},
+		// Unknowns rejected — only when neither scalar enum NOR structured form
+		{"off (production uses 'disable' not 'off')", "off",
+			[]string{`got "off"`, `{warning, critical, all, disable}`}},
 		{"empty string", "",
-			`must be one of {warning, critical, all, disable}; got ""`},
-		{"nonsense", "purple-elephant",
-			`must be one of {warning, critical, all, disable}; got "purple-elephant"`},
+			[]string{`got ""`}},
+		{"nonsense scalar", "purple-elephant",
+			[]string{`got "purple-elephant"`}},
+		// Edge case: value containing a `:` that's NOT `target:` — still
+		// goes through the enum path (and gets rejected because
+		// `key:value` doesn't match any enum value).
+		{"unrelated-key:value", "expires: 2025-01-01",
+			[]string{`got "expires: 2025-01-01"`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := validateSilentMode(tt.input)
-			if got != tt.wantReason {
-				t.Errorf("validateSilentMode(%q) = %q, want %q", tt.input, got, tt.wantReason)
+			if len(tt.wantSubstrings) == 0 {
+				if got != "" {
+					t.Errorf("validateSilentMode(%q) = %q, want pass", tt.input, got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatalf("validateSilentMode(%q) passed unexpectedly", tt.input)
+			}
+			for _, sub := range tt.wantSubstrings {
+				if !strings.Contains(got, sub) {
+					t.Errorf("validateSilentMode(%q): reason %q missing substring %q",
+						tt.input, got, sub)
+				}
 			}
 		})
 	}
@@ -83,19 +109,22 @@ func TestValidateNonNegativeIntCap(t *testing.T) {
 	}
 }
 
-func TestValidateNonEmptyString256(t *testing.T) {
-	if r := validateNonEmptyString256(""); r != "must not be empty" {
-		t.Errorf("empty string: got %q, want 'must not be empty'", r)
+func TestValidateProfileReference(t *testing.T) {
+	// Empty string MUST pass — customer can patch _profile: "" to
+	// clear the profile reference (downstream treats empty as "no
+	// profile", same semantic as missing key).
+	if r := validateProfileReference(""); r != "" {
+		t.Errorf("empty string should pass (clears profile reference); got %q", r)
 	}
-	if r := validateNonEmptyString256("ok"); r != "" {
-		t.Errorf("'ok': got %q, want pass", r)
+	if r := validateProfileReference("standard-db"); r != "" {
+		t.Errorf("'standard-db': got %q, want pass", r)
 	}
 	long := strings.Repeat("x", 257)
-	if r := validateNonEmptyString256(long); !strings.Contains(r, "256") {
+	if r := validateProfileReference(long); !strings.Contains(r, "256") {
 		t.Errorf("257-char string: reason %q should mention 256", r)
 	}
 	exact := strings.Repeat("x", 256)
-	if r := validateNonEmptyString256(exact); r != "" {
+	if r := validateProfileReference(exact); r != "" {
 		t.Errorf("256-char string (boundary): got %q, want pass", r)
 	}
 }
@@ -136,9 +165,9 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 	// Per #134 spec: report ALL violations, not first-only — matches
 	// PR-2 forbidden-member listing UX (one round-trip to fix everything).
 	patch := map[string]string{
-		"_silent_mode": "purple-elephant",
-		"_timeout_ms":  "99999999999", // exceeds 1h cap
-		"_quench_min":  "abc",         // not an integer
+		"_silent_mode":     "purple-elephant",          // bad enum
+		"_timeout_ms":      "99999999999",              // exceeds 1h cap
+		"_routing_profile": strings.Repeat("p", 257),    // exceeds 256 chars
 	}
 	v := validatePatchMap(patch, "operations[0].patch")
 	if len(v) != 3 {
@@ -153,7 +182,7 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 	wantFields := []string{
 		`operations[0].patch["_silent_mode"]`,
 		`operations[0].patch["_timeout_ms"]`,
-		`operations[0].patch["_quench_min"]`,
+		`operations[0].patch["_routing_profile"]`,
 	}
 	for _, want := range wantFields {
 		if !gotFields[want] {
@@ -195,6 +224,35 @@ func TestValidatePatchMap_OversizedValue(t *testing.T) {
 	}
 	if !strings.Contains(v[0].Reason, "value length must not exceed") {
 		t.Errorf("expected 'value length' violation, got %q", v[0].Reason)
+	}
+}
+
+func TestValidatePatchMap_SilentMode_StructuredFormPassthrough(t *testing.T) {
+	// Production accepts BOTH scalar enum and structured YAML form:
+	//   "warning"                                         (scalar)
+	//   "target: warning\nexpires: 2099-12-31T00:00:00Z\n" (structured)
+	// Validator must let the structured form through (downstream parser
+	// handles RFC3339 expires + lower-case target enum). Locks the
+	// production-mirror heuristic added in self-review.
+	patch := map[string]string{
+		"_silent_mode": "target: warning\nexpires: 2099-12-31T00:00:00Z\nreason: planned migration",
+	}
+	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
+		t.Errorf("structured _silent_mode form should pass; got %d violations: %+v", len(v), v)
+	}
+}
+
+func TestValidatePatchMap_ProfileReference_EmptyAllowed(t *testing.T) {
+	// Empty `_profile` / `_routing_profile` is a documented "clear
+	// the profile reference" semantic (downstream treats empty same
+	// as missing). Validator must NOT reject it. Locks the empty-
+	// allowed behavior of validateProfileReference added in self-review.
+	patch := map[string]string{
+		"_profile":         "", // clear profile
+		"_routing_profile": "", // clear routing profile
+	}
+	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
+		t.Errorf("empty profile reference should pass; got %d violations: %+v", len(v), v)
 	}
 }
 

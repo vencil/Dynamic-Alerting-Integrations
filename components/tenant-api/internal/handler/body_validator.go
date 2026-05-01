@@ -77,7 +77,8 @@ func newValidatorInstance() *validator.Validate {
 // the struct passed all tag rules.
 //
 // Note: this only handles the fixed-shape fields. Map-shaped fields
-// like Patch / Filters need per-key validation via validateReservedKeys.
+// like Patch / Filters need per-key validation via validatePatchMap /
+// validateFilterMap.
 func validateStructTags(req interface{}) []Violation {
 	if err := validatorInstance.Struct(req); err != nil {
 		var validationErrs validator.ValidationErrors
@@ -114,18 +115,40 @@ func translateValidatorErrors(errs validator.ValidationErrors) []Violation {
 // humanizeValidatorTag renders one validator FieldError into a
 // human-readable reason string. Keep messages actionable: state the
 // constraint violated and (where helpful) the actual offending value.
+//
+// `min` / `max` / `len` semantics depend on the field kind:
+//   - String  → character-count rule
+//   - Slice / Map / Array → element-count rule
+//
+// Reporting "must be at least 1 characters" for an empty Operations
+// slice would confuse customers. We use fe.Kind() to pick the right
+// noun. Numeric kinds also fall through to "value" wording.
 func humanizeValidatorTag(fe validator.FieldError) string {
 	switch fe.Tag() {
 	case "required":
 		return "is required"
 	case "min":
-		return fmt.Sprintf("must be at least %s characters", fe.Param())
+		return fmt.Sprintf("must be at least %s %s", fe.Param(), countNounFor(fe.Kind()))
 	case "max":
-		return fmt.Sprintf("must not exceed %s characters", fe.Param())
+		return fmt.Sprintf("must not exceed %s %s", fe.Param(), countNounFor(fe.Kind()))
 	case "len":
-		return fmt.Sprintf("must be exactly %s characters", fe.Param())
+		return fmt.Sprintf("must be exactly %s %s", fe.Param(), countNounFor(fe.Kind()))
 	default:
 		return fmt.Sprintf("failed %q validation (param=%q)", fe.Tag(), fe.Param())
+	}
+}
+
+// countNounFor returns the user-facing unit name for size-class
+// validator rules ("characters" / "items" / "value").
+func countNounFor(k reflect.Kind) string {
+	switch k {
+	case reflect.String:
+		return "characters"
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return "items"
+	default:
+		// Numeric / bool / unknown — fall back to a neutral noun
+		return "value"
 	}
 }
 
@@ -154,21 +177,38 @@ type reservedKeyValidator func(value string) string
 // metadata logic (e.g. config_resolve.go's `silent_mode` enum
 // `{warning, critical, all, disable}`). When extending this map,
 // cross-check the SOT or you'll create a doc/code drift class.
+//
+// Registry purposely small — only entries with confirmed production
+// validation rules go in. (Earlier draft included a hallucinated
+// `_quench_min` entry; removed in self-review.)
 var reservedKeyValidators = map[string]reservedKeyValidator{
 	"_silent_mode":     validateSilentMode,
 	"_timeout_ms":      validateNonNegativeIntCap(3_600_000), // ≤ 1h
-	"_quench_min":      validateNonNegativeIntCap(86_400),    // ≤ 1d
-	"_routing_profile": validateNonEmptyString256,
-	"_profile":         validateNonEmptyString256,
+	"_routing_profile": validateProfileReference,
+	"_profile":         validateProfileReference,
 }
 
+// validateSilentMode mirrors threshold-exporter's `config_resolve.go`
+// behavior: the value can be either the scalar enum form
+// (`"warning"` / `"critical"` / `"all"` / `"disable"`, case-insensitive)
+// OR a structured YAML form (`"target: warning\nexpires: ..."`). The
+// production code distinguishes via `strings.Contains(val, "target:")`
+// — we use the same heuristic so the boundary doesn't false-positive
+// on documented usage. Structured-form parsing details (RFC3339 expires
+// validation, etc.) live downstream — we just let it through here.
 func validateSilentMode(value string) string {
+	if strings.Contains(value, "target:") {
+		// Looks like a structured YAML mapping; defer to threshold-
+		// exporter's parser. Length cap (1024) already enforced upstream.
+		return ""
+	}
 	switch strings.ToLower(value) {
 	case "warning", "critical", "all", "disable":
 		return ""
 	default:
 		return fmt.Sprintf(
-			"must be one of {warning, critical, all, disable}; got %q",
+			"must be one of {warning, critical, all, disable} (or structured YAML "+
+				"with `target: <mode>` form); got %q",
 			value,
 		)
 	}
@@ -190,10 +230,12 @@ func validateNonNegativeIntCap(maxVal int64) reservedKeyValidator {
 	}
 }
 
-func validateNonEmptyString256(value string) string {
-	if value == "" {
-		return "must not be empty"
-	}
+// validateProfileReference enforces the length cap on a profile-name
+// reference (`_profile` / `_routing_profile`). Empty value is ALLOWED
+// — customers may patch the field to "" to clear the profile reference
+// (downstream interprets empty same as missing). Only oversize is
+// rejected (resource-exhaustion guard).
+func validateProfileReference(value string) string {
 	if len(value) > 256 {
 		return fmt.Sprintf("must not exceed 256 characters; got %d", len(value))
 	}
