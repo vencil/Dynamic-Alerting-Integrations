@@ -16,6 +16,16 @@ purpose: |
 
 const { useState } = React;
 
+// Defensive explicit import (PR-2d Phase 2 self-review): Phase 1 worked
+// in Chromium without this line because Babel-standalone's compiled
+// output appears to leak `const styles` from styles.js's eval frame
+// to global scope (or otherwise resolves it through closure). Per
+// MDN's strict reading of indirect-eval semantics this shouldn't
+// happen — but empirically PR #156 CI was green. This explicit
+// `const styles = window.__styles;` makes the lookup deterministic
+// and resilient to future Babel-standalone version drift.
+const styles = window.__styles;
+
 function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onDeleteGroup, canWrite }) {
   const [showCreate, setShowCreate] = useState(false);
   const [newGroupId, setNewGroupId] = useState('');
