@@ -151,7 +151,7 @@ lang: zh
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_techdebt_drift.py` | TECH-DEBT / REG registry drift checker. |
 | `check_translation.py` | 自動化翻譯品質檢查 |
-| `check_undefined_tokens.py` | Detect JSX/CSS references to --da-* tokens not defined in design-tokens.css. |
+| `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
