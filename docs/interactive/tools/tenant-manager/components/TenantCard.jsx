@@ -37,6 +37,19 @@ purpose: |
 const styles = window.__styles;
 const t = window.__t || ((zh, en) => en);
 
+// C-4 PR-1 (S#94) — deep-link URL builder for wizard tools.
+// Forms: ?component=<toolKey>&tenant_id=<id>
+// Relative to current jsx-loader.html, preserving path. Same-tab
+// query replacement when used as `<a href="?...">`. We use
+// target="_blank" so user keeps tenant-manager open.
+function buildToolUrl(toolKey, tenantName) {
+  var params = new URLSearchParams({
+    component: toolKey,
+    tenant_id: tenantName,
+  });
+  return '?' + params.toString();
+}
+
 function TenantCard({
   name,
   data,
@@ -142,6 +155,36 @@ function TenantCard({
           </span>
         </div>
       )}
+
+      {/*
+        C-4 PR-1 (S#94) — wizard deep-link footer.
+        Open alert-builder / routing-trace in a new tab with
+        `?tenant_id=<name>` so the wizard pre-fills the `tenant`
+        label automatically, saving 1-2 clicks + avoiding tenant-id
+        typos. target="_blank" keeps tenant-manager open for context.
+      */}
+      <div style={styles.cardToolsRow}>
+        <a
+          href={buildToolUrl('alert-builder', name)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={t('用此 tenant 開告警精靈', 'Open Alert Builder pre-filled with this tenant')}
+          data-testid={`tenant-card-${name}-build-alert`}
+          style={styles.cardToolLink}
+        >
+          🛠️ {t('告警', 'Alert')}
+        </a>
+        <a
+          href={buildToolUrl('routing-trace', name)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={t('用此 tenant 模擬路由', 'Trace routing with this tenant')}
+          data-testid={`tenant-card-${name}-trace-routing`}
+          style={styles.cardToolLink}
+        >
+          🧭 {t('路由', 'Route')}
+        </a>
+      </div>
     </article>
   );
 }

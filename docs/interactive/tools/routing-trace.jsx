@@ -196,6 +196,22 @@ function Field({ label, hint, error, children }) {
 const inputClass =
   'w-full px-3 py-2 text-sm border border-[color:var(--da-color-surface-border)] rounded-md bg-[color:var(--da-color-surface)] text-[color:var(--da-color-fg)] focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]';
 
+// C-4 PR-1 (S#94) — read `?tenant_id=<id>` from URL and pre-fill it
+// as a `tenant` label on the seeded sample alert. Triggered from
+// Tenant Manager card deep-link. Falls through silently when the
+// query param is absent (standalone usage).
+function getInitialAlertLabels() {
+  var base = { team: 'platform', env: 'prod' };
+  try {
+    var params = new URLSearchParams(window.location.search);
+    var tenantId = params.get('tenant_id');
+    if (tenantId) base.tenant = tenantId;
+  } catch (_err) {
+    // window.location unavailable — keep default labels.
+  }
+  return base;
+}
+
 /* ── Main component ───────────────────────────────────────────────── */
 export default function RoutingTrace() {
   const [step, setStep] = useState(0);
@@ -203,7 +219,7 @@ export default function RoutingTrace() {
     alert: {
       alertname: 'HighCPUUsage',
       severity: 'critical',
-      labels: { team: 'platform', env: 'prod' },
+      labels: getInitialAlertLabels(),
     },
     defaultRoute: {
       receiver: 'default-pager',

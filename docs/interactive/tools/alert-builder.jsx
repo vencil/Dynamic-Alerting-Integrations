@@ -177,6 +177,24 @@ function Field({ label, hint, error, children }) {
 }
 
 /* ── Main component ───────────────────────────────────────────────── */
+// C-4 PR-1 (S#94) — read `?tenant_id=<id>` from URL and pre-fill it
+// as a `tenant` label. Triggered from Tenant Manager card deep-link.
+// Returns the initial labels object: always has `team: ''`; adds
+// `tenant: '<id>'` only when query param present (graceful no-op when
+// alert-builder loaded standalone).
+function getInitialLabelsFromUrl() {
+  var labels = { team: '' };
+  try {
+    var params = new URLSearchParams(window.location.search);
+    var tenantId = params.get('tenant_id');
+    if (tenantId) labels.tenant = tenantId;
+  } catch (_err) {
+    // window.location may be unavailable in some test envs — fall back
+    // to default labels silently.
+  }
+  return labels;
+}
+
 export default function AlertBuilder() {
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState({
@@ -189,7 +207,7 @@ export default function AlertBuilder() {
     forDuration: '5m',
     severity: 'warning',
     description: '',
-    labels: { team: '' },
+    labels: getInitialLabelsFromUrl(),
   });
   const [copied, setCopied] = useState(false);
 
