@@ -841,7 +841,15 @@ test('renders success state', async ({ page }) => {
 });
 ```
 
-**Mechanical safety net**：⏸️ deferred to v2.9.0+ — would require static analysis of component `useState` defaults vs spec `expect(testid).toBeVisible()` reachability graph，~300 LoC + AST work；ROI uncertain because cold-start contracts vary per component。Pattern 對 read-time discipline 的覆蓋率夠高，先靠 review checklist 防漏（PR #185 是這條 lesson 的 motivating instance — 若已存在 review checklist，author 應 catch「mount 後 testid 不存在」）。
+**Mechanical safety net** — three-tier feasibility analysis, lightest viable tier identified post-codify:
+
+- **Tier 1 — text heuristic（~150 LoC, S#97 candidate）**：對每個 `test()` block 找 `await expect(...).toBeVisible()` 對 downstream-state testid 的 assertion（pattern：`*-state-(ready|success|loaded|error|fail)` / `*-(result|output|preview)-*`），若**前面同一 test block 內**找不到任何 input establishment（`*.fill(` / `*.click(` / `*.dispatchEvent(` / `*.selectOption(` / `*.setInputFiles(` / `page.goto(<url with query params>)` / `page.route(`），WARN。Per-line escape `// playwright-coldstart: ignore` (3-line lookback) for residual cases；`// playwright-coldstart: auto-fire` marker for legitimate cold-start auto-fire（component default state 已 verified 滿足 render gate；例：`alert-builder` 的 `groupName: 'my-alerts'` 預設、`routing-trace` 的 `labels: {team: 'platform', env: 'prod'}` 預設、PR #185 fix 後的 `simulate-preview` 的 `tenantId: 'example-tenant'` 預設）。**抓得到 PR #185 case** — 100%。**False-positive rate** ~10-15%：spec 用 `page.evaluate()` 推狀態 / 用非標準 selector / 合法 cold-start auto-fire 但忘標 marker。**Recommendation**：ship warn-only first，audit 一輪後標 ~3-5 處 marker，再考慮 strict mode。9th `make lint-extract` text scaffold dogfood candidate.
+
+- **Tier 2 — marker-enforced convention（~250 LoC, deferred）**：每個 `test()` block 強制 `// playwright-coldstart: <empty|requires-fill|auto-fire>` marker；lint 驗 marker 與內容一致（`empty` 時禁 fill / `requires-fill` 時必有 fill / `auto-fire` 時允許無 fill）。**問題**：legacy 20 specs × ~6 test = ~120 markers 要 retrofit，adoption cost 高；不如先靠 Tier 1 的 review-time discipline + ignore marker 補洞。
+
+- **Tier 3 — component AST × spec AST cross-reachability（~400+ LoC, deferred）**：parse component `useState(initial)` → 推導 cold-start state；parse `if (state.X) <... data-testid="Y" />` → state→testid mapping；spec → 找 `expect(testid='Y')` assertion；推 「Y 從 cold-start 是否可達 unless spec 有 fill」。**ROI 不確定** — HOC / context / async effect 邊界 case 多。
+
+**Recommendation order**: Tier 1 → review-checklist (this section) for the rest. Tier 2/3 only if Tier 1 false-positive rate >25% post-audit (unlikely given the narrow signal).
 
 **Cross-refs**：PR #185 first-CI-fail commit `3beb127`（fix: seed Tenant ID default `'example-tenant'`）；`docs/interactive/tools/simulate-preview.jsx` (4-state machine reference); Component cold-start UX 對照 `alert-builder.jsx` (`groupName: 'my-alerts'` default) + `routing-trace.jsx` (`labels: {team: 'platform', env: 'prod'}` default) — 兩者 cold-start spec 也都不需 fill。
 
