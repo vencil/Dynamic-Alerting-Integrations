@@ -144,7 +144,7 @@ conf.d/
 - **單一 DB（MariaDB）** — [`config/conf.d/db-a.yaml`](config/conf.d/db-a.yaml)
 - **多 DB 維度** — [`config/conf.d/examples/`](config/conf.d/examples/)（Redis / MongoDB / Elasticsearch + `_defaults-multidb.yaml` + `_routing_profiles.yaml` + `_domain_policy.yaml` + `_instance_mapping.yaml`）
 
-> **語法細節** — dimensional labels / regex labels / scheduled overrides / metadata 完整規則見 [migration-guide.md](../../docs/migration-guide.md)；recording rule 適配見 [migration-guide.md §平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
+> **語法細節** — dimensional labels / regex labels / scheduled overrides / metadata 完整規則見 [migration-guide.md](../../docs/migration-guide.md)；recording rule 適配見 [migration-guide.md §平台團隊 PromQL 適配](../../docs/migration-guide.md#平台團隊-promql-適配-重要)。
 
 ---
 
