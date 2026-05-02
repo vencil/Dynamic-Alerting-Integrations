@@ -120,7 +120,14 @@ test.describe('Saved Views (Smart Views) @critical', () => {
     await expect(
       page.getByTestId('saved-views-panel')
     ).toBeVisibleWithDiagnostics({ timeout: 10000 });
-    await expect(page.getByTestId('saved-views-empty')).toBeVisible();
+    // Use diagnostic matcher for empty-state assertion too — first CI
+    // run failed here with a stuck-loading bug; the diagnostic dump
+    // pinpointed it (loading + populated views both visible mid-loop).
+    // Promoting all state-* assertions to the matcher so future
+    // regressions self-explain in CI logs.
+    await expect(
+      page.getByTestId('saved-views-empty')
+    ).toBeVisibleWithDiagnostics({ timeout: 5000 });
     // No select dropdown when empty.
     await expect(page.getByTestId('saved-views-select')).toHaveCount(0);
   });

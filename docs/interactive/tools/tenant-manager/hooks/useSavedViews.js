@@ -54,7 +54,7 @@ purpose: |
   controls. A 403 response from PUT/DELETE bubbles up via onError.
 ---
 
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 
 const VIEWS_ENDPOINT = '/api/v1/views';
 
@@ -62,6 +62,22 @@ function useSavedViews(onError) {
   const [views, setViews] = useState({});
   const [loading, setLoading] = useState(true);
   const [reachable, setReachable] = useState(true);
+
+  // CI fix (PR #190 first run): orchestrator passes a NEW inline
+  // function for `onError` every render. If `onError` is in the
+  // dep arrays of `useCallback` / `useEffect` below, then `reload`
+  // changes every render → `useEffect([reload])` fires every render
+  // → infinite reload loop → loading stuck true. Spec saw the
+  // contradictory state (loading + populated views) because the
+  // diagnostic matcher captured a frame mid-loop.
+  //
+  // Fix: stash callback in a ref so its identity is stable; effects
+  // never see the callback in their dep array. Standard React idiom
+  // for "stable callback handle without burdening callers".
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -76,7 +92,9 @@ function useSavedViews(onError) {
       }
       if (!resp.ok) {
         const detail = await resp.text().catch(() => resp.statusText);
-        if (onError) onError(`Failed to list saved views: ${detail || resp.status}`);
+        if (onErrorRef.current) {
+          onErrorRef.current(`Failed to list saved views: ${detail || resp.status}`);
+        }
         return;
       }
       const data = await resp.json().catch(() => ({}));
@@ -94,7 +112,7 @@ function useSavedViews(onError) {
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, []); // <-- empty deps; uses onErrorRef instead
 
   useEffect(() => {
     reload();
@@ -103,17 +121,19 @@ function useSavedViews(onError) {
   const save = useCallback(
     async (id, label, description, filters) => {
       // Validation per backend contract (`views.go`): id charset,
-      // label non-empty, filters ≤ 20 entries.
+      // label non-empty, filters ≤ 20 entries. Uses onErrorRef so
+      // callback identity stays stable even if caller passes inline
+      // function (see CI fix note above).
       if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {
-        if (onError) onError('View id must be 1-128 chars: letters, digits, dash, underscore.');
+        if (onErrorRef.current) onErrorRef.current('View id must be 1-128 chars: letters, digits, dash, underscore.');
         return false;
       }
       if (!label || label.length > 256) {
-        if (onError) onError('View label is required (≤ 256 chars).');
+        if (onErrorRef.current) onErrorRef.current('View label is required (≤ 256 chars).');
         return false;
       }
       if (Object.keys(filters || {}).length > 20) {
-        if (onError) onError('Saved view supports at most 20 filter entries.');
+        if (onErrorRef.current) onErrorRef.current('Saved view supports at most 20 filter entries.');
         return false;
       }
       try {
@@ -129,20 +149,20 @@ function useSavedViews(onError) {
         if (!resp.ok) {
           const body = await resp.json().catch(() => ({ error: resp.statusText }));
           if (resp.status === 403) {
-            if (onError) onError('Permission denied: write access required.');
+            if (onErrorRef.current) onErrorRef.current('Permission denied: write access required.');
           } else {
-            if (onError) onError(body.error || `Failed to save view (HTTP ${resp.status}).`);
+            if (onErrorRef.current) onErrorRef.current(body.error || `Failed to save view (HTTP ${resp.status}).`);
           }
           return false;
         }
         await reload();
         return true;
       } catch (err) {
-        if (onError) onError('Network error while saving view.');
+        if (onErrorRef.current) onErrorRef.current('Network error while saving view.');
         return false;
       }
     },
-    [reload, onError]
+    [reload]  // reload is stable (empty-dep useCallback); no onError dep needed
   );
 
   const remove = useCallback(
@@ -154,20 +174,20 @@ function useSavedViews(onError) {
         if (!resp.ok) {
           const body = await resp.json().catch(() => ({ error: resp.statusText }));
           if (resp.status === 403) {
-            if (onError) onError('Permission denied: write access required.');
+            if (onErrorRef.current) onErrorRef.current('Permission denied: write access required.');
           } else {
-            if (onError) onError(body.error || `Failed to delete view (HTTP ${resp.status}).`);
+            if (onErrorRef.current) onErrorRef.current(body.error || `Failed to delete view (HTTP ${resp.status}).`);
           }
           return false;
         }
         await reload();
         return true;
       } catch (err) {
-        if (onError) onError('Network error while deleting view.');
+        if (onErrorRef.current) onErrorRef.current('Network error while deleting view.');
         return false;
       }
     },
-    [reload, onError]
+    [reload]  // reload is stable; ref-based onError doesn't need dep
   );
 
   return { views, loading, reachable, reload, save, remove };
