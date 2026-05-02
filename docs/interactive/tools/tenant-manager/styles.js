@@ -274,6 +274,31 @@ const styles = {
     marginBottom: 'var(--da-space-3)',
     paddingRight: '28px',
   },
+  // C-4 PR-1 (S#94) — wizard deep-link footer row.
+  // Two icon-link buttons in tenant card footer that open
+  // alert-builder + routing-trace in a new tab with `?tenant_id=<name>`
+  // pre-filled. `position: relative` keeps icon stacking inside card.
+  cardToolsRow: {
+    display: 'flex',
+    gap: 'var(--da-space-2)',
+    marginTop: 'var(--da-space-3)',
+    paddingTop: 'var(--da-space-3)',
+    borderTop: '1px solid var(--da-color-section-border)',
+    justifyContent: 'flex-end',
+  },
+  cardToolLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 'var(--da-space-1)',
+    padding: 'var(--da-space-1) var(--da-space-2)',
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-accent)',
+    textDecoration: 'none',
+    borderRadius: 'var(--da-radius-sm)',
+    border: '1px solid var(--da-color-surface-border)',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease',
+  },
   badge: {
     display: 'inline-block',
     padding: 'var(--da-space-1) var(--da-space-2)',
