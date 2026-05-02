@@ -137,6 +137,7 @@ lang: en
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
+| `check_jsx_loader_compat.py` | Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls). |
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |

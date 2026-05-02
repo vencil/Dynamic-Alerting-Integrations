@@ -80,6 +80,7 @@ TOOLS = [
     ("hardcode_tenant", "lint/check_hardcode_tenant.py", ["--ci"], "Hardcoded tenant literals in PromQL (Rule #2)"),
     ("changelog_no_tbd", "lint/check_changelog_no_tbd.py", ["--ci"], "TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)"),
     ("undefined_tokens", "lint/check_undefined_tokens.py", ["--ci"], "JSX/CSS/HTML references to undefined --da-* tokens (S#85 colour-only → S#86 all categories → S#88 +.html +--report-orphans)"),
+    ("jsx_loader_compat", "lint/check_jsx_loader_compat.py", ["--ci"], "JSX-loader Babel-standalone compat (named exports / non-allowlist imports / require() — S#93 from PR #182 fix)"),
 ]
 
 

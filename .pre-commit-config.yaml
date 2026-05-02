@@ -512,3 +512,16 @@ repos:
         # flag and ship warn-only first (PR #166 pattern).
         # Per-line escape via `# undefined-tokens: ignore` for legitimate
         # exceptions / illustrative quotes.
+
+      - id: jsx-loader-compat-check
+        name: Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls)
+        entry: python3 -X utf8 scripts/tools/lint/check_jsx_loader_compat.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/interactive/.*\.jsx$
+        # Auto-stage, FATAL on findings (default for new lints when
+        # post-rewrite violation count is 0; mirrors PR #169 / #170).
+        # If existing codebase has violations, add granular `--strict-jsx_loader_compat`
+        # flag and ship warn-only first (PR #166 pattern).
+        # Per-line escape via `<!-- jsx-loader-compat: ignore -->` for legitimate
+        # exceptions / illustrative quotes.
