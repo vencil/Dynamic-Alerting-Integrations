@@ -72,7 +72,12 @@ function isValidLabelKey(s) {
  *   - receiver: the receiver string
  *   - reasons: ordered list of human-readable trace lines
  * ────────────────────────────────────────────────────────────────── */
-export function computeTrace({ alert, defaultRoute, childRoutes }) {
+// Note: NOT exported — Babel-standalone in jsx-loader only supports
+// `export default`; named exports compile to `exports.x = ...` which
+// fails at runtime with `exports is not defined` (caught locally
+// reproducing PR #182 first-CI-run failure). Kept module-scope so
+// the component closure can reach it.
+function computeTrace({ alert, defaultRoute, childRoutes }) {
   const alertLabels = {
     alertname: alert.alertname || '(blank)',
     severity: alert.severity || 'warning',
