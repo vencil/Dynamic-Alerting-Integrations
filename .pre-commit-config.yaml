@@ -525,3 +525,16 @@ repos:
         # flag and ship warn-only first (PR #166 pattern).
         # Per-line escape via `<!-- jsx-loader-compat: ignore -->` for legitimate
         # exceptions / illustrative quotes.
+
+      - id: playwright-rtl-drift-check
+        name: Detect React Testing Library API names in Playwright specs (S#96; mechanical safety net for testing-playbook §LL §10)
+        entry: python3 -X utf8 scripts/tools/lint/check_playwright_rtl_drift.py --ci
+        language: python
+        pass_filenames: false
+        files: ^tests/e2e/.*\.spec\.ts$
+        # Auto-stage, FATAL on findings. RTL-only methods getByDisplayValue
+        # / getByLabelText / getByPlaceholderText do NOT exist on Playwright
+        # `Page` / `Locator` — runtime `TypeError` (PR #184 first-CI-fail).
+        # Comment lines (`//` and JSDoc ` *`) and inline backtick code-spans
+        # auto-skipped; per-line escape `// playwright-rtl-drift: ignore`
+        # (3-line lookback) for residual cases.

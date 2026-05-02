@@ -759,9 +759,91 @@ expect(await page.getByTestId('my-input').inputValue()).toBe('expected');
 5. ❌ `page.getByDisplayValue(...)` — does NOT exist
 6. ❌ `page.locator('input[value="x"]')` — unreliable for React controlled inputs
 
-**Mechanical safety net**：⏸️ deferred — 寫 `check_playwright_rtl_drift.py` lint 偵測 `\bpage\.getByDisplayValue\(` / `\bpage\.getByLabelText\(` / `\bpage\.getByPlaceholderText\(` / `\bpage\.getByAltText\(` 三個 RTL-only 名稱出現在 `tests/e2e/**/*.spec.ts`。Single-rule lint，~80 LoC + tests，可走 `make lint-extract` scaffold 第 8 次 dogfood。Future PR 候選（不阻擋 PR-2 落地）。
+**Mechanical safety net**：🟢 **S#96 PR：`scripts/tools/lint/check_playwright_rtl_drift.py`**（8th `make lint-extract` text scaffold dogfood）。偵測三個 RTL-only method names 作為 method call invocation `\b\w+\.(getByDisplayValue|getByLabelText|getByPlaceholderText)\s*\(` 在 `tests/e2e/**/*.spec.ts`。**`getByAltText` 不入名單** — Playwright 從 1.27 起也支援同名 method，跟 RTL 同名同意義不衝突。Three-layer 抑制：(1) Per-line `// playwright-rtl-drift: ignore` (3-line lookback, JSDoc-friendly)；(2) TS line comments `//` + JSDoc body ` *` 自動 skip（spec 常在 docstring 討論這些 API，不要誤報）；(3) Inline backtick code-spans skip（`` `page.getByDisplayValue('x')` `` 是 documentation reference 不是 call）。Pre-merge intentional-break dogfood：re-inject PR #184 historical pattern 進現 spec → lint 立刻抓 `tests/e2e/tenant-manager-deeplink.spec.ts:168:23 [getByDisplayValue]` exit=1 → restored。Live audit 0 violations across 20 spec files。43 unit tests passing。Pre-commit hook `playwright-rtl-drift-check` auto-stage FATAL；validate_all registry +1；tool count 137→138。
 
 **Cross-refs**：PR #184 first-run CI failure (3 scenarios fail with `TypeError`); fix commit `912cf2b` (`readAllInputValues` helper); `tests/e2e/tenant-manager-deeplink.spec.ts` + `simulate-preview.spec.ts`（canonical evaluate pattern）；Playwright docs `https://playwright.dev/docs/locators`（authoritative API surface）；React Testing Library docs `https://testing-library.com/docs/queries/about/`（distinct API surface）。
+
+### 11. Spec cold-start state must match assertion assumptions (PR #185 case)
+
+> **觸發**：S#95 PR #185 第一次 CI run 在 Smoke Tests fail 3 of 5 scenarios — `simulate-preview-state-ready` / `simulate-preview-state-error` testids never visible because the widget rendered `state-empty` indefinitely。Root cause 不是 spec 寫錯也不是 widget bug per se — 是 **spec assumptions 與 component cold-start state 不對齊**：spec 假設 `auto-simulate on mount` 會自動跑，但 widget cold-start 的 Tenant ID 是 `''`，`canSimulate` 為 false，effect 短路 → state 永遠停在 EMPTY。
+
+**Root cause**：
+Component cold-start state 由 `useState` initial values 決定。Spec 寫 `await expect(page.getByTestId('simulate-preview-state-ready')).toBeVisible()` 隱含假設「mount 後 5s 內應該抵達 ready 狀態」。這個假設只有當 cold-start state 提供 enough input to trigger fetch 時才成立。
+
+PR #185 widget 設計：
+```js
+const [tenantId, setTenantId] = useState(() => getInitialTenantId());
+// getInitialTenantId() returned '' if no ?tenant_id= URL param
+const canSimulate = tenantId.trim().length > 0 && tenantYaml.trim().length > 0;
+// On mount: tenantId = '' (no URL param) -> canSimulate = false
+// useEffect early-returns to STATUS.EMPTY -> state-ready never renders
+```
+
+Fix 是 widget UX 層：cold-start 預設 `'example-tenant'`（matches sample YAML key），改善「user 一打開就看到工作的 demo」+ spec 假設成立。
+
+**Why local lint did not catch**：
+
+- `npm run lint`（eslint + tsc）只檢 syntax / type — 不知道 component runtime state 與 spec assertion 之間的關係
+- `pre-commit run` 不跑 spec — spec 失敗只在 CI 才暴露
+- Playwright trace + screenshot 是 post-mortem 工具，不 prevent commit
+
+**Two checklist items for spec authors（read-time discipline）**：
+
+1. **Cold-start visualization** — 寫 spec assertion 前，先回答：「component mount 後**沒有 user input** 的狀態下，這個 testid 會 render 嗎？」如果答案是「需要 user 先 fill / click」，spec 必須 include 那個 user action 才 assert testid visible。**反例**（PR #185）：spec 直接 `expect(state-ready).toBeVisible()` 而沒先 fill input，因為 dev 假設「default sample 會 trigger」。
+2. **Default state is a contract** — 如果 component 預設 cold-start state（例 `tenantId: ''`、`labels: {team: ''}`、`alertname: ''`），spec 要嚴格區分：(a) 「we test EMPTY state」用 `state-empty` testid；(b) 「we test READY state」要 fill input 抵達 → 不能省略 fill 步驟。
+
+**Decision tool — quick spec audit**：
+
+對每個 `await expect(...).toBeVisible()` 問三個問題：
+
+- **What state shows this testid?** （EMPTY / LOADING / READY / ERROR / SUCCESS / 其他）
+- **What input combination triggers that state?**（無、URL param、user fill、network response、timer 到期）
+- **Does this spec scenario establish that input?**（cold-start 滿足 / spec 主動 fill / mock fetch / timer mock）
+
+如果第 3 個問題答 「unclear」 或 「assumes cold-start does」，需要當場 verify。最快方法：在 dev container 跑 `npx playwright test <spec> --headed` 觀察 component mount 後實際狀態，再決定 spec 要不要加 fill 步驟。
+
+**Allowed patterns**：
+
+```ts
+// ✅ Cold-start EMPTY state — assert state-empty testid directly
+test('shows empty state on mount with no inputs', async ({ page }) => {
+  await loadPortalTool(page, 'simulate-preview');
+  await expect(page.getByTestId('simulate-preview-state-empty')).toBeVisible();
+});
+
+// ✅ READY state — fill required inputs FIRST, then assert
+test('renders ready state after user fills inputs', async ({ page }) => {
+  await loadPortalTool(page, 'simulate-preview');
+  await page.getByTestId('simulate-preview-tenant-id').fill('example');
+  await expect(page.getByTestId('simulate-preview-state-ready')).toBeVisible();
+});
+
+// ✅ Cold-start auto-fire — only valid IF cold-start state actually triggers fetch
+//    (verified by reading useState initial values in component source)
+test('auto-fires on mount when cold-start defaults are sufficient', async ({ page }) => {
+  // Pin: useState(() => getInitialTenantId()) returns 'example-tenant' default
+  // Pin: SAMPLE_TENANT_YAML is non-empty
+  // -> canSimulate is true on mount -> effect fires -> state-ready
+  await loadPortalTool(page, 'simulate-preview');
+  await expect(page.getByTestId('simulate-preview-state-ready')).toBeVisible();
+});
+```
+
+**Banned pattern**：
+
+```ts
+// ❌ Asserts state-ready without fill OR cold-start verification
+//    PR #185 first-CI-fail: cold-start was state-empty, spec assumed state-ready
+test('renders success state', async ({ page }) => {
+  await loadPortalTool(page, 'simulate-preview');
+  // <-- missing: either fill inputs OR verify cold-start makes canSimulate=true
+  await expect(page.getByTestId('simulate-preview-state-ready')).toBeVisible();
+});
+```
+
+**Mechanical safety net**：⏸️ deferred to v2.9.0+ — would require static analysis of component `useState` defaults vs spec `expect(testid).toBeVisible()` reachability graph，~300 LoC + AST work；ROI uncertain because cold-start contracts vary per component。Pattern 對 read-time discipline 的覆蓋率夠高，先靠 review checklist 防漏（PR #185 是這條 lesson 的 motivating instance — 若已存在 review checklist，author 應 catch「mount 後 testid 不存在」）。
+
+**Cross-refs**：PR #185 first-CI-fail commit `3beb127`（fix: seed Tenant ID default `'example-tenant'`）；`docs/interactive/tools/simulate-preview.jsx` (4-state machine reference); Component cold-start UX 對照 `alert-builder.jsx` (`groupName: 'my-alerts'` default) + `routing-trace.jsx` (`labels: {team: 'platform', env: 'prod'}` default) — 兩者 cold-start spec 也都不需 fill。
 
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
