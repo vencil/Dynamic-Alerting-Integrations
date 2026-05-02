@@ -24,6 +24,26 @@ import { test, expect, Page } from '@playwright/test';
 // Pin a single tenant ID across all tests so failures are easy to grep.
 const TENANT_ID = 'pr94-deeplink-tenant';
 
+/**
+ * Read every `<input>` value currently on the page.
+ *
+ * Why this helper exists (lesson from CI failure on PR #184 first run):
+ * Playwright does NOT have `page.getByDisplayValue()` — that API belongs
+ * to React Testing Library. We initially used it and CI failed with
+ * `TypeError: page.getByDisplayValue is not a function`. CSS attribute
+ * selectors (`input[value="x"]`) also don't reliably work for React-
+ * controlled inputs because React sets the DOM property, not always the
+ * attribute. The robust path is to evaluate `el.value` (the property)
+ * via `page.evaluate` and assert against the returned array.
+ */
+async function readAllInputValues(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('input')).map(
+      (el) => (el as HTMLInputElement).value
+    )
+  );
+}
+
 async function loadTenantManagerWithMockedApi(page: Page) {
   await page.route('**/api/v1/tenants/search**', async (route) => {
     await route.fulfill({
@@ -127,9 +147,14 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
 
     // Step 2: severity step now visible. The labels editor renders
     // each (key, value) pair as two adjacent inputs. Both inputs
-    // for the seeded `tenant=<id>` row must be present.
-    await expect(page.getByDisplayValue('tenant')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByDisplayValue(TENANT_ID)).toBeVisible();
+    // for the seeded `tenant=<id>` row must be present. Wait for
+    // the step transition to settle (Next click → re-render).
+    await expect(page.getByPlaceholder(/可包含|Supports/i)).toBeVisible({
+      timeout: 5000,
+    });
+    const values = await readAllInputValues(page);
+    expect(values).toContain('tenant');
+    expect(values).toContain(TENANT_ID);
   });
 
   test('routing-trace pre-fills tenant label from ?tenant_id= URL param', async ({
@@ -148,9 +173,14 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
 
     // routing-trace step 0 (Alert) is the default view — labels editor
     // is visible without any navigation. Both inputs of the seeded
-    // `tenant=<id>` row should be on screen immediately.
-    await expect(page.getByDisplayValue('tenant')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByDisplayValue(TENANT_ID)).toBeVisible();
+    // `tenant=<id>` row should be on screen immediately. Wait for the
+    // alertname testid so the JSX has actually mounted, then read.
+    await expect(page.getByTestId('routing-trace-alertname')).toBeVisible({
+      timeout: 10000,
+    });
+    const values = await readAllInputValues(page);
+    expect(values).toContain('tenant');
+    expect(values).toContain(TENANT_ID);
   });
 
   test('alert-builder without ?tenant_id= does NOT inject a tenant label', async ({
@@ -179,8 +209,13 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
     await page.getByTestId('alert-builder-threshold').fill('80');
     await page.getByTestId('alert-builder-next').click();
 
+    // Wait for step 2's labels editor to render before reading values.
+    await expect(page.getByPlaceholder(/可包含|Supports/i)).toBeVisible({
+      timeout: 5000,
+    });
     // No `tenant` key should be seeded. Default labels just have `team`.
-    await expect(page.getByDisplayValue('team')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByDisplayValue('tenant')).toHaveCount(0);
+    const values = await readAllInputValues(page);
+    expect(values).toContain('team');
+    expect(values).not.toContain('tenant');
   });
 });
