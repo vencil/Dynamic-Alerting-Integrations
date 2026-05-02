@@ -4,9 +4,11 @@
 掃描英文文件偵測 CJK 字元比例，確保英文文件不含過多中文內容。
 同時掃描中文文件偵測是否有純英文而無中文的情況。
 
-支援兩種命名慣例（v2.7.0 SSOT 遷移期間共存）：
-- Legacy: *.en.md = English, *.md (without .en/.zh) = Chinese
-- New:    *.md (without .en/.zh) = English, *.zh.md = Chinese
+支援兩種命名慣例（dual-mode；v2.8.0 S#101 policy lock：ZH primary）：
+- ZH-primary (active): *.en.md = English, *.md (no suffix) = Chinese
+- EN-primary (dormant future-option): *.md (no suffix) = English, *.zh.md = Chinese
+S#101 policy lock：repo 現完全運作於 ZH-primary 模式；EN-primary 模式保留以
+支援未來若 trigger 條件達成時的遷移（見 dev-rules.md §9b）。
 
 Usage:
     python3 scripts/tools/lint/check_bilingual_content.py
