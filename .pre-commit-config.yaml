@@ -538,3 +538,18 @@ repos:
         # Comment lines (`//` and JSDoc ` *`) and inline backtick code-spans
         # auto-skipped; per-line escape `// playwright-rtl-drift: ignore`
         # (3-line lookback) for residual cases.
+
+      - id: playwright-coldstart-drift-check
+        name: Detect Playwright spec downstream-state testid assertions without preceding input establishment (S#97; Tier 1 mechanical net for testing-playbook §LL §11)
+        entry: python3 -X utf8 scripts/tools/lint/check_playwright_coldstart_drift.py --ci
+        language: python
+        pass_filenames: false
+        files: ^tests/e2e/.*\.spec\.ts$
+        # Auto-stage, FATAL on findings. Per-block scan: assertions
+        # against `*-state-(ready|success|loaded|error|fail)` testids
+        # require preceding input establishment (`*.fill(` / `*.click(`
+        # / `page.goto(?...=)` / `page.route(` / `page.evaluate(` / etc.)
+        # in the same test() block. Block-level escape:
+        # `// playwright-coldstart: auto-fire` (component default state
+        # verified to satisfy render gate). Per-line escape:
+        # `// playwright-coldstart: ignore` (3-line lookback for JSDoc).
