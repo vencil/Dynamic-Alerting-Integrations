@@ -702,6 +702,67 @@ Self-Review-Pass-2:
 
 **Cross-refs**：PR #182 amend commit `6e16a65`（routing-trace.jsx fix）；`docs/assets/jsx-loader.html` `transformImports` 函式；`docs/internal/jsx-multi-file-pattern.md`（cross-tool reuse 正解 = front-matter dependencies + window self-register, NOT named export）。
 
+### 10. Playwright API surface ≠ React Testing Library API surface (PR #184 case)
+
+> **觸發**：S#94 PR #184 第一次 CI run 在 Smoke Tests (Chromium) fail，3 個 deep-link 場景以 `TypeError: page.getByDisplayValue is not a function` 攔截。Local `npm run lint`（eslint + typescript-eslint + eslint-plugin-playwright）跑過綠，pre-commit hook 全綠，commit-time 沒擋住；只有 runtime 才暴露。Spec author 直覺從 React Testing Library 借來 `getByDisplayValue` API，誤以為 Playwright 也有同名 method。
+
+**Root cause**：
+Playwright 的 `Page` 與 `Locator` 的 `getBy*` 系列 query API **不等同於** React Testing Library 的 `getBy*`。兩個 library 同名前綴但 method 集合不同：
+
+| Method | React Testing Library | Playwright |
+|---|---|---|
+| `getByRole` | ✅ | ✅ |
+| `getByText` | ✅ | ✅ |
+| `getByLabel(Text)` | ✅ `getByLabelText` | ✅ `getByLabel` |
+| `getByPlaceholder(Text)` | ✅ `getByPlaceholderText` | ✅ `getByPlaceholder` |
+| `getByAlt(Text)` | ✅ `getByAltText` | ✅ `getByAltText` |
+| `getByTitle` | ✅ | ✅ |
+| `getByTestId` | ✅ | ✅ |
+| **`getByDisplayValue`** | ✅ | **❌ does NOT exist** |
+
+`getByDisplayValue('foo')` 在 RTL 是「找 `value="foo"` / `defaultValue="foo"` 的 input/textarea/select」。Playwright 沒有同等 API；最接近的等價物是 Locator method `inputValue()`（一次取一個），或自己寫 evaluate 拿 DOM property。
+
+**Why eslint didn't catch it**：
+TypeScript 的 strict mode 對 Playwright `Page` 的 overloaded signatures 不會做 exhaustive method-existence 檢查到「method-not-found」這層；compile-time 看到 `page.getByXxx(...)` 就放行。`eslint-plugin-playwright` 的規則集合（`no-skipped-test` / `no-element-handle` / etc.）也不檢驗「呼叫不存在的 method」這條。所以漏網 → CI runtime 撞牆。
+
+**Why CSS attribute selectors are also unreliable**：
+看似自然的 fix `page.locator('input[value="x"]')` 對 React 不可靠 — React controlled inputs (`<input value={state}>`) 更新 DOM `.value` **property** 但不一定 reflect 到 `value` **attribute**。CSS attribute selector 只看 attribute，所以可能讀不到最新值。
+
+**Robust pattern (canonical)**：
+評估 DOM 拿 property 是 RTL 內部做的事，Playwright 端用 `page.evaluate` 等價：
+
+```ts
+async function readAllInputValues(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('input')).map(
+      (el) => (el as HTMLInputElement).value
+    )
+  );
+}
+
+const values = await readAllInputValues(page);
+expect(values).toContain('expected-value');
+```
+
+對單一 input 用 `inputValue()`：
+```ts
+await expect(page.getByTestId('my-input')).toHaveValue('expected-value');
+// or
+expect(await page.getByTestId('my-input').inputValue()).toBe('expected');
+```
+
+**Allowed patterns**：
+1. ✅ `getByRole` / `getByText` / `getByLabel` / `getByPlaceholder` / `getByAltText` / `getByTitle` / `getByTestId` — Playwright supports these
+2. ✅ `expect(locator).toHaveValue('x')` — value-based assertion built into matchers
+3. ✅ `await locator.inputValue()` for single input read
+4. ✅ `page.evaluate(() => ...)` for batch DOM reads (multi-input pages)
+5. ❌ `page.getByDisplayValue(...)` — does NOT exist
+6. ❌ `page.locator('input[value="x"]')` — unreliable for React controlled inputs
+
+**Mechanical safety net**：⏸️ deferred — 寫 `check_playwright_rtl_drift.py` lint 偵測 `\bpage\.getByDisplayValue\(` / `\bpage\.getByLabelText\(` / `\bpage\.getByPlaceholderText\(` / `\bpage\.getByAltText\(` 三個 RTL-only 名稱出現在 `tests/e2e/**/*.spec.ts`。Single-rule lint，~80 LoC + tests，可走 `make lint-extract` scaffold 第 8 次 dogfood。Future PR 候選（不阻擋 PR-2 落地）。
+
+**Cross-refs**：PR #184 first-run CI failure (3 scenarios fail with `TypeError`); fix commit `912cf2b` (`readAllInputValues` helper); `tests/e2e/tenant-manager-deeplink.spec.ts` + `simulate-preview.spec.ts`（canonical evaluate pattern）；Playwright docs `https://playwright.dev/docs/locators`（authoritative API surface）；React Testing Library docs `https://testing-library.com/docs/queries/about/`（distinct API surface）。
+
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
 > **觸發**：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 `withIsolatedMetrics` + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。

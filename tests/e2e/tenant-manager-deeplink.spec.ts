@@ -80,20 +80,26 @@ async function loadTenantManagerWithMockedApi(page: Page) {
 }
 
 test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
-  test('tenant card surfaces Alert + Route deep-link footer with correct hrefs', async ({
+  test('tenant card surfaces Alert + Route + Preview deep-link footer with correct hrefs', async ({
     page,
   }) => {
     await loadTenantManagerWithMockedApi(page);
 
-    // Both deep-link anchors should be present on the rendered card
-    // for our mocked tenant. Pin via data-testid (PR #182 lesson: prefer
-    // testid over text/role to dodge strict-mode collisions when other
-    // emoji-laden links appear elsewhere on the page).
+    // All three deep-link anchors should be present on the rendered
+    // card for our mocked tenant. Pin via data-testid (PR #182 lesson:
+    // prefer testid over text/role to dodge strict-mode collisions
+    // when other emoji-laden links appear elsewhere on the page).
+    // S#94 shipped the first 2 (alert-builder + routing-trace);
+    // S#95 / C-4 PR-2 added the 3rd (simulate-preview).
     const alertLink = page.getByTestId(`tenant-card-${TENANT_ID}-build-alert`);
     const traceLink = page.getByTestId(`tenant-card-${TENANT_ID}-trace-routing`);
+    const previewLink = page.getByTestId(
+      `tenant-card-${TENANT_ID}-simulate-preview`
+    );
 
     await expect(alertLink).toBeVisible({ timeout: 10000 });
     await expect(traceLink).toBeVisible();
+    await expect(previewLink).toBeVisible();
 
     // href contract — the orchestrator query-string convention is
     // `?component=<toolKey>&tenant_id=<id>`. We assert exact-match on
@@ -108,10 +114,15 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
     expect(traceHref).toContain('component=routing-trace');
     expect(traceHref).toContain(`tenant_id=${TENANT_ID}`);
 
+    const previewHref = await previewLink.getAttribute('href');
+    expect(previewHref).toContain('component=simulate-preview');
+    expect(previewHref).toContain(`tenant_id=${TENANT_ID}`);
+
     // target="_blank" so the tenant-manager stays open for context
     // — central UX intent of this PR.
     expect(await alertLink.getAttribute('target')).toBe('_blank');
     expect(await traceLink.getAttribute('target')).toBe('_blank');
+    expect(await previewLink.getAttribute('target')).toBe('_blank');
   });
 
   test('alert-builder pre-fills tenant label from ?tenant_id= URL param', async ({
