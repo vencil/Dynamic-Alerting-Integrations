@@ -169,7 +169,7 @@ Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playb
 
 ## 互動工具變更 SOP
 
-專案有 **39 個 JSX 互動工具**，Source of Truth 檔案：
+專案有 **43 個 JSX 互動工具**（v2.8.0 Phase .c 期間自 39 增至 43：master-onboarding / alert-builder / routing-trace / simulate-preview），Source of Truth 檔案：
 
 | 檔案 | 用途 |
 |------|------|

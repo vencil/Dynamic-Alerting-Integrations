@@ -7,7 +7,7 @@ purpose: |
 
   Codified after PR-2d (#153) Phase 1 + Phase 2 hit two non-obvious
   footguns. The scaffold tool `scripts/tools/dx/scaffold_jsx_dep.py`
-  (PR #TBD) automates the boilerplate, but knowing WHY the boilerplate
+  (PR #160) automates the boilerplate, but knowing WHY the boilerplate
   exists is what lets you debug when something breaks.
 verified-at-version: v2.7.0
 ---

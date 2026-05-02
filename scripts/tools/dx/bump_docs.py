@@ -694,14 +694,17 @@ def _count_rule_packs():
 def _count_jsx_tools():
     """Count interactive tools registered in docs/assets/tool-registry.yaml.
 
-    Returns count of tools (by counting '- key:' entries).
+    Returns count of tools (by counting '- key:' entries). Accepts both
+    `tools:\n  - key:` (nested) and top-level `- key:` shapes — the
+    registry's actual format uses top-level (no extra indent), and the
+    older nested pattern was a silent miss source until v2.8.0.
     """
     registry = REPO_ROOT / "docs" / "assets" / "tool-registry.yaml"
     if not registry.exists():
         return 0
 
     content = registry.read_text(encoding="utf-8")
-    count = len(re.findall(r"^  - key:", content, re.MULTILINE))
+    count = len(re.findall(r"^[ \t]*-\s+key:", content, re.MULTILINE))
     return count
 
 
@@ -730,6 +733,38 @@ def _count_precommit_hooks():
     content = config.read_text(encoding="utf-8")
     count = len(re.findall(r"^\s+- id:", content, re.MULTILINE))
     return count
+
+
+def _count_precommit_hook_stages():
+    """Return (auto_count, manual_count, pre_push_count) for hooks.
+
+    `default_stages: [pre-commit]` makes hooks lacking explicit `stages`
+    auto-run; `stages: [manual]` and `stages: [pre-push]` opt out.
+    """
+    config = REPO_ROOT / ".pre-commit-config.yaml"
+    if not config.exists():
+        return 0, 0, 0
+
+    auto = manual = push = 0
+    try:
+        import yaml  # local import — yaml is a transitive dep, not in core
+        cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
+    except Exception:
+        return 0, 0, 0
+
+    for repo in cfg.get("repos", []) or []:
+        for hook in repo.get("hooks", []) or []:
+            stages = hook.get("stages")
+            if stages is None or "pre-commit" in stages:
+                auto += 1
+            elif "manual" in stages:
+                manual += 1
+            elif "pre-push" in stages:
+                push += 1
+            else:
+                # Unknown stage — count as auto for safety.
+                auto += 1
+    return auto, manual, push
 
 
 def _build_count_rules():
@@ -815,13 +850,35 @@ def _build_count_rules():
             "is_count": True,
         })
 
-    # CLAUDE.md: 13 個 auto-run hooks
-    if hooks > 0:
+    # CLAUDE.md: pre-commit hook breakdown (auto-run + manual-stage + pre-push)
+    # Source-of-truth count derived dynamically from .pre-commit-config.yaml stages.
+    auto_n, manual_n, push_n = _count_precommit_hook_stages()
+    if auto_n + manual_n + push_n > 0:
         rules.append({
             "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: pre-commit hooks ({hooks} hooks)",
-            "pattern": r"(\d+)\s+個\s+auto-run\s+hooks（每次\s+commit）",
-            "replacement": lambda _: f"{hooks} 個 auto-run hooks（每次 commit）",
+            "desc": (
+                f"CLAUDE.md: pre-commit hook breakdown "
+                f"({auto_n} auto + {manual_n} manual + {push_n} push)"
+            ),
+            "pattern": (
+                r"\d+\s+auto-run\s+\+\s+\d+\s+manual-stage"
+                r"(?:\s+\+\s+\d+\s+pre-push)?\s+hooks"
+            ),
+            "replacement": lambda _: (
+                f"{auto_n} auto-run + {manual_n} manual-stage "
+                f"+ {push_n} pre-push hooks"
+            ),
+            "is_count": True,
+        })
+
+    # dev-rules.md: 互動工具 SOP 章節「N 個 JSX 互動工具」count
+    # Phase .c 期間自 39 增至 43；hardcoded count is drift surface.
+    if jsx_tools > 0:
+        rules.append({
+            "file": "docs/internal/dev-rules.md",
+            "desc": f"dev-rules.md: JSX 互動工具 count ({jsx_tools} tools)",
+            "pattern": r"專案有\s+\*\*\d+\s+個\s+JSX\s+互動工具\*\*",
+            "replacement": lambda _: f"專案有 **{jsx_tools} 個 JSX 互動工具**",
             "is_count": True,
         })
 

@@ -340,3 +340,138 @@ class TestMainCLI:
             pass
         out = capsys.readouterr().out
         assert len(out) > 0
+
+
+class TestPhaseAddedCountRules:
+    """v2.8.0 Phase A review — count drift detection added in this PR.
+
+    Two new rules were wired into _build_count_rules() to catch hardcoded
+    counts that previously drifted silently:
+
+      1. CLAUDE.md "N auto-run + M manual-stage + K pre-push hooks"
+         — the pre-existing rule expected the old "N 個 auto-run hooks
+         （每次 commit）" format which CLAUDE.md no longer uses (S#87
+         slim-down rewrote the line). Drift went undetected.
+
+      2. dev-rules.md "專案有 **N 個 JSX 互動工具**" — bumped from 39 to
+         43 during Phase .c (master-onboarding / alert-builder /
+         routing-trace / simulate-preview), but no rule existed.
+
+    A separate fix updates _count_jsx_tools() to match top-level `- key:`
+    in tool-registry.yaml (the registry uses `tools:\n- key:` shape, not
+    `tools:\n  - key:` — the previous regex required 2-space indent and
+    silently returned 0).
+    """
+
+    def test_count_jsx_tools_handles_top_level_dash(self, tmp_path,
+                                                     monkeypatch):
+        """_count_jsx_tools accepts both nested and top-level `- key:`."""
+        registry = tmp_path / "docs" / "assets" / "tool-registry.yaml"
+        registry.parent.mkdir(parents=True)
+        registry.write_text(
+            "tools:\n"
+            "- key: alpha\n"
+            "  title: Alpha\n"
+            "- key: beta\n"
+            "  title: Beta\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        assert bump_docs._count_jsx_tools() == 2
+
+    def test_count_jsx_tools_handles_legacy_nested(self, tmp_path,
+                                                     monkeypatch):
+        """Legacy 2-space-indented tool-registry shape still counted."""
+        registry = tmp_path / "docs" / "assets" / "tool-registry.yaml"
+        registry.parent.mkdir(parents=True)
+        registry.write_text(
+            "tools:\n"
+            "  - key: alpha\n"
+            "  - key: beta\n"
+            "  - key: gamma\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        assert bump_docs._count_jsx_tools() == 3
+
+    def test_count_precommit_hook_stages_classifies_correctly(
+            self, tmp_path, monkeypatch):
+        """Hook stage classifier returns (auto, manual, pre-push)."""
+        config = tmp_path / ".pre-commit-config.yaml"
+        config.write_text(
+            "default_stages: [pre-commit]\n"
+            "repos:\n"
+            "  - repo: local\n"
+            "    hooks:\n"
+            "      - id: a-default\n"
+            "      - id: b-explicit-pre-commit\n"
+            "        stages: [pre-commit]\n"
+            "      - id: c-manual\n"
+            "        stages: [manual]\n"
+            "      - id: d-pre-push\n"
+            "        stages: [pre-push]\n"
+            "      - id: e-manual\n"
+            "        stages: [manual]\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        auto, manual, push = bump_docs._count_precommit_hook_stages()
+        assert (auto, manual, push) == (2, 2, 1)
+
+    def test_count_hook_stages_missing_config_returns_zeros(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        assert bump_docs._count_precommit_hook_stages() == (0, 0, 0)
+
+    def test_hook_breakdown_rule_matches_new_text_shape(
+            self, tmp_path, monkeypatch):
+        """The hook-breakdown rule pattern matches the post-S#87 text."""
+        # Stage a tmp repo with a tool-registry + .pre-commit-config so
+        # rule registration sees non-zero counts (rules are conditionally
+        # registered when their source count is positive).
+        (tmp_path / "docs" / "assets").mkdir(parents=True)
+        (tmp_path / "docs" / "assets" / "tool-registry.yaml").write_text(
+            "tools:\n- key: x\n", encoding="utf-8")
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n  - repo: local\n    hooks:\n      - id: a\n",
+            encoding="utf-8")
+
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = bump_docs._build_count_rules()
+        hook_rules = [r for r in rules
+                      if "pre-commit hook breakdown" in r["desc"]]
+        assert len(hook_rules) == 1
+        rule = hook_rules[0]
+
+        # Old format (pre-S#87): `13 個 auto-run hooks（每次 commit）`
+        # New format (post-S#87): `39 auto-run + 14 manual-stage + 3 pre-push hooks`
+        import re as _re
+        new_text = "39 auto-run + 14 manual-stage + 3 pre-push hooks"
+        assert _re.search(rule["pattern"], new_text), (
+            "Hook-breakdown pattern must match the post-S#87 CLAUDE.md text."
+        )
+        # Backward compatibility: pattern also accepts the no-pre-push
+        # 2-stage shape `N auto-run + M manual-stage hooks`.
+        legacy_2stage = "12 auto-run + 5 manual-stage hooks"
+        assert _re.search(rule["pattern"], legacy_2stage)
+
+    def test_jsx_tools_dev_rules_rule_matches_dev_rules_text(
+            self, tmp_path, monkeypatch):
+        """The new dev-rules.md JSX count rule pattern matches the SOP heading."""
+        (tmp_path / "docs" / "assets").mkdir(parents=True)
+        (tmp_path / "docs" / "assets" / "tool-registry.yaml").write_text(
+            "tools:\n- key: x\n- key: y\n", encoding="utf-8")
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n", encoding="utf-8")
+
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = bump_docs._build_count_rules()
+        jsx_rules = [r for r in rules
+                     if r["file"] == "docs/internal/dev-rules.md"]
+        assert len(jsx_rules) == 1
+        rule = jsx_rules[0]
+
+        import re as _re
+        sample = "專案有 **39 個 JSX 互動工具**，Source of Truth 檔案："
+        m = _re.search(rule["pattern"], sample)
+        assert m, "JSX-count pattern must match the dev-rules.md SOP heading."
