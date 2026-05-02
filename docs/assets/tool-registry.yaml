@@ -198,6 +198,35 @@ tools:
   hub_section: interactive
   appears_in: []
   journey_phase: configure
+- key: simulate-preview
+  title:
+    en: Simulate Preview Widget
+    zh: Simulate 預覽工具
+  file: interactive/tools/simulate-preview.jsx
+  audience:
+  - platform
+  - sre
+  - tenant
+  icon: wizard
+  tags:
+  - simulate
+  - effective-config
+  - preview
+  - c-4
+  - c-7b
+  desc:
+    en: Live preview of merged tenant config via POST /api/v1/tenants/simulate;
+      paste tenant.yaml + defaults, see effective_config + merged_hash
+    zh: 經 POST /api/v1/tenants/simulate 預覽合併後的 tenant 配置；貼上 tenant.yaml + defaults，
+      看 effective_config + merged_hash
+  related:
+  - tenant-manager
+  - alert-builder
+  - routing-trace
+  - master-onboarding
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
 - key: alert-builder
   title:
     en: Alert Builder Wizard

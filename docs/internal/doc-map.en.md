@@ -101,6 +101,7 @@ lang: en
 | `docs/interactive/tools/runbook-viewer.jsx` | Platform Engineers, Domain Experts (DBA) | Runbook Viewer |
 | `docs/interactive/tools/schema-explorer.jsx` | Platform Engineers, Domain Experts (DBA) | YAML Schema Explorer |
 | `docs/interactive/tools/self-service-portal.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Tenant Self-Service Portal |
+| `docs/interactive/tools/simulate-preview.jsx` | Platform Engineers, SREs, Tenants | Simulate Preview Widget |
 | `docs/interactive/tools/template-gallery.jsx` | Tenants, Platform Engineers | Config Template Gallery |
 | `docs/interactive/tools/tenant-manager/components/ApiNotificationToast.jsx` | All | Tenant Manager — ApiNotificationToast |
 | `docs/interactive/tools/tenant-manager/components/GroupSidebar.jsx` | All | Tenant Manager — GroupSidebar |

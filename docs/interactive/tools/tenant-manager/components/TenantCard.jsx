@@ -184,6 +184,21 @@ function TenantCard({
         >
           🧭 {t('路由', 'Route')}
         </a>
+        {/*
+          C-4 PR-2 (S#95) — extend the S#94 deep-link pattern to the new
+          simulate-preview tool. Same `?tenant_id=<name>` convention so
+          the widget can pre-fill the Tenant ID input on landing.
+        */}
+        <a
+          href={buildToolUrl('simulate-preview', name)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={t('用此 tenant 預覽 effective config', 'Preview effective config for this tenant')}
+          data-testid={`tenant-card-${name}-simulate-preview`}
+          style={styles.cardToolLink}
+        >
+          🔍 {t('預覽', 'Preview')}
+        </a>
       </div>
     </article>
   );
