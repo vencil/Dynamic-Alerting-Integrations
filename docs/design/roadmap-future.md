@@ -18,37 +18,76 @@ DX 工具改善追蹤見 [dx-tooling-backlog.md](../internal/dx-tooling-backlog.
 
 ---
 
-## 計畫中（v2.8.0）
+## v2.8.0 已交付（Phase .a/.b/.c/.d，Phase .e release 收尾中）
 
-v2.7.0 已交付 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）、元件健壯化（Design Token 9 支 JSX、Component Health、dark mode ADR-016）、測試基礎設施（1000-tenant fixture、tests/ 重整、Blast Radius CI bot）。v2.8.0 的重點轉向「把 v2.7.0 奠定的骨架推到全球 / 全自動化」，並對 v2.7.0 期間暴露出來的 harness 盲點進行一次性還債。
+v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）+ 元件健壯化（Design Token 9 支 JSX + Component Health + dark mode ADR-016）+ 測試基礎設施（1000-tenant fixture + Blast Radius CI bot），在 v2.8.0 進化為**客戶可導入的完整 pipeline + Scale 生產驗證 + 自動化收斂**。
 
-### EN-first 雙語 SSOT 全量遷移（Phase 2）
+### 客戶導入管線 (Phase .c) — 5-step chain ✅
 
-v2.7.0 已完成 Phase 1 工具準備（`migrate_ssot_language.py` dry-run 驗證通過、lint hooks 雙模式 auto-detect）。Phase 2 執行全量遷移：66 對 markdown + JSX + Rule Pack + lint hook + mkdocs.yml 原子性 commit。前置條件：釘死遷移窗口（建議配合 minor release）、備份 git snapshot、staging MkDocs 部署驗證 nav + lang switcher。完整評估：[`docs/internal/ssot-migration-pilot-report.md`](../internal/ssot-migration-pilot-report.md)。
+把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構的端到端流程，全部 codify 為可離線執行的 Go binary：
 
-### Field-level RBAC
+```
+PromRule corpus → da-parser → da-tools profile build → da-batchpr apply → da-guard → conf.d/
+```
 
-拆分 write 為 `edit-threshold` / `edit-routing` / `edit-state`。Enterprise 合規需求：不同角色修改不同欄位。前置條件：Tenant API 已在 v2.4.0 奠定 RBAC 基礎，需要擴展 middleware + OpenAPI spec + Portal UI 三層同步。
+- **`da-parser`** (C-8)：dialect 偵測（prom / metricsql / ambiguous）+ VM-only 函數 allowlist（`vm_only_functions.yaml` 走 `go:embed`，CI freshness gate 偵測新版 metricsql 上游函數）+ `StrictPromQLValidator` + provenance header（`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`）。`prom_portable: bool` 旗標讓客戶遷入 VM 後仍能識別「可回 Prom」的子集 — anti-vendor-lock-in 具體承諾
+- **`da-tools profile build`** (C-9)：cluster 相似 rules → median 演算法決定 cluster 共通閾值 → 寫 `_defaults.yaml`、偏離 tenant 寫 `<id>.yaml` 只含 override；fuzzy matching opt-in 套 duration-equivalence canonicalisation（`[5m]` ≡ `[300s]` ≡ `[300000ms]`）；遵循 [ADR-019](../adr/019-profile-as-directory-default.md) Profile-as-Directory-Default
+- **`da-batchpr apply`** (C-10)：Hierarchy-Aware 分塊 — `_defaults.yaml` 變更打 Base Infrastructure PR、tenant PRs 標 `Blocked by:`；`refresh --base-merged` 在 Base merge 後自動 rebase 下游；`refresh --source-rule-ids` 對 parser bug fix 細粒度重生 patch PR
+- **`da-guard`** (C-12)：Schema / Routing / Cardinality / Redundant-override 四層檢查；`.github/workflows/guard-defaults-impact.yml` 自動跑 + sticky PR comment（marker-based update vs create）+ artifact 14d retention
 
-### Tenant Auto-Discovery
+### Scale Foundation III + Tenant API hardening (Phase .b) ✅
 
-Kubernetes-native 環境：根據 namespace label（`dynamic-alerting.io/tenant: "true"`）自動註冊。推薦 sidecar 模式：定期掃描 namespace label → 產生 tenant YAML → 落地至 v2.7.0 的 `conf.d/tenants/<pod>/<tenant>.yaml` 路徑 → 既有 Directory Scanner 載入。明確配置永遠優先。`discover_instance_mappings.py` 可復用。
+- 1000-tenant synthetic baseline land：`make benchmark-report` 17 benches × count=6 跑 nightly cron；mixed-mode flat+hierarchy benches 加入 trend tracking
+- Tenant API hardening：rate limit per-pod + `X-Request-ID` middleware + tenant-scoped authz + body-content range validation（go-playground/validator + struct tags + reservedKeyValidators registry）
+- Mixed-mode duplicate tenant ID：WARN → typed `*DuplicateTenantError` hard error + state preservation invariant
 
-### Grafana Dashboard as Code
+### Server-side Search / Tenant Manager virtualization / Master Onboarding / Smart Views (Phase .c) ✅
 
-`scaffold_tenant.py --grafana` 自動產生 per-tenant dashboard JSON。利用 `platform-data.json` 已有的 metadata 產生對應 panel。搭配 Grafana provisioning 或 API 自動部署。可結合 v2.7.0 的 `/effective` endpoint 讀取最終合併配置作為面板變量 source。
+- **C-1** `GET /api/v1/tenants/search`：page_size cap 500 + closed-field free-text + RBAC-before-pagination + 30s TTL `tenantSnapshotCache`，p99 < 200ms @ 1000T
+- **C-2** Tenant Manager JSX：API-first 三層 priority chain（API → platform-data.json → DEMO）+ 429 retry-with-backoff + server-side `q` filter（debounced 300ms）+ URL state（`useURLState` + `useDebouncedValue`）+ self-written `useVirtualGrid`（`filtered.length > 50` 才 virtualize；客戶 500+ tenant DOM-freeze 在 server-cap 層解掉）
+- **C-3** Master Onboarding Dual Entry：Import Journey 5 步（C-8/9/10/12 inline CLI）vs Wizard Journey 5 步（cicd-setup → deployment → alert-builder → routing-trace → tenant-manager 全 5/5 真 wizards）
+- **C-4** Tenant Manager × Wizard 整合：TenantCard footer 三鈕（Alert / Route / Preview）deep link + `?tenant_id=` URL 參數預填 + 獨立 `simulate-preview.jsx` widget（4-state machine + 500ms debounce + AbortController）
+- **C-6** Smart Views：`useSavedViews` + `SavedViewsPanel` 接 v2.5.0 backend `/api/v1/views` CRUD；RBAC-aware（Save/Delete hidden when `canWrite=false`）
 
-### Playwright E2E 完整覆蓋
+### Migration Toolkit packaging + supply-chain provenance (Phase .c, C-11) ✅
 
-v2.7.0 完成 8/8 core tools locator calibration。擴展至全部 39 支 JSX 工具 smoke test + 真實 backend integration test。
+- 三條交付路徑並行：(a) Docker pull `ghcr.io/vencil/da-tools` (b) Static binary linux/darwin/windows × amd64/arm64 共 6 archives (c) Air-gapped tar (`docker save` export)
+- Layer 1 已交付：cosign keyless 簽（OIDC identity pinned）+ SBOM SPDX/CycloneDX 雙格式也加簽 + `make verify-release` 客戶一鍵驗
+- Layer 2/3（GPG / Authenticode / HSM / FIPS / SLSA L2-3 / reproducible / in-toto）保留 customer-RFP-driven activation path，runbook 已寫
+- 詳：[Migration Toolkit Installation](../migration-toolkit-installation.md) · [Release Signing Runbook](../internal/release-signing-runbook.md)
 
-### Release Automation 完善
+### Phase .d ZH-primary policy lock ✅
 
-tag push → GitHub Release Notes 自動產生（基於 CHANGELOG section）→ OCI image build/push 全自動。五線版號手動 release 的人為錯誤率歸零。v2.7.0 引入 `make pre-tag` 作為手動檢查 gate，v2.8.0 應將這些檢查整合進 `release.yml` workflow。
+v2.5.0 評估文 §7 原推薦切換 EN SSOT，Phase 1 試點工具於 v2.7.0 完成；v2.8.0 S#101 套 `testing-playbook §LL §12a` 4-question audit（**Q4 NEW: spec premise validation**）後 reverse 原計畫：「open-source SSOT 該 EN」premise 從未被 actual contributor pool 驗證 → strong fail → 不執行 ZH→EN 全量遷移。Phase 1 工具保留 dormant，trigger conditions 明確 codify（≥3 非中文母語 contributor / 客戶 RFP 顯式要求 EN / maintainer 主動 pivot international-positioning）。
 
-### Harness 還債（v2.7.0 Session LL）
+### Policy-as-Code 自動化（Phase .a/各 PR 累積）✅
 
-v2.7.0 release 過程暴露了若干「糾錯成本高」的系統性問題（Go 時間相依 test flake、ADR filename 漂移、spoke 文件「空頭支票」、FUSE 端 git 操作陷阱）。v2.8.0 的 harness 還債項目見 [dx-tooling-backlog.md §候選 — Harness Audit v2.8.0 發想](../internal/dx-tooling-backlog.md)（HA-10 ~ HA-18）。
+從「文字規範 → reviewer convention → AI 提醒」升級為 lint hook 自動攔截：`check_hardcode_tenant.py`（Rule #2 PromQL label selector）/ `check_dev_rules_enforcement.py`（dev-rules ↔ pre-commit 自動偵 drift）/ `check_subprocess_timeout.py`（Layer A，FATAL 已啟動）/ `check_jsx_loader_compat.py`（named-export / non-allowlist-import / require-call 三類）/ `check_playwright_rtl_drift.py`（RTL `getByDisplayValue` 系列在 Playwright spec）/ `check_undefined_tokens.py`（含 `--report-orphans` 模式）/ `check_changelog_no_tbd.py`（CHANGELOG placeholder）/ `check_ad_hoc_git_scripts.py`（Trap #54 enforcement）/ `scaffold_lint.py + make lint-extract`（5-kind template，下個 lint ~15 min）。56 hooks 共 39 auto + 14 manual + 3 pre-push。
+
+---
+
+## Phase .e 待跑（v2.8.0 release 收尾）
+
+- ⬜ 真實 4-hr soak（`make soak-readiness`，產出 `.build/v2.8.0-soak/soak-report.md` 作 release asset）
+- ⬜ `make pre-tag`（version-check + lint-docs；`make bump-docs` 統一 v2.7.0 → v2.8.0 跨 50+ 文件）
+- ⬜ `make benchmark-report` 取 v2.8.0 baseline
+- ⬜ 起草 v2.8.0 GitHub Release body（[github-release-playbook.md §Step 3.5](../internal/github-release-playbook.md) skeleton + planning archive §1/§2/§3 distill）
+- ⬜ 五線 tag 推送（`v2.8.0` / `exporter/v2.8.0` / `tools/v2.8.0` / `portal/v2.8.0` / `tenant-api/v2.8.0`）+ Release publish
+
+---
+
+## v2.8.0 已 deferred 至 v2.9.0（明確不在本版範圍）
+
+| 項目 | 為何延 | tracking |
+|---|---|---|
+| **EN-first 雙語 SSOT 全量遷移** | Phase .d S#101 reverse — premise（open-source 該 EN）從未驗證；既有客戶與 contributor 均中文母語 | [#145](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/145) re-evaluation 觸發條件已 codify |
+| **Field-level RBAC** | v2.8.0 重心放客戶導入管線；RBAC 拆分需 middleware + OpenAPI + Portal UI 三層改動，scope 大 | 留 v2.9.0 customer hardening pass 2 一起做 |
+| **Tenant Auto-Discovery** | 需要 sidecar 模式設計 + `discover_instance_mappings.py` 改造，跟 v2.8.0 客戶導入管線 scope 不重疊 | 視第一個導入客戶實際需求決定 |
+| **Grafana Dashboard as Code** | 需 `scaffold_tenant.py --grafana` 與 platform-data.json 改造 | 探索方向；無客戶 hard ask |
+| **Customer onboarding hardening pass 2** | 4-hr soak / customer-anon corpus / migration playbook walkthrough rehearsal | [#140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/140) / [#141](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/141) / [#142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/142) |
+| **tenant-api 補完** | SSE per-client idle timeout / server timeout + body-size 移到 Helm value | [#143](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/143) / [#144](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/144) |
+| **Mixed-mode 性能 authoritative characterization** | 需 28+ nightly bench-record data points（wall-clock-bound）| [#128](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/128) |
+| **Pre-tag bench gate Phase 2** | 需 main-only hard gate + Larger Runners | [#67](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/67) |
 
 ---
 

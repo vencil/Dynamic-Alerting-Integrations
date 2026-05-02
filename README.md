@@ -179,9 +179,26 @@ O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volum
 | 日常運維 | `diagnose` 健康檢查 · `patch-config` 安全更新 · `check-alert` 警報狀態 · `maintenance-scheduler` 排程維護 · `explain-route` 路由偵錯 |
 | 品質治理 | `validate-config` 一站式驗證 · `alert-quality` 品質評分 · Policy-as-Code · `cardinality-forecast` 趨勢預測 · `backtest-threshold` 歷史回測 |
 | 配置繼承 (v2.7.0) | `describe-tenant` 展示 defaults chain + merged config（含 `--what-if` 模擬 `_defaults.yaml` 變動 / `--show-sources` / `--diff`）· `migrate-conf-d` 扁平 → 階層 automated migration（`--dry-run` 預設 / `--apply` 執行 `git mv` 保留 history） |
+| 客戶導入管線 (v2.8.0 Phase .c) | `da-parser` PromRule → JSON parser（dialect 偵測 + VM-only 函數 allowlist + strict-PromQL 相容性檢查 + provenance header）· `da-tools profile build` cluster + Profile-as-Directory-Default 萃取（[ADR-019](docs/adr/019-profile-as-directory-default.md)，median-based defaults）· `da-batchpr apply` Hierarchy-Aware Batch PR 開單（Base Infrastructure PR 先 / 個別 tenant PR 標 `Blocked by:`）· `da-batchpr refresh --base-merged` Base PR merge 後自動 rebase tenant PRs · `da-batchpr refresh --source-rule-ids` parser 修 bug 後 data-layer hot-fix 細粒度重生 · `da-guard` Dangling Defaults Guard（schema / routing / cardinality / redundant-override 四層檢查；CI workflow 在 PR comment 貼 sticky 報告） |
 | 採用加速 | `init` 專案骨架 · `config-history` 快照追蹤 · `gitops-check` GitOps 驗證 · `demo-showcase` 展演腳本 |
 
 所有工具封裝在 `da-tools` 容器（`docker run --rm ghcr.io/vencil/da-tools`）。完整 CLI 參考：[da-tools CLI](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
+
+### 客戶導入：Migration Toolkit (v2.8.0 Phase .c)
+
+把客戶現有的 PromRule corpus 導入到本平台的 `conf.d/` Profile-as-Directory-Default 架構，串接：
+
+```
+PromRule corpus → da-parser → da-tools profile build → da-batchpr apply → da-guard → conf.d/
+```
+
+`tools/v2.8.0` 起以 **三條交付路徑** 隨 GitHub Release 出貨（每路徑都附 cosign keyless 簽章 + SBOM SPDX/CycloneDX）：
+
+- **Docker pull** `ghcr.io/vencil/da-tools:v<tag>`（最常見；外網可達客戶）
+- **Static binary** linux/darwin/windows × amd64/arm64 共 6 組合 cross-compile（Pre-commit / GitHub Actions 用）
+- **Air-gapped tar** `docker save` export，金融/政府/軍工封閉網路用
+
+完整安裝路徑與簽章驗證流程：[Migration Toolkit Installation](docs/migration-toolkit-installation.md) · 客戶 helper 一鍵驗 release：`make verify-release VERSION=tools/v2.8.0`
 
 ---
 
@@ -196,7 +213,8 @@ O(M) 複雜度（`group_left` 向量匹配）· 15 個 Rule Pack Projected Volum
 | 四層路由合併 | defaults → profile → tenant → enforced + 域策略約束 | [ADR-007](docs/adr/007-cross-domain-routing-profiles.md) |
 | conf.d/ 階層目錄（v2.7.0）| `conf.d/<domain>/<region>/<tenant>.yaml` 多層路徑，扁平與階層平滑共存 | [ADR-017](docs/adr/017-conf-d-directory-hierarchy-mixed-mode.md) |
 | `_defaults.yaml` 繼承 + Dual-Hash 熱重載（v2.7.0）| L0→L1→L2→L3 深合併 + null-as-delete + `source_hash`/`merged_hash` 精確 reload + 300ms debounce | [ADR-018](docs/adr/018-defaults-yaml-inheritance-dual-hash.md) |
-| 安全護欄內建 | Webhook Domain Allowlist · Schema Validation · Cardinality Guard | — |
+| Profile-as-Directory-Default（v2.8.0 Phase .c）| Cluster 共通閾值寫 `_defaults.yaml`（cluster median）, 偏離者寫 `<id>.yaml` 只含 override；禁止 50 份 tenant.yaml 拷貝（GitOps 反模式）| [ADR-019](docs/adr/019-profile-as-directory-default.md) |
+| 安全護欄內建 | Webhook Domain Allowlist · Schema Validation · Cardinality Guard · Dangling Defaults Guard（v2.8.0 Phase .c, [`da-guard`](docs/migration-toolkit-installation.md)）| — |
 
 完整 ADR 索引：[docs/adr/](docs/adr/README.md)
 

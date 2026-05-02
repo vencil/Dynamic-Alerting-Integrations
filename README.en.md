@@ -179,9 +179,26 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 | Day-to-day ops | `diagnose` health check · `patch-config` safe updates · `check-alert` alert status · `maintenance-scheduler` scheduled silence · `explain-route` routing debugger |
 | Quality governance | `validate-config` all-in-one validation · `alert-quality` quality scoring · Policy-as-Code · `cardinality-forecast` trend prediction · `backtest-threshold` historical replay |
 | Config inheritance (v2.7.0) | `describe-tenant` shows defaults chain + merged config (with `--what-if` simulation / `--show-sources` / `--diff`) · `migrate-conf-d` automated flat → hierarchy migration (`--dry-run` default / `--apply` executes `git mv` preserving history) |
+| Customer onboarding pipeline (v2.8.0 Phase .c) | `da-parser` PromRule → JSON parser (dialect detection + VM-only function allowlist + strict-PromQL compatibility check + provenance header) · `da-tools profile build` cluster + Profile-as-Directory-Default extraction ([ADR-019](docs/adr/019-profile-as-directory-default.en.md), median-based defaults) · `da-batchpr apply` Hierarchy-Aware Batch PR creation (Base Infrastructure PR first / per-tenant PRs marked `Blocked by:`) · `da-batchpr refresh --base-merged` auto-rebase tenant PRs after Base merge · `da-batchpr refresh --source-rule-ids` parser-bug data-layer hot-fix granular regen · `da-guard` Dangling Defaults Guard (schema / routing / cardinality / redundant-override 4-layer check; CI workflow posts sticky PR comment) |
 | Adoption acceleration | `init` project scaffold · `config-history` snapshot tracking · `gitops-check` GitOps validation · `demo-showcase` demo script |
 
 All tools packaged in `da-tools` container (`docker run --rm ghcr.io/vencil/da-tools`). Full CLI reference: [da-tools CLI](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
+
+### Customer Onboarding: Migration Toolkit (v2.8.0 Phase .c)
+
+To migrate a customer's existing PromRule corpus into this platform's `conf.d/` Profile-as-Directory-Default architecture, the pipeline chains:
+
+```
+PromRule corpus → da-parser → da-tools profile build → da-batchpr apply → da-guard → conf.d/
+```
+
+Starting from `tools/v2.8.0`, **three delivery paths** ship with each GitHub Release (every path includes cosign keyless signing + SBOM in SPDX/CycloneDX):
+
+- **Docker pull** `ghcr.io/vencil/da-tools:v<tag>` (most common; customers with internet)
+- **Static binary** linux/darwin/windows × amd64/arm64 — 6 cross-compile targets (Pre-commit / GitHub Actions use)
+- **Air-gapped tar** `docker save` export, for customers in isolated networks (finance / government / defense)
+
+Full installation paths and signature verification flow: [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md) · One-shot customer helper: `make verify-release VERSION=tools/v2.8.0`
 
 ---
 
@@ -196,7 +213,8 @@ All tools packaged in `da-tools` container (`docker run --rm ghcr.io/vencil/da-t
 | Four-Layer Routing Merge | defaults → profile → tenant → enforced + domain policy constraints | [ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md) |
 | conf.d/ Hierarchical Directory (v2.7.0) | `conf.d/<domain>/<region>/<tenant>.yaml` multi-layer paths; flat and hierarchical layouts coexist | [ADR-017](docs/adr/017-conf-d-directory-hierarchy-mixed-mode.en.md) |
 | `_defaults.yaml` Inheritance + Dual-Hash Hot-Reload (v2.7.0) | L0→L1→L2→L3 deep merge + null-as-delete + `source_hash`/`merged_hash` precise reload + 300ms debounce | [ADR-018](docs/adr/018-defaults-yaml-inheritance-dual-hash.en.md) |
-| Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard | — |
+| Profile-as-Directory-Default (v2.8.0 Phase .c) | Cluster shared thresholds go in `_defaults.yaml` (cluster median); only deviating tenants write `<id>.yaml` containing override-only keys; rejects 50-tenant.yaml-copy GitOps anti-pattern | [ADR-019](docs/adr/019-profile-as-directory-default.en.md) |
+| Security Guardrails Built-in | Webhook Domain Allowlist · Schema Validation · Cardinality Guard · Dangling Defaults Guard (v2.8.0 Phase .c, [`da-guard`](docs/migration-toolkit-installation.en.md)) | — |
 
 Full ADR index: [docs/adr/](docs/adr/README.en.md)
 
