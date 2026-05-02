@@ -36,23 +36,20 @@ function useDebouncedValue(value, delayMs) {
  * try/catch wrapped because window.location may be unavailable in
  * SSR / test environments — graceful fallback to empty string.
  * ──────────────────────────────────────────────────────────────────── */
-function getInitialTenantId() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('tenant_id') || '';
-  } catch (_err) {
-    return '';
-  }
-}
-
-/* ── Default sample YAML (placeholder UX) ────────────────────────────
+/* ── Default sample YAML (cold-start UX) ─────────────────────────────
  *
- * Pre-seed an obvious-template tenant.yaml + a defaults_chain entry so
- * a user landing cold sees an immediately-runnable example. Both are
- * kept short so they don't clutter the screen — full edit happens via
- * the textareas. The shape mirrors the docstring example in
+ * Pre-seed an obvious-template tenant.yaml + defaults_chain entry so a
+ * cold landing renders a working preview without any user typing. The
+ * sample tenant key (`example-tenant`) is also the default Tenant ID
+ * value (NOT just the placeholder hint) — that way `canSimulate` is
+ * true on mount and the auto-simulate effect fires immediately. PR-2
+ * first-CI-fail caught the bug where Tenant ID was '' on mount and the
+ * `state-ready` / `state-error` testids never rendered. Mirrors the
+ * docstring example in
  * `components/tenant-api/internal/handler/config_simulate_test.go`.
  * ──────────────────────────────────────────────────────────────────── */
+const DEFAULT_TENANT_ID = 'example-tenant';
+
 const SAMPLE_TENANT_YAML = `tenants:
   example-tenant:
     cpu_threshold: 70
@@ -64,7 +61,14 @@ const SAMPLE_DEFAULTS_YAML = `defaults:
   mem_threshold: 80
 `;
 
-const DEFAULT_TENANT_ID_PLACEHOLDER = 'example-tenant';
+function getInitialTenantId() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('tenant_id') || DEFAULT_TENANT_ID;
+  } catch (_err) {
+    return DEFAULT_TENANT_ID;
+  }
+}
 
 /* ── base64 encoding helper ──────────────────────────────────────────
  *
@@ -261,7 +265,7 @@ function SimulatePreview() {
               type="text"
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
-              placeholder={DEFAULT_TENANT_ID_PLACEHOLDER}
+              placeholder={DEFAULT_TENANT_ID}
               data-testid="simulate-preview-tenant-id"
               className={inputClass}
               aria-required="true"
