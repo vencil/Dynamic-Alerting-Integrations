@@ -1,17 +1,34 @@
 /**
- * Tenant Manager × Wizard Deep-Link — E2E (S#94 / C-4 PR-1)
+ * Tenant Manager × Wizard Deep-Link — E2E (S#94 / C-4 PR-1; extended in S#99 / §C-4 (v) closure)
  *
  * Validates the deep-link bridge from tenant cards into the
- * alert-builder and routing-trace wizards:
+ * alert-builder, routing-trace, and simulate-preview wizards.
  *
- *   1. Each tenant card surfaces a 🛠️ Alert + 🧭 Route footer link
- *      with stable `data-testid` and `?component=...&tenant_id=<id>`
- *      hrefs (kept in tenant-manager open via target="_blank").
+ * Coverage (after S#99 extension):
+ *
+ *   1. Each tenant card surfaces 🛠️ Alert + 🧭 Route + 🔍 Preview
+ *      footer links with stable `data-testid` and
+ *      `?component=...&tenant_id=<id>` hrefs (kept in tenant-manager
+ *      open via target="_blank").
  *   2. Navigating directly to `?component=alert-builder&tenant_id=<id>`
  *      pre-fills a `tenant=<id>` row in the labels editor (step 2).
  *   3. Navigating directly to `?component=routing-trace&tenant_id=<id>`
  *      pre-fills a `tenant=<id>` row in the alert-input labels editor
  *      (step 0).
+ *   4. Negative — alert-builder without `?tenant_id=` does NOT inject
+ *      an empty `tenant` key (silent-regression guard).
+ *   5. Navigating directly to `?component=simulate-preview&tenant_id=<id>`
+ *      pre-fills the Tenant ID input AND auto-simulates to the ready
+ *      state. Uses `toBeVisibleWithDiagnostics` (S#98) so a regression
+ *      to `state-empty` produces a self-explanatory CI error.
+ *   6. URL-encoding round-trip — tenant ids containing dashes and dots
+ *      survive the deep-link → wizard handoff intact (no double-encode,
+ *      no decode surprise).
+ *
+ * The 5-scenario integration coverage closes planning §C-4 sub-task (v).
+ * Sub-tasks (i) tab container and (iii) cross-tool state are deferred-
+ * not-pursuing (post-S#94 separate-tab UX is the established pattern;
+ * see CHANGELOG / planning §12.2 C-4 row for the rationale).
  *
  * Wire pattern: tenant-manager.spec.ts API-mode tests use `page.route()`
  * to stub `/api/v1/tenants/search` and `loadTenantManagerDirect()` to
@@ -20,6 +37,10 @@
  * fixtures matching specific tenant IDs.
  */
 import { test, expect, Page } from '@playwright/test';
+// S#98: side-effect import registers `toBeVisibleWithDiagnostics`
+// matcher, used below for state-* assertions where the default
+// "element(s) not found" failure mode wastes a CI round-trip.
+import './fixtures/diagnostic-matchers';
 
 // Pin a single tenant ID across all tests so failures are easy to grep.
 const TENANT_ID = 'pr94-deeplink-tenant';
@@ -228,5 +249,147 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
     const values = await readAllInputValues(page);
     expect(values).toContain('team');
     expect(values).not.toContain('tenant');
+  });
+
+  // -------------------------------------------------------------------
+  // S#99 — §C-4 sub-task (v) integration coverage extension.
+  //
+  // The 4 scenarios above exercise the deep-link bridge into
+  // alert-builder + routing-trace. The 2 below extend coverage to
+  // simulate-preview + URL-encoding round-trip — which together with
+  // the existing scenarios close the 5-scenario integration target.
+  // -------------------------------------------------------------------
+
+  test('simulate-preview pre-fills Tenant ID + reaches ready state from ?tenant_id=', async ({
+    page,
+  }) => {
+    // Mock the simulate API so the auto-simulate effect on cold-start
+    // can resolve and the widget transitions to STATUS.READY (post-PR
+    // #185 fix the default tenantId is `'example-tenant'`, but with a
+    // URL param the override should win — verify both).
+    await page.route('**/api/v1/tenants/simulate', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          source_hash: 'cccccccccccccccc',
+          merged_hash: 'dddddddddddddddd',
+          defaults_chain: ['_defaults.yaml'],
+          effective_config: { cpu_threshold: 70 },
+        }),
+      });
+    });
+
+    await page.goto(
+      `../assets/jsx-loader.html?component=simulate-preview&tenant_id=${TENANT_ID}`
+    );
+    await page
+      .waitForFunction(
+        () => document.title.length > 0 && document.title !== 'Interactive Component',
+        { timeout: 15000 }
+      )
+      .catch(() => {});
+
+    // Tenant ID input must be pre-filled with our URL-param value
+    // (override of the default `'example-tenant'` cold-start seed).
+    await expect(page.getByTestId('simulate-preview-tenant-id')).toBeVisible({
+      timeout: 10000,
+    });
+    const inputValues = await readAllInputValues(page);
+    expect(inputValues).toContain(TENANT_ID);
+
+    // S#98 diagnostic matcher: if a regression makes the widget render
+    // `state-empty` / `state-error` instead of `state-ready`, the CI
+    // failure message lists every visible testid so we don't need to
+    // re-run locally to find what state the widget is in.
+    await expect(
+      page.getByTestId('simulate-preview-state-ready')
+    ).toBeVisibleWithDiagnostics({ timeout: 5000 });
+  });
+
+  test('URL-encoding round-trip — tenant ids with dashes/dots survive the handoff', async ({
+    page,
+  }) => {
+    // Pin a tenant id with characters that often misbehave in URL
+    // encoding round-trips: dashes (treated by encodeURIComponent as
+    // safe), dots (also safe but historically tripped on some servers),
+    // and a digit prefix (no semantic load but exercises the regex).
+    // We don't include `:` or `#` because those have URL semantic
+    // meaning that the deep-link contract rightly does not promise to
+    // round-trip.
+    const SPECIAL_TENANT = 'team-platform-2026.q2';
+    await page.route('**/api/v1/tenants/search**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            {
+              id: SPECIAL_TENANT,
+              environment: 'production',
+              tier: 'tier-1',
+              domain: 'finance',
+              db_type: 'mariadb',
+              owner: 'team-deeplink',
+              tags: [],
+              groups: [],
+            },
+          ],
+          total_matched: 1,
+          page_size: 500,
+          next_offset: null,
+        }),
+      });
+    });
+    await page.goto(
+      '../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx'
+    );
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    // All 3 footer buttons must contain the EXACT tenant id (URL-
+    // encoded by URLSearchParams). encodeURIComponent leaves dashes
+    // and dots unchanged, so the literal id appears in the href.
+    const alertHref = await page
+      .getByTestId(`tenant-card-${SPECIAL_TENANT}-build-alert`)
+      .getAttribute('href');
+    const traceHref = await page
+      .getByTestId(`tenant-card-${SPECIAL_TENANT}-trace-routing`)
+      .getAttribute('href');
+    const previewHref = await page
+      .getByTestId(`tenant-card-${SPECIAL_TENANT}-simulate-preview`)
+      .getAttribute('href');
+
+    expect(alertHref).toContain(`tenant_id=${SPECIAL_TENANT}`);
+    expect(traceHref).toContain(`tenant_id=${SPECIAL_TENANT}`);
+    expect(previewHref).toContain(`tenant_id=${SPECIAL_TENANT}`);
+
+    // Round-trip check: navigate via the alert-builder href and verify
+    // the wizard receives the literal id (no decode mishap).
+    await page.goto(`../assets/jsx-loader.html${alertHref}`);
+    await page
+      .waitForFunction(
+        () => document.title.length > 0 && document.title !== 'Interactive Component',
+        { timeout: 15000 }
+      )
+      .catch(() => {});
+    await page.getByTestId('alert-builder-name').fill('SpecialCharsAlert');
+    await page
+      .getByPlaceholder(/CPU 使用率超過 80%|CPU usage above 80%/)
+      .fill('Round-trip check');
+    await page.getByTestId('alert-builder-next').click();
+    const expr = page.getByTestId('alert-builder-expr');
+    await expect(expr).toBeVisibleWithDiagnostics({ timeout: 5000 });
+    await expr.fill('rate(cpu_usage[5m])');
+    await page.getByTestId('alert-builder-threshold').fill('80');
+    await page.getByTestId('alert-builder-next').click();
+    await expect(page.getByPlaceholder(/可包含|Supports/i)).toBeVisible({
+      timeout: 5000,
+    });
+
+    const labels = await readAllInputValues(page);
+    expect(labels).toContain('tenant');
+    expect(labels).toContain(SPECIAL_TENANT);
   });
 });
