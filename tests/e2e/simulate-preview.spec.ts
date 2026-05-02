@@ -24,6 +24,10 @@ import {
   loadPortalTool,
   runToolSmokeChecks,
 } from './fixtures/portal-tool-smoke';
+// S#98: side-effect import registers `toBeVisibleWithDiagnostics`
+// matcher used below for state-* assertions where the default
+// "element(s) not found" failure mode wastes a CI round-trip.
+import './fixtures/diagnostic-matchers';
 
 async function readAllInputValues(page: Page): Promise<string[]> {
   return page.evaluate(() =>
@@ -90,9 +94,13 @@ test.describe('Simulate Preview Widget @critical', () => {
     await expect(page.getByTestId('simulate-preview-tenant-id')).toBeVisible({
       timeout: 10000,
     });
-    await expect(page.getByTestId('simulate-preview-state-ready')).toBeVisible({
-      timeout: 5000,
-    });
+    // S#98 demonstration: state-* testid uses the diagnostic matcher
+    // so a regression to `state-empty` / `state-loading` produces a CI
+    // error message that lists what testids ARE visible — no need to
+    // re-run locally to discover actual state.
+    await expect(
+      page.getByTestId('simulate-preview-state-ready')
+    ).toBeVisibleWithDiagnostics({ timeout: 5000 });
 
     // Pin success-state sections by testid.
     await expect(page.getByTestId('simulate-preview-source-hash')).toContainText(
@@ -161,7 +169,10 @@ test.describe('Simulate Preview Widget @critical', () => {
     await loadPortalTool(page, 'simulate-preview');
 
     const errBanner = page.getByTestId('simulate-preview-state-error');
-    await expect(errBanner).toBeVisible({ timeout: 10000 });
+    // S#98: diagnostic matcher — if the widget surfaces a different
+    // state (e.g. ready / empty), the failure message lists the
+    // visible testids so we can see the actual transition.
+    await expect(errBanner).toBeVisibleWithDiagnostics({ timeout: 10000 });
     await expect(errBanner).toContainText('400');
     await expect(errBanner).toContainText(/tenant id not present/);
   });
@@ -177,7 +188,8 @@ test.describe('Simulate Preview Widget @critical', () => {
     await loadPortalTool(page, 'simulate-preview');
 
     const errBanner = page.getByTestId('simulate-preview-state-error');
-    await expect(errBanner).toBeVisible({ timeout: 10000 });
+    // S#98: diagnostic matcher (same rationale as 4xx scenario above).
+    await expect(errBanner).toBeVisibleWithDiagnostics({ timeout: 10000 });
     await expect(errBanner).toContainText(/Could not reach|無法連線/);
   });
 });

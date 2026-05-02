@@ -841,17 +841,87 @@ test('renders success state', async ({ page }) => {
 });
 ```
 
-**Mechanical safety net** — three-tier feasibility analysis, lightest viable tier identified post-codify:
+**Mechanical safety net** — **revised post-S#97 review**. Original S#96 codify proposed three tiers (text heuristic / marker-enforced / AST cross-reachability). S#97 PR #187 attempted Tier 1 (text heuristic) and was **closed unmerged** after user review caught the architectural mistake: input-establishment enumeration is open-set whack-a-mole (Playwright keeps adding interaction methods, custom helpers wrap them, mental-model mismatch failure modes are countless beyond cold-start). See §LL §12 below for the closed-vs-open enumeration discipline that fell out of this.
 
-- **Tier 1 — text heuristic（~150 LoC, S#97 candidate）**：對每個 `test()` block 找 `await expect(...).toBeVisible()` 對 downstream-state testid 的 assertion（pattern：`*-state-(ready|success|loaded|error|fail)` / `*-(result|output|preview)-*`），若**前面同一 test block 內**找不到任何 input establishment（`*.fill(` / `*.click(` / `*.dispatchEvent(` / `*.selectOption(` / `*.setInputFiles(` / `page.goto(<url with query params>)` / `page.route(`），WARN。Per-line escape `// playwright-coldstart: ignore` (3-line lookback) for residual cases；`// playwright-coldstart: auto-fire` marker for legitimate cold-start auto-fire（component default state 已 verified 滿足 render gate；例：`alert-builder` 的 `groupName: 'my-alerts'` 預設、`routing-trace` 的 `labels: {team: 'platform', env: 'prod'}` 預設、PR #185 fix 後的 `simulate-preview` 的 `tenantId: 'example-tenant'` 預設）。**抓得到 PR #185 case** — 100%。**False-positive rate** ~10-15%：spec 用 `page.evaluate()` 推狀態 / 用非標準 selector / 合法 cold-start auto-fire 但忘標 marker。**Recommendation**：ship warn-only first，audit 一輪後標 ~3-5 處 marker，再考慮 strict mode。9th `make lint-extract` text scaffold dogfood candidate.
+The right shape is **runtime diagnostic feedback at assertion-failure time**, not commit-time pattern-list maintenance:
 
-- **Tier 2 — marker-enforced convention（~250 LoC, deferred）**：每個 `test()` block 強制 `// playwright-coldstart: <empty|requires-fill|auto-fire>` marker；lint 驗 marker 與內容一致（`empty` 時禁 fill / `requires-fill` 時必有 fill / `auto-fire` 時允許無 fill）。**問題**：legacy 20 specs × ~6 test = ~120 markers 要 retrofit，adoption cost 高；不如先靠 Tier 1 的 review-time discipline + ignore marker 補洞。
+- **Tier 1 (v2) — `toBeVisibleWithDiagnostics` matcher** 🟢 **S#98 PR：`tests/e2e/fixtures/diagnostic-matchers.ts` (~30 LoC implementation + ~80 LoC self-test)**。Drop-in replacement for `.toBeVisible()`：success path is identical (zero overhead); failure path collects every `data-testid` currently visible on the page via `page.evaluate(...)` over `getBoundingClientRect` and dumps them in the assertion error. **Zero enumeration** — works for every Playwright version + custom helper + state-machine pattern, no pattern list to maintain. **Catches more than cold-start** — any state-mismatch failure (async race / validation reject / stale mock / selector miss / re-mount) gets a self-explanatory error. **Spec-author-friendly** — opt-in via spec-level side-effect import `import './fixtures/diagnostic-matchers'` + `.toBeVisibleWithDiagnostics()` call site; no migration cost; gradual adoption per spec author judgment. Trade-off vs commit-time lint: failures surface at CI time, not commit time, but the diagnostic output makes the round-trip cheap (no re-run-locally needed). 3 self-tests verify pass-through, failure-with-testids, failure-with-empty-page paths.
 
-- **Tier 3 — component AST × spec AST cross-reachability（~400+ LoC, deferred）**：parse component `useState(initial)` → 推導 cold-start state；parse `if (state.X) <... data-testid="Y" />` → state→testid mapping；spec → 找 `expect(testid='Y')` assertion；推 「Y 從 cold-start 是否可達 unless spec 有 fill」。**ROI 不確定** — HOC / context / async effect 邊界 case 多。
+- **Tier 2 — marker-enforced convention** ⏸️ **deferred indefinitely**：reframed as "force authors to write down their assumed state arc via `// state-arc: ...` annotation". Useful but redundant with Tier 1 v2 — the matcher catches mismatch automatically; forcing annotation adds friction without proportional value. Revisit if dogfood shows authors don't reach for the matcher.
 
-**Recommendation order**: Tier 1 → review-checklist (this section) for the rest. Tier 2/3 only if Tier 1 false-positive rate >25% post-audit (unlikely given the narrow signal).
+- **Tier 3 — component AST × spec AST cross-reachability** ⏸️ **deferred indefinitely**：would require parsing `useState` defaults + JSX render branches + spec `expect(testid)` reachability. ~400+ LoC heavy infra; HOC / context / async effect edge cases. Tier 1 v2 covers the actual bug class without static analysis.
 
-**Cross-refs**：PR #185 first-CI-fail commit `3beb127`（fix: seed Tenant ID default `'example-tenant'`）；`docs/interactive/tools/simulate-preview.jsx` (4-state machine reference); Component cold-start UX 對照 `alert-builder.jsx` (`groupName: 'my-alerts'` default) + `routing-trace.jsx` (`labels: {team: 'platform', env: 'prod'}` default) — 兩者 cold-start spec 也都不需 fill。
+**Adoption pattern**：
+
+```ts
+// At top of spec file using state-* assertions:
+import { test, expect } from '@playwright/test';
+import './fixtures/diagnostic-matchers';
+
+test('renders ready after fill', async ({ page }) => {
+  await loadPortalTool(page, 'simulate-preview');
+  await page.getByTestId('input').fill('x');
+  // For state-* testids prefer the diagnostic matcher:
+  await expect(
+    page.getByTestId('simulate-preview-state-ready')
+  ).toBeVisibleWithDiagnostics({ timeout: 5000 });
+});
+```
+
+For non-state assertions (input fields, headings, etc.) the regular `.toBeVisible()` is fine. Don't replace mechanically — the matcher's value is when component state is dynamic.
+
+**Cross-refs**：PR #185 first-CI-fail commit `3beb127`（fix: seed Tenant ID default `'example-tenant'`）；PR #187 closed unmerged (the wrong-shape lint, S#97); S#98 ships the matcher; `docs/interactive/tools/simulate-preview.jsx` (4-state machine reference); Component cold-start UX 對照 `alert-builder.jsx` (`groupName: 'my-alerts'` default) + `routing-trace.jsx` (`labels: {team: 'platform', env: 'prod'}` default) — 兩者 cold-start spec 也都不需 fill；§LL §12 below (closed-vs-open enumeration discipline).
+
+### 12. Closed-vs-open enumeration discipline check (S#97 PR #187 self-correction)
+
+> **觸發**：S#97 PR #187 try ship 「Tier 1 mechanical net for §11」用 input-establishment enumeration（12 個 `*.fill / *.click / page.route / ...` patterns）。User 點破：「打地鼠的修法 — 你表列不完每一支 React/Playwright API」。Playwright keeps adding interaction methods (`tap` for mobile, `setChecked`, `dragAndDrop`, future ones), custom helpers wrap them (`loadPortalTool` wraps `page.goto`), and the bug class itself (mental-model mismatch) has failure modes beyond just "missing input" (async race, validation reject, stale mock, ...). PR #187 closed unmerged; S#98 ships the runtime matcher instead.
+
+**Rule of thumb — before writing a lint, ask if the target set is closed**:
+
+- **Closed set** (lint OK)：finite enumeration that doesn't grow. Examples:
+  - **RTL `getBy*` family** (`getByDisplayValue` / `getByLabelText` / `getByPlaceholderText` / `getByAltText`) — RTL has these 4 + a few more, stable, no plans to add more in 2026. S#96 PR #186 `check_playwright_rtl_drift.py` lints this set ✓.
+  - **JSX-loader supported imports** (`react`, `lucide-react`, exact two strings) — pinned by jsx-loader.html `transformImports` regex; growing the set requires editing jsx-loader itself. S#93 PR #183 `check_jsx_loader_compat.py` lints this ✓.
+  - **Hard-coded reserved patterns** like `_*` config keys, `--no-verify` flag, `subprocess.run(timeout=)` keyword arg — language/library spec-defined, stable.
+
+- **Open set** (lint = whack-a-mole, ❌ wrong shape)：grows over time without your control. Examples:
+  - **Playwright interaction methods** — Playwright 1.30+ added `setChecked`, `tap`, etc. Each release possibly more. S#97 PR #187 tried to enumerate this ✗.
+  - **State-marker testid suffixes** — `*-state-ready` / `*-loaded` / `*-rendered` / `*-complete` — convention-driven, every component author can invent new names.
+  - **CSS-in-JS class names** — generated by build tooling, no fixed list.
+  - **Custom helper functions** — `loadPortalTool`, `setupAuthFlow`, etc. — repo-specific, unbounded.
+
+**Decision tree**:
+
+```
+Q1: Is the target set defined by a spec / library / hardware constraint
+    that you don't control?
+  YES → likely CLOSED → lint may be correct
+  NO  → continue
+
+Q2: Does growing the set require editing files in your repo?
+  YES → CLOSED (you'll see the new entry land and update the lint)
+  NO  → OPEN
+
+Q3: Has the set's size changed in the past 12 months?
+  NO  → CLOSED-ish (treat as closed; revisit if change observed)
+  YES → OPEN
+```
+
+**Alternative architectures for open-set bug classes**:
+
+If the bug class lives behind an open-set signal, prefer:
+
+1. **Runtime diagnostic feedback** (S#98 `toBeVisibleWithDiagnostics`) — fail loudly at the failure site with full context dumped; zero enumeration; works for every API the underlying lib will ever ship.
+2. **Convention forcing** (Tier 2 from §11 analysis, deferred but valid pattern) — make spec authors write down their mental model in a comment; lint enforces presence not correctness.
+3. **Snapshot baselines** (image-diff / inline-snapshot tests) — let the framework record "what's there" and fail when actual diverges; no enumeration.
+4. **Read-time review checklist** (this playbook section pattern) — accept that prevention is a human-discipline problem when no closed-set signal exists.
+
+**What NOT to do**:
+
+- ❌ Assume "if I list the most common patterns the rest will be rare" — that's true on day 1 but false at month 6 as new tools land.
+- ❌ Ship a lint with `# TODO: extend pattern list as Playwright grows` — that's tech debt with no commitment to clean.
+- ❌ Conflate "this lint catches the motivating PR" with "this lint catches the bug class" — PR #187 caught PR #185 because the regex was tuned to it; new instances would have slipped.
+
+**Cross-refs**: S#96 PR #186 (closed-set `check_playwright_rtl_drift.py`, correct shape); S#97 PR #187 (open-set `check_playwright_coldstart_drift.py`, wrong shape, closed unmerged); S#98 PR (this PR, runtime matcher replacing the lint); §LL §11 above (the bug class and mechanical-net analysis).
 
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
