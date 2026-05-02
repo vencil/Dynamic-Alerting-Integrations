@@ -17,7 +17,9 @@ dependencies: [
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/hooks/useDebouncedValue.js",
   "tenant-manager/hooks/useURLState.js",
-  "tenant-manager/hooks/useVirtualGrid.js"
+  "tenant-manager/hooks/useVirtualGrid.js",
+  "tenant-manager/hooks/useSavedViews.js",
+  "tenant-manager/components/SavedViewsPanel.jsx"
 ]
 ---
 
@@ -48,6 +50,11 @@ const useDebouncedValue = window.__useDebouncedValue;
 const useURLState = window.__useURLState;
 
 const useVirtualGrid = window.__useVirtualGrid;
+// C-6 Smart Views (S#100): hook + panel pickup. Backend was already
+// query-criteria shaped in v2.5.0; this UI closes the v2.7.0 §C-3
+// frontend gap.
+const useSavedViews = window.__useSavedViews;
+const SavedViewsPanel = window.__SavedViewsPanel;
 // PR-2b: tracked URL params. Module-level const so identity stays
 // stable across renders — passing `['q']` inline as a literal would
 // create a new array each render and trigger useURLState's internal
@@ -132,6 +139,26 @@ export default function TenantManager() {
   const [filterMode, setFilterMode] = useState('');
   const [filterDomain, setFilterDomain] = useState('');
   const [filterDBType, setFilterDBType] = useState('');
+
+  // C-6 Smart Views (S#100) — pass `setApiNotification` so CRUD errors
+  // surface as toasts. Hook is a no-op in demo mode (`reachable: false`)
+  // and the SavedViewsPanel hides itself accordingly.
+  const savedViews = useSavedViews((message) =>
+    setApiNotification({ type: 'error', message })
+  );
+
+  // Apply a view's filter map back into orchestrator setters. Backend
+  // `filters: map[string]string` only contains set keys — empty / unset
+  // dimensions resolve to '' (clear that filter).
+  const applySavedView = useCallback((filters) => {
+    const f = filters || {};
+    setSearchText(f.q || '');
+    setFilterEnv(f.environment || '');
+    setFilterTier(f.tier || '');
+    setFilterMode(f.operational_mode || '');
+    setFilterDomain(f.domain || '');
+    setFilterDBType(f.db_type || '');
+  }, []);
   const [selected, setSelected] = useState(new Set());
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState('');
@@ -519,6 +546,23 @@ export default function TenantManager() {
         )}
 
         <div style={styles.controlsPanel}>
+          {/* C-6 Smart Views (S#100) — saved view selector + save/delete
+              controls. Hidden when /api/v1/views unreachable (demo mode)
+              or when canWrite=false hides the write controls. */}
+          <SavedViewsPanel
+            currentFilters={{
+              q: searchText,
+              environment: filterEnv,
+              tier: filterTier,
+              operational_mode: filterMode,
+              domain: filterDomain,
+              db_type: filterDBType,
+            }}
+            onApplyView={applySavedView}
+            canWrite={canWrite}
+            savedViews={savedViews}
+          />
+
           <label style={styles.formLabel} htmlFor="search-tenants">
             {t('搜尋租戶', 'Search')}
           </label>
