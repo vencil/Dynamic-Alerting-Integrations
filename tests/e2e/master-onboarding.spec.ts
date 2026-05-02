@@ -65,18 +65,21 @@ test.describe('Master Onboarding @critical', () => {
     ).toBeVisible();
   });
 
-  test('Wizard journey marks routing-trace as Planned (alert-builder shipped S#91)', async ({ page }) => {
+  test('Wizard journey has all 5 real wizards (no Planned badges; C-3 軌道完結 S#92)', async ({ page }) => {
     await loadPortalTool(page, 'master-onboarding');
 
     await page.getByTestId('onboarding-card-wizard').click();
 
-    // Step 3 (alert-builder) shipped in S#91 PR (this PR for C-3 PR-2)
-    // and is no longer deferred — its "Planned" badge was removed when
-    // the wizard landed. Step 4 (routing-trace) is still deferred to
-    // C-3 PR-3, so exactly 1 "Planned" badge should remain visible.
+    // C-3 PR-3 (S#92) shipped routing-trace, retiring the last
+    // "Planned v2.8.x" badge. Wizard Journey now has 5/5 real wizards:
+    // cicd-setup → deployment → alert-builder → routing-trace → tenant-manager.
+    // Assert ZERO Planned badges visible — Wizard Journey is complete.
+    // Wait for the page to settle past the dispatcher transition.
+    await expect(
+      page.getByTestId('onboarding-back')
+    ).toBeVisible({ timeout: 10000 });
     const planned = page.getByText(/Planned|規劃中/);
-    await expect(planned.first()).toBeVisible({ timeout: 10000 });
-    await expect(await planned.count()).toBeGreaterThanOrEqual(1);
+    await expect(await planned.count()).toBe(0);
   });
 
   test('Back button returns to journey choice', async ({ page }) => {

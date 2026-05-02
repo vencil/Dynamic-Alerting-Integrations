@@ -124,14 +124,14 @@ const WIZARD_STEPS = [
   },
   {
     id: 'routing',
-    title: () => t('4. 路由與抑制（Coming v2.8.x）', '4. Routing & inhibition (Coming v2.8.x)'),
+    title: () => t('4. 路由追蹤', '4. Routing Trace'),
     desc: () => t(
-      'Routing Trace wizard 規劃中（C-3 PR-2）。目前 routing-profiles + alert-simulator 的 inhibit 預覽功能已涵蓋多數情境。',
-      'Routing Trace wizard planned (C-3 PR-2). For now routing-profiles + alert-simulator inhibit preview cover most cases.'
+      '4 步路由模擬器：定義樣本告警 + 預設路由 + 子路由 → 看哪個 receiver 收到。教 label-match + tree-walk 概念；inhibit / timing simulation 用 alert-simulator 與 amtool。',
+      '4-step routing simulator: define sample alert + default route + child routes → see which receiver gets it. Teaches label-match + tree-walk concept; inhibit / timing simulation lives in alert-simulator + amtool.'
     ),
-    cta: () => t('查看 Routing Profiles 文件', 'View Routing Profiles docs'),
-    href: docUrl('docs/internal/design/routing-profiles.md'),
-    deferred: true,
+    cta: () => t('開啟 Routing Trace', 'Open Routing Trace'),
+    href: 'routing-trace.html',
+    internal: true,
   },
   {
     id: 'verify',

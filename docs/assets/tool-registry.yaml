@@ -169,6 +169,35 @@ tools:
   hub_section: advanced
   appears_in: []
   journey_phase: configure
+- key: routing-trace
+  title:
+    en: Routing Trace Wizard
+    zh: 告警路由追蹤精靈
+  file: interactive/tools/routing-trace.jsx
+  audience:
+  - platform
+  - sre
+  icon: wizard
+  tags:
+  - routing
+  - alertmanager
+  - trace
+  - wizard
+  - c-3
+  desc:
+    en: 4-step Alertmanager routing tree simulator (alert input / default route /
+      child routes / trace result); first-match-wins, equality matchers
+    zh: 4 步 Alertmanager 路由樹模擬器（樣本告警 / 預設路由 / 子路由 / 追蹤結果）；first-match-wins，
+      equality matchers only
+  related:
+  - alert-builder
+  - alert-simulator
+  - master-onboarding
+  - cicd-setup-wizard
+  - deployment-wizard
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
 - key: alert-builder
   title:
     en: Alert Builder Wizard
