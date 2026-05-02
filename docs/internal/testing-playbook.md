@@ -923,6 +923,24 @@ If the bug class lives behind an open-set signal, prefer:
 
 **Cross-refs**: S#96 PR #186 (closed-set `check_playwright_rtl_drift.py`, correct shape); S#97 PR #187 (open-set `check_playwright_coldstart_drift.py`, wrong shape, closed unmerged); S#98 PR (this PR, runtime matcher replacing the lint); §LL §11 above (the bug class and mechanical-net analysis).
 
+#### 12a. Same discipline applies to **feature plans**, not just lints (S#99 PR #189 extension)
+
+The closed-vs-open check originally codified for lints generalises to **feature work**. Before building a feature, ask: **does the original plan still describe a customer-valuable shape post-recent-changes?** Same risk class as PR #187 — sunk cost on building "what the plan said" instead of "what's actually useful now."
+
+**Worked example (S#99)**: planning §C-4 (i) "三工具統一 tab 容器" was specified before S#94 deep-link UX landed. After S#94/S#95, separate browser tabs (one per wizard, with `?tenant_id=` pre-fill) are the established UX. A unified tab container would FIGHT this convention rather than complement it. Rather than build a ~600 LoC orchestrator that may be obsolete day-1, S#99 pivots: drop sub-task (i) tab container + drop (iii) cross-tool state (rarely used in practice given separate-tab UX), ship only (v) E2E integration coverage extension. Net: ~150 LoC pure spec, zero production code, §C-4 honestly closed.
+
+**Three-question audit before any feature PR** (mirrors the closed-vs-open lint audit):
+
+1. Was the feature spec written before a related landing changed the picture? (planning row date vs. recent landed PRs)
+2. Does the current customer journey use the established alternative? (S#94 separate-tab UX is the alternative to a tab container)
+3. Would shipping this feature add an unused-in-practice path that costs maintenance? (yes → reframe; no → proceed)
+
+**Anti-pattern**: "the plan says we should build it, so we build it" — same shape as "the lint convention says enumerate, so we enumerate." Both ignore the closed-vs-open / staleness check.
+
+**When to apply**: feature PRs whose plan row pre-dates significant adjacent-system changes by ≥2 weeks. Quick check, not blocking.
+
+**Cross-refs**: planning §12.2 C-4 row (S#99 honest closure); S#94 PR #184 (the picture-changing event); §LL §12 above (the original lint-scoped discipline).
+
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
 > **觸發**：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 `withIsolatedMetrics` + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。
