@@ -671,6 +671,37 @@ Self-Review-Pass-2:
 
 **Cross-refs**：PR #172 §Pre-merge Self-Review Pass 1 check #4；CHANGELOG `[Unreleased] ### Changed` S#89 entry。
 
+### 9. JSX-loader Babel-standalone constraints (PR #182 case)
+
+> **觸發**：S#92 PR #182 第一次 CI E2E run 失敗 — `routing-trace.jsx` 在 `computeTrace` 加了 `export function`（命名 export）。在 jsx-loader 的 Babel-standalone（**script mode**, not module mode）context，Babel 把命名 export 編譯成 `exports.computeTrace = ...`，runtime `ReferenceError: exports is not defined`（`exports` 在 script-mode 不是 global），React tree 不 mount，4 specs 全 fail。
+
+**為何 `jsx-babel-check` 沒擋住**：那個 hook 只 PARSE JSX，`export function` 是合法 AST node。Babel-standalone `runtime` 才會嘗試把它編譯成 `exports.x = ...` 並炸。**CI E2E 是唯一暴露 runtime failure 的關卡**，pre-commit 全綠不代表瀏覽器跑得起來。
+
+**JSX-loader 約束（per `docs/assets/jsx-loader.html` `transformImports` 函式 lines ~617-639）**：
+
+只有兩條 module syntax 特別 handled（regex transform）：
+- ✅ `import React, { ... } from 'react'` — 改成 `const { ... } = React;`
+- ✅ `import { Icon } from 'lucide-react'` — 改成 `const Icon = window.lucideReact.Icon || fallback;`
+- ✅ `export default function Component()` — Babel + jsx-loader handle; component 渲染
+
+其他 module syntax 全 break：
+- ❌ `export function helper()` (任何命名 export)
+- ❌ `export const x = ...` / `export let` / `export var` / `export class`
+- ❌ `import X from 'lodash'` (任何非 react/lucide-react)
+- ❌ `import X from './local'` (除非在 front-matter `dependencies:` 列出，走另一條 `loadDependency` 路徑)
+- ❌ `require('x')` calls
+
+**規範**：
+1. ✅ `export default` 才是 component 唯一支援的 export
+2. ✅ Helper functions / constants 用 module-scope 即可（component closure 可達）
+3. ✅ Cross-tool reuse 透過 front-matter `dependencies:` + `window.__X` self-register pattern（見 `docs/internal/jsx-multi-file-pattern.md` / PR #160 scaffold tool）
+4. ❌ 不要寫命名 export
+5. ❌ 不要 import 第三方 lib 除了 react / lucide-react
+
+**Mechanical safety net** ✅ S#93 PR：`scripts/tools/lint/check_jsx_loader_compat.py` 偵測 `^export (function|const|let|var|class)`（不含 default）/ `import .* from '<X>'`（X ∉ {react, lucide-react}）/ `require\(`，FATAL on hit；commit-time catch 而非 CI runtime 才暴露。Per-line escape 用 `<!-- jsx-loader-compat: ignore -->`（3-line lookback）。
+
+**Cross-refs**：PR #182 amend commit `6e16a65`（routing-trace.jsx fix）；`docs/assets/jsx-loader.html` `transformImports` 函式；`docs/internal/jsx-multi-file-pattern.md`（cross-tool reuse 正解 = front-matter dependencies + window self-register, NOT named export）。
+
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
 > **觸發**：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 `withIsolatedMetrics` + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。
