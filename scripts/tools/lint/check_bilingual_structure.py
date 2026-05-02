@@ -5,10 +5,12 @@
 比對章節結構是否一致。允許翻譯差異但 section count 和 heading hierarchy
 必須匹配。同時檢查雙語導航連結對稱性。
 
-支援兩種命名慣例（v2.7.0 SSOT 遷移期間共存）：
-- Legacy: *.md (ZH) + *.en.md (EN) — 中文為主
-- New:    *.md (EN) + *.zh.md (ZH) — 英文為主（SSOT 目標）
-自動偵測檔案命名以判斷使用哪種模式。
+支援兩種命名慣例（dual-mode）：
+- ZH-primary (v2.8.0 policy locked, S#101): *.md (ZH) + *.en.md (EN)
+- EN-primary (dormant future-option):       *.md (EN) + *.zh.md (ZH)
+自動偵測檔案命名以判斷使用哪種模式。S#101 policy lock：repo 現
+完全運作於 ZH-primary 模式；EN-primary 模式保留以支援未來若 trigger
+條件達成時的遷移（見 dev-rules.md §9b 與 testing-playbook §LL §12a Q4）。
 
 互補工具（三者互不重疊）：
 - 本工具：管「骨架」— heading 數量與層級必須 1:1 對齊

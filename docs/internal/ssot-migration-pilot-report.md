@@ -3,9 +3,38 @@ title: "SSOT 語言遷移 Phase 1 Pilot Report"
 short: SSOT Phase 1 Pilot
 audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
-status: completed
+status: completed-pilot-only
 lang: zh
 version: v2.7.0
+---
+
+> ## ⚠️ Execution-phase cancelled by v2.8.0 S#101 (2026-05-02)
+>
+> Phase 1 pilot（本文）**證實工具可用** — `migrate_ssot_language.py`
+> 經 4 對檔案 dry-run 驗證、`check_bilingual_*.py` 雙模式可正確偵測、
+> 45 個 bilingual lint tests 全綠。**該 pilot 結論仍有效**。
+>
+> 然而，**Phase 1 之後的 execution phase（66 對檔案 atomic rename +
+> mkdocs.yml + JSX i18n flip）已取消**：
+>
+> - `ssot-language-evaluation.md` §7.4 的「採方案 C」推薦撤回
+> - 撤回理由：原 premise「open-source community 預期 EN SSOT」未驗證；
+>   實際 contributor / customer base 100% 中文母語
+> - 詳細 audit 見 `testing-playbook.md §LL §12a Q4 premise validation`
+>
+> **Phase 1 工具現狀（dormant future-option）**：
+>
+> | 工具 | 狀態 | 用途 |
+> |---|---|---|
+> | `migrate_ssot_language.py` | dormant | 若 trigger 條件達成可使用 |
+> | `check_bilingual_structure.py` 雙模式 | active (ZH-primary mode) | 現行 lint |
+> | `check_bilingual_content.py` 雙模式 | active (ZH-primary mode) | 現行 lint |
+> | pre-commit `.zh.md` trigger | dormant | 等遷移觸發後生效 |
+>
+> 本文以下章節保留作 future-option 啟動參考；不代表現行執行 plan。
+>
+> **Trigger conditions** 見 `dev-rules.md §9b`。
+
 ---
 
 # SSOT 語言遷移 Phase 1 Pilot Report

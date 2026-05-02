@@ -118,18 +118,26 @@ lang: zh
 
 **檢查方式**：pre-commit hook `check_bilingual_annotations`。
 
-### 9b. SSOT 語言遷移（v2.7.0+）
+### 9b. SSOT 語言策略（v2.8.0 S#101 policy lock）
 
-**規則**：v2.7.0 起開始從「中文為主 SSOT」遷移至「英文為主 SSOT」。遷移期間 lint hooks 同時支援兩種檔案對命名：
+**規則**：**中文為主 SSOT，英文為輔**。檔案對命名為 `foo.md`（ZH）+ `foo.en.md`（EN）。**不執行 ZH→EN 遷移**。
 
-- **Legacy**：`foo.md`（ZH）+ `foo.en.md`（EN）— 中文為主
-- **New**：`foo.md`（EN）+ `foo.zh.md`（ZH）— 英文為主
+**為什麼鎖 ZH primary**：v2.5.0 評估文 §7 原推薦切換 EN SSOT，premise 是「open-source community 慣例 EN」；但實際客戶與 contributor 社群均為中文母語，premise 未驗證 → 切換 = 解決不存在的問題。詳細 audit 見 [`testing-playbook.md`](testing-playbook.md) §LL §12a Q4（premise validation）。
 
-**遷移工具**：`python3 scripts/tools/dx/migrate_ssot_language.py --dry-run`
+**Phase 1 pilot 工具狀態（v2.7.0 完成的，現 dormant）**：
 
-**全量遷移時程**：v2.8.0（需 mkdocs.yml 原子性修改，不可漸進式遷移）
+- `migrate_ssot_language.py` — 單向 ZH→EN 遷移腳本，保留作 future-option（trigger 觸發後可用）
+- `check_bilingual_structure.py` / `check_bilingual_content.py` — 雙模式 lint，自動偵測檔案命名；保留以支援未來若選擇遷移
 
-**評估文件**：[`ssot-language-evaluation.md`](ssot-language-evaluation.md) + [`ssot-migration-pilot-report.md`](ssot-migration-pilot-report.md)
+**Trigger conditions for re-evaluation**（觸發後 re-open `ssot-language-evaluation.md`）：
+
+1. 收到 ≥3 個非中文母語 contributor PR/issue
+2. 客戶 RFP 顯式要求英文 SSOT
+3. Maintainer 主動 pivot 為 international-positioning project
+
+未觸發前：新文件沿用「中主英副」；不討論未出現的英文主體客戶。
+
+**評估文件**（status: superseded by S#101）：[`ssot-language-evaluation.md`](ssot-language-evaluation.md) + [`ssot-migration-pilot-report.md`](ssot-migration-pilot-report.md)
 
 ### 10. 雙語政策：internal docs 不需英文版
 

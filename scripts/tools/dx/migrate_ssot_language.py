@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-"""migrate_ssot_language.py — SSOT 語言切換遷移工具
+"""migrate_ssot_language.py — SSOT 語言切換遷移工具 (DORMANT, S#101 policy lock)
+
+⚠️ DORMANT — v2.8.0 S#101 (2026-05-02) policy locked: ZH primary.
+
+This script's intended use case (ZH→EN SSOT migration) is NOT being pursued.
+Original v2.5.0 evaluation (`docs/internal/ssot-language-evaluation.md`)
+recommended Plan C "switch to EN SSOT" but the underlying premise
+("open-source community SSOT should be EN") was never validated against
+actual contributor / customer base shape (which remains 100% Chinese-
+native through v2.8.0). See `testing-playbook.md §LL §12a Q4 premise
+validation` for the audit detail.
+
+This script is **kept dormant** (not deleted) to preserve future-option
+value: if trigger conditions in `dev-rules.md §9b` are ever met (≥3
+non-Chinese-native contributor PR/issue, customer RFP requires EN SSOT,
+or maintainer pivots to international positioning), this tool can be
+reactivated.
+
+DO NOT run this script in current ZH-primary policy regime — it would
+silently cause migration drift on the file pairs it touches.
+
+---
 
 將文件對從「中文主 (.md) + 英文輔 (.en.md)」反轉為
 「英文主 (.md) + 中文輔 (.zh.md)」，同步更新 frontmatter lang 標籤
@@ -11,7 +32,7 @@
 - --directory 可限定只遷移某個目錄（試點用）
 - 遷移腳本不更新 mkdocs.yml — 那需要手動 + 全量遷移時一併處理
 
-用法:
+用法（only after S#101 policy lock 反轉）:
   # 全量掃描（dry-run）
   python3 scripts/tools/dx/migrate_ssot_language.py --dry-run
 
@@ -24,7 +45,8 @@
   # CI 驗證：檢查是否有未遷移的 .en.md 或已遷移但 frontmatter 不一致的檔案
   python3 scripts/tools/dx/migrate_ssot_language.py --check
 
-參考：docs/internal/ssot-language-evaluation.md §4 Migration Path
+參考：docs/internal/ssot-language-evaluation.md §4 Migration Path（
+status: superseded） + dev-rules.md §9b（trigger conditions）
 """
 
 import argparse

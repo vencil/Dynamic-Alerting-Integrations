@@ -3,9 +3,36 @@ title: SSOT 切換影響評估
 short: SSOT 語言切換影響分析
 audience: [maintainers]
 tags: [internal, planning, i18n, language-strategy]
-status: decided
+status: superseded
 lang: zh
 version: v2.7.0
+---
+
+> ## ⚠️ Status: SUPERSEDED by v2.8.0 S#101 (2026-05-02)
+>
+> 本文 §7.4 原推薦「採用方案 C — 切換至英文 SSOT」**已撤回**。
+> 撤回理由（詳見 `testing-playbook.md §LL §12a Q4 premise validation`）：
+>
+> - 本文 §7.1 的「國際化友好 / 維護工作減少 / 工程規範化」benefit
+>   依賴的 premise 是「open-source community 慣例 EN SSOT + 預期會有
+>   非中文母語 contributor」
+> - **實際 v2.7.0 → v2.8.0 期間，contributor pool 與 customer base
+>   仍 100% 中文母語**；premise 從未被 evidence 驗證
+> - 切換 EN 主 = 解決不存在的問題；可預期的 ZH-fallback translation
+>   lag + maintainer 非母語 drafting 速度損失皆為實質 cost
+>
+> **現行政策（policy locked v2.8.0 S#101）**：中文為主 SSOT，英文為輔。
+> 不執行 ZH→EN 遷移。
+>
+> **Trigger conditions for re-evaluation**（觸發後本文重新生效作為
+> 評估依據）：
+>
+> 1. 收到 ≥3 個非中文母語 contributor PR/issue
+> 2. 客戶 RFP 顯式要求英文 SSOT
+> 3. Maintainer 主動 pivot 為 international-positioning project
+>
+> 本文以下章節保留作 future-option 評估資料；不代表現行政策。
+
 ---
 
 # SSOT 切換影響評估：中文↔英文主次互換

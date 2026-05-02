@@ -929,17 +929,28 @@ The closed-vs-open check originally codified for lints generalises to **feature 
 
 **Worked example (S#99)**: planning §C-4 (i) "三工具統一 tab 容器" was specified before S#94 deep-link UX landed. After S#94/S#95, separate browser tabs (one per wizard, with `?tenant_id=` pre-fill) are the established UX. A unified tab container would FIGHT this convention rather than complement it. Rather than build a ~600 LoC orchestrator that may be obsolete day-1, S#99 pivots: drop sub-task (i) tab container + drop (iii) cross-tool state (rarely used in practice given separate-tab UX), ship only (v) E2E integration coverage extension. Net: ~150 LoC pure spec, zero production code, §C-4 honestly closed.
 
-**Three-question audit before any feature PR** (mirrors the closed-vs-open lint audit):
+**Four-question audit before any feature PR** (extended from S#99's 3-question version after S#101 Phase .d closure exposed Q4):
 
 1. Was the feature spec written before a related landing changed the picture? (planning row date vs. recent landed PRs)
 2. Does the current customer journey use the established alternative? (S#94 separate-tab UX is the alternative to a tab container)
 3. Would shipping this feature add an unused-in-practice path that costs maintenance? (yes → reframe; no → proceed)
+4. **(NEW S#101)** Has the spec's stated premise been validated against actual evidence? (e.g., spec says "we should X **because** Y is true"; is Y actually true? — check repo / customer / contributor data, don't accept the premise on faith)
 
-**Anti-pattern**: "the plan says we should build it, so we build it" — same shape as "the lint convention says enumerate, so we enumerate." Both ignore the closed-vs-open / staleness check.
+**Why Q4 matters (S#101 Phase .d worked example)**: the v2.5.0 SSOT-language evaluation doc (`docs/internal/ssot-language-evaluation.md`) recommended switching ZH→EN SSOT in §7.4 Plan C, with §7.1 explicitly listing benefits dependent on premise "**open-source community SSOT should be EN + international contributors will appear**". Q1 (picture changed?) gave mixed signal (some international-facing infra shipped); Q2 (alternative exists?) gave strong yes (ZH-primary already running); Q3 (unused path?) gave strong yes. **Q4 was the discriminating signal**: the premise was an assumption, never validated. Actual contributor / customer base remained 100% Chinese-native through v2.8.0. Without Q4, an audit would lean "consider migration"; with Q4 added, the audit cleanly rejects.
 
-**When to apply**: feature PRs whose plan row pre-dates significant adjacent-system changes by ≥2 weeks. Quick check, not blocking.
+**Q4 anti-pattern**: accepting spec's "because" clause without checking. "We should switch to EN SSOT *because* open-source convention" — but "convention" doesn't make a premise true for THIS project's actual community. Industry convention is real but doesn't override actual evidence.
 
-**Cross-refs**: planning §12.2 C-4 row (S#99 honest closure); S#94 PR #184 (the picture-changing event); §LL §12 above (the original lint-scoped discipline).
+**Anti-pattern (S#99-S#101 cumulative)**: "the plan says we should build it, so we build it" — same shape as "the lint convention says enumerate, so we enumerate." Both ignore the closed-vs-open / staleness / premise-validation check.
+
+**When to apply**: feature PRs whose plan row pre-dates significant adjacent-system changes by ≥2 weeks **OR** whose justification leans on industry-convention / community-shape claims that haven't been tested against this repo's evidence. Quick check, not blocking.
+
+**Worked examples**:
+
+- **S#99 §C-4 (i) tab container**: failed Q1 + Q2 + Q3 (post-S#94 separate-tab UX is the convention; tab container fights it). Q4 not needed — Q1-Q3 sufficient.
+- **S#100 C-6 Smart Views**: passed audit (real gap, customer-shape-agnostic, established alternative incomplete). Default = ship per original plan when audit passes.
+- **S#101 Phase .d SSOT migration**: failed Q4 specifically — Q1-Q3 alone gave mixed signal; Q4 (premise unvalidated) was the clean fail. Phase .d closed as ZH-primary policy lock.
+
+**Cross-refs**: planning §12.2 C-4 row (S#99 honest closure); planning §12.2 C-6 row (S#100 default-to-ship after fabricated-defer correction); planning §6 Phase .d closure (S#101 ZH primary lock); S#94 PR #184 (picture-changing event); §LL §12 above (original lint-scoped discipline).
 
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
