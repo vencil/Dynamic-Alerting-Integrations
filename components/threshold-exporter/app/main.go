@@ -1,15 +1,28 @@
 package main
 
+// Boot wiring for the threshold-exporter binary. Three concerns,
+// one per helper:
+//
+//   - loadEnvOverrides — apply CONFIG_PATH / CONFIG_DIR / LISTEN_ADDR
+//                        env vars on top of flag.Parse()
+//   - buildServer      — assemble the http.Server with hardened
+//                        timeouts (Gosec G112 ReadHeaderTimeout)
+//   - runUntilSignal   — block on SIGINT/SIGTERM, then close the
+//                        watch loop, debounce timer, and graceful-
+//                        shutdown the HTTP server with a 15s budget
+//
+// HTTP handlers live in handlers.go (read-only API) and
+// handler_simulate.go (POST /api/v1/tenants/simulate). resolveConfigPath
+// stays here because main_test.go binds to it directly via global
+// configDir / configPath.
+
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -33,19 +46,15 @@ func init() {
 	flag.DurationVar(&scanDebounce, "scan-debounce", DefaultDebounceWindow, "Debounce window for hierarchical conf.d reload (0 disables)")
 }
 
+// shutdownTimeout caps how long the graceful HTTP shutdown will wait
+// for in-flight requests to drain. Long enough for a /metrics scrape
+// (typically <1s) to finish; short enough that a misbehaving client
+// can't keep the Pod alive past the K8s terminationGracePeriodSeconds.
+const shutdownTimeout = 15 * time.Second
+
 func main() {
 	flag.Parse()
-
-	// Allow env override
-	if v := os.Getenv("CONFIG_PATH"); v != "" {
-		configPath = v
-	}
-	if v := os.Getenv("CONFIG_DIR"); v != "" {
-		configDir = v
-	}
-	if v := os.Getenv("LISTEN_ADDR"); v != "" {
-		listenAddr = v
-	}
+	loadEnvOverrides()
 
 	// Auto-detect mode: -config-dir takes precedence, then -config, then default
 	resolvedPath := resolveConfigPath()
@@ -69,7 +78,29 @@ func main() {
 	stopCh := make(chan struct{})
 	go manager.WatchLoop(reloadInterval, stopCh)
 
-	// HTTP handlers
+	server := buildServer(listenAddr, buildMux(manager, collector))
+	runUntilSignal(server, stopCh, manager)
+}
+
+// loadEnvOverrides applies env var overrides on top of flag values.
+// Env wins over flag when set — convenient for K8s Pod templates that
+// pass config via env without rebuilding the command line.
+func loadEnvOverrides() {
+	if v := os.Getenv("CONFIG_PATH"); v != "" {
+		configPath = v
+	}
+	if v := os.Getenv("CONFIG_DIR"); v != "" {
+		configDir = v
+	}
+	if v := os.Getenv("LISTEN_ADDR"); v != "" {
+		listenAddr = v
+	}
+}
+
+// buildMux wires the routing table for the read-only API + simulate
+// primitive + Prometheus scrape endpoint. Kept separate from
+// buildServer so tests can construct a mux without binding a port.
+func buildMux(manager *ConfigManager, collector *ThresholdCollector) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", collector.MetricsHandler())
 	mux.HandleFunc("/health", healthHandler)
@@ -79,23 +110,43 @@ func main() {
 	// no shared writer to manager, no disk IO; safe to colocate with
 	// the rest of the read-only API.
 	mux.HandleFunc("/api/v1/tenants/simulate", simulateHandler())
+	return mux
+}
 
-	server := &http.Server{
-		Addr:              listenAddr,
-		Handler:           mux,
+// buildServer constructs an http.Server with hardened defaults:
+//   - ReadHeaderTimeout (Gosec G112) closes Slowloris-style attacks
+//   - MaxHeaderBytes 8 KiB caps header memory per connection
+//   - Read/Write/Idle timeouts pinned to values that work for our
+//     workload (Prometheus scrape, manual debug, simulate POST)
+func buildServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
 		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 3 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    8192,
 	}
+}
 
-	// Graceful shutdown
+// runUntilSignal blocks on SIGINT / SIGTERM, then runs an ordered
+// shutdown:
+//
+//  1. close stopCh — terminates manager.WatchLoop goroutine
+//  2. manager.Close — releases the debounce timer (v2.7.0 Phase 3,
+//     §8.11.2 trap #12; safe no-op when debounceTimer is nil)
+//  3. server.Shutdown — drains in-flight HTTP requests up to
+//     shutdownTimeout, then force-closes
+//
+// Order matters: close stopCh first so WatchLoop doesn't race with
+// manager.Close releasing the timer it might still arm.
+func runUntilSignal(server *http.Server, stopCh chan struct{}, manager *ConfigManager) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("Listening on %s", listenAddr)
+		log.Printf("Listening on %s", server.Addr)
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
@@ -112,7 +163,7 @@ func main() {
 	manager.Close()
 
 	// Graceful HTTP shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
@@ -122,6 +173,9 @@ func main() {
 
 // resolveConfigPath determines the config path based on flags and auto-detection.
 // Priority: -config-dir > -config > auto-detect default paths.
+//
+// Reads package-level configDir / configPath globals — pinned by
+// main_test.go's resolveConfigPath unit tests, do not change shape.
 func resolveConfigPath() string {
 	if configDir != "" {
 		return configDir
@@ -140,108 +194,4 @@ func resolveConfigPath() string {
 	}
 	log.Printf("Using legacy single-file config: %s", defaultFile)
 	return defaultFile
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "ok")
-}
-
-func readyHandler(manager *ConfigManager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if manager.IsLoaded() {
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, "ready")
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintln(w, "config not loaded")
-		}
-	}
-}
-
-func configViewHandler(manager *ConfigManager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "Config loaded: %v\n", manager.IsLoaded())
-		fmt.Fprintf(w, "Last reload:   %s\n", manager.LastReload().Format(time.RFC3339))
-		fmt.Fprintf(w, "Config mode:   %s\n", manager.Mode())
-
-		cfg := manager.GetConfig()
-		if cfg == nil {
-			fmt.Fprintln(w, "No config loaded")
-			return
-		}
-
-		// Determine resolve time: ?at=2006-01-02T15:04:05Z for debugging scheduled overrides
-		resolveTime := time.Now()
-		if atParam := r.URL.Query().Get("at"); atParam != "" {
-			if parsed, err := time.Parse(time.RFC3339, atParam); err == nil {
-				resolveTime = parsed
-				fmt.Fprintf(w, "Resolve at:    %s (overridden)\n", resolveTime.Format(time.RFC3339))
-			} else {
-				fmt.Fprintf(w, "Resolve at:    now (invalid ?at= param: %v)\n", err)
-			}
-		}
-
-		fmt.Fprintf(w, "\nDefaults (%d metrics):\n", len(cfg.Defaults))
-		for k, v := range cfg.Defaults {
-			fmt.Fprintf(w, "  %s: %.0f\n", k, v)
-		}
-
-		fmt.Fprintf(w, "\nTenants (%d):\n", len(cfg.Tenants))
-		for tenant, metrics := range cfg.Tenants {
-			fmt.Fprintf(w, "  %s:\n", tenant)
-			for k, v := range metrics {
-				if len(v.Overrides) > 0 {
-					fmt.Fprintf(w, "    %s: %s (+ %d time overrides)\n", k, v.Default, len(v.Overrides))
-				} else {
-					fmt.Fprintf(w, "    %s: %s\n", k, v.Default)
-				}
-			}
-		}
-
-		// Show silent mode status
-		silentModes := cfg.ResolveSilentModes()
-		if len(silentModes) > 0 {
-			fmt.Fprintf(w, "\nSilent modes (%d):\n", len(silentModes))
-			for _, sm := range silentModes {
-				fmt.Fprintf(w, "  tenant=%s target_severity=%s\n", sm.Tenant, sm.TargetSeverity)
-			}
-		}
-
-		// Show resolved state at the determined time
-		fmt.Fprintf(w, "\nResolved thresholds:\n")
-		resolved := cfg.ResolveAt(resolveTime)
-		for _, t := range resolved {
-			// Format label pairs for display (exact + regex)
-			var pairs []string
-			if len(t.CustomLabels) > 0 {
-				keys := make([]string, 0, len(t.CustomLabels))
-				for k := range t.CustomLabels {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					pairs = append(pairs, fmt.Sprintf("%s=%q", k, t.CustomLabels[k]))
-				}
-			}
-			if len(t.RegexLabels) > 0 {
-				keys := make([]string, 0, len(t.RegexLabels))
-				for k := range t.RegexLabels {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					pairs = append(pairs, fmt.Sprintf("%s=~%q", k, t.RegexLabels[k]))
-				}
-			}
-			if len(pairs) > 0 {
-				fmt.Fprintf(w, "  tenant=%s metric=%s{%s} value=%.0f severity=%s component=%s\n",
-					t.Tenant, t.Metric, strings.Join(pairs, ", "), t.Value, t.Severity, t.Component)
-			} else {
-				fmt.Fprintf(w, "  tenant=%s metric=%s value=%.0f severity=%s component=%s\n",
-					t.Tenant, t.Metric, t.Value, t.Severity, t.Component)
-			}
-		}
-	}
 }

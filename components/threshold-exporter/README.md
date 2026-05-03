@@ -1,538 +1,235 @@
 # Threshold Exporter (v2.7.0)
 
-> **核心 Component** — config-driven 的 Prometheus metric exporter，將 YAML 閾值設定轉換為 Prometheus metrics。相比硬寫 PromQL 規則（修改需重啟 Prometheus、規則數隨 tenant × metric 線性增長），threshold-exporter 以 YAML 驅動實現零停機更新、租戶級隔離、固定 O(M) 規則複雜度。
+<!-- 標題版號 = 最後 released tag；v2.8.0 in-flight feature 在內文以 **v2.8.0** inline 標記。
+     Phase .e release wrap 切五線 tag 時，本標題 + 下方 helm --version 跟著批次同步 bump。 -->
+
+> **核心 component** — 把 `conf.d/` YAML 配置轉成 Prometheus `user_threshold` 系列 metrics 的 config-driven exporter。Directory Scanner + 四層繼承 + Dual-Hash 熱重載 + Cardinality Guard。
 >
-> **其他文件：** [README](../../README.md) (概覽) · [Helm Chart](../../helm/threshold-exporter/) (部署用 chart) · [Migration Guide](../../docs/migration-guide.md) (遷移指南) · [Architecture & Design](../../docs/architecture-and-design.md) (技術深度) · [Rule Packs](../../rule-packs/README.md) (規則包目錄)
-
-## 架構
-
-- **HA 架構**: 預設 2 Replicas，具備 PodAntiAffinity 與 PodDisruptionBudget，確保高可用性
-- **Directory Scanner 模式** (`-config-dir`): ConfigMap 拆分為多檔，掛載至 `/etc/threshold-exporter/conf.d/`，按檔名排序合併；v2.7.0 支援 **階層式** `conf.d/<domain>/<region>/<tenant>.yaml` (ADR-017)
-- **_defaults.yaml 繼承引擎 (v2.7.0, ADR-018)**: L0（頂層 defaults）→ L1（domain）→ L2（region）→ L3（tenant override）四層深合併；array 替換語義 + null-as-delete
-- **三態設計**: custom value / default / disable
-- **多層嚴重度**: `"40:critical"` 後綴覆寫 severity
-- **Hot-reload**: v2.6.x 為 SHA-256 單一 hash；**v2.7.0 升級為 Dual-Hash**——`source_hash`（原始文件）+ `merged_hash`（套完繼承後的 canonical JSON）並行追蹤，僅 merged_hash 變化才觸發 reload
-- **300ms Debounce (v2.7.0)**: `time.AfterFunc` + `sync.Mutex` 雙保護吸收 K8s ConfigMap symlink rotation 的連續寫入；可用 `--scan-debounce` flag 調整
-- **Cardinality Guard**: 每租戶最多 500 個 metric（超限自動截斷 + ERROR log），防止 TSDB 爆炸
-- **Schema Validation**: `ValidateTenantKeys()` 自動偵測 typo 和非法 key，支援保留前綴 (`_state_*`, `_routing*`)
-- **SAST 合規**: ReadHeaderTimeout (Gosec G112)、檔案權限 0o600 (CWE-276)
-
-## v2.7.0：conf.d/ 階層 + 繼承引擎 + Dual-Hash 熱重載
-
-**ADR-017 / ADR-018** 把 Directory Scanner 從「扁平多檔」升級為「多層目錄 + `_defaults.yaml` 繼承」，讓 1000+ 租戶場景的配置重複度降到最低，且 ConfigMap symlink rotation 不會觸發假 reload。
-
-**四層繼承 (L0→L3)**：
-
-```
-conf.d/
-├── _defaults.yaml             # L0 平台預設
-├── mysql/
-│   ├── _defaults.yaml         # L1 domain 預設
-│   ├── us-east/
-│   │   ├── _defaults.yaml     # L2 region 預設
-│   │   ├── db-a.yaml          # L3 tenant override
-│   │   └── db-b.yaml
-│   └── ap-northeast/
-│       └── db-c.yaml
-└── redis/
-    ├── _defaults.yaml
-    └── cache-1.yaml
-```
-
-**合併語義**（ADR-018）：
-
-- **Deep merge**: map 遞迴合併，子鍵各自套用下層覆寫
-- **Array 替換**: list 型欄位整包覆寫（不合併），避免繼承鏈造成的意外累加
-- **null-as-delete**: 下層把某個鍵設 `null` → 從 effective 結果中刪除，等同「顯式否決上層預設」
-- **保留前綴**: `_state_*` / `_routing*` / `_metadata` 只允許出現在 `_` 前綴檔案，不會被 L3 tenant 檔案覆寫
-
-**Dual-Hash 熱重載**：
-
-| Hash | 覆蓋範圍 | 觸發 reload 時機 |
-|------|---------|------------------|
-| `source_hash` | 原始 YAML 文件內容（未套繼承） | 只做 diff 觀察，不直接觸發 |
-| `merged_hash` | 套完 L0→L3 繼承後的 canonical JSON | **變化才 reload** |
-
-這解決了 v2.6.x 的痛點：ConfigMap 被 K8s symlink rotation 修改 mtime 但內容沒變 → v2.6.x 會假 reload；v2.7.0 因為 merged_hash 不變而跳過。v2.8.0 (Issue #61) 將該事件依 effect 拆 `da_config_defaults_change_noop_total`（cosmetic）+ `da_config_defaults_shadowed_total`（shadowed by override）兩個 counter。
-
-**300ms Debounce**：
-
-```
-fsnotify event ──┐
-                 ├─→ triggerDebouncedReload(reason)
-fsnotify event ──┤       │
-                 │       ├─ time.AfterFunc(300ms)
-fsnotify event ──┘       │
-                         └─→ fireDebounced() → single reload
-```
-
-5 種 reload reason 被 `da_config_reload_trigger_total{reason}` counter 追蹤：`source` / `defaults` / `new_tenant` / `delete` / `forced`。
-
-**新增 Prometheus Metrics (v2.7.0)**：
-
-| Metric | 類型 | 說明 |
-|--------|------|------|
-| `da_config_scan_duration_seconds` | Histogram | 每次 fullDirLoad 的耗時分佈 |
-| `da_config_reload_trigger_total{reason}` | Counter | 按 reason 分的 reload 觸發次數 |
-| `da_config_defaults_change_noop_total` | Counter | merged_hash 未變的 noop 次數（symlink rotation 吸收驗證）。**v2.8.0 (Issue #61) 起 cosmetic-only**；shadowed 移到下方新 counter |
-| `da_config_defaults_shadowed_total` | Counter | **v2.8.0** — defaults 變更被 tenant override 擋下（從 noop_total 拆出） |
-| `da_config_blast_radius_tenants_affected` | Histogram | **v2.8.0** — 每 tick `(reason, scope, effect)` 受影響 tenant 分佈 |
-
-**相關 CLI (`da-tools` package)**：
-
-- `da-tools describe-tenant <tenant_id> [--conf-d <dir>] [--show-sources]` — 展示 L0→L3 繼承鏈 + effective config
-- `da-tools describe-tenant <tenant_id> --what-if <defaults.yaml>` — 模擬 `_defaults.yaml` 變動 → `merged_hash` 對比 + per-key diff
-- `da-tools migrate-conf-d --conf-d <dir> [--dry-run|--apply] [--infer-from metadata]` — 扁平 → 階層 automated migration，`git mv` 保留歷史
-
-**Mixed-mode 共存**：舊的扁平 `tenants/*.yaml` 與新的 `conf.d/` 分層可並存於同一次 load，平滑遷移不強制一次切。
-
-## Config 與 Image 分離原則
-
-Helm chart (`values.yaml`) **預設不包含任何測試租戶資料**。`thresholdConfig.tenants` 為空物件 (`{}`)，客戶部署時透過 values-override 或 GitOps 注入自身的租戶設定。
-
-| 來源 | 內容 | 用途 |
-|------|------|------|
-| `values.yaml` | defaults + state_filters + `tenants: {}` | 生產基底，不帶測試資料 |
-| `environments/local/threshold-exporter.yaml` | db-a、db-b 測試租戶 | 開發/測試用 (`make component-deploy ENV=local`) |
-| `environments/ci/threshold-exporter.yaml` | `tenants: {}` | CI 環境，依 pipeline 注入 |
-| `config/conf.d/` | _defaults + db-a + db-b (標註 DEVELOPMENT EXAMPLE) | Directory Scanner 格式參考範本 |
-| `config/conf.d/examples/` | Redis、MongoDB、Elasticsearch 多 DB 維度範本 | 文件參考 |
-
-> **Docker image 只包含 Go binary**，不含任何 config 檔案。Config 完全透過 ConfigMap volume mount 在 runtime 注入。
-
-## Config 格式 (Directory Mode)
-
-ConfigMap 拆分為 `_defaults.yaml` + 每租戶 `<tenant>.yaml`：
-
-**`_defaults.yaml`** — 平台管理的全域設定 (`defaults` 與 `state_filters` 僅允許出現在 `_` 前綴檔案)：
-
-```yaml
-defaults:
-  mysql_connections: 80
-  mysql_cpu: 80
-  container_cpu: 80
-  container_memory: 85
-
-state_filters:
-  container_crashloop:
-    reasons: ["CrashLoopBackOff"]
-    severity: "critical"
-  maintenance:
-    reasons: []
-    severity: "info"
-    default_state: "disable"
-```
-
-**`db-a.yaml`** — 租戶覆寫 (僅允許 `tenants` 區塊)：
-
-```yaml
-tenants:
-  db-a:
-    mysql_connections: "70"
-    container_cpu: "70"
-    # 維度標籤 (YAML key 需加引號)
-    "redis_queue_length{queue='tasks'}": "500"
-    "redis_queue_length{queue='events', priority='high'}": "1000:critical"
-    "redis_db_keys{db='db0'}": "disable"
-```
-
-### 維度標籤 (Dimensional Labels)
-
-支援在 metric key 中指定額外的 Prometheus 標籤，用於 Redis DB、ES Index 等多維度場景：
-
-```yaml
-"metric_name{label1='value1', label2='value2'}": "threshold_value"
-```
-
-**重要規則**：
-- YAML key 包含 `{` 時**必須加引號**
-- 維度 key 為 tenant-only，**不繼承** defaults 預設值
-- 不支援 `_critical` 後綴，改用 `"value:critical"` 語法覆寫 severity
-- Prometheus 輸出會包含額外標籤：`user_threshold{..., queue="tasks", priority="high"} 500`
-
-### Regex 維度標籤
-
-支援在 metric key 中使用 `=~` 運算子指定 regex 匹配模式：
-
-```yaml
-"oracle_tablespace{tablespace=~'SYS.*'}": "95"
-"oracle_ts{env='prod', tablespace=~'TEMP.*'}": "200"
-```
-
-**重要規則**：
-- Regex pattern 以 `_re` 後綴 label 輸出：`user_threshold{..., tablespace_re="SYS.*"} 95`
-- 實際匹配由 PromQL recording rules 透過 `label_replace` + `=~` 完成
-- 可混合使用 exact (`=`) 和 regex (`=~`) label matcher
-- Exporter 不進行實際 regex 匹配，僅輸出 pattern
-
-### 排程式閾值 (Scheduled Thresholds)
-
-支援在特定 UTC 時間窗口覆蓋閾值，適用於備份窗口等場景：
-
-```yaml
-tenants:
-  db-a:
-    mysql_connections:                # 結構化格式
-      default: "70"
-      overrides:
-        - window: "01:00-09:00"       # UTC 備份窗口
-          value: "1000"               # 提升閾值
-        - window: "22:00-06:00"       # UTC 跨午夜窗口
-          value: "disable"            # 停用告警
-    mysql_cpu: "80"                   # 純量格式 (向後相容)
-```
-
-**重要規則**：
-- 窗口格式：`HH:MM-HH:MM`（UTC-only），支援跨午夜
-- 開始時間 inclusive、結束時間 exclusive
-- 多個窗口重疊時，**第一個匹配** 的勝出
-- `value` 支援所有現有語法：數值、`disable`、`"70:critical"`
-- 純量字串格式完全向後相容，不需修改現有配置
-
-### 租戶 Metadata (v1.11.0)
-
-透過 `_metadata` 區塊為租戶附加營運資訊，支援 Dynamic Runbook Injection：
-
-```yaml
-tenants:
-  db-a:
-    _metadata:
-      runbook_url: "https://wiki.example.com/runbooks/{{tenant}}"
-      owner: "dba-team"
-      tier: "gold"
-    mysql_connections: "70"
-```
-
-**重要規則**：
-- `_metadata` 為保留 key，不產生 `user_threshold` gauge
-- Exporter 為每個含 `_metadata` 的 tenant 無條件輸出 `tenant_metadata_info` info metric（值永遠為 1）
-- `{{tenant}}` 佔位符在輸出時自動替換為實際 tenant 名稱
-- Rule Pack 的 Alert Rules 透過 `group_left(runbook_url, owner, tier) tenant_metadata_info` 將 metadata 注入 alert annotations
-
-### 三態運營模式 (Operational Modes)
-
-租戶可透過保留 key 控制告警行為。三種模式皆支援 `expires` 自動失效。
-
-**Silent Mode** (`_silent_mode`) — 保留 TSDB 紀錄但攔截通知：
-
-```yaml
-tenants:
-  db-a:
-    # 純量格式（向後相容）
-    _silent_mode: "warning"           # warning / critical / all / disable
-
-  db-b:
-    # 結構化格式（含自動失效）
-    _silent_mode:
-      target: "all"                   # warning / critical / all
-      expires: "2026-04-01T00:00:00Z" # ISO 8601，到期自動解除
-      reason: "計畫性維護"
-```
-
-**Maintenance Mode** (`_state_maintenance`) — 抑制所有告警：
-
-```yaml
-tenants:
-  db-a:
-    # 結構化格式（含自動失效 + 排程式維護）
-    _state_maintenance:
-      target: "enable"                # enable / disable（預設 enable）
-      expires: "2026-04-01T00:00:00Z" # 到期自動解除
-      reason: "資料庫升級"
-      recurring:                      # v1.11.0: 排程式維護窗口
-        - cron: "0 2 * * 0"          # 每週日 02:00 UTC
-          duration: "4h"              # 持續 4 小時
-          reason: "Weekly backup"
-```
-
-> **排程式維護**：`recurring` 欄位由 Go exporter 儲存但不執行——由 `da-tools maintenance-scheduler` CronJob 在 runtime 讀取 conf.d/ 並建立 Alertmanager silence。
-
-**Severity Dedup** (`_severity_dedup`) — Critical 觸發時自動抑制 Warning 通知：
-
-```yaml
-tenants:
-  db-a:
-    _severity_dedup: true             # 啟用 severity dedup inhibit rule
-```
-
-### 邊界規則
-
-| 檔案類型 | 允許的區塊 | 違規行為 |
-|----------|-----------|---------|
-| `_` 前綴 (`_defaults.yaml`) | `defaults`, `state_filters`, `tenants` | — |
-| 租戶檔 (`db-a.yaml`) | 僅 `tenants` | 其他區塊自動忽略 + WARN log |
-
-### 三態行為
-
-| 設定 | 行為 | Prometheus 輸出 |
-|------|------|-----------------|
-| `"70"` | Custom value | `user_threshold{...} 70` |
-| 省略不寫 | Use default | `user_threshold{...} 80` |
-| `"disable"` | Disabled | 不產生 metric |
-
-## Endpoints
-
-| Path | 說明 |
-|------|------|
-| `GET /metrics` | Prometheus metrics (user_threshold gauge) |
-| `GET /health` | Liveness probe |
-| `GET /ready` | Readiness probe (config loaded?) |
-| `GET /api/v1/config` | 查看當前 config 與 resolved thresholds (debug) |
-
-## Metrics 輸出格式
-
-```prometheus
-# HELP user_threshold User-defined alerting threshold (config-driven)
-# TYPE user_threshold gauge
-user_threshold{tenant="db-a",component="mysql",metric="connections",severity="warning"} 70
-user_threshold{tenant="db-a",component="mysql",metric="cpu",severity="warning"} 80
-user_threshold{tenant="db-b",component="mysql",metric="cpu",severity="critical"} 40
-# 維度標籤 — 額外 label 自動附加在標準 label 之後
-user_threshold{tenant="redis-prod",component="redis",metric="queue_length",severity="critical",queue="tasks"} 500
-user_threshold{tenant="es-prod",component="es",metric="index_store_size_bytes",severity="warning",index="logs-prod"} 107374182400
-
-# Tenant metadata info — Dynamic Runbook Injection (v1.11.0)
-# HELP tenant_metadata_info Tenant metadata labels for group_left join
-# TYPE tenant_metadata_info gauge
-tenant_metadata_info{tenant="db-a",runbook_url="https://wiki.example.com/runbooks/db-a",owner="dba-team",tier="gold"} 1
-
-# Silent mode — per-tenant 通知靜音 (v1.2.0)
-# HELP user_silent_mode Silent mode flag (1=active)
-# TYPE user_silent_mode gauge
-user_silent_mode{tenant="db-b",target_severity="warning"} 1
-user_silent_mode{tenant="db-c",target_severity="warning"} 1
-user_silent_mode{tenant="db-c",target_severity="critical"} 1
-```
-
-## Prometheus 整合
-
-Recording rules 直接透傳 exporter 的 resolved values（無 fallback 邏輯）：
-
-```yaml
-# 基本閾值 — 僅按 tenant 聚合
-- record: tenant:alert_threshold:connections
-  expr: max by(tenant) (user_threshold{metric="connections"})
-
-# 維度閾值 (exact label) — 必須包含維度 label
-- record: tenant:alert_threshold:redis_queue_length
-  expr: max by(tenant, queue) (user_threshold{metric="redis_queue_length"})
-
-# Regex 維度閾值 — 透過 label_replace 將 _re pattern 轉為實際匹配
-# Step 1: 提取 regex pattern
-- record: tenant:alert_threshold:tablespace
-  expr: max by(tenant, tablespace_re) (user_threshold{metric="tablespace", tablespace_re!=""})
-
-# Step 2: Alert rule 中使用 =~ 匹配實際值
-# oracle_tablespace_usage > on(tenant) group_left()
-#   (tenant:alert_threshold:tablespace{tablespace_re=~"<pattern>"})
-# 具體實現需根據實際 metric label 結構設計 recording rule chain
-```
-
-> **重要**: 當租戶使用維度標籤時，對應的 Recording Rule 與 Alert Rule 都必須在 `by()` / `on()` 中包含該維度 label。詳見 [migration-guide.md §7 平台團隊的 PromQL 適配](../../docs/migration-guide.md#平台團隊的-promql-適配-重要)。
-
-> **排程式閾值**: Recording rules 不需要特別調整。`ScheduledValue` 的時間窗口在每次 scrape 時由 exporter 即時解析，recording rule 自動取得當下有效的閾值。
-
-Service Discovery 透過 `prometheus.io/scrape: "true"` annotation 自動發現。
-
-## K8s 部署與配置管理
-
-### 部署 (Helm)
-
-```bash
-# 首次安裝 (OCI registry — 推薦)
-helm install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
-  -n monitoring --create-namespace \
-  -f values-override.yaml
-
-# 升級 (含 config 變更)
-helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
-  -n monitoring \
-  -f values-override.yaml
-```
-
-> **已 clone 專案？** 也可指向本地 chart 目錄：
-> ```bash
-> helm install threshold-exporter ./helm/threshold-exporter \
->   -n monitoring --create-namespace -f values-override.yaml
-> ```
-
-Helm chart 會自動建立：Deployment (2 replicas + PDB)、Service (含 Prometheus scrape annotations)、ConfigMap (`threshold-config`)。
-
-### 將 da-tools 產出注入 K8s
-
-`da-tools scaffold` 和 `da-tools migrate` 產出的 tenant config 需注入 `threshold-config` ConfigMap，exporter 才能讀取。有三種方式：
-
-**方式 A (推薦)：Helm values 覆寫**
-
-將產出的 `<tenant>.yaml` 內容合併至 `values.yaml` 的 `thresholdConfig.tenants`，再 `helm upgrade`：
-
-```bash
-# 1. da-tools 產出 tenant config
-docker run --rm -v $(pwd):/data ghcr.io/vencil/da-tools:v2.7.0 \
-  scaffold --tenant db-c --db mariadb,redis --non-interactive -o /data/output
-
-# 2. 將產出的 tenant config 合併至 values override file
-#    (手動或用 yq 工具將 output/db-c.yaml 合併至 values-override.yaml)
-
-# 3. Helm upgrade — ConfigMap 自動更新，exporter hot-reload
-helm upgrade threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
-  -n monitoring -f values-override.yaml
-```
-
-**方式 B：kubectl patch ConfigMap**
-
-直接 patch 既有 ConfigMap，不需 Helm：
-
-```bash
-# 將 da-tools 產出的 tenant YAML 注入 ConfigMap
-kubectl create configmap threshold-config \
-  --from-file=_defaults.yaml=conf.d/_defaults.yaml \
-  --from-file=db-a.yaml=conf.d/db-a.yaml \
-  --from-file=db-c.yaml=output/db-c.yaml \
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-```
-
-**方式 C：GitOps (生產環境推薦)**
-
-將 `conf.d/` 目錄納入 Git repo，CI/CD pipeline 組裝為 ConfigMap 並 apply。詳見 [GitOps 部署指南](../../docs/integration/gitops-deployment.md)。
-
-> **Hot-reload**：無論哪種方式，ConfigMap 變更後 K8s 會在 1-2 分鐘內 propagate 新內容至 Pod volume，exporter 的 SHA-256 watcher 在下一個 reload-interval (預設 30s) 自動偵測並載入。不需重啟 Pod。
-
-### 驗證部署
-
-```bash
-# Pod 狀態
-kubectl get pods -n monitoring -l app=threshold-exporter
-
-# 閾值輸出
-kubectl port-forward svc/threshold-exporter 8080:8080 -n monitoring &
-curl -s http://localhost:8080/metrics | grep user_threshold
-
-# 完整 config (debug)
-curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
-```
-
-### 在 K8s 內執行 da-tools
-
-當 threshold-exporter 運行在 K8s 叢集內時，da-tools 也可以作為 K8s Job 執行，直接透過 K8s Service 存取 Prometheus，不需 port-forward：
-
-```yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: check-alert
-  namespace: monitoring
-spec:
-  template:
-    spec:
-      containers:
-        - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.7.0
-          env:
-            - name: PROMETHEUS_URL
-              value: "http://prometheus.monitoring.svc.cluster.local:9090"
-          args: ["check-alert", "MariaDBHighConnections", "db-a"]
-      restartPolicy: Never
-  backoffLimit: 0
-```
-
-> **叢集內網路**：da-tools 容器可直接使用 `http://prometheus.monitoring.svc.cluster.local:9090`，無需 `--network=host` 或 port-forward。
+> **Companion 文件：** [helm chart](../../helm/threshold-exporter/) · [architecture-and-design](../../docs/architecture-and-design.md) · [migration-guide](../../docs/migration-guide.md) · [rule-packs](../../rule-packs/README.md)
 
 ---
 
-## da-guard CLI（v2.8.0 Phase .c C-12 PR-4 + PR-5）
+## 1. What & Why
 
-`da-guard` 是 `internal/guard` 的 CLI 包裝，把「Dangling Defaults Guard」帶到客戶 repo 端：把 `_defaults.yaml` 變更前 / pre-commit / GitHub Actions 階段就攔截 schema / routing / cardinality 三層問題，不讓壞改動 reach WatchLoop。
+- **Input** — `conf.d/*.yaml`（單檔扁平 _或_ `<domain>/<region>/<tenant>.yaml` 階層），ConfigMap volume mount 在 runtime 注入
+- **Output** — Prometheus gauge `user_threshold{tenant, component, metric, severity, ...}` + 四個運營狀態 gauge + 十個 reload-side metrics
+- **Why config-driven** — 1000+ 租戶場景下避免「修閾值要改 PromQL recording rule + 重啟 Prometheus」；YAML 改動 K8s ConfigMap propagate 後 < 30s 自動 hot-reload，**不掉 scrape**
+- **不做的事** — 不執行 PromQL（只輸出 threshold gauge）；不做 alerting routing（交給 Alertmanager）；不持久化（無狀態 + ConfigMap 是 SSOT）
 
-**位置**：`components/threshold-exporter/app/cmd/da-guard/`（同 module，import `pkg/config` + `internal/guard`）。
+> **架構深度** — 9 個核心設計概念（Severity Dedup / Sentinel Alert / 四層路由 / Dual-Perspective / Tenant API ...）見 [architecture-and-design.md §設計概念總覽](../../docs/architecture-and-design.md#設計概念總覽)。本 README 只負責 operator quick-reference。
 
-**建置**：
+---
 
-```bash
-cd components/threshold-exporter/app
-go build -o da-guard ./cmd/da-guard
-./da-guard --help
+## 2. What's New in v2.8.0
+
+| # | 能力 | 影響 |
+|---|------|------|
+| 1 | **客戶導入管線** — 三隻新 CLI：`da-parser`（PrometheusRule → ParseResult JSON）、`da-batchpr`（Hierarchy-aware Batch PR with apply / refresh / refresh-source 三 mode）、`da-guard`（pre-merge gate for `_defaults.yaml`） | 從「現有客戶手動寫 conf.d」到「kube-prometheus 客戶 onboarding 全自動化」，C-8 / C-9 / C-10 / C-12 軌道 |
+| 2 | **`/api/v1/tenants/simulate` ephemeral primitive** — POST 帶 base64 tenant.yaml + defaults chain，回傳 `merged_hash` + `effective_config` + 完整 inheritance preview。**無 disk IO，無 manager state mutation** | C-7b：CI 與 simulator UI 在 commit 前可預測 inheritance 影響；蓋過 `da-guard` 的 speculative 缺口 |
+| 3 | **Issue #61 metric 拆分 + Blast-Radius Histogram** — `da_config_defaults_change_noop_total` 收斂為純 cosmetic edits；`da_config_defaults_shadowed_total` 為新 counter 抓「被 tenant override 擋下」；`da_config_blast_radius_tenants_affected{reason, scope, effect}` 為新 histogram 量化每次 tick 受影響 tenant 分佈 | 既有 dashboard 用舊 noop counter 衡量「inheritance 擋下多少」需切到 shadowed counter |
+| 4 | **Mixed-mode duplicate tenant 從 WARN → hard error** — 同 tenant id 同時出現在 flat + nested 路徑，`Load()` 直接拒絕 + 保留 `m.config` 為 nil（cold-start）或 prior known-good（hot-reload） | Breaking：先前 silently last-wins 的部署會在 v2.8.0 升級時 fail-loudly。詳 [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127) |
+| 5 | **ZH-primary policy lock** — 文件 SSOT 鎖中文，`foo.md`(ZH) + `foo.en.md`(EN) 雙寫；不執行 v2.5.0 規劃的 ZH→EN 遷移（[planning S#101](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/101)） | 本 README 含 codebase 內 dev rules 文件均為 ZH primary |
+
+> **升級路徑** — v2.7.0 → v2.8.0 升級風險點與 mitigation 見 [migration-guide.md](../../docs/migration-guide.md)。
+
+---
+
+## 3. Operator Reference
+
+### Endpoints
+
+| Path | Method | 用途 | 引入版本 |
+|------|--------|------|---------|
+| `/metrics` | GET | Prometheus scrape | v0.1.0 |
+| `/health` | GET | Liveness probe | v0.1.0 |
+| `/ready` | GET | Readiness probe（`config_loaded` 才回 200） | v0.1.0 |
+| `/api/v1/config` | GET | Resolved config + tenant list（debug；支援 `?at=<RFC3339>` 模擬未來時間點） | v1.0.0 |
+| `/api/v1/tenants/simulate` | POST | Ephemeral merge preview（不寫狀態） | **v2.8.0** |
+
+### Flags / Env
+
+| Flag | Env | Default | 說明 |
+|------|-----|---------|------|
+| `-config-dir` | `CONFIG_DIR` | (auto) | conf.d 目錄路徑（推薦，takes precedence） |
+| `-config` | `CONFIG_PATH` | (auto) | 單檔 legacy 模式 |
+| `-listen` | `LISTEN_ADDR` | `:8080` | HTTP listen address |
+| `-reload-interval` | — | `30s` | watch tick 間隔 |
+| `-scan-debounce` | — | `300ms` | fsnotify burst coalesce window（0 停用，回 v2.6.x 行為） |
+
+> **Auto-detect 規則**：`-config-dir` 優先；其次 `-config`；最後依序試 `/etc/threshold-exporter/conf.d/` → `/etc/threshold-exporter/config.yaml`。
+
+### Metrics
+
+**Threshold-domain（dynamic labels）：**
+
+| Metric | Type | 用途 |
+|--------|------|------|
+| `user_threshold` | Gauge | resolved threshold（labels: tenant / component / metric / severity / 維度 labels） |
+| `user_silent_mode` | Gauge | silent mode active（label: tenant / target_severity） |
+| `tenant_metadata_info` | Gauge | metadata 注入用（值恆 1，labels: runbook_url / owner / tier / ...） |
+| `da_config_event` | Gauge | timed config 失效事件（silent / maintenance auto-deactivated） |
+
+**Reload / config-domain（observability）：**
+
+| Metric | Type | 用途 |
+|--------|------|------|
+| `da_config_scan_duration_seconds` | Histogram | full dir scan 耗時 |
+| `da_config_reload_duration_seconds` | Histogram | 完整 reload 耗時（scan + parse + merge + commit） |
+| `da_config_reload_trigger_total{reason}` | Counter | reasons: `source` / `defaults` / `new_tenant` / `delete` / `forced` |
+| `da_config_debounce_batch_size` | Histogram | 每次 fire 吸收的 trigger 數（debounce 健康指標） |
+| `da_config_parse_failure_total` | Counter | YAML parse / boundary 違規次數 |
+| `da_config_defaults_change_noop_total` | Counter | cosmetic edits（v2.8.0 收斂語義；舊 dashboard 注意） |
+| `da_config_defaults_shadowed_total` | Counter | **v2.8.0** — defaults 變更被 tenant override 擋下 |
+| `da_config_blast_radius_tenants_affected{reason, scope, effect}` | Histogram | **v2.8.0** — 每次 tick 受影響 tenant 分佈 |
+| `da_config_last_scan_complete_unixtime_seconds` | Gauge | 上次 scan 結束時間（age = now - 此值） |
+| `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 結束時間 |
+
+### Exit Codes（CLI binaries）
+
+| Code | `da-guard` | `da-parser` | `da-batchpr` |
+|------|-----------|-------------|--------------|
+| 0 | clean | parse OK | all targets succeeded |
+| 1 | error finding（block merge） | gate failure（non-portable / ambiguous） | one or more targets failed |
+| 2 | caller error（flag / path） | caller error | caller error |
+
+---
+
+## 4. Config Reference
+
+### 邊界規則
+
+| 檔案 pattern | 允許區塊 | 違規行為 |
+|-------------|---------|---------|
+| `_*.yaml`（如 `_defaults.yaml`） | `defaults` / `state_filters` / `tenants`（但通常只放 defaults） | — |
+| `<tenant>.yaml` | 僅 `tenants`（含其子鍵 `_metadata` / `_silent_mode` / `_state_maintenance` / `_severity_dedup`） | 其他區塊自動忽略 + WARN log |
+
+### 四層繼承（ADR-018, v2.7.0+）
+
+```
+conf.d/
+├── _defaults.yaml             L0 平台預設
+├── mysql/
+│   ├── _defaults.yaml         L1 domain 預設
+│   ├── us-east/
+│   │   ├── _defaults.yaml     L2 region 預設
+│   │   └── db-a.yaml          L3 tenant override
 ```
 
-**典型用法**：
+合併語義：**deep merge**（map 遞迴）+ **array 替換**（list 整包覆寫，不串接）+ **null-as-delete**（下層設 `null` 等同顯式否決）+ **保留前綴**（`_state_*` / `_routing*` / `_metadata` 只允許 `_` 前綴檔案）。
+
+### 三態 + 嚴重度
+
+| 設定 | Prometheus 輸出 |
+|------|----------------|
+| `"70"` | `user_threshold{...} 70`（severity=warning） |
+| `"40:critical"` | `user_threshold{...,severity="critical"} 40` |
+| 省略不寫 | 套 default value |
+| `"disable"` | 不產生 metric |
+
+### Grammar quick-table
+
+| 形式 | 範例 key | 範例 value | 備註 |
+|------|---------|-----------|------|
+| 純量閾值 | `mysql_connections` | `"70"` | 最常見 |
+| 維度標籤（exact） | `"redis_queue_length{queue='tasks'}"` | `"500:critical"` | YAML key 必加引號；不繼承 defaults |
+| 維度標籤（regex） | `"oracle_tablespace{tablespace=~'SYS.*'}"` | `"95"` | 輸出 `tablespace_re` label，匹配交 PromQL `label_replace` |
+| 排程式閾值 | `mysql_connections:` | `default + overrides[]` | UTC `HH:MM-HH:MM` 窗口；多窗口 first-match-wins |
+| 租戶 metadata | `_metadata` | `{runbook_url, owner, tier, env, region, domain, db_type, ...}` | 注入 `tenant_metadata_info` gauge |
+| Silent mode | `_silent_mode` | `"warning"` 或 `{target, expires, reason}` | `expires` ISO 8601 自動失效 |
+| Maintenance | `_state_maintenance` | `{target, expires, reason, recurring[]}` | `recurring` 由 `da-tools maintenance-scheduler` CronJob 執行 |
+| Severity dedup | `_severity_dedup` | `true` | Critical 觸發時抑制 Warning 通知 |
+
+完整範例：
+
+- **單一 DB（MariaDB）** — [`config/conf.d/db-a.yaml`](config/conf.d/db-a.yaml)
+- **多 DB 維度** — [`config/conf.d/examples/`](config/conf.d/examples/)（Redis / MongoDB / Elasticsearch + `_defaults-multidb.yaml` + `_routing_profiles.yaml` + `_domain_policy.yaml` + `_instance_mapping.yaml`）
+
+> **語法細節** — dimensional labels / regex labels / scheduled overrides / metadata 完整規則見 [migration-guide.md](../../docs/migration-guide.md)；recording rule 適配見 [migration-guide.md §平台團隊 PromQL 適配](../../docs/migration-guide.md#平台團隊-promql-適配-重要)。
+
+---
+
+## 5. Companion CLIs
+
+三隻 CLI 都從 `components/threshold-exporter/app/cmd/<binary>` build，共用 `internal/` 與 `pkg/config` library，避免「CLI 行為」與「runtime 行為」漂移。
+
+### `da-guard` — pre-merge gate for `_defaults.yaml`
+
+CI / pre-commit 階段攔截 schema / routing / cardinality / redundant override 四層問題，不讓壞改動 reach WatchLoop。
 
 ```bash
-# 驗證整棵 conf.d/，所有租戶都套 cpu 必填
-da-guard --config-dir conf.d/ --required-fields cpu
-
-# 只驗 db/ 子目錄（CI 由 dirname 變更的 _defaults.yaml 推算）
-da-guard --config-dir conf.d/ --scope conf.d/db/ \
-    --required-fields cpu,memory --cardinality-limit 500
-
-# JSON 輸出供下游 PR comment poster 消費
+da-guard --config-dir conf.d/ --required-fields cpu,memory --cardinality-limit 500
 da-guard --config-dir conf.d/ --format json --output guard-report.json
 ```
 
-**Exit codes**：
+GitHub Actions template：[`/.github/workflows/guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml) — 客戶可整份 copy，`pull_request` 觸發於 `**/_defaults.yaml` 變更時自動跑、posting sticky PR comment、artifact 留 14 天。
 
-| Code | 意義 |
-|------|------|
-| 0 | clean — 沒有 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
-| 1 | guard 偵測到 error — block merge / commit |
-| 2 | caller error — flag 錯、路徑找不到、scope 跑出 root 之外等 |
+### `da-parser` — kube-prometheus PrometheusRule → ParseResult JSON
 
-**三層 error 檢查 + 一層 warn 檢查（內建於 `internal/guard`）**：
-
-1. **Schema validation**（error；`--required-fields`）— 點分路徑欄位 deepMerge 後不可缺；ADR-018 null-as-delete 後欄位變 nil 也算缺。
-2. **Routing schema guardrails**（error）— 5 檢查：unknown receiver type / 必填欄位缺 / empty matcher / duplicate matcher / redundant override。
-3. **Cardinality guard**（error；`--cardinality-limit`）— 預測 post-merge metric 數，warn @ ratio×limit（預設 0.8）/ error 超 limit。
-4. **Redundant override**（warn；PR-5 啟用）— tenant.yaml 覆寫某欄位的值剛好等於繼承的 `_defaults.yaml`，提示「移掉 override 改靠繼承」；warn 不擋 merge 除非 `--warn-as-error`。**Cascading 正確性**：tenants 在不同 sub-tree 下繼承不同 merged defaults，`pkg/config` 把每個租戶的 pre-merge defaults snapshot 透過 `EffectiveConfig.MergedDefaults` 暴露，guard 用 `NewDefaultsByTenant` per-tenant resolve（非 single-map fallback），保證 cascading L0/L1/L2 場景下不誤判。
-
-**`da-tools guard defaults-impact` 包裝**：Python `da-tools` CLI 透過 `scripts/tools/ops/guard_dispatch.py` shell-out 到 `da-guard` 二進位。Binary 解析順序：`--da-guard-binary` flag → `$DA_GUARD_BINARY` env → `$PATH` 上的 `da-guard`。詳見 `da-tools guard --help`。
-
-**GitHub Actions 自動化（PR-5）**：[`/.github/workflows/guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml) — `pull_request` 觸發於 `**/_defaults.yaml` 變更時自動跑 guard、posting 一個 sticky PR comment（marker `<!-- da-guard-defaults-impact -->`，每次 push update-in-place 不堆 stale）、artifact 上傳保 14 天。Exit code 1 (errors) 或 2 (caller error) 都失敗 workflow 擋 merge；exit 0 (clean 或只有 warnings) 通過。Workflow 也支援 `workflow_dispatch` 手動跑 + `config_dir` input override。**客戶 template**：客戶可把這份 workflow 整份 copy 到自己 repo gate `_defaults.yaml`；`Build da-guard` 步驟假設 threshold-exporter Go module 同 repo，純消費 release binary 的客戶可改下載 `tools/v*` release asset（C-11 後配套）。
-
-**範圍簡化（vs. v2.8.0 planning §C-12）**：PR-4 是 *當前工作樹* 驗證器，讀取磁碟現狀。CI / pre-commit 流程下這跟「給定 _defaults.yaml 變更、預測影響」等價（commit / push 前該變更已經寫在磁碟上）。Speculative simulation 留 C-7b `/simulate` 或後續 PR。
-
-## 開發
+導入既有 PrometheusRule corpus 的第一步：解析、dialect 分類（PromQL strict / VictoriaMetrics-only）、可選 `--fail-on-non-portable` gate。
 
 ```bash
-# Build & load to Kind
-make component-build COMP=threshold-exporter
-
-# Deploy
-make component-deploy COMP=threshold-exporter ENV=local
-
-# View metrics
-curl http://localhost:8080/metrics | grep user_threshold
-
-# View resolved config
-curl http://localhost:8080/api/v1/config
+da-parser import --input rules.yaml --output rules.json
+da-parser import --input rules.yaml --validate-strict-prom --fail-on-non-portable
+da-parser allowlist                # 印出 VM-only allowlist（introspection）
 ```
 
-## 修改閾值
+### `da-batchpr` — hierarchy-aware Batch PR pipeline
 
-**強烈建議使用專案標準工具**，它會自動偵測單檔/多檔模式並安全更新：
+JSON-input-first contract（每個 subcommand 讀 JSON 寫 JSON + Markdown report），smart-parts 留給上游 Python `da-tools`。
+
+| Subcommand | 作用 |
+|-----------|------|
+| `apply` | 從 C-9 emit + C-10 BuildPlan 開 / update tenant chunk PRs |
+| `refresh` | Base PR merged 後，rebase tenant branches 到新 main HEAD |
+| `refresh-source` | 把 data-layer hot-fix 重新 apply 到既有 tenant branches |
+
+> **Python 包裝** — `da-tools guard defaults-impact` 與 `da-tools batchpr *` 透過 `scripts/tools/ops/guard_dispatch.py` shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` flag → `$DA_<BIN>_BINARY` env → `$PATH`。
+
+---
+
+## 6. Deploy
+
+部署用 [`helm/threshold-exporter/`](../../helm/threshold-exporter/) — 詳見該目錄 README。Chart 自動建立 Deployment (2 replicas + PDB) / Service / ConfigMap (`threshold-config`)；config 完全 ConfigMap volume mount 注入，**Docker image 不含任何 config 檔案**。
+
+Quick-start：
 
 ```bash
-# 基本閾值
-python3 scripts/tools/patch_config.py db-a mysql_connections 50
-
-# 停用指標
-python3 scripts/tools/patch_config.py db-b container_cpu disable
-
-# 維度閾值 (key 需加引號)
-python3 scripts/tools/patch_config.py redis-prod 'redis_queue_length{queue="tasks"}' 500
-python3 scripts/tools/patch_config.py redis-prod 'redis_queue_length{queue="temp"}' disable
+helm install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.7.0 \
+  -n monitoring --create-namespace -f values-override.yaml
 ```
 
-Exporter 會在 reload-interval 內自動載入新設定 (SHA-256 hash 變更觸發)。
+GitOps / kubectl-patch / da-tools 注入 ConfigMap 三種方式詳見 [`docs/integration/gitops-deployment.md`](../../docs/integration/gitops-deployment.md)。
 
-## 權威範本 (Multi-DB Examples)
+### Hot-reload 模型
 
-`config/conf.d/examples/` 目錄提供三種 DB 類型的維度閾值配置範本：
+ConfigMap 變更 → K8s 在 1-2 分鐘內 propagate 至 Pod volume → exporter `-reload-interval`（預設 30s）下個 tick 偵測 `merged_hash` 變化 → 套 300ms debounce → atomic-swap config + emit `da_config_reload_trigger_total{reason}`。**不需重啟 Pod。**
 
-| 檔案 | DB 類型 | 維度範例 |
-|------|---------|----------|
-| `redis-tenant.yaml` | Redis | queue, db |
-| `elasticsearch-tenant.yaml` | Elasticsearch | index, node |
-| `mongodb-tenant.yaml` | MongoDB | database, collection |
-| `_defaults-multidb.yaml` | 多 DB 全域預設 | (維度 key 不支援 defaults) |
+---
+
+## 7. Develop
+
+| Make target | 用途 |
+|-------------|------|
+| `make component-build COMP=threshold-exporter` | Build Go binary + load 進 Kind |
+| `make component-deploy COMP=threshold-exporter ENV=local` | 部署 + 注入 db-a / db-b 測試租戶 |
+| `make dc-go-test` | Dev container 內跑 Go tests（race + count=1） |
+| `make benchmark-report` | 17 benches × count=6（含 4 mixed-mode） |
+| `make pre-tag` | ⛔ 打 tag 前必跑（version-check + lint-docs + benchmark gate） |
+| `make pr-preflight` | ⛔ PR merge 前必跑（七項檢查 + `.git/.preflight-ok.<SHA>` marker） |
+
+修改閾值用 `python3 scripts/tools/patch_config.py <tenant> <metric> <value>`（自動偵測單檔/多檔模式 + 安全更新）；exporter 在下個 reload tick 自動載入。
+
+驗證部署：
+
+```bash
+kubectl port-forward svc/threshold-exporter 8080:8080 -n monitoring &
+curl -s http://localhost:8080/metrics | grep user_threshold
+curl -s http://localhost:8080/api/v1/config        # resolved view
+curl -s -XPOST http://localhost:8080/api/v1/tenants/simulate \
+  -H 'Content-Type: application/json' -d @simulate-payload.json
+```
+
+---
+
+> **回報問題** — Issue tracker：https://github.com/vencil/Dynamic-Alerting-Integrations/issues。若是 hot-reload / debounce / merged_hash 行為，請附 `da_config_reload_trigger_total` + `da_config_blast_radius_tenants_affected` 連續 5 分鐘的 scrape 樣本。

@@ -123,7 +123,7 @@ make setup && make verify && make test-alert
 | GitOps（ArgoCD / Flux） | Helm + Git repo | [GitOps 部署](docs/integration/gitops-deployment.md) |
 | 不確定？ | 互動式決策矩陣 | [Decision Matrix](docs/getting-started/decision-matrix.md) |
 
-所有路徑均支援 [OCI Registry 安裝](components/threshold-exporter/README.md#部署-helm)。
+所有路徑均支援 [OCI Registry 安裝](components/threshold-exporter/README.md#6-deploy)。
 
 ### 按角色入門
 
