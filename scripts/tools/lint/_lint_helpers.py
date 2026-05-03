@@ -25,6 +25,9 @@ BUILD_EXEMPT = frozenset({
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_io.py",
+    # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
+    # batchpr / parser dispatcher boilerplate. Library, not CLI.
+    "_lib_godispatch.py",
     "metric-dictionary.yaml",
     "generate_tenant_mapping_rules.py",
     # v2.8.0 Phase B Track A A5: ship-but-not-public CLI design tradeoff.

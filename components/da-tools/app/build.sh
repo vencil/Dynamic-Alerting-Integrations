@@ -143,6 +143,10 @@ TOOL_FILES=(
     _lib_validation.py
     _lib_prometheus.py
     _lib_io.py
+    # v2.8.0 PR-2 — shared dispatcher for the three Go-binary
+    # subcommands (guard / batchpr / parser). Imported by their
+    # respective ops/*_dispatch.py shims.
+    _lib_godispatch.py
     # Data files
     metric-dictionary.yaml
 )
