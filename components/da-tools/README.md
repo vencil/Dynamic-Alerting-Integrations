@@ -373,7 +373,7 @@ cd components/da-tools/app
 ./build.sh
 
 # Build 指定版號（同步寫進 image label + VERSION 檔內容）
-./build.sh 2.8.0
+./build.sh 2.7.0
 
 # Assemble-only mode（CI 用，給 Buildx 接 multi-arch build）
 ./build.sh --assemble-only
