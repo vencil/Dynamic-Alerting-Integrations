@@ -67,16 +67,16 @@ func (w *Writer) SetOnWrite(fn OnWriteFunc) {
 
 // Write validates, persists, and commits a tenant's config YAML.
 //
-// Flow:
+// Flow (steps 2–6 are shared with writeSpecialFile via commitFileChange):
 //  1. Validate YAML schema (ParseConfig + ValidateTenantKeys)
 //  2. Lock mutex
 //  3. Record HEAD before write
 //  4. Write file to configDir/{tenantID}.yaml
 //  5. git add + git commit --author="<authorEmail>"
 //  6. Check HEAD again (conflict detection)
-//  7. Unlock mutex
+//  7. onWrite callback (e.g. SSE broadcast)
 func (w *Writer) Write(tenantID, authorEmail, yamlContent string) error {
-	// Step 1: validate schema before touching disk
+	// Step 1: validate schema before touching disk.
 	if errs := validate(tenantID, yamlContent); len(errs) > 0 {
 		return fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
@@ -84,46 +84,12 @@ func (w *Writer) Write(tenantID, authorEmail, yamlContent string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Step 2: record HEAD before write
-	headBefore, err := w.currentHEAD()
-	if err != nil {
-		log.Printf("WARN: gitops: could not read HEAD before write (non-git mode?): %v", err)
-		// Proceed without conflict detection in non-git environments
-	}
-
-	// Step 3: write file
-	filePath := filepath.Join(w.configDir, tenantID+".yaml")
-	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-
-	// Step 4: git commit
-	if err := w.gitCommit(filePath, tenantID, authorEmail); err != nil {
-		// Rollback: remove file if it didn't exist before (best-effort)
-		log.Printf("WARN: gitops: commit failed for tenant=%s: %v", tenantID, err)
-		return fmt.Errorf("git commit: %w", err)
-	}
-
-	// Step 5: conflict detection — verify our commit's parent is the HEAD we
-	// recorded before writing.  If HEAD~1 != headBefore, an external commit
-	// landed between our read and write (e.g. a concurrent git push).
-	if headBefore != "" {
-		parent, err := w.commitParent()
-		if err == nil && parent != headBefore {
-			log.Printf("WARN: gitops: external commit detected for tenant=%s (expected parent=%s, got=%s)",
-				tenantID, headBefore[:8], parent[:8])
-			return ErrConflict
-		}
-	}
-
-	log.Printf("gitops: tenant=%s committed by %s", tenantID, authorEmail)
-
-	// v2.6.0: Notify via callback (e.g. SSE hub broadcast)
-	if w.onWrite != nil {
-		w.onWrite(tenantID)
-	}
-
-	return nil
+	return w.commitFileChange(
+		filepath.Join(w.configDir, tenantID+".yaml"),
+		tenantID,
+		authorEmail,
+		[]byte(yamlContent),
+	)
 }
 
 // Diff returns the unified diff between the current file and proposed content.
@@ -178,9 +144,10 @@ func (w *Writer) WriteViewsFile(authorEmail, yamlContent string) error {
 }
 
 // writeSpecialFile is a shared implementation for writing _groups.yaml, _views.yaml, etc.
-// These files use the same mutex and conflict detection as tenant writes.
+// These files use the same mutex and conflict detection as tenant writes — only
+// the validation step differs (basic YAML well-formedness, not full schema).
 func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent string) error {
-	// Basic YAML validity check
+	// Basic YAML validity check (special files don't have a schema).
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
@@ -189,35 +156,57 @@ func (w *Writer) writeSpecialFile(filename, entityType, authorEmail, yamlContent
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	return w.commitFileChange(
+		filepath.Join(w.configDir, filename),
+		entityType,
+		authorEmail,
+		[]byte(yamlContent),
+	)
+}
+
+// commitFileChange is the shared write+commit+conflict-detect+notify
+// flow used by both Write (tenant YAML) and writeSpecialFile
+// (_groups.yaml / _views.yaml). Caller MUST hold w.mu before calling.
+//
+// `commitTag` identifies what's being committed in log lines, the
+// commit message subject (via gitCommit), and the onWrite callback
+// argument. For tenant writes it's the tenant ID; for special files
+// it's the entity type ("groups" / "views").
+//
+// Returns ErrConflict if the recorded HEAD before the write differs
+// from our commit's parent (someone else pushed between our read and
+// our write). Non-git environments skip conflict detection but still
+// return commit errors verbatim.
+func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte) error {
 	headBefore, err := w.currentHEAD()
 	if err != nil {
-		log.Printf("WARN: gitops: could not read HEAD before %s write: %v", entityType, err)
+		// Proceed without conflict detection in non-git environments.
+		log.Printf("WARN: gitops: could not read HEAD before write (commit_tag=%s): %v", commitTag, err)
 	}
 
-	filePath := filepath.Join(w.configDir, filename)
-	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	if err := w.gitCommit(filePath, entityType, authorEmail); err != nil {
-		log.Printf("WARN: gitops: commit failed for %s: %v", entityType, err)
+	if err := w.gitCommit(filePath, commitTag, authorEmail); err != nil {
+		log.Printf("WARN: gitops: commit failed for commit_tag=%s: %v", commitTag, err)
 		return fmt.Errorf("git commit: %w", err)
 	}
 
 	if headBefore != "" {
 		parent, err := w.commitParent()
 		if err == nil && parent != headBefore {
-			log.Printf("WARN: gitops: external commit detected for %s (expected parent=%s, got=%s)",
-				entityType, headBefore[:8], parent[:8])
+			log.Printf("WARN: gitops: external commit detected for commit_tag=%s (expected parent=%s, got=%s)",
+				commitTag, headBefore[:8], parent[:8])
 			return ErrConflict
 		}
 	}
 
-	log.Printf("gitops: %s committed by %s", entityType, authorEmail)
+	log.Printf("gitops: commit_tag=%s committed by %s", commitTag, authorEmail)
 
-	// v2.6.0: Notify via callback (e.g. SSE hub broadcast)
+	// v2.6.0: Notify via callback (e.g. SSE hub broadcast).
 	if w.onWrite != nil {
-		w.onWrite(entityType)
+		w.onWrite(commitTag)
 	}
 
 	return nil
