@@ -1,5 +1,5 @@
 ---
-title: "Tenant Manager — useURLState hook"
+title: "_common — useURLState hook"
 purpose: |
   Bidirectional sync between component state and URLSearchParams —
   enables bookmarkable filter state. Each tracked key maps a URL

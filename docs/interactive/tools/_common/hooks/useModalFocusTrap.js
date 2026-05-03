@@ -1,5 +1,5 @@
 ---
-title: "Tenant Manager — useModalFocusTrap hook"
+title: "_common — useModalFocusTrap hook"
 purpose: |
   Modal focus trap + escape-key + auto-focus management. Hoisted above
   the `if (loading) return` early return in PR #150 (commit 2caddc2)
