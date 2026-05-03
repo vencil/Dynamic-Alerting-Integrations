@@ -90,7 +90,7 @@ def is_internal_jsx(rel_path: str) -> bool:
 
 def main() -> int:
     if not REGISTRY.exists():
-        print(f"ERROR: {REGISTRY} not found")
+        print(f"ERROR: {REGISTRY} not found", file=sys.stderr)
         return 1
 
     tools = load_registry()
