@@ -78,6 +78,15 @@ TOOL_FILES=(
     ops/alert_correlate.py
     # Config generation tools
     ops/generate_alertmanager_routes.py
+    # v2.8.0 PR-3a — generate_alertmanager_routes split into 5 helpers
+    # (validate / merge / parse / routes / render). All re-exported from
+    # the main file so existing entrypoint.py / test imports work
+    # unchanged. See scripts/tools/ops/_grar_*.py module docstrings.
+    ops/_grar_validate.py
+    ops/_grar_merge.py
+    ops/_grar_parse.py
+    ops/_grar_routes.py
+    ops/_grar_render.py
     ops/explain_route.py
     ops/validate_config.py
     ops/analyze_rule_pack_gaps.py

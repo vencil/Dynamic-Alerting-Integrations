@@ -15,6 +15,11 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
+| `_grar_merge.py` | Routing-config merging + tenant substitution + receiver building. |
+| `_grar_parse.py` | Configuration loading + parsing for generate_alertmanager_routes. |
+| `_grar_render.py` | Output rendering + Alertmanager ConfigMap operations. |
+| `_grar_routes.py` | Route generation: tenant routes, override expansion, enforced routes, inhibit rules. |
+| `_grar_validate.py` | URL / domain / schema validation for generate_alertmanager_routes. |
 | `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
