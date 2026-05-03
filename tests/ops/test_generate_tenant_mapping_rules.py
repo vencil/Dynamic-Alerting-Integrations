@@ -58,7 +58,7 @@ def mapping_file(config_dir):
               filter: 'tablespace="ts_client_c"'
     """)
     path = os.path.join(config_dir, '_instance_mapping.yaml')
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
     return path
 
@@ -96,7 +96,7 @@ class TestFindMappingFile:
 
     def test_yml_extension(self, config_dir):
         path = os.path.join(config_dir, '_instance_mapping.yml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write('instance_tenant_mapping: {}')
         assert find_mapping_file(config_dir) is not None
 
@@ -116,13 +116,13 @@ class TestParseMappingFile:
 
     def test_empty_file(self, config_dir):
         path = os.path.join(config_dir, '_instance_mapping.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write('')
         assert parse_mapping_file(path) == []
 
     def test_missing_tenant_field(self, config_dir):
         path = os.path.join(config_dir, '_instance_mapping.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent("""\
                 instance_tenant_mapping:
                   inst-1:
@@ -133,7 +133,7 @@ class TestParseMappingFile:
 
     def test_empty_filter_skipped(self, config_dir):
         path = os.path.join(config_dir, '_instance_mapping.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent("""\
                 instance_tenant_mapping:
                   inst-1:
@@ -145,7 +145,7 @@ class TestParseMappingFile:
 
     def test_non_list_entries_warned(self, config_dir, capsys):
         path = os.path.join(config_dir, '_instance_mapping.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent("""\
                 instance_tenant_mapping:
                   inst-1: "not a list"
@@ -307,7 +307,7 @@ class TestValidateMappings:
 
 class TestCollectTenantIds:
     def test_wrapper_format(self, config_dir):
-        with open(os.path.join(config_dir, 'db-a.yaml'), 'w') as f:
+        with open(os.path.join(config_dir, 'db-a.yaml'), 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent("""\
                 tenants:
                   db-a:
@@ -317,9 +317,9 @@ class TestCollectTenantIds:
         assert 'db-a' in ids
 
     def test_skips_reserved_files(self, config_dir):
-        with open(os.path.join(config_dir, '_defaults.yaml'), 'w') as f:
+        with open(os.path.join(config_dir, '_defaults.yaml'), 'w', encoding='utf-8') as f:
             f.write('defaults:\n  cpu: 90\n')
-        with open(os.path.join(config_dir, 'db-a.yaml'), 'w') as f:
+        with open(os.path.join(config_dir, 'db-a.yaml'), 'w', encoding='utf-8') as f:
             f.write('tenants:\n  db-a:\n    cpu: "80"\n')
         ids = collect_tenant_ids_from_config_dir(config_dir)
         assert 'db-a' in ids
@@ -346,7 +346,7 @@ class TestEstimateCardinality:
 class TestLoadMetricsDictionary:
     def test_basic_load(self, config_dir):
         path = os.path.join(config_dir, 'metric-dictionary.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent("""\
                 mysql_threads_connected:
                   maps_to: mysql_connections
@@ -367,7 +367,7 @@ class TestLoadMetricsDictionary:
 
     def test_empty_file(self, config_dir):
         path = os.path.join(config_dir, 'empty.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write('')
         assert load_metrics_from_dictionary(path) == []
 
@@ -387,7 +387,7 @@ class TestCLI:
              '--config-dir', config_dir,
              '--metrics', 'oracle_sessions,oracle_tablespace_usage',
              '--dry-run'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         assert 'Tenant Mapping Rules Summary' in result.stdout
@@ -402,7 +402,7 @@ class TestCLI:
              '--config-dir', config_dir,
              '--metrics', 'cpu_usage',
              '--format', 'yaml'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         parsed = yaml.safe_load(result.stdout)
@@ -418,7 +418,7 @@ class TestCLI:
              '--config-dir', config_dir,
              '--metrics', 'cpu_usage',
              '--validate', '--dry-run'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         # Should fail because db-a, db-b, db-c don't exist as tenant YAML files
         assert result.returncode == 1
@@ -433,7 +433,7 @@ class TestCLI:
             [sys.executable, script,
              '--config-dir', config_dir,
              '--metrics', 'cpu_usage'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         assert 'no _instance_mapping.yaml' in result.stderr

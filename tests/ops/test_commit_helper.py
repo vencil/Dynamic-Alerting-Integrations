@@ -135,7 +135,7 @@ class TestCLI:
             [sys.executable, str(_SCRIPT), "check-ascii", "plain text"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=10, encoding='utf-8'
         )
         assert result.returncode == 0
 
@@ -155,7 +155,7 @@ class TestCLI:
             [sys.executable, str(_SCRIPT), "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=10, encoding='utf-8'
         )
         assert result.returncode == 0
         assert "check-ascii" in result.stdout
@@ -166,6 +166,6 @@ class TestCLI:
             [sys.executable, str(_SCRIPT)],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=10, encoding='utf-8'
         )
         assert result.returncode != 0

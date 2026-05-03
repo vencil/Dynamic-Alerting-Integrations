@@ -35,7 +35,7 @@ class TestSnapshots:
         """Execute a tool and return subprocess result."""
         result = subprocess.run(
             [sys.executable] + args,
-            capture_output=True, timeout=timeout, text=True
+            capture_output=True, timeout=timeout, text=True, encoding='utf-8'
         )
         return result
 

@@ -299,13 +299,13 @@ class TestHelmChartThresholdExporter:
     @pytest.fixture(scope="class")
     def chart_yaml(self, chart_dir: Path) -> dict:
         import yaml
-        with open(chart_dir / "Chart.yaml") as f:
+        with open(chart_dir / "Chart.yaml", encoding='utf-8') as f:
             return yaml.safe_load(f)
 
     @pytest.fixture(scope="class")
     def values_yaml(self, chart_dir: Path) -> dict:
         import yaml
-        with open(chart_dir / "values.yaml") as f:
+        with open(chart_dir / "values.yaml", encoding='utf-8') as f:
             return yaml.safe_load(f)
 
     def test_chart_version_270(self, chart_yaml: dict):

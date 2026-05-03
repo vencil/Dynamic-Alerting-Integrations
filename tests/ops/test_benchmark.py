@@ -18,6 +18,17 @@ import tempfile
 
 import pytest
 
+# Whole-module skip when pytest-benchmark plugin is unavailable: every test
+# in this file uses the `benchmark` fixture, and without the plugin pytest
+# raises 14 fixture-not-found ERRORs at collection time, drowning real
+# regressions in noise. Plugin is shipped in dev container; locally it's
+# `pip install pytest-benchmark`.
+pytest.importorskip(
+    "pytest_benchmark",
+    reason="pytest-benchmark not installed; "
+           "skipping perf baselines (run `pip install pytest-benchmark`)",
+)
+
 pytestmark = [pytest.mark.benchmark, pytest.mark.slow]
 
 from factories import make_receiver, make_tenant_yaml, write_yaml

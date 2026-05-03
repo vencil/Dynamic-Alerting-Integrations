@@ -368,6 +368,19 @@ repos:
         # / PR #165 / PR #166 / S#84 for the underlying Popen deadlock
         # motivation and cleanup arc.
 
+      - id: open-encoding-audit
+        name: open() encoding= kwarg audit (PR-2.5 portability, warn-only)
+        entry: python3 -X utf8 scripts/tools/lint/check_open_encoding.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(scripts|components/da-tools|tests)/.*\.py$
+        # Warn-only because ~72 latent sites remain in test files that
+        # don't currently exercise non-ASCII content (no failing tests).
+        # PR-2.5 cleaned the 33 sites + 15 subprocess.run sites that
+        # were causing actual UnicodeDecodeError on cp950 / shift_jis /
+        # POSIX-locale dev hosts. Flip to --strict-open-encoding once
+        # the residual cleanup track lands. See PR-2.5 description.
+
       - id: i18n-coverage-check
         name: i18n coverage report
         entry: python3 -X utf8 scripts/tools/lint/check_i18n_coverage.py

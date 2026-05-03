@@ -204,7 +204,12 @@ def write_csv_report(all_results, output_dir):
     csv_path = os.path.join(output_dir, "validation-report.csv")
 
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    # lineterminator='\n' — write_text_secure opens in text mode, which on
+    # Windows translates each \n → \r\n. csv.writer's default \r\n would then
+    # become \r\r\n on disk, producing phantom blank rows when downstream tools
+    # use universal-newlines reading. Pin \n here so the OS does the only
+    # translation.
+    writer = csv.writer(buf, lineterminator='\n')
     writer.writerow([
         "Label", "Tenant", "Old Query", "New Query",
         "Old Value", "New Value", "Delta", "Status",

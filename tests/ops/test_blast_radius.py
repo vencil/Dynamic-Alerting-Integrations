@@ -590,7 +590,7 @@ class TestCLI:
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, "--base", base_path, "--pr", pr_path, "--format", "json"],
             capture_output=True,
-            text=True,
+            text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         report = json.loads(result.stdout)
@@ -602,7 +602,7 @@ class TestCLI:
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, "--base", base_path, "--pr", pr_path, "--format", "markdown"],
             capture_output=True,
-            text=True,
+            text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         assert "Blast Radius" in result.stdout
@@ -614,7 +614,7 @@ class TestCLI:
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, "--base", base_path, "--pr", pr_path, "--output", out_path],
             capture_output=True,
-            text=True,
+            text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         assert os.path.exists(out_path)
