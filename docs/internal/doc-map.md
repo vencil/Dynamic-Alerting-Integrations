@@ -85,6 +85,7 @@ lang: zh
 | `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |
 | `docs/interactive/tools/notification-previewer.jsx` | Platform Engineers, Tenants | Notification Template Editor |
 | `docs/interactive/tools/onboarding-checklist.jsx` | Tenants, Platform Engineers, Domain Experts (DBA) | Onboarding Checklist Generator |
+| `docs/interactive/tools/operator-setup-wizard/components/StepReview.jsx` | All | Operator Setup Wizard — Step 5: Review & Generate |
 | `docs/interactive/tools/operator-setup-wizard.jsx` | Platform Engineers, SREs, DevOps | Operator Setup Wizard |
 | `docs/interactive/tools/platform-demo.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Platform Demo |
 | `docs/interactive/tools/platform-health.jsx` | Platform Engineers | Platform Health Dashboard |
