@@ -437,6 +437,66 @@ func BenchmarkDiffAndReload_Hierarchical_5000_NoChange(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
+// v2.8.0 PR-9: 10%-churn benchmark — covers the gap between
+// OneTenantChanged (smallest possible diff) and BlastRadius (mid-tree
+// _defaults change). Real ops scenario: 100 of 1000 tenants change in
+// a single tick, mimicking a daily migration batch or a rolling
+// rebalance. Measures the reload pipeline at the throughput tail:
+// 100 individual file writes + diffAndReload's per-tenant merge loop
+// + atomic-swap with a 100-entry update set.
+// ---------------------------------------------------------------------------
+
+// BenchmarkDiffAndReload_Hierarchical_1000_Churn10pct rewrites 10% of
+// tenant files (deterministic stride-of-10 selection: tenant-0000,
+// tenant-0010, ...) with fresh threshold values per iteration, then
+// runs diffAndReload. Measures the full reload pipeline at a real
+// "many-changed" workload.
+//
+// Naming matches the existing _1000(_|$) regex captured by
+// `make benchmark-report` so nightly bench-record auto-tracks it.
+func BenchmarkDiffAndReload_Hierarchical_1000_Churn10pct(b *testing.B) {
+	dir := buildDirConfigHierarchicalFresh(b, 1000)
+	silenceLogs(b)
+	mgr := NewConfigManager(dir)
+	if err := mgr.fullDirLoad(); err != nil {
+		b.Fatal(err)
+	}
+	// Pre-compute the 100 target file paths (deterministic stride).
+	targetFiles := make([]string, 100)
+	targetIDs := make([]string, 100)
+	leafCardinality := len(benchDomains) * len(benchRegions) * len(benchEnvs)
+	for i := 0; i < 100; i++ {
+		tenantIdx := i * 10
+		leafIdx := tenantIdx % leafCardinality
+		envIdx := leafIdx % len(benchEnvs)
+		regionIdx := (leafIdx / len(benchEnvs)) % len(benchRegions)
+		domainIdx := leafIdx / (len(benchEnvs) * len(benchRegions))
+		tenantName := fmt.Sprintf("tenant-%04d", tenantIdx)
+		targetFiles[i] = filepath.Join(dir,
+			benchDomains[domainIdx], benchRegions[regionIdx], benchEnvs[envIdx],
+			tenantName+".yaml")
+		targetIDs[i] = tenantName
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Rewrite all 100 target files with iteration-specific values
+		// so the file hash actually moves.
+		for j := 0; j < 100; j++ {
+			content := fmt.Sprintf("tenants:\n  %s:\n    mysql_connections: \"%d\"\n    mysql_cpu: \"%d\"\n",
+				targetIDs[j], 50+(i+j)%100, 60+(i+j)%40)
+			if err := os.WriteFile(targetFiles[j], []byte(content), 0o600); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if _, _, err := mgr.diffAndReload(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	reportResourceMetrics(b)
+}
+
+// ---------------------------------------------------------------------------
 // B-8: Blast-radius benchmark
 // ---------------------------------------------------------------------------
 //
