@@ -105,6 +105,22 @@ func main() {
 	// Numeric requests-per-minute; "0" disables; default 100.
 	rateLimitPerMin := flag.String("rate-limit-per-min", envOrDefault("TA_RATE_LIMIT_PER_MIN", ""),
 		"Per-caller rate limit (requests / 60s rolling window). 0 disables. Default 100.")
+
+	// PR-11/11: HTTP server timeouts. Pre-PR-11 these were
+	// hard-coded (15s read / 30s write / 60s idle). Some long-tail
+	// operations (PR-mode batch with N tenants × WritePR commit
+	// latency) brushed up against the 30s write deadline; making
+	// these tunable lets operators raise WriteTimeout for
+	// deployments that need it without rebuilding.
+	readTimeout := flag.Duration("read-timeout",
+		parseDurationOrDefault(os.Getenv("TA_READ_TIMEOUT"), 15*time.Second),
+		"HTTP server read timeout (default 15s; TA_READ_TIMEOUT)")
+	writeTimeout := flag.Duration("write-timeout",
+		parseDurationOrDefault(os.Getenv("TA_WRITE_TIMEOUT"), 30*time.Second),
+		"HTTP server write timeout (default 30s; TA_WRITE_TIMEOUT)")
+	idleTimeout := flag.Duration("idle-timeout",
+		parseDurationOrDefault(os.Getenv("TA_IDLE_TIMEOUT"), 60*time.Second),
+		"HTTP server idle timeout (default 60s; TA_IDLE_TIMEOUT)")
 	flag.Parse()
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
@@ -207,7 +223,9 @@ func main() {
 	} else {
 		slog.Info("rate limiter disabled", "hint", "set TA_RATE_LIMIT_PER_MIN > 0 to enable")
 	}
-	r.Use(handler.RateLimit(rlCfg))
+	// PR-11/11: stopCh terminates the limiter's bucket-sweeper
+	// goroutine alongside the rbac/policy/tracker WatchLoops.
+	r.Use(handler.RateLimit(rlCfg, stopCh))
 
 	// Health / readiness / metrics (no auth)
 	r.Get("/health", handler.Health)
@@ -304,13 +322,16 @@ func main() {
 	})
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────
+	// PR-11/11: timeouts now configurable via TA_{READ,WRITE,IDLE}_TIMEOUT.
 	srv := &http.Server{
 		Addr:         *listenAddr,
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  *readTimeout,
+		WriteTimeout: *writeTimeout,
+		IdleTimeout:  *idleTimeout,
 	}
+	slog.Info("http server timeouts",
+		"read", *readTimeout, "write", *writeTimeout, "idle", *idleTimeout)
 
 	// Graceful shutdown on SIGTERM / SIGINT
 	quit := make(chan os.Signal, 1)
@@ -335,6 +356,23 @@ func main() {
 		slog.Warn("shutdown error", "error", err)
 	}
 	slog.Info("tenant-api stopped")
+}
+
+// parseDurationOrDefault parses a Go duration string ("30s", "1m") and
+// returns def on empty input or parse error. Errors are logged at WARN
+// so misconfigured TA_*_TIMEOUT env vars don't silently fall back —
+// the operator sees the rejected value and the chosen default.
+func parseDurationOrDefault(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		slog.Warn("invalid duration env value, using default",
+			"value", s, "default", def, "error", err)
+		return def
+	}
+	return d
 }
 
 // envOrDefault returns the environment variable value or the default if unset.

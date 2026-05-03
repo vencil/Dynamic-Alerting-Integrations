@@ -87,7 +87,7 @@ func TestRequestIDResponse_NoOpWhenContextEmpty(t *testing.T) {
 
 func TestRateLimit_AllowsUnderCap(t *testing.T) {
 	cfg := RateLimitConfig{RequestsPerMinute: 3}
-	handler := RateLimit(cfg)(http.HandlerFunc(
+	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -105,7 +105,7 @@ func TestRateLimit_AllowsUnderCap(t *testing.T) {
 
 func TestRateLimit_BlocksAtCap(t *testing.T) {
 	cfg := RateLimitConfig{RequestsPerMinute: 2}
-	handler := RateLimit(cfg)(http.HandlerFunc(
+	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -159,7 +159,7 @@ func TestRateLimit_BlocksAtCap(t *testing.T) {
 func TestRateLimit_PerCallerIsolation(t *testing.T) {
 	// Alice's bucket overflowing must NOT affect Bob's bucket.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	handler := RateLimit(cfg)(http.HandlerFunc(
+	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -198,7 +198,7 @@ func TestRateLimit_SkipPathsExempt(t *testing.T) {
 	// cap=1 they should return 200 indefinitely.
 	cfg := DefaultRateLimit()
 	cfg.RequestsPerMinute = 1
-	handler := RateLimit(cfg)(http.HandlerFunc(
+	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -217,7 +217,7 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 	// requestsPerMinute=0 → middleware degrades to a no-op pass-
 	// through. The same identity can call any number of times.
 	cfg := RateLimitConfig{RequestsPerMinute: 0}
-	handler := RateLimit(cfg)(http.HandlerFunc(
+	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -236,7 +236,7 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	// No X-Forwarded-Email → bucket by X-Real-IP.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	handler := RateLimit(cfg)(http.HandlerFunc(
+	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -441,5 +441,117 @@ func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
 	}
 	if entry["level"] != "WARN" {
 		t.Errorf("5xx log level = %q, want WARN", entry["level"])
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────
+// PR-11/11: rate-limiter polish (rejections counter, sweeper)
+// ─────────────────────────────────────────────────────────────────
+
+// TestRateLimit_RejectionsCounter verifies the package-level
+// rejection counter increments once per blocked request and is
+// readable via RateLimitMetrics().
+func TestRateLimit_RejectionsCounter(t *testing.T) {
+	cfg := RateLimitConfig{RequestsPerMinute: 1}
+	stop := make(chan struct{})
+	defer close(stop)
+	mw := RateLimit(cfg, stop)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := mw(inner)
+
+	// Snapshot baseline so the test is independent of any earlier
+	// limiter activity in the same process.
+	baselineRejections, _ := RateLimitMetrics()
+
+	// First request passes; next 3 are rejected.
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest("GET", "/x", nil)
+		req.Header.Set("X-Forwarded-Email", "ratelimit-counter-test@example.com")
+		w := httptest.NewRecorder()
+		wrapped.ServeHTTP(w, req)
+	}
+
+	gotRejections, gotActive := RateLimitMetrics()
+	delta := gotRejections - baselineRejections
+	if delta != 3 {
+		t.Errorf("rejections delta = %d, want 3", delta)
+	}
+	if gotActive < 1 {
+		t.Errorf("active callers = %d, want >= 1", gotActive)
+	}
+}
+
+// TestRateLimit_SweepEvictsExpiredBucket exercises the bucket
+// sweeper directly: a caller's bucket is created via allow(),
+// then the wall-clock advances past the rolling window, then
+// sweep() with the future timestamp drops the now-empty bucket.
+func TestRateLimit_SweepEvictsExpiredBucket(t *testing.T) {
+	l := newRateLimiter(RateLimitConfig{RequestsPerMinute: 100})
+
+	// Caller registers an old timestamp.
+	now := time.Now()
+	if ok, _ := l.allow("ghost@example.com", now); !ok {
+		t.Fatal("first request should be allowed")
+	}
+	if got := l.activeCallers(); got != 1 {
+		t.Fatalf("activeCallers = %d, want 1", got)
+	}
+
+	// Advance past the rolling window and sweep.
+	l.sweep(now.Add(2 * time.Minute))
+
+	if got := l.activeCallers(); got != 0 {
+		t.Errorf("after sweep, activeCallers = %d, want 0", got)
+	}
+}
+
+// TestRateLimit_SweepLoopExitsOnStop runs the sweep loop with a
+// short interval, closes stopCh, and asserts the goroutine exits
+// promptly. Guards against the sweeper outliving server shutdown.
+func TestRateLimit_SweepLoopExitsOnStop(t *testing.T) {
+	stop := make(chan struct{})
+	l := newRateLimiterWithSweep(RateLimitConfig{RequestsPerMinute: 100}, stop)
+	_ = l
+
+	done := make(chan struct{})
+	go func() {
+		// In production, sweepLoop runs on the goroutine launched
+		// inside newRateLimiterWithSweep — we re-launch a duplicate
+		// here to assert the exit signal works on a goroutine WE own.
+		l.sweepLoop(20*time.Millisecond, stop)
+		close(done)
+	}()
+
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("sweepLoop did not exit within 1s of close(stop)")
+	}
+}
+
+// TestMetricsHandler_IncludesRateLimitMetrics asserts the new
+// PR-11 metrics render in the /metrics text output with HELP +
+// TYPE lines.
+func TestMetricsHandler_IncludesRateLimitMetrics(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/metrics", nil)
+	MetricsHandler(w, r)
+
+	body := w.Body.String()
+	for _, want := range []string{
+		"# HELP tenant_api_rate_limit_rejections_total",
+		"# TYPE tenant_api_rate_limit_rejections_total counter",
+		"tenant_api_rate_limit_rejections_total ",
+		"# HELP tenant_api_rate_limit_active_callers",
+		"# TYPE tenant_api_rate_limit_active_callers gauge",
+		"tenant_api_rate_limit_active_callers ",
+	} {
+		if !bytes.Contains([]byte(body), []byte(want)) {
+			t.Errorf("metrics output missing %q\nbody:\n%s", want, body)
+		}
 	}
 }

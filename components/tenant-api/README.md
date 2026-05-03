@@ -124,11 +124,15 @@ tenant_api_uptime_seconds 3600.0
 tenant_api_requests_total 42
 tenant_api_errors_total 2
 tenant_api_writes_total 5
+tenant_api_rate_limit_rejections_total 3
+tenant_api_rate_limit_active_callers 12
 ```
+
+`rate_limit_rejections_total` counts requests denied by the per-caller limiter since process start; `rate_limit_active_callers` is the live count of callers with at least one timestamp inside the rolling window. Bucket sweeper (5-min cadence) keeps the limiter's memory bounded against pathological caller-set growth.
 
 ### Request correlation
 
-每筆 request 收到 `X-Request-ID` response header（chi 自動產或客戶傳入）。Server log 同步印出該 request id，客戶報問題時直接給 id 即可定位。
+每筆 request 收到 `X-Request-ID` response header（chi 自動產或客戶傳入）。Server 用 structured `slog` JSON 格式輸出，每行帶 `request_id`，5xx 升到 `WARN` level；客戶報問題時直接給 X-Request-ID 即可 grep 後端 log。`TA_LOG_LEVEL` 控制 verbosity（`debug` / `info` / `warn` / `error`，預設 `info`）。
 
 ### SSE events
 
@@ -150,6 +154,10 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_RBAC_PATH` | (空 = open-read) | `_rbac.yaml` 路徑 |
 | `TA_ADDR` | `:8080` | HTTP listen address |
 | `TA_RATE_LIMIT_PER_MIN` | `100` | Per-caller rate limit；`0` 關閉；malformed 值回退預設並印 WARN |
+| `TA_READ_TIMEOUT` | `15s` | HTTP server read timeout（Go duration string） |
+| `TA_WRITE_TIMEOUT` | `30s` | HTTP server write timeout — 大 batch + 慢 git push 時可調高 |
+| `TA_IDLE_TIMEOUT` | `60s` | HTTP server idle keep-alive timeout |
+| `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab` |
 | `TA_GITHUB_TOKEN` | (空) | `pr-github` 必填 |
 | `TA_GITHUB_REPO` | (空) | `owner/repo` |
@@ -242,7 +250,7 @@ curl -s http://localhost:8080/metrics
 ## Development
 
 ```bash
-# 322 個 Go 測試（含 race detector）
+# 343 個 Go 測試（含 race detector）
 go test ./... -race
 
 # Lint
