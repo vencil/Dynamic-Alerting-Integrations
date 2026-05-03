@@ -271,7 +271,7 @@ func TestInheritanceGraph_DefaultsToTenantsOrder(t *testing.T) {
 	// Scanner feeds sorted IDs → result is sorted. Verify the sort helper
 	// produces the shape we expect.
 	ids := []string{"tenant-b", "tenant-a", "tenant-c"}
-	sortStrings(ids)
+	sort.Strings(ids)
 	sortExpect := []string{"tenant-a", "tenant-b", "tenant-c"}
 	if !reflect.DeepEqual(ids, sortExpect) {
 		t.Errorf("sortStrings produced %v, want %v", ids, sortExpect)
@@ -280,7 +280,7 @@ func TestInheritanceGraph_DefaultsToTenantsOrder(t *testing.T) {
 	cross := []string{"c", "a", "b"}
 	sort.Strings(cross)
 	ours := []string{"c", "a", "b"}
-	sortStrings(ours)
+	sort.Strings(ours)
 	if !reflect.DeepEqual(cross, ours) {
 		t.Errorf("local sort diverges from stdlib: stdlib=%v ours=%v", cross, ours)
 	}

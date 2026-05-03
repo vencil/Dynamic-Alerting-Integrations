@@ -5,13 +5,13 @@ package main
 // ============================================================
 //
 // Three layers:
-//   1. SimulateEffective unit tests — basic merge / chain ordering /
+//   1. config.SimulateEffective unit tests — basic merge / chain ordering /
 //      error paths (no HTTP).
 //   2. simulateHandler HTTP tests — request shape, error codes,
 //      content-type contract.
 //   3. **Parity gate** — TestSimulate_VsResolve_ParityHash writes the
 //      same bytes to disk under a tmp dir, lets ConfigManager.Resolve
-//      compute its merged_hash, then calls SimulateEffective with the
+//      compute its merged_hash, then calls config.SimulateEffective with the
 //      identical bytes and asserts byte-identical SourceHash, MergedHash,
 //      DefaultsChain length, and effective Config map. This is the
 //      contract Phase .c relies on: a /simulate response is the same
@@ -27,21 +27,23 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// --- Layer 1: SimulateEffective unit tests ---------------------------
+// --- Layer 1: config.SimulateEffective unit tests ---------------------------
 
 func TestSimulate_BasicHierarchy(t *testing.T) {
 	defaults := []byte("defaults:\n  mysql_connections: 80\n  cpu_threshold: 75\n")
 	tenantBytes := []byte("tenants:\n  tenant-a:\n    mysql_connections: \"90\"\n")
 
-	resp, err := SimulateEffective(SimulateRequest{
+	resp, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:          "tenant-a",
 		TenantYAML:        tenantBytes,
 		DefaultsChainYAML: [][]byte{defaults},
 	})
 	if err != nil {
-		t.Fatalf("SimulateEffective: %v", err)
+		t.Fatalf("config.SimulateEffective: %v", err)
 	}
 	if resp.TenantID != "tenant-a" {
 		t.Errorf("TenantID = %q, want tenant-a", resp.TenantID)
@@ -66,12 +68,12 @@ func TestSimulate_BasicHierarchy(t *testing.T) {
 
 func TestSimulate_NoDefaults(t *testing.T) {
 	tenantBytes := []byte("tenants:\n  tenant-flat:\n    cpu_threshold: 80\n")
-	resp, err := SimulateEffective(SimulateRequest{
+	resp, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:   "tenant-flat",
 		TenantYAML: tenantBytes,
 	})
 	if err != nil {
-		t.Fatalf("SimulateEffective: %v", err)
+		t.Fatalf("config.SimulateEffective: %v", err)
 	}
 	if len(resp.DefaultsChain) != 0 {
 		t.Errorf("DefaultsChain should be empty, got %v", resp.DefaultsChain)
@@ -89,13 +91,13 @@ func TestSimulate_DeepChainOrdering(t *testing.T) {
 	l1 := []byte("defaults:\n  X: 2\n  Z: 20\n")
 	tenantBytes := []byte("tenants:\n  t1:\n    X: 3\n")
 
-	resp, err := SimulateEffective(SimulateRequest{
+	resp, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:          "t1",
 		TenantYAML:        tenantBytes,
 		DefaultsChainYAML: [][]byte{l0, l1},
 	})
 	if err != nil {
-		t.Fatalf("SimulateEffective: %v", err)
+		t.Fatalf("config.SimulateEffective: %v", err)
 	}
 	if got := resp.Config["X"]; got != 3 {
 		t.Errorf("X = %v, want 3 (tenant)", got)
@@ -113,17 +115,17 @@ func TestSimulate_DeepChainOrdering(t *testing.T) {
 
 func TestSimulate_TenantNotFound(t *testing.T) {
 	tenantBytes := []byte("tenants:\n  someone-else:\n    foo: 1\n")
-	_, err := SimulateEffective(SimulateRequest{
+	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:   "missing",
 		TenantYAML: tenantBytes,
 	})
-	if err != ErrSimulateTenantNotFound {
-		t.Fatalf("err = %v, want ErrSimulateTenantNotFound", err)
+	if err != config.ErrSimulateTenantNotFound {
+		t.Fatalf("err = %v, want config.ErrSimulateTenantNotFound", err)
 	}
 }
 
 func TestSimulate_EmptyTenantID(t *testing.T) {
-	_, err := SimulateEffective(SimulateRequest{
+	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantYAML: []byte("tenants:\n  t1:\n    x: 1\n"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "tenant_id is required") {
@@ -132,7 +134,7 @@ func TestSimulate_EmptyTenantID(t *testing.T) {
 }
 
 func TestSimulate_EmptyTenantYAML(t *testing.T) {
-	_, err := SimulateEffective(SimulateRequest{
+	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID: "t1",
 	})
 	if err == nil || !strings.Contains(err.Error(), "tenant_yaml is required") {
@@ -141,7 +143,7 @@ func TestSimulate_EmptyTenantYAML(t *testing.T) {
 }
 
 func TestSimulate_MalformedTenantYAML(t *testing.T) {
-	_, err := SimulateEffective(SimulateRequest{
+	_, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:   "t1",
 		TenantYAML: []byte("tenants:\n  t1:\n    [unclosed-bracket\n"),
 	})
@@ -153,7 +155,7 @@ func TestSimulate_MalformedTenantYAML(t *testing.T) {
 // --- Layer 2: simulateHandler HTTP tests -----------------------------
 
 func TestSimulateHandler_Happy(t *testing.T) {
-	body := SimulateRequest{
+	body := config.SimulateRequest{
 		TenantID:          "tenant-a",
 		TenantYAML:        []byte("tenants:\n  tenant-a:\n    cpu_threshold: 70\n"),
 		DefaultsChainYAML: [][]byte{[]byte("defaults:\n  cpu_threshold: 50\n  mem: 80\n")},
@@ -171,7 +173,7 @@ func TestSimulateHandler_Happy(t *testing.T) {
 		t.Errorf("Content-Type = %q", ct)
 	}
 
-	var resp SimulateResponse
+	var resp config.SimulateResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode resp: %v", err)
 	}
@@ -204,7 +206,7 @@ func TestSimulateHandler_BadJSON(t *testing.T) {
 }
 
 func TestSimulateHandler_TenantNotFound(t *testing.T) {
-	body := SimulateRequest{
+	body := config.SimulateRequest{
 		TenantID:   "ghost",
 		TenantYAML: []byte("tenants:\n  alive:\n    x: 1\n"),
 	}
@@ -221,7 +223,7 @@ func TestSimulateHandler_TenantNotFound(t *testing.T) {
 func TestSimulateHandler_BodyTooLarge(t *testing.T) {
 	// Build an oversized payload: 2 MiB of tenant YAML padding.
 	pad := strings.Repeat("a", 2<<20)
-	body := SimulateRequest{
+	body := config.SimulateRequest{
 		TenantID:   "t1",
 		TenantYAML: []byte("tenants:\n  t1:\n    note: \"" + pad + "\"\n"),
 	}
@@ -251,7 +253,7 @@ func TestSimulateHandler_MalformedDefaults(t *testing.T) {
 	// Defaults bytes that don't parse as YAML must surface as 400 from
 	// the handler — the contract is "preview will fail the same way a
 	// commit would fail".
-	body := SimulateRequest{
+	body := config.SimulateRequest{
 		TenantID:          "t1",
 		TenantYAML:        []byte("tenants:\n  t1:\n    x: 1\n"),
 		DefaultsChainYAML: [][]byte{[]byte("defaults:\n  [unclosed\n")},
@@ -326,13 +328,13 @@ func TestSimulate_VsResolve_ParityHash(t *testing.T) {
 	}
 
 	// Simulate path: same bytes, manually-ordered chain.
-	sim, err := SimulateEffective(SimulateRequest{
+	sim, err := config.SimulateEffective(config.SimulateRequest{
 		TenantID:          "tenant-a",
 		TenantYAML:        tenantBytes,
 		DefaultsChainYAML: [][]byte{l0Bytes, l1Bytes},
 	})
 	if err != nil {
-		t.Fatalf("SimulateEffective: %v", err)
+		t.Fatalf("config.SimulateEffective: %v", err)
 	}
 
 	if disk.SourceHash != sim.SourceHash {
@@ -372,7 +374,7 @@ func TestInMemoryConfigSource_FiltersByRoot(t *testing.T) {
 		"/sim/.hidden.yaml":   []byte("tenants:\n  hidden:\n    x: 4\n"),
 		"/sim/_defaults.yaml": []byte("defaults:\n  x: 0\n"),
 	}
-	src := NewInMemoryConfigSource(files)
+	src := config.NewInMemoryConfigSource(files)
 	out, err := src.YAMLFiles("/sim")
 	if err != nil {
 		t.Fatalf("YAMLFiles: %v", err)
@@ -399,8 +401,8 @@ func TestScanFromConfigSource_DuplicateTenantError(t *testing.T) {
 		"/sim/team-a.yaml": []byte("tenants:\n  shared:\n    x: 1\n"),
 		"/sim/team-b.yaml": []byte("tenants:\n  shared:\n    x: 2\n"),
 	}
-	src := NewInMemoryConfigSource(files)
-	_, _, _, _, err := scanFromConfigSource(src, "/sim")
+	src := config.NewInMemoryConfigSource(files)
+	_, _, _, _, err := config.ScanFromConfigSource(src, "/sim")
 	if err == nil || !strings.Contains(err.Error(), "duplicate tenant ID") {
 		t.Fatalf("err = %v, want duplicate tenant error", err)
 	}

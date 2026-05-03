@@ -27,10 +27,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // DuplicateTenantError signals that the same tenant ID was discovered in two
@@ -59,61 +62,6 @@ func (e *DuplicateTenantError) Error() string {
 	return fmt.Sprintf("duplicate tenant ID %q: defined in both %s and %s", e.TenantID, e.PathA, e.PathB)
 }
 
-// InheritanceGraph tracks the defaults↔tenants dependency for a hierarchical
-// conf.d layout (ADR-017). Two maps, one per direction:
-//
-//   - TenantDefaults[tenantID]  → L0..Ln defaults paths (root first, leaf last).
-//     Used by computeMergedHash and the /effective handler.
-//   - DefaultsToTenants[path]   → tenant IDs whose merged_hash depends on this
-//     defaults file. Used by the debounced reload path: when a
-//     _defaults.yaml changes, we look up exactly which tenants need re-hash.
-//
-// All paths stored are absolute + filepath.Clean-ed so equality comparisons are
-// stable across calls. The struct is treated as immutable once built — reload
-// constructs a fresh graph and atomically swaps the pointer on ConfigManager.
-type InheritanceGraph struct {
-	DefaultsToTenants map[string][]string
-	TenantDefaults    map[string][]string
-}
-
-// NewInheritanceGraph returns an empty graph with both directions initialized.
-func NewInheritanceGraph() *InheritanceGraph {
-	return &InheritanceGraph{
-		DefaultsToTenants: make(map[string][]string),
-		TenantDefaults:    make(map[string][]string),
-	}
-}
-
-// AddTenant records a tenant's inheritance chain. defaultsChain MUST be
-// ordered root-first, leaf-last (matching describe_tenant.py after its
-// internal reverse). A defensive copy is made so the caller may reuse the
-// slice.
-func (g *InheritanceGraph) AddTenant(tenantID string, defaultsChain []string) {
-	if g.TenantDefaults == nil {
-		g.TenantDefaults = make(map[string][]string)
-	}
-	if g.DefaultsToTenants == nil {
-		g.DefaultsToTenants = make(map[string][]string)
-	}
-	chain := make([]string, len(defaultsChain))
-	copy(chain, defaultsChain)
-	g.TenantDefaults[tenantID] = chain
-
-	for _, dp := range chain {
-		g.DefaultsToTenants[dp] = append(g.DefaultsToTenants[dp], tenantID)
-	}
-}
-
-// TenantsAffectedBy returns the tenant IDs whose effective config depends on
-// the given _defaults.yaml path. Returns nil when the path is unknown — the
-// caller can distinguish "no tenants inherit this file" vs "unrelated file"
-// via the defaults map returned by scanDirHierarchical.
-func (g *InheritanceGraph) TenantsAffectedBy(defaultsPath string) []string {
-	if g == nil {
-		return nil
-	}
-	return g.DefaultsToTenants[defaultsPath]
-}
 
 // scanDirHierarchical walks a conf.d/ tree collecting every tenant file and
 // every _defaults.yaml file at every nesting depth. It supports flat layouts
@@ -309,14 +257,14 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	}
 	// Sort for stability. We intentionally don't sort by source path because
 	// tenants in the same file would reshuffle across scans.
-	sortStrings(tenantIDs)
+	sort.Strings(tenantIDs)
 
 	for _, tid := range tenantIDs {
 		srcPath := tenants[tid]
 		dir := filepath.Dir(srcPath)
 		chain, cached := chainCache[dir]
 		if !cached {
-			chain = collectDefaultsChain(dir, absRoot, defaults)
+			chain = config.CollectDefaultsChain(dir, absRoot, defaults)
 			chainCache[dir] = chain
 		}
 		graph.AddTenant(tid, chain)
@@ -330,59 +278,3 @@ func scanDirHierarchical(rootPath string, priorMtimes map[string]fileStat) (
 	return tenants, defaults, hashes, mtimes, graph, nil
 }
 
-// collectDefaultsChain walks from `leafDir` up to `root` (both inclusive),
-// collecting _defaults.yaml at each level. Returns root-first (L0..Ln) order.
-// `defaults` is the set populated by the walker; this spares a second stat
-// call per directory level.
-//
-// Precondition: `leafDir` must be `root` or a descendant. (The walker only
-// visits entries under `root`, so this is always true for real callers.)
-func collectDefaultsChain(leafDir, root string, defaults map[string]bool) []string {
-	var chain []string
-	current := filepath.Clean(leafDir)
-	rootClean := filepath.Clean(root)
-
-	for {
-		// Prefer .yaml over .yml when both exist at the same level (same
-		// precedence rule as describe_tenant.py's iteration order).
-		yamlPath := filepath.Join(current, "_defaults.yaml")
-		ymlPath := filepath.Join(current, "_defaults.yml")
-		if defaults[yamlPath] {
-			chain = append(chain, yamlPath)
-		} else if defaults[ymlPath] {
-			chain = append(chain, ymlPath)
-		}
-
-		if current == rootClean {
-			break
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			// Reached filesystem root without hitting rootClean — shouldn't
-			// happen given the precondition, but don't infinite-loop.
-			break
-		}
-		current = parent
-	}
-
-	// Reverse to make chain[0] the top-most (L0) defaults and the last entry
-	// the nearest-to-tenant (Ln). Matches describe_tenant.py line 152.
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
-	return chain
-}
-
-// sortStrings is a small local helper so this file doesn't pull in "sort"
-// just for a single call site. Keeping the dependency surface minimal makes
-// it easier to spot accidental coupling when reading diffs.
-func sortStrings(s []string) {
-	// Insertion sort is fine: len(tenants) is typically <1000 and we call
-	// this once per scan. Keeps binary size marginally smaller than pulling
-	// sort.Strings. If profile shows it matters, swap to sort.Strings.
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
-}
