@@ -65,18 +65,13 @@ func (d *Deps) GetTask() http.HandlerFunc {
 }
 
 // filterTaskResults returns the subset of results visible to the
-// caller. Open-mode RBAC (no _rbac.yaml) returns the input as-is.
-// Mirrors the filterAccessibleMembers contract in group.go for
-// consistency.
+// caller. Open-mode RBAC (no _rbac.yaml) returns the input as-is
+// (HasPermission short-circuits). Mirrors filterAccessibleMembers /
+// filterAccessiblePRs via the shared filterByRBAC generic.
 func filterTaskResults(rbacMgr *rbac.Manager, idpGroups []string, results []async.TaskResult) []async.TaskResult {
-	if len(results) == 0 {
-		return results
-	}
-	out := make([]async.TaskResult, 0, len(results))
-	for _, r := range results {
-		if r.TenantID == "" || rbacMgr.HasPermission(idpGroups, r.TenantID, rbac.PermRead) {
-			out = append(out, r)
-		}
-	}
-	return out
+	return filterByRBAC(rbacMgr, idpGroups, results, tenantIDFromTaskResult, rbac.PermRead)
 }
+
+// tenantIDFromTaskResult is the per-element extractor for filterByRBAC
+// over async.TaskResult slices.
+func tenantIDFromTaskResult(r async.TaskResult) string { return r.TenantID }

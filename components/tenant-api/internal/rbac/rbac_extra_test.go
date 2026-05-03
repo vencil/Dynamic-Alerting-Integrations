@@ -92,11 +92,11 @@ func TestLoad_NoChangeSkipsUpdate(t *testing.T) {
 	}
 
 	// Second load should be a no-op (same hash)
-	hashBefore := m.lastHash
-	if err := m.load(); err != nil {
+	hashBefore := m.LastHash()
+	if err := m.Reload(); err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if m.lastHash != hashBefore {
+	if m.LastHash() != hashBefore {
 		t.Error("hash changed on reload of unchanged file")
 	}
 }
@@ -135,7 +135,7 @@ func TestLoad_DetectsChange(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := m.load(); err != nil {
+	if err := m.Reload(); err != nil {
 		t.Fatalf("load after change: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestLoad_DeletedFile(t *testing.T) {
 	}
 
 	// Reload should fall back to open mode
-	if err := m.load(); err != nil {
+	if err := m.Reload(); err != nil {
 		t.Fatalf("load after delete: %v", err)
 	}
 	if len(m.Get().Groups) != 0 {
@@ -178,8 +178,9 @@ func TestLoad_DeletedFile(t *testing.T) {
 // --- WatchLoop tests ---
 
 func TestWatchLoop_EmptyPath(t *testing.T) {
-	m := &Manager{path: ""}
-	m.value.Store(&RBACConfig{})
+	// NewForTest constructs a Manager with empty path → WatchLoop
+	// is a no-op (returns immediately) per the configwatcher contract.
+	m := NewForTest(&RBACConfig{})
 
 	stopCh := make(chan struct{})
 	done := make(chan struct{})
@@ -228,23 +229,28 @@ func TestWatchLoop_StopsOnClose(t *testing.T) {
 
 // --- Get tests ---
 
-func TestGet_NilValue(t *testing.T) {
-	m := &Manager{}
-	// value is never set — Get should return empty config
+func TestGet_EmptyConfig(t *testing.T) {
+	// PR-8/11: with the configwatcher embed, a Manager constructed
+	// via NewForTest(&RBACConfig{}) is the canonical "open mode" /
+	// empty config shape. Pre-PR-8 this test exercised the
+	// uninitialized-Manager case (`&Manager{}`); that's no longer
+	// constructible without panic since Get is promoted through
+	// a possibly-nil Watcher pointer. The behavior under test
+	// (Get returns a non-nil empty-Groups config) is preserved.
+	m := NewForTest(&RBACConfig{})
 	cfg := m.Get()
 	if cfg == nil {
 		t.Fatal("Get returned nil")
 	}
 	if len(cfg.Groups) != 0 {
-		t.Errorf("expected 0 groups from nil value, got %d", len(cfg.Groups))
+		t.Errorf("expected 0 groups from empty config, got %d", len(cfg.Groups))
 	}
 }
 
 // --- HasPermission extended tests ---
 
 func TestHasPermission_MultipleGroups(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{
+	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "team-a", Tenants: []string{"db-a"}, Permissions: []Permission{PermRead}},
 			{Name: "team-b", Tenants: []string{"db-b"}, Permissions: []Permission{PermWrite}},
@@ -264,8 +270,7 @@ func TestHasPermission_MultipleGroups(t *testing.T) {
 }
 
 func TestHasPermission_EmptyGroups(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{
+	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
 		},
@@ -288,8 +293,7 @@ func TestPermCovers_UnknownPermission(t *testing.T) {
 // --- Middleware tests ---
 
 func TestMiddleware_MissingEmail(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{})
+	m := NewForTest(&RBACConfig{})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -307,8 +311,7 @@ func TestMiddleware_MissingEmail(t *testing.T) {
 }
 
 func TestMiddleware_OpenModeAllowsRead(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{}) // empty = open mode
+	m := NewForTest(&RBACConfig{}) // empty = open mode
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		email := RequestEmail(r)
@@ -330,8 +333,7 @@ func TestMiddleware_OpenModeAllowsRead(t *testing.T) {
 }
 
 func TestMiddleware_OpenModeDeniesWrite(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{}) // empty = open mode
+	m := NewForTest(&RBACConfig{}) // empty = open mode
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -349,8 +351,7 @@ func TestMiddleware_OpenModeDeniesWrite(t *testing.T) {
 }
 
 func TestMiddleware_WithTenantIDFn(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{
+	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "db-ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}},
 		},
@@ -374,8 +375,7 @@ func TestMiddleware_WithTenantIDFn(t *testing.T) {
 }
 
 func TestMiddleware_DeniedForWrongTenant(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{
+	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "db-ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}},
 		},
@@ -399,8 +399,7 @@ func TestMiddleware_DeniedForWrongTenant(t *testing.T) {
 }
 
 func TestMiddleware_GroupsParsing(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{
+	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "team-b", Tenants: []string{"*"}, Permissions: []Permission{PermRead}},
 		},
@@ -431,8 +430,7 @@ func TestMiddleware_GroupsParsing(t *testing.T) {
 }
 
 func TestMiddleware_EmptyGroups(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{}) // open mode
+	m := NewForTest(&RBACConfig{}) // open mode
 
 	var gotGroups []string
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

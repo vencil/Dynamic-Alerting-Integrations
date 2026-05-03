@@ -62,3 +62,39 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, idpGroups, tenantIDs []stri
 	}
 	return forbidden
 }
+
+// filterByRBAC returns the subset of `items` whose tenant ID
+// (extracted via `tenantID(item)`) the caller has the given
+// permission on. Items with empty tenant IDs are passed through
+// — that's how administrative entries (e.g. PRs not bound to a
+// single tenant) end up surfacing to readers without false-403'ing
+// on a missing tag.
+//
+// Empty / nil input → returned as-is. Open-read mode (no
+// _rbac.yaml) → HasPermission returns true for every tenant, so
+// this helper effectively becomes the identity transform — no
+// restrictions, allocation cost only.
+//
+// Generic over the slice element type so it covers the four
+// near-identical filter wrappers below (members []string,
+// PRInfo, async.TaskResult, etc.) without copy-paste drift on
+// the loop body.
+func filterByRBAC[T any](
+	rbacMgr *rbac.Manager,
+	idpGroups []string,
+	items []T,
+	tenantID func(T) string,
+	perm rbac.Permission,
+) []T {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]T, 0, len(items))
+	for _, item := range items {
+		tid := tenantID(item)
+		if tid == "" || rbacMgr.HasPermission(idpGroups, tid, perm) {
+			out = append(out, item)
+		}
+	}
+	return out
+}

@@ -30,14 +30,12 @@
 package groups
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sort"
-	"sync/atomic"
 
+	"github.com/vencil/tenant-api/internal/configwatcher"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,75 +52,30 @@ type GroupsConfig struct {
 	Groups map[string]Group `yaml:"groups" json:"groups"`
 }
 
-// Manager handles hot-reloadable group config (same pattern as rbac.Manager).
+// Manager handles hot-reloadable group config. The hot-reload
+// machinery (atomic.Value + SHA-256 dedup + Reload) lives in the
+// embedded configwatcher.Watcher; this type only adds the
+// domain-specific list/get methods.
 type Manager struct {
-	configDir string
-	value     atomic.Value // stores *GroupsConfig
-	lastHash  string
+	*configwatcher.Watcher[GroupsConfig]
 }
 
 // NewManager creates a Manager that reads _groups.yaml from configDir.
-// If the file does not exist, the manager starts with an empty config.
+// If the file does not exist, the manager starts with an empty config
+// (and logs a WARN — same as pre-PR-8 behavior).
 func NewManager(configDir string) *Manager {
-	m := &Manager{configDir: configDir}
-	if err := m.load(); err != nil {
+	path := filepath.Join(configDir, "_groups.yaml")
+	w, err := configwatcher.New(path, "groups", ParseConfig, emptyConfig)
+	if err != nil {
 		log.Printf("WARN: groups: initial load: %v", err)
 	}
-	if m.value.Load() == nil {
-		m.value.Store(&GroupsConfig{Groups: make(map[string]Group)})
-	}
-	return m
+	return &Manager{Watcher: w}
 }
 
-// Get returns the current groups config snapshot (lock-free).
-func (m *Manager) Get() *GroupsConfig {
-	v := m.value.Load()
-	if v == nil {
-		return &GroupsConfig{Groups: make(map[string]Group)}
-	}
-	return v.(*GroupsConfig)
-}
-
-// Reload re-reads the _groups.yaml file. Called after writes.
-func (m *Manager) Reload() error {
-	m.lastHash = "" // force reload
-	return m.load()
-}
-
-// load reads and parses the _groups.yaml file, storing the result atomically.
-func (m *Manager) load() error {
-	path := m.filePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			m.value.Store(&GroupsConfig{Groups: make(map[string]Group)})
-			return nil
-		}
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256(data))
-	if hash == m.lastHash {
-		return nil
-	}
-
-	var cfg GroupsConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
-	}
-	if cfg.Groups == nil {
-		cfg.Groups = make(map[string]Group)
-	}
-
-	m.value.Store(&cfg)
-	m.lastHash = hash
-	log.Printf("groups: loaded %d groups from %s", len(cfg.Groups), path)
-	return nil
-}
-
-// filePath returns the path to _groups.yaml.
-func (m *Manager) filePath() string {
-	return filepath.Join(m.configDir, "_groups.yaml")
+// emptyConfig returns the empty fallback config used when the file
+// is missing or initial load fails.
+func emptyConfig() *GroupsConfig {
+	return &GroupsConfig{Groups: make(map[string]Group)}
 }
 
 // ListGroups returns all groups sorted by ID.

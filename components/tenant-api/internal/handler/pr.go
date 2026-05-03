@@ -81,14 +81,9 @@ func (d *Deps) ListPRs() http.HandlerFunc {
 // shouldn't normally exist, but if they do they're surface-area
 // the caller already saw via other endpoints).
 func filterAccessiblePRs(rbacMgr *rbac.Manager, idpGroups []string, prs []platform.PRInfo) []platform.PRInfo {
-	if len(prs) == 0 {
-		return prs
-	}
-	out := make([]platform.PRInfo, 0, len(prs))
-	for _, p := range prs {
-		if p.TenantID == "" || rbacMgr.HasPermission(idpGroups, p.TenantID, rbac.PermRead) {
-			out = append(out, p)
-		}
-	}
-	return out
+	return filterByRBAC(rbacMgr, idpGroups, prs, tenantIDFromPR, rbac.PermRead)
 }
+
+// tenantIDFromPR is the per-element extractor for filterByRBAC over
+// platform.PRInfo slices.
+func tenantIDFromPR(p platform.PRInfo) string { return p.TenantID }

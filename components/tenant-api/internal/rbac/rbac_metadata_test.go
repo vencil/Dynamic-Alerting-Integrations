@@ -350,8 +350,7 @@ func TestHasMetadataAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manager{}
-			m.value.Store(tt.config)
+			m := NewForTest(tt.config)
 
 			got := m.HasMetadataAccess(tt.idpGroups, tt.tenantID, tt.environment, tt.domain)
 			if got != tt.want {
@@ -494,8 +493,7 @@ func TestAccessibleEnvironments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manager{}
-			m.value.Store(tt.config)
+			m := NewForTest(tt.config)
 
 			got := m.AccessibleEnvironments(tt.idpGroups)
 
@@ -622,8 +620,7 @@ func TestAccessibleDomains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manager{}
-			m.value.Store(tt.config)
+			m := NewForTest(tt.config)
 
 			got := m.AccessibleDomains(tt.idpGroups)
 
@@ -709,8 +706,7 @@ func TestHasMetadataAccess_BackwardCompatible(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manager{}
-			m.value.Store(tt.config)
+			m := NewForTest(tt.config)
 
 			got := m.HasMetadataAccess(tt.idpGroups, tt.tenantID, tt.env, tt.domain)
 			if got != tt.want {
