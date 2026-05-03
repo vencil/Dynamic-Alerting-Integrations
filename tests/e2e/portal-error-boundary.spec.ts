@@ -42,70 +42,32 @@ test.describe('Portal ErrorBoundary', () => {
   });
 
   test('render error — boundary catches throw and shows fallback', async ({ page }) => {
-    // Inject the throw BEFORE the loader script runs. The poisoned
-    // createElement only throws for elements with the sentinel name
-    // we ship below; everything else (the boundary's own fallback
-    // tree, the loader DOM) renders normally.
-    await page.addInitScript(() => {
-      const POISON = '__BOUNDARY_TEST_POISON__';
-      // Hook React.createElement once React loads. Use a polling
-      // microtask because React is loaded by a vendor <script> tag
-      // after this init script runs.
-      const hook = () => {
-        if (!window.React) return setTimeout(hook, 10);
-        const orig = window.React.createElement;
-        window.React.createElement = function (type: unknown, ...rest: unknown[]) {
-          if (
-            typeof type === 'function' &&
-            (type as { name?: string }).name === POISON
-          ) {
-            throw new Error('intentional boundary test failure');
-          }
-          return orig.call(this, type, ...rest);
-        };
-      };
-      hook();
-    });
+    // Mock the JSX fetch to return a deliberately-broken component.
+    // jsx-loader fetches → strips front-matter → Babel-transforms →
+    // mounts. The component throws synchronously on render → React's
+    // error path → window.__ErrorBoundary catches → fallback renders.
+    //
+    // This is more robust than patching React.createElement on the
+    // page because jsx-loader doesn't expose user components on
+    // window — they live inside the Babel script-tag's lexical scope.
+    const BROKEN_JSX = `---
+title: "Boundary test fixture"
+---
+import React from 'react';
+export default function Boom() {
+  throw new Error('intentional boundary test failure');
+}
+`;
+    await page.route('**/playground.jsx', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/plain; charset=utf-8',
+        body: BROKEN_JSX,
+      }),
+    );
 
-    // Use a real tool; we'll patch the rendered component name into the
-    // sentinel via a follow-up evaluate so the createElement hook fires
-    // when the loader's render-call evaluates.
     await page.goto('../assets/jsx-loader.html?component=playground');
 
-    // Force the user-component name lookup to return the poisoned name.
-    // jsx-loader stores the export-default name in window.__currentComponentName
-    // and uses it inside the `React.createElement(<name>, ...)` line.
-    // Simpler: replace the actual component identifier on the global
-    // before render by re-defining `Playground` (the playground export).
-    await page.evaluate(() => {
-      const w = window as unknown as Record<string, unknown>;
-      // Defer until Babel has emitted the user-component as a global.
-      const wait = () =>
-        new Promise<void>((resolve) => {
-          const tick = () => {
-            if (w.Playground) return resolve();
-            setTimeout(tick, 25);
-          };
-          tick();
-        });
-      return wait().then(() => {
-        // Reassign to a poisoned function with the sentinel name so the
-        // createElement hook trips on the next render attempt.
-        Object.defineProperty(w, 'Playground', {
-          configurable: true,
-          value: function __BOUNDARY_TEST_POISON__() {
-            return null;
-          },
-        });
-        // Force a re-render by toggling the language preference, which
-        // triggers the loader's re-render path.
-        const rerender = w.__rerenderCurrent as (() => void) | undefined;
-        if (typeof rerender === 'function') rerender();
-      });
-    });
-
-    // Either the original mount caught the throw, or the forced
-    // re-render triggers it. Boundary fallback should now be visible.
     await expect(page.getByTestId('error-boundary-fallback')).toBeVisible({
       timeout: 15000,
     });
