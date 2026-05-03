@@ -61,6 +61,9 @@ lang: zh
 | `docs/integration/operator-prometheus-integration.md` (.en.md) | Platform Engineers | Operator Prometheus 整合指南 |
 | `docs/integration/operator-shadow-monitoring.md` (.en.md) | Platform Engineers | Operator Shadow Monitoring 策略 |
 | `docs/integration/prometheus-operator-integration.md` (.en.md) | Platform Engineers | Prometheus Operator 整合手冊（Hub） |
+| `docs/interactive/tools/_common/components/EmptyState.jsx` | All | _common — EmptyState |
+| `docs/interactive/tools/_common/components/ErrorBoundary.jsx` | All | _common — ErrorBoundary |
+| `docs/interactive/tools/_common/components/Loading.jsx` | All | _common — Loading |
 | `docs/interactive/tools/_common/README.md` | All | `_common/` — Shared Hooks, Utils, and Components for Portal Tools |
 | `docs/interactive/tools/alert-builder.jsx` | Platform Engineers, SREs, Tenants | Alert Builder Wizard |
 | `docs/interactive/tools/alert-noise-analyzer.jsx` | platform, Domain Experts (DBA) | Alert Noise Analyzer |
