@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -243,7 +243,8 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 	if resp.StatusCode >= 400 {
 		// Sanitize: log the full response for debugging but only expose status code to callers.
 		// This prevents leaking internal GitHub error details to API consumers.
-		log.Printf("WARN: GitHub API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+		slog.Warn("github API non-2xx",
+			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
 		return nil, fmt.Errorf("GitHub API %s %s returned %d", method, path, resp.StatusCode)
 	}
 	return respBody, nil

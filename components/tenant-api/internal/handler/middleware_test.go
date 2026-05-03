@@ -8,7 +8,9 @@ package handler
 // ============================================================
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -352,5 +354,92 @@ func TestRateLimitConfigFromEnv_Negative(t *testing.T) {
 	}
 	if !malformed {
 		t.Error("negative number must be flagged malformed")
+	}
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// SlogRequestLogger tests (PR-10/11)
+// ─────────────────────────────────────────────────────────────────
+
+// TestSlogRequestLogger_EmitsStructuredLine verifies the middleware
+// drives slog with the expected attribute keys. We capture slog
+// output by swapping in a JSON handler over a bytes.Buffer for the
+// duration of the test.
+func TestSlogRequestLogger_EmitsStructuredLine(t *testing.T) {
+	t.Helper()
+	// Save + restore default logger.
+	origLogger := slog.Default()
+	defer slog.SetDefault(origLogger)
+
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Wrap with chi RequestID + our logger so request_id is populated.
+	handler := middleware.RequestID(SlogRequestLogger(inner))
+
+	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("inner status = %d, want 200", w.Code)
+	}
+
+	// Parse the structured log line.
+	var entry map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("log line not JSON: %v\n%s", err, buf.String())
+	}
+	if entry["msg"] != "request" {
+		t.Errorf("msg = %q, want \"request\"", entry["msg"])
+	}
+	if entry["method"] != "GET" {
+		t.Errorf("method = %q, want GET", entry["method"])
+	}
+	if entry["path"] != "/api/v1/tenants" {
+		t.Errorf("path = %q", entry["path"])
+	}
+	if v, _ := entry["status"].(float64); v != 200 {
+		t.Errorf("status = %v, want 200", entry["status"])
+	}
+	if entry["caller"] != "alice@example.com" {
+		t.Errorf("caller = %q, want alice@example.com", entry["caller"])
+	}
+	if entry["request_id"] == "" || entry["request_id"] == nil {
+		t.Errorf("request_id missing or empty: %v", entry["request_id"])
+	}
+}
+
+// TestSlogRequestLogger_5xxLogsAtWarn ensures server errors get
+// elevated to WARN so log aggregators can alert on level alone.
+func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
+	origLogger := slog.Default()
+	defer slog.SetDefault(origLogger)
+
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	handler := middleware.RequestID(SlogRequestLogger(inner))
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	var entry map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("log line not JSON: %v", err)
+	}
+	if entry["level"] != "WARN" {
+		t.Errorf("5xx log level = %q, want WARN", entry["level"])
 	}
 }

@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -185,7 +185,8 @@ func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
 
 		// Safety limit: 10 pages = 1000 MRs max
 		if page > 10 {
-			log.Printf("WARN: GitLab MR pagination hit safety limit at page %d (collected %d MRs so far)", page, len(result))
+			slog.Warn("gitlab MR pagination hit safety limit",
+				"page", page, "collected", len(result))
 			break
 		}
 	}
@@ -250,7 +251,8 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 	if resp.StatusCode >= 400 {
 		// Sanitize: log the full response for debugging but only expose status code to callers.
 		// This prevents leaking internal GitLab error details to API consumers.
-		log.Printf("WARN: GitLab API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+		slog.Warn("gitlab API non-2xx",
+			"method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
 		return nil, fmt.Errorf("GitLab API %s %s returned %d", method, path, resp.StatusCode)
 	}
 	return respBody, nil

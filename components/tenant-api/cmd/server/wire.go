@@ -16,6 +16,7 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -68,9 +69,9 @@ func wirePRBackend(f prBackendFlags) (platform.Client, platform.Tracker, handler
 			ghClient.SetBaseURL(gheURL)
 		}
 		if err := ghClient.ValidateToken(); err != nil {
-			log.Printf("WARN: GitHub token validation failed: %v (PR operations may fail)", err)
+			slog.Warn("github token validation failed", "error", err, "note", "PR operations may fail")
 		}
-		log.Printf("tenant-api: GitHub PR write-back mode enabled (repo=%s, base=%s)", f.GitHubRepo, f.GitHubBase)
+		slog.Info("github PR write-back mode enabled", "repo", f.GitHubRepo, "base", f.GitHubBase)
 		return ghClient, gh.NewTracker(ghClient, f.ReloadInterval), wm
 
 	case handler.WriteModePRGitLab:
@@ -89,13 +90,13 @@ func wirePRBackend(f prBackendFlags) (platform.Client, platform.Tracker, handler
 			glClient.SetBaseURL(glURL)
 		}
 		if err := glClient.ValidateToken(); err != nil {
-			log.Printf("WARN: GitLab token validation failed: %v (MR operations may fail)", err)
+			slog.Warn("gitlab token validation failed", "error", err, "note", "MR operations may fail")
 		}
-		log.Printf("tenant-api: GitLab MR write-back mode enabled (project=%s, target=%s)", f.GitLabProject, f.GitLabBranch)
+		slog.Info("gitlab MR write-back mode enabled", "project", f.GitLabProject, "target", f.GitLabBranch)
 		return glClient, gl.NewTracker(glClient, f.ReloadInterval), wm
 
 	default:
-		log.Printf("tenant-api: direct write mode (commit-on-write)")
+		slog.Info("direct write mode (commit-on-write)")
 		return nil, nil, handler.WriteModeDirect
 	}
 }

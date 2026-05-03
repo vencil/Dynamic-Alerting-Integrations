@@ -27,7 +27,7 @@ package views
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 	"sort"
 
@@ -61,7 +61,7 @@ func NewManager(configDir string) *Manager {
 	path := filepath.Join(configDir, "_views.yaml")
 	w, err := configwatcher.New(path, "views", ParseConfig, emptyConfig)
 	if err != nil {
-		log.Printf("WARN: views: initial load: %v", err)
+		slog.Warn("views: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
 }

@@ -19,6 +19,7 @@ package handler
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -244,6 +245,46 @@ func RequestIDResponse(next http.Handler) http.Handler {
 			w.Header().Set("X-Request-ID", reqID)
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// SlogRequestLogger emits one structured slog line per request, in
+// the same shape chi's text-based middleware.Logger does (method,
+// path, status, latency) but as JSON with the chi request_id
+// attached. PR-10/11: replaces middleware.Logger so request lines
+// land on the same structured pipeline as gitops / config / tracker
+// logs.
+//
+// 5xx responses are logged at WARN; everything else at INFO.
+// Mount AFTER middleware.RequestID so request_id is available in
+// the context.
+func SlogRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+
+		latencyMs := float64(time.Since(start).Microseconds()) / 1000.0
+		attrs := []any{
+			"request_id", middleware.GetReqID(r.Context()),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.Status(),
+			"bytes", ww.BytesWritten(),
+			"latency_ms", latencyMs,
+			"remote", r.RemoteAddr,
+		}
+		// Caller identity if oauth2-proxy populated it.
+		if email := r.Header.Get("X-Forwarded-Email"); email != "" {
+			attrs = append(attrs, "caller", email)
+		}
+
+		switch {
+		case ww.Status() >= 500:
+			slog.Warn("request", attrs...)
+		default:
+			slog.Info("request", attrs...)
+		}
 	})
 }
 
