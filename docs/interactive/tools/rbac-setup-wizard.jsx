@@ -5,86 +5,26 @@ audience: ["platform-engineer", "sre"]
 version: v2.7.0
 lang: en
 related: [config-lint, tenant-manager, self-service-portal]
-dependencies: []
+dependencies: [
+  "rbac-setup-wizard/fixtures/wizard-defaults.js",
+  "rbac-setup-wizard/utils/generators.js"
+]
 ---
 
 import React, { useState, useMemo, useCallback } from 'react';
 
 const t = window.__t || ((zh, en) => en);
 
-/* ── Step definitions ── */
-const STEPS = [
-  { id: 'groups', label: () => t('定義群組', 'Define Groups') },
-  { id: 'tenants', label: () => t('分配租戶', 'Assign Tenants') },
-  { id: 'permissions', label: () => t('設定權限', 'Set Permissions') },
-  { id: 'filters', label: () => t('環境/域名篩選', 'Environment/Domain Filters') },
-  { id: 'review', label: () => t('檢視與匯出', 'Review & Export') },
-];
+// PR-portal-10: data + helpers extracted to sibling subdirectory
+// (mirrors operator-setup-wizard PR-portal-4 + cicd / deployment in
+// this same PR). Step components remain inline; future PR can extract.
+const STEPS = window.__RBAC_STEPS;
+const PERMISSION_HIERARCHY = window.__RBAC_PERMISSION_HIERARCHY;
+const ENVIRONMENTS = window.__RBAC_ENVIRONMENTS;
+const DOMAIN_EXAMPLES = window.__RBAC_DOMAIN_EXAMPLES;
 
-const PERMISSION_HIERARCHY = {
-  read: { level: 1, label: () => t('讀取', 'Read'), desc: () => t('查看配置和告警', 'View configs and alerts') },
-  write: { level: 2, label: () => t('寫入', 'Write'), desc: () => t('修改配置（read + write）', 'Modify configs (read + write)') },
-  admin: { level: 3, label: () => t('管理員', 'Admin'), desc: () => t('完全控制（包含讀取和寫入）', 'Full control (includes read & write)') },
-};
-
-const ENVIRONMENTS = ['production', 'staging', 'development'];
-const DOMAIN_EXAMPLES = ['finance', 'ecommerce', 'analytics', 'mobile', 'streaming', 'cache'];
-
-/* ── Helper functions ── */
-
-function generateRbacYaml(groups) {
-  let yaml = '_rbac:\n';
-  for (const group of groups) {
-    if (!group.name) continue;
-    yaml += `  ${group.name}:\n`;
-    yaml += `    description: "${group.description || ''}"\n`;
-    yaml += `    permission: ${group.permission}\n`;
-
-    if (group.tenantMode === 'all') {
-      yaml += `    tenants: ["*"]\n`;
-    } else if (group.tenantMode === 'prefix' && group.tenantPrefix) {
-      yaml += `    tenants: ["${group.tenantPrefix}"]\n`;
-    } else if (group.tenantMode === 'specific' && group.specificTenants.length > 0) {
-      yaml += `    tenants: [${group.specificTenants.map(t => `"${t}"`).join(', ')}]\n`;
-    }
-
-    const hasEnvFilter = group.environments && group.environments.length > 0;
-    const hasDomainFilter = group.domains && group.domains.length > 0;
-
-    if (hasEnvFilter || hasDomainFilter) {
-      yaml += `    filters:\n`;
-      if (hasEnvFilter) {
-        yaml += `      environments: [${group.environments.map(e => `"${e}"`).join(', ')}]\n`;
-      }
-      if (hasDomainFilter) {
-        yaml += `      domains: [${group.domains.map(d => `"${d}"`).join(', ')}]\n`;
-      }
-    }
-  }
-  return yaml;
-}
-
-function validateRbac(groups) {
-  const warnings = [];
-  for (const group of groups) {
-    if (!group.name) {
-      warnings.push({ level: 'error', msg: () => t('群組名稱不能為空', 'Group name cannot be empty') });
-    }
-    if (!group.permission) {
-      warnings.push({ level: 'error', msg: () => t('未設定權限', 'Permission not set') });
-    }
-    if (group.tenantMode === 'all' && group.permission === 'admin') {
-      warnings.push({
-        level: 'warning',
-        msg: () => t(`群組 "${group.name}" 有管理員權限且可訪問所有租戶 - 非常寬鬆，請確認`, `Group "${group.name}" has admin on all tenants - very broad, please confirm`)
-      });
-    }
-    if (group.tenantMode === 'specific' && group.specificTenants.length === 0) {
-      warnings.push({ level: 'error', msg: () => t('特定租戶模式下未選中任何租戶', 'No specific tenants selected') });
-    }
-  }
-  return warnings;
-}
+const generateRbacYaml = window.__rbacGenerateYaml;
+const validateRbac = window.__rbacValidate;
 
 /* ── Step Components ── */
 
