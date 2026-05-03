@@ -45,7 +45,7 @@ func TestGetTenantEffective_Success_Flat(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/effective", "id", "db-a", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -96,7 +96,7 @@ func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "team-a", "tenant-a.yaml"),
 		"tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n") // tenant overrides mysql_connections
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/tenant-a/effective", "id", "tenant-a", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -143,7 +143,7 @@ func TestGetTenantEffective_NotFound(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/nonexistent/effective", "id", "nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -164,7 +164,7 @@ func TestGetTenantEffective_NotFound(t *testing.T) {
 func TestGetTenantEffective_InvalidID(t *testing.T) {
 	dir := t.TempDir()
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/../etc/effective", "id", "../etc", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -177,7 +177,7 @@ func TestGetTenantEffective_InvalidID(t *testing.T) {
 func TestGetTenantEffective_EmptyID(t *testing.T) {
 	dir := t.TempDir()
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants//effective", "id", "", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -196,7 +196,7 @@ func TestGetTenantEffective_HashStable(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 
 	callOnce := func() cfg.EffectiveConfig {
 		req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/effective", "id", "db-a", nil)
@@ -230,7 +230,7 @@ func TestGetTenantEffective_HashChangesOnContentEdit(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 
 	callOnce := func() cfg.EffectiveConfig {
 		req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/effective", "id", "db-a", nil)
@@ -272,7 +272,7 @@ func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: ~\n") // YAML null
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/effective", "id", "db-a", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -303,7 +303,7 @@ func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_cpu: \"85\"\n")
 
-	h := GetTenantEffective(dir)
+	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/effective", "id", "db-a", nil)
 	w := httptest.NewRecorder()
 	h(w, req)

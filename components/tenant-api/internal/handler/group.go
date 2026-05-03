@@ -33,16 +33,16 @@ type GroupResponse struct {
 // @Produce     json
 // @Success     200 {array}  GroupResponse
 // @Router      /api/v1/groups [get]
-func ListGroups(mgr *groups.Manager, rbacMgr *rbac.Manager) http.HandlerFunc {
+func (d *Deps) ListGroups() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
-		rbacCfg := rbacMgr.Get()
+		rbacCfg := d.RBAC.Get()
 
-		list := mgr.ListGroups()
+		list := d.Groups.ListGroups()
 		resp := make([]GroupResponse, 0, len(list))
 		for _, g := range list {
 			// v2.5.0: Skip groups where user has no accessible members
-			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(rbacMgr, idpGroups, g.Members) {
+			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, idpGroups, g.Members) {
 				continue
 			}
 			resp = append(resp, GroupResponse{
@@ -50,7 +50,7 @@ func ListGroups(mgr *groups.Manager, rbacMgr *rbac.Manager) http.HandlerFunc {
 				Label:       g.Label,
 				Description: g.Description,
 				Filters:     g.Filters,
-				Members:     filterAccessibleMembers(rbacMgr, idpGroups, g.Members),
+				Members:     filterAccessibleMembers(d.RBAC, idpGroups, g.Members),
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -94,7 +94,7 @@ func filterAccessibleMembers(rbacMgr *rbac.Manager, idpGroups, members []string)
 // @Failure     400  {object} map[string]string
 // @Failure     404  {object} map[string]string
 // @Router      /api/v1/groups/{id} [get]
-func GetGroup(mgr *groups.Manager) http.HandlerFunc {
+func (d *Deps) GetGroup() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -102,7 +102,7 @@ func GetGroup(mgr *groups.Manager) http.HandlerFunc {
 			return
 		}
 
-		g, ok := mgr.GetGroup(groupID)
+		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "group not found: "+groupID)
 			return
@@ -156,7 +156,7 @@ type PutGroupRequest struct {
 // @Failure     403  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/groups/{id} [put]
-func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager) http.HandlerFunc {
+func (d *Deps) PutGroup() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -195,7 +195,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager)
 		// if any member is forbidden. List ALL forbidden ids in the
 		// error so the operator can fix in one round-trip rather
 		// than discovering them one-at-a-time.
-		if forbidden := tenantsLackingPermission(rbacMgr, idpGroups, req.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, idpGroups, req.Members, rbac.PermWrite); len(forbidden) > 0 {
 			writeJSONError(w, http.StatusForbidden,
 				"insufficient permission to write group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
@@ -203,7 +203,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager)
 		}
 
 		// Update the in-memory config and write to disk
-		cfg := mgr.Get()
+		cfg := d.Groups.Get()
 		newCfg := &groups.GroupsConfig{
 			Groups: make(map[string]groups.Group, len(cfg.Groups)+1),
 		}
@@ -223,7 +223,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager)
 			return
 		}
 
-		if err := writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				writeJSONError(w, http.StatusConflict, err.Error())
 				return
@@ -233,7 +233,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager)
 		}
 
 		// Reload manager to pick up the new file
-		_ = mgr.Reload()
+		_ = d.Groups.Reload()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -256,7 +256,7 @@ func PutGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager)
 // @Failure     404 {object} map[string]string
 // @Failure     409 {object} map[string]string
 // @Router      /api/v1/groups/{id} [delete]
-func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manager) http.HandlerFunc {
+func (d *Deps) DeleteGroup() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -267,7 +267,7 @@ func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manag
 		email := rbac.RequestEmail(r)
 		idpGroups := rbac.RequestGroups(r)
 
-		cfg := mgr.Get()
+		cfg := d.Groups.Get()
 		existing, ok := cfg.Groups[groupID]
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "group not found: "+groupID)
@@ -280,7 +280,7 @@ func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manag
 		// group whose members they don't own — a denial-of-
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
-		if forbidden := tenantsLackingPermission(rbacMgr, idpGroups, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, idpGroups, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
 			writeJSONError(w, http.StatusForbidden,
 				"insufficient permission to delete group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
@@ -302,7 +302,7 @@ func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manag
 			return
 		}
 
-		if err := writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteGroupsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				writeJSONError(w, http.StatusConflict, err.Error())
 				return
@@ -311,7 +311,7 @@ func DeleteGroup(mgr *groups.Manager, writer *gitops.Writer, rbacMgr *rbac.Manag
 			return
 		}
 
-		_ = mgr.Reload()
+		_ = d.Groups.Reload()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{

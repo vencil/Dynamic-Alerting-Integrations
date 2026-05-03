@@ -38,7 +38,7 @@ func TestGetTask_Found(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Call handler
-	handler := GetTask(taskMgr, newRBACManager(t, ""))
+	handler := (&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")}).GetTask()
 	handler(w, req)
 
 	// Verify response
@@ -85,7 +85,7 @@ func TestGetTask_NotFound(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Call handler
-	handler := GetTask(taskMgr, newRBACManager(t, ""))
+	handler := (&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")}).GetTask()
 	handler(w, req)
 
 	// Verify response status is 404
@@ -166,7 +166,7 @@ func TestGetTask_CompletedTask(t *testing.T) {
 				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 				// Call handler
-				handler := GetTask(taskMgr, newRBACManager(t, ""))
+				handler := (&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")}).GetTask()
 				handler(w, req)
 
 				// Verify response
@@ -246,7 +246,7 @@ func TestGetTask_OrphanedHint(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Call handler
-	handler := GetTask(taskMgr2, newRBACManager(t, ""))
+	handler := (&Deps{Tasks: taskMgr2, RBAC: newRBACManager(t, "")}).GetTask()
 	handler(w, req)
 
 	// Verify 404 response
@@ -301,7 +301,7 @@ func TestGetTask_MultiplePolls(t *testing.T) {
 		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 		// Call handler
-		handler := GetTask(taskMgr, newRBACManager(t, ""))
+		handler := (&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")}).GetTask()
 		handler(w, req)
 
 		// Decode response

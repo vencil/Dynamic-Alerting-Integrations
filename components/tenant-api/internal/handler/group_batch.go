@@ -52,7 +52,7 @@ type GroupBatchResponse struct {
 // @Failure     400   {object} map[string]string
 // @Failure     404   {object} map[string]string
 // @Router      /api/v1/groups/{id}/batch [post]
-func GroupBatch(groupMgr *groups.Manager, writer *gitops.Writer, configDir string, rbacMgr *rbac.Manager, taskMgr *async.Manager) http.HandlerFunc {
+func (d *Deps) GroupBatch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		if err := groups.ValidateGroupID(groupID); err != nil {
@@ -63,7 +63,7 @@ func GroupBatch(groupMgr *groups.Manager, writer *gitops.Writer, configDir strin
 		email := rbac.RequestEmail(r)
 		idpGroups := rbac.RequestGroups(r)
 
-		g, ok := groupMgr.GetGroup(groupID)
+		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "group not found: "+groupID)
 			return
@@ -88,9 +88,9 @@ func GroupBatch(groupMgr *groups.Manager, writer *gitops.Writer, configDir strin
 			groupID, time.Now().UTC().Format("20060102-150405"))
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
-		if r.URL.Query().Get("async") == "true" && taskMgr != nil {
-			task := taskMgr.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeGroupBatchOps(writer, configDir, g.Members, req.Patch, email, idpGroups, rbacMgr)
+		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
+			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
+				results := executeGroupBatchOps(d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -105,15 +105,15 @@ func GroupBatch(groupMgr *groups.Manager, writer *gitops.Writer, configDir strin
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":    "pending",
-				"task_id":   task.ID,
-				"poll_url":  fmt.Sprintf("/api/v1/tasks/%s", task.ID),
+				"status":   "pending",
+				"task_id":  task.ID,
+				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
 			})
 			return
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeGroupBatchOps(writer, configDir, g.Members, req.Patch, email, idpGroups, rbacMgr)
+		results := executeGroupBatchOps(d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
 
 		// Compute summary statistics
 		successes := 0

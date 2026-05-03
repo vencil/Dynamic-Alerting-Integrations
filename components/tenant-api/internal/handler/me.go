@@ -32,7 +32,7 @@ type MeResponse struct {
 // @Success     200 {object} MeResponse
 // @Failure     401 {object} map[string]string
 // @Router      /api/v1/me [get]
-func Me(rbacMgr *rbac.Manager) http.HandlerFunc {
+func (d *Deps) Me() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		if email == "" {
@@ -56,15 +56,15 @@ func Me(rbacMgr *rbac.Manager) http.HandlerFunc {
 
 		// Build the response
 		resp := MeResponse{
-			Email:      email,
-			User:       user,
-			Groups:     groups,
+			Email:       email,
+			User:        user,
+			Groups:      groups,
 			Permissions: make(map[string][]string),
 		}
 
 		// Collect all accessible tenants and build permissions map
 		accessibleTenants := make(map[string]bool)
-		rbacCfg := rbacMgr.Get()
+		rbacCfg := d.RBAC.Get()
 
 		for _, groupName := range groups {
 			// Find the group rule in RBAC config
@@ -101,8 +101,8 @@ func Me(rbacMgr *rbac.Manager) http.HandlerFunc {
 		sort.Strings(resp.AccessibleTenants)
 
 		// v2.5.0: Accessible environments and domains for UI filtering hints
-		resp.AccessibleEnvironments = rbacMgr.AccessibleEnvironments(groups)
-		resp.AccessibleDomains = rbacMgr.AccessibleDomains(groups)
+		resp.AccessibleEnvironments = d.RBAC.AccessibleEnvironments(groups)
+		resp.AccessibleDomains = d.RBAC.AccessibleDomains(groups)
 		sort.Strings(resp.AccessibleEnvironments)
 		sort.Strings(resp.AccessibleDomains)
 

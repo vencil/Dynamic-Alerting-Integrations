@@ -78,7 +78,7 @@ func makeFixtureDir(t *testing.T, n int, factory func(i int) (string, string)) s
 func runSearch(t *testing.T, configDir string, mgr *rbac.Manager, idpGroups []string, query string) (*SearchResponse, int, []byte) {
 	t.Helper()
 	cache := NewTenantSnapshotCache()
-	inner := SearchTenants(configDir, mgr, cache)
+	inner := (&Deps{ConfigDir: configDir, RBAC: mgr, SearchCache: cache}).SearchTenants()
 	// The list endpoint passes nil tenantIDFn (no per-tenant
 	// permission check) — same as the production route binding.
 	h := mgr.Middleware(rbac.PermRead, nil)(inner)

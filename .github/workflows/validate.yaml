@@ -18,6 +18,18 @@ on:
     paths:
       - "components/threshold-exporter/config/**"
       - "components/threshold-exporter/app/**"
+      # tenant-api: branch-protection on `main` requires the four jobs
+      # in this workflow (Python Tests, Go Tests, Validate Tenant
+      # Config & Routes, Version Consistency). Pre-PR-216 the path
+      # filter excluded `components/tenant-api/**`, so any tenant-api-
+      # only PR couldn't satisfy the required-checks contract and
+      # merging fell back to admin override / artificial cross-touch
+      # in CHANGELOG. The included jobs don't actually exercise
+      # tenant-api code (Python tests + threshold-exporter Go tests
+      # + threshold-exporter config validation + version-bump check),
+      # but they're cheap to run and the symmetry with threshold-
+      # exporter PRs is the cleanest fix.
+      - "components/tenant-api/**"
       - "rule-packs/**"
       - "scripts/tools/**"
       - "tests/**"

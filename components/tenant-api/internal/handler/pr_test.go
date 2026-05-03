@@ -46,7 +46,7 @@ func newTestTracker(t *testing.T, prs []platform.PRInfo) *gh.Tracker {
 func TestListPRs_Empty(t *testing.T) {
 	tracker := newTestTracker(t, []platform.PRInfo{})
 
-	h := ListPRs(tracker, newRBACManager(t, ""))
+	h := (&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")}).ListPRs()
 	req := httptest.NewRequest("GET", "/api/v1/prs", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -70,7 +70,7 @@ func TestListPRs_WithPRs(t *testing.T) {
 		{Number: 2, WebURL: "https://gh/2", State: "open", Title: "PR2", HeadRef: "tenant-api/db-b/20260406"},
 	})
 
-	h := ListPRs(tracker, newRBACManager(t, ""))
+	h := (&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")}).ListPRs()
 	req := httptest.NewRequest("GET", "/api/v1/prs", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -97,7 +97,7 @@ func TestListPRs_WithRegisteredPR(t *testing.T) {
 		HeadRef:  "tenant-api/db-a/20260406",
 	})
 
-	h := ListPRs(tracker, newRBACManager(t, ""))
+	h := (&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")}).ListPRs()
 	req := httptest.NewRequest("GET", "/api/v1/prs", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -123,7 +123,7 @@ func TestListPRs_FilterByTenant(t *testing.T) {
 		Number: 2, WebURL: "https://gh/2", State: "open", TenantID: "db-b",
 	})
 
-	h := ListPRs(tracker, newRBACManager(t, ""))
+	h := (&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")}).ListPRs()
 
 	// Filter for db-a only
 	req := httptest.NewRequest("GET", "/api/v1/prs?tenant=db-a", nil)
@@ -147,7 +147,7 @@ func TestListPRs_FilterByNonexistentTenant(t *testing.T) {
 		Number: 1, WebURL: "https://gh/1", State: "open", TenantID: "db-a",
 	})
 
-	h := ListPRs(tracker, newRBACManager(t, ""))
+	h := (&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")}).ListPRs()
 	req := httptest.NewRequest("GET", "/api/v1/prs?tenant=nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -169,7 +169,7 @@ func TestPutTenant_DirectMode(t *testing.T) {
 	})
 	writer := newTestWriter(configDir)
 
-	h := PutTenant(writer, nil, WriteModeDirect, nil, nil)
+	h := (&Deps{Writer: writer, WriteMode: WriteModeDirect}).PutTenant()
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	// Set identity headers for RBAC
@@ -210,7 +210,7 @@ func TestPutTenant_PRMode_PendingPRConflict(t *testing.T) {
 		HeadRef:  "tenant-api/db-a/20260406",
 	})
 
-	h := PutTenant(writer, nil, WriteModePR, ghClient, tracker)
+	h := (&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: ghClient, PRTracker: tracker}).PutTenant()
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -245,7 +245,7 @@ func TestPutTenant_PRMode_InvalidTenantID(t *testing.T) {
 	ghClient.SetBaseURL(ghSrv.URL)
 	tracker := gh.NewTracker(ghClient, 1<<30)
 
-	h := PutTenant(writer, nil, WriteModePR, ghClient, tracker)
+	h := (&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: ghClient, PRTracker: tracker}).PutTenant()
 	body := bytes.NewBufferString("content")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/../etc/passwd", "id", "../etc/passwd", body)
 	w := httptest.NewRecorder()
@@ -284,7 +284,7 @@ func TestPutTenant_GitLabMode_PendingMRConflict(t *testing.T) {
 	})
 
 	// Use pr-gitlab write mode with the tracker
-	h := PutTenant(writer, nil, WriteModePRGitLab, ghClient, tracker)
+	h := (&Deps{Writer: writer, WriteMode: WriteModePRGitLab, PRClient: ghClient, PRTracker: tracker}).PutTenant()
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -381,7 +381,7 @@ func TestPutTenant_PRMode_HappyPath(t *testing.T) {
 	}
 	mockTracker := &mockPlatformTracker{}
 
-	h := PutTenant(writer, nil, WriteModePR, mockClient, mockTracker)
+	h := (&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker}).PutTenant()
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
@@ -426,7 +426,7 @@ func TestPutTenant_GitLabMode_HappyPath(t *testing.T) {
 	mockClient := &mockPlatformClient{providerName: "gitlab"}
 	mockTracker := &mockPlatformTracker{}
 
-	h := PutTenant(writer, nil, WriteModePRGitLab, mockClient, mockTracker)
+	h := (&Deps{Writer: writer, WriteMode: WriteModePRGitLab, PRClient: mockClient, PRTracker: mockTracker}).PutTenant()
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
@@ -454,7 +454,7 @@ func TestBatchTenants_PRMode_AllInvalid(t *testing.T) {
 	mockClient := &mockPlatformClient{providerName: "github"}
 	mockTracker := &mockPlatformTracker{}
 
-	h := BatchTenants(writer, configDir, rbacMgr, nil, nil, WriteModePR, mockClient, mockTracker)
+	h := (&Deps{Writer: writer, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: mockTracker}).BatchTenants()
 
 	batchReq := `{"operations":[{"tenant_id":"../etc/passwd","patch":{"_silent_mode":"warning"}}]}`
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", strings.NewReader(batchReq))

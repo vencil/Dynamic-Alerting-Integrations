@@ -41,18 +41,18 @@ type TenantSummary struct {
 // @Success     200 {array}  TenantSummary
 // @Failure     500 {object} map[string]string
 // @Router      /api/v1/tenants [get]
-func ListTenants(configDir string, rbacMgr *rbac.Manager) http.HandlerFunc {
+func (d *Deps) ListTenants() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
 
-		tenants, err := loadAllTenants(configDir)
+		tenants, err := loadAllTenants(d.ConfigDir)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		// v2.5.0: Filter tenants by RBAC (tenant pattern + environment/domain metadata)
-		filtered := filterTenantsByRBAC(tenants, rbacMgr, idpGroups)
+		filtered := filterTenantsByRBAC(tenants, d.RBAC, idpGroups)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(filtered)

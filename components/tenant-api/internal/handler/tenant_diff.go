@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // DiffRequest is the body for POST /api/v1/tenants/{id}/diff.
@@ -38,7 +37,7 @@ type DiffResponse struct {
 // @Failure     400   {object} map[string]string
 // @Failure     500   {object} map[string]string
 // @Router      /api/v1/tenants/{id}/diff [post]
-func DiffTenant(w *gitops.Writer) http.HandlerFunc {
+func (d *Deps) DiffTenant() http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -64,7 +63,7 @@ func DiffTenant(w *gitops.Writer) http.HandlerFunc {
 			proposed = req.Proposed
 		}
 
-		diff, err := w.Diff(tenantID, proposed)
+		diff, err := d.Writer.Diff(tenantID, proposed)
 		if err != nil {
 			writeJSONError(rw, http.StatusInternalServerError, err.Error())
 			return
