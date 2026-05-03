@@ -32,7 +32,7 @@ type TenantDetail struct {
 // @Failure     404  {object} map[string]string
 // @Failure     500  {object} map[string]string
 // @Router      /api/v1/tenants/{id} [get]
-func GetTenant(configDir string) http.HandlerFunc {
+func (d *Deps) GetTenant() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -40,7 +40,7 @@ func GetTenant(configDir string) http.HandlerFunc {
 			return
 		}
 
-		filePath := filepath.Join(configDir, tenantID+".yaml")
+		filePath := filepath.Join(d.ConfigDir, tenantID+".yaml")
 		data, err := os.ReadFile(filePath)
 		if os.IsNotExist(err) {
 			writeJSONError(w, http.StatusNotFound, "tenant not found: "+tenantID)
@@ -52,7 +52,7 @@ func GetTenant(configDir string) http.HandlerFunc {
 		}
 
 		// Parse defaults from _defaults.yaml if it exists
-		merged := loadMergedConfig(configDir, tenantID, data)
+		merged := loadMergedConfig(d.ConfigDir, tenantID, data)
 
 		warnings := merged.ValidateTenantKeys()
 		resolved := merged.ResolveAt(time.Now())

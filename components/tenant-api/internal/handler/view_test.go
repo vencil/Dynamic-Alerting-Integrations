@@ -45,7 +45,7 @@ func TestListViews_Empty(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 
-	h := ListViews(mgr)
+	h := (&Deps{Views: mgr}).ListViews()
 	req := httptest.NewRequest("GET", "/api/v1/views", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -69,7 +69,7 @@ func TestListViews_WithData(t *testing.T) {
 	setupViewsFile(t, configDir, testViewsYAML)
 	mgr := views.NewManager(configDir)
 
-	h := ListViews(mgr)
+	h := (&Deps{Views: mgr}).ListViews()
 	req := httptest.NewRequest("GET", "/api/v1/views", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -116,7 +116,7 @@ func TestGetView_Success(t *testing.T) {
 	setupViewsFile(t, configDir, testViewsYAML)
 	mgr := views.NewManager(configDir)
 
-	h := GetView(mgr)
+	h := (&Deps{Views: mgr}).GetView()
 	req := newRequestWithChiParam("GET", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -154,7 +154,7 @@ func TestGetView_NotFound(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 
-	h := GetView(mgr)
+	h := (&Deps{Views: mgr}).GetView()
 	req := newRequestWithChiParam("GET", "/api/v1/views/nonexistent", "id", "nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -169,7 +169,7 @@ func TestGetView_InvalidID(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	mgr := views.NewManager(configDir)
 
-	h := GetView(mgr)
+	h := (&Deps{Views: mgr}).GetView()
 	req := newRequestWithChiParam("GET", "/api/v1/views/INVALID!", "id", "INVALID!", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -201,7 +201,7 @@ func TestPutView_Create(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -268,7 +268,7 @@ func TestPutView_Update(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -308,7 +308,7 @@ func TestPutView_MissingLabel(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -336,7 +336,7 @@ func TestPutView_EmptyFilters(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -355,7 +355,7 @@ func TestPutView_InvalidJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -378,7 +378,7 @@ func TestPutView_InvalidViewID(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -405,7 +405,7 @@ func TestDeleteView_Success(t *testing.T) {
 	req := newRequestWithChiParam("DELETE", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).DeleteView()
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -442,7 +442,7 @@ func TestDeleteView_NotFound(t *testing.T) {
 	req := newRequestWithChiParam("DELETE", "/api/v1/views/nonexistent", "id", "nonexistent", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).DeleteView()
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusNotFound {
@@ -459,7 +459,7 @@ func TestDeleteView_InvalidID(t *testing.T) {
 	req := newRequestWithChiParam("DELETE", "/api/v1/views/INVALID!", "id", "INVALID!", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).DeleteView()
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -492,7 +492,7 @@ func TestPutView_Conflict(t *testing.T) {
 		t.SkipNow()
 	}
 
-	h := PutView(mgr, writer)
+	h := (&Deps{Views: mgr, Writer: writer}).PutView()
 	w := executeWithRBAC(t, h, req)
 
 	// The request should succeed even if there was a pre-existing HEAD

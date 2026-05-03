@@ -29,9 +29,9 @@ type ViewResponse struct {
 // @Produce     json
 // @Success     200 {array}  ViewResponse
 // @Router      /api/v1/views [get]
-func ListViews(mgr *views.Manager) http.HandlerFunc {
+func (d *Deps) ListViews() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list := mgr.ListViews()
+		list := d.Views.ListViews()
 		resp := make([]ViewResponse, 0, len(list))
 		for _, v := range list {
 			resp = append(resp, ViewResponse{
@@ -57,7 +57,7 @@ func ListViews(mgr *views.Manager) http.HandlerFunc {
 // @Failure     400 {object} map[string]string
 // @Failure     404 {object} map[string]string
 // @Router      /api/v1/views/{id} [get]
-func GetView(mgr *views.Manager) http.HandlerFunc {
+func (d *Deps) GetView() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
@@ -65,7 +65,7 @@ func GetView(mgr *views.Manager) http.HandlerFunc {
 			return
 		}
 
-		v, ok := mgr.GetView(viewID)
+		v, ok := d.Views.GetView(viewID)
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "view not found: "+viewID)
 			return
@@ -107,7 +107,7 @@ type PutViewRequest struct {
 // @Failure     400  {object} map[string]string
 // @Failure     409  {object} map[string]string
 // @Router      /api/v1/views/{id} [put]
-func PutView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
+func (d *Deps) PutView() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
@@ -141,7 +141,7 @@ func PutView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 			return
 		}
 
-		cfg := mgr.Get()
+		cfg := d.Views.Get()
 		newCfg := &views.ViewsConfig{
 			Views: make(map[string]views.View, len(cfg.Views)+1),
 		}
@@ -161,7 +161,7 @@ func PutView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 			return
 		}
 
-		if err := writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				writeJSONError(w, http.StatusConflict, err.Error())
 				return
@@ -170,7 +170,7 @@ func PutView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 			return
 		}
 
-		_ = mgr.Reload()
+		_ = d.Views.Reload()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -191,7 +191,7 @@ func PutView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 // @Failure     404 {object} map[string]string
 // @Failure     409 {object} map[string]string
 // @Router      /api/v1/views/{id} [delete]
-func DeleteView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
+func (d *Deps) DeleteView() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
@@ -201,7 +201,7 @@ func DeleteView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 
 		email := rbac.RequestEmail(r)
 
-		cfg := mgr.Get()
+		cfg := d.Views.Get()
 		if _, ok := cfg.Views[viewID]; !ok {
 			writeJSONError(w, http.StatusNotFound, "view not found: "+viewID)
 			return
@@ -222,7 +222,7 @@ func DeleteView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 			return
 		}
 
-		if err := writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
+		if err := d.Writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
 				writeJSONError(w, http.StatusConflict, err.Error())
 				return
@@ -231,7 +231,7 @@ func DeleteView(mgr *views.Manager, writer *gitops.Writer) http.HandlerFunc {
 			return
 		}
 
-		_ = mgr.Reload()
+		_ = d.Views.Reload()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{

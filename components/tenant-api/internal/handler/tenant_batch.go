@@ -73,7 +73,7 @@ type BatchResponse struct {
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} map[string]string
 // @Router      /api/v1/tenants/batch [post]
-func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, policyMgr *policy.Manager, taskMgr *async.Manager, writeMode WriteMode, prClient platform.Client, prTracker platform.Tracker) http.HandlerFunc {
+func (d *Deps) BatchTenants() http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
 		groups := rbac.RequestGroups(r)
@@ -108,7 +108,7 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 		// v2.6.0: PR-based write-back mode for batch operations (ADR-011)
 		// All operations are consolidated into a single PR/MR.
 		// Supports both GitHub PRs and GitLab MRs via platform interfaces.
-		if writeMode.IsPRMode() && prClient != nil && prTracker != nil {
+		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
 			// Pre-validate all ops (RBAC + policy) before creating any branch
 			var batchOps []gitops.PRBatchOp
 			var batchResults []BatchResult
@@ -117,12 +117,12 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 					continue
 				}
-				if !rbacMgr.HasPermission(groups, op.TenantID, rbac.PermWrite) {
+				if !d.RBAC.HasPermission(groups, op.TenantID, rbac.PermWrite) {
 					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 					continue
 				}
-				if policyMgr != nil {
-					if violations := policyMgr.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+				if d.Policy != nil {
+					if violations := d.Policy.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
 						msgs := make([]string, len(violations))
 						for i, v := range violations {
 							msgs[i] = v.Message
@@ -147,7 +147,7 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 				return
 			}
 
-			result, err := w.WritePRBatch(batchOps, email)
+			result, err := d.Writer.WritePRBatch(batchOps, email)
 			if err != nil {
 				writeJSONError(rw, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
@@ -160,16 +160,16 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 			}
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
 				email, strings.Join(tenantList, ", "))
-			pr, err := prClient.CreatePR(prTitle, prBody, result.BranchName, []string{"tenant-api", "auto-generated", "batch"})
+			pr, err := d.PRClient.CreatePR(prTitle, prBody, result.BranchName, []string{"tenant-api", "auto-generated", "batch"})
 			if err != nil {
-				provider := prClient.ProviderName()
+				provider := d.PRClient.ProviderName()
 				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 
 			// Register each tenant's PR/MR in tracker
 			for _, op := range batchOps {
-				prTracker.RegisterPR(platform.PRInfo{
+				d.PRTracker.RegisterPR(platform.PRInfo{
 					Number:   pr.Number,
 					WebURL:   pr.WebURL,
 					State:    "open",
@@ -192,9 +192,9 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 		}
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
-		if r.URL.Query().Get("async") == "true" && taskMgr != nil {
-			task := taskMgr.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeBatchOps(w, configDir, req.Operations, email, groups, rbacMgr, policyMgr)
+		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
+			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
+				results := executeBatchOps(d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -209,15 +209,15 @@ func BatchTenants(w *gitops.Writer, configDir string, rbacMgr *rbac.Manager, pol
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(rw).Encode(map[string]interface{}{
-				"status":  "pending",
-				"task_id": task.ID,
+				"status":   "pending",
+				"task_id":  task.ID,
 				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
 			})
 			return
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeBatchOps(w, configDir, req.Operations, email, groups, rbacMgr, policyMgr)
+		results := executeBatchOps(d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
 
 		// Compute summary
 		successes := 0

@@ -28,7 +28,7 @@ type ValidateResponse struct {
 // @Success     200   {object} ValidateResponse
 // @Failure     400   {object} map[string]string
 // @Router      /api/v1/tenants/{id}/validate [post]
-func ValidateTenant(configDir string) http.HandlerFunc {
+func (d *Deps) ValidateTenant() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -43,7 +43,7 @@ func ValidateTenant(configDir string) http.HandlerFunc {
 		}
 
 		// Merge with defaults to get full validation context
-		merged := loadMergedConfig(configDir, tenantID, body)
+		merged := loadMergedConfig(d.ConfigDir, tenantID, body)
 
 		warnings := merged.ValidateTenantKeys()
 

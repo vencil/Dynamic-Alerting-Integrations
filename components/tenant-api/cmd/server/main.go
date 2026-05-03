@@ -160,6 +160,23 @@ func main() {
 		log.Printf("tenant-api: direct write mode (commit-on-write)")
 	}
 
+	// Wire all handler dependencies into a single struct (PR-4/11).
+	// Every handler is now a method on *deps; pass-through positional
+	// args are gone.
+	deps := &handler.Deps{
+		ConfigDir:   *configDir,
+		Writer:      writer,
+		RBAC:        rbacMgr,
+		Policy:      policyMgr,
+		Groups:      groupMgr,
+		Views:       viewMgr,
+		Tasks:       taskMgr,
+		PRClient:    prClient,
+		PRTracker:   prTracker,
+		WriteMode:   wm,
+		SearchCache: handler.NewTenantSnapshotCache(),
+	}
+
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
@@ -196,99 +213,91 @@ func main() {
 
 	// Health / readiness / metrics (no auth)
 	r.Get("/health", handler.Health)
-	r.Get("/ready", handler.Ready(*configDir))
+	r.Get("/ready", deps.Ready())
 	r.Get("/metrics", handler.MetricsHandler)
 
 	// API v1 — all routes require identity headers (injected by oauth2-proxy)
 	r.Route("/api/v1", func(r chi.Router) {
 		// Identity endpoint (no specific permission required, just authenticated)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/me", handler.Me(rbacMgr))
+			Get("/me", deps.Me())
 
 		// Tenant list (read permission, no specific tenant ID)
 		// v2.5.0: RBAC-filtered — only returns tenants the user can access
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tenants", handler.ListTenants(*configDir, rbacMgr))
+			Get("/tenants", deps.ListTenants())
 
 		// v2.8.0 Phase .c C-1: server-side search / filter / pagination.
-		// Same RBAC scoping as /tenants; designed for the
-		// virtualized Tenant Manager (PR-2 / C-2) so the JSX doesn't
-		// have to ship the full set client-side at 500+ tenant scale.
-		// Snapshot cache (30s TTL) shared across requests — see
-		// tenant_search.go for the design notes.
+		// Snapshot cache (30s TTL) shared across requests via Deps.SearchCache.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tenants/search", handler.SearchTenants(*configDir, rbacMgr, handler.NewTenantSnapshotCache()))
+			Get("/tenants/search", deps.SearchTenants())
 
 		// Per-tenant routes
 		r.Route("/tenants/{id}", func(r chi.Router) {
-			// Read endpoints
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/", handler.GetTenant(*configDir))
+				Get("/", deps.GetTenant())
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Post("/diff", handler.DiffTenant(writer))
+				Post("/diff", deps.DiffTenant())
 
-			// Write endpoints
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
-				Put("/", handler.PutTenant(writer, policyMgr, wm, prClient, prTracker))
+				Put("/", deps.PutTenant())
 
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Post("/validate", handler.ValidateTenant(*configDir))
+				Post("/validate", deps.ValidateTenant())
 
 			// v2.7.0 B-3 (ADR-017/018): merged effective config + dual hashes.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/effective", handler.GetTenantEffective(*configDir))
+				Get("/effective", deps.GetTenantEffective())
 		})
 
 		// Batch operations — route-level middleware checks read (authenticated),
 		// per-tenant write permission is enforced inside the handler.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Post("/tenants/batch", handler.BatchTenants(writer, *configDir, rbacMgr, policyMgr, taskMgr, wm, prClient, prTracker))
+			Post("/tenants/batch", deps.BatchTenants())
 
-		// Group management (v2.5.0)
-		// v2.5.0: RBAC-filtered — only returns groups with accessible members
+		// Group management (v2.5.0) — RBAC-filtered list.
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/groups", handler.ListGroups(groupMgr, rbacMgr))
+			Get("/groups", deps.ListGroups())
 
 		r.Route("/groups/{id}", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/", handler.GetGroup(groupMgr))
+				Get("/", deps.GetGroup())
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Put("/", handler.PutGroup(groupMgr, writer, rbacMgr))
+				Put("/", deps.PutGroup())
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Delete("/", handler.DeleteGroup(groupMgr, writer, rbacMgr))
+				Delete("/", deps.DeleteGroup())
 
-			// Batch operations on group members
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Post("/batch", handler.GroupBatch(groupMgr, writer, *configDir, rbacMgr, taskMgr))
+				Post("/batch", deps.GroupBatch())
 		})
 
 		// Saved Views (v2.5.0 Phase C)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/views", handler.ListViews(viewMgr))
+			Get("/views", deps.ListViews())
 
 		r.Route("/views/{id}", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/", handler.GetView(viewMgr))
+				Get("/", deps.GetView())
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Put("/", handler.PutView(viewMgr, writer))
+				Put("/", deps.PutView())
 
 			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
-				Delete("/", handler.DeleteView(viewMgr, writer))
+				Delete("/", deps.DeleteView())
 		})
 
 		// Task polling (v2.6.0 — async batch operations)
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-			Get("/tasks/{id}", handler.GetTask(taskMgr, rbacMgr))
+			Get("/tasks/{id}", deps.GetTask())
 
 		// PR/MR tracking (v2.6.0 Phase C — ADR-011 PR-based write-back)
 		// Works for both GitHub PRs and GitLab MRs via platform.Tracker
 		if prTracker != nil {
 			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-				Get("/prs", handler.ListPRs(prTracker, rbacMgr))
+				Get("/prs", deps.ListPRs())
 		}
 
 		// Real-time event stream (v2.6.0 — SSE for config change notifications)

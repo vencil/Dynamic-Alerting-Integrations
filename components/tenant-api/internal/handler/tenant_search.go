@@ -132,7 +132,7 @@ type SearchResponse struct {
 // Response: SearchResponse (see above) on 200, structured JSON error
 // otherwise. RBAC filtering is applied identically to ListTenants —
 // callers without metadata access see fewer rows.
-func SearchTenants(configDir string, rbacMgr *rbac.Manager, cache *tenantSnapshotCache) http.HandlerFunc {
+func (d *Deps) SearchTenants() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idpGroups := rbac.RequestGroups(r)
 
@@ -142,7 +142,7 @@ func SearchTenants(configDir string, rbacMgr *rbac.Manager, cache *tenantSnapsho
 			return
 		}
 
-		all, err := cache.snapshot(configDir)
+		all, err := d.SearchCache.snapshot(d.ConfigDir)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -152,7 +152,7 @@ func SearchTenants(configDir string, rbacMgr *rbac.Manager, cache *tenantSnapsho
 		// THIS user can see, not what exists globally. UI consumers
 		// expect total_matched to equal "rows the user could ever
 		// reach by paging".
-		visible := filterTenantsByRBAC(all, rbacMgr, idpGroups)
+		visible := filterTenantsByRBAC(all, d.RBAC, idpGroups)
 		matched := applyFilters(visible, params)
 		sortTenants(matched, params.sort)
 

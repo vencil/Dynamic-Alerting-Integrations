@@ -17,16 +17,16 @@ func Health(w http.ResponseWriter, r *http.Request) {
 // stat-able (e.g. ConfigMap mount failed, PV detached). Returns 200
 // only when the directory is readable, so K8s drains traffic away
 // from a pod whose tenant data the app cannot serve.
-func Ready(configDir string) http.HandlerFunc {
+func (d *Deps) Ready() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		info, err := os.Stat(configDir)
+		info, err := os.Stat(d.ConfigDir)
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"status":     "not_ready",
-				"config_dir": configDir,
+				"config_dir": d.ConfigDir,
 				"error":      err.Error(),
 			})
 			return
@@ -35,7 +35,7 @@ func Ready(configDir string) http.HandlerFunc {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"status":     "not_ready",
-				"config_dir": configDir,
+				"config_dir": d.ConfigDir,
 				"error":      "config_dir is not a directory",
 			})
 			return
@@ -44,7 +44,7 @@ func Ready(configDir string) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status":     "ready",
-			"config_dir": configDir,
+			"config_dir": d.ConfigDir,
 		})
 	}
 }

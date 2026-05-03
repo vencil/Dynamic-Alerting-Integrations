@@ -155,7 +155,7 @@ func TestPutGroup_ForbiddenMember_Returns403(t *testing.T) {
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/mixed", "id", "mixed",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	w := servePopulatingRBAC(t, PutGroup(mgr, writer, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{Groups: mgr, Writer: writer, RBAC: rbacMgr}).PutGroup(), req,
 		"alice@example.com", []string{"dba-team-a"})
 
 	if w.Code != http.StatusForbidden {
@@ -188,7 +188,7 @@ func TestPutGroup_AllMembersForbidden_ListsAllInError(t *testing.T) {
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/forbidden", "id", "forbidden",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	w := servePopulatingRBAC(t, PutGroup(mgr, writer, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{Groups: mgr, Writer: writer, RBAC: rbacMgr}).PutGroup(), req,
 		"alice@example.com", []string{"unprivileged"})
 
 	if w.Code != http.StatusForbidden {
@@ -229,7 +229,7 @@ func TestDeleteGroup_ForbiddenMember_Returns403(t *testing.T) {
 `)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/cross-team", "id", "cross-team", nil)
-	w := servePopulatingRBAC(t, DeleteGroup(mgr, writer, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{Groups: mgr, Writer: writer, RBAC: rbacMgr}).DeleteGroup(), req,
 		"alice@example.com", []string{"dba-team-a"})
 
 	if w.Code != http.StatusForbidden {
@@ -270,7 +270,7 @@ func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
 	taskID := task.ID
 
 	req := newRequestWithChiParam("GET", "/api/v1/tasks/"+taskID, "id", taskID, nil)
-	w := servePopulatingRBAC(t, GetTask(taskMgr, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{Tasks: taskMgr, RBAC: rbacMgr}).GetTask(), req,
 		"alice@example.com", []string{"viewers"})
 
 	if w.Code != http.StatusOK {
@@ -314,7 +314,7 @@ func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
 	taskID := task.ID
 
 	req := newRequestWithChiParam("GET", "/api/v1/tasks/"+taskID, "id", taskID, nil)
-	w := servePopulatingRBAC(t, GetTask(taskMgr, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{Tasks: taskMgr, RBAC: rbacMgr}).GetTask(), req,
 		"alice@example.com", []string{"viewers"})
 
 	if w.Code != http.StatusForbidden {
@@ -365,7 +365,7 @@ func TestListPRs_FiltersBulkListByTenantAccess(t *testing.T) {
 `)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/prs", nil)
-	w := servePopulatingRBAC(t, ListPRs(tracker, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{PRTracker: tracker, RBAC: rbacMgr}).ListPRs(), req,
 		"alice@example.com", []string{"viewers"})
 
 	if w.Code != http.StatusOK {
@@ -399,7 +399,7 @@ func TestListPRs_TenantQueryReturnsEmptyWhenForbidden(t *testing.T) {
 `)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/prs?tenant=db-secret", nil)
-	w := servePopulatingRBAC(t, ListPRs(tracker, rbacMgr), req,
+	w := servePopulatingRBAC(t, (&Deps{PRTracker: tracker, RBAC: rbacMgr}).ListPRs(), req,
 		"alice@example.com", []string{"viewers"})
 
 	if w.Code != http.StatusOK {

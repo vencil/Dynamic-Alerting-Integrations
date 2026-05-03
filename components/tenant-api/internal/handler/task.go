@@ -27,11 +27,11 @@ import (
 //   - all accessible → return Task as-is
 //   - empty original (Task with no Results yet — still running) →
 //     return Task as-is (no tenants disclosed yet)
-func GetTask(taskMgr *async.Manager, rbacMgr *rbac.Manager) http.HandlerFunc {
+func (d *Deps) GetTask() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		taskID := chi.URLParam(r, "id")
 
-		task, ok := taskMgr.Get(taskID)
+		task, ok := d.Tasks.Get(taskID)
 		if !ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
@@ -46,7 +46,7 @@ func GetTask(taskMgr *async.Manager, rbacMgr *rbac.Manager) http.HandlerFunc {
 		// task struct so we never mutate the in-memory copy that
 		// other concurrent pollers would observe.
 		idpGroups := rbac.RequestGroups(r)
-		filtered := filterTaskResults(rbacMgr, idpGroups, task.Results)
+		filtered := filterTaskResults(d.RBAC, idpGroups, task.Results)
 		if len(task.Results) > 0 && len(filtered) == 0 {
 			// Caller has zero access to any of the touched tenants.
 			// 403 (not 404) — the task exists, just none of its
