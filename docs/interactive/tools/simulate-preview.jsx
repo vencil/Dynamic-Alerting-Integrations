@@ -5,6 +5,9 @@ audience: [platform-engineer, sre, tenant]
 version: v2.7.0
 lang: en
 related: [tenant-manager, alert-builder, routing-trace, master-onboarding]
+dependencies: [
+  "_common/hooks/useDebouncedValue.js"
+]
 ---
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -12,22 +15,15 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 /* ── i18n + repo helpers ───────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
 
-/* ── Inline useDebouncedValue (S#94 / C-4 PR-2) ──────────────────────
+/* ── Shared useDebouncedValue (PR-portal-1: promoted to _common/) ────
  *
- * Tenant Manager has its own `useDebouncedValue` hook registered on
- * `window.__useDebouncedValue` via the multi-file pattern (PR-2d).
- * We deliberately don't depend on that here — this tool may load
- * before tenant-manager (or stand alone via direct deep link), and a
- * 8-line hook isn't worth a cross-tool dependency. Same semantics.
+ * Loaded via front-matter `dependencies:` block above; registers as
+ * window.__useDebouncedValue. Pre-PR-portal-1 this file inlined an
+ * 8-line copy because Tenant Manager owned the only hook copy and a
+ * cross-tool dep felt heavyweight. With _common/hooks/ now hosting
+ * the canonical hook, the inline copy is removed.
  * ──────────────────────────────────────────────────────────────────── */
-function useDebouncedValue(value, delayMs) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const handle = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(handle);
-  }, [value, delayMs]);
-  return debounced;
-}
+const useDebouncedValue = window.__useDebouncedValue;
 
 /* ── URL param helpers (S#94 deep-link pattern reuse) ────────────────
  *

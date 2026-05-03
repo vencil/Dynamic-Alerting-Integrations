@@ -1,5 +1,5 @@
 ---
-title: "Tenant Manager — useDebouncedValue hook"
+title: "_common — useDebouncedValue hook"
 purpose: |
   Generic debouncer: takes a rapidly-changing value (e.g. typing in
   a search box) and returns a stable mirror that only updates after

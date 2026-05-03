@@ -10,14 +10,14 @@ dependencies: [
   "tenant-manager/styles.js",
   "tenant-manager/utils/yaml-generators.js",
   "tenant-manager/hooks/useTenantData.js",
-  "tenant-manager/hooks/useModalFocusTrap.js",
+  "_common/hooks/useModalFocusTrap.js",
   "tenant-manager/components/GroupSidebar.jsx",
   "tenant-manager/components/ApiNotificationToast.jsx",
   "tenant-manager/components/OverflowBanner.jsx",
   "tenant-manager/components/TenantCard.jsx",
-  "tenant-manager/hooks/useDebouncedValue.js",
-  "tenant-manager/hooks/useURLState.js",
-  "tenant-manager/hooks/useVirtualGrid.js",
+  "_common/hooks/useDebouncedValue.js",
+  "_common/hooks/useURLState.js",
+  "_common/hooks/useVirtualGrid.js",
   "tenant-manager/hooks/useSavedViews.js",
   "tenant-manager/components/SavedViewsPanel.jsx"
 ]

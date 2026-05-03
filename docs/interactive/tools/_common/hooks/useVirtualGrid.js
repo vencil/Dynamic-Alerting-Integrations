@@ -1,5 +1,5 @@
 ---
-title: "Tenant Manager — useVirtualGrid"
+title: "_common — useVirtualGrid"
 purpose: |
   Minimal fixed-row-height grid virtualizer. Given a flat `items` array
   laid out as a CSS grid with `columnCount` columns and `rowHeight` px
