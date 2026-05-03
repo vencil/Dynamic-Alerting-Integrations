@@ -83,7 +83,7 @@ lang: zh
 | `docs/interactive/tools/glossary.jsx` | Platform Engineers, Domain Experts (DBA), Tenants | Interactive Glossary |
 | `docs/interactive/tools/health-dashboard.jsx` | Tenants, Platform Engineers | Tenant Health Dashboard |
 | `docs/interactive/tools/master-onboarding.jsx` | Platform Engineers, SREs, Tenants | Master Onboarding — Dual Entry |
-| `docs/interactive/tools/migration-roi-calculator.jsx` | Platform Engineers, SREs | Migration ROI Calculator |
+| `docs/interactive/tools/migration-roi-calculator.jsx` | maintainer | Migration ROI Calculator |
 | `docs/interactive/tools/migration-simulator.jsx` | Platform Engineers | Migration Dry-Run Simulator |
 | `docs/interactive/tools/multi-tenant-comparison.jsx` | platform, Domain Experts (DBA) | Multi-Tenant Comparison |
 | `docs/interactive/tools/notification-previewer.jsx` | Platform Engineers, Tenants | Notification Template Editor |
@@ -96,8 +96,8 @@ lang: zh
 | `docs/interactive/tools/portal-shared.jsx` | Platform Engineers | Portal Shared Module |
 | `docs/interactive/tools/promql-tester.jsx` | Platform Engineers, Domain Experts (DBA) | Prometheus Query Tester |
 | `docs/interactive/tools/rbac-setup-wizard.jsx` | Platform Engineers, SREs | RBAC Setup Wizard |
-| `docs/interactive/tools/release-notes-generator.jsx` | Platform Engineers, SREs | Release Notes Generator |
-| `docs/interactive/tools/roi-calculator.jsx` | Platform Engineers | ROI Calculator |
+| `docs/interactive/tools/release-notes-generator.jsx` | maintainer | Release Notes Generator |
+| `docs/interactive/tools/roi-calculator.jsx` | maintainer | ROI Calculator |
 | `docs/interactive/tools/routing-trace.jsx` | Platform Engineers, SREs | Routing Trace Wizard |
 | `docs/interactive/tools/RoutingTraceTab.jsx` | Platform Engineers, Tenants | Routing Trace Tab |
 | `docs/interactive/tools/rule-pack-detail.jsx` | Platform Engineers, Domain Experts (DBA) | Rule Pack Detail Viewer |

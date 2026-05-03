@@ -734,7 +734,7 @@
     <div class="section-header">
       <div class="section-title">
         <span aria-hidden="true">🚀</span> Deploy
-        <span class="journey-phase-badge deploy" id="deploy-badge">8 Tools</span>
+        <span class="journey-phase-badge deploy" id="deploy-badge">{N} Tools</span>
       </div>
     </div>
     <div class="cards" id="deploy-cards"></div>
@@ -745,7 +745,7 @@
     <div class="section-header">
       <div class="section-title">
         <span aria-hidden="true">⚙️</span> Configure
-        <span class="journey-phase-badge configure" id="configure-badge">10 Tools</span>
+        <span class="journey-phase-badge configure" id="configure-badge">{N} Tools</span>
       </div>
     </div>
     <div class="cards" id="configure-cards"></div>
@@ -756,7 +756,7 @@
     <div class="section-header">
       <div class="section-title">
         <span aria-hidden="true">📊</span> Monitor
-        <span class="journey-phase-badge monitor" id="monitor-badge">6 Tools</span>
+        <span class="journey-phase-badge monitor" id="monitor-badge">{N} Tools</span>
       </div>
     </div>
     <div class="cards" id="monitor-cards"></div>
@@ -767,7 +767,7 @@
     <div class="section-header">
       <div class="section-title">
         <span aria-hidden="true">🔧</span> Troubleshoot
-        <span class="journey-phase-badge troubleshoot" id="troubleshoot-badge">6 Tools</span>
+        <span class="journey-phase-badge troubleshoot" id="troubleshoot-badge">{N} Tools</span>
       </div>
     </div>
     <div class="cards" id="troubleshoot-cards"></div>
@@ -777,12 +777,26 @@
   <div style="margin-bottom: 48px;">
     <div class="section-header">
       <div class="section-title">
-        <span aria-hidden="true">📚</span> Reference
-        <span class="journey-phase-badge reference" id="reference-badge">2 Tools</span>
+        <span aria-hidden="true">📚</span> <span id="phase-title-reference">Reference</span>
+        <span class="journey-phase-badge reference" id="reference-badge">{N} Tools</span>
       </div>
     </div>
     <div class="cards" id="reference-cards"></div>
   </div>
+
+  <!-- INTERNAL phase (PR-portal-7) — maintainer-only tools, collapsed by default -->
+  <details style="margin-bottom: 48px;">
+    <summary style="cursor: pointer; padding: var(--da-space-2, 8px) 0;">
+      <span class="section-title" style="display: inline-flex; align-items: center; gap: var(--da-space-2, 8px);">
+        <span aria-hidden="true">🔧</span> <span id="phase-title-internal">Internal / Maintainer Tools</span>
+        <span class="journey-phase-badge reference" id="internal-badge">{N} Tools</span>
+      </span>
+    </summary>
+    <p style="margin: var(--da-space-2, 8px) 0 var(--da-space-3, 12px) 0; font-size: var(--da-font-size-sm, 14px); color: var(--da-color-fg, #6b7280);" id="internal-blurb">
+      Tools used by the platform release / maintenance team — not part of the tenant or SRE journey.
+    </p>
+    <div class="cards" id="internal-cards"></div>
+  </details>
 
   <!-- Documentation links -->
   <div style="margin-bottom: 32px;">
@@ -882,7 +896,7 @@
   <!-- platform-demo (interactive/tools/platform-demo.jsx) -->
   <a class="card" data-audience="platform,domain,tenant" href="interactive/tools/platform-demo.jsx">Platform Demo</a>
   <!-- roi-calculator (interactive/tools/roi-calculator.jsx) -->
-  <a class="card" data-audience="platform" href="interactive/tools/roi-calculator.jsx">ROI Calculator</a>
+  <a class="card" data-audience="maintainer" href="interactive/tools/roi-calculator.jsx">ROI Calculator</a>
   <!-- self-service-portal (interactive/tools/self-service-portal.jsx) -->
   <a class="card" data-audience="platform,domain,tenant" href="interactive/tools/self-service-portal.jsx">Tenant Self-Service Portal</a>
   <!-- multi-tenant-comparison (interactive/tools/multi-tenant-comparison.jsx) -->
@@ -896,11 +910,11 @@
   <!-- operator-setup-wizard (interactive/tools/operator-setup-wizard.jsx) -->
   <a class="card" data-audience="platform,sre" href="interactive/tools/operator-setup-wizard.jsx">Operator Setup Wizard</a>
   <!-- migration-roi-calculator (interactive/tools/migration-roi-calculator.jsx) -->
-  <a class="card" data-audience="platform,sre" href="interactive/tools/migration-roi-calculator.jsx">Migration ROI Calculator</a>
+  <a class="card" data-audience="maintainer" href="interactive/tools/migration-roi-calculator.jsx">Migration ROI Calculator</a>
   <!-- cost-estimator (interactive/tools/cost-estimator.jsx) -->
   <a class="card" data-audience="platform,sre,management" href="interactive/tools/cost-estimator.jsx">Cost Estimator</a>
   <!-- release-notes-generator (interactive/tools/release-notes-generator.jsx) -->
-  <a class="card" data-audience="platform,sre" href="interactive/tools/release-notes-generator.jsx">Release Notes Generator</a>
+  <a class="card" data-audience="maintainer" href="interactive/tools/release-notes-generator.jsx">Release Notes Generator</a>
   <!-- threshold-heatmap (interactive/tools/threshold-heatmap.jsx) -->
   <a class="card" data-audience="platform,domain,sre" href="interactive/tools/threshold-heatmap.jsx">Threshold Heatmap</a>
   <!-- component-health (interactive/tools/component-health.jsx) -->
@@ -927,7 +941,7 @@
   var i18n = {
     en: {
       'hero-title': 'Dynamic Alerting — Interactive Tools Hub',
-      'hero-desc': 'Explore 32 tools organized by your user journey. Build, configure, monitor, and troubleshoot with guided flows and interactive utilities.',
+      'hero-desc': 'Explore {N} tools organized by your user journey. Build, configure, monitor, and troubleshoot with guided flows and interactive utilities.',
       'qa-wizard': 'Getting Started',
       'qa-playground': 'YAML Validator',
       'qa-platform-health': 'Platform Health',
@@ -939,11 +953,15 @@
       'analytics-empty': 'No usage data yet. Start any Guided Flow to see progress analytics.',
       'builder-title': 'Build Custom Flow',
       'builder-btn-label': 'Launch Custom Flow',
-      'deploy-badge': '8 Tools',
-      'configure-badge': '10 Tools',
-      'monitor-badge': '6 Tools',
-      'troubleshoot-badge': '6 Tools',
-      'reference-badge': '2 Tools',
+      'deploy-badge': '{N} Tools',
+      'configure-badge': '{N} Tools',
+      'monitor-badge': '{N} Tools',
+      'troubleshoot-badge': '{N} Tools',
+      'reference-badge': '{N} Tools',
+      'internal-badge': '{N} Tools',
+      'phase-title-reference': 'Reference',
+      'phase-title-internal': 'Internal / Maintainer Tools',
+      'internal-blurb': 'Tools used by the platform release / maintenance team — not part of the tenant or SRE journey.',
       'docs-title': 'Documentation',
       'link-readme-text': 'README',
       'link-arch-text': 'Architecture',
@@ -956,7 +974,7 @@
     },
     zh: {
       'hero-title': '動態告警平台 — 互動工具中心',
-      'hero-desc': '探索 32 個按用戶旅程組織的工具。使用引導式流程和互動工具進行構建、配置、監控和故障排除。',
+      'hero-desc': '探索 {N} 個按用戶旅程組織的工具。使用引導式流程和互動工具進行構建、配置、監控和故障排除。',
       'qa-wizard': '入門精靈',
       'qa-playground': 'YAML 驗證器',
       'qa-platform-health': '平台健康',
@@ -968,11 +986,15 @@
       'analytics-empty': '尚無使用紀錄。開始任一引導式流程後即顯示進度分析。',
       'builder-title': '構建自訂流程',
       'builder-btn-label': '啟動自訂流程',
-      'deploy-badge': '8 個工具',
-      'configure-badge': '10 個工具',
-      'monitor-badge': '6 個工具',
-      'troubleshoot-badge': '6 個工具',
-      'reference-badge': '2 個工具',
+      'deploy-badge': '{N} 個工具',
+      'configure-badge': '{N} 個工具',
+      'monitor-badge': '{N} 個工具',
+      'troubleshoot-badge': '{N} 個工具',
+      'reference-badge': '{N} 個工具',
+      'internal-badge': '{N} 個工具',
+      'phase-title-reference': '參考資料',
+      'phase-title-internal': '內部 / 維運團隊工具',
+      'internal-blurb': '平台發版 / 維運團隊使用的工具 — 不在租戶或 SRE 操作流程內。',
       'docs-title': '文檔',
       'link-readme-text': '讀我檔案',
       'link-arch-text': '架構',
@@ -991,6 +1013,13 @@
   }
 
   // Apply i18n to all static elements with matching IDs (REG-001 fix)
+  // PR-portal-7: phase counts populated by renderTools() after the
+  // tool-registry fetch resolves. Read by __applyHubI18n to substitute
+  // {N} placeholders in *-badge + hero-desc strings so the badge text
+  // reflects the actual rendered card count instead of a stale literal.
+  window.__hubPhaseCounts = {};
+  window.__hubTotalCount = 0;
+
   // Exposed globally so the lang-toggle init script can call it after setting __DA_HUB_LANG
   window.__applyHubI18n = function() {
     var lang = window.__DA_HUB_LANG || 'en';
@@ -998,14 +1027,31 @@
     Object.keys(strings).forEach(function(key) {
       var el = document.getElementById(key);
       if (el) {
+        var text = strings[key];
+        // PR-portal-7: substitute {N} for *-badge (per-phase count)
+        // and hero-desc (total tools count). Source of truth is the
+        // tool-registry fetch via renderTools(); see __hubPhaseCounts
+        // and __hubTotalCount populated below.
+        if (text.indexOf('{N}') !== -1) {
+          var n;
+          if (key === 'hero-desc') {
+            n = window.__hubTotalCount;
+          } else if (/^([a-z]+)-badge$/.test(key)) {
+            var phase = key.replace(/-badge$/, '');
+            n = window.__hubPhaseCounts[phase];
+          }
+          if (typeof n === 'number') {
+            text = text.replace('{N}', String(n));
+          }
+        }
         // For footer-text, preserve structure (contains child elements)
         if (key === 'footer-text') {
           var textNode = el.firstChild;
           if (textNode && textNode.nodeType === 3) {
-            textNode.textContent = strings[key] + ' \u2014 ';
+            textNode.textContent = text + ' \u2014 ';
           }
         } else {
-          el.textContent = strings[key];
+          el.textContent = text;
         }
       }
     });
@@ -1016,7 +1062,11 @@
 
   // Render tools by journey phase
   function renderTools(tools) {
-    var phases = { deploy: [], configure: [], monitor: [], troubleshoot: [], reference: [] };
+    // PR-portal-7: 6th phase 'internal' for maintainer-only tools
+    // (release-notes-generator etc.) that don't belong in the main
+    // tenant/SRE journey but still need a discovery surface for the
+    // platform team. Hidden inside a collapsed <details> below.
+    var phases = { deploy: [], configure: [], monitor: [], troubleshoot: [], reference: [], internal: [] };
 
     tools.forEach(function(tool) {
       var phase = tool.journey_phase || 'reference';
@@ -1024,6 +1074,19 @@
         phases[phase].push(tool);
       }
     });
+
+    // PR-portal-7: populate window.__hubPhaseCounts + total so
+    // __applyHubI18n can substitute {N} placeholders in badge labels
+    // and hero-desc. Also drives the new check_hub_badge_drift lint.
+    window.__hubPhaseCounts = {};
+    window.__hubTotalCount = 0;
+    Object.keys(phases).forEach(function(phase) {
+      window.__hubPhaseCounts[phase] = phases[phase].length;
+      window.__hubTotalCount += phases[phase].length;
+    });
+    if (typeof window.__applyHubI18n === 'function') {
+      window.__applyHubI18n();
+    }
 
     Object.keys(phases).forEach(function(phase) {
       var container = document.getElementById(phase + '-cards');

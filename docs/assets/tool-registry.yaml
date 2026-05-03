@@ -793,8 +793,16 @@ tools:
     en: ROI Calculator
     zh: 採用效益試算器
   file: interactive/tools/roi-calculator.jsx
+  # PR-portal-7 audit: re-tagged from `audience: [platform]` +
+  # `journey_phase: monitor` to `[maintainer]` + `internal`. Tool
+  # asks for `hourlyRate` ($75 default), `oncallStaff`, manual
+  # onboard minutes — pure decision-maker / sales business case for
+  # justifying platform adoption to management. Real platform
+  # engineers operating tenants don't compute their own salary ×
+  # hours-saved. Lives under collapsed "Internal / Maintainer Tools"
+  # Hub section.
   audience:
-  - platform
+  - maintainer
   icon: wizard
   tags:
   - roi
@@ -810,15 +818,21 @@ tools:
   - self-service-portal
   hub_section: advanced
   appears_in: []
-  journey_phase: monitor
+  journey_phase: internal
 - key: migration-roi-calculator
   title:
     en: Migration ROI Calculator
     zh: 遷移效益試算器
   file: interactive/tools/migration-roi-calculator.jsx
+  # PR-portal-7 audit: re-tagged from `audience: [platform, sre]` +
+  # `journey_phase: deploy` to `[maintainer]` + `internal`. Tool
+  # asks for `hourlyRate` and outputs "annual savings + break-even
+  # months" — project-justification language for engineering
+  # management, not migration mechanics for SREs actually running
+  # the migration. Lives under collapsed "Internal / Maintainer
+  # Tools" Hub section.
   audience:
-  - platform
-  - sre
+  - maintainer
   icon: wizard
   tags:
   - migration
@@ -834,7 +848,7 @@ tools:
   - migration-simulator
   hub_section: advanced
   appears_in: []
-  journey_phase: deploy
+  journey_phase: internal
 - key: cost-estimator
   title:
     en: Cost Estimator
@@ -1018,9 +1032,14 @@ tools:
     en: Release Notes Generator
     zh: 發布說明產生器
   file: interactive/tools/release-notes-generator.jsx
+  # PR-portal-7: re-tagged from `audience: [platform, sre]` to
+  # `[maintainer]` and `journey_phase: reference` to `internal`.
+  # The tool produces da-platform release notes from CHANGELOG —
+  # used only by the team SHIPPING the platform, not by tenants /
+  # SREs operating the platform. Lives under collapsed "Internal /
+  # Maintainer Tools" Hub section.
   audience:
-  - platform
-  - sre
+  - maintainer
   icon: chart
   tags:
   - release
@@ -1034,7 +1053,7 @@ tools:
   - deployment-wizard
   - health-dashboard
   - platform-health
-  journey_phase: reference
+  journey_phase: internal
   hub_section: advanced
   appears_in: []
 - key: threshold-heatmap

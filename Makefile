@@ -629,6 +629,8 @@ lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / p
 	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
 	@echo "==> tool-registry.yaml ↔ jsx parity"
 	@python3 scripts/tools/lint/check_tool_registry_jsx_parity.py
+	@echo "==> Hub UI badge drift (no hardcoded counts)"
+	@python3 scripts/tools/lint/check_hub_badge_drift.py
 
 .PHONY: lint-new-script
 lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR-portal-6) — usage: make lint-new-script SCRIPT=scripts/tools/lint/check_foo.py
