@@ -43,7 +43,7 @@ func TestTrackerSync(t *testing.T) {
 	})
 	defer srv.Close()
 
-	tracker.sync()
+	tracker.Sync()
 
 	prs := tracker.PendingPRs()
 	if len(prs) != 2 {
@@ -67,7 +67,7 @@ func TestTrackerPendingPRForTenant(t *testing.T) {
 	})
 	defer srv.Close()
 
-	tracker.sync()
+	tracker.Sync()
 
 	pr, ok := tracker.PendingPRForTenant("db-a")
 	if !ok {
@@ -87,7 +87,7 @@ func TestTrackerRegisterPR(t *testing.T) {
 	tracker, srv := newTestTracker(t, []platform.PRInfo{})
 	defer srv.Close()
 
-	tracker.sync()
+	tracker.Sync()
 	if len(tracker.PendingPRs()) != 0 {
 		t.Fatal("expected empty tracker")
 	}
@@ -118,7 +118,7 @@ func TestTrackerLastSyncTime(t *testing.T) {
 		t.Error("expected zero time before first sync")
 	}
 
-	tracker.sync()
+	tracker.Sync()
 
 	if tracker.LastSyncTime().IsZero() {
 		t.Error("expected non-zero time after sync")
@@ -133,7 +133,7 @@ func TestTrackerMostRecentPRPerTenant(t *testing.T) {
 	})
 	defer srv.Close()
 
-	tracker.sync()
+	tracker.Sync()
 
 	pr, ok := tracker.PendingPRForTenant("db-a")
 	if !ok {
@@ -147,7 +147,7 @@ func TestTrackerMostRecentPRPerTenant(t *testing.T) {
 func TestMinSyncInterval(t *testing.T) {
 	c, _ := NewClient("token", "owner/repo", "main")
 	tracker := NewTracker(c, 1*time.Second) // below minimum
-	if tracker.syncInterval < 10*time.Second {
-		t.Errorf("expected sync interval >= 10s, got %v", tracker.syncInterval)
+	if got := tracker.SyncInterval(); got < 10*time.Second {
+		t.Errorf("expected sync interval >= 10s, got %v", got)
 	}
 }
