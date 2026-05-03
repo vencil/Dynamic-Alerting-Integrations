@@ -96,7 +96,7 @@ lang: zh
 | `docs/interactive/tools/portal-shared.jsx` | Platform Engineers | Portal Shared Module |
 | `docs/interactive/tools/promql-tester.jsx` | Platform Engineers, Domain Experts (DBA) | Prometheus Query Tester |
 | `docs/interactive/tools/rbac-setup-wizard.jsx` | Platform Engineers, SREs | RBAC Setup Wizard |
-| `docs/interactive/tools/release-notes-generator.jsx` | Platform Engineers, SREs | Release Notes Generator |
+| `docs/interactive/tools/release-notes-generator.jsx` | maintainer | Release Notes Generator |
 | `docs/interactive/tools/roi-calculator.jsx` | Platform Engineers | ROI Calculator |
 | `docs/interactive/tools/routing-trace.jsx` | Platform Engineers, SREs | Routing Trace Wizard |
 | `docs/interactive/tools/RoutingTraceTab.jsx` | Platform Engineers, Tenants | Routing Trace Tab |
