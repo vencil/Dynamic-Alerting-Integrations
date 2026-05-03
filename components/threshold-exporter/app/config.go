@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -138,6 +137,59 @@ func (m *ConfigManager) Mode() string {
 	return "single-file"
 }
 
+// commitConfig installs a freshly-loaded ThresholdConfig + composite
+// hash into the manager under m.mu.Lock, then runs the post-commit
+// hooks (config-source detection + stats log). Shared by Load,
+// fullDirLoad, and IncrementalLoad — every loader's "atomic swap"
+// step now goes through this single seam.
+//
+// flatScan.hashes != nil signals "I have a new flat-scan snapshot to
+// install"; nil leaves m.flat untouched (single-file Load path). The
+// snapshot is shallow-copied into m.flat — caller may mutate after
+// commitConfig returns.
+//
+// logHeader is the human-readable banner inserted into the
+// "Config loaded (...)" log line.
+func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan *flatScanState, logHeader string) {
+	m.mu.Lock()
+	m.config = cfg
+	m.loaded = true
+	m.lastReload = time.Now()
+	m.lastHash = hash
+	if flatScan != nil {
+		m.flat = *flatScan
+	}
+	m.mu.Unlock()
+
+	// Detect config source mode and git commit (v2.3.0). Refreshed on
+	// every commit because git-sync may rotate .git-revision between
+	// reloads.
+	m.detectConfigSource()
+
+	logConfigStats(cfg, logHeader)
+}
+
+// runHierarchyScanReject runs populateHierarchyState with the
+// consistent error-policy used by Load + fullDirLoad:
+//
+//   - *DuplicateTenantError → hard reject; caller propagates without
+//     committing any state (issue #127, mixed-mode misconfig).
+//   - Other errors → log WARN, return nil (hierarchical mode is opt-in;
+//     a malformed branch shouldn't tear down a flat-only deploy).
+//
+// label appears in the log line so operators can tell which loader
+// triggered the warning.
+func (m *ConfigManager) runHierarchyScanReject(label string) error {
+	if err := m.populateHierarchyState(); err != nil {
+		var dupErr *DuplicateTenantError
+		if errors.As(err, &dupErr) {
+			return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", err)
+		}
+		log.Printf("WARN: hierarchical scan during %s failed: %v", label, err)
+	}
+	return nil
+}
+
 // Load loads config from either a single file or a directory.
 func (m *ConfigManager) Load() error {
 	var cfg ThresholdConfig
@@ -170,280 +222,20 @@ func (m *ConfigManager) Load() error {
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
 
-	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode commit
-	// so a `*DuplicateTenantError` (mixed-mode misconfig: same tenant ID in
-	// both `<root>/<id>.yaml` and `<root>/<dir>/<id>.yaml`) rejects Load
-	// at the boundary instead of silently last-wins-merging via the flat
-	// path. Other scan errors (permissions, malformed file, missing path)
-	// keep the prior log-and-continue policy because hierarchical mode is
-	// opt-in — a malformed branch shouldn't tear down a flat-only deploy.
-	//
-	// On hard reject: m.config / m.loaded stay at their pre-Load values
-	// (nil / false on cold start) — caller observes "Load returned error"
-	// without any partial state being committed.
+	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode
+	// commit so mixed-mode duplicates reject Load at the boundary, not
+	// after partial state lands. See runHierarchyScanReject for the
+	// shared error policy.
 	if m.isDir {
-		if hierErr := m.populateHierarchyState(); hierErr != nil {
-			var dupErr *DuplicateTenantError
-			if errors.As(hierErr, &dupErr) {
-				return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", hierErr)
-			}
-			log.Printf("WARN: hierarchical scan during Load failed: %v", hierErr)
+		if err := m.runHierarchyScanReject("Load"); err != nil {
+			return err
 		}
 	}
 
-	m.mu.Lock()
-	m.config = &cfg
-	m.loaded = true
-	m.lastReload = time.Now()
-	m.lastHash = hash
-	m.mu.Unlock()
-
-	// Detect config source mode and git commit (v2.3.0)
-	m.detectConfigSource()
-
-	logConfigStats(&cfg, fmt.Sprintf("Config loaded (%s)", m.Mode()))
-
+	m.commitConfig(&cfg, hash, nil, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }
 
-// loadFile reads a single YAML config file and returns the parsed config + content hash.
-func loadFile(path string) (ThresholdConfig, string, error) {
-	var cfg ThresholdConfig
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return cfg, "", fmt.Errorf("read config %s: %w", path, err)
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256(data))
-
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return cfg, "", fmt.Errorf("parse config %s: %w", path, err)
-	}
-
-	return cfg, hash, nil
-}
-
-// loadDir scans a directory for *.yaml files, parses and deep-merges them.
-//
-// File naming convention:
-//   - _defaults.yaml: contains 'defaults' and 'state_filters' (loaded first due to underscore prefix)
-//   - <tenant-name>.yaml: contains tenant-specific overrides under 'tenants' key
-//
-// Merge rules:
-//   - Files are processed in sorted order (underscore prefix sorts first)
-//   - defaults: later values overwrite earlier ones for the same key
-//   - state_filters: later values overwrite earlier ones for the same filter name
-//   - tenants: deep merge per tenant (later key-values overwrite)
-//
-// Boundary rule: state_filters should only be defined in _defaults.yaml.
-// Tenant files should only contain a 'tenants' block. This is enforced with warnings.
-func loadDir(dir string) (ThresholdConfig, string, error) {
-	merged := ThresholdConfig{
-		Defaults:     make(map[string]float64),
-		StateFilters: make(map[string]StateFilter),
-		Tenants:      make(map[string]map[string]ScheduledValue),
-		Profiles:     make(map[string]map[string]ScheduledValue),
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return merged, "", fmt.Errorf("read config dir %s: %w", dir, err)
-	}
-
-	// Collect *.yaml files, sorted (underscore prefix sorts first)
-	var files []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
-			files = append(files, name)
-		}
-	}
-	sort.Strings(files)
-
-	if len(files) == 0 {
-		return merged, "", fmt.Errorf("no .yaml files found in %s", dir)
-	}
-
-	// Hash all file contents for change detection
-	hasher := sha256.New()
-
-	for _, name := range files {
-		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			log.Printf("WARN: skip unreadable file %s: %v", path, err)
-			continue
-		}
-		hasher.Write(data)
-
-		var partial ThresholdConfig
-		if err := yaml.Unmarshal(data, &partial); err != nil {
-			// _defaults.yaml parse failure silently nullifies the entire
-			// defaults block → every dependent tenant override breaks
-			// (`unknown key not in defaults`). Cycle-6 RCA (planning archive
-			// §S#37d) cost 5+ hours wall-clock because this signal lived at
-			// WARN. Promote to ERROR for `_*` files; emit parse_failure_total
-			// (v2.8.0 A-8d metric) so ops can alert.
-			IncParseFailure(filepath.Base(path))
-			if strings.HasPrefix(name, "_") {
-				log.Printf("ERROR: skip unparseable defaults/profiles file %s: %v (entire block dropped — fix file or remove)", path, err)
-			} else {
-				log.Printf("WARN: skip unparseable file %s: %v", path, err)
-			}
-			continue
-		}
-
-		isDefaultsFile := strings.HasPrefix(name, "_")
-		isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
-
-		// Boundary enforcement: warn if tenant file contains state_filters, defaults, or profiles
-		if !isDefaultsFile {
-			if len(partial.StateFilters) > 0 {
-				log.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
-				partial.StateFilters = nil
-			}
-			if len(partial.Defaults) > 0 {
-				log.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
-				partial.Defaults = nil
-			}
-		}
-		if !isProfilesFile && !isDefaultsFile {
-			if len(partial.Profiles) > 0 {
-				log.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
-				partial.Profiles = nil
-			}
-		}
-
-		// Merge defaults
-		for k, v := range partial.Defaults {
-			merged.Defaults[k] = v
-		}
-
-		// Merge state_filters
-		for k, v := range partial.StateFilters {
-			merged.StateFilters[k] = v
-		}
-
-		// Merge profiles (v1.12.0)
-		for profileName, profileValues := range partial.Profiles {
-			if merged.Profiles[profileName] == nil {
-				merged.Profiles[profileName] = make(map[string]ScheduledValue)
-			}
-			for k, v := range profileValues {
-				merged.Profiles[profileName][k] = v
-			}
-		}
-
-		// Merge tenants (deep merge per tenant)
-		for tenant, overrides := range partial.Tenants {
-			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]ScheduledValue)
-			}
-			for k, v := range overrides {
-				merged.Tenants[tenant][k] = v
-			}
-		}
-	}
-
-	hash := fmt.Sprintf("%x", hasher.Sum(nil))
-	return merged, hash, nil
-}
-
-// scanDirFileHashes scans a directory and returns per-file SHA-256 hashes,
-// the composite hash, per-file mtime+size stats, and a byte cache of files
-// that were actually read (for reuse by callers that need file contents,
-// avoiding double disk reads in fullDirLoad/IncrementalLoad).
-//
-// Uses DirEntry.Info() to get mtime+size from the directory listing itself,
-// avoiding separate os.Stat calls per file.
-//
-// When oldHashes and oldMtimes are provided (non-nil), the mtime guard kicks in:
-// files whose ModTime and Size match the previous scan reuse the cached SHA-256
-// without re-reading file contents. This reduces NoChange cost from O(N×read)
-// to O(N×stat) — typically 4-5× faster at 1000 tenants.
-func scanDirFileHashes(dir string, oldHashes map[string]string, oldMtimes map[string]fileStat) (map[string]string, string, map[string]fileStat, map[string][]byte, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("read config dir %s: %w", dir, err)
-	}
-
-	type dirFile struct {
-		name string
-		info os.FileInfo // from DirEntry.Info(), avoids separate os.Stat
-	}
-	var files []dirFile
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
-			info, ierr := entry.Info()
-			if ierr != nil {
-				log.Printf("WARN: skip unreadable entry %s: %v", name, ierr)
-				continue
-			}
-			files = append(files, dirFile{name: name, info: info})
-		}
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
-
-	perFile := make(map[string]string, len(files))
-	mtimes := make(map[string]fileStat, len(files))
-	dataCache := make(map[string][]byte)
-	compositeHasher := sha256.New()
-
-	for _, f := range files {
-		cur := fileStat{ModTime: f.info.ModTime().UnixNano(), Size: f.info.Size()}
-		fullPath := filepath.Join(dir, f.name)
-
-		// Mtime guard: reuse cached hash if mtime+size unchanged and file
-		// is older than 2 seconds (safety window for coarse-mtime filesystems).
-		if oldHashes != nil && oldMtimes != nil {
-			age := time.Since(f.info.ModTime())
-			if prev, ok := oldMtimes[f.name]; ok && age > 2*time.Second {
-				if oldHash, hok := oldHashes[f.name]; hok && cur == prev {
-					perFile[f.name] = oldHash
-					mtimes[f.name] = cur
-					compositeHasher.Write([]byte(oldHash))
-					continue
-				}
-			}
-		}
-
-		data, rerr := os.ReadFile(fullPath)
-		if rerr != nil {
-			log.Printf("WARN: skip unreadable file %s: %v", f.name, rerr)
-			continue
-		}
-		h := fmt.Sprintf("%x", sha256.Sum256(data))
-		perFile[f.name] = h
-		mtimes[f.name] = cur
-		compositeHasher.Write([]byte(h))
-		// Only cache bytes for files whose hash changed or is new (saves memory
-		// in incremental path where 999/1000 files are unchanged).
-		if oldHashes == nil {
-			// First load: cache everything (fullDirLoad needs all bytes)
-			dataCache[f.name] = data
-		} else if oldH, ok := oldHashes[f.name]; !ok || oldH != h {
-			// Changed or added file: cache for Phase 3 re-parse
-			dataCache[f.name] = data
-		}
-	}
-
-	return perFile, fmt.Sprintf("%x", compositeHasher.Sum(nil)), mtimes, dataCache, nil
-}
-
-// IncrementalLoad performs an incremental reload in directory mode.
-// It compares per-file hashes with the cached state, re-parses only
-// changed/added files, removes deleted files from cache, then rebuilds
-// the merged config from cached partials.
-//
-// Falls back to full Load() for single-file mode or first-time load.
 func (m *ConfigManager) IncrementalLoad() error {
 	// Single-file mode or first load: fall back to full Load
 	if !m.isDir {
@@ -605,22 +397,11 @@ func (m *ConfigManager) IncrementalLoad() error {
 		merged.ApplyProfiles()
 	}
 
-	// Atomic swap
-	m.mu.Lock()
-	m.config = &merged
-	m.loaded = true
-	m.lastReload = time.Now()
-	m.lastHash = compositeHash
-	m.flat.hashes = newHashes
-	m.flat.configs = newConfigs
-	m.flat.mtimes = newMtimes
-	m.mu.Unlock()
-
-	// Refresh config source detection (v2.3.0) — git-sync may rotate .git-revision
-	m.detectConfigSource()
-
-	logConfigStats(&merged, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
-
+	m.commitConfig(&merged, compositeHash, &flatScanState{
+		hashes:  newHashes,
+		configs: newConfigs,
+		mtimes:  newMtimes,
+	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
 }
 
@@ -677,34 +458,17 @@ func (m *ConfigManager) fullDirLoad() error {
 	merged := mergePartialConfigs(fileConfigs)
 	merged.ApplyProfiles()
 
-	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode commit
-	// for the same reason as Load() — a `*DuplicateTenantError` rejects the
-	// reload at the boundary, leaving the prior known-good state intact and
-	// serving. Generic scan errors keep the log-and-continue policy
-	// (hierarchical mode is opt-in).
-	if err := m.populateHierarchyState(); err != nil {
-		var dupErr *DuplicateTenantError
-		if errors.As(err, &dupErr) {
-			return fmt.Errorf("config rejected (mixed-mode duplicate tenant): %w", err)
-		}
-		log.Printf("WARN: hierarchical scan during fullDirLoad failed: %v", err)
+	// v2.8.x issue #127: same hierarchical-scan-before-commit reject
+	// as Load() — see runHierarchyScanReject.
+	if err := m.runHierarchyScanReject("fullDirLoad"); err != nil {
+		return err
 	}
 
-	m.mu.Lock()
-	m.config = &merged
-	m.loaded = true
-	m.lastReload = time.Now()
-	m.lastHash = compositeHash
-	m.flat.hashes = perFileHashes
-	m.flat.configs = fileConfigs
-	m.flat.mtimes = perFileMtimes
-	m.mu.Unlock()
-
-	// Detect config source mode and git commit (v2.3.0)
-	m.detectConfigSource()
-
-	logConfigStats(&merged, fmt.Sprintf("Config loaded (%s)", m.Mode()))
-
+	m.commitConfig(&merged, compositeHash, &flatScanState{
+		hashes:  perFileHashes,
+		configs: fileConfigs,
+		mtimes:  perFileMtimes,
+	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }
 
@@ -816,98 +580,6 @@ func logConfigStats(cfg *ThresholdConfig, prefix string) {
 	}
 }
 
-// applyBoundaryRules enforces the boundary convention: state_filters and
-// defaults only in _defaults.yaml, profiles only in _profiles.yaml.
-func applyBoundaryRules(name string, partial *ThresholdConfig) {
-	isDefaultsFile := strings.HasPrefix(name, "_")
-	isProfilesFile := name == "_profiles.yaml" || name == "_profiles.yml"
-
-	if !isDefaultsFile {
-		if len(partial.StateFilters) > 0 {
-			log.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
-			partial.StateFilters = nil
-		}
-		if len(partial.Defaults) > 0 {
-			log.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
-			partial.Defaults = nil
-		}
-	}
-	if !isProfilesFile && !isDefaultsFile {
-		if len(partial.Profiles) > 0 {
-			log.Printf("WARN: profiles found in %s — should only be in _profiles.yaml, ignoring", name)
-			partial.Profiles = nil
-		}
-	}
-}
-
-// mergePartialConfigs merges all cached partial configs in sorted filename order.
-// Same merge semantics as loadDir: defaults/state_filters overwrite, tenants/profiles deep merge.
-func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
-	// Pre-scan to estimate map capacities, avoiding rehash during merge.
-	// In directory mode each tenant file has exactly 1 tenant, so
-	// len(configs) is a reasonable upper bound for the Tenants map.
-	tenantCap := 0
-	defaultCap := 0
-	for _, partial := range configs {
-		tenantCap += len(partial.Tenants)
-		if len(partial.Defaults) > defaultCap {
-			defaultCap = len(partial.Defaults)
-		}
-	}
-
-	merged := ThresholdConfig{
-		Defaults:     make(map[string]float64, defaultCap),
-		StateFilters: make(map[string]StateFilter),
-		Tenants:      make(map[string]map[string]ScheduledValue, tenantCap),
-		Profiles:     make(map[string]map[string]ScheduledValue),
-	}
-
-	// Sort filenames for deterministic merge order
-	names := make([]string, 0, len(configs))
-	for name := range configs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		partial := configs[name]
-
-		for k, v := range partial.Defaults {
-			merged.Defaults[k] = v
-		}
-		for k, v := range partial.StateFilters {
-			merged.StateFilters[k] = v
-		}
-		for profileName, profileValues := range partial.Profiles {
-			if merged.Profiles[profileName] == nil {
-				merged.Profiles[profileName] = make(map[string]ScheduledValue)
-			}
-			for k, v := range profileValues {
-				merged.Profiles[profileName][k] = v
-			}
-		}
-		for tenant, overrides := range partial.Tenants {
-			if merged.Tenants[tenant] == nil {
-				merged.Tenants[tenant] = make(map[string]ScheduledValue, len(overrides))
-			}
-			for k, v := range overrides {
-				merged.Tenants[tenant][k] = v
-			}
-		}
-	}
-
-	return merged
-}
-
-// WatchLoop periodically checks for config changes and reloads.
-// Uses content hash comparison for reliable change detection.
-// K8s ConfigMap volumes update via symlink rotation (..data), so hash-based
-// detection is more reliable than ModTime for both modes.
-// The stopCh parameter allows graceful shutdown — close it to stop the loop.
-//
-// In directory mode, uses incremental reload (v2.1.0): per-file hash tracking
-// means only changed files are re-parsed, reducing reload latency for large
-// multi-tenant deployments.
 func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
