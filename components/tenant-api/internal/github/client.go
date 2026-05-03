@@ -20,10 +20,6 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 )
 
-// PRInfo is an alias for platform.PRInfo for backward compatibility.
-// New code should use platform.PRInfo directly.
-type PRInfo = platform.PRInfo
-
 // Compile-time interface assertion: *Client implements platform.Client.
 var _ platform.Client = (*Client)(nil)
 
