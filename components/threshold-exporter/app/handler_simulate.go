@@ -36,6 +36,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // simulateMaxBodyBytes caps a single /simulate request body. 1 MiB
@@ -59,7 +61,7 @@ func simulateHandler() http.HandlerFunc {
 		body := http.MaxBytesReader(w, r.Body, simulateMaxBodyBytes)
 		defer body.Close()
 
-		var req SimulateRequest
+		var req config.SimulateRequest
 		dec := json.NewDecoder(body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
@@ -79,9 +81,9 @@ func simulateHandler() http.HandlerFunc {
 			return
 		}
 
-		resp, err := SimulateEffective(req)
+		resp, err := config.SimulateEffective(req)
 		if err != nil {
-			if errors.Is(err, ErrSimulateTenantNotFound) {
+			if errors.Is(err, config.ErrSimulateTenantNotFound) {
 				writeSimulateError(w, http.StatusNotFound, err.Error())
 				return
 			}

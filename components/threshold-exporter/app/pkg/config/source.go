@@ -1,4 +1,4 @@
-package main
+package config
 
 // ============================================================
 // ConfigSource abstraction (v2.8.0 Phase .c C-7a)
@@ -21,7 +21,7 @@ package main
 // machinery. It exposes one capability — enumerating the YAML files
 // the merge engine should consider — and leaves the parsing, hashing,
 // dedup, and InheritanceGraph construction in one place
-// (`scanFromConfigSource`). The disk path keeps its own walker
+// (`ScanFromConfigSource`). The disk path keeps its own walker
 // (`scanDirHierarchical`) for production because that walker also
 // records mtimes for debounced-reload change detection — a concern
 // the simulate path doesn't share.
@@ -40,6 +40,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -100,7 +101,7 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 	return out, nil
 }
 
-// scanFromConfigSource is the in-memory cousin of scanDirHierarchical:
+// ScanFromConfigSource is the in-memory cousin of scanDirHierarchical:
 // it takes a corpus from a ConfigSource and produces the same outputs
 // (tenants map, defaults set, per-file hashes, InheritanceGraph) using
 // identical classification + dedup + chain rules.
@@ -108,7 +109,7 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 // This is what the /simulate endpoint calls. Production reload still
 // uses scanDirHierarchical because that path also gathers mtimes for
 // change detection — a concern simulate doesn't share.
-func scanFromConfigSource(src ConfigSource, rootPath string) (
+func ScanFromConfigSource(src ConfigSource, rootPath string) (
 	tenants map[string]string,
 	defaults map[string]bool,
 	hashes map[string]string,
@@ -188,14 +189,14 @@ func scanFromConfigSource(src ConfigSource, rootPath string) (
 	for tid := range tenants {
 		tenantIDs = append(tenantIDs, tid)
 	}
-	sortStrings(tenantIDs)
+	sort.Strings(tenantIDs)
 
 	for _, tid := range tenantIDs {
 		srcPath := tenants[tid]
 		dir := filepath.Dir(srcPath)
 		chain, cached := chainCache[dir]
 		if !cached {
-			chain = collectDefaultsChain(dir, absRoot, defaults)
+			chain = CollectDefaultsChain(dir, absRoot, defaults)
 			chainCache[dir] = chain
 		}
 		graph.AddTenant(tid, chain)

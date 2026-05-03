@@ -33,7 +33,17 @@ type (
 	ResolvedSeverityDedup     = config.ResolvedSeverityDedup
 	RoutingConfig             = config.RoutingConfig
 	ConfigInfo                = config.ConfigInfo
+
+	// v2.8.0 PR-8: hierarchy graph promoted to pkg/config so cmd/da-guard
+	// and tenant-api can construct it without importing package main.
+	// app's scanDirHierarchical still owns the disk-walking implementation
+	// (it threads fileStat for mtime fast-path).
+	InheritanceGraph = config.InheritanceGraph
 )
+
+// NewInheritanceGraph re-exports the pkg/config constructor under its
+// historical name so existing app/test callers compile unchanged.
+var NewInheritanceGraph = config.NewInheritanceGraph
 
 // fileStat is app-only — pkg/config has no concept of file mtimes
 // because it's the standalone resolver layer. Kept here next to the

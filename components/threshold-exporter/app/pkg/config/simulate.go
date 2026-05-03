@@ -1,4 +1,4 @@
-package main
+package config
 
 // ============================================================
 // Simulate primitive (v2.8.0 Phase .c C-7b)
@@ -99,7 +99,7 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 	//   /sim/lvl1/.../tenant.yaml    ← tenant file (deepest)
 	//
 	// This guarantees collectDefaultsChain (called by
-	// scanFromConfigSource) reproduces exactly the chain the caller
+	// ScanFromConfigSource) reproduces exactly the chain the caller
 	// asked for. We could skip the scan and call computeEffectiveConfig
 	// directly, but going through the scan exercises the same code
 	// path the parity test needs — keeping one road keeps both roads
@@ -116,7 +116,7 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 	files[tenantPath] = req.TenantYAML
 
 	src := NewInMemoryConfigSource(files)
-	tenants, _, _, graph, err := scanFromConfigSource(src, SimRoot)
+	tenants, _, _, graph, err := ScanFromConfigSource(src, SimRoot)
 	if err != nil {
 		return nil, fmt.Errorf("simulate scan: %w", err)
 	}
@@ -130,18 +130,18 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		chainBytes = append(chainBytes, files[dp])
 	}
 
-	merged, err := computeEffectiveConfig(req.TenantYAML, req.TenantID, chainBytes)
+	merged, err := ComputeEffectiveConfig(req.TenantYAML, req.TenantID, chainBytes)
 	if err != nil {
 		return nil, fmt.Errorf("simulate merge: %w", err)
 	}
-	mergedHash, err := computeMergedHash(req.TenantYAML, req.TenantID, chainBytes)
+	mergedHash, err := ComputeMergedHash(req.TenantYAML, req.TenantID, chainBytes)
 	if err != nil {
 		return nil, fmt.Errorf("simulate hash: %w", err)
 	}
 
 	return &SimulateResponse{
 		TenantID:      req.TenantID,
-		SourceHash:    computeSourceHash(req.TenantYAML),
+		SourceHash:    ComputeSourceHash(req.TenantYAML),
 		MergedHash:    mergedHash,
 		DefaultsChain: append([]string(nil), chain...),
 		Config:        merged,
