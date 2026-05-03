@@ -37,10 +37,10 @@ func TestFullDirLoad_PopulatesHierarchyState(t *testing.T) {
 	}
 
 	m.mu.RLock()
-	hierarchical := m.hierarchicalMode
-	tenantCount := len(m.tenantSources)
-	hashCount := len(m.mergedHashes)
-	graph := m.inheritanceGraph
+	hierarchical := m.hierarchy.enabled
+	tenantCount := len(m.hierarchy.tenantSources)
+	hashCount := len(m.hierarchy.mergedHashes)
+	graph := m.hierarchy.graph
 	m.mu.RUnlock()
 
 	if !hierarchical {
@@ -77,7 +77,7 @@ tenants:
 	}
 
 	m.mu.RLock()
-	hierarchical := m.hierarchicalMode
+	hierarchical := m.hierarchy.enabled
 	m.mu.RUnlock()
 
 	if hierarchical {
@@ -165,7 +165,7 @@ func TestWatchLoop_DebouncedReload_DetectsFileChange(t *testing.T) {
 	}
 
 	m.mu.RLock()
-	firstHash := m.mergedHashes["tenant-a"]
+	firstHash := m.hierarchy.mergedHashes["tenant-a"]
 	m.mu.RUnlock()
 	if firstHash == "" {
 		t.Fatalf("expected first merged_hash to be populated by Load")
@@ -196,7 +196,7 @@ tenants:
 	ok := waitFor(t, 3*time.Second, func() bool {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
-		curr := m.mergedHashes["tenant-a"]
+		curr := m.hierarchy.mergedHashes["tenant-a"]
 		return curr != "" && curr != firstHash
 	})
 	close(stopCh)
@@ -204,7 +204,7 @@ tenants:
 
 	if !ok {
 		m.mu.RLock()
-		curr := m.mergedHashes["tenant-a"]
+		curr := m.hierarchy.mergedHashes["tenant-a"]
 		m.mu.RUnlock()
 		t.Errorf("merged_hash did not update via WatchLoop: first=%s current=%s", firstHash, curr)
 	}
@@ -257,13 +257,13 @@ defaults:
 	// Baseline invariant: all 3 tenants populated across every per-tenant map.
 	m.mu.RLock()
 	for _, tid := range []string{"tenant-a", "tenant-b", "tenant-c"} {
-		if _, ok := m.tenantSources[tid]; !ok {
+		if _, ok := m.hierarchy.tenantSources[tid]; !ok {
 			t.Errorf("baseline: tenantSources missing %s", tid)
 		}
-		if _, ok := m.mergedHashes[tid]; !ok {
+		if _, ok := m.hierarchy.mergedHashes[tid]; !ok {
 			t.Errorf("baseline: mergedHashes missing %s", tid)
 		}
-		if m.inheritanceGraph == nil || len(m.inheritanceGraph.TenantDefaults[tid]) == 0 {
+		if m.hierarchy.graph == nil || len(m.hierarchy.graph.TenantDefaults[tid]) == 0 {
 			t.Errorf("baseline: inheritanceGraph.TenantDefaults missing %s", tid)
 		}
 	}
@@ -284,7 +284,7 @@ defaults:
 	ok := waitFor(t, 2*time.Second, func() bool {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
-		_, stillHere := m.tenantSources["tenant-b"]
+		_, stillHere := m.hierarchy.tenantSources["tenant-b"]
 		return !stillHere
 	})
 	if !ok {
@@ -296,29 +296,29 @@ defaults:
 	// (e.g. in GET /api/v1/tenants/tenant-b/effective) will return data
 	// for a tenant that no longer exists.
 	m.mu.RLock()
-	if _, stillHere := m.tenantSources["tenant-b"]; stillHere {
+	if _, stillHere := m.hierarchy.tenantSources["tenant-b"]; stillHere {
 		t.Errorf("tenantSources still has tenant-b")
 	}
-	if _, stillHere := m.mergedHashes["tenant-b"]; stillHere {
+	if _, stillHere := m.hierarchy.mergedHashes["tenant-b"]; stillHere {
 		t.Errorf("mergedHashes still has tenant-b")
 	}
-	if _, stillHere := m.hierarchyHashes["team-a/tenant-b.yaml"]; stillHere {
+	if _, stillHere := m.hierarchy.hashes["team-a/tenant-b.yaml"]; stillHere {
 		t.Errorf("hierarchyHashes still has team-a/tenant-b.yaml")
 	}
-	if _, stillHere := m.hierarchyMtimes["team-a/tenant-b.yaml"]; stillHere {
+	if _, stillHere := m.hierarchy.mtimes["team-a/tenant-b.yaml"]; stillHere {
 		t.Errorf("hierarchyMtimes still has team-a/tenant-b.yaml")
 	}
-	if m.inheritanceGraph == nil {
+	if m.hierarchy.graph == nil {
 		t.Errorf("inheritanceGraph became nil after delete")
-	} else if chain := m.inheritanceGraph.TenantDefaults["tenant-b"]; chain != nil {
+	} else if chain := m.hierarchy.graph.TenantDefaults["tenant-b"]; chain != nil {
 		t.Errorf("inheritanceGraph.TenantDefaults[tenant-b] = %v, want nil", chain)
 	}
 	// Surviving tenants must NOT be collateral damage.
 	for _, tid := range []string{"tenant-a", "tenant-c"} {
-		if _, ok := m.tenantSources[tid]; !ok {
+		if _, ok := m.hierarchy.tenantSources[tid]; !ok {
 			t.Errorf("collateral damage: tenantSources missing surviving %s", tid)
 		}
-		if _, ok := m.mergedHashes[tid]; !ok {
+		if _, ok := m.hierarchy.mergedHashes[tid]; !ok {
 			t.Errorf("collateral damage: mergedHashes missing surviving %s", tid)
 		}
 	}

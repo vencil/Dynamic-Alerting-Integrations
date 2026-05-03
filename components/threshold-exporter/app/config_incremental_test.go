@@ -96,11 +96,11 @@ tenants:
 	if !mgr.IsLoaded() {
 		t.Error("should be loaded after IncrementalLoad")
 	}
-	if len(mgr.fileHashes) != 2 {
-		t.Errorf("expected 2 file hashes, got %d", len(mgr.fileHashes))
+	if len(mgr.flat.hashes) != 2 {
+		t.Errorf("expected 2 file hashes, got %d", len(mgr.flat.hashes))
 	}
-	if len(mgr.fileConfigs) != 2 {
-		t.Errorf("expected 2 file configs, got %d", len(mgr.fileConfigs))
+	if len(mgr.flat.configs) != 2 {
+		t.Errorf("expected 2 file configs, got %d", len(mgr.flat.configs))
 	}
 	cfg := mgr.GetConfig()
 	if cfg.Defaults["mysql_connections"] != 80 {
@@ -180,8 +180,8 @@ tenants:
 	if cfg.Tenants["db-b"]["mysql_connections"].Default != "60" {
 		t.Error("expected tenant db-b with value 60")
 	}
-	if len(mgr.fileHashes) != 2 {
-		t.Errorf("expected 2 file hashes after add, got %d", len(mgr.fileHashes))
+	if len(mgr.flat.hashes) != 2 {
+		t.Errorf("expected 2 file hashes after add, got %d", len(mgr.flat.hashes))
 	}
 }
 
@@ -223,8 +223,8 @@ tenants:
 	if _, exists := cfg.Tenants["db-b"]; exists {
 		t.Error("db-b should be removed")
 	}
-	if len(mgr.fileHashes) != 2 {
-		t.Errorf("expected 2 file hashes after remove, got %d", len(mgr.fileHashes))
+	if len(mgr.flat.hashes) != 2 {
+		t.Errorf("expected 2 file hashes after remove, got %d", len(mgr.flat.hashes))
 	}
 }
 
@@ -273,7 +273,7 @@ tenants:
 		t.Error("should be loaded")
 	}
 	// fileHashes should remain nil (single-file mode doesn't use incremental)
-	if mgr.fileHashes != nil {
+	if mgr.flat.hashes != nil {
 		t.Error("fileHashes should be nil for single-file mode")
 	}
 }
@@ -424,11 +424,11 @@ tenants:
 	if err := mgr.fullDirLoad(); err != nil {
 		t.Fatalf("fullDirLoad failed: %v", err)
 	}
-	if len(mgr.fileHashes) != 2 {
-		t.Errorf("expected 2 file hashes, got %d", len(mgr.fileHashes))
+	if len(mgr.flat.hashes) != 2 {
+		t.Errorf("expected 2 file hashes, got %d", len(mgr.flat.hashes))
 	}
-	if len(mgr.fileConfigs) != 2 {
-		t.Errorf("expected 2 file configs, got %d", len(mgr.fileConfigs))
+	if len(mgr.flat.configs) != 2 {
+		t.Errorf("expected 2 file configs, got %d", len(mgr.flat.configs))
 	}
 }
 
@@ -505,8 +505,8 @@ tenants:
 	}
 
 	// Verify cache consistency
-	if len(mgr.fileHashes) != 4 { // _defaults + db-a + db-c + db-d
-		t.Errorf("expected 4 file hashes, got %d", len(mgr.fileHashes))
+	if len(mgr.flat.hashes) != 4 { // _defaults + db-a + db-c + db-d
+		t.Errorf("expected 4 file hashes, got %d", len(mgr.flat.hashes))
 	}
 }
 
@@ -638,8 +638,8 @@ tenants:
 	}
 
 	// Record cache state for db-b (unchanged file)
-	oldDbBConfig := mgr.fileConfigs["db-b.yaml"]
-	oldDbBHash := mgr.fileHashes["db-b.yaml"]
+	oldDbBConfig := mgr.flat.configs["db-b.yaml"]
+	oldDbBHash := mgr.flat.hashes["db-b.yaml"]
 
 	// Only modify db-a
 	writeTestFile(t, dir, "db-a.yaml", `
@@ -653,10 +653,10 @@ tenants:
 	}
 
 	// db-b's cache entry should remain identical (same hash → not re-parsed)
-	if mgr.fileHashes["db-b.yaml"] != oldDbBHash {
+	if mgr.flat.hashes["db-b.yaml"] != oldDbBHash {
 		t.Error("db-b hash should not change")
 	}
-	newDbBConfig := mgr.fileConfigs["db-b.yaml"]
+	newDbBConfig := mgr.flat.configs["db-b.yaml"]
 	if newDbBConfig.Tenants["db-b"]["mysql_connections"].Default != oldDbBConfig.Tenants["db-b"]["mysql_connections"].Default {
 		t.Error("db-b config should be preserved from cache")
 	}

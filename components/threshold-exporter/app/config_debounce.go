@@ -68,7 +68,7 @@ const (
 //
 // Behavior:
 //   - First call: starts timer; timer fires diffAndReload after
-//     m.debounceWindow elapsed.
+//     m.debounce.window elapsed.
 //   - Subsequent calls within the window: reset the timer — the reload
 //     slides forward, keeping the total batch bounded by the slowest caller.
 //   - debounceWindow == 0: synchronous fallback. Calls diffAndReload
@@ -79,7 +79,7 @@ const (
 // unfiltered for duplicates — a storm of 10 "source" events is itself a
 // signal and we want to count them as 10 increments.
 func (m *ConfigManager) triggerDebouncedReload(reason string) {
-	if m.debounceWindow <= 0 {
+	if m.debounce.window <= 0 {
 		// Synchronous fallback — useful for v2.6.0 parity tests and for
 		// the initial Load() bootstrap where we don't want to gate startup
 		// on a timer. Observe reload duration so callers using the
@@ -91,12 +91,12 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 		return
 	}
 
-	m.debounceMu.Lock()
-	m.pendingReasons = append(m.pendingReasons, reason)
-	if m.debounceTimer == nil {
+	m.debounce.mu.Lock()
+	m.debounce.pendingReasons = append(m.debounce.pendingReasons, reason)
+	if m.debounce.timer == nil {
 		// First event in this window — arm the timer.
-		m.debounceTimer = time.AfterFunc(m.debounceWindow, m.fireDebounced)
-		m.debounceMu.Unlock()
+		m.debounce.timer = time.AfterFunc(m.debounce.window, m.fireDebounced)
+		m.debounce.mu.Unlock()
 		return
 	}
 	// Subsequent event — reset. Stop() returns false if the timer has already
@@ -105,30 +105,30 @@ func (m *ConfigManager) triggerDebouncedReload(reason string) {
 	// goroutine — the callback's own code path handles that. Stop() racing
 	// with fire is cheap to absorb: we simply let the fired callback swap
 	// the pointer to nil and start fresh on the next call.
-	if m.debounceTimer.Stop() {
+	if m.debounce.timer.Stop() {
 		// Successfully cancelled before fire → safe to re-arm in place.
-		m.debounceTimer.Reset(m.debounceWindow)
+		m.debounce.timer.Reset(m.debounce.window)
 	} else {
 		// Already firing; fireDebounced will observe the newly-appended
 		// reason on the next pass since we hold the mutex and it acquires
 		// the same one. If Stop() returned false AND the timer was already
 		// nil'd by a completed fire, arm a fresh one.
-		if m.debounceTimer == nil {
-			m.debounceTimer = time.AfterFunc(m.debounceWindow, m.fireDebounced)
+		if m.debounce.timer == nil {
+			m.debounce.timer = time.AfterFunc(m.debounce.window, m.fireDebounced)
 		} else {
-			m.debounceTimer.Reset(m.debounceWindow)
+			m.debounce.timer.Reset(m.debounce.window)
 		}
 	}
-	m.debounceMu.Unlock()
+	m.debounce.mu.Unlock()
 }
 
 // recordReason appends to pendingReasons under debounceMu. Exported as a
 // method (not inlined) so the synchronous fallback path and the regular
 // path share identical reason-list semantics.
 func (m *ConfigManager) recordReason(reason string) {
-	m.debounceMu.Lock()
-	m.pendingReasons = append(m.pendingReasons, reason)
-	m.debounceMu.Unlock()
+	m.debounce.mu.Lock()
+	m.debounce.pendingReasons = append(m.debounce.pendingReasons, reason)
+	m.debounce.mu.Unlock()
 }
 
 // fireDebounced is invoked by time.AfterFunc when the debounce window
@@ -137,19 +137,19 @@ func (m *ConfigManager) recordReason(reason string) {
 // then runs diffAndReload without holding the mutex so a long reload does
 // not block new triggers.
 func (m *ConfigManager) fireDebounced() {
-	m.debounceMu.Lock()
+	m.debounce.mu.Lock()
 	// Snapshot reasons and clear state so concurrent triggerDebouncedReload
 	// calls start a fresh window.
-	reasons := m.pendingReasons
-	m.pendingReasons = nil
-	m.debounceTimer = nil
-	m.debounceMu.Unlock()
+	reasons := m.debounce.pendingReasons
+	m.debounce.pendingReasons = nil
+	m.debounce.timer = nil
+	m.debounce.mu.Unlock()
 
 	// v2.8.0 B-3: observe debounce batch size (effectiveness signal)
 	// before the reload so the sample lands even if diffAndReload
 	// errors out. Sample count == fire count by construction.
 	ObserveDebounceBatch(len(reasons))
-	atomic.AddUint64(&m.debounceFired, 1)
+	atomic.AddUint64(&m.debounce.fired, 1)
 	t0 := time.Now()
 	_, _, err := m.diffAndReload()
 	ObserveReloadDuration(time.Since(t0))
@@ -162,16 +162,16 @@ func (m *ConfigManager) fireDebounced() {
 // construction. Test-only accessor; production code should not rely on
 // this for correctness. Uses atomic load so callers don't need the mutex.
 func (m *ConfigManager) DebounceFiredCount() uint64 {
-	return atomic.LoadUint64(&m.debounceFired)
+	return atomic.LoadUint64(&m.debounce.fired)
 }
 
 // PendingDebounceReasons returns a snapshot of the current debounce
 // window's accumulated reasons. Test-only; callers should not mutate.
 func (m *ConfigManager) PendingDebounceReasons() []string {
-	m.debounceMu.Lock()
-	defer m.debounceMu.Unlock()
-	out := make([]string, len(m.pendingReasons))
-	copy(out, m.pendingReasons)
+	m.debounce.mu.Lock()
+	defer m.debounce.mu.Unlock()
+	out := make([]string, len(m.debounce.pendingReasons))
+	copy(out, m.debounce.pendingReasons)
 	return out
 }
 
@@ -185,13 +185,13 @@ func (m *ConfigManager) PendingDebounceReasons() []string {
 // done, we'd need to add a wait group here; for now the 15s HTTP shutdown
 // grace in main.go overshoots any debounce window comfortably.
 func (m *ConfigManager) Close() {
-	m.debounceMu.Lock()
-	if m.debounceTimer != nil {
-		m.debounceTimer.Stop()
-		m.debounceTimer = nil
+	m.debounce.mu.Lock()
+	if m.debounce.timer != nil {
+		m.debounce.timer.Stop()
+		m.debounce.timer = nil
 	}
-	m.pendingReasons = nil
-	m.debounceMu.Unlock()
+	m.debounce.pendingReasons = nil
+	m.debounce.mu.Unlock()
 }
 
 // reloadPriorState bundles every m.* hierarchy field captured under
@@ -243,12 +243,12 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return reloadPriorState{
-		mtimes:           m.hierarchyMtimes,
-		hashes:           m.hierarchyHashes,
-		mergedHashes:     m.mergedHashes,
-		tenantSources:    m.tenantSources,
-		parsedDefaults:   m.parsedDefaults, // Issue #61
-		hierarchicalMode: m.hierarchicalMode,
+		mtimes:           m.hierarchy.mtimes,
+		hashes:           m.hierarchy.hashes,
+		mergedHashes:     m.hierarchy.mergedHashes,
+		tenantSources:    m.hierarchy.tenantSources,
+		parsedDefaults:   m.hierarchy.parsedDefaults, // Issue #61
+		hierarchicalMode: m.hierarchy.enabled,
 	}
 }
 
@@ -467,13 +467,13 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	}
 
 	m.mu.Lock()
-	m.hierarchicalMode = true
-	m.tenantSources = scan.tenants
-	m.hierarchyHashes = scan.hashes
-	m.hierarchyMtimes = scan.mtimes
-	m.mergedHashes = result.newMergedHashes
-	m.inheritanceGraph = scan.graph
-	m.parsedDefaults = result.newParsedDefaults
+	m.hierarchy.enabled = true
+	m.hierarchy.tenantSources = scan.tenants
+	m.hierarchy.hashes = scan.hashes
+	m.hierarchy.mtimes = scan.mtimes
+	m.hierarchy.mergedHashes = result.newMergedHashes
+	m.hierarchy.graph = scan.graph
+	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.mu.Unlock()
 
 	SetLastReloadComplete(time.Now())
