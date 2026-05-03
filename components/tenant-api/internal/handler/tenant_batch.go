@@ -11,7 +11,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
@@ -153,6 +152,10 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 				return
 			}
 
+			// PR-6/11: shared post-write flow via createPRAndRegister.
+			// Per-tenant tracker entries get every field of the PR
+			// response (Title / HeadRef / CreatedAt) preserved
+			// consistently with the single-tenant path.
 			prTitle := fmt.Sprintf("[tenant-api] Batch update %d tenants", len(batchOps))
 			tenantList := make([]string, len(batchOps))
 			for i, op := range batchOps {
@@ -160,23 +163,15 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 			}
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
 				email, strings.Join(tenantList, ", "))
-			pr, err := d.PRClient.CreatePR(prTitle, prBody, result.BranchName, []string{"tenant-api", "auto-generated", "batch"})
+			pr, err := d.createPRAndRegister(
+				prTitle, prBody, result.BranchName,
+				[]string{"tenant-api", "auto-generated", "batch"},
+				tenantList,
+			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
 				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
-			}
-
-			// Register each tenant's PR/MR in tracker
-			for _, op := range batchOps {
-				d.PRTracker.RegisterPR(platform.PRInfo{
-					Number:   pr.Number,
-					WebURL:   pr.WebURL,
-					State:    "open",
-					Title:    pr.Title,
-					HeadRef:  result.BranchName,
-					TenantID: op.TenantID,
-				})
 			}
 
 			rw.Header().Set("Content-Type", "application/json")

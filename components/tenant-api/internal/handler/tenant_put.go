@@ -96,19 +96,20 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 				return
 			}
 
-			// Create PR/MR via platform client
+			// Create PR/MR via platform client + register in tracker.
+			// PR-6/11: shared with BatchTenants via createPRAndRegister.
 			prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
 			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
-			pr, err := d.PRClient.CreatePR(prTitle, prBody, result.BranchName, []string{"tenant-api", "auto-generated"})
+			pr, err := d.createPRAndRegister(
+				prTitle, prBody, result.BranchName,
+				[]string{"tenant-api", "auto-generated"},
+				[]string{tenantID},
+			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
 				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
-
-			// Register in tracker immediately
-			pr.TenantID = tenantID
-			d.PRTracker.RegisterPR(*pr)
 
 			rw.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(rw).Encode(PutTenantResponse{
