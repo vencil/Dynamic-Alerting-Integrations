@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [tenant-manager, alert-builder, routing-trace, master-onboarding]
 dependencies: [
-  "_common/hooks/useDebouncedValue.js"
+  "_common/hooks/useDebouncedValue.js",
+  "_common/components/Loading.jsx"
 ]
 ---
 
@@ -24,6 +25,7 @@ const t = window.__t || ((zh, en) => en);
  * the canonical hook, the inline copy is removed.
  * ──────────────────────────────────────────────────────────────────── */
 const useDebouncedValue = window.__useDebouncedValue;
+const Loading = window.__Loading;
 
 /* ── URL param helpers (S#94 deep-link pattern reuse) ────────────────
  *
@@ -348,12 +350,11 @@ function SimulatePreview() {
           )}
 
           {status === STATUS.LOADING && (
-            <div
-              data-testid="simulate-preview-state-loading"
-              className="text-sm text-[color:var(--da-color-muted)] py-8 text-center"
-            >
-              {t('Simulate 中…', 'Simulating…')}
-            </div>
+            <Loading
+              testid="simulate-preview-state-loading"
+              size="sm"
+              message={t('Simulate 中…', 'Simulating…')}
+            />
           )}
 
           {status === STATUS.ERROR && errorInfo && (

@@ -16,6 +16,10 @@ purpose: |
              to localized "載入中… / Loading…" via window.__t.
     size     'sm' | 'md' | 'lg' (optional, default 'md'), spinner
              diameter; size tokens align with --da-space scale.
+    testid   string (optional), override default
+             data-testid="loading-spinner" for tool-scoped assertions
+             (e.g. 'simulate-preview-state-loading'). Mirrors
+             EmptyState's testid prop. Added PR-portal-8.
 
   Behaviour notes:
     Pure CSS spinner (animated border), no SVG/lucide-react dep so
@@ -24,7 +28,7 @@ purpose: |
     (idempotent: tracked by window.__loadingSpinnerStyleInjected).
     Centers in parent (block-level wrapper); caller controls outer
     sizing via wrapping div.
-    data-testid="loading-spinner" for spec assertions.
+    Default data-testid="loading-spinner" (overridable via testid prop).
 
   Closure deps: none. Pure functional component using React global.
 ---
@@ -64,7 +68,7 @@ function buildSpinnerStyle(dim) {
   };
 }
 
-function Loading({ message, size }) {
+function Loading({ message, size, testid }) {
   useEffect(() => { injectSpinnerStyle(); }, []);
 
   const t = window.__t || ((zh, en) => en);
@@ -73,7 +77,7 @@ function Loading({ message, size }) {
   const spinnerStyle = buildSpinnerStyle(dim);
 
   return (
-    <div data-testid="loading-spinner" style={WRAPPER_STYLE}>
+    <div data-testid={testid || 'loading-spinner'} style={WRAPPER_STYLE}>
       <div style={spinnerStyle} aria-hidden="true" />
       <div style={TEXT_STYLE} role="status" aria-live="polite">
         {text}

@@ -5,11 +5,16 @@ audience: [tenant, "platform-engineer"]
 version: v2.7.0
 lang: en
 related: [playground, rule-pack-selector, threshold-calculator]
+dependencies: [
+  "_common/components/Loading.jsx"
+]
 ---
 
 import React, { useState, useMemo, useEffect } from 'react';
 
 const t = window.__t || ((zh, en) => en);
+// PR-portal-8: shared spinner replaces the inline 8x8 border-spin div.
+const Loading = window.__Loading;
 
 /* ── Fallback pack list (used if JSON fetch fails) ── */
 const FALLBACK_PACKS = [
@@ -128,14 +133,11 @@ export default function TemplateGallery() {
     return set;
   }, [TEMPLATES]);
 
-  /* ── Loading state ── */
+  /* ── Loading state ── PR-portal-8: shared <Loading> swap. */
   if (!templateData && !loadError) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4" />
-          <p className="text-slate-500 text-sm">{t('載入模板資料...', 'Loading template data...')}</p>
-        </div>
+        <Loading message={t('載入模板資料...', 'Loading template data...')} />
       </div>
     );
   }

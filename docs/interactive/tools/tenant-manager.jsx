@@ -19,7 +19,9 @@ dependencies: [
   "_common/hooks/useURLState.js",
   "_common/hooks/useVirtualGrid.js",
   "tenant-manager/hooks/useSavedViews.js",
-  "tenant-manager/components/SavedViewsPanel.jsx"
+  "tenant-manager/components/SavedViewsPanel.jsx",
+  "_common/components/Loading.jsx",
+  "_common/components/EmptyState.jsx"
 ]
 ---
 
@@ -55,6 +57,9 @@ const useVirtualGrid = window.__useVirtualGrid;
 // frontend gap.
 const useSavedViews = window.__useSavedViews;
 const SavedViewsPanel = window.__SavedViewsPanel;
+// PR-portal-8: shared loading + empty-state UI from _common/components/.
+const Loading = window.__Loading;
+const EmptyState = window.__EmptyState;
 // PR-2b: tracked URL params. Module-level const so identity stays
 // stable across renders — passing `['q']` inline as a literal would
 // create a new array each render and trigger useURLState's internal
@@ -430,12 +435,12 @@ export default function TenantManager() {
   const enableVirtualization = filtered.length > VIRTUAL_GRID_THRESHOLD;
 
   if (loading) {
+    // PR-portal-8: replaced inline 48px hourglass + muted text with
+    // shared <Loading> from _common/components/. Wrapper preserves
+    // the full-screen centred layout the original gave.
     return (
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', marginBottom: 'var(--da-space-4)' }} aria-hidden="true">&#8987;</div>
-          <div style={{ color: 'var(--da-color-muted)' }}>{t('載入租戶數據中...', 'Loading tenant data...')}</div>
-        </div>
+        <Loading size="lg" message={t('載入租戶數據中...', 'Loading tenant data...')} />
       </div>
     );
   }
@@ -820,20 +825,25 @@ export default function TenantManager() {
         )}
 
         {filtered.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 'var(--da-space-12)', backgroundColor: 'white', borderRadius: 'var(--da-radius-lg)' }}>
-            <div style={{ fontSize: '48px', marginBottom: 'var(--da-space-4)' }}>🔍</div>
-            <div style={{ color: 'var(--da-color-muted)', fontWeight: 'var(--da-font-weight-medium)' }}>
-              {t('未找到符合條件的租戶', 'No tenants match your filters')}
-            </div>
-            {!activeFilters.length && !searchText && (
-              <button
-                onClick={() => setActiveGroupId(null)}
-                style={{ ...styles.button, marginTop: 'var(--da-space-4)' }}
-              >
-                {t('建立群組', 'Create Group')}
-              </button>
-            )}
-          </div>
+          // PR-portal-8: replaced inline 🔍 + muted text + conditional
+          // CTA with shared <EmptyState>. The CTA only appears when
+          // there are no active filters AND no search — i.e. the user
+          // genuinely has no tenants in this view, not because they
+          // over-filtered.
+          <EmptyState
+            icon="🔍"
+            title={t('未找到符合條件的租戶', 'No tenants match your filters')}
+            actionLabel={
+              !activeFilters.length && !searchText
+                ? t('建立群組', 'Create Group')
+                : undefined
+            }
+            onAction={
+              !activeFilters.length && !searchText
+                ? () => setActiveGroupId(null)
+                : undefined
+            }
+          />
         )}
 
         {activeGroupId && groups[activeGroupId] && (

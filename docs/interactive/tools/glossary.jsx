@@ -5,11 +5,16 @@ audience: ["platform-engineer", "domain-expert", tenant]
 version: v2.7.0
 lang: en
 related: [schema-explorer, wizard, onboarding-checklist]
+dependencies: [
+  "_common/components/EmptyState.jsx"
+]
 ---
 
 import React, { useState } from 'react';
 
 const t = window.__t || ((zh, en) => en);
+// PR-portal-8: shared empty-state replaces inline "No terms" div.
+const EmptyState = window.__EmptyState;
 
 const GLOSSARY = [
   { term: 'Rule Pack', category: 'Core', def: 'A pre-built bundle of Prometheus recording rules and alert rules for a specific technology (e.g., MariaDB, Redis). You pick the ones you need — no PromQL required.', related: ['Recording Rule', 'Alert Rule', 'Projected Volume'], tryLink: '../assets/jsx-loader.html?component=../rule-pack-selector.jsx' },
@@ -131,7 +136,10 @@ export default function GlossaryPage() {
         </div>
 
         {filtered.length === 0 && (
-          <div className="text-center text-slate-400 py-12">{t('沒有符合的術語', 'No terms match your search.')}</div>
+          <EmptyState
+            icon="📖"
+            title={t('沒有符合的術語', 'No terms match your search.')}
+          />
         )}
       </div>
     </div>
