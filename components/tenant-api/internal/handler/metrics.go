@@ -54,22 +54,34 @@ func (w *statusWriter) WriteHeader(code int) {
 }
 
 // MetricsHandler handles GET /metrics in Prometheus exposition format.
+//
+// PR-11/11 added two rate-limiter metrics (`rejections_total` counter
+// + `active_callers` gauge) sourced from the package-level
+// activeLimiter pointer. When no limiter is installed (cfg
+// disabled or pre-wiring) both render as 0.
 func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	uptime := time.Since(Metrics.startTime).Seconds()
-	_, _ = fmt.Fprintf(w,"# HELP tenant_api_up Whether the tenant-api is up.\n")
-	_, _ = fmt.Fprintf(w,"# TYPE tenant_api_up gauge\n")
-	_, _ = fmt.Fprintf(w,"tenant_api_up 1\n")
-	_, _ = fmt.Fprintf(w,"# HELP tenant_api_uptime_seconds Seconds since tenant-api started.\n")
-	_, _ = fmt.Fprintf(w,"# TYPE tenant_api_uptime_seconds gauge\n")
-	_, _ = fmt.Fprintf(w,"tenant_api_uptime_seconds %.1f\n", uptime)
-	_, _ = fmt.Fprintf(w,"# HELP tenant_api_requests_total Total API requests.\n")
-	_, _ = fmt.Fprintf(w,"# TYPE tenant_api_requests_total counter\n")
-	_, _ = fmt.Fprintf(w,"tenant_api_requests_total %d\n", Metrics.requestsTotal.Load())
-	_, _ = fmt.Fprintf(w,"# HELP tenant_api_errors_total Total API errors.\n")
-	_, _ = fmt.Fprintf(w,"# TYPE tenant_api_errors_total counter\n")
-	_, _ = fmt.Fprintf(w,"tenant_api_errors_total %d\n", Metrics.errorsTotal.Load())
-	_, _ = fmt.Fprintf(w,"# HELP tenant_api_writes_total Total write operations (git commits).\n")
-	_, _ = fmt.Fprintf(w,"# TYPE tenant_api_writes_total counter\n")
-	_, _ = fmt.Fprintf(w,"tenant_api_writes_total %d\n", Metrics.writesTotal.Load())
+	rejections, activeCallers := RateLimitMetrics()
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_up Whether the tenant-api is up.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_up gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_up 1\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_uptime_seconds Seconds since tenant-api started.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_uptime_seconds gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_uptime_seconds %.1f\n", uptime)
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_requests_total Total API requests.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_requests_total counter\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_requests_total %d\n", Metrics.requestsTotal.Load())
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_errors_total Total API errors.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_errors_total counter\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_errors_total %d\n", Metrics.errorsTotal.Load())
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_writes_total Total write operations (git commits).\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_writes_total counter\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_writes_total %d\n", Metrics.writesTotal.Load())
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_rate_limit_rejections_total Total requests denied by the per-caller rate limiter.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_rate_limit_rejections_total counter\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_rate_limit_rejections_total %d\n", rejections)
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_rate_limit_active_callers Number of callers with at least one request inside the rolling window.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_rate_limit_active_callers gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_rate_limit_active_callers %d\n", activeCallers)
 }

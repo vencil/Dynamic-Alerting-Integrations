@@ -182,7 +182,7 @@ func TestCodeFromStatus(t *testing.T) {
 // match (RFC 6585) and code is the expected RATE_LIMITED token.
 func TestRateLimit_EnvelopeShape(t *testing.T) {
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
-	mw := RateLimit(cfg)
+	mw := RateLimit(cfg, make(chan struct{}))
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
