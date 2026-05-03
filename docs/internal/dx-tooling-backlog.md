@@ -123,6 +123,25 @@ v2.6.0 Phase .d-R2 建議：pack count slider 未連動 platform-data.json。改
 
 v2.6.0 Phase .d-R2 建議：template editing 時顯示即時 char counter，幫助使用者掌握各 receiver 的長度限制（Slack 3000 / Email 無限 / PagerDuty 1024）。
 
+### deployment-wizard + alert-builder Step component 抽取（PR-portal-11 follow-up）
+
+PR-portal-11 ([#213](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/213)) 在 4 個 multi-step / multi-tab 工具加上 subtree ErrorBoundary，唯獨 `deployment-wizard.jsx` (504 LOC) + `alert-builder.jsx` (616 LOC) 跳過：兩者 step content 都是 inline JSX (`{currentStep.id === 'tier' && (<div>...</div>)}` × 6 / `{step === N && (<div>...</div>)}` × 4)，不是抽出來的 Step component；直接包 boundary 會變多層 nesting + 條件交錯，醜且難 review。
+
+兩階段執行（建議放同一個 PR）：
+
+**Phase A — 抽 Step components**。每個 inline block 抽到 sibling `<wizard>/components/Step*.jsx`（deployment 6 個、alert-builder 4 個），符號用 `window.__DeployStepX` / `window.__AlertBuilderStepX` 前綴避免跨工具衝突（同 PR-portal-10 的 `__CICD_*` / `__DEPLOY_*` / `__RBAC_*` 命名慣例）。orchestrator 的 conditional render 變乾淨：`{currentStep.id === 'tier' && <StepTier {...stepProps} />}`。
+
+**Phase B — 套 boundary**。複製 PR-portal-11 的 cicd-setup-wizard pattern：`<ErrorBoundary key={currentStep.id} scope={'deployment-wizard/step/' + currentStep.id}>{...所有 conditionals...}</ErrorBoundary>`。1 個 wrap 配 `key={...id}` 每步換新 mount。
+
+**兩個必踩坑**：
+
+- **`auth` step 的雙條件** (`currentStep.id === 'auth' && config.tier === 'tier2'`) — `config.tier === 'tier2'` 邏輯**必須留在 orchestrator**（決定 step 是否出現），不要搬進 `StepAuth`；否則 step nav 顯示這個 step 但 component 內 early-return → 一片空白卡關。
+- **sed-damage threshold**：deployment-wizard 抽完 504 → ~150 LOC（70% shrink）+ alert-builder 616 → ~200 LOC（67% shrink）→ 兩個都觸發 `sed-damage-guard`。需把兩個路徑加進 `.sed-damage-allowlist`（PR-portal-9 #211 portal-shared.jsx 已有先例 + PR-portal-6 #208 機制本身）。
+
+**預估規模**：10 個新檔 + 2 個 orchestrator 改動 + 2 個 allowlist 條目 ≈ -770 LOC orchestrator 總減量；單一 PR ~800 LOC delta（reviewable，跟 PR-portal-10 同級）。
+
+**時程：post-v2.8.0**。當前兩個工具功能正常（loader-level boundary from PR-portal-2 仍能接全工具失敗），不是 bug 是 incremental quality。塞進 v2.8.0 release window 會讓 release notes 變雜（已 11 個 portal PR）。若 ship 後客戶遇到「某 step 壞掉拖死整個 wizard」事件再提前。
+
 ---
 
 ## 候選 — 測試品質
