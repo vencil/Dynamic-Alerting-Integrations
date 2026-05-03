@@ -16,7 +16,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
-	"gopkg.in/yaml.v3"
 )
 
 // region DirectoryLoading — LoadDir tests and file hashing
