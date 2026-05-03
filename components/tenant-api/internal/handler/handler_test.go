@@ -116,6 +116,48 @@ func TestReady(t *testing.T) {
 	}
 }
 
+// TestReady_MissingDir asserts /ready returns 503 when the config
+// directory is not stat-able, so K8s readinessProbe drains traffic
+// away from a pod whose ConfigMap mount failed.
+func TestReady_MissingDir(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	handler := Ready(missing)
+
+	req := httptest.NewRequest("GET", "/ready", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Ready() status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["status"] != "not_ready" {
+		t.Errorf("Ready() status = %q, want %q", resp["status"], "not_ready")
+	}
+}
+
+// TestReady_NotADirectory asserts /ready returns 503 when the
+// configured config_dir is a file (operator misconfig).
+func TestReady_NotADirectory(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "imposter")
+	if err := os.WriteFile(filePath, []byte("not a dir"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	handler := Ready(filePath)
+
+	req := httptest.NewRequest("GET", "/ready", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Ready() status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
 // --- GetTenant tests ---
 
 func TestGetTenant_Success(t *testing.T) {

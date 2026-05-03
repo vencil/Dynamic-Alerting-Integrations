@@ -271,47 +271,6 @@ func TestGetTask_OrphanedHint(t *testing.T) {
 	}
 }
 
-// TestListTasks verifies the ListTasks handler returns helpful message.
-func TestListTasks(t *testing.T) {
-	// Create task manager
-	taskMgr := async.NewManager(1)
-	defer taskMgr.Close()
-
-	// Create HTTP request
-	req := httptest.NewRequest("GET", "/api/v1/tasks", nil)
-	w := httptest.NewRecorder()
-
-	// Call handler
-	handler := ListTasks(taskMgr)
-	handler(w, req)
-
-	// Verify response
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
-
-	// Decode response
-	var resp map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	// Verify response contains helpful message
-	if resp["message"] == "" {
-		t.Errorf("expected non-empty message")
-	}
-
-	if _, ok := resp["message"]; !ok {
-		t.Errorf("expected 'message' field in response")
-	}
-
-	// Verify Content-Type header
-	contentType := w.Header().Get("Content-Type")
-	if contentType != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %s", contentType)
-	}
-}
-
 // TestGetTask_MultiplePolls verifies task status is consistent across polls.
 func TestGetTask_MultiplePolls(t *testing.T) {
 	// Create task manager

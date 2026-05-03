@@ -80,15 +80,3 @@ func filterTaskResults(rbacMgr *rbac.Manager, idpGroups []string, results []asyn
 	}
 	return out
 }
-
-// ListTasks handles GET /api/v1/tasks
-// Returns all known tasks (limited to in-memory state).
-func ListTasks(taskMgr *async.Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Simple: return message about in-memory nature
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"message": "task list endpoint — use GET /api/v1/tasks/{id} to poll specific tasks",
-		})
-	}
-}
