@@ -33,11 +33,12 @@ func (d *Deps) GetTask() http.HandlerFunc {
 
 		task, ok := d.Tasks.Get(taskID)
 		if !ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error": "task_not_found",
-				"hint":  "pod_may_have_restarted",
+			writeErrorEnvelope(w, r, http.StatusNotFound, ErrorResponse{
+				Error: "task_not_found",
+				Code:  CodeTaskNotFound,
+				Extra: map[string]any{
+					"hint": "pod_may_have_restarted",
+				},
 			})
 			return
 		}
@@ -51,7 +52,7 @@ func (d *Deps) GetTask() http.HandlerFunc {
 			// Caller has zero access to any of the touched tenants.
 			// 403 (not 404) — the task exists, just none of its
 			// tenants are within the caller's RBAC scope.
-			writeJSONError(w, http.StatusForbidden,
+			writeJSONError(w, r,http.StatusForbidden,
 				"insufficient permission to read task results: caller has no access to any of the task's tenants")
 			return
 		}

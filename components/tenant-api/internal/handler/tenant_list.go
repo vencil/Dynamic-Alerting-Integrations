@@ -47,7 +47,7 @@ func (d *Deps) ListTenants() http.HandlerFunc {
 
 		tenants, err := loadAllTenants(d.ConfigDir)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

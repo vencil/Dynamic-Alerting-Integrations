@@ -61,13 +61,13 @@ func (d *Deps) GetView() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		v, ok := d.Views.GetView(viewID)
 		if !ok {
-			writeJSONError(w, http.StatusNotFound, "view not found: "+viewID)
+			writeJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
 			return
 		}
 
@@ -111,7 +111,7 @@ func (d *Deps) PutView() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -119,13 +119,13 @@ func (d *Deps) PutView() http.HandlerFunc {
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
 		var req PutViewRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 
@@ -137,7 +137,7 @@ func (d *Deps) PutView() http.HandlerFunc {
 		violations := validateStructTags(&req)
 		violations = append(violations, validateFilterMap(req.Filters, "filters")...)
 		if len(violations) > 0 {
-			writeValidationErrors(w, violations)
+			writeValidationErrors(w, r,violations)
 			return
 		}
 
@@ -157,16 +157,16 @@ func (d *Deps) PutView() http.HandlerFunc {
 
 		yamlBytes, err := views.MarshalConfig(newCfg)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "marshal views: "+err.Error())
+			writeJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
 			return
 		}
 
 		if err := d.Writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, http.StatusConflict, err.Error())
+				writeJSONError(w, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -195,7 +195,7 @@ func (d *Deps) DeleteView() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -203,7 +203,7 @@ func (d *Deps) DeleteView() http.HandlerFunc {
 
 		cfg := d.Views.Get()
 		if _, ok := cfg.Views[viewID]; !ok {
-			writeJSONError(w, http.StatusNotFound, "view not found: "+viewID)
+			writeJSONError(w, r,http.StatusNotFound, "view not found: "+viewID)
 			return
 		}
 
@@ -218,16 +218,16 @@ func (d *Deps) DeleteView() http.HandlerFunc {
 
 		yamlBytes, err := views.MarshalConfig(newCfg)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "marshal views: "+err.Error())
+			writeJSONError(w, r,http.StatusInternalServerError, "marshal views: "+err.Error())
 			return
 		}
 
 		if err := d.Writer.WriteViewsFile(email, string(yamlBytes)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(w, http.StatusConflict, err.Error())
+				writeJSONError(w, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

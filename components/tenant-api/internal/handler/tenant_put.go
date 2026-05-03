@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"gopkg.in/yaml.v3"
 )
@@ -53,14 +52,14 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(rw, http.StatusBadRequest, err.Error())
+			writeJSONError(rw, r,http.StatusBadRequest, err.Error())
 			return
 		}
 		email := rbac.RequestEmail(r)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB limit
 		if err != nil {
-			writeJSONError(rw, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			writeJSONError(rw, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
@@ -68,7 +67,7 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 		if d.Policy != nil {
 			patch := extractPatchKeys(body, tenantID)
 			if violations := d.Policy.CheckWrite(tenantID, patch); len(violations) > 0 {
-				writePolicyViolation(rw, violations)
+				writePolicyViolation(rw, r,violations)
 				return
 			}
 		}
@@ -78,13 +77,14 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 			// Check for existing pending PR/MR
 			if d.PRTracker.HasPendingPR(tenantID) {
 				existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
-				rw.Header().Set("Content-Type", "application/json")
-				rw.WriteHeader(http.StatusConflict)
-				_ = json.NewEncoder(rw).Encode(map[string]interface{}{
-					"error":           "pending_pr_exists",
-					"existing_pr_url": existingPR.WebURL,
-					"pr_number":       existingPR.Number,
-					"message":         fmt.Sprintf("A pending PR/MR for %s already exists. Merge or close it first.", tenantID),
+				writeErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
+					Error: "pending_pr_exists",
+					Code:  CodePendingPR,
+					Extra: map[string]any{
+						"existing_pr_url": existingPR.WebURL,
+						"pr_number":       existingPR.Number,
+						"message":         fmt.Sprintf("A pending PR/MR for %s already exists. Merge or close it first.", tenantID),
+					},
 				})
 				return
 			}
@@ -92,7 +92,7 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 			// Create feature branch + commit
 			result, err := d.Writer.WritePR(tenantID, email, string(body))
 			if err != nil {
-				writeJSONError(rw, http.StatusInternalServerError, "PR write failed: "+err.Error())
+				writeJSONError(rw, r,http.StatusInternalServerError, "PR write failed: "+err.Error())
 				return
 			}
 
@@ -107,7 +107,7 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
-				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				writeJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 
@@ -125,10 +125,10 @@ func (d *Deps) PutTenant() http.HandlerFunc {
 		// Default: direct commit-on-write (ADR-009)
 		if err := d.Writer.Write(tenantID, email, string(body)); err != nil {
 			if errors.Is(err, gitops.ErrConflict) {
-				writeJSONError(rw, http.StatusConflict, err.Error())
+				writeJSONError(rw, r,http.StatusConflict, err.Error())
 				return
 			}
-			writeJSONError(rw, http.StatusBadRequest, err.Error())
+			writeJSONError(rw, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -194,15 +194,4 @@ func flattenMapDepth(prefix string, m map[string]interface{}, out map[string]str
 	}
 }
 
-// writePolicyViolation writes a 403 response with domain policy violations.
-func writePolicyViolation(w http.ResponseWriter, violations []policy.Violation) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	resp := map[string]interface{}{
-		"error":      "domain policy violation",
-		"violations": violations,
-		"help":       "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/internal/test-coverage-matrix.md",
-		"action":     "Review the _domain_policy.yaml constraints for this tenant's domain. Contact a platform admin to update the policy if this change is necessary.",
-	}
-	_ = json.NewEncoder(w).Encode(resp)
-}
+// writePolicyViolation lives in errors.go (PR-9/11 unification).

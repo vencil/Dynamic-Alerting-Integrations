@@ -18,7 +18,6 @@ package handler
 // ============================================================
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -207,13 +206,15 @@ func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 			caller := rateLimitCaller(r)
 			ok, retryAfter := limiter.allow(caller, time.Now())
 			if !ok {
+				// Retry-After header is set per RFC 6585 in addition
+				// to the body field — clients with HTTP-aware retry
+				// libs (e.g. http.Client wrappers) honor the header
+				// without parsing JSON.
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"error":         fmt.Sprintf("rate limit exceeded for %s; try again in %ds", caller, retryAfter),
-					"code":          "RATE_LIMITED",
-					"retry_after_s": retryAfter,
+				writeErrorEnvelope(w, r, http.StatusTooManyRequests, ErrorResponse{
+					Error:       fmt.Sprintf("rate limit exceeded for %s; try again in %ds", caller, retryAfter),
+					Code:        CodeRateLimited,
+					RetryAfterS: retryAfter,
 				})
 				return
 			}

@@ -36,18 +36,18 @@ func (d *Deps) GetTenant() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		filePath := filepath.Join(d.ConfigDir, tenantID+".yaml")
 		data, err := os.ReadFile(filePath)
 		if os.IsNotExist(err) {
-			writeJSONError(w, http.StatusNotFound, "tenant not found: "+tenantID)
+			writeJSONError(w, r,http.StatusNotFound, "tenant not found: "+tenantID)
 			return
 		}
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -125,13 +125,6 @@ func loadMergedConfig(configDir, tenantID string, tenantData []byte) cfg.Thresho
 
 	merged.ApplyProfiles()
 	return merged
-}
-
-// writeJSONError writes a JSON error body with the given HTTP status.
-func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 // tenantIDFromPath is a helper for chi URL param extraction used by middleware.

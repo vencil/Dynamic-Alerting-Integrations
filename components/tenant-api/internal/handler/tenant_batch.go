@@ -79,11 +79,11 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 
 		var req BatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(rw, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			writeJSONError(rw, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		if len(req.Operations) == 0 {
-			writeJSONError(rw, http.StatusBadRequest, "operations list is empty")
+			writeJSONError(rw, r,http.StatusBadRequest, "operations list is empty")
 			return
 		}
 
@@ -97,7 +97,7 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 			violations = append(violations, validatePatchMap(op.Patch, fieldPrefix)...)
 		}
 		if len(violations) > 0 {
-			writeValidationErrors(rw, violations)
+			writeValidationErrors(rw, r,violations)
 			return
 		}
 
@@ -148,7 +148,7 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 
 			result, err := d.Writer.WritePRBatch(batchOps, email)
 			if err != nil {
-				writeJSONError(rw, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+				writeJSONError(rw, r,http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 				return
 			}
 
@@ -170,7 +170,7 @@ func (d *Deps) BatchTenants() http.HandlerFunc {
 			)
 			if err != nil {
 				provider := d.PRClient.ProviderName()
-				writeJSONError(rw, http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
+				writeJSONError(rw, r,http.StatusServiceUnavailable, fmt.Sprintf("%s PR/MR creation failed: %s", provider, err.Error()))
 				return
 			}
 
