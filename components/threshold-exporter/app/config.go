@@ -27,86 +27,81 @@ import (
 // In directory mode, ConfigManager supports incremental hot-reload (v2.1.0):
 // per-file SHA-256 tracking + parsed config cache → only changed files are
 // re-parsed on each reload cycle, then all cached partials are merged.
+// flatScanState bundles the v2.1.0 incremental-reload caches used by the
+// flat-mode scanner (`scanDirFileHashes` + `IncrementalLoad`). Per-file
+// SHA-256 + parsed partial config + mtime fast-path stat. nil maps when
+// the manager is in single-file mode or has not yet completed its first
+// directory scan.
+type flatScanState struct {
+	hashes  map[string]string          // filename → SHA-256
+	configs map[string]ThresholdConfig // filename → parsed partial config
+	mtimes  map[string]fileStat        // filename → mtime+size for quick skip (v2.1.0)
+}
+
+// hierarchyState bundles the v2.7.0+ ADR-017/018 hierarchical-mode caches.
+// `enabled` is auto-detected on first load: if scanDirHierarchical finds
+// at least one `_defaults.yaml` at any depth AND the top-level scan path
+// is a directory, we keep hierarchical state populated alongside the flat
+// state. A reload always produces both views so a legacy flat caller
+// (fullDirLoad) stays correct.
+//
+// When `enabled` is false, all maps/graph are nil and diffAndReload falls
+// back to IncrementalLoad (flat path).
+//
+// All fields atomic-swap together at the end of diffAndReload under
+// `ConfigManager.mu.Lock()`. A desync between, e.g., `hashes[X]=H_new`
+// and `parsedDefaults[X]=parse(H_old)` would cause
+// classifyDefaultsNoOpEffect (Issue #61) to compute against the wrong
+// baseline. See `installNewHierarchyState` in config_debounce.go.
+//
+// Memory: ~432 `_defaults.yaml` × ~2KB parsed dict ≈ 1MB at the
+// 1000-tenant baseline; scales linearly with tree size.
+type hierarchyState struct {
+	enabled        bool
+	tenantSources  map[string]string          // tenantID → absolute tenant file path
+	hashes         map[string]string          // absolute Clean path → 64-char SHA-256
+	mtimes         map[string]fileStat        // absolute Clean path → mtime+size
+	mergedHashes   map[string]string          // tenantID → 16-char merged_hash
+	graph          *InheritanceGraph          // defaults↔tenants dependency map
+	parsedDefaults map[string]map[string]any  // absolute Clean path → parsed defaults dict
+}
+
+// debouncerState bundles the v2.7.0 Phase 3 burst-coalescing fields.
+// `window` controls fsnotify storm absorption (50-200ms K8s ConfigMap
+// symlink rotation + safety margin). 0 disables debouncing and restores
+// the v2.6.0 behavior (immediate reload per detected diff).
+//
+// `mu` is a separate mutex from `ConfigManager.mu` so a long-running
+// reload doesn't block trigger registration; trigger accumulation is
+// fast (just append to pendingReasons + reset timer).
+type debouncerState struct {
+	window         time.Duration
+	timer          *time.Timer // current pending reload; nil when idle
+	mu             sync.Mutex  // guards timer + pendingReasons
+	pendingReasons []string    // accumulates reload triggers during a window
+	fired          uint64      // count of fires; read via DebounceFiredCount()
+}
+
 type ConfigManager struct {
-	path     string // file path or directory path
-	isDir    bool   // true = directory mode
-	mu       sync.RWMutex
-	config   *ThresholdConfig
-	loaded   bool
+	path       string // file path or directory path
+	isDir      bool   // true = directory mode
+	mu         sync.RWMutex
+	config     *ThresholdConfig
+	loaded     bool
 	lastReload time.Time
 	lastHash   string // SHA-256 composite hash for change detection
-
-	// Incremental reload state (directory mode only, v2.1.0)
-	fileHashes  map[string]string          // filename → SHA-256
-	fileConfigs map[string]ThresholdConfig // filename → parsed partial config
-	fileMtimes  map[string]fileStat        // filename → mtime+size for quick skip (v2.1.0)
 
 	// Config info metric state (v2.3.0)
 	configSource string // "configmap", "operator", or "git-sync"
 	gitCommit    string // git commit hash from .git-revision file, or ""
 
-	// Hierarchical scan state (v2.7.0, ADR-017/018 — Phase 3+5)
-	//
-	// hierarchical mode is auto-detected on first load: if scanDirHierarchical
-	// finds at least one _defaults.yaml at any depth AND the top-level scan
-	// path is a directory, we keep hierarchical state populated alongside the
-	// flat fileHashes above. A reload always produces both views so a legacy
-	// flat caller (fullDirLoad) stays correct.
-	//
-	// When hierarchicalMode is false, all three maps/graph are nil and
-	// diffAndReload falls back to IncrementalLoad (flat path).
-	hierarchicalMode bool
-	// tenantSources maps tenantID → absolute tenant file path. Updated on
-	// every hierarchical scan; used by Resolve(tenantID) for /effective.
-	tenantSources map[string]string
-	// hierarchyHashes is keyed by absolute Clean path and stores the full
-	// 64-char SHA-256 hex of each scanned YAML (tenant + defaults). Used to
-	// diff which files changed between scans in Phase 3.
-	hierarchyHashes map[string]string
-	// hierarchyMtimes parallels hierarchyHashes for mtime-based fast path
-	// (forward-compat with scanDirHierarchical's priorMtimes arg).
-	hierarchyMtimes map[string]fileStat
-	// mergedHashes is the user-facing 16-char merged_hash per tenant, keyed
-	// by tenantID. Computed by diffAndReload on every dirty tenant. The
-	// /effective handler reads this to avoid recomputing on each request.
-	mergedHashes map[string]string
-	// inheritanceGraph records defaults↔tenants dependencies. Swapped
-	// atomically on reload (pointer swap; the graph itself is immutable
-	// once built). nil when hierarchicalMode is false.
-	inheritanceGraph *InheritanceGraph
-	// parsedDefaults caches the *parsed-and-normalized* dict of every
-	// _defaults.yaml file in the tree (key = absolute Clean path, same
-	// keying as hierarchyHashes). Required by Issue #61 to distinguish
-	// effect=shadowed from effect=cosmetic in the blast-radius
-	// histogram: the noOp branch needs to know which keys actually
-	// moved between prior and current scan, which file-hash alone can't
-	// answer (comment-only edits move the file hash but not any key).
-	//
-	// MUST atomic-swap together with hierarchyHashes — a desync between
-	// "we know file X has hash H_new" and "parsed cache for X is H_old"
-	// would cause changedDefaultsKeys to compute against the wrong
-	// baseline. Both are installed under m.mu.Lock() in
-	// populateHierarchyState (cold start) and diffAndReload (incremental).
-	//
-	// Memory: ~432 _defaults files × ~2KB parsed dict ≈ 1MB at the
-	// 1000-tenant baseline; scales linearly with tree size.
-	parsedDefaults map[string]map[string]any
-
-	// Debounce state (v2.7.0 Phase 3)
-	//
-	// debounceWindow bundles multiple fsnotify-ish bursts (tick-initiated
-	// diffs, manual SIGHUP, etc.) into a single reload. 0 disables debouncing
-	// and restores the v2.6.0 behavior (immediate reload on detected diff).
-	debounceWindow time.Duration
-	debounceTimer  *time.Timer // current pending reload; nil when idle
-	debounceMu     sync.Mutex  // guards debounceTimer + pendingReasons
-	// pendingReasons accumulates reload triggers during a debounce window so
-	// the terminal diffAndReload can emit counter increments per-reason (see
-	// collector.go da_config_reload_trigger_total). Cleared on fire + Close.
-	pendingReasons []string
-	// debounceFired is bumped by the timer goroutine each time a debounce
-	// fires. Tests read this via DebounceFiredCount() to assert batching.
-	debounceFired uint64
+	// Sub-struct field groups — v2.8.0 PR-5 decomposed the original
+	// 14-mixed-fields ConfigManager into named concerns. Field accesses
+	// across the codebase use `m.flat.X` / `m.hierarchy.X` / `m.debounce.X`
+	// for clarity at the call site.
+	flat      flatScanState
+	hierarchy hierarchyState
+	debounce  debouncerState
 }
 
 // DefaultDebounceWindow is the default burst-coalescing window applied by
@@ -129,9 +124,9 @@ func NewConfigManagerWithDebounce(path string, debounceWindow time.Duration) *Co
 	isDir := err == nil && info.IsDir()
 
 	return &ConfigManager{
-		path:           path,
-		isDir:          isDir,
-		debounceWindow: debounceWindow,
+		path:     path,
+		isDir:    isDir,
+		debounce: debouncerState{window: debounceWindow},
 	}
 }
 
@@ -456,7 +451,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 	}
 
 	m.mu.RLock()
-	hasCache := m.fileHashes != nil && len(m.fileHashes) > 0
+	hasCache := m.flat.hashes != nil && len(m.flat.hashes) > 0
 	m.mu.RUnlock()
 
 	if !hasCache {
@@ -465,8 +460,8 @@ func (m *ConfigManager) IncrementalLoad() error {
 
 	// Phase 1: scan per-file hashes with mtime guard (cheap — stat + skip unchanged)
 	m.mu.RLock()
-	oldH := m.fileHashes
-	oldM := m.fileMtimes
+	oldH := m.flat.hashes
+	oldM := m.flat.mtimes
 	prevHash := m.lastHash
 	m.mu.RUnlock()
 
@@ -483,8 +478,8 @@ func (m *ConfigManager) IncrementalLoad() error {
 
 	// Phase 2: diff per-file hashes → identify changed/added/removed
 	m.mu.RLock()
-	oldHashes := m.fileHashes
-	oldConfigs := m.fileConfigs
+	oldHashes := m.flat.hashes
+	oldConfigs := m.flat.configs
 	m.mu.RUnlock()
 
 	var changed, added, removed []string
@@ -616,9 +611,9 @@ func (m *ConfigManager) IncrementalLoad() error {
 	m.loaded = true
 	m.lastReload = time.Now()
 	m.lastHash = compositeHash
-	m.fileHashes = newHashes
-	m.fileConfigs = newConfigs
-	m.fileMtimes = newMtimes
+	m.flat.hashes = newHashes
+	m.flat.configs = newConfigs
+	m.flat.mtimes = newMtimes
 	m.mu.Unlock()
 
 	// Refresh config source detection (v2.3.0) — git-sync may rotate .git-revision
@@ -700,9 +695,9 @@ func (m *ConfigManager) fullDirLoad() error {
 	m.loaded = true
 	m.lastReload = time.Now()
 	m.lastHash = compositeHash
-	m.fileHashes = perFileHashes
-	m.fileConfigs = fileConfigs
-	m.fileMtimes = perFileMtimes
+	m.flat.hashes = perFileHashes
+	m.flat.configs = fileConfigs
+	m.flat.mtimes = perFileMtimes
 	m.mu.Unlock()
 
 	// Detect config source mode and git commit (v2.3.0)
@@ -775,14 +770,14 @@ func (m *ConfigManager) populateHierarchyState() error {
 	// somewhere. Pure-flat trees keep hierarchicalMode=false, letting
 	// WatchLoop take the v2.6.0 IncrementalLoad path.
 	if len(defaults) > 0 {
-		m.hierarchicalMode = true
+		m.hierarchy.enabled = true
 	}
-	m.tenantSources = tenants
-	m.hierarchyHashes = hashes
-	m.hierarchyMtimes = mtimes
-	m.mergedHashes = newMergedHashes
-	m.inheritanceGraph = graph
-	m.parsedDefaults = newParsedDefaults
+	m.hierarchy.tenantSources = tenants
+	m.hierarchy.hashes = hashes
+	m.hierarchy.mtimes = mtimes
+	m.hierarchy.mergedHashes = newMergedHashes
+	m.hierarchy.graph = graph
+	m.hierarchy.parsedDefaults = newParsedDefaults
 	m.mu.Unlock()
 	return nil
 }
@@ -987,12 +982,12 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 // changed=true call triggerDebouncedReload(reason).
 func (m *ConfigManager) detectChange() (bool, string, error) {
 	m.mu.RLock()
-	oldH := m.fileHashes
-	oldM := m.fileMtimes
+	oldH := m.flat.hashes
+	oldM := m.flat.mtimes
 	prevHash := m.lastHash
-	hierarchical := m.hierarchicalMode
-	priorHierHashes := m.hierarchyHashes
-	priorHierMtimes := m.hierarchyMtimes
+	hierarchical := m.hierarchy.enabled
+	priorHierHashes := m.hierarchy.hashes
+	priorHierMtimes := m.hierarchy.mtimes
 	m.mu.RUnlock()
 
 	if hierarchical {
@@ -1057,12 +1052,12 @@ type EffectiveConfig struct {
 // structured error body instead of 404/500.
 func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
 	m.mu.RLock()
-	srcPath, known := m.tenantSources[tenantID]
+	srcPath, known := m.hierarchy.tenantSources[tenantID]
 	var chain []string
-	if m.inheritanceGraph != nil {
-		chain = append(chain, m.inheritanceGraph.TenantDefaults[tenantID]...)
+	if m.hierarchy.graph != nil {
+		chain = append(chain, m.hierarchy.graph.TenantDefaults[tenantID]...)
 	}
-	cachedHash := m.mergedHashes[tenantID]
+	cachedHash := m.hierarchy.mergedHashes[tenantID]
 	m.mu.RUnlock()
 
 	if !known {

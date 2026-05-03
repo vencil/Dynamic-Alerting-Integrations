@@ -188,7 +188,7 @@ func TestDiffAndReload_HierarchicalMode_SourceChange(t *testing.T) {
 		t.Fatalf("first diffAndReload: %v", err)
 	}
 	m.mu.RLock()
-	firstHash := m.mergedHashes["tenant-a"]
+	firstHash := m.hierarchy.mergedHashes["tenant-a"]
 	m.mu.RUnlock()
 	if firstHash == "" {
 		t.Fatalf("expected non-empty merged_hash for tenant-a, got empty")
@@ -213,7 +213,7 @@ func TestDiffAndReload_HierarchicalMode_SourceChange(t *testing.T) {
 	}
 
 	m.mu.RLock()
-	secondHash := m.mergedHashes["tenant-a"]
+	secondHash := m.hierarchy.mergedHashes["tenant-a"]
 	m.mu.RUnlock()
 	if secondHash == firstHash {
 		t.Errorf("merged_hash did not move after source change (both=%s)", firstHash)
@@ -239,7 +239,7 @@ func TestDiffAndReload_DefaultsChangeNoOp(t *testing.T) {
 		t.Fatalf("first diffAndReload: %v", err)
 	}
 	m.mu.RLock()
-	firstHash := m.mergedHashes["tenant-a"]
+	firstHash := m.hierarchy.mergedHashes["tenant-a"]
 	m.mu.RUnlock()
 
 	// Mutate _defaults.yaml but only the shadowed key.
@@ -258,7 +258,7 @@ defaults:
 	}
 
 	m.mu.RLock()
-	secondHash := m.mergedHashes["tenant-a"]
+	secondHash := m.hierarchy.mergedHashes["tenant-a"]
 	m.mu.RUnlock()
 	if secondHash != firstHash {
 		t.Errorf("merged_hash moved on shadowed defaults change (first=%s second=%s)", firstHash, secondHash)
@@ -294,7 +294,7 @@ tenants:
 	}
 
 	m.mu.RLock()
-	hierarchical := m.hierarchicalMode
+	hierarchical := m.hierarchy.enabled
 	m.mu.RUnlock()
 	if hierarchical {
 		t.Errorf("hierarchicalMode should remain false for flat conf.d")
@@ -409,12 +409,12 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 	// fireDebounced may complete AFTER our withIsolatedMetrics swap. The
 	// S#35 fix asserted "deltaReload == deltaBatch lockstep" but that
 	// claim was WRONG — only batch + DebounceFiredCount() are atomic
-	// (Step 1+2 of fireDebounced under m.debounceMu). Reload is observed
+	// (Step 1+2 of fireDebounced under m.debounce.mu). Reload is observed
 	// AFTER diffAndReload (Step 4), making its leak window much wider:
 	//
 	//   fireDebounced steps:
 	//     1. ObserveDebounceBatch(len(reasons))   ← batch leaks here
-	//     2. atomic.AddUint64(&m.debounceFired)   ← fire counter
+	//     2. atomic.AddUint64(&m.debounce.fired)   ← fire counter
 	//        ----- diffAndReload runs (~ms-100ms) -----
 	//     4. ObserveReloadDuration(elapsed)       ← reload leaks LATE
 	//
@@ -429,7 +429,7 @@ func TestFireDebounced_EmitsBatchAndDuration(t *testing.T) {
 	deltaBatchCount := histogramSampleCount(t, fresh.debounceBatch) - baseBatchCount
 
 	if deltaBatchCount != deltaFire {
-		t.Errorf("batch-fire lockstep violated: deltaBatch=%d != deltaFire=%d (both atomic under m.debounceMu in fireDebounced steps 1+2)", deltaBatchCount, deltaFire)
+		t.Errorf("batch-fire lockstep violated: deltaBatch=%d != deltaFire=%d (both atomic under m.debounce.mu in fireDebounced steps 1+2)", deltaBatchCount, deltaFire)
 	}
 	if deltaReload < deltaFire {
 		t.Errorf("at-least-our-own invariant violated: deltaReload=%d < deltaFire=%d", deltaReload, deltaFire)

@@ -134,7 +134,7 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 	// Snapshot baseline merged_hash for every tenant we plan to mutate.
 	baseline := make(map[string]string, numFiles)
 	m.mu.RLock()
-	for tid, h := range m.mergedHashes {
+	for tid, h := range m.hierarchy.mergedHashes {
 		baseline[tid] = h
 	}
 	m.mu.RUnlock()
@@ -192,7 +192,7 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 	m.mu.RLock()
 	mismatches := 0
 	for tid, prev := range baseline {
-		curr := m.mergedHashes[tid]
+		curr := m.hierarchy.mergedHashes[tid]
 		if curr == "" {
 			t.Errorf("tenant %s: missing merged_hash post-reload", tid)
 			mismatches++

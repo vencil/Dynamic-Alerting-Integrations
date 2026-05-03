@@ -323,7 +323,7 @@ func BenchmarkMergePartialConfigs_100(b *testing.B) {
 	silenceLogs(b)
 	mgr := NewConfigManager(dir)
 	mgr.fullDirLoad()
-	configs := mgr.fileConfigs
+	configs := mgr.flat.configs
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		mergePartialConfigs(configs)
@@ -422,7 +422,7 @@ func BenchmarkMergePartialConfigs_1000(b *testing.B) {
 	silenceLogs(b)
 	mgr := NewConfigManager(dir)
 	mgr.fullDirLoad()
-	configs := mgr.fileConfigs
+	configs := mgr.flat.configs
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		mergePartialConfigs(configs)

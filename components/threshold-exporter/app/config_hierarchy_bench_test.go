@@ -468,8 +468,8 @@ func benchBlastRadiusDefaultsChangeAtSize(b *testing.B, n int) {
 	}
 
 	// Snapshot pre-change merged hashes to diff against post-change.
-	preHashes := make(map[string]string, len(mgr.mergedHashes))
-	for k, v := range mgr.mergedHashes {
+	preHashes := make(map[string]string, len(mgr.hierarchy.mergedHashes))
+	for k, v := range mgr.hierarchy.mergedHashes {
 		preHashes[k] = v
 	}
 
@@ -502,7 +502,7 @@ func benchBlastRadiusDefaultsChangeAtSize(b *testing.B, n int) {
 			// Count tenants whose merged_hash changed on the first iteration.
 			// Subsequent iterations should affect the same set (deterministic).
 			count := 0
-			for k, post := range mgr.mergedHashes {
+			for k, post := range mgr.hierarchy.mergedHashes {
 				if preHashes[k] != post {
 					count++
 				}

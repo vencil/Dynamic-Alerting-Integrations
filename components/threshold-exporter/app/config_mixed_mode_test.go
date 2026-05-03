@@ -97,7 +97,7 @@ func TestMixedMode_RootDefaultsCascadeToBoth(t *testing.T) {
 
 	// Both tenants should be discovered.
 	mgr.mu.RLock()
-	graph := mgr.inheritanceGraph
+	graph := mgr.hierarchy.graph
 	mgr.mu.RUnlock()
 	if graph == nil {
 		t.Fatal("inheritanceGraph nil; populateHierarchyState should have built it")
@@ -123,8 +123,8 @@ func TestMixedMode_RootDefaultsCascadeToBoth(t *testing.T) {
 	// merged_hash present for both — proves both went through
 	// computeMergedHash with the chain applied.
 	mgr.mu.RLock()
-	flatHash := mgr.mergedHashes["db-flat"]
-	hierHash := mgr.mergedHashes["db-fin"]
+	flatHash := mgr.hierarchy.mergedHashes["db-flat"]
+	hierHash := mgr.hierarchy.mergedHashes["db-fin"]
 	mgr.mu.RUnlock()
 	if flatHash == "" {
 		t.Error("db-flat: merged_hash empty; root defaults didn't apply")
@@ -411,8 +411,8 @@ tenants:
 	}
 
 	mgr.mu.RLock()
-	preChain := append([]string(nil), mgr.inheritanceGraph.TenantDefaults["db-mig"]...)
-	preHash := mgr.mergedHashes["db-mig"]
+	preChain := append([]string(nil), mgr.hierarchy.graph.TenantDefaults["db-mig"]...)
+	preHash := mgr.hierarchy.mergedHashes["db-mig"]
 	mgr.mu.RUnlock()
 	if len(preChain) != 1 {
 		t.Fatalf("pre-migration: expected 1-element chain (root only), got %d: %v", len(preChain), preChain)
@@ -441,8 +441,8 @@ defaults:
 	}
 
 	mgr.mu.RLock()
-	postChain := mgr.inheritanceGraph.TenantDefaults["db-mig"]
-	postHash := mgr.mergedHashes["db-mig"]
+	postChain := mgr.hierarchy.graph.TenantDefaults["db-mig"]
+	postHash := mgr.hierarchy.mergedHashes["db-mig"]
 	mgr.mu.RUnlock()
 
 	// Tenant still present.
@@ -518,7 +518,7 @@ tenants:
 	}
 
 	mgr.mu.RLock()
-	hier := mgr.hierarchicalMode
+	hier := mgr.hierarchy.enabled
 	mgr.mu.RUnlock()
 	if !hier {
 		t.Fatal("hierarchicalMode should flip to true on first Load (root _defaults.yaml present)")
@@ -536,10 +536,10 @@ tenants:
 	}
 
 	mgr.mu.RLock()
-	stillHier := mgr.hierarchicalMode
-	finStillThere := mgr.mergedHashes["db-fin"] != ""
-	flatStillThere := mgr.mergedHashes["db-flat"] != ""
-	finChain := mgr.inheritanceGraph.TenantDefaults["db-fin"]
+	stillHier := mgr.hierarchy.enabled
+	finStillThere := mgr.hierarchy.mergedHashes["db-fin"] != ""
+	flatStillThere := mgr.hierarchy.mergedHashes["db-flat"] != ""
+	finChain := mgr.hierarchy.graph.TenantDefaults["db-fin"]
 	mgr.mu.RUnlock()
 
 	if !stillHier {
