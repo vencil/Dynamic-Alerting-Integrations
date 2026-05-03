@@ -43,7 +43,7 @@ func TestResolve_ProfileBasic(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	result := cfg.Resolve()
 	if len(result) != 1 {
 		t.Fatalf("expected 1 resolved threshold, got %d", len(result))
@@ -67,7 +67,7 @@ func TestResolve_ProfileOverriddenByTenant(t *testing.T) {
 			},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	result := cfg.Resolve()
 	if len(result) != 1 {
 		t.Fatalf("expected 1 resolved threshold, got %d", len(result))
@@ -88,7 +88,7 @@ func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	result := cfg.Resolve()
 	if len(result) != 2 {
 		t.Fatalf("expected 2 resolved thresholds, got %d", len(result))
@@ -122,7 +122,7 @@ func TestResolve_ProfileDisable(t *testing.T) {
 			},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	result := cfg.Resolve()
 	if len(result) != 0 {
 		t.Errorf("expected 0 resolved thresholds (disabled), got %d", len(result))
@@ -138,7 +138,7 @@ func TestResolve_ProfileNotFound(t *testing.T) {
 			"db-a": {"_profile": SV("nonexistent")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	result := cfg.Resolve()
 	if len(result) != 1 {
 		t.Fatalf("expected 1 resolved threshold (default), got %d", len(result))
@@ -162,7 +162,7 @@ func TestResolve_ProfileWithSilentMode(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	silents := cfg.ResolveSilentModes()
 	if len(silents) != 1 {
 		t.Fatalf("expected 1 silent mode from profile, got %d", len(silents))
@@ -186,7 +186,7 @@ func TestResolve_ProfileWithRouting(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	routes := cfg.ResolveRouting()
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 routing config from profile, got %d", len(routes))
@@ -209,7 +209,7 @@ func TestResolve_ProfileWithMetadata(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	metadata := cfg.ResolveMetadata()
 	found := false
 	for _, m := range metadata {
@@ -243,7 +243,7 @@ func TestResolve_ProfileWithScheduledValue(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 
 	// During window (03:00 UTC)
 	inWindow := time.Date(2025, 6, 15, 3, 0, 0, 0, time.UTC)
@@ -274,7 +274,7 @@ func TestResolve_ProfileWithCritical(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb")},
 		},
 	}
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 	result := cfg.Resolve()
 	if len(result) != 2 {
 		t.Fatalf("expected 2 thresholds (warning+critical), got %d", len(result))

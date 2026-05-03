@@ -173,7 +173,7 @@ func (m *ConfigManager) Load() error {
 	}
 
 	// Expand profile values into tenant overrides (v1.12.0)
-	cfg.applyProfiles()
+	cfg.ApplyProfiles()
 
 	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode commit
 	// so a `*DuplicateTenantError` (mixed-mode misconfig: same tenant ID in
@@ -607,7 +607,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
 		merged = mergePartialConfigs(newConfigs)
-		merged.applyProfiles()
+		merged.ApplyProfiles()
 	}
 
 	// Atomic swap
@@ -680,7 +680,7 @@ func (m *ConfigManager) fullDirLoad() error {
 
 	// Merge all partials
 	merged := mergePartialConfigs(fileConfigs)
-	merged.applyProfiles()
+	merged.ApplyProfiles()
 
 	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode commit
 	// for the same reason as Load() — a `*DuplicateTenantError` rejects the
