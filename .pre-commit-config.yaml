@@ -230,11 +230,11 @@ repos:
         files: ^components/da-tools/app/(entrypoint\.py|build\.sh)$
 
       - id: cli-coverage-check
-        name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ COMMAND_MAP)
+        name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ component README ↔ COMMAND_MAP)
         entry: python3 -X utf8 scripts/tools/lint/check_cli_coverage.py --ci
         language: python
         pass_filenames: false
-        files: ^(components/da-tools/app/entrypoint\.py|docs/(cheat-sheet|cli-reference)(\.en)?\.md)$
+        files: ^(components/da-tools/(app/entrypoint\.py|README\.md)|docs/(cheat-sheet|cli-reference)(\.en)?\.md)$
 
       - id: bilingual-structure-check
         name: ZH/EN document structure sync
