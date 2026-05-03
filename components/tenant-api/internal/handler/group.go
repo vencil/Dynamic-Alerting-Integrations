@@ -68,20 +68,18 @@ func hasAccessibleMember(rbacMgr *rbac.Manager, idpGroups, members []string) boo
 	return false
 }
 
-// filterAccessibleMembers returns only the members the user has read access to.
+// filterAccessibleMembers returns only the members the user has read
+// access to. Members are tenant IDs themselves (so the identity
+// extractor `tenantIDFromString` is just `s -> s`). Open-mode RBAC
+// is handled inside filterByRBAC via HasPermission's open-mode
+// short-circuit.
 func filterAccessibleMembers(rbacMgr *rbac.Manager, idpGroups, members []string) []string {
-	rbacCfg := rbacMgr.Get()
-	if len(rbacCfg.Groups) == 0 {
-		return members // open mode
-	}
-	filtered := make([]string, 0, len(members))
-	for _, m := range members {
-		if rbacMgr.HasPermission(idpGroups, m, rbac.PermRead) {
-			filtered = append(filtered, m)
-		}
-	}
-	return filtered
+	return filterByRBAC(rbacMgr, idpGroups, members, tenantIDFromString, rbac.PermRead)
 }
+
+// tenantIDFromString is the identity extractor used when filtering a
+// slice whose elements are themselves tenant IDs.
+func tenantIDFromString(s string) string { return s }
 
 // GetGroup handles GET /api/v1/groups/{id}
 //
