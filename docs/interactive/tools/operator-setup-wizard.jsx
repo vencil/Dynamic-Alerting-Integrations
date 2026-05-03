@@ -8,7 +8,8 @@ related: [deployment-wizard, cicd-setup-wizard, config-lint]
 dependencies: [
   "operator-setup-wizard/fixtures/wizard-defaults.js",
   "operator-setup-wizard/utils/generators.js",
-  "operator-setup-wizard/components/StepReview.jsx"
+  "operator-setup-wizard/components/StepReview.jsx",
+  "_common/components/ErrorBoundary.jsx"
 ]
 ---
 
@@ -30,6 +31,10 @@ const RULE_MODES = window.__OSW_RULE_MODES;
 
 const validateTenantName = window.__validateTenantName;
 const StepReview = window.__StepReview;
+// PR-portal-11: per-step boundary so a render error in step N
+// doesn't crash the wizard chrome — user can still hit "Back" and
+// recover state from step N-1.
+const ErrorBoundary = window.__ErrorBoundary;
 
 /* ── Step Components ── */
 
@@ -817,7 +822,14 @@ export default function OperatorSetupWizard() {
           padding: 'var(--da-space-6)',
           marginBottom: 'var(--da-space-6)',
         }}>
-          {stepContent[STEPS[currentStep].id]}
+          {/* PR-portal-11: per-step boundary keyed by step id so a
+              fresh boundary mounts on each step transition. */}
+          <ErrorBoundary
+            key={STEPS[currentStep].id}
+            scope={'operator-setup-wizard/step/' + STEPS[currentStep].id}
+          >
+            {stepContent[STEPS[currentStep].id]}
+          </ErrorBoundary>
         </div>
 
         {/* Navigation */}
