@@ -17,18 +17,16 @@
 //	      max_repeat_interval: 1h
 //	      min_group_wait: 30s
 //
-// Concurrency: reads are lock-free (atomic.Value). Hot-reloaded via SHA-256.
+// Concurrency: reads are lock-free (atomic.Value). Hot-reloaded via SHA-256
+// (the underlying configwatcher.Watcher dedups disk reads on each tick).
 package policy
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
-	"sync/atomic"
-	"time"
 
+	"github.com/vencil/tenant-api/internal/configwatcher"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,78 +58,44 @@ type Violation struct {
 	Message    string `json:"message"`
 }
 
-// Manager holds the hot-reloadable domain policy config.
+// Manager holds the hot-reloadable domain policy config. The
+// hot-reload machinery (atomic.Value + SHA-256 dedup + WatchLoop)
+// lives in the embedded configwatcher.Watcher; this type only adds
+// the policy-specific check methods.
 type Manager struct {
-	configDir string
-	value     atomic.Value // stores *DomainPolicyConfig
-	lastHash  string
+	*configwatcher.Watcher[DomainPolicyConfig]
 }
 
 // NewManager creates a Manager that reads _domain_policy.yaml from configDir.
 func NewManager(configDir string) *Manager {
-	m := &Manager{configDir: configDir}
-	if err := m.load(); err != nil {
+	path := filepath.Join(configDir, "_domain_policy.yaml")
+	w, err := configwatcher.New(path, "policy", parseConfig, emptyConfig)
+	if err != nil {
 		log.Printf("WARN: policy: initial load: %v", err)
 	}
-	if m.value.Load() == nil {
-		m.value.Store(&DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)})
-	}
-	return m
+	return &Manager{Watcher: w}
 }
 
-// Get returns the current policy config snapshot (lock-free).
-func (m *Manager) Get() *DomainPolicyConfig {
-	v := m.value.Load()
-	if v == nil {
-		return &DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)}
-	}
-	return v.(*DomainPolicyConfig)
+// NewForTest returns a Manager pre-populated with cfg and no file
+// path. WatchLoop becomes a no-op; only the embedded check methods
+// are exercised. Intended for unit tests.
+func NewForTest(cfg *DomainPolicyConfig) *Manager {
+	return &Manager{Watcher: configwatcher.NewForTest("policy", cfg)}
 }
 
-// WatchLoop periodically checks for changes to the policy config file.
-func (m *Manager) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-stopCh:
-			return
-		case <-ticker.C:
-			if err := m.load(); err != nil {
-				log.Printf("WARN: policy reload failed: %v", err)
-			}
-		}
-	}
+func emptyConfig() *DomainPolicyConfig {
+	return &DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)}
 }
 
-func (m *Manager) load() error {
-	path := filepath.Join(m.configDir, "_domain_policy.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			m.value.Store(&DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)})
-			return nil
-		}
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256(data))
-	if hash == m.lastHash {
-		return nil
-	}
-
+func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 	var cfg DomainPolicyConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
+		return nil, err
 	}
 	if cfg.DomainPolicies == nil {
 		cfg.DomainPolicies = make(map[string]DomainPolicy)
 	}
-
-	m.value.Store(&cfg)
-	m.lastHash = hash
-	log.Printf("policy: loaded %d domain policies from %s", len(cfg.DomainPolicies), path)
-	return nil
+	return &cfg, nil
 }
 
 // CheckWrite validates a tenant config patch against applicable domain policies.

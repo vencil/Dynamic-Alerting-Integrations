@@ -71,8 +71,7 @@ func TestNewManager_ValidFile(t *testing.T) {
 
 func TestCheckWrite_NoPolicies(t *testing.T) {
 	// When no policies exist, all writes should be allowed
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)})
+	m := NewForTest(&DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)})
 
 	patch := map[string]string{
 		"_routing_receiver_type": "slack",
@@ -86,8 +85,7 @@ func TestCheckWrite_NoPolicies(t *testing.T) {
 
 func TestCheckWrite_ForbiddenReceiver(t *testing.T) {
 	// When tenant is in a policy and receiver type is forbidden, write should be rejected
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -122,8 +120,7 @@ func TestCheckWrite_ForbiddenReceiver(t *testing.T) {
 
 func TestCheckWrite_AllowedReceiver(t *testing.T) {
 	// When tenant is in a policy with allowed_receiver_types list, allowed type should pass
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -147,8 +144,7 @@ func TestCheckWrite_AllowedReceiver(t *testing.T) {
 
 func TestCheckWrite_AllowedReceiverNotInList(t *testing.T) {
 	// When receiver type is not in the allowed list, write should be rejected
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -177,8 +173,7 @@ func TestCheckWrite_AllowedReceiverNotInList(t *testing.T) {
 
 func TestCheckWrite_TenantNotInPolicy(t *testing.T) {
 	// When tenant is not in any policy, no violations should be returned
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -202,8 +197,7 @@ func TestCheckWrite_TenantNotInPolicy(t *testing.T) {
 
 func TestCheckWrite_NestedRoutingFormat(t *testing.T) {
 	// Policy should also check the nested "_routing.receiver.type" patch format
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -227,8 +221,7 @@ func TestCheckWrite_NestedRoutingFormat(t *testing.T) {
 
 func TestCheckWrite_BothForbiddenAndAllowed(t *testing.T) {
 	// When both allowed and forbidden lists are set, both constraints should be checked
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -271,8 +264,7 @@ func TestCheckWrite_BothForbiddenAndAllowed(t *testing.T) {
 
 func TestCheckWrite_NoReceiverTypeInPatch(t *testing.T) {
 	// When patch doesn't contain receiver type, no violations should occur
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -331,8 +323,7 @@ func TestPolicyForTenant(t *testing.T) {
 		},
 	}
 
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain compliance requirements",
@@ -373,8 +364,7 @@ func TestPolicyForTenant(t *testing.T) {
 
 func TestCheckWrite_MultipleViolations(t *testing.T) {
 	// Test that multiple violations are reported when receiver type violates multiple constraints
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",
@@ -404,8 +394,7 @@ func TestCheckWrite_MultipleViolations(t *testing.T) {
 
 func TestCheckWrite_EmptyConstraints(t *testing.T) {
 	// Test that policy with empty constraints doesn't restrict writes
-	m := &Manager{}
-	m.value.Store(&DomainPolicyConfig{
+	m := NewForTest(&DomainPolicyConfig{
 		DomainPolicies: map[string]DomainPolicy{
 			"finance": {
 				Description: "Finance domain",

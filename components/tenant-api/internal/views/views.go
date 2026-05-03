@@ -26,14 +26,12 @@
 package views
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sort"
-	"sync/atomic"
 
+	"github.com/vencil/tenant-api/internal/configwatcher"
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,72 +48,28 @@ type ViewsConfig struct {
 	Views map[string]View `yaml:"views" json:"views"`
 }
 
-// Manager handles hot-reloadable views config.
+// Manager handles hot-reloadable views config. The hot-reload
+// machinery lives in the embedded configwatcher.Watcher;
+// Get / Reload / WatchLoop promote through. This type adds only
+// the list/get methods.
 type Manager struct {
-	configDir string
-	value     atomic.Value // stores *ViewsConfig
-	lastHash  string
+	*configwatcher.Watcher[ViewsConfig]
 }
 
 // NewManager creates a Manager that reads _views.yaml from configDir.
 func NewManager(configDir string) *Manager {
-	m := &Manager{configDir: configDir}
-	if err := m.load(); err != nil {
+	path := filepath.Join(configDir, "_views.yaml")
+	w, err := configwatcher.New(path, "views", ParseConfig, emptyConfig)
+	if err != nil {
 		log.Printf("WARN: views: initial load: %v", err)
 	}
-	if m.value.Load() == nil {
-		m.value.Store(&ViewsConfig{Views: make(map[string]View)})
-	}
-	return m
+	return &Manager{Watcher: w}
 }
 
-// Get returns the current views config snapshot (lock-free).
-func (m *Manager) Get() *ViewsConfig {
-	v := m.value.Load()
-	if v == nil {
-		return &ViewsConfig{Views: make(map[string]View)}
-	}
-	return v.(*ViewsConfig)
-}
-
-// Reload re-reads the _views.yaml file. Called after writes.
-func (m *Manager) Reload() error {
-	m.lastHash = ""
-	return m.load()
-}
-
-func (m *Manager) load() error {
-	path := m.filePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			m.value.Store(&ViewsConfig{Views: make(map[string]View)})
-			return nil
-		}
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256(data))
-	if hash == m.lastHash {
-		return nil
-	}
-
-	var cfg ViewsConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
-	}
-	if cfg.Views == nil {
-		cfg.Views = make(map[string]View)
-	}
-
-	m.value.Store(&cfg)
-	m.lastHash = hash
-	log.Printf("views: loaded %d saved views from %s", len(cfg.Views), path)
-	return nil
-}
-
-func (m *Manager) filePath() string {
-	return filepath.Join(m.configDir, "_views.yaml")
+// emptyConfig returns the empty fallback config used when the file
+// is missing or initial load fails.
+func emptyConfig() *ViewsConfig {
+	return &ViewsConfig{Views: make(map[string]View)}
 }
 
 // ListViews returns all views sorted by ID.

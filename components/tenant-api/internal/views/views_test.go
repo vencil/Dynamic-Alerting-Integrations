@@ -401,7 +401,7 @@ func TestManager_Reload_HashCaching(t *testing.T) {
 
 	mgr := NewManager(dir)
 	first := mgr.Get()
-	initialHash := mgr.lastHash
+	initialHash := mgr.LastHash()
 
 	// Reload without file changes
 	if err := mgr.Reload(); err != nil {

@@ -55,8 +55,7 @@ func TestPermCovers(t *testing.T) {
 }
 
 func TestHasPermission(t *testing.T) {
-	m := &Manager{}
-	m.value.Store(&RBACConfig{
+	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "platform-admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
 			{Name: "db-ops", Tenants: []string{"db-a-*", "db-b-*"}, Permissions: []Permission{PermRead, PermWrite}},
@@ -93,8 +92,7 @@ func TestHasPermission(t *testing.T) {
 
 func TestOpenModeReadOnly(t *testing.T) {
 	// Empty config (open mode) allows read, denies write
-	m := &Manager{}
-	m.value.Store(&RBACConfig{})
+	m := NewForTest(&RBACConfig{})
 
 	if !m.HasPermission([]string{"any"}, "any-tenant", PermRead) {
 		t.Error("open mode should allow read")
