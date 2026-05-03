@@ -5,7 +5,7 @@ audience: ["platform-engineer", "domain-expert", "tenant"]
 version: v2.7.0
 lang: en
 related: [playground, config-lint, alert-simulator, schema-explorer]
-dependencies: [portal-shared.jsx, YamlValidatorTab.jsx, AlertPreviewTab.jsx, RoutingTraceTab.jsx]
+dependencies: [portal-shared.jsx, YamlValidatorTab.jsx, AlertPreviewTab.jsx, RoutingTraceTab.jsx, _common/components/ErrorBoundary.jsx]
 ---
 
 import React, { useState } from 'react';
@@ -16,6 +16,11 @@ const t = window.__t || ((zh, en) => en);
 const YamlValidatorTab = window.__YamlValidatorTab;
 const AlertPreviewTab = window.__AlertPreviewTab;
 const RoutingTraceTab = window.__RoutingTraceTab;
+// PR-portal-11: each tab gets its own boundary so a bad render in
+// one tab doesn't crash the others. Loader-level boundary
+// (PR-portal-2) catches whole-tool failures; this is a per-tab
+// safety net for the multi-tab tools.
+const ErrorBoundary = window.__ErrorBoundary;
 
 /* ── Main Portal Component ── */
 const TABS = [
@@ -57,11 +62,24 @@ export default function SelfServicePortal() {
         ))}
       </div>
 
-      {/* Tab content */}
+      {/* Tab content — PR-portal-11: per-tab subtree boundaries so a
+          render error in one tab doesn't crash the sibling tabs. */}
       <div className="bg-white rounded-lg border p-6">
-        {activeTab === 'validate' && <YamlValidatorTab />}
-        {activeTab === 'alerts' && <AlertPreviewTab />}
-        {activeTab === 'routing' && <RoutingTraceTab />}
+        {activeTab === 'validate' && (
+          <ErrorBoundary scope="self-service-portal/tab/validate">
+            <YamlValidatorTab />
+          </ErrorBoundary>
+        )}
+        {activeTab === 'alerts' && (
+          <ErrorBoundary scope="self-service-portal/tab/alerts">
+            <AlertPreviewTab />
+          </ErrorBoundary>
+        )}
+        {activeTab === 'routing' && (
+          <ErrorBoundary scope="self-service-portal/tab/routing">
+            <RoutingTraceTab />
+          </ErrorBoundary>
+        )}
       </div>
 
       {/* Footer info */}

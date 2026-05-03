@@ -7,7 +7,8 @@ lang: en
 related: [config-lint, tenant-manager, self-service-portal]
 dependencies: [
   "rbac-setup-wizard/fixtures/wizard-defaults.js",
-  "rbac-setup-wizard/utils/generators.js"
+  "rbac-setup-wizard/utils/generators.js",
+  "_common/components/ErrorBoundary.jsx"
 ]
 ---
 
@@ -25,6 +26,8 @@ const DOMAIN_EXAMPLES = window.__RBAC_DOMAIN_EXAMPLES;
 
 const generateRbacYaml = window.__rbacGenerateYaml;
 const validateRbac = window.__rbacValidate;
+// PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
+const ErrorBoundary = window.__ErrorBoundary;
 
 /* ── Step Components ── */
 
@@ -598,9 +601,15 @@ export default function RBACSetupWizard() {
           </div>
         </div>
 
-        {/* Step Content */}
+        {/* Step Content — PR-portal-11: per-step boundary, fresh
+            mount per step via key={...id}. */}
         <div className="bg-[color:var(--da-color-surface)] rounded-xl shadow-md p-6 mb-6">
-          {stepContent[STEPS[currentStep].id]}
+          <ErrorBoundary
+            key={STEPS[currentStep].id}
+            scope={'rbac-setup-wizard/step/' + STEPS[currentStep].id}
+          >
+            {stepContent[STEPS[currentStep].id]}
+          </ErrorBoundary>
         </div>
 
         {/* Navigation */}

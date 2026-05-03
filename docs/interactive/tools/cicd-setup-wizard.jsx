@@ -7,7 +7,8 @@ lang: en
 related: [self-service-portal, template-gallery, onboarding-checklist]
 dependencies: [
   "cicd-setup-wizard/fixtures/wizard-defaults.js",
-  "cicd-setup-wizard/utils/generators.js"
+  "cicd-setup-wizard/utils/generators.js",
+  "_common/components/ErrorBoundary.jsx"
 ]
 ---
 
@@ -27,6 +28,8 @@ const generateInitCommand = window.__cicdGenerateInitCommand;
 const generateDockerCommand = window.__cicdGenerateDockerCommand;
 const generateFileTree = window.__cicdGenerateFileTree;
 const generateGitHubActionsPreview = window.__cicdGenerateGitHubActionsPreview;
+// PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
+const ErrorBoundary = window.__ErrorBoundary;
 
 /* ── Step components ── */
 
@@ -469,11 +472,19 @@ export default function CICDSetupWizard() {
         role="region"
         aria-label={t(`步驟 ${step + 1} 內容`, `Step ${step + 1} content`)}
       >
-        {step === 0 && <StepCI config={config} onChange={setConfig} />}
-        {step === 1 && <StepDeploy config={config} onChange={setConfig} />}
-        {step === 2 && <StepPacks config={config} onChange={setConfig} />}
-        {step === 3 && <StepTenants config={config} onChange={setConfig} />}
-        {step === 4 && <StepReview config={config} />}
+        {/* PR-portal-11: single boundary keyed by step index → fresh
+            mount per step transition; one boundary instead of 5
+            wraps keeps the diff small. */}
+        <ErrorBoundary
+          key={step}
+          scope={'cicd-setup-wizard/step/' + step}
+        >
+          {step === 0 && <StepCI config={config} onChange={setConfig} />}
+          {step === 1 && <StepDeploy config={config} onChange={setConfig} />}
+          {step === 2 && <StepPacks config={config} onChange={setConfig} />}
+          {step === 3 && <StepTenants config={config} onChange={setConfig} />}
+          {step === 4 && <StepReview config={config} />}
+        </ErrorBoundary>
       </div>
 
       {/* Navigation */}
