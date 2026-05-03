@@ -216,7 +216,7 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 		return nil, err
 	}
 
-	cjson, err := canonicalJSONBytes(merged)
+	cjson, err := canonicalJSON(merged)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func computeEffectiveConfigBytes(
 //     tenant override is applied. Captured as a deep-copy snapshot so
 //     subsequent merging into `merged` doesn't mutate it.
 //   - tenantRaw:      the tenant.yaml override block, raw. Returned
-//     by extractTenantRawH and never mutated past this point.
+//     by extractTenantRaw and never mutated past this point.
 //
 // Caller-friendly contract: these two maps are *also* what the guard
 // library treats as the tuple (NewDefaults, TenantOverrides) per
@@ -289,32 +289,32 @@ func computeEffectiveConfigBytesDetailed(
 		if err := yaml.Unmarshal(defBytes, &raw); err != nil {
 			return nil, nil, nil, fmt.Errorf("parse defaults[%d]: %w", i, err)
 		}
-		block := extractDefaultsBlockH(normalizeYAMLToJSONH(raw))
+		block := extractDefaultsBlock(normalizeYAMLToJSON(raw))
 		if block == nil {
 			continue
 		}
-		merged = deepMergeH(merged, block)
+		merged = deepMerge(merged, block)
 	}
 
 	// Snapshot the merged-defaults state BEFORE the tenant override
-	// is applied. deepCopyMapH defends against shared sub-maps that
-	// the subsequent deepMergeH could mutate via aliasing.
-	mergedDefaults = deepCopyMapH(merged)
+	// is applied. deepCopyMap defends against shared sub-maps that
+	// the subsequent deepMerge could mutate via aliasing.
+	mergedDefaults = deepCopyMap(merged)
 
 	var tenantDoc any
 	if err := yaml.Unmarshal(tenantYAMLBytes, &tenantDoc); err != nil {
 		return nil, nil, nil, fmt.Errorf("parse tenant: %w", err)
 	}
-	tenantRaw, err = extractTenantRawH(normalizeYAMLToJSONH(tenantDoc), tenantID)
+	tenantRaw, err = extractTenantRaw(normalizeYAMLToJSON(tenantDoc), tenantID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	merged = deepMergeH(merged, tenantRaw)
+	merged = deepMerge(merged, tenantRaw)
 	return merged, mergedDefaults, tenantRaw, nil
 }
 
-func deepMergeH(base, override map[string]any) map[string]any {
-	result := deepCopyMapH(base)
+func deepMerge(base, override map[string]any) map[string]any {
+	result := deepCopyMap(base)
 	if override == nil {
 		return result
 	}
@@ -328,34 +328,34 @@ func deepMergeH(base, override map[string]any) map[string]any {
 		}
 		if overrideMap, ok := v.(map[string]any); ok {
 			if baseMap, ok2 := result[k].(map[string]any); ok2 {
-				result[k] = deepMergeH(baseMap, overrideMap)
+				result[k] = deepMerge(baseMap, overrideMap)
 				continue
 			}
 		}
-		result[k] = deepCopyValueH(v)
+		result[k] = deepCopyValue(v)
 	}
 	return result
 }
 
-func deepCopyMapH(m map[string]any) map[string]any {
+func deepCopyMap(m map[string]any) map[string]any {
 	if m == nil {
 		return make(map[string]any)
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		out[k] = deepCopyValueH(v)
+		out[k] = deepCopyValue(v)
 	}
 	return out
 }
 
-func deepCopyValueH(v any) any {
+func deepCopyValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
-		return deepCopyMapH(t)
+		return deepCopyMap(t)
 	case []any:
 		arr := make([]any, len(t))
 		for i := range t {
-			arr[i] = deepCopyValueH(t[i])
+			arr[i] = deepCopyValue(t[i])
 		}
 		return arr
 	default:
@@ -363,7 +363,7 @@ func deepCopyValueH(v any) any {
 	}
 }
 
-func normalizeYAMLToJSONH(v any) any {
+func normalizeYAMLToJSON(v any) any {
 	switch t := v.(type) {
 	case map[any]any:
 		out := make(map[string]any, len(t))
@@ -372,19 +372,19 @@ func normalizeYAMLToJSONH(v any) any {
 			if !ok {
 				ks = fmt.Sprintf("%v", k)
 			}
-			out[ks] = normalizeYAMLToJSONH(val)
+			out[ks] = normalizeYAMLToJSON(val)
 		}
 		return out
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			out[k] = normalizeYAMLToJSONH(val)
+			out[k] = normalizeYAMLToJSON(val)
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i := range t {
-			out[i] = normalizeYAMLToJSONH(t[i])
+			out[i] = normalizeYAMLToJSON(t[i])
 		}
 		return out
 	default:
@@ -392,7 +392,7 @@ func normalizeYAMLToJSONH(v any) any {
 	}
 }
 
-func extractDefaultsBlockH(doc any) map[string]any {
+func extractDefaultsBlock(doc any) map[string]any {
 	m, ok := doc.(map[string]any)
 	if !ok {
 		return nil
@@ -403,7 +403,7 @@ func extractDefaultsBlockH(doc any) map[string]any {
 	return m
 }
 
-func extractTenantRawH(doc any, tenantID string) (map[string]any, error) {
+func extractTenantRaw(doc any, tenantID string) (map[string]any, error) {
 	m, ok := doc.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("tenant file has non-dict root")
@@ -419,7 +419,7 @@ func extractTenantRawH(doc any, tenantID string) (map[string]any, error) {
 	return raw, nil
 }
 
-func canonicalJSONBytes(data any) ([]byte, error) {
+func canonicalJSON(data any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -431,4 +431,84 @@ func canonicalJSONBytes(data any) ([]byte, error) {
 		out = out[:n-1]
 	}
 	return out, nil
+}
+
+// ============================================================
+// Public re-exports — v2.8.0 PR-4 collapsed app/config_inheritance.go
+// into thin wrappers calling these. Same semantic contract as the
+// private impls above; the wrappers keep `package main` callers from
+// having to switch every call site to a config-qualified name.
+// ============================================================
+
+// DeepMerge implements ADR-018 inheritance semantics. See `deepMerge`
+// for the rule list.
+func DeepMerge(base, override map[string]any) map[string]any {
+	return deepMerge(base, override)
+}
+
+// DeepCopyMap clones a map and all nested maps/slices.
+func DeepCopyMap(m map[string]any) map[string]any {
+	return deepCopyMap(m)
+}
+
+// NormalizeYAMLToJSON walks a yaml.v3-decoded `any` tree and rewrites
+// `map[any]any` (yaml.v3 default for mappings) into `map[string]any`
+// so encoding/json can marshal it. Slice elements + scalar leaves are
+// passed through untouched.
+func NormalizeYAMLToJSON(v any) any { return normalizeYAMLToJSON(v) }
+
+// ExtractDefaultsBlock returns the `defaults:` sub-tree from a parsed
+// `_defaults.yaml`-shaped doc; nil for empty / unexpected shape.
+func ExtractDefaultsBlock(doc any) map[string]any { return extractDefaultsBlock(doc) }
+
+// ExtractTenantRaw returns `doc.tenants[tenantID]` from a parsed
+// `<tenant>.yaml`-shaped doc, or an error if the document doesn't
+// have the expected `tenants:` wrapper.
+func ExtractTenantRaw(doc any, tenantID string) (map[string]any, error) {
+	return extractTenantRaw(doc, tenantID)
+}
+
+// CanonicalJSON encodes data with sort_keys + no-space + no-HTML-escape
+// + no-trailing-newline, matching describe_tenant.py's _canonical_hash.
+// MUST stay byte-equal across Go and Python implementations — golden
+// fixtures in app/config_golden_parity_test.go pin the contract.
+func CanonicalJSON(data any) ([]byte, error) { return canonicalJSON(data) }
+
+// ComputeEffectiveConfig is the byte-input version of
+// computeEffectiveConfigBytes — public-facing alias for the simulate
+// primitive (app/handler_simulate.go) and the inheritance.go wrappers.
+func ComputeEffectiveConfig(
+	tenantYAMLBytes []byte,
+	tenantID string,
+	defaultsChainYAML [][]byte,
+) (map[string]any, error) {
+	return computeEffectiveConfigBytes(tenantYAMLBytes, tenantID, defaultsChainYAML)
+}
+
+// ComputeMergedHash returns the 16-char `merged_hash` user-facing
+// fingerprint. SHA-256 over CanonicalJSON of ComputeEffectiveConfig's
+// output, truncated to 16 hex chars. Parity with describe_tenant.py
+// pinned by 8 golden fixtures.
+func ComputeMergedHash(
+	tenantYAMLBytes []byte,
+	tenantID string,
+	defaultsChainYAML [][]byte,
+) (string, error) {
+	merged, err := ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML)
+	if err != nil {
+		return "", err
+	}
+	cjson, err := canonicalJSON(merged)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(cjson)
+	return fmt.Sprintf("%x", sum)[:16], nil
+}
+
+// ComputeSourceHash reproduces describe_tenant.py `_file_hash`: SHA-256
+// over raw file bytes, truncated to 16 hex chars.
+func ComputeSourceHash(tenantYAMLBytes []byte) string {
+	sum := sha256.Sum256(tenantYAMLBytes)
+	return fmt.Sprintf("%x", sum)[:16]
 }
