@@ -926,63 +926,11 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 		}
 
 		if m.isDir {
-			// Incremental reload path. Two scan strategies:
-			//   - Flat mode (v2.1.0): scanDirFileHashes of top-level files,
-			//     mtime-guard cheap stat, composite hash compare.
-			//   - Hierarchical mode (v2.8.0 A-10 fix, Issue #52): flat scan
-			//     cannot see nested tenant files (os.ReadDir(dir) + IsDir()
-			//     skip), so changes under conf.d/<domain>/<region>/ would
-			//     NEVER trigger a reload. Use scanDirHierarchical (recursive)
-			//     and diff the per-file hash map against the prior hierarchy
-			//     state for change detection.
-			m.mu.RLock()
-			oldH := m.fileHashes
-			oldM := m.fileMtimes
-			prevHash := m.lastHash
-			hierarchical := m.hierarchicalMode
-			priorHierHashes := m.hierarchyHashes
-			priorHierMtimes := m.hierarchyMtimes
-			m.mu.RUnlock()
-
-			var changed bool
-			var reason string
-
-			if hierarchical {
-				_, _, newHashes, _, _, hErr := scanDirHierarchical(m.path, priorHierMtimes)
-				if hErr != nil {
-					log.Printf("WARN: hierarchical scan in WatchLoop failed for %s: %v", m.path, hErr)
-					continue
-				}
-				// Any file added/removed/changed constitutes a change.
-				// O(N) compare, one hash-string compare per file. At
-				// WatchInterval cadence (15s default) with 1000 files this
-				// adds ~1k comparisons/15s — negligible. Disk-read cost is
-				// in scanDirHierarchical itself; mtime-guard optimization
-				// is reserved for Phase 3 (see config_hierarchy.go L132).
-				if len(newHashes) != len(priorHierHashes) {
-					changed = true
-				} else {
-					for k, v := range newHashes {
-						if priorHierHashes[k] != v {
-							changed = true
-							break
-						}
-					}
-				}
-				// diffAndReload will categorize the actual reason via its
-				// per-tenant source/defaults hash compare; WatchLoop just
-				// needs to trigger.
-				reason = ReloadReasonForced
-			} else {
-				_, compositeHash, _, _, err := scanDirFileHashes(m.path, oldH, oldM)
-				if err != nil {
-					log.Printf("WARN: cannot check config %s: %v", m.path, err)
-					continue
-				}
-				changed = (compositeHash != prevHash)
-				reason = ReloadReasonSource
+			changed, reason, err := m.detectChange()
+			if err != nil {
+				log.Printf("WARN: cannot check config %s: %v", m.path, err)
+				continue
 			}
-
 			if changed {
 				log.Printf("Config changed, scheduling debounced reload...")
 				// v2.7.0: route through debounce even for flat mode so an
@@ -990,26 +938,87 @@ func (m *ConfigManager) WatchLoop(interval time.Duration, stopCh <-chan struct{}
 				// into a single reload.
 				m.triggerDebouncedReload(reason)
 			}
-		} else {
-			// Single-file mode: full reload (no incremental benefit)
-			_, hash, err := loadFile(m.path)
-			if err != nil {
-				log.Printf("WARN: cannot check config %s: %v", m.path, err)
-				continue
-			}
+			continue
+		}
 
-			m.mu.RLock()
-			changed := hash != m.lastHash
-			m.mu.RUnlock()
+		// Single-file mode: full reload (no incremental benefit)
+		_, hash, err := loadFile(m.path)
+		if err != nil {
+			log.Printf("WARN: cannot check config %s: %v", m.path, err)
+			continue
+		}
 
-			if changed {
-				log.Printf("Config changed, reloading...")
-				if err := m.Load(); err != nil {
-					log.Printf("ERROR: failed to reload config: %v", err)
-				}
+		m.mu.RLock()
+		changed := hash != m.lastHash
+		m.mu.RUnlock()
+
+		if changed {
+			log.Printf("Config changed, reloading...")
+			if err := m.Load(); err != nil {
+				log.Printf("ERROR: failed to reload config: %v", err)
 			}
 		}
 	}
+}
+
+// detectChange runs directory-mode change detection — the flat-scan
+// (v2.1.0) or hierarchical-scan (v2.8.0 A-10 fix, Issue #52) path
+// depending on whether hierarchical mode has been activated for this
+// config root.
+//
+//   - Flat: scanDirFileHashes of top-level files, mtime-guard cheap
+//     stat, composite hash compare. Returns reason=source so the
+//     debounce path emits da_config_reload_trigger_total{reason="source"}.
+//   - Hierarchical: scanDirHierarchical (recursive, sees nested tenant
+//     files under <domain>/<region>/). Any file added/removed/changed
+//     constitutes a change. Returns reason=forced; diffAndReload will
+//     categorize the actual reason via its per-tenant hash compare.
+//
+// O(N) compare for hierarchical mode is acceptable: at WatchInterval
+// cadence (30s default) with 1000 files it adds ~1k comparisons/30s —
+// negligible. Disk-read cost is in scanDirHierarchical itself; mtime-
+// guard optimization is reserved for Phase 3 (see config_hierarchy.go).
+//
+// v2.8.0 PR-3: extracted from WatchLoop so the dual-path lives in a
+// named seam. Single-file mode stays inline in WatchLoop because its
+// reload semantics differ (synchronous m.Load instead of debounced).
+//
+// Caller responsibilities: log the (warning-level) error, and on
+// changed=true call triggerDebouncedReload(reason).
+func (m *ConfigManager) detectChange() (bool, string, error) {
+	m.mu.RLock()
+	oldH := m.fileHashes
+	oldM := m.fileMtimes
+	prevHash := m.lastHash
+	hierarchical := m.hierarchicalMode
+	priorHierHashes := m.hierarchyHashes
+	priorHierMtimes := m.hierarchyMtimes
+	m.mu.RUnlock()
+
+	if hierarchical {
+		_, _, newHashes, _, _, hErr := scanDirHierarchical(m.path, priorHierMtimes)
+		if hErr != nil {
+			return false, "", fmt.Errorf("hierarchical scan: %w", hErr)
+		}
+		changed := false
+		if len(newHashes) != len(priorHierHashes) {
+			changed = true
+		} else {
+			for k, v := range newHashes {
+				if priorHierHashes[k] != v {
+					changed = true
+					break
+				}
+			}
+		}
+		return changed, ReloadReasonForced, nil
+	}
+
+	_, compositeHash, _, _, err := scanDirFileHashes(m.path, oldH, oldM)
+	if err != nil {
+		return false, "", err
+	}
+	return compositeHash != prevHash, ReloadReasonSource, nil
 }
 
 func (m *ConfigManager) GetConfig() *ThresholdConfig {

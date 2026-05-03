@@ -194,101 +194,134 @@ func (m *ConfigManager) Close() {
 	m.debounceMu.Unlock()
 }
 
-// diffAndReload computes the set of tenants whose merged_hash changed since
-// the previous scan and rebuilds the relevant state. Returns the count of
-// tenants actually reloaded and the count of no-op defaults changes (a
-// defaults file changed but none of its dependent tenants' merged_hash
-// moved — described in ADR-018 §Reload Decisions as the "quiet defaults
-// edit" case).
+// reloadPriorState bundles every m.* hierarchy field captured under
+// RLock at the start of diffAndReload. Snapshotting up-front lets the
+// I/O below run lock-free so /metrics scrapes (which take RLock via
+// GetConfig) aren't blocked by YAML parses or disk reads.
 //
-// Flow:
-//  1. Call scanDirHierarchical with current priorMtimes (forward-compat;
-//     Phase 1 ignores the arg but we pass it anyway so Phase 5's mtime
-//     optimization is a drop-in upgrade).
-//  2. If hierarchicalMode is not yet activated for this path, check whether
-//     the scan found any _defaults.yaml. If so, activate hierarchical mode.
-//     Otherwise fall back to IncrementalLoad (flat path).
-//  3. Compute the "dirty tenant" set:
-//       - tenants whose own YAML hash changed        → reason=source
-//       - tenants discovered for the first time      → reason=new
-//       - tenants previously known but now absent    → reason=delete
-//       - tenants whose defaults chain has any file whose hash changed
-//         → candidate; compute new merged_hash and compare — if moved,
-//         record as reason=defaults; otherwise increment noOp counter.
-//  4. For each dirty tenant, recompute merged_hash and update mergedHashes.
-//  5. Atomic swap: lock once, install the new hierarchy state.
-//  6. Also run fullDirLoad so the Prometheus collector's ThresholdConfig
-//     view stays in sync. This is slightly wasteful — fullDirLoad re-scans
-//     the same dir — but keeps the collector path unchanged in v2.7.0. A
-//     future optimization can share the scan between the two.
-//
-// Trap: we do not hold m.mu during the per-file merge because the merge
-// does disk reads and YAML parses; long holds would stall /metrics
-// scrapes. Instead we snapshot old hashes under RLock, do I/O lock-free,
-// and take the write lock only for the final swap.
-func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
-	if !m.isDir {
-		// Single-file mode has no hierarchical concept — just reload.
-		if err := m.Load(); err != nil {
-			log.Printf("ERROR: single-file reload failed: %v", err)
-			return 0, 0, err
-		}
-		return 1, 0, nil
-	}
+// v2.8.0 PR-3: extracted from the original 216-line diffAndReload to
+// give the snapshot/scan/classify/install seams readable names.
+type reloadPriorState struct {
+	mtimes           map[string]fileStat
+	hashes           map[string]string
+	mergedHashes     map[string]string
+	tenantSources    map[string]string
+	parsedDefaults   map[string]map[string]any // Issue #61: shadow-vs-cosmetic baseline
+	hierarchicalMode bool
+}
 
-	// Snapshot prior state under RLock (cheap) so the I/O below is
-	// unblocked from subsequent GetConfig readers.
+// reloadScanState bundles the result of scanDirHierarchical when the
+// scan committed to the hierarchical path. When the scan resolves to
+// the flat path, scanAndCheckHierarchical returns fallback=true and
+// the caller short-circuits without populating this struct.
+type reloadScanState struct {
+	tenants  map[string]string
+	defaults map[string]bool
+	hashes   map[string]string
+	mtimes   map[string]fileStat
+	graph    *InheritanceGraph
+}
+
+// reloadResult bundles classifyAndCount's output for installNewHierarchyState
+// and the diffAndReload return value. blast-radius histogram observations
+// are emitted inside classifyAndCount before it returns; this struct only
+// carries the state the install step needs to atom-swap.
+type reloadResult struct {
+	newMergedHashes   map[string]string
+	newParsedDefaults map[string]map[string]any
+	reloaded          int
+	noOp              int
+}
+
+// snapshotPriorState reads every m.* field that diffAndReload needs into
+// a local struct under RLock, then releases the lock so subsequent disk
+// I/O + YAML parses run unblocked from /metrics scrapers.
+//
+// Trap codified in the original v2.7.0 diffAndReload header: never hold
+// m.mu across recomputeMergedHash — long holds stall scrapes.
+func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 	m.mu.RLock()
-	priorMtimes := m.hierarchyMtimes
-	priorHashes := m.hierarchyHashes
-	priorMergedHashes := m.mergedHashes
-	priorTenantSources := m.tenantSources
-	priorParsedDefaults := m.parsedDefaults // Issue #61: required for shadow-vs-cosmetic classification
-	hierarchicalMode := m.hierarchicalMode
-	m.mu.RUnlock()
+	defer m.mu.RUnlock()
+	return reloadPriorState{
+		mtimes:           m.hierarchyMtimes,
+		hashes:           m.hierarchyHashes,
+		mergedHashes:     m.mergedHashes,
+		tenantSources:    m.tenantSources,
+		parsedDefaults:   m.parsedDefaults, // Issue #61
+		hierarchicalMode: m.hierarchicalMode,
+	}
+}
 
-	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchical(m.path, priorMtimes)
+// scanAndCheckHierarchical runs scanDirHierarchical and decides the path:
+//
+//	hierarchical → return scan, fallback=false; caller continues
+//	flat         → IncrementalLoad here, return fallback=true; caller short-circuits
+//	error        → return fallback=true + err; caller propagates
+//
+// hierarchicalMode is sticky once activated: a config that introduces
+// `_defaults.yaml` flips the bit ON, and even if the file is later deleted
+// we keep using the hierarchical path because computeMergedHash with an
+// empty chain is well-defined.
+func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reloadScanState, bool, error) {
+	tenants, defaults, hashes, mtimes, graph, scanErr := scanDirHierarchical(m.path, prior.mtimes)
 	if scanErr != nil {
 		log.Printf("ERROR: hierarchical scan failed: %v", scanErr)
-		return 0, 0, scanErr
+		return reloadScanState{}, true, scanErr
 	}
 
-	// If no _defaults.yaml was discovered, stay on the flat path. We still
-	// keep hierarchicalMode sticky — once flipped on (by a config that
-	// introduces _defaults.yaml) we don't flip back off even if it's
-	// deleted later, because the downstream behaviour (merged_hash
-	// computation) is still well-defined with an empty chain.
-	if !hierarchicalMode && len(defaults) == 0 {
-		// Flat mode — delegate to the v2.6.0 incremental path.
+	// If no _defaults.yaml was discovered AND we haven't activated
+	// hierarchical mode yet, stay on the flat path.
+	if !prior.hierarchicalMode && len(defaults) == 0 {
 		if ierr := m.IncrementalLoad(); ierr != nil {
 			log.Printf("ERROR: incremental load failed: %v", ierr)
-			return 0, 0, ierr
+			return reloadScanState{}, true, ierr
 		}
-		return 0, 0, nil
-	}
-	hierarchicalMode = true
-
-	// Compute dirty set. We compute merged_hash for every currently-known
-	// tenant that may have changed:
-	//   - new tenant: always dirty.
-	//   - tenant whose own file hash moved: dirty (reason=source).
-	//   - tenant whose defaults chain has any file whose hash moved:
-	//     candidate — compute and compare to decide dirty vs no-op.
-	newMergedHashes := make(map[string]string, len(tenants))
-	for tid := range tenants {
-		newMergedHashes[tid] = "" // filled below
+		return reloadScanState{}, true, nil
 	}
 
-	// Issue #61: maintain parsedDefaults cache incrementally. Reuse
-	// the prior parse for any defaults file whose hash didn't move;
-	// re-parse the rest. Required for shadow-vs-cosmetic effect
-	// classification in the noOp branch below. Parse failures are
+	return reloadScanState{
+		tenants:  tenants,
+		defaults: defaults,
+		hashes:   hashes,
+		mtimes:   mtimes,
+		graph:    graph,
+	}, false, nil
+}
+
+// classifyAndCount is the heart of the reload pipeline:
+//
+//  1. Maintain parsedDefaults cache incrementally — reuse prior parse for
+//     any defaults file whose hash didn't move (Issue #61).
+//  2. For each tenant, classify into one of:
+//     - source-changed         (sourceChanged=true) → applied
+//     - new tenant             (wasKnown=false)     → applied
+//     - defaults-changed-applied (merged_hash moved) → applied
+//     - defaults-changed-noop  (merged_hash steady) → cosmetic | shadowed
+//     - clean                  (nothing moved)      → reuse cached merged_hash
+//  3. Account deleted tenants — previously known, absent now → applied.
+//  4. Emit one ObserveBlastRadius per non-empty (reason, scope, effect)
+//     bucket so a tick that fires multiple effect classes preserves the
+//     dimensional detail.
+//
+// Counter increments (IncReloadTrigger / IncDefaultsShadowed /
+// IncDefaultsNoop / ObserveBlastRadius) are side-effects emitted here
+// — installNewHierarchyState only does the atomic swap.
+func (m *ConfigManager) classifyAndCount(prior reloadPriorState, scan reloadScanState) reloadResult {
+	res := reloadResult{
+		newMergedHashes:   make(map[string]string, len(scan.tenants)),
+		newParsedDefaults: make(map[string]map[string]any, len(scan.defaults)),
+	}
+	for tid := range scan.tenants {
+		res.newMergedHashes[tid] = "" // filled below
+	}
+
+	// Issue #61: parsedDefaults cache rebuild. Reuse prior parse where
+	// the hash didn't move; re-parse the rest. Parse failures are
 	// log-and-skip (same policy as populateHierarchyState cold start).
-	newParsedDefaults := make(map[string]map[string]any, len(defaults))
-	for dp := range defaults {
-		if hashes[dp] == priorHashes[dp] {
-			if cached, ok := priorParsedDefaults[dp]; ok && cached != nil {
-				newParsedDefaults[dp] = cached
+	for dp := range scan.defaults {
+		if scan.hashes[dp] == prior.hashes[dp] {
+			if cached, ok := prior.parsedDefaults[dp]; ok && cached != nil {
+				res.newParsedDefaults[dp] = cached
 				continue
 			}
 		}
@@ -302,26 +335,26 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 			log.Printf("WARN: parsedDefaults: parse %s: %v", dp, perr)
 			continue
 		}
-		newParsedDefaults[dp] = parsed
+		res.newParsedDefaults[dp] = parsed
 	}
 
-	// Issue #61: per-tick group-by emission for the blast-radius
-	// histogram. Each tenant contributes one increment to exactly one
-	// (reason, scope, effect) bucket; after the loop each non-empty
-	// bucket emits a single Observe(N=count). This preserves dimensional
-	// detail (a tick can fire applied/shadowed/cosmetic concurrently)
-	// without conflating distinct events into a single sample.
+	// Per-tick group-by emission for the blast-radius histogram. Each
+	// tenant contributes one increment to exactly one (reason, scope,
+	// effect) bucket; after the loop each non-empty bucket emits a single
+	// Observe(N=count). Preserves dimensional detail (a tick can fire
+	// applied/shadowed/cosmetic concurrently) without conflating distinct
+	// events into a single sample.
 	type emissionKey struct{ reason, scope, effect string }
 	buckets := make(map[emissionKey]int)
 
-	for tid, srcPath := range tenants {
-		prevSrc, wasKnown := priorTenantSources[tid]
-		sourceChanged := !wasKnown || prevSrc != srcPath || hashes[srcPath] != priorHashes[srcPath]
+	for tid, srcPath := range scan.tenants {
+		prevSrc, wasKnown := prior.tenantSources[tid]
+		sourceChanged := !wasKnown || prevSrc != srcPath || scan.hashes[srcPath] != prior.hashes[srcPath]
 
-		defaultsChain := graph.TenantDefaults[tid]
+		defaultsChain := scan.graph.TenantDefaults[tid]
 		defaultsChanged := false
 		for _, dp := range defaultsChain {
-			if hashes[dp] != priorHashes[dp] {
+			if scan.hashes[dp] != prior.hashes[dp] {
 				defaultsChanged = true
 				break
 			}
@@ -329,8 +362,8 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 
 		if !sourceChanged && !defaultsChanged {
 			// Reuse cached merged_hash — nothing that feeds this tenant moved.
-			if prev, ok := priorMergedHashes[tid]; ok {
-				newMergedHashes[tid] = prev
+			if prev, ok := prior.mergedHashes[tid]; ok {
+				res.newMergedHashes[tid] = prev
 				continue
 			}
 			// No cached value (first scan after enabling hierarchical mode).
@@ -343,15 +376,15 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 			// Preserve any prior merged_hash we had so the /effective
 			// endpoint still serves the last-known-good value. Absent prior
 			// → mark empty (tenant will read as merge-failing).
-			if prev, ok := priorMergedHashes[tid]; ok {
-				newMergedHashes[tid] = prev
+			if prev, ok := prior.mergedHashes[tid]; ok {
+				res.newMergedHashes[tid] = prev
 			}
 			continue
 		}
-		newMergedHashes[tid] = mh
+		res.newMergedHashes[tid] = mh
 
 		if sourceChanged {
-			reloaded++
+			res.reloaded++
 			if wasKnown {
 				IncReloadTrigger(ReloadReasonSource)
 				buckets[emissionKey{ReloadReasonSource, "tenant", "applied"}]++
@@ -360,26 +393,26 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 				buckets[emissionKey{ReloadReasonNewTenant, "tenant", "applied"}]++
 			}
 		} else if defaultsChanged {
-			scope := widestChangedScope(defaultsChain, hashes, priorHashes, m.path)
+			scope := widestChangedScope(defaultsChain, scan.hashes, prior.hashes, m.path)
 			if scope == "" {
 				// Defensive: defaultsChanged was true but no chain entry
 				// differs by hash. Shouldn't happen (defaultsChanged is
 				// derived from the same comparison) — fall back to unknown.
 				scope = "unknown"
 			}
-			if prev, ok := priorMergedHashes[tid]; ok && prev == mh {
+			if prev, ok := prior.mergedHashes[tid]; ok && prev == mh {
 				// Defaults file changed but the resulting merged_hash
 				// didn't — "quiet defaults edit". v2.8.0 Issue #61 splits
 				// this into shadowed (tenant override blocked the change)
 				// vs cosmetic (comment/reorder/whitespace).
-				noOp++
+				res.noOp++
 				tenantBytes, terr := os.ReadFile(srcPath)
 				effect := "cosmetic"
 				if terr == nil {
 					effect = classifyDefaultsNoOpEffect(
 						tenantBytes, tid, defaultsChain,
-						priorParsedDefaults, newParsedDefaults,
-						hashes, priorHashes,
+						prior.parsedDefaults, res.newParsedDefaults,
+						scan.hashes, prior.hashes,
 					)
 				}
 				switch effect {
@@ -390,7 +423,7 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 				}
 				buckets[emissionKey{ReloadReasonDefaults, scope, effect}]++
 			} else {
-				reloaded++
+				res.reloaded++
 				IncReloadTrigger(ReloadReasonDefaults)
 				buckets[emissionKey{ReloadReasonDefaults, scope, "applied"}]++
 			}
@@ -400,9 +433,9 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	// Detect deleted tenants — previously known, absent now. Deletions
 	// don't get a merged_hash but we do account them in the reload count
 	// so the caller can emit a counter.
-	for tid := range priorTenantSources {
-		if _, stillKnown := tenants[tid]; !stillKnown {
-			reloaded++
+	for tid := range prior.tenantSources {
+		if _, stillKnown := scan.tenants[tid]; !stillKnown {
+			res.reloaded++
 			IncReloadTrigger(ReloadReasonDelete)
 			buckets[emissionKey{ReloadReasonDelete, "tenant", "applied"}]++
 		}
@@ -415,32 +448,88 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 		ObserveBlastRadius(k.reason, k.scope, k.effect, n)
 	}
 
-	// Atomic swap. We rebuild ThresholdConfig via fullDirLoad first (it
-	// acquires m.mu.Lock itself), then take the lock again to install the
-	// hierarchy-only fields. Splitting into two locks is intentional:
-	// fullDirLoad is slow (I/O + YAML parse) and we don't want the debounce
-	// goroutine to gate scrapes on it for hierarchy metadata updates.
+	return res
+}
+
+// installNewHierarchyState rebuilds the ThresholdConfig view via
+// fullDirLoad (which acquires m.mu.Lock itself), then re-takes the lock
+// to atom-swap the hierarchy-only fields and stamps the last-reload
+// gauge. Splitting into two locks is intentional: fullDirLoad is slow
+// (I/O + YAML parse) and we don't want the debounce goroutine to gate
+// scrapes on it for hierarchy metadata updates.
+//
+// SetLastReloadComplete (v2.8.0 B-1.P2-a) is stamped strictly post
+// atomic-swap so the gauge cannot advance ahead of observable state.
+func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result reloadResult) error {
 	if err := m.fullDirLoad(); err != nil {
 		log.Printf("ERROR: fullDirLoad inside diffAndReload failed: %v", err)
-		return reloaded, noOp, err
+		return err
 	}
 
 	m.mu.Lock()
-	m.hierarchicalMode = hierarchicalMode
-	m.tenantSources = tenants
-	m.hierarchyHashes = hashes
-	m.hierarchyMtimes = mtimes
-	m.mergedHashes = newMergedHashes
-	m.inheritanceGraph = graph
-	m.parsedDefaults = newParsedDefaults
+	m.hierarchicalMode = true
+	m.tenantSources = scan.tenants
+	m.hierarchyHashes = scan.hashes
+	m.hierarchyMtimes = scan.mtimes
+	m.mergedHashes = result.newMergedHashes
+	m.inheritanceGraph = scan.graph
+	m.parsedDefaults = result.newParsedDefaults
 	m.mu.Unlock()
 
-	// v2.8.0 B-1.P2-a: stamp the last-successful-reload gauge for the
-	// e2e harness anchor T2 + production stuck-reloader detection. Stamped
-	// strictly post atomic-swap so the gauge cannot advance ahead of
-	// observable state.
 	SetLastReloadComplete(time.Now())
-	return reloaded, noOp, nil
+	return nil
+}
+
+// diffAndReload computes the set of tenants whose merged_hash changed
+// since the previous scan and rebuilds the relevant state. Returns the
+// count of tenants actually reloaded and the count of no-op defaults
+// changes (a defaults file changed but none of its dependent tenants'
+// merged_hash moved — the "quiet defaults edit" case described in
+// ADR-018 §Reload Decisions).
+//
+// v2.8.0 PR-3 decomposed the original 216-line implementation into
+// four named steps without changing semantics:
+//
+//  1. snapshotPriorState        — RLock-and-copy m.* hierarchy fields
+//  2. scanAndCheckHierarchical  — scanDirHierarchical, fall back to
+//                                 IncrementalLoad if neither hierarchical
+//                                 mode is active nor `_defaults.yaml`
+//                                 was found (sticky once flipped)
+//  3. classifyAndCount          — per-tenant dirty detection +
+//                                 Issue #61 effect classification
+//                                 (applied / shadowed / cosmetic) +
+//                                 blast-radius bucket emission
+//  4. installNewHierarchyState  — fullDirLoad + atomic swap +
+//                                 SetLastReloadComplete stamp
+//
+// Single-file mode short-circuits at the very top (no hierarchical
+// concept). Trap unchanged from v2.7.0: never hold m.mu across
+// recomputeMergedHash — long holds stall /metrics scrapes.
+func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
+	if !m.isDir {
+		// Single-file mode has no hierarchical concept — just reload.
+		if err := m.Load(); err != nil {
+			log.Printf("ERROR: single-file reload failed: %v", err)
+			return 0, 0, err
+		}
+		return 1, 0, nil
+	}
+
+	prior := m.snapshotPriorState()
+
+	scan, fallback, scanErr := m.scanAndCheckHierarchical(prior)
+	if fallback {
+		// Either an error (returned to caller) or a successful flat-mode
+		// IncrementalLoad. Both cases: nothing more to do here.
+		return 0, 0, scanErr
+	}
+
+	result := m.classifyAndCount(prior, scan)
+
+	if err := m.installNewHierarchyState(scan, result); err != nil {
+		return result.reloaded, result.noOp, err
+	}
+	return result.reloaded, result.noOp, nil
 }
 
 // recomputeMergedHash reads the tenant file + each file in its defaults
