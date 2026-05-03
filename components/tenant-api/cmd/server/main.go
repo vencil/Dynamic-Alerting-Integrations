@@ -20,12 +20,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/async"
-	gh "github.com/vencil/tenant-api/internal/github"
-	gl "github.com/vencil/tenant-api/internal/gitlab"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
-	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/views"
@@ -101,64 +98,17 @@ func main() {
 	// v2.6.0: Async task manager for batch operations
 	taskMgr := async.NewManager(4) // 4 worker goroutines
 
-	// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
-	wm := handler.WriteMode(*writeMode)
-	var prClient platform.Client
-	var prTracker platform.Tracker
-
-	switch wm {
-	case handler.WriteModePR, handler.WriteModePRGitHub:
-		// GitHub PR mode
-		wm = handler.WriteModePR // normalize
-		ghToken := os.Getenv("TA_GITHUB_TOKEN")
-		if ghToken == "" {
-			log.Fatalf("FATAL: TA_GITHUB_TOKEN is required when write-mode=pr/pr-github")
-		}
-		if *ghRepo == "" {
-			log.Fatalf("FATAL: --github-repo (or TA_GITHUB_REPO) is required when write-mode=pr/pr-github")
-		}
-		ghClient, err := gh.NewClient(ghToken, *ghRepo, *ghBaseBranch)
-		if err != nil {
-			log.Fatalf("FATAL: github client: %v", err)
-		}
-		if gheURL := os.Getenv("TA_GITHUB_API_URL"); gheURL != "" {
-			ghClient.SetBaseURL(gheURL)
-		}
-		if err := ghClient.ValidateToken(); err != nil {
-			log.Printf("WARN: GitHub token validation failed: %v (PR operations may fail)", err)
-		}
-		ghTracker := gh.NewTracker(ghClient, *reloadInterval)
-		prClient = ghClient
-		prTracker = ghTracker
-		log.Printf("tenant-api: GitHub PR write-back mode enabled (repo=%s, base=%s)", *ghRepo, *ghBaseBranch)
-
-	case handler.WriteModePRGitLab:
-		// GitLab MR mode
-		glToken := os.Getenv("TA_GITLAB_TOKEN")
-		if glToken == "" {
-			log.Fatalf("FATAL: TA_GITLAB_TOKEN is required when write-mode=pr-gitlab")
-		}
-		if *glProject == "" {
-			log.Fatalf("FATAL: --gitlab-project (or TA_GITLAB_PROJECT) is required when write-mode=pr-gitlab")
-		}
-		glClient, err := gl.NewClient(glToken, *glProject, *glTargetBranch)
-		if err != nil {
-			log.Fatalf("FATAL: gitlab client: %v", err)
-		}
-		if glURL := os.Getenv("TA_GITLAB_API_URL"); glURL != "" {
-			glClient.SetBaseURL(glURL)
-		}
-		if err := glClient.ValidateToken(); err != nil {
-			log.Printf("WARN: GitLab token validation failed: %v (MR operations may fail)", err)
-		}
-		glTracker := gl.NewTracker(glClient, *reloadInterval)
-		prClient = glClient
-		prTracker = glTracker
-		log.Printf("tenant-api: GitLab MR write-back mode enabled (project=%s, target=%s)", *glProject, *glTargetBranch)
-
-	default:
-		log.Printf("tenant-api: direct write mode (commit-on-write)")
-	}
+	// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab.
+	// PR-5/11: bootstrap logic lives in wire.go::wirePRBackend so main()
+	// shows the wiring shape without 50 lines of switch-case noise.
+	prClient, prTracker, wm := wirePRBackend(prBackendFlags{
+		Mode:           *writeMode,
+		GitHubRepo:     *ghRepo,
+		GitHubBase:     *ghBaseBranch,
+		GitLabProject:  *glProject,
+		GitLabBranch:   *glTargetBranch,
+		ReloadInterval: *reloadInterval,
+	})
 
 	// Wire all handler dependencies into a single struct (PR-4/11).
 	// Every handler is now a method on *deps; pass-through positional
