@@ -630,6 +630,29 @@ lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / p
 	@echo "==> tool-registry.yaml ↔ jsx parity"
 	@python3 scripts/tools/lint/check_tool_registry_jsx_parity.py
 
+.PHONY: lint-new-script
+lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR-portal-6) — usage: make lint-new-script SCRIPT=scripts/tools/lint/check_foo.py
+	@# All-in-one local pre-flight for newly-added lint scripts. Mirrors
+	@# the CI-only gates that bit PR-portal-5 four times in a row
+	@# (stderr routing / argparse / SAST / strict-linecount). Run this
+	@# BEFORE the first git push to catch convention violations locally
+	@# instead of in CI.
+	@if [ -z "$(SCRIPT)" ]; then \
+		echo "ERROR: SCRIPT variable required."; \
+		echo "Usage: make lint-new-script SCRIPT=scripts/tools/lint/check_foo.py"; \
+		exit 2; \
+	fi
+	@echo "==> Linting new script: $(SCRIPT)"
+	@echo "==> [1/3] argparse + exit-code conventions"
+	@python3 -m pytest tests/shared/test_tool_exit_codes.py -k "$$(basename $(SCRIPT))" -v --no-header
+	@echo "==> [2/3] SAST conventions (encoding / shell=True / yaml-safe-load / stderr-routing / etc.)"
+	@python3 -m pytest tests/shared/test_sast.py -k "$$(basename $(SCRIPT))" -v --no-header
+	@echo "==> [3/3] tool-map registration check"
+	@python3 scripts/tools/dx/generate_tool_map.py --check || \
+		(echo "Hint: run 'python3 scripts/tools/dx/generate_tool_map.py --generate --lang all' to regenerate" && exit 1)
+	@echo ""
+	@echo "✓ All convention gates pass for $(SCRIPT)"
+
 version-show: ## 顯示目前三條版號線
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 

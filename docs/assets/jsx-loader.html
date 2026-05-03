@@ -710,7 +710,9 @@ window.addEventListener('pageshow', function(e) {
    * Returns array of resolved URLs relative to basePath.
    */
   function parseDependencies(source, basePath) {
-    var fmMatch = source.match(/^---\n([\s\S]*?)\n---/);
+    // Closing `---` anchored to its own line — defense-in-depth match
+    //  for the loadDependency / renderJSX strip regexes (PR-portal-6).
+    var fmMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
     if (!fmMatch) return [];
     var depMatch = fmMatch[1].match(/dependencies:\s*\[([^\]]*)\]/);
     if (!depMatch) return [];
@@ -735,8 +737,12 @@ window.addEventListener('pageshow', function(e) {
       if (!r.ok) throw new Error('Dependency HTTP ' + r.status + ': ' + url);
       return r.text();
     }).then(function(code) {
-      // Strip YAML front matter
-      code = code.replace(/^---[\s\S]*?---\s*\n?/, '');
+      // Strip YAML front matter (PR-portal-6: closing `---` must be
+      // its own line — old regex `^---[\s\S]*?---\s*\n?` matched any
+      // `---` substring including the first 3 chars of `------`
+      // separator lines inside `purpose:` blocks → silent parse error
+      // when remaining FM bled into JS code).
+      code = code.replace(/^---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, '');
       // Transform ES imports
       code = transformImports(code);
       // Remove export default (deps register on window globals)
@@ -780,7 +786,9 @@ window.addEventListener('pageshow', function(e) {
 
     // 0) Extract front matter for related tools before stripping
     var frontMatter = '';
-    var fmMatch = source.match(/^---\n([\s\S]*?)\n---/);
+    // Closing `---` anchored to its own line — defense-in-depth match
+    //  for the loadDependency / renderJSX strip regexes (PR-portal-6).
+    var fmMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
     if (fmMatch) frontMatter = fmMatch[1];
     var relatedTools = [];
     var relMatch = frontMatter.match(/related:\s*\[([^\]]*)\]/);
@@ -791,8 +799,9 @@ window.addEventListener('pageshow', function(e) {
       });
     }
 
-    // 1) Strip YAML front matter (--- ... ---)
-    source = source.replace(/^---[\s\S]*?---\s*\n?/, '');
+    // 1) Strip YAML front matter (--- ... ---) — closing `---` must
+    //    be its own line; see loadDependency note above (PR-portal-6).
+    source = source.replace(/^---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, '');
 
     // 2) Replace ES imports with global references (using shared transform)
     source = transformImports(source);

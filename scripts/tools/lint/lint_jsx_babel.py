@@ -242,8 +242,13 @@ def _run_line_count_check(filepath: str, source: str) -> list[dict]:
 def _transform_jsx(source: str) -> str:
     """Replicate jsx-loader.html renderJSX() transform pipeline."""
 
-    # 1) Strip YAML front matter
-    source = re.sub(r"^---[\s\S]*?---\s*\n?", "", source)
+    # 1) Strip YAML front matter — closing `---` must be on its own
+    #    line (PR-portal-6). Old `^---[\s\S]*?---\s*\n?` matched any
+    #    `---` substring including the first 3 chars of `------`
+    #    separator lines inside `purpose:` blocks → silent parse error
+    #    when remaining FM bled into JS code. Mirrors jsx-loader.html
+    #    `loadDependency` and `renderJSX` transforms.
+    source = re.sub(r"^---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)", "", source)
 
     # 2a) React imports: import React, { useState, ... } from 'react'
     source = re.sub(

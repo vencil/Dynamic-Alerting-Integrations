@@ -1,0 +1,17 @@
+# sed-damage-guard exemption list (PR-portal-6)
+#
+# Files listed here are exempted from the >50% shrink check in
+# scripts/tools/lint/detect_sed_damage.py. Use sparingly — only for
+# legitimate refactors that inline-shrink an authoritative module
+# (e.g. converting it into a thin BC re-export shim).
+#
+# Format: one path per line, # for comments. Trailing inline comments
+# supported. Paths are matched verbatim (no glob).
+#
+# NOTE: this list ONLY suppresses the truncation check, not the
+# NUL-byte check (NUL bytes are always damage).
+#
+# Examples (commented out — real entries below):
+#   docs/interactive/tools/portal-shared.jsx  # PR-portal-7 shim conversion
+
+# (no active entries)
