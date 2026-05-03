@@ -14,4 +14,9 @@
 # Examples (commented out — real entries below):
 #   docs/interactive/tools/portal-shared.jsx  # PR-portal-7 shim conversion
 
-# (no active entries)
+# PR-portal-9: shim conversion of portal-shared.jsx — 590 → ~190 LOC
+# (~67% shrink). Data/validation/sim helpers live in _common/ since
+# PR-portal-3 (#205); this file becomes a thin BC re-export wrapper
+# preserving window.__portalShared for the 4 existing consumers
+# (self-service-portal + 3 Tab files). Genuine refactor, not damage.
+docs/interactive/tools/portal-shared.jsx
