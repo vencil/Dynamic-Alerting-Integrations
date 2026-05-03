@@ -376,7 +376,7 @@ func TestWriteValidationErrors_JSONShape(t *testing.T) {
 		{Field: "operations[0].patch[\"_timeout_ms\"]", Reason: "must be ≤ 3600000"},
 		{Field: "operations[0].patch[\"_silent_mode\"]", Reason: "must be one of ..."},
 	}
-	writeValidationErrors(w, violations)
+	writeValidationErrors(w, nil, violations)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)

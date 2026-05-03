@@ -41,13 +41,13 @@ func (d *Deps) DiffTenant() http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(rw, http.StatusBadRequest, err.Error())
+			writeJSONError(rw, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(rw, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			writeJSONError(rw, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 
@@ -57,7 +57,7 @@ func (d *Deps) DiffTenant() http.HandlerFunc {
 		if strings.Contains(ct, "json") || (len(body) > 0 && body[0] == '{') {
 			var req DiffRequest
 			if err := json.Unmarshal(body, &req); err != nil {
-				writeJSONError(rw, http.StatusBadRequest, "invalid JSON: "+err.Error())
+				writeJSONError(rw, r,http.StatusBadRequest, "invalid JSON: "+err.Error())
 				return
 			}
 			proposed = req.Proposed
@@ -65,7 +65,7 @@ func (d *Deps) DiffTenant() http.HandlerFunc {
 
 		diff, err := d.Writer.Diff(tenantID, proposed)
 		if err != nil {
-			writeJSONError(rw, http.StatusInternalServerError, err.Error())
+			writeJSONError(rw, r,http.StatusInternalServerError, err.Error())
 			return
 		}
 

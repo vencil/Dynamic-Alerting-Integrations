@@ -11,6 +11,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,6 +29,47 @@ import (
 	"github.com/vencil/tenant-api/internal/views"
 	"github.com/vencil/tenant-api/internal/ws"
 )
+
+// configureLogger wires slog's default to a JSON handler on stderr.
+// Called before any other startup work so even early-init failures
+// emit structured lines. Verbosity controlled by TA_LOG_LEVEL
+// (debug / info / warn / error; default info).
+func configureLogger() {
+	level := slog.LevelInfo
+	switch os.Getenv("TA_LOG_LEVEL") {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(h))
+	// Bridge the legacy `log` package so any remaining log.Printf
+	// (including from third-party libs) goes through slog at INFO.
+	// log.Fatalf is preserved as a separate path — startup-fatal
+	// errors should keep using log to retain the immediate exit
+	// behavior; their messages still land on stderr.
+	log.SetFlags(0)
+	log.SetOutput(slogLogWriter{})
+}
+
+// slogLogWriter implements io.Writer by forwarding each Write to
+// slog.Default().Info, stripping the trailing newline so the
+// JSON `msg` field doesn't carry "\n". Used to bridge stdlib log
+// callers (chi internals, log.Fatalf at startup) to the structured
+// pipeline.
+type slogLogWriter struct{}
+
+func (slogLogWriter) Write(p []byte) (int, error) {
+	msg := string(p)
+	for len(msg) > 0 && (msg[len(msg)-1] == '\n' || msg[len(msg)-1] == '\r') {
+		msg = msg[:len(msg)-1]
+	}
+	slog.Info(msg)
+	return len(p), nil
+}
 
 func main() {
 	// ── Flags ──────────────────────────────────────────────────────────────────
@@ -65,7 +107,12 @@ func main() {
 		"Per-caller rate limit (requests / 60s rolling window). 0 disables. Default 100.")
 	flag.Parse()
 
-	log.Printf("tenant-api starting — config-dir=%s addr=%s", *configDir, *listenAddr)
+	// PR-10/11: structured (JSON) logging via slog. Configure before
+	// any Manager / Writer / Tracker construction so their initial-
+	// load logs go through the same pipeline.
+	configureLogger()
+
+	slog.Info("tenant-api starting", "config_dir", *configDir, "addr", *listenAddr)
 
 	// ── Dependencies ──────────────────────────────────────────────────────────
 	rbacMgr, err := rbac.NewManager(*rbacPath)
@@ -140,7 +187,7 @@ func main() {
 	r.Use(middleware.RequestID)
 	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(handler.SlogRequestLogger) // PR-10/11: structured JSON request log w/ request_id
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(handler.MetricsMiddleware)
@@ -151,13 +198,14 @@ func main() {
 	// upstream of tenant-api).
 	rlCfg, rlMalformed := handler.RateLimitConfigFromEnv(*rateLimitPerMin)
 	if rlMalformed {
-		log.Printf("WARN: TA_RATE_LIMIT_PER_MIN=%q is malformed (must be a non-negative integer); falling back to default %d req/min",
-			*rateLimitPerMin, rlCfg.RequestsPerMinute)
+		slog.Warn("rate limit env malformed, falling back to default",
+			"env_value", *rateLimitPerMin,
+			"default_per_min", rlCfg.RequestsPerMinute)
 	}
 	if rlCfg.RequestsPerMinute > 0 {
-		log.Printf("tenant-api rate limiter: %d req/min per caller", rlCfg.RequestsPerMinute)
+		slog.Info("rate limiter enabled", "per_min_per_caller", rlCfg.RequestsPerMinute)
 	} else {
-		log.Printf("tenant-api rate limiter: DISABLED (set TA_RATE_LIMIT_PER_MIN > 0 to enable)")
+		slog.Info("rate limiter disabled", "hint", "set TA_RATE_LIMIT_PER_MIN > 0 to enable")
 	}
 	r.Use(handler.RateLimit(rlCfg))
 
@@ -269,14 +317,14 @@ func main() {
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
 	go func() {
-		log.Printf("tenant-api listening on %s", *listenAddr)
+		slog.Info("tenant-api listening", "addr", *listenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("FATAL: listen: %v", err)
 		}
 	}()
 
 	<-quit
-	log.Println("tenant-api shutting down...")
+	slog.Info("tenant-api shutting down")
 
 	taskMgr.Close()
 	close(stopCh)
@@ -284,9 +332,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("WARN: shutdown error: %v", err)
+		slog.Warn("shutdown error", "error", err)
 	}
-	log.Println("tenant-api stopped")
+	slog.Info("tenant-api stopped")
 }
 
 // envOrDefault returns the environment variable value or the default if unset.

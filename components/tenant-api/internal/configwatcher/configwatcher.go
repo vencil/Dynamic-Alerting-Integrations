@@ -23,7 +23,7 @@ package configwatcher
 import (
 	"crypto/sha256"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sync/atomic"
 	"time"
@@ -81,7 +81,7 @@ func New[T any](path, label string, parse ParseFunc[T], empty EmptyFunc[T]) (*Wa
 	// Always start with empty so Get is non-nil even before load().
 	w.value.Store(empty())
 	if path == "" {
-		log.Printf("%s: no config path provided, running with empty config", label)
+		slog.Info("config: no path provided, running with empty config", "component", label)
 		return w, nil
 	}
 	if err := w.load(); err != nil {
@@ -122,7 +122,7 @@ func (w *Watcher[T]) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if err := w.load(); err != nil {
-				log.Printf("WARN: %s reload failed: %v", w.label, err)
+				slog.Warn("config reload failed", "component", w.label, "error", err)
 			}
 		}
 	}
@@ -156,7 +156,7 @@ func (w *Watcher[T]) load() error {
 	}
 	w.value.Store(cfg)
 	w.lastHash = hash
-	log.Printf("%s: loaded from %s", w.label, w.path)
+	slog.Info("config loaded", "component", w.label, "path", w.path)
 	return nil
 }
 

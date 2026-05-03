@@ -12,7 +12,7 @@ package gitops
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +181,8 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	headBefore, err := w.currentHEAD()
 	if err != nil {
 		// Proceed without conflict detection in non-git environments.
-		log.Printf("WARN: gitops: could not read HEAD before write (commit_tag=%s): %v", commitTag, err)
+		slog.Warn("gitops: could not read HEAD before write",
+			"commit_tag", commitTag, "error", err)
 	}
 
 	if err := os.WriteFile(filePath, content, 0644); err != nil {
@@ -189,20 +190,22 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	}
 
 	if err := w.gitCommit(filePath, commitTag, authorEmail); err != nil {
-		log.Printf("WARN: gitops: commit failed for commit_tag=%s: %v", commitTag, err)
+		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)
 	}
 
 	if headBefore != "" {
 		parent, err := w.commitParent()
 		if err == nil && parent != headBefore {
-			log.Printf("WARN: gitops: external commit detected for commit_tag=%s (expected parent=%s, got=%s)",
-				commitTag, headBefore[:8], parent[:8])
+			slog.Warn("gitops: external commit detected",
+				"commit_tag", commitTag,
+				"expected_parent", headBefore[:8],
+				"actual_parent", parent[:8])
 			return ErrConflict
 		}
 	}
 
-	log.Printf("gitops: commit_tag=%s committed by %s", commitTag, authorEmail)
+	slog.Info("gitops: committed", "commit_tag", commitTag, "author", authorEmail)
 
 	// v2.6.0: Notify via callback (e.g. SSE hub broadcast).
 	if w.onWrite != nil {
@@ -337,16 +340,19 @@ func (w *Writer) WritePR(tenantID, authorEmail, yamlContent string) (*PRWriteRes
 
 	// Step 6: push branch to origin
 	if err := w.gitExec("push", "origin", branchName); err != nil {
-		log.Printf("WARN: gitops: push branch %s failed: %v (PR creation will fail)", branchName, err)
+		slog.Warn("gitops: push branch failed",
+			"branch", branchName, "error", err, "note", "PR creation will fail")
 		// Don't delete the branch — the commit is valuable even if push fails
 	}
 
 	// Step 7: switch back to the original branch (main/HEAD)
 	if err := w.gitExec("checkout", "-"); err != nil {
-		log.Printf("WARN: gitops: failed to switch back from branch %s: %v", branchName, err)
+		slog.Warn("gitops: failed to switch back from branch",
+			"branch", branchName, "error", err)
 	}
 
-	log.Printf("gitops: PR branch %s created for tenant=%s by %s", branchName, tenantID, authorEmail)
+	slog.Info("gitops: PR branch created",
+		"branch", branchName, "tenant", tenantID, "author", authorEmail)
 
 	return &PRWriteResult{
 		BranchName: branchName,
@@ -394,14 +400,17 @@ func (w *Writer) WritePRBatch(ops []PRBatchOp, authorEmail string) (*PRWriteResu
 	}
 
 	if err := w.gitExec("push", "origin", branchName); err != nil {
-		log.Printf("WARN: gitops: push branch %s failed: %v", branchName, err)
+		slog.Warn("gitops: push batch branch failed",
+			"branch", branchName, "error", err)
 	}
 
 	if err := w.gitExec("checkout", "-"); err != nil {
-		log.Printf("WARN: gitops: failed to switch back from branch %s: %v", branchName, err)
+		slog.Warn("gitops: failed to switch back from batch branch",
+			"branch", branchName, "error", err)
 	}
 
-	log.Printf("gitops: PR batch branch %s created with %d ops by %s", branchName, len(ops), authorEmail)
+	slog.Info("gitops: PR batch branch created",
+		"branch", branchName, "ops", len(ops), "author", authorEmail)
 
 	return &PRWriteResult{
 		BranchName: branchName,

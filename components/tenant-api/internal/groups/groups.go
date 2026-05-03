@@ -31,7 +31,7 @@ package groups
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 	"sort"
 
@@ -67,7 +67,7 @@ func NewManager(configDir string) *Manager {
 	path := filepath.Join(configDir, "_groups.yaml")
 	w, err := configwatcher.New(path, "groups", ParseConfig, emptyConfig)
 	if err != nil {
-		log.Printf("WARN: groups: initial load: %v", err)
+		slog.Warn("groups: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
 }

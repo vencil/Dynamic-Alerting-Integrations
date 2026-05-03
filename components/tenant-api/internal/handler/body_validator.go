@@ -34,10 +34,8 @@ package handler
 //     `reservedKeyValidators` can become a generated subset of it.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -316,27 +314,5 @@ func validateFilterMap(filters map[string]string, fieldPrefix string) []Violatio
 	return violations
 }
 
-// ─────────────────────────────────────────────────────────────────
-// JSON response helper
-// ─────────────────────────────────────────────────────────────────
-
-// writeValidationErrors emits the canonical 400 response with a
-// `violations` array. Caller has decided there's at least one
-// violation; this just renders the response.
-//
-// Response shape (per #134 spec):
-//
-//	{
-//	  "error":      "validation failed",
-//	  "code":       "INVALID_BODY",
-//	  "violations": [{"field": "...", "reason": "..."}]
-//	}
-func writeValidationErrors(w http.ResponseWriter, violations []Violation) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":      "validation failed",
-		"code":       "INVALID_BODY",
-		"violations": violations,
-	})
-}
+// writeValidationErrors and the canonical error envelope live in
+// errors.go (PR-9/11 unification).

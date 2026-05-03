@@ -32,13 +32,13 @@ func (d *Deps) ValidateTenant() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, err.Error())
 			return
 		}
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			writeJSONError(w, r,http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
 

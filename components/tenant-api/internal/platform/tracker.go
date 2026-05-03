@@ -1,7 +1,7 @@
 package platform
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -91,7 +91,7 @@ func (t *PollingTracker) WatchLoop(stopCh <-chan struct{}) {
 func (t *PollingTracker) Sync() {
 	prs, err := t.lister()
 	if err != nil {
-		log.Printf("WARN: %s tracker: sync failed: %v", t.provider, err)
+		slog.Warn("tracker sync failed", "provider", t.provider, "error", err)
 		return
 	}
 
@@ -113,7 +113,7 @@ func (t *PollingTracker) Sync() {
 	t.lastSync = time.Now()
 	t.mu.Unlock()
 
-	log.Printf("%s tracker: synced %d pending PRs", t.provider, len(prs))
+	slog.Info("tracker synced", "provider", t.provider, "pending", len(prs))
 }
 
 // PendingPRs returns a defensive copy of all tracked pending PRs/MRs.

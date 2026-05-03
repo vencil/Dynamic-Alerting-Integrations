@@ -23,7 +23,7 @@ package policy
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
@@ -71,7 +71,7 @@ func NewManager(configDir string) *Manager {
 	path := filepath.Join(configDir, "_domain_policy.yaml")
 	w, err := configwatcher.New(path, "policy", parseConfig, emptyConfig)
 	if err != nil {
-		log.Printf("WARN: policy: initial load: %v", err)
+		slog.Warn("policy: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
 }
