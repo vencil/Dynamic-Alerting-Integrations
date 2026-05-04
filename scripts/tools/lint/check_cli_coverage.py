@@ -5,7 +5,9 @@
   1. cheat-sheet.md / cheat-sheet.en.md — 每個命令都出現在速查表中
   2. cli-reference.md / cli-reference.en.md — 每個命令都有詳解章節
   3. entrypoint.py help text — 每個命令都列在 help 文字中
-  4. 雙語一致性 — zh/en 文件涵蓋相同的命令集
+  4. components/da-tools/README.md — component README 覆蓋每個命令
+     (v2.8.0 PR-1: 接住 v2.7.0 README 漏寫 22 條命令的 drift)
+  5. 雙語一致性 — zh/en 文件涵蓋相同的命令集
 
 Usage:
     python3 scripts/tools/lint/check_cli_coverage.py [--ci] [--json]
@@ -27,6 +29,7 @@ CHEAT_SHEET_ZH = REPO_ROOT / "docs" / "cheat-sheet.md"
 CHEAT_SHEET_EN = REPO_ROOT / "docs" / "cheat-sheet.en.md"
 CLI_REF_ZH = REPO_ROOT / "docs" / "cli-reference.md"
 CLI_REF_EN = REPO_ROOT / "docs" / "cli-reference.en.md"
+COMPONENT_README = REPO_ROOT / "components" / "da-tools" / "README.md"
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +89,32 @@ def parse_cli_reference_commands(path: Path) -> set:
     with open(path, encoding="utf-8") as f:
         for line in f:
             m = re.match(r"^####\s+([a-z][a-z0-9-]+)\s*$", line.strip())
+            if m:
+                commands.add(m.group(1))
+    return commands
+
+
+def parse_component_readme_commands(path: Path) -> set:
+    """Parse commands from da-tools component README markdown tables.
+
+    The README's §4 Command Reference uses table rows of form:
+
+        | `command-name` ... | description | flags |
+        | `command-name` ✨v2.8.0 | description | flags |
+
+    Cell may carry a trailing badge (e.g., `✨v2.8.0`) after the
+    backtick-quoted name; tolerate that when parsing.
+
+    Matches the same backtick pattern as parse_cheat_sheet_commands but
+    parsed from the component README so v2.7.0-style README drift
+    (22 missing commands, 2 false claims) fails fast in pre-flight.
+    """
+    commands = set()
+    if not path.exists():
+        return commands
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r"\|\s*`([a-z][a-z0-9-]+)`", line.strip())
             if m:
                 commands.add(m.group(1))
     return commands
@@ -155,6 +184,7 @@ def run_all_checks() -> list:
     cs_en = parse_cheat_sheet_commands(CHEAT_SHEET_EN)
     cr_zh = parse_cli_reference_commands(CLI_REF_ZH)
     cr_en = parse_cli_reference_commands(CLI_REF_EN)
+    component_readme = parse_component_readme_commands(COMPONENT_README)
 
     # 1. Help text coverage
     help_missing = command_map - help_commands
@@ -171,7 +201,15 @@ def run_all_checks() -> list:
     all_errors.extend(check_coverage(command_map, cr_en,
                                      "cli-reference.en.md"))
 
-    # 4. Bilingual consistency
+    # 4. Component README coverage (da-tools/README.md is the customer-
+    #    facing landing page; v2.7.0 drifted 22 commands behind COMMAND_MAP
+    #    + advertised 2 unregistered commands as public. v2.8.0 PR-1
+    #    closes both gaps and wires this lint to keep them closed.)
+    all_errors.extend(check_coverage(
+        command_map, component_readme,
+        "components/da-tools/README.md"))
+
+    # 5. Bilingual consistency
     all_errors.extend(check_bilingual_consistency(
         cs_zh, cs_en, "cheat-sheet zh/en"))
     all_errors.extend(check_bilingual_consistency(

@@ -35,6 +35,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_io.py",
     "_lib_validation.py",
     "_lib_prometheus.py",
+    "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / batchpr / parser
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

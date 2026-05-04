@@ -148,7 +148,7 @@ class TestCollectData:
 
     def test_non_dict_data_skipped(self, config_dir):
         path = os.path.join(config_dir, 'bad.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write('- just a list\n')
         data = _collect_data(config_dir)
         assert data['tenant_ids'] == set()
@@ -368,7 +368,7 @@ class TestCLI:
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', full_setup],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         assert result.returncode == 0
         assert 'OK' in result.stdout
@@ -386,7 +386,7 @@ class TestCLI:
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', config_dir, '--strict'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         assert result.returncode == 1
         assert 'bad-ref' in result.stderr
@@ -398,7 +398,7 @@ class TestCLI:
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', '/nonexistent/path'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         assert result.returncode == 1
 
@@ -415,7 +415,7 @@ class TestCLI:
             _REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
         result = subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, script, '--config-dir', config_dir],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding='utf-8'
         )
         # WARN only (not strict) → exit 0
         assert result.returncode == 0

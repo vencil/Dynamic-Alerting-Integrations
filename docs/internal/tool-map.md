@@ -15,6 +15,11 @@ lang: zh
 
 | 工具 | 用途 |
 |------|------|
+| `_grar_merge.py` | Routing-config merging + tenant substitution + receiver building. |
+| `_grar_parse.py` | Configuration loading + parsing for generate_alertmanager_routes. |
+| `_grar_render.py` | Output rendering + Alertmanager ConfigMap operations. |
+| `_grar_routes.py` | Route generation: tenant routes, override expansion, enforced routes, inhibit rules. |
+| `_grar_validate.py` | URL / domain / schema validation for generate_alertmanager_routes. |
 | `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
@@ -142,6 +147,7 @@ lang: zh
 | `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
+| `check_open_encoding.py` | flag open() text-mode calls without encoding=. |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
@@ -169,6 +175,7 @@ lang: zh
 ## 共用函式庫
 
 - `scripts/tools/_lib_constants.py`：Domain constants for Dynamic Alerting platform.
+- `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.

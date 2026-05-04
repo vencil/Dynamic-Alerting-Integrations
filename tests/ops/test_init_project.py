@@ -978,7 +978,7 @@ class TestRunInit:
             }
             ip.run_init(config, tmpdir)
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
-            with open(defaults_path, 'r') as f:
+            with open(defaults_path, 'r', encoding='utf-8') as f:
                 config_data = yaml.safe_load(f)
             assert 'defaults' in config_data
 
@@ -995,7 +995,7 @@ class TestRunInit:
             }
             ip.run_init(config, tmpdir)
             tenant_path = os.path.join(tmpdir, 'conf.d', 'db-a.yaml')
-            with open(tenant_path, 'r') as f:
+            with open(tenant_path, 'r', encoding='utf-8') as f:
                 tenant_data = yaml.safe_load(f)
             assert 'tenants' in tenant_data
 
@@ -1012,7 +1012,7 @@ class TestRunInit:
             }
             ip.run_init(config, tmpdir)
             marker_path = os.path.join(tmpdir, '.da-init.yaml')
-            with open(marker_path, 'r') as f:
+            with open(marker_path, 'r', encoding='utf-8') as f:
                 marker_data = yaml.safe_load(f)
             assert marker_data['ci_platform'] == 'both'
             assert marker_data['deploy_method'] == 'helm'
@@ -1082,7 +1082,7 @@ class TestMarkerFileDetection:
 
             # Now marker exists; re-init in same dir would fail in main()
             # but we verify the marker file is readable
-            with open(marker_path, 'r') as f:
+            with open(marker_path, 'r', encoding='utf-8') as f:
                 marker_data = yaml.safe_load(f)
             assert 'version' in marker_data
             assert 'generated_at' in marker_data
@@ -1100,7 +1100,7 @@ class TestMarkerFileDetection:
             }
             ip.run_init(original_config, tmpdir)
             marker_path = os.path.join(tmpdir, '.da-init.yaml')
-            with open(marker_path, 'r') as f:
+            with open(marker_path, 'r', encoding='utf-8') as f:
                 marker = yaml.safe_load(f)
 
             assert marker['ci_platform'] == 'gitlab'
@@ -1129,7 +1129,7 @@ class TestFileContentValidation:
             }
             ip.run_init(config, tmpdir)
             workflow_path = os.path.join(tmpdir, '.github', 'workflows', 'dynamic-alerting.yaml')
-            with open(workflow_path, 'r') as f:
+            with open(workflow_path, 'r', encoding='utf-8') as f:
                 workflow = yaml.safe_load(f)
             assert workflow is not None
             assert 'jobs' in workflow
@@ -1147,7 +1147,7 @@ class TestFileContentValidation:
             }
             ip.run_init(config, tmpdir)
             pipeline_path = os.path.join(tmpdir, '.gitlab-ci.d', 'dynamic-alerting.yml')
-            with open(pipeline_path, 'r') as f:
+            with open(pipeline_path, 'r', encoding='utf-8') as f:
                 pipeline = yaml.safe_load(f)
             assert pipeline is not None
             assert 'stages' in pipeline
@@ -1165,7 +1165,7 @@ class TestFileContentValidation:
             }
             ip.run_init(config, tmpdir)
             base_path = os.path.join(tmpdir, 'kustomize', 'base', 'kustomization.yaml')
-            with open(base_path, 'r') as f:
+            with open(base_path, 'r', encoding='utf-8') as f:
                 base = yaml.safe_load(f)
             assert base is not None
             assert 'configMapGenerator' in base
@@ -1183,7 +1183,7 @@ class TestFileContentValidation:
             }
             ip.run_init(config, tmpdir)
             precommit_path = os.path.join(tmpdir, '.pre-commit-config.da.yaml')
-            with open(precommit_path, 'r') as f:
+            with open(precommit_path, 'r', encoding='utf-8') as f:
                 precommit = yaml.safe_load(f)
             assert precommit is not None
             assert 'repos' in precommit
@@ -1238,7 +1238,7 @@ class TestEdgeCases:
             }
             created = ip.run_init(config, tmpdir)
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
-            with open(defaults_path, 'r') as f:
+            with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults = yaml.safe_load(f)
             assert 'mysql_connections' in defaults['defaults']
 
@@ -1257,7 +1257,7 @@ class TestEdgeCases:
             created = ip.run_init(config, tmpdir)
             assert len(created) > 0
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
-            with open(defaults_path, 'r') as f:
+            with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults = yaml.safe_load(f)
             # Should have metrics from all packs
             assert len(defaults['defaults']) > 50  # 65 keys from 13 packs
@@ -1275,7 +1275,7 @@ class TestEdgeCases:
             }
             created = ip.run_init(config, tmpdir)
             kust_path = os.path.join(tmpdir, 'kustomize', 'base', 'kustomization.yaml')
-            with open(kust_path, 'r') as f:
+            with open(kust_path, 'r', encoding='utf-8') as f:
                 kust = yaml.safe_load(f)
             assert kust['namespace'] == 'custom-monitoring'
 
@@ -1292,7 +1292,7 @@ class TestEdgeCases:
             }
             created = ip.run_init(config, tmpdir)
             workflow_path = os.path.join(tmpdir, '.github', 'workflows', 'dynamic-alerting.yaml')
-            with open(workflow_path, 'r') as f:
+            with open(workflow_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             assert 'registry.example.com/da-tools:v1.0' in content
 
@@ -1374,7 +1374,7 @@ class TestGitOpsNativeMode:
             }
             ip.run_init(config, tmpdir)
             patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path) as f:
+            with open(patch_path, encoding='utf-8') as f:
                 content = f.read()
             assert 'https://github.com/myorg/myrepo.git' in content
             assert 'production' in content
@@ -1408,7 +1408,7 @@ class TestGitOpsNativeMode:
                 'git_branch': 'main', 'git_path': 'conf.d',
             }
             ip.run_init(config, tmpdir)
-            with open(os.path.join(tmpdir, '.da-init.yaml')) as f:
+            with open(os.path.join(tmpdir, '.da-init.yaml'), encoding='utf-8') as f:
                 marker = yaml.safe_load(f)
             assert marker['config_source'] == 'git'
             assert marker['git_repo'] == 'git@github.com:example/configs.git'
@@ -1427,7 +1427,7 @@ class TestGitOpsNativeMode:
             }
             ip.run_init(config, tmpdir)
             kust_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'kustomization.yaml')
-            with open(kust_path) as f:
+            with open(kust_path, encoding='utf-8') as f:
                 kust = yaml.safe_load(f)
             assert 'patches' in kust
             assert any('git-sync-patch.yaml' in str(p) for p in kust['patches'])
@@ -1446,7 +1446,7 @@ class TestGitOpsNativeMode:
             }
             ip.run_init(config, tmpdir)
             patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path) as f:
+            with open(patch_path, encoding='utf-8') as f:
                 patch = yaml.safe_load(f)
             spec = patch['spec']['template']['spec']
             # Verify initContainer exists with --one-time
@@ -1470,7 +1470,7 @@ class TestGitOpsNativeMode:
             }
             ip.run_init(config, tmpdir)
             patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path) as f:
+            with open(patch_path, encoding='utf-8') as f:
                 content = f.read()
             assert '--period=30s' in content
 
@@ -1488,7 +1488,7 @@ class TestGitOpsNativeMode:
             }
             ip.run_init(config, tmpdir)
             patch_path = os.path.join(tmpdir, 'kustomize', 'overlays', 'gitops', 'git-sync-patch.yaml')
-            with open(patch_path) as f:
+            with open(patch_path, encoding='utf-8') as f:
                 patch = yaml.safe_load(f)
             exporter = patch['spec']['template']['spec']['containers'][0]
             assert exporter['name'] == 'threshold-exporter'

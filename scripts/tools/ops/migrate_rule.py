@@ -745,7 +745,12 @@ def write_triage_csv(results, output_dir, dictionary):
     """產出 CSV 分桶報告，供大規模遷移時在 Excel 中批次決策。"""
     csv_path = os.path.join(output_dir, "triage-report.csv")
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    # lineterminator='\n' — write_text_secure opens in text mode, which on
+    # Windows translates each \n → \r\n. csv.writer's default \r\n would then
+    # become \r\r\n on disk, producing phantom blank rows when downstream tools
+    # use universal-newlines reading. Pin \n here so the OS does the only
+    # translation. (Excel still parses the result correctly; no BOM impact.)
+    writer = csv.writer(buf, lineterminator='\n')
     writer.writerow([
         "Alert Name",
         "Triage Action",

@@ -107,6 +107,40 @@ def tmp_cli_reference(tmp_path):
     return p
 
 
+@pytest.fixture
+def tmp_component_readme(tmp_path):
+    """Create a minimal component README with command tables.
+
+    Mirrors the v2.8.0+ da-tools README structure: §4 Command Reference
+    uses tables where the first cell is `command-name` (sometimes with a
+    trailing ✨v2.8.0 badge), description in 2nd cell, min args in 3rd —
+    which may itself contain backtick-quoted subcommand names that the
+    parser MUST NOT count as top-level commands.
+    """
+    content = textwrap.dedent("""\
+        # da-tools (v2.7.0)
+
+        ## 4. Command Reference
+
+        ### 4.1 Discover
+
+        | 命令 | 用途 | 最小參數 |
+        |------|------|----------|
+        | `check-alert` | Query alert | `<alert> <tenant>` |
+        | `diagnose` | Health check | `<tenant>` |
+        | `parser` ✨v2.8.0 | Parse PromRule | `import <file>` |
+
+        ### 4.2 Onboard
+
+        | 命令 | 用途 | 最小參數 |
+        |------|------|----------|
+        | `scaffold` | Generate config | `--tenant <name>` |
+    """)
+    p = tmp_path / "README.md"
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
 # ---------------------------------------------------------------------------
 # TestParseCommandMap
 # ---------------------------------------------------------------------------
@@ -220,6 +254,47 @@ class TestParseCliReference:
 
     def test_missing_file(self, tmp_path):
         result = cc.parse_cli_reference_commands(tmp_path / "nope.md")
+        assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# TestParseComponentReadme
+# ---------------------------------------------------------------------------
+
+class TestParseComponentReadme:
+    def test_basic(self, tmp_component_readme):
+        result = cc.parse_component_readme_commands(tmp_component_readme)
+        assert result == {"check-alert", "diagnose", "parser", "scaffold"}
+
+    def test_emoji_badge_tolerated(self, tmp_path):
+        content = "| `parser` ✨v2.8.0 | desc | flags |\n"
+        p = tmp_path / "r.md"
+        p.write_text(content, encoding="utf-8")
+        result = cc.parse_component_readme_commands(p)
+        assert result == {"parser"}
+
+    def test_subcommand_in_third_cell_ignored(self, tmp_path):
+        # Third-cell `import <file>` is a subcommand mention, not a
+        # top-level command. The lint anchors on first-cell only.
+        content = "| `parser` | Parse PromRule | `import <file>` |\n"
+        p = tmp_path / "r.md"
+        p.write_text(content, encoding="utf-8")
+        result = cc.parse_component_readme_commands(p)
+        assert result == {"parser"}
+
+    def test_header_separator_excluded(self, tmp_path):
+        content = textwrap.dedent("""\
+            | 命令 | 用途 |
+            |------|------|
+            | `check-alert` | desc |
+        """)
+        p = tmp_path / "r.md"
+        p.write_text(content, encoding="utf-8")
+        result = cc.parse_component_readme_commands(p)
+        assert result == {"check-alert"}
+
+    def test_missing_file(self, tmp_path):
+        result = cc.parse_component_readme_commands(tmp_path / "nope.md")
         assert result == set()
 
 
@@ -384,6 +459,17 @@ class TestIntegration:
         zh = cc.parse_cli_reference_commands(cc.CLI_REF_ZH)
         en = cc.parse_cli_reference_commands(cc.CLI_REF_EN)
         assert zh == en, f"zh-only: {zh - en}, en-only: {en - zh}"
+
+    def test_real_component_readme_matches_command_map(self):
+        """v2.8.0 PR-1 invariant: da-tools README first-cell commands ==
+        COMMAND_MAP. v2.7.0 README drifted 22 commands behind + advertised
+        2 unregistered commands; the rewrite + this lint close that gap."""
+        cmds = parse_command_map_keys(cc.ENTRYPOINT_PATH)
+        readme = cc.parse_component_readme_commands(cc.COMPONENT_README)
+        assert cmds - readme == set(), (
+            f"README missing commands: {sorted(cmds - readme)}")
+        assert readme - cmds == set(), (
+            f"README has unregistered commands: {sorted(readme - cmds)}")
 
     def test_full_coverage_check(self):
         errors = cc.run_all_checks()

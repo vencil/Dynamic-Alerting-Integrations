@@ -31,10 +31,12 @@
   },
   
   // [UPDATED] 環境建立後的自動化指令：
-  // 1. 安裝 PyYAML
+  // 1. 安裝 Python 測試/工具依賴（PyYAML 為運行時，pytest-benchmark
+  //    為 tests/ops/test_benchmark.py 的效能基線；缺它會在 collection
+  //    階段炸 14 個 ERROR）
   // 2. 安裝 Kind
   // 3. 建立 Cluster
-  "postCreateCommand": "pip3 install --user pyyaml && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind",
+  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind",
 
   "customizations": {
     "vscode": {

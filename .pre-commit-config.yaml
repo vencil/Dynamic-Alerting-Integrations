@@ -230,11 +230,11 @@ repos:
         files: ^components/da-tools/app/(entrypoint\.py|build\.sh)$
 
       - id: cli-coverage-check
-        name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ COMMAND_MAP)
+        name: CLI command coverage (cheat-sheet ↔ cli-reference ↔ component README ↔ COMMAND_MAP)
         entry: python3 -X utf8 scripts/tools/lint/check_cli_coverage.py --ci
         language: python
         pass_filenames: false
-        files: ^(components/da-tools/app/entrypoint\.py|docs/(cheat-sheet|cli-reference)(\.en)?\.md)$
+        files: ^(components/da-tools/(app/entrypoint\.py|README\.md)|docs/(cheat-sheet|cli-reference)(\.en)?\.md)$
 
       - id: bilingual-structure-check
         name: ZH/EN document structure sync
@@ -367,6 +367,19 @@ repos:
         # See S#74 (testing-playbook.md v2.8.0 Lessons §4) + PR #164
         # / PR #165 / PR #166 / S#84 for the underlying Popen deadlock
         # motivation and cleanup arc.
+
+      - id: open-encoding-audit
+        name: open() encoding= kwarg audit (PR-2.5 portability, warn-only)
+        entry: python3 -X utf8 scripts/tools/lint/check_open_encoding.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(scripts|components/da-tools|tests)/.*\.py$
+        # Warn-only because ~72 latent sites remain in test files that
+        # don't currently exercise non-ASCII content (no failing tests).
+        # PR-2.5 cleaned the 33 sites + 15 subprocess.run sites that
+        # were causing actual UnicodeDecodeError on cp950 / shift_jis /
+        # POSIX-locale dev hosts. Flip to --strict-open-encoding once
+        # the residual cleanup track lands. See PR-2.5 description.
 
       - id: i18n-coverage-check
         name: i18n coverage report

@@ -20,3 +20,12 @@
 # preserving window.__portalShared for the 4 existing consumers
 # (self-service-portal + 3 Tab files). Genuine refactor, not damage.
 docs/interactive/tools/portal-shared.jsx
+
+# PR-3a (v2.8.0 da-tools sweep, PR-4 of 4): split of
+# generate_alertmanager_routes.py 1645 → 309 LOC (~80% shrink).
+# Logic moved to 5 new sibling helpers (_grar_validate / _grar_merge
+# / _grar_parse / _grar_routes / _grar_render); main file becomes
+# a CLI facade re-exporting every public + private symbol so the
+# 25+ test imports across 9 test files keep working unchanged.
+# Genuine refactor, not damage.
+scripts/tools/ops/generate_alertmanager_routes.py
