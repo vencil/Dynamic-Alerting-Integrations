@@ -2,48 +2,34 @@ extends:
   - '@commitlint/config-conventional'
 
 rules:
+  # Scope = 「PR 動到的產品介面 / 長期跨切關注點」。
+  # Initiative / phase / 版號不進 scope（用 PR labels / branch name / chore(release) 表達）。
+  # Compound scope（dx+e2e）違反 conventional 的 one-scope 原則 — 拆 commit 或選主導 scope。
   scope-enum:
     - 2
     - always
-    - - exporter
-      - tools
-      - docs
-      - rule-packs
-      - ci
-      - k8s
-      - helm
-      # tool-map sub-categories (ops 46 / dx 22 / lint 35)
-      - ops
-      - dx
-      - lint
-      # doc sub-categories
-      - audit
-      - playbook
-      # development phases & cross-cutting scopes
-      - adr
-      - e2e
-      - jsx
-      - a11y            # accessibility (WCAG / axe fixes, cross-cutting per v2.8.0 Phase .a PR#2)
-      - phase-a
-      - phase-b
-      - phase-c
-      # compound scopes (multi-area changes)
-      - dx+e2e
-      - lint+tooling
-      # component / sub-area scopes
-      - scanner          # hierarchical dir scanner (exporter subsystem)
-      - golden           # golden fixture parity tests
-      - tooling          # generic tooling / infrastructure changes
-      - blast-radius     # CI bot + scripts/tools/ops/blast_radius.py (PR comment generator)
-      - session-init     # session startup guards (scripts/session-guards/, PreToolUse hook)
-      # configuration & resilience scopes
-      - config           # CI / linter / commitlint / pre-commit config tweaks (chore(config) equivalent)
-      - resilience       # session / FUSE / Windows-MCP resilience tooling (fuse_plumbing, recover_index, cmd-redirect)
-      # planning / paperwork scopes (session-ledger / decomposition commits)
-      - planning        # v*-planning.md authorship commits (DEC-K/L drafts, session ledger)
-      # release-version scopes (used by release-wrap commits)
-      - v2.7.0
-      - v2.8.0
+    - # Deliverable artifacts (long-lived product surfaces)
+      - exporter         # threshold-exporter Go binary
+      - tenant-api       # tenant-api Go service
+      - portal           # da-portal (JSX 工具集 host)
+      - tools            # da-tools CLI / scripts/tools/
+      - rule-packs       # rule pack content
+      - helm             # helm chart
+      - k8s              # kubernetes manifests
+      # Cross-cutting concerns
+      - docs             # documentation
+      - ci               # GitHub Actions / pipeline
+      - e2e              # Playwright suite
+      - jsx              # JSX 工具技術面（_common/, jsx-loader, 共用 hooks 等）
+      - a11y             # accessibility (WCAG / axe-core)
+      - dx               # developer-experience tooling
+      - ops              # operational scripts / runbooks
+      - lint             # linter scripts / pre-commit hooks
+      # Doc sub-categories (high-frequency; warrant own scope vs. plain `docs`)
+      - audit            # security / drift / health audit reports
+      - playbook         # docs/internal/*-playbook.md 系列
+      # Release wrap (replaces v2.7.0 / v2.8.0 version-named scopes)
+      - release          # chore(release): vX.Y.Z 版本發布 commit
   # Allow sentence-case subjects (conventional default forbids it)
   subject-case:
     - 0

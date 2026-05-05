@@ -244,8 +244,6 @@ def validate_conventional_header(
         )
 
     if s is not None and scope_enum is not None and s not in scope_enum:
-        # Multi-scope like "dx+e2e" is a single scope string (already allowed
-        # via explicit enum entries); nothing special needed here.
         errors.append(
             f"scope '{s}' not in allowed enum: {', '.join(sorted(scope_enum))}"
         )

@@ -119,9 +119,13 @@ def test_read_scope_enum_from_real_config() -> None:
     mod = _load_module()
     enum = mod._read_commitlint_enum(_REPO_ROOT, "scope-enum")
     assert enum is not None
+    # Anchor on stable deliverable-artifact scopes that codify the
+    # "scope = product surface" invariant. Avoid asserting initiative /
+    # phase / version-named scopes — those should not be in the enum.
     assert "dx" in enum
-    assert "config" in enum  # added by PR #44 C1
-    assert "resilience" in enum  # added by PR #44 C1
+    assert "exporter" in enum
+    assert "tenant-api" in enum
+    assert "release" in enum
 
 
 def test_read_enum_returns_none_for_missing_key(tmp_path: Path) -> None:
@@ -168,7 +172,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
 
 def test_cli_check_commit_msg_good(tmp_path: Path) -> None:
     msg = tmp_path / "m.txt"
-    msg.write_text("feat(resilience): new tool\n\nbody\n")
+    msg.write_text("feat(dx): new tool\n\nbody\n")
     proc = _run_cli("--check-commit-msg", str(msg))
     assert proc.returncode == 0, f"stderr={proc.stderr}"
 
@@ -199,7 +203,7 @@ def test_cli_check_commit_msg_bad(tmp_path) -> None:
 
 
 def test_cli_check_pr_title_good() -> None:
-    proc = _run_cli("--check-pr-title", "feat(resilience): bundle tooling")
+    proc = _run_cli("--check-pr-title", "feat(dx): bundle tooling")
     assert proc.returncode == 0, f"stderr={proc.stderr}"
 
 
