@@ -5,6 +5,14 @@
 // Usage:
 //
 //	tenant-api --config-dir /conf.d --port 8080 --rbac /etc/rbac/_rbac.yaml
+//
+// @title          Tenant API
+// @version        v2.8.0
+// @description    Multi-tenant configuration management API for the Dynamic Alerting Platform.
+// @description    Provides CRUD over per-tenant alert thresholds, RBAC-scoped writes, and async batch operations.
+// @description    Auth is enforced by the oauth2-proxy sidecar and forwarded via X-Forwarded-Email / X-Forwarded-Groups.
+// @license.name   See repository LICENSE
+// @BasePath       /api/v1
 package main
 
 import (
