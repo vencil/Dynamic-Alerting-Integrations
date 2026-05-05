@@ -84,6 +84,15 @@ func (h *Hub) Unsubscribe(ch chan Event) {
 	h.mu.Unlock()
 }
 
+// ClientCount returns the number of currently-subscribed clients.
+// Useful for observability (metrics) and tests that need to wait for a
+// subscriber to be registered before broadcasting.
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
 // ServeHTTP implements http.Handler for the SSE endpoint.
 // GET /api/v1/events — clients connect and receive streaming JSON events.
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -112,16 +121,41 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: %s\n\n", string(data))
 	flusher.Flush()
 
-	// Stream events until client closes or context is done
+	// writeEvent marshals + flushes a single event. Factored so it can
+	// be reused by the drain loop on context cancel.
+	writeEvent := func(evt Event) {
+		data, _ := json.Marshal(evt)
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
+	}
+
+	// Stream events until client closes or context is done.
+	//
+	// On context cancel we drain any events that Broadcast has already
+	// pushed into ch but the main select hasn't picked up yet. Without
+	// this drain, races between Broadcast and cancel can drop in-flight
+	// events on the floor — which surfaces as flaky tests that "fix"
+	// themselves with a time.Sleep before cancel (the anti-pattern that
+	// TECH-DEBT-019 removes).
 	for {
 		select {
 		case <-r.Context().Done():
-			// Client disconnected
-			return
-		case evt := <-ch:
-			data, _ := json.Marshal(evt)
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
-			flusher.Flush()
+			for {
+				select {
+				case evt, ok := <-ch:
+					if !ok {
+						return
+					}
+					writeEvent(evt)
+				default:
+					return
+				}
+			}
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			writeEvent(evt)
 		}
 	}
 }
