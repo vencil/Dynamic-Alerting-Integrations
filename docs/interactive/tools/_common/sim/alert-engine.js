@@ -308,3 +308,7 @@ window.__generateSampleYaml = generateSampleYaml;
 window.__validateConfig = validateConfig;
 window.__simulateAlerts = simulateAlerts;
 window.__resolveRoutingLayers = resolveRoutingLayers;
+
+// TD-030c: ESM exports for esbuild bundle + Vitest. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { generateSampleYaml, validateConfig, simulateAlerts, resolveRoutingLayers };

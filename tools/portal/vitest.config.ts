@@ -32,6 +32,9 @@ function stripFrontmatter() {
 }
 
 export default defineConfig({
+  // root stays at tools/portal/ so node_modules resolution works.
+  // server.fs.allow expands to repo root so tests/portal/ and
+  // docs/interactive/ files outside root are still loadable.
   root: __dirname,
   plugins: [stripFrontmatter(), react()],
   test: {
@@ -44,6 +47,13 @@ export default defineConfig({
         // .jsx/.js files outside node_modules need Vite's transform pipeline.
         inline: [/\/docs\/interactive\/.*\.(jsx?|tsx?)$/],
       },
+    },
+  },
+  server: {
+    fs: {
+      // Allow Vite to read source files outside root: the test specs in
+      // tests/portal/ and the components under docs/interactive/.
+      allow: [REPO_ROOT],
     },
   },
   resolve: {
