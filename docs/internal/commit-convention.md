@@ -40,23 +40,39 @@ The type specifies the category of change. Must be one of:
 
 ### Scope
 
-The scope is optional but recommended. **Source of truth**: `.commitlintrc.yaml` `scope-enum` rule (this list drifts; CI is the authority).
+Scope is **optional** but if provided **must** be from the allowed list (`scope-enum` level 2). Scopeless commits like `chore: ...` / `ci: ...` are accepted. **Source of truth**: `.commitlintrc.yaml` `scope-enum`.
 
-Common scopes (most-used subset; see `.commitlintrc.yaml` for the full enforced list):
+**Design invariant**: scope = 「PR 動到的產品介面 / 長期跨切關注點」。Initiative / development phase / 版號 **不放 scope**（用 PR labels、branch name、或 `chore(release)` 表達）。Compound scope（如 `dx+e2e`）違反 conventional commits 的 one-scope 原則 — 拆 commit 或選主導 scope。
 
-- **exporter**: threshold-exporter code or deployment (NOT `threshold-exporter` — that's a common mistake)
-- **tools**: tools in `scripts/tools/`
-- **docs**: docs / guides
-- **rule-packs**: rule pack definitions
-- **ci**: GitHub Actions / GitLab CI infrastructure
+**Allowed scopes (full list, mirrors SOT)**:
+
+Deliverable artifacts:
+- **exporter**: threshold-exporter Go binary（NOT `threshold-exporter` — 寫 verbose name 會被 commitlint reject）
+- **tenant-api**: tenant-api Go service
+- **portal**: da-portal（JSX 工具集 host）
+- **tools**: da-tools CLI / `scripts/tools/`
+- **rule-packs**: rule pack content
+- **helm**: Helm chart
 - **k8s**: Kubernetes manifests / deployments
-- **helm**: Helm chart configuration
-- **ops** / **dx** / **lint**: tool-map sub-categories (matches `scripts/tools/{ops,dx,lint}/`)
-- **phase-a** / **phase-b** / **phase-c**: development phase scopes (use these for phase-bundle PRs that span multiple components)
-- **scanner** / **golden** / **config** / **session-init**: component / sub-area scopes for narrow refactors
-- **adr** / **playbook** / **planning**: doc-only sub-categories (use when commit is purely about ADR / playbook / planning archive content)
 
-> **Common pitfall**: typing the verbose component name (`threshold-exporter`, `tenant-api`) instead of the short scope (`exporter`). commitlint will reject; check `.commitlintrc.yaml` if unsure. The CI failure message lists every allowed scope — copy from there.
+Cross-cutting concerns:
+- **docs**: documentation
+- **ci**: GitHub Actions / pipeline
+- **e2e**: Playwright suite
+- **jsx**: JSX 工具技術面（`_common/`, jsx-loader, 共用 hooks 等）
+- **a11y**: accessibility (WCAG / axe-core)
+- **dx**: developer-experience tooling
+- **ops**: operational scripts / runbooks
+- **lint**: linter scripts / pre-commit hooks
+
+Doc sub-categories (高頻使用，故給獨立 scope):
+- **audit**: security / drift / health audit 報告
+- **playbook**: `docs/internal/*-playbook.md` 系列
+
+Release wrap:
+- **release**: `chore(release): vX.Y.Z` 版本發布 commit（取代過去 `chore(v2.7.0)` 那種版號式 scope）
+
+> **Common pitfall**: typing the verbose component name (`threshold-exporter`) instead of the short scope (`exporter`). commitlint will reject; copy the allowed scope from the CI failure message or `.commitlintrc.yaml`.
 
 ### Description
 
