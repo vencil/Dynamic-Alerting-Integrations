@@ -215,7 +215,7 @@ const styles = {
   },
   buttonDanger: {
     backgroundColor: 'var(--da-color-error-soft)',
-    color: 'var(--da-color-error)',
+    color: 'var(--da-color-error-text)',
     border: '1px solid var(--da-color-error)',
   },
   buttonDisabled: {
@@ -309,12 +309,12 @@ const styles = {
     marginBottom: 'var(--da-space-2)',
   },
   environmentBadge: {
-    production: { backgroundColor: 'var(--da-color-error-soft)', color: 'var(--da-color-error)' },
-    staging: { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning)' },
+    production: { backgroundColor: 'var(--da-color-error-soft)', color: 'var(--da-color-error-text)' },
+    staging: { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning-text)' },
     development: { backgroundColor: 'var(--da-color-success-soft)', color: 'var(--da-color-success)' },
   },
   tierBadge: {
-    'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning)' },
+    'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning-text)' },
     'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
     'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
   },

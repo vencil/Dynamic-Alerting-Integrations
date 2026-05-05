@@ -61,8 +61,10 @@
   --da-color-success-soft:    #ecfdf5;
   --da-color-warning:         #f59e0b;
   --da-color-warning-soft:    #fffbeb;
+  --da-color-warning-text:    #92400e;   /* WCAG AA text on warning-soft (#fffbeb): 6.1:1 */
   --da-color-error:           #ef4444;
   --da-color-error-soft:      #fef2f2;
+  --da-color-error-text:      #991b1b;   /* WCAG AA text on error-soft (#fef2f2): 7.3:1 */
   --da-color-info:            #2563eb;
   --da-color-info-soft:       #eff6ff;
 
@@ -170,8 +172,10 @@
   --da-color-success-soft:    #064e3b;
   --da-color-warning:         #fbbf24;
   --da-color-warning-soft:    #451a03;
+  --da-color-warning-text:    #fbbf24;   /* same as warning; dark bg inverts the soft-bg pattern */
   --da-color-error:           #f87171;
   --da-color-error-soft:      #450a0a;
+  --da-color-error-text:      #f87171;   /* same as error; dark bg inverts the soft-bg pattern */
   --da-color-info:            #60a5fa;
   --da-color-info-soft:       #1e3a5f;
 
