@@ -1141,6 +1141,44 @@ groups:
 	}
 }
 
+// TestMe_EmptyGroupsRendersAsArray verifies the JSON wire shape — when a
+// caller has no group memberships, `groups` and `accessible_tenants` must
+// serialise as `[]`, not `null`. The spec (swagger.json) declares both as
+// arrays; rendering as `null` violates the contract and was the original
+// TD-028 schemathesis finding (#242).
+func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
+	rbacMgr := newRBACManager(t, "")
+	handler := (&Deps{RBAC: rbacMgr}).Me()
+
+	// No X-Forwarded-Groups header — caller has no group memberships.
+	req := httptest.NewRequest("GET", "/api/v1/me", nil)
+	req.Header.Set("X-Forwarded-Email", "anon@example.com")
+
+	w := httptest.NewRecorder()
+	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+	wrapped.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	// Wire-level assertions — testing string output, not just struct field
+	// values, because the failure mode is JSON encoding, not Go semantics.
+	if strings.Contains(body, `"groups":null`) {
+		t.Errorf("groups serialised as null; want []. body: %s", body)
+	}
+	if strings.Contains(body, `"accessible_tenants":null`) {
+		t.Errorf("accessible_tenants serialised as null; want []. body: %s", body)
+	}
+	if !strings.Contains(body, `"groups":[]`) {
+		t.Errorf("expected groups=[] in body; got: %s", body)
+	}
+	if !strings.Contains(body, `"accessible_tenants":[]`) {
+		t.Errorf("expected accessible_tenants=[] in body; got: %s", body)
+	}
+}
+
 // TestMeMissingIdentity tests that /api/v1/me returns 401 without identity headers
 func TestMeMissingIdentity(t *testing.T) {
 	rbacMgr := newRBACManager(t, "")

@@ -218,6 +218,18 @@ jobs:
             exit 1
           fi
 
+      # TECH-DEBT-028 (#242): schemathesis contract test against the spec.
+      # Builds tenant-api, starts on a random port, fuzzes GET endpoints
+      # with response_schema_conformance check. CONTRACT_MAX_EXAMPLES=5 keeps
+      # CI runtime ~10-20s. The runner already has timeout=600 + auth header.
+      - name: Install schemathesis
+        run: pip install schemathesis
+
+      - name: Run schemathesis contract tests
+        env:
+          CONTRACT_MAX_EXAMPLES: "5"
+        run: python3 tests/contract/run_contract_tests.py
+
       - name: Upload coverage artifacts
         if: always()
         uses: actions/upload-artifact@v7
