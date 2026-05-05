@@ -197,7 +197,9 @@ jobs:
 
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
-        run: go test ./... -race -count=1 -coverprofile=coverage.out
+        # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
+        # (not a go.mod dependency). Only cmd/... and internal/... contain testable code.
+        run: go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
 
       # TECH-DEBT-021 (#226): Verify generated OpenAPI spec is in sync
       # with the swag annotations in handler/*. Drift = annotation
