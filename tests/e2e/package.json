@@ -3,7 +3,7 @@
   "version": "2.6.0",
   "description": "Playwright smoke tests for Dynamic Alerting Portal",
   "scripts": {
-    "test": "playwright test",
+    "test": "playwright test --grep-invert @visual",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
@@ -13,6 +13,8 @@
     "test:auth": "playwright test tests/e2e/auth-flow.spec.ts",
     "test:batch": "playwright test tests/e2e/batch-operations.spec.ts",
     "test:critical": "playwright test --grep @critical",
+    "test:visual": "playwright test --grep @visual",
+    "test:visual:update": "playwright test --grep @visual --update-snapshots",
     "serve:portal": "python -m http.server 8080 --directory ../../docs",
     "install-deps": "playwright install chromium",
     "lint": "eslint ."
