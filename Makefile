@@ -726,6 +726,18 @@ test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑
 	fi
 	@cd tests/e2e && npm run test:visual:update -- $(ARGS)
 
+.PHONY: portal-build
+portal-build: ## Build portal ESM bundles (TD-030 Option C; entries listed in tools/portal/manifest.json)
+	@cd tools/portal && npm run build
+
+.PHONY: portal-build-watch
+portal-build-watch: ## Watch-mode portal build for dev iteration (TD-030)
+	@cd tools/portal && npm run build:watch
+
+.PHONY: test-portal
+test-portal: ## Vitest unit tests for portal components (TD-030; tests in tests/portal/)
+	@cd tools/portal && npm run test
+
 .PHONY: test-skip-audit
 test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
 	@echo "=== Test Skip Audit ==="

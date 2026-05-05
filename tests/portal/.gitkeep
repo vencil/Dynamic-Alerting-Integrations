@@ -1,0 +1,3 @@
+# Portal Vitest unit tests live here (TD-030).
+# TD-030a (foundation) creates this directory with no tests yet.
+# TD-030b adds the first batch (SavedViewsPanel / TenantCard / useSavedViews / filtersToViewMap).
