@@ -361,6 +361,19 @@ api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TECH-DEBT-0
 		cd components/tenant-api && \
 		swag init -g cmd/server/main.go -o ./docs --parseInternal --parseDependency'
 
+.PHONY: contract-test
+contract-test: ## 跑 schemathesis 契約測試 (TECH-DEBT-022) — build → start tenant-api → fuzz spec
+	@# Runner builds tenant-api, starts it on a random port, runs schemathesis
+	@# against components/tenant-api/docs/swagger.json, tears down. CONTRACT_MAX_EXAMPLES
+	@# defaults to 10 (CI-friendly); bump for local investigation. Requires
+	@# schemathesis (pip install schemathesis) — handled inside dev container.
+	@bash scripts/ops/dx-run.sh bash -c '\
+		if ! command -v schemathesis >/dev/null 2>&1; then \
+			echo "Installing schemathesis..."; \
+			pip install schemathesis 2>&1 | tail -3; \
+		fi; \
+		REPO_ROOT=/workspaces/vibe-k8s-lab python3 tests/contract/run_contract_tests.py'
+
 .PHONY: fuse-reset
 fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘影時用
 	@echo "=== FUSE Cache Reset: Level 1 → Level 3 ==="
