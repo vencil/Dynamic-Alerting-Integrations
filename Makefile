@@ -709,8 +709,22 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
 
 .PHONY: test-e2e
-test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20)
-	@cd tests/e2e && npx playwright test $(ARGS)
+test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js ≥ 20，排除 @visual)
+	@cd tests/e2e && npm test -- $(ARGS)
+
+.PHONY: test-e2e-visual
+test-e2e-visual: ## Visual regression test (TD-029)，比對 baseline png；CI 不跑，需 baseline 已存在
+	@cd tests/e2e && npm run test:visual -- $(ARGS)
+
+.PHONY: test-e2e-visual-update
+test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑（Windows host 字體渲染不同會產生 false positives）。建議用 GitHub Actions visual-baseline.yaml workflow_dispatch
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+		echo "❌ Refuse to run on non-Linux host: '$$(uname -s)'"; \
+		echo "   Use the 'Visual Regression Baseline Update' GitHub Actions workflow instead"; \
+		echo "   ('Actions' tab → 'Visual Regression Baseline Update' → 'Run workflow')"; \
+		exit 1; \
+	fi
+	@cd tests/e2e && npm run test:visual:update -- $(ARGS)
 
 .PHONY: test-skip-audit
 test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）

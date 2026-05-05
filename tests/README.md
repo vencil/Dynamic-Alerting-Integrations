@@ -59,6 +59,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 | `Smoke Tests (Chromium)` (Playwright E2E workflow) | `tests/e2e/*.spec.ts` |
 | `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10`，advisory only（TD-026） |
 | `Lint Documentation` (ci.yml) | `make lint-docs`（含 changelog / link / structure check） |
+| `Visual Regression Baseline Update` (visual-baseline.yaml) | manual `workflow_dispatch`，重產 visual.spec.ts 基線（TD-029） |
 
 **CI 跳過的慢測試**（local 用 `make test` 會跑）：
 - `tests/shared/test_property.py` — Hypothesis property-based（`@slow`）
@@ -74,6 +75,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 測試跨檔案 / 基礎設施?                → tests/shared/test_<topic>.py
 測試 Go 程式碼?                       → 同檔案旁 *_test.go（不在 tests/）
 測試使用者操作 portal UI?              → tests/e2e/*.spec.ts
+要鎖視覺回歸（pixel-diff baseline）?  → tests/e2e/visual.spec.ts（Ubuntu CI 才能產基線，TD-029）
 測試前端跨工具效能 / 頁面載入?         → tests/e2e-bench/
 測試需要真實 DB / Prometheus / docker? → tests/scenarios/ + Makefile target
 ```

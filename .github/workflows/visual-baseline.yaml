@@ -1,0 +1,95 @@
+name: Visual Regression Baseline Update
+
+# TECH-DEBT-029 (#243): manual workflow_dispatch to regenerate Playwright
+# visual-regression baselines on the same Ubuntu image CI uses.
+#
+# Why a dedicated workflow: baselines MUST come from a deterministic
+# environment. Generating on a contributor's macOS / Windows host would
+# produce PNGs that fail in CI due to font hinting / sub-pixel rendering
+# differences. This workflow runs `--update-snapshots` on ubuntu-latest
+# and uploads the resulting __snapshots__/ folder as an artifact —
+# reviewer downloads it, commits to a PR branch, and merges the PR.
+#
+# NOT auto-triggered: only run when the visual contract intentionally
+# changes (UI redesign, copy update, etc.). Auto-running would create
+# noise PRs whenever any PNG byte-level drift occurs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for regenerating baselines'
+        required: true
+        type: string
+      spec:
+        description: 'Specific spec file to update (default: visual.spec.ts only)'
+        required: false
+        default: 'visual.spec.ts'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate-baselines:
+    name: Regenerate visual baselines
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Install Playwright + dependencies
+        working-directory: tests/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Start portal server
+        working-directory: tests/e2e
+        run: |
+          npm run serve:portal &
+          # Wait for /interactive/ to respond with 200 (portal is ready).
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/interactive/ >/dev/null; then
+              echo "portal ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Regenerate baselines (--update-snapshots)
+        working-directory: tests/e2e
+        env:
+          BASE_URL: http://localhost:8080/interactive/
+          CI: 'true'
+        run: |
+          npx playwright test "${{ inputs.spec }}" --update-snapshots
+
+      - name: Upload regenerated baselines
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-baselines-${{ github.run_id }}
+          path: tests/e2e/__snapshots__/
+          retention-days: 14
+
+      - name: Print next steps
+        run: |
+          cat <<'EOF'
+
+          ====================================================================
+          Baselines regenerated. Next steps:
+
+          1. Download the artifact `visual-baselines-${{ github.run_id }}`
+             from this run page.
+          2. Unzip into `tests/e2e/__snapshots__/` on a fresh branch.
+          3. Open a PR titled "chore(e2e): refresh visual baselines —
+             ${{ inputs.reason }}".
+          4. CI on the PR will compare current behaviour against these
+             baselines; should be green.
+          ====================================================================
+          EOF
