@@ -86,7 +86,7 @@ graph TD
 
 | 目錄 | 內容 | 何時會來這裡 |
 |------|------|--------------|
-| [`components/`](components/) | 各元件程式碼：`threshold-exporter`（Go）、`tenant-api`（Go）、`da-tools`（Python CLI）、`da-portal`（前端容器）、`backstage-plugin`（TS） | 改應用程式邏輯 |
+| [`components/`](components/) | 各元件程式碼：`threshold-exporter`（Go）、`tenant-api`（Go）、`da-tools`（Python CLI）、`da-portal`（前端容器） | 改應用程式邏輯 |
 | [`helm/`](helm/) | Helm charts：`da-portal`、`tenant-api`、`mariadb-instance`；values 檔 `values-db-*.yaml` | 調整部署與 chart 模板 |
 | [`k8s/`](k8s/) | 原生 K8s manifests：namespaces、monitoring（Prometheus/Alertmanager/Grafana）、tenant-api、CRD | 部署示範環境 |
 | [`rule-packs/`](rule-packs/) | 15 份 Rule Pack 來源 YAML（`rule-pack-<tech>.yaml`）+ [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) | 新增/修改告警規則 |
