@@ -28,6 +28,7 @@
 import { test, expect, Page } from '@playwright/test';
 // S#98: side-effect import registers `toBeVisibleWithDiagnostics` matcher.
 import './fixtures/diagnostic-matchers';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 const VIEWS_FIXTURE = {
   views: {
@@ -314,5 +315,30 @@ test.describe('Saved Views (Smart Views) @critical', () => {
     // Save / Delete are RBAC-hidden.
     await expect(page.getByTestId('saved-views-save-btn')).toHaveCount(0);
     await expect(page.getByTestId('saved-views-delete-select')).toHaveCount(0);
+  });
+
+  // TECH-DEBT-020 (#225): scan the populated saved-views panel for WCAG 2.1
+  // AA violations. Uses the views-list state (richest UI for this spec).
+  // If new violations surface, register them in
+  // `docs/internal/frontend-quality-backlog.md` rather than relaxing this
+  // assertion silently.
+  test('passes WCAG 2.1 AA accessibility checks (saved views panel populated)', async ({ page }) => {
+    await mountTenantManagerWithBackend(page);
+    await page.route('**/api/v1/views', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(VIEWS_FIXTURE),
+      });
+    });
+
+    await loadTenantManager(page);
+    await waitForPageReady(page, '[data-testid="saved-views-panel"]');
+
+    const results = await checkA11y(page);
+    if (results.violations.length > 0) {
+      console.error(`saved-views a11y violations:\n${formatA11yViolations(results.violations)}`);
+    }
+    expect(results.violations.length).toBe(0);
   });
 });
