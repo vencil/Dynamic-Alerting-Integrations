@@ -946,6 +946,28 @@ The closed-vs-open check originally codified for lints generalises to **feature 
 
 **Cross-refs**: planning §12.2 C-4 row (S#99 honest closure); planning §12.2 C-6 row (S#100 default-to-ship after fabricated-defer correction); planning §6 Phase .d closure (S#101 ZH primary lock); S#94 PR #184 (picture-changing event); §LL §12 above (original lint-scoped discipline).
 
+### 13. CI E2E hang → 在 local 重現拿到真實錯誤訊息再動手（PR #257 case）
+
+**現象**：PR #257（TD-030 Option C portal ESM dist-bundle）的 Smoke Tests E2E job 在 CI 多次卡到 GitHub Actions 10-min 強制 cancel。Default dot reporter 只看到 80 個 `·` 然後沒下文，沒有任何錯誤訊息浮現。
+
+**反模式（這次踩的）**：把「CI hang」當成 CI 環境特有的怪事，直接針對症狀做 CI-side 實驗：
+- 把 `<script type="module">` 的 onload handler 從「立刻隱藏 loading」改成「等 onload 才隱藏」
+- 把 `fetch HEAD` probe 拿掉、改 hardcoded list
+- 把 hardcoded list 換成 empty list 看 IF/ELSE 結構是否影響
+- 每次都 push + 等 5-10 分鐘 CI cycle 才知道結果
+
+90 分鐘後沒有定位根因。User push back「測試寫法是不是不夠成熟？」才轉成熟方法。
+
+**正模式**：
+1. **第一反應：local 重現**。`npx playwright install --with-deps chromium` + `python -m http.server` + `BASE_URL=... CI=true ./node_modules/.bin/playwright test --reporter=line --workers=1`。Reporter 換成 `line` 才會看到每個 test 的名稱。
+2. **Local 30s per-test timeout 比 CI 10-min cancel 快 20×**。Local 跑出來立刻看到 `Error: Expected locator to be visible but was not` 與具體 testid 名稱——根因是 component-render 失敗（`saved-views-panel` 等 testid 不在 DOM），不是 hang。
+3. **CI hang ≠ infinite loop**。99% 是 `waitFor` / `networkidle` / `expect.toBeVisible({ timeout: ... })` 卡在永遠不會 true 的 precondition。Local 因為 timeout 比 CI 短會 fail-fast 把那個 precondition 暴露出來。
+4. **CI 上若一定要 debug**：用 `--reporter=list`（看 test 名稱）+ trace recording (`trace: 'on'`) + 上傳 artifact。Default dot reporter 在 CI hang 場景下完全失明。
+
+**這 PR 的真正根因**（已在 PR description + [#258](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/258) follow-up 記錄）：dist-bundle 路徑在 component-render 層壞掉（疑似 React 雙 instance / `window.__X` 載入順序 / frontmatter strip race 等四種可能），不是 jsx-loader 控制流問題。
+
+**Codify rule**：E2E hang 在 CI——**先在 local 重現拿真實錯誤訊息**，再針對該訊息動手；never push 推測修復進 CI 來「看會不會不 hang」。Cross-ref：feedback memory `feedback_ci_hang_repro_locally_first.md`。
+
 ## v2.8.0 Lessons Learned — Race-flake battles（2026-04-26, Phase .b）
 
 > **觸發**：Phase .b session #32（PR #75）+ session #35（PR #79）兩次踩同一個 `withIsolatedMetrics` + async-callback goroutine-leak race，每次都燒 1-3 個 fix-up commits 才收斂 CI。Lessons 一直困在 planning archive，下個 session 不一定看得到。本節 codify 三條規範升 cross-version SSOT。
