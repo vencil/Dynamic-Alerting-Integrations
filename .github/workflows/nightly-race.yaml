@@ -1,0 +1,91 @@
+name: Nightly Race Detector
+
+# TECH-DEBT-026 (#235): nightly Go race detector with -count=10.
+#
+# Why nightly + advisory: race detector is a sampling tool. -count=1 (used
+# in PR-blocking ci.yml) won't surface low-probability races; -count=10 on
+# every PR is too slow (multiplies tenant-api + threshold-exporter test time
+# by 10x). Nightly schedule trades latency for coverage. Advisory-only
+# (does NOT block any PR) — a race surfaced here is a real bug to triage,
+# not a "fix this PR" gate.
+#
+# Failure handling: workflow opens an issue tagged `race-flake` listing the
+# failing test + run URL. Manual triage from there.
+
+on:
+  schedule:
+    # 16:00 UTC = 00:00 Asia/Taipei. Runs once daily, off-hours.
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-race-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  race:
+    name: Race Detector (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: tenant-api
+            workdir: components/tenant-api
+            packages: ./cmd/... ./internal/...
+          - module: threshold-exporter
+            workdir: components/threshold-exporter/app
+            packages: ./...
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Run tests with -race -count=10
+        id: race
+        working-directory: ${{ matrix.workdir }}
+        # -count=10 multiplies sampling chances. -timeout=30m guards
+        # against single test hangs (default is 10m which is tight at 10x).
+        run: go test ${{ matrix.packages }} -race -count=10 -timeout=30m
+
+      - name: Open issue on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const title = `Nightly race detector flake — ${{ matrix.module }} (${new Date().toISOString().slice(0,10)})`;
+            const body = [
+              `Nightly \`go test -race -count=10\` failed for **${{ matrix.module }}**.`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `## Triage steps`,
+              `1. Reproduce locally: \`cd ${{ matrix.workdir }} && go test ${{ matrix.packages }} -race -count=10\``,
+              `2. If reproducible, add a regression test and fix the race.`,
+              `3. If not reproducible after 50 runs, close as transient and watch for re-occurrence.`,
+              ``,
+              `Auto-opened by [.github/workflows/nightly-race.yaml](https://github.com/${owner}/${repo}/blob/main/.github/workflows/nightly-race.yaml).`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner, repo, title, body,
+              labels: ['bug', 'ci', 'P2'],
+            });
