@@ -26,7 +26,7 @@ lang: zh
 | [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ |
 | [未來擴展路線](design/roadmap-future.md) | v2.7.0 計畫中 → 長期探索方向 |
 
-**專題文件：** [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md) · [進階場景](internal/test-coverage-matrix.md) · [遷移引擎](migration-engine.md) · [VCS 整合](vcs-integration-guide.md) · [Backstage Plugin](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/backstage-plugin/README.md)
+**專題文件：** [性能基準](benchmarks.md) · [治理與安全](governance-security.md) · [故障排查](troubleshooting.md) · [進階場景](internal/test-coverage-matrix.md) · [遷移引擎](migration-engine.md) · [VCS 整合](vcs-integration-guide.md)
 
 ---
 

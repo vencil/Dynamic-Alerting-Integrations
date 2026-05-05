@@ -29,6 +29,10 @@ Compare：v2.7.0 最終條目約 55 行（Scale / Token / Test / Benchmark / ADR
 Breaking / Upgrade 七塊清楚區分），那是目標形狀。
 -->
 
+### Removed
+
+- **`components/backstage-plugin/` 整個目錄移除（v2.8.0, Phase .e prep）** — v2.1.0 在沒有真實客戶需求前 speculative 寫的 Backstage frontend plugin，14 個月內僅 2 commits（v2.1.0 建立 + v2.6.0 README 微調），長期落後於 v2.5.0+ 的 platform 演進：直連 Prometheus 繞過 v2.5.0/v2.7.0 上線的 tenant-api（沒 RBAC / saved views / SSE / hierarchy resolution），README 列出但程式碼未實作的 feature（alert quality scores、custom/disabled distribution、`useMockData` config），缺 `package.json` 不可建置，零測試零 CI 覆蓋（`.pre-commit-config.yaml` / `.github/` / `helm/` / `tests/` 全無引用）。違反 dev-rule #4 Doc-as-Code（README 與 code 嚴重 drift）。一併清掉 `README.md` / `README.en.md` 的 components 列表項 + `docs/architecture-and-design.md` 專題文件 cross-link；保留 `CHANGELOG.md` v2.1.0 / v2.6.0 歷史條目 + `docs/internal/testing-playbook.md` 與 archived `lessons-learned.md` 的 v2.1.0 LL 紀錄（Entity annotation / proxy CORS pattern 是通用 Backstage 整合知識，與本 plugin 是否存在無關）。**未來重做的設計約束**：若有真實 Backstage 需求出現，新版應 (1) 走 tenant-api（非直連 Prometheus）取得 RBAC + 完整資料模型，(2) 評估改成 `da-tools backstage-export` 產 `catalog-info.yaml` 的 generator 形式（不需追 Backstage SDK 升級、不養 React 程式碼）作為比 plugin 更輕量的選項。
+
 ### Security
 
 - **Grafana 12.4.1 → 12.4.2（v2.8.0, [#98](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/98) of umbrella [#100](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/100) Q2 2026 CVE audit）** — bump `k8s/03-monitoring/deployment-grafana.yaml`。**audit prerequisite confirmed**：`configmap-grafana.yaml` 唯一 data source 是 Prometheus，**無 PostgreSQL**，故 12.4.1 帶的 pgx/v5 CVE-2026-33816（CRITICAL memory-safety, fixed in 5.9.0）在我們部署是 dead-code。bump 主要修 12.4.1 → 12.4.2 自身的 Go binary CVE（含 grpc CVE-2026-33186 transitive）。Trivy 0.70.0 audit：Go binary 部分 8/2 → 7/1（pgx 那條 CRITICAL 即使可達也已被 12.4.2 fix）。**殘留 11 HIGH + 2 CRITICAL Alpine OS layer**（OpenSSL/libssl3/musl/zlib）upstream Grafana 還沒 rebase Alpine 3.22+，CRITICAL CVE-2026-31789 是 32-bit only（amd64 N/A），HIGH OpenSSL CMS path 在 Grafana 不啟用 — 留 issue 追 upstream rebase。詳見 [#100](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/100) audit 摘要。
