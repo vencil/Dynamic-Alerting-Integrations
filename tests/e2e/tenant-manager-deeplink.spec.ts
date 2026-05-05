@@ -41,6 +41,7 @@ import { test, expect, Page } from '@playwright/test';
 // matcher, used below for state-* assertions where the default
 // "element(s) not found" failure mode wastes a CI round-trip.
 import './fixtures/diagnostic-matchers';
+import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
 // Pin a single tenant ID across all tests so failures are easy to grep.
 const TENANT_ID = 'pr94-deeplink-tenant';
@@ -391,5 +392,21 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
     const labels = await readAllInputValues(page);
     expect(labels).toContain('tenant');
     expect(labels).toContain(SPECIAL_TENANT);
+  });
+
+  // TECH-DEBT-020 (#225): scan the tenant-manager landing view (the
+  // host page from which the deep-link footer renders) for WCAG 2.1 AA
+  // violations. If new violations surface, register them in
+  // `docs/internal/frontend-quality-backlog.md` rather than relaxing
+  // this assertion silently.
+  test('passes WCAG 2.1 AA accessibility checks (tenant-manager landing view)', async ({ page }) => {
+    await loadTenantManagerWithMockedApi(page);
+    await waitForPageReady(page);
+
+    const results = await checkA11y(page);
+    if (results.violations.length > 0) {
+      console.error(`tenant-manager-deeplink a11y violations:\n${formatA11yViolations(results.violations)}`);
+    }
+    expect(results.violations.length).toBe(0);
   });
 });
