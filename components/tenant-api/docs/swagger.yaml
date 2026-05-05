@@ -1,0 +1,957 @@
+basePath: /api/v1
+definitions:
+  config.EffectiveConfig:
+    properties:
+      defaults_chain:
+        items:
+          type: string
+        type: array
+      effective_config:
+        additionalProperties: {}
+        type: object
+      merged_hash:
+        type: string
+      source_file:
+        type: string
+      source_hash:
+        type: string
+      tenant_id:
+        type: string
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  config.ResolvedThreshold:
+    properties:
+      component:
+        type: string
+      customLabels:
+        additionalProperties:
+          type: string
+        description: dimensional labels from {key="value"} syntax
+        type: object
+      metric:
+        type: string
+      regexLabels:
+        additionalProperties:
+          type: string
+        description: regex labels from {key=~"pattern"} syntax
+        type: object
+      severity:
+        type: string
+      tenant:
+        type: string
+      value:
+        format: float64
+        type: number
+    type: object
+  github_com_vencil_tenant-api_internal_platform.PRInfo:
+    properties:
+      created_at:
+        description: ISO 8601 timestamp
+        type: string
+      head_ref:
+        description: Source branch name
+        type: string
+      number:
+        description: GitHub PR number or GitLab MR IID
+        type: integer
+      state:
+        description: '"open"/"opened", "closed", "merged"'
+        type: string
+      tenant_id:
+        description: Extracted from branch name
+        type: string
+      title:
+        description: PR/MR title
+        type: string
+      web_url:
+        description: Browser-accessible URL
+        type: string
+    type: object
+  internal_handler.BatchOperation:
+    properties:
+      patch:
+        additionalProperties:
+          type: string
+        description: 'key → value to set (e.g., "_silent_mode": "warning")'
+        type: object
+      tenant_id:
+        maxLength: 256
+        minLength: 1
+        type: string
+    required:
+    - tenant_id
+    type: object
+  internal_handler.BatchRequest:
+    properties:
+      operations:
+        items:
+          $ref: '#/definitions/internal_handler.BatchOperation'
+        maxItems: 1000
+        minItems: 1
+        type: array
+    required:
+    - operations
+    type: object
+  internal_handler.BatchResponse:
+    properties:
+      message:
+        description: 'v2.6.0: human-readable message'
+        type: string
+      pr_number:
+        description: 'v2.6.0: PR/MR number in PR mode'
+        type: integer
+      pr_url:
+        description: 'v2.6.0: PR/MR URL in PR mode'
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/internal_handler.BatchResult'
+        type: array
+      status:
+        description: '"completed" | "pending_review" (PR mode)'
+        type: string
+      summary:
+        description: e.g., "5 succeeded, 1 failed"
+        type: string
+      task_id:
+        description: async task ID
+        type: string
+    type: object
+  internal_handler.BatchResult:
+    properties:
+      message:
+        type: string
+      status:
+        description: '"ok" | "error"'
+        type: string
+      tenant_id:
+        type: string
+    type: object
+  internal_handler.DiffRequest:
+    properties:
+      proposed:
+        description: proposed YAML content
+        type: string
+    type: object
+  internal_handler.DiffResponse:
+    properties:
+      diff:
+        type: string
+      has_diff:
+        type: boolean
+      tenant_id:
+        type: string
+    type: object
+  internal_handler.GroupBatchRequest:
+    properties:
+      patch:
+        additionalProperties:
+          type: string
+        description: 'key → value (e.g., "_silent_mode": "warning")'
+        type: object
+    type: object
+  internal_handler.GroupBatchResponse:
+    properties:
+      group_id:
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/internal_handler.BatchResult'
+        type: array
+      status:
+        type: string
+      summary:
+        description: e.g., "5 succeeded, 1 failed"
+        type: string
+      task_id:
+        type: string
+    type: object
+  internal_handler.GroupResponse:
+    properties:
+      description:
+        type: string
+      filters:
+        additionalProperties:
+          type: string
+        type: object
+      id:
+        type: string
+      label:
+        type: string
+      members:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_handler.MeResponse:
+    properties:
+      accessible_domains:
+        description: nil = all
+        items:
+          type: string
+        type: array
+      accessible_environments:
+        description: nil = all
+        items:
+          type: string
+        type: array
+      accessible_tenants:
+        items:
+          type: string
+        type: array
+      email:
+        type: string
+      groups:
+        items:
+          type: string
+        type: array
+      permissions:
+        additionalProperties:
+          items:
+            type: string
+          type: array
+        type: object
+      user:
+        type: string
+    type: object
+  internal_handler.PRListResponse:
+    properties:
+      count:
+        type: integer
+      pending_prs:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_platform.PRInfo'
+        type: array
+    type: object
+  internal_handler.PutGroupRequest:
+    properties:
+      description:
+        maxLength: 4096
+        type: string
+      filters:
+        additionalProperties:
+          type: string
+        type: object
+      label:
+        maxLength: 256
+        minLength: 1
+        type: string
+      members:
+        items:
+          type: string
+        maxItems: 1000
+        type: array
+    required:
+    - label
+    type: object
+  internal_handler.PutTenantResponse:
+    properties:
+      message:
+        type: string
+      pr_number:
+        type: integer
+      pr_url:
+        type: string
+      status:
+        type: string
+      tenant_id:
+        type: string
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_handler.PutViewRequest:
+    properties:
+      description:
+        maxLength: 1024
+        type: string
+      filters:
+        additionalProperties:
+          type: string
+        type: object
+      label:
+        maxLength: 256
+        minLength: 1
+        type: string
+    required:
+    - filters
+    - label
+    type: object
+  internal_handler.TenantDetail:
+    properties:
+      id:
+        type: string
+      raw_yaml:
+        type: string
+      resolved_thresholds:
+        items:
+          $ref: '#/definitions/config.ResolvedThreshold'
+        type: array
+      validation_warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_handler.TenantSummary:
+    properties:
+      db_type:
+        type: string
+      domain:
+        type: string
+      environment:
+        type: string
+      groups:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      maintenance:
+        type: string
+      owner:
+        type: string
+      profile:
+        type: string
+      region:
+        type: string
+      silent_mode:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      tier:
+        type: string
+    type: object
+  internal_handler.ValidateResponse:
+    properties:
+      valid:
+        type: boolean
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_handler.ViewResponse:
+    properties:
+      created_by:
+        type: string
+      description:
+        type: string
+      filters:
+        additionalProperties:
+          type: string
+        type: object
+      id:
+        type: string
+      label:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: |-
+    Multi-tenant configuration management API for the Dynamic Alerting Platform.
+    Provides CRUD over per-tenant alert thresholds, RBAC-scoped writes, and async batch operations.
+    Auth is enforced by the oauth2-proxy sidecar and forwarded via X-Forwarded-Email / X-Forwarded-Groups.
+  license:
+    name: See repository LICENSE
+  title: Tenant API
+  version: v2.8.0
+paths:
+  /api/v1/groups:
+    get:
+      description: Returns tenant groups visible to the authenticated user, filtered
+        by RBAC.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_handler.GroupResponse'
+            type: array
+      summary: List all custom groups
+      tags:
+      - groups
+  /api/v1/groups/{id}:
+    delete:
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a group
+      tags:
+      - groups
+    get:
+      description: Returns a tenant group by ID.
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.GroupResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a single group
+      tags:
+      - groups
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Group definition
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.PutGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create or update a group
+      tags:
+      - groups
+  /api/v1/groups/{id}/batch:
+    post:
+      consumes:
+      - application/json
+      description: Apply a patch to all tenants in a group.
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Patch to apply
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.GroupBatchRequest'
+      - description: Enable async mode (true/false)
+        in: query
+        name: async
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.GroupBatchResponse'
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Batch operation on group members
+      tags:
+      - groups
+  /api/v1/me:
+    get:
+      description: Returns the authenticated user's email, groups, accessible tenants,
+        and permissions.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.MeResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get current user identity and permissions
+      tags:
+      - identity
+  /api/v1/prs:
+    get:
+      description: Returns pending pull/merge requests created by tenant-api, filtered
+        by caller's tenant RBAC.
+      parameters:
+      - description: Filter by tenant ID
+        in: query
+        name: tenant
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.PRListResponse'
+      summary: List pending PRs/MRs
+      tags:
+      - prs
+  /api/v1/tenants:
+    get:
+      description: Returns tenants visible to the authenticated user, filtered by
+        RBAC.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_handler.TenantSummary'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List tenants
+      tags:
+      - tenants
+  /api/v1/tenants/{id}:
+    get:
+      description: Returns the raw YAML and resolved thresholds for a single tenant.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.TenantDetail'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get tenant config
+      tags:
+      - tenants
+    put:
+      consumes:
+      - application/yaml
+      description: Validates, writes, and commits a tenant's YAML configuration.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Tenant YAML content
+        in: body
+        name: body
+        required: true
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.PutTenantResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update tenant config
+      tags:
+      - tenants
+  /api/v1/tenants/{id}/diff:
+    post:
+      consumes:
+      - application/json
+      description: Returns unified diff between current file and proposed content.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Proposed YAML
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.DiffRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.DiffResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview config diff
+      tags:
+      - tenants
+  /api/v1/tenants/{id}/effective:
+    get:
+      description: |-
+        Returns the tenant config after merging the _defaults.yaml
+        chain from L0 (conf.d root) down to the tenant's own file.
+        Includes two SHA-256 hashes (truncated to 16 hex chars):
+        source_hash for raw file content and merged_hash for the
+        canonical-JSON of the merged dict. Parity target:
+        scripts/tools/dx/describe_tenant.py.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/config.EffectiveConfig'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get tenant effective (merged) config
+      tags:
+      - tenants
+  /api/v1/tenants/{id}/validate:
+    post:
+      consumes:
+      - application/yaml
+      description: Dry-run validation of a tenant YAML without writing to disk.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Tenant YAML content
+        in: body
+        name: body
+        required: true
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.ValidateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Validate tenant config
+      tags:
+      - tenants
+  /api/v1/tenants/batch:
+    post:
+      consumes:
+      - application/json
+      description: Apply patch operations to multiple tenants in one call.
+      parameters:
+      - description: Batch operations
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.BatchRequest'
+      - description: Enable async mode (true/false)
+        in: query
+        name: async
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.BatchResponse'
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Batch tenant operations
+      tags:
+      - tenants
+  /api/v1/views:
+    get:
+      description: Returns all saved filter views defined in _views.yaml.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_handler.ViewResponse'
+            type: array
+      summary: List all saved views
+      tags:
+      - views
+  /api/v1/views/{id}:
+    delete:
+      parameters:
+      - description: View ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a saved view
+      tags:
+      - views
+    get:
+      parameters:
+      - description: View ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.ViewResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a single saved view
+      tags:
+      - views
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: View ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: View definition
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.PutViewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create or update a saved view
+      tags:
+      - views
+swagger: "2.0"
