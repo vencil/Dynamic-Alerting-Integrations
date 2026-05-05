@@ -345,6 +345,22 @@ dc-test: ## 在 Dev Container 內跑 pytest（可選 ARGS="-k foo"）
 dc-go-test: ## 在 Dev Container 內跑 go test ./...（Go 僅在 container 內可用）
 	@bash scripts/ops/dx-run.sh go test ./...
 
+.PHONY: api-docs
+api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TECH-DEBT-021)
+	@# swag CLI installs lazily inside the Dev Container. Generated artefacts
+	@# (docs/swagger.json, swagger.yaml, docs.go) are committed to git so CI
+	@# can drift-check via `make api-docs && git diff --exit-code
+	@# components/tenant-api/docs/`. Edit the @Router / @Param / @Success
+	@# annotations in handler/* — never edit the generated files by hand.
+	@bash scripts/ops/dx-run.sh bash -c '\
+		if ! command -v swag >/dev/null 2>&1; then \
+			echo "Installing github.com/swaggo/swag/cmd/swag@latest..."; \
+			GOBIN=$$HOME/go/bin go install github.com/swaggo/swag/cmd/swag@latest && \
+				export PATH=$$HOME/go/bin:$$PATH; \
+		fi; \
+		cd components/tenant-api && \
+		swag init -g cmd/server/main.go -o ./docs --parseInternal --parseDependency'
+
 .PHONY: fuse-reset
 fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘影時用
 	@echo "=== FUSE Cache Reset: Level 1 → Level 3 ==="

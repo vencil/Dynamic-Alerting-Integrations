@@ -197,7 +197,26 @@ jobs:
 
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
-        run: go test ./... -race -count=1 -coverprofile=coverage.out
+        # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
+        # (not a go.mod dependency). Only cmd/... and internal/... contain testable code.
+        run: go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
+
+      # TECH-DEBT-021 (#226): Verify generated OpenAPI spec is in sync
+      # with the swag annotations in handler/*. Drift = annotation
+      # changed but `make api-docs` not run + committed.
+      - name: Install swag CLI
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      - name: Generate OpenAPI spec from swag annotations
+        working-directory: components/tenant-api
+        run: swag init -g cmd/server/main.go -o ./docs --parseInternal --parseDependency
+
+      - name: Verify OpenAPI spec is up-to-date (drift check)
+        run: |
+          if ! git diff --exit-code components/tenant-api/docs/; then
+            echo "::error::OpenAPI spec drift detected. Run 'make api-docs' locally and commit components/tenant-api/docs/."
+            exit 1
+          fi
 
       - name: Upload coverage artifacts
         if: always()
