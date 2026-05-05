@@ -464,12 +464,30 @@ func TestWatchLoop(t *testing.T) {
 		t.Fatalf("failed to update file: %v", err)
 	}
 
-	// Give watch loop time to detect change (not deterministic, but reasonable)
-	// Note: In a real scenario with proper wait mechanisms, this would be more robust
-	time.Sleep(200 * time.Millisecond)
+	// TD-024: replace blind 200ms sleep with poll-until-loaded. The 100ms
+	// WatchLoop tick + 200ms sleep was tight on slow CI. Now we poll for
+	// up to 2s with 5ms granularity.
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+waitLoaded:
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatalf("WatchLoop did not pick up policy update within 2s")
+		case <-tick.C:
+			if cfg := m.Get(); len(cfg.DomainPolicies) == 1 {
+				if _, ok := cfg.DomainPolicies["test"]; ok {
+					break waitLoaded
+				}
+			}
+		}
+	}
 	close(stopCh)
 
-	// Verify the update was loaded
+	// Final verification — equivalent to old test, but redundant after
+	// the wait loop. Keep for explicit failure messaging.
 	cfg := m.Get()
 	if len(cfg.DomainPolicies) != 1 {
 		t.Errorf("after update, expected 1 policy, got %d", len(cfg.DomainPolicies))
