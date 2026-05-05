@@ -50,12 +50,23 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 ## CI 整合
 
-**目前 CI 不跑 contract test**。先讓 spec 漂移清乾淨（TD-022 follow-up）再加 CI step。完整契約：
-- 條件式 trigger：只在 `components/tenant-api/docs/swagger.json` 或 `internal/handler/**.go` 變動時跑
-- 與 `go-tests` job 平行（不阻塞 PR merge 直到 spec clean）
-- 失敗自動 attach JUnit XML report 為 artifact
+**已啟用**（TD-028 修復 spec drift 後）：在 `Go Tests (1.26)` job 末段，於 swag drift check 之後跑。`CONTRACT_MAX_EXAMPLES=5` 讓單次 CI ~10-20s。
 
-當 spec 完全 conformance pass 後，這份 README 會更新。
+當前 CI step:
+```yaml
+- name: Install schemathesis
+  run: pip install schemathesis
+- name: Run schemathesis contract tests
+  env:
+    CONTRACT_MAX_EXAMPLES: "5"
+  run: python3 tests/contract/run_contract_tests.py
+```
+
+### 已知 warnings（非 failure）
+- **Schema validation mismatch (6 ops)**：spec 裡 path param 沒指定 `pattern`，schemathesis 隨機產生奇怪字串被 \`ValidateTenantID\` 拒絕。改善方法：在 swag 註解加 `format` / `pattern` 約束。
+- **Missing valid test data (5 ops)**：schemathesis 隨機產 ID 大多 404。改善方法：在 spec 加 `example` 或在 runner 用 `--data` 鎖固定值。
+
+兩者都是 warning（exit 0），目前不阻擋 CI。後續 follow-up TECH-DEBT 可逐步收斂。
 
 ## 相關文件
 
