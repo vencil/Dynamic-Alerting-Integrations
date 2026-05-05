@@ -278,7 +278,26 @@ func TestClose(t *testing.T) {
 	}
 
 	m.Submit(taskID, fn)
-	time.Sleep(50 * time.Millisecond)
+
+	// TD-024: replace blind 50ms sleep with a poll for "task is actually
+	// being run by a worker" — the original sleep was a hack to give the
+	// worker time to pick up the work item. Polling for TaskRunning is
+	// deterministic and fast.
+	pollDeadline := time.NewTimer(time.Second)
+	defer pollDeadline.Stop()
+	pollTick := time.NewTicker(time.Millisecond)
+	defer pollTick.Stop()
+waitRunning:
+	for {
+		select {
+		case <-pollDeadline.C:
+			t.Fatalf("task %q did not enter TaskRunning within 1s", taskID)
+		case <-pollTick.C:
+			if cur, ok := m.Get(taskID); ok && cur.Status == TaskRunning {
+				break waitRunning
+			}
+		}
+	}
 
 	// Close should not panic and should wait for workers.
 	err := m.Close()
