@@ -37,6 +37,9 @@ package-lock.json
 # E2E tests are the one Node.js component — allow their npm manifests
 !tests/e2e/package.json
 !tests/e2e/package-lock.json
+# TD-030: Portal ESM build + Vitest also has npm manifests
+!tools/portal/package.json
+!tools/portal/package-lock.json
 
 # --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔
