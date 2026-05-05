@@ -260,13 +260,9 @@ func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
 			{TenantID: "db-secret", Status: "ok"},
 		}, nil
 	})
-	// Wait for task completion.
-	for i := 0; i < 50; i++ {
-		if cur, ok := taskMgr.Get(task.ID); ok && cur.Status == async.TaskCompleted {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// TD-024: use shared pollUntilTerminal (defined in async_test.go) instead
+	// of the blind for/sleep loop.
+	pollUntilTerminal(t, taskMgr, task.ID, time.Second)
 	taskID := task.ID
 
 	req := newRequestWithChiParam("GET", "/api/v1/tasks/"+taskID, "id", taskID, nil)
@@ -305,12 +301,8 @@ func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
 	task := taskMgr.Submit("test-task", func(ctx context.Context) ([]async.TaskResult, error) {
 		return []async.TaskResult{{TenantID: "db-secret", Status: "ok"}}, nil
 	})
-	for i := 0; i < 50; i++ {
-		if cur, ok := taskMgr.Get(task.ID); ok && cur.Status == async.TaskCompleted {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// TD-024: use shared pollUntilTerminal (see async_test.go).
+	pollUntilTerminal(t, taskMgr, task.ID, time.Second)
 	taskID := task.ID
 
 	req := newRequestWithChiParam("GET", "/api/v1/tasks/"+taskID, "id", taskID, nil)
