@@ -128,6 +128,24 @@ class TestNonAllowlistImportRule:
     def test_allowlist_imports_pass(self, src):
         assert _scan(src) == []
 
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "import { TenantCard } from './tenant-manager/components/TenantCard.jsx';\n",
+            "import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';\n",
+            "import { Loading } from '../_common/components/Loading.jsx';\n",
+            "import { Foo, Bar } from './subdir/file.js';\n",
+        ],
+    )
+    def test_relative_imports_pass(self, src):
+        # TD-030 transitional: relative imports are rewritten by jsx-loader
+        # transformImports → window.__X reads, and consumed natively by the
+        # esbuild dist-bundle path. Both routes work, so the lint must NOT
+        # flag them. Removed from this allowance when jsx-loader retires
+        # (TD-030z) — at that point relative imports are the only mechanism
+        # and there's nothing to lint against.
+        assert _scan(src) == []
+
 
 # ---------------------------------------------------------------------------
 # Detection — require-call rule

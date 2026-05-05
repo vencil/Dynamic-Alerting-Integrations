@@ -27,39 +27,31 @@ dependencies: [
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 
+// TD-030 (Option C): orchestrator deps via ESM imports. Both browser
+// path (jsx-loader transforms relative imports → `const X = window.__X;`
+// reads — see jsx-loader.html transformImports) and dist-bundle path
+// (esbuild bundles them natively) work from the same source.
+import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenants.js';
+import { styles } from './tenant-manager/styles.js';
+import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
+import { useTenantData } from './tenant-manager/hooks/useTenantData.js';
+import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
+import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
+import { ApiNotificationToast } from './tenant-manager/components/ApiNotificationToast.jsx';
+import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
+import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
+import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
+import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
+import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
+import { useURLState } from './_common/hooks/useURLState.js';
+import { useVirtualGrid } from './_common/hooks/useVirtualGrid.js';
+import { Loading } from './_common/components/Loading.jsx';
+import { EmptyState } from './_common/components/EmptyState.jsx';
+
+// `t` and `__DA_LANG` stay as window globals (jsx-loader.html injects
+// them at host-page level for both legacy + dist-bundle paths — the
+// dist bundle inherits these from the host page that loaded it).
 const t = window.__t || ((zh, en) => en);
-
-// PR-2d (#153) decomposition: pull dep symbols from window. Each dep
-// file (front-matter `dependencies: [...]` block above) self-registers
-// via `window.__X = X;` at its tail — same pattern self-service-portal
-// uses for its tab modules. This is the only safe way to share names
-// because jsx-loader evaluates deps via `(0, eval)(code)` (indirect
-// eval), where `const`/`let` declarations are block-scoped to the eval
-// frame and don't leak to the surrounding global scope.
-const DEMO_TENANTS = window.__DEMO_TENANTS;
-const DEMO_GROUPS = window.__DEMO_GROUPS;
-const styles = window.__styles;
-const generateMaintenanceYaml = window.__generateMaintenanceYaml;
-const generateSilentModeYaml = window.__generateSilentModeYaml;
-const useTenantData = window.__useTenantData;
-const useModalFocusTrap = window.__useModalFocusTrap;
-const GroupSidebar = window.__GroupSidebar;
-const ApiNotificationToast = window.__ApiNotificationToast;
-const OverflowBanner = window.__OverflowBanner;
-
-const TenantCard = window.__TenantCard;
-const useDebouncedValue = window.__useDebouncedValue;
-const useURLState = window.__useURLState;
-
-const useVirtualGrid = window.__useVirtualGrid;
-// C-6 Smart Views (S#100): hook + panel pickup. Backend was already
-// query-criteria shaped in v2.5.0; this UI closes the v2.7.0 §C-3
-// frontend gap.
-const useSavedViews = window.__useSavedViews;
-const SavedViewsPanel = window.__SavedViewsPanel;
-// PR-portal-8: shared loading + empty-state UI from _common/components/.
-const Loading = window.__Loading;
-const EmptyState = window.__EmptyState;
 // PR-2b: tracked URL params. Module-level const so identity stays
 // stable across renders — passing `['q']` inline as a literal would
 // create a new array each render and trigger useURLState's internal

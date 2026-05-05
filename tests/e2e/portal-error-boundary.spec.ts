@@ -88,9 +88,15 @@ export default function Boom() {
       route.fulfill({ status: 404, body: 'not found' }),
     );
 
-    // tenant-manager depends on useDebouncedValue — so the 404 trips
-    // its dep load.
-    await page.goto('../assets/jsx-loader.html?component=tenant-manager');
+    // TD-030: tenant-manager is now ESM-bundled (loaded via dist path,
+    // bypassing legacy loadDependencies entirely — the 404 intercept
+    // wouldn't even fire). Use `simulate-preview` instead: it's still
+    // on the legacy path AND its frontmatter `dependencies:` block
+    // declares `_common/hooks/useDebouncedValue.js`, so the 404 trips
+    // its dep load. When TD-030f migrates simulate-preview, swap to
+    // any tool still on legacy. After TD-030z (jsx-loader retired),
+    // this test becomes obsolete and gets removed.
+    await page.goto('../assets/jsx-loader.html?component=simulate-preview');
 
     // showError replaces the loader's #loading with #error; the
     // dep-load message should be self-explanatory.

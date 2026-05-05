@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..');
 
-const TOOLS_DIR = resolve(REPO_ROOT, 'docs', 'interactive', 'tools');
+const ENTRIES_DIR = resolve(__dirname, 'entries');
 const DIST_DIR = resolve(REPO_ROOT, 'docs', 'assets', 'dist');
 
 /**
@@ -88,10 +88,9 @@ async function main() {
 
   await mkdir(DIST_DIR, { recursive: true });
 
-  const entryPaths = entries.map((name) => resolve(TOOLS_DIR, `${name}.jsx`));
   const config = {
     entryPoints: Object.fromEntries(
-      entries.map((name) => [name, resolve(TOOLS_DIR, `${name}.jsx`)]),
+      entries.map((name) => [name, resolve(ENTRIES_DIR, `${name}.entry.jsx`)]),
     ),
     bundle: true,
     format: 'esm',
@@ -102,17 +101,28 @@ async function main() {
     sourcemap: 'linked',
     jsx: 'automatic',
     jsxImportSource: 'react',
-    // React + ReactDOM are loaded as <script> tags from CDN by the host
-    // HTML page (preserving the existing zero-build runtime contract);
-    // mark them external so esbuild doesn't try to bundle them.
-    external: ['react', 'react-dom', 'react-dom/client'],
+    // React + ReactDOM are bundled into each tool's dist (~140KB) so
+    // browser pages can `<script type="module" src="dist/X.js">` without
+    // an import map or CDN dependency. Per-tool React instance is fine
+    // because each tool is its own page (no cross-tool sharing).
     plugins: [stripFrontmatterPlugin()],
+    // Source files under docs/interactive/ have no sibling node_modules;
+    // their ancestor walk doesn't reach tools/portal/node_modules either.
+    // Explicit nodePaths makes esbuild resolve `react` / `react-dom/client`
+    // / etc. from the build harness's deps regardless of where the
+    // importing file lives in the repo tree.
+    nodePaths: [resolve(__dirname, 'node_modules')],
+    // Production-mode React: NODE_ENV=production strips DevTools hooks
+    // and dev-only warnings, trimming the bundle by ~85% (1.1MB → ~150KB).
+    // Watch mode (--watch) runs unminified for clearer stack traces.
+    define: { 'process.env.NODE_ENV': '"production"' },
+    minify: !watch,
     logLevel: 'info',
   };
 
   console.log(`[portal-build] Bundling ${entries.length} entries:`);
   for (const e of entries) {
-    console.log(`  - ${e}.jsx → dist/${e}.js`);
+    console.log(`  - entries/${e}.entry.jsx → dist/${e}.js`);
   }
 
   if (watch) {
