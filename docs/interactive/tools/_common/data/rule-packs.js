@@ -77,3 +77,7 @@ function getAllMetricKeys(selectedPacks) {
 window.__RULE_PACK_DATA = RULE_PACK_DATA;
 window.__CATEGORY_LABELS = CATEGORY_LABELS;
 window.__getAllMetricKeys = getAllMetricKeys;
+
+// TD-030c: ESM exports for esbuild bundle + Vitest. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys };

@@ -47,3 +47,10 @@ function useDebouncedValue(value, delayMs) {
 
 // Register on window for orchestrator pickup.
 window.__useDebouncedValue = useDebouncedValue;
+
+// TD-030c: ESM export for esbuild bundle + Vitest. Browser jsx-loader
+// strips this line before script-mode eval (see jsx-loader.html). Both
+// `window.__X` and `export { X }` removed in TD-030z when jsx-loader
+// retires entirely.
+// <!-- jsx-loader-compat: ignore -->
+export { useDebouncedValue };

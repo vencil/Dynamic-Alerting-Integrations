@@ -139,3 +139,8 @@ class ErrorBoundary extends Component {
 }
 
 window.__ErrorBoundary = ErrorBoundary;
+
+// TD-030c: ESM export for esbuild bundle + Vitest. Both `window.__X`
+// and `export { X }` removed in TD-030z when jsx-loader retires.
+// <!-- jsx-loader-compat: ignore -->
+export { ErrorBoundary };

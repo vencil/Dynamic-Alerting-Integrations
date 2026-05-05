@@ -121,3 +121,4 @@ docs/internal/_project-structure-audit-*
 # See docs/internal/windows-mcp-playbook.md §FUSE Phantom Lock 防治.
 CUsersvencs*
 /C:\*
+.vite/

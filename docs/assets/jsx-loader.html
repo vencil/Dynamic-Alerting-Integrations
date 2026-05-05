@@ -748,6 +748,13 @@ window.addEventListener('pageshow', function(e) {
       // Remove export default (deps register on window globals)
       code = code.replace(/^export\s+default\s+function\s+(\w+)/m, 'function $1');
       code = code.replace(/^export\s+default\s+(\w+)\s*;?\s*$/m, '');
+      // TD-030 transitional sweep: strip named-export statements
+      // (`export { A, B };`). Browser path uses window.__X registrations
+      // (which remain in the file); the export is for esbuild + Vitest.
+      // Babel-standalone script mode treats `export {}` as a syntax error,
+      // so without this line the file fails to parse here. Removed in
+      // TD-030z when jsx-loader retires entirely.
+      code = code.replace(/^\s*export\s*\{[^}]*\}\s*;?\s*$/gm, '');
       // Babel transform for JSX files
       if (url.match(/\.jsx(\?.*)?$/)) {
         var result = Babel.transform(code, { presets: ['react'] });
