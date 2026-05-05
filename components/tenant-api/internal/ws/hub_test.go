@@ -10,6 +10,29 @@ import (
 	"time"
 )
 
+// waitForClientCount polls h.ClientCount() until it matches want or the
+// timeout expires. Mirrors the ticker-with-deadline pattern in
+// async/taskmanager_test.go to replace blind time.Sleep — see
+// TECH-DEBT-019.
+func waitForClientCount(t *testing.T, h *Hub, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		if h.ClientCount() == want {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("waitForClientCount: want %d clients within %v, got %d", want, timeout, h.ClientCount())
+		case <-tick.C:
+		}
+	}
+}
+
 func TestSubscribeUnsubscribe(t *testing.T) {
 	h := NewHub()
 
@@ -184,8 +207,8 @@ func TestSSEEndpoint(t *testing.T) {
 		close(done)
 	}()
 
-	// Give the handler time to start
-	time.Sleep(100 * time.Millisecond)
+	// Wait until the handler has subscribed (no time.Sleep — see TECH-DEBT-019).
+	waitForClientCount(t, h, 1, time.Second)
 
 	// Broadcast an event
 	evt := Event{
@@ -196,11 +219,9 @@ func TestSSEEndpoint(t *testing.T) {
 	}
 	h.Broadcast(evt)
 
-	// Give the event time to be sent
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel the context to stop the handler, then wait for it to finish
-	// so we don't race on reading the ResponseRecorder body.
+	// Cancel the context to stop the handler. ServeHTTP drains any pending
+	// events from the channel before returning (see hub.go), so the body
+	// is guaranteed to contain the broadcast event by the time done fires.
 	cancel()
 
 	select {
@@ -280,8 +301,8 @@ func TestSSEStreamingFormat(t *testing.T) {
 		close(done)
 	}()
 
-	// Give handler time to initialize
-	time.Sleep(100 * time.Millisecond)
+	// Wait until the handler has subscribed (no time.Sleep — see TECH-DEBT-019).
+	waitForClientCount(t, h, 1, time.Second)
 
 	// Broadcast an event
 	evt := Event{
@@ -291,10 +312,8 @@ func TestSSEStreamingFormat(t *testing.T) {
 	}
 	h.Broadcast(evt)
 
-	// Give event time to be sent
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel the context to stop the handler
+	// Cancel the context to stop the handler. ServeHTTP drains pending
+	// events before returning, so the body is complete by the time done fires.
 	cancel()
 
 	// Wait for handler to finish
