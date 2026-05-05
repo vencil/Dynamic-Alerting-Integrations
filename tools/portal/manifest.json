@@ -1,4 +1,4 @@
 {
   "_comment": "Portal build manifest — TECH-DEBT-030 Option C. Each entry is the basename of a `tools/portal/entries/<name>.entry.jsx` file (the entry script imports the orchestrator + ErrorBoundary and mounts to #root). When TD-030z retires jsx-loader, this list contains all 46 top-level tools.",
-  "entries": ["tenant-manager"]
+  "entries": ["tenant-manager", "alert-builder", "alert-simulator", "alert-noise-analyzer", "alert-timeline"]
 }
