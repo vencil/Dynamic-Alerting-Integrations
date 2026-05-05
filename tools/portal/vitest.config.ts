@@ -59,6 +59,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@portal-tools': resolve(REPO_ROOT, 'docs/interactive/tools'),
+      // Test specs in tests/portal/ are outside Vitest root and have no
+      // sibling node_modules. Force resolution to tools/portal/node_modules.
+      'react': resolve(__dirname, 'node_modules/react'),
+      'react/jsx-runtime': resolve(__dirname, 'node_modules/react/jsx-runtime.js'),
+      'react-dom': resolve(__dirname, 'node_modules/react-dom'),
+      'react-dom/client': resolve(__dirname, 'node_modules/react-dom/client.js'),
+      '@testing-library/react': resolve(__dirname, 'node_modules/@testing-library/react'),
+      '@testing-library/jest-dom': resolve(__dirname, 'node_modules/@testing-library/jest-dom'),
+      '@testing-library/jest-dom/vitest': resolve(__dirname, 'node_modules/@testing-library/jest-dom/vitest.js'),
     },
   },
 });

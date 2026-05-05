@@ -48,3 +48,7 @@ function OverflowBanner({ overflow, t }) {
 
 // Register on window for orchestrator pickup.
 window.__OverflowBanner = OverflowBanner;
+
+// TD-030b: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { OverflowBanner };

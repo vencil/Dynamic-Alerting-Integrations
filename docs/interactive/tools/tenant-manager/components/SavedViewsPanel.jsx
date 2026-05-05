@@ -393,3 +393,9 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
 
 // Register on window for orchestrator pickup.
 window.__SavedViewsPanel = SavedViewsPanel;
+
+// TD-030b: ESM export. `filtersToViewMap` is the pure utility used by
+// the panel's "Save current..." flow — first-batch unit-test target.
+// Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { SavedViewsPanel, filtersToViewMap };
