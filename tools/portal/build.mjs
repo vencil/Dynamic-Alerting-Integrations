@@ -115,7 +115,19 @@ async function main() {
     // Production-mode React: NODE_ENV=production strips DevTools hooks
     // and dev-only warnings, trimming the bundle by ~85% (1.1MB → ~150KB).
     // Watch mode (--watch) runs unminified for clearer stack traces.
-    define: { 'process.env.NODE_ENV': '"production"' },
+    //
+    // TD-031 fix: free `React` references in component files (the
+    // `const { useState } = React;` pattern used across the migrated
+    // subtree) must resolve to the BUNDLED React, not the host page's
+    // CDN React. Without this, the host's React.useCallback fires with
+    // a null dispatcher (the bundled React's dispatcher is set, but the
+    // CDN one is unused) — TypeError: Cannot read properties of null.
+    // entry script populates `globalThis.__bundledReact` from its
+    // `import React from 'react'` statement.
+    define: {
+      'process.env.NODE_ENV': '"production"',
+      'React': 'globalThis.__bundledReact',
+    },
     minify: !watch,
     logLevel: 'info',
   };

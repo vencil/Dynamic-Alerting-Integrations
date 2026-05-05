@@ -552,7 +552,7 @@ window.addEventListener('pageshow', function(e) {
     // dist-bundle path code present at all (e.g. line-count, frontmatter,
     // cache-busting hash drift, or some other side-channel). If green,
     // the issue is specifically when the IF branch fires.
-    var ESM_TOOLS = [];
+    var ESM_TOOLS = ['tenant-manager'];
     if (ESM_TOOLS.indexOf(name) >= 0) {
       // Migrated tool: load dist bundle directly. No HEAD probe.
       var distUrl = '../assets/dist/' + name + '.js';
