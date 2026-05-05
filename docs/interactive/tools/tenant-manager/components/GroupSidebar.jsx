@@ -148,3 +148,7 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
 
 // Register on window for orchestrator pickup.
 window.__GroupSidebar = GroupSidebar;
+
+// TD-030b: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { GroupSidebar };

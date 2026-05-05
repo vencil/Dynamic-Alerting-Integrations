@@ -47,3 +47,7 @@ function generateSilentModeYaml(tenants) {
 // Register on window for orchestrator pickup.
 window.__generateMaintenanceYaml = generateMaintenanceYaml;
 window.__generateSilentModeYaml = generateSilentModeYaml;
+
+// TD-030b: ESM exports. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { generateMaintenanceYaml, generateSilentModeYaml };

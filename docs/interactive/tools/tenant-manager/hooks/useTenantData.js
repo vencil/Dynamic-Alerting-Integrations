@@ -271,3 +271,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
 
 // Register on window for orchestrator pickup.
 window.__useTenantData = useTenantData;
+
+// TD-030b: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { useTenantData };

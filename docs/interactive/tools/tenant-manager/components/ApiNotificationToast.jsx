@@ -66,3 +66,7 @@ function ApiNotificationToast({ notification, onDismiss, t }) {
 
 // Register on window for orchestrator pickup.
 window.__ApiNotificationToast = ApiNotificationToast;
+
+// TD-030b: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { ApiNotificationToast };
