@@ -164,7 +164,14 @@ def scan_source(path: Path, source: str) -> list[JsxLoaderCompatFinding]:
         m = _IMPORT_RE.match(line)
         if m:
             source_name = m.group(1)
-            if source_name not in _ALLOWED_IMPORT_SOURCES:
+            # TD-030 transitional: relative imports (`./` or `../`) are
+            # rewritten by jsx-loader.html transformImports → window.__X
+            # reads. The dist-bundle path uses them natively. Both work.
+            # Removed when jsx-loader retires (TD-030z) — at that point
+            # relative imports are the only path and this rule reduces
+            # to "no bare specifiers other than the React allowlist".
+            is_relative = source_name.startswith("./") or source_name.startswith("../")
+            if source_name not in _ALLOWED_IMPORT_SOURCES and not is_relative:
                 findings.append(
                     JsxLoaderCompatFinding(
                         path=path,

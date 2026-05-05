@@ -543,26 +543,53 @@ window.addEventListener('pageshow', function(e) {
       return c.toUpperCase();
     }) + ' — Dynamic Alerting';
 
-    fetch(componentPath)
-      .then(function(r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
-        return r.text();
-      })
-      .then(function(jsx) {
-        // Load dependencies before rendering main component
-        var basePath = componentPath.substring(0, componentPath.lastIndexOf('/'));
-        var deps = parseDependencies(jsx, basePath);
-        if (deps.length > 0) {
-          console.log('[DA] Loading ' + deps.length + ' dependencies for ' + componentPath);
-        }
-        return loadDependencies(deps).then(function() {
-          document.getElementById('loading').style.display = 'none';
-          renderJSX(jsx);
+    // TD-030 experiment 2: same IF/ELSE structure as before but with
+    // ESM_TOOLS empty so the IF branch never fires for any test. This
+    // isolates whether the *presence* of the IF/ELSE control flow
+    // matters (vs the module-script-append code only running for migrated
+    // tools, which none of the CI tests actually trigger). If this run
+    // still hangs at test 81, the issue is fundamental to having the
+    // dist-bundle path code present at all (e.g. line-count, frontmatter,
+    // cache-busting hash drift, or some other side-channel). If green,
+    // the issue is specifically when the IF branch fires.
+    var ESM_TOOLS = [];
+    if (ESM_TOOLS.indexOf(name) >= 0) {
+      // Migrated tool: load dist bundle directly. No HEAD probe.
+      var distUrl = '../assets/dist/' + name + '.js';
+      var script = document.createElement('script');
+      script.type = 'module';
+      script.src = distUrl;
+      script.onload = function() {
+        var loading = document.getElementById('loading');
+        if (loading) loading.style.display = 'none';
+        console.log('[DA] Loaded ESM bundle: ' + distUrl);
+      };
+      script.onerror = function() {
+        showError('Failed to load ESM bundle: ' + distUrl);
+      };
+      document.body.appendChild(script);
+    } else {
+      // Legacy JSX path (jsx-loader's original dep-resolve + Babel eval).
+      fetch(componentPath)
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + componentPath);
+          return r.text();
+        })
+        .then(function(jsx) {
+          var basePath = componentPath.substring(0, componentPath.lastIndexOf('/'));
+          var deps = parseDependencies(jsx, basePath);
+          if (deps.length > 0) {
+            console.log('[DA] Loading ' + deps.length + ' dependencies for ' + componentPath);
+          }
+          return loadDependencies(deps).then(function() {
+            document.getElementById('loading').style.display = 'none';
+            renderJSX(jsx);
+          });
+        })
+        .catch(function(err) {
+          showError('Failed to load component: ' + err.message);
         });
-      })
-      .catch(function(err) {
-        showError('Failed to load component: ' + err.message);
-      });
+    }
   } else {
     showError('No component or flow specified. Use ?component=playground.jsx or ?flow=onboarding');
   }
@@ -699,6 +726,25 @@ window.addEventListener('pageshow', function(e) {
                  ') || window.__iconFallback("' + icon + '");';
         });
         return lines.join('\n');
+      }
+    );
+    // TD-030 transitional sweep: relative imports `import { X, Y } from './path';`
+    // get rewritten to `const X = window.__X; const Y = window.__Y;` reads.
+    // The deps are pre-loaded by jsx-loader's own dependency mechanism, so
+    // window.__X is already populated. Dist-bundle path (esbuild) handles
+    // imports natively and never reaches this transform. Removed in TD-030z.
+    source = source.replace(
+      /^import\s+\{([^}]*)\}\s*from\s*['"][.\/][^'"]+['"];?\s*$/gm,
+      function(_, names) {
+        var items = names.split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+        return items.map(function(n) {
+          // Handle `as` aliasing: `Foo as Bar` → window.__Foo bound to local Bar.
+          var asMatch = n.match(/^(\w+)\s+as\s+(\w+)$/);
+          if (asMatch) {
+            return 'const ' + asMatch[2] + ' = window.__' + asMatch[1] + ';';
+          }
+          return 'const ' + n + ' = window.__' + n + ';';
+        }).join('\n');
       }
     );
     return source;
