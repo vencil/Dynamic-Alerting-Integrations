@@ -47,29 +47,43 @@ const t = window.__t || ((zh, en) => en);
  * comment.
  * ──────────────────────────────────────────────────────────────────── */
 
-// Data + validation + sim — all loaded via dependencies above.
-const RULE_PACK_DATA = window.__RULE_PACK_DATA;
-const CATEGORY_LABELS = window.__CATEGORY_LABELS;
-const getAllMetricKeys = window.__getAllMetricKeys;
-
-const RESERVED_KEYS = window.__RESERVED_KEYS;
-const RESERVED_PREFIXES = window.__RESERVED_PREFIXES;
-const RECEIVER_TYPES = window.__RECEIVER_TYPES;
-const RECEIVER_REQUIRED = window.__RECEIVER_REQUIRED;
-const TIMING_GUARDRAILS = window.__TIMING_GUARDRAILS;
-const UNSAFE_KEYS = window.__UNSAFE_KEYS;
-const MAX_YAML_SIZE = window.__MAX_YAML_SIZE;
-
-const ROUTING_DEFAULTS = window.__ROUTING_DEFAULTS;
-const ROUTING_PROFILES = window.__ROUTING_PROFILES;
-const DOMAIN_POLICIES = window.__DOMAIN_POLICIES;
-
-const parseDuration = window.__parseDuration;
-const parseYaml = window.__parseYaml;
-const generateSampleYaml = window.__generateSampleYaml;
-const validateConfig = window.__validateConfig;
-const simulateAlerts = window.__simulateAlerts;
-const resolveRoutingLayers = window.__resolveRoutingLayers;
+// TD-034: replace 19 module-scope `window.__X` reads with explicit
+// ESM imports. Same pattern that broke saved-views / tenant-manager
+// in TD-033 (PR-E rebuild reshuffled chunks → consumer chunk loaded
+// before producer chunk → undefined). These were latent — the
+// data-providing modules happened to evaluate first under the
+// previous chunk graph — but a future rebuild could re-expose them.
+// Importing directly removes the latent risk and the implicit
+// ordering dependency.
+import {
+  RULE_PACK_DATA,
+  CATEGORY_LABELS,
+  getAllMetricKeys,
+} from './_common/data/rule-packs.js';
+import {
+  RESERVED_KEYS,
+  RESERVED_PREFIXES,
+  RECEIVER_TYPES,
+  RECEIVER_REQUIRED,
+  TIMING_GUARDRAILS,
+  UNSAFE_KEYS,
+  MAX_YAML_SIZE,
+} from './_common/validation/constants.js';
+import {
+  ROUTING_DEFAULTS,
+  ROUTING_PROFILES,
+  DOMAIN_POLICIES,
+} from './_common/data/routing-profiles.js';
+import {
+  parseDuration,
+  parseYaml,
+} from './_common/validation/yaml-parser.js';
+import {
+  generateSampleYaml,
+  validateConfig,
+  simulateAlerts,
+  resolveRoutingLayers,
+} from './_common/sim/alert-engine.js';
 
 /* ── Metric key autocomplete dropdown ── */
 /* Kept inline: alert-builder-tab UI only, not generic enough for

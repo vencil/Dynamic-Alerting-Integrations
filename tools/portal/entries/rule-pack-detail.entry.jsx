@@ -1,4 +1,3 @@
-import './_setup-globals.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import RulePackDetail from '../../../docs/interactive/tools/rule-pack-detail.jsx';
