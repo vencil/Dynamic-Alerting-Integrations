@@ -9,18 +9,17 @@ dependencies: [portal-shared.jsx, YamlValidatorTab.jsx, AlertPreviewTab.jsx, Rou
 ---
 
 import React, { useState } from 'react';
-
-const t = window.__t || ((zh, en) => en);
-
-/* ── Import tab components from dependency-loaded modules ── */
-const YamlValidatorTab = window.__YamlValidatorTab;
-const AlertPreviewTab = window.__AlertPreviewTab;
-const RoutingTraceTab = window.__RoutingTraceTab;
+// TD-030f: ESM imports — tabs + ErrorBoundary.
+import { YamlValidatorTab } from './YamlValidatorTab.jsx';
+import { AlertPreviewTab } from './AlertPreviewTab.jsx';
+import { RoutingTraceTab } from './RoutingTraceTab.jsx';
 // PR-portal-11: each tab gets its own boundary so a bad render in
 // one tab doesn't crash the others. Loader-level boundary
 // (PR-portal-2) catches whole-tool failures; this is a per-tab
 // safety net for the multi-tab tools.
-const ErrorBoundary = window.__ErrorBoundary;
+import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
+
+const t = window.__t || ((zh, en) => en);
 
 /* ── Main Portal Component ── */
 const TABS = [

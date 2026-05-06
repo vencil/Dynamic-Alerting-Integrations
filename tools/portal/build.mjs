@@ -41,6 +41,38 @@ const DIST_DIR = resolve(REPO_ROOT, 'docs', 'assets', 'dist');
  * exactly the same regex (closing `---` anchored to its own line) so a
  * file that loaded under jsx-loader still loads under esbuild.
  */
+/**
+ * esbuild plugin that virtualizes `lucide-react` imports to read from
+ * `window.lucideReact` (loaded by the host jsx-loader page via CDN).
+ * Avoids bundling the full lucide-react package (which would add ~200KB
+ * + redundant icons) — host already has it. TD-030f.
+ */
+function lucideReactGlobalsPlugin() {
+  return {
+    name: 'lucide-react-globals',
+    setup(build) {
+      build.onResolve({ filter: /^lucide-react$/ }, (args) => ({
+        path: args.path,
+        namespace: 'lucide-virtual',
+      }));
+      build.onLoad({ filter: /.*/, namespace: 'lucide-virtual' }, () => ({
+        contents: [
+          'const lucide = (typeof window !== "undefined" && window.lucideReact) || {};',
+          'const fallback = (name) => (typeof window !== "undefined" && window.__iconFallback) ? window.__iconFallback(name) : null;',
+          'export default lucide;',
+          'export const Copy = lucide.Copy || fallback("Copy");',
+          'export const ChevronDown = lucide.ChevronDown || fallback("ChevronDown");',
+          'export const ChevronRight = lucide.ChevronRight || fallback("ChevronRight");',
+          'export const Play = lucide.Play || fallback("Play");',
+          'export const RotateCcw = lucide.RotateCcw || fallback("RotateCcw");',
+          'export const Zap = lucide.Zap || fallback("Zap");',
+        ].join('\n'),
+        loader: 'js',
+      }));
+    },
+  };
+}
+
 function stripFrontmatterPlugin() {
   return {
     name: 'strip-yaml-frontmatter',
@@ -105,7 +137,7 @@ async function main() {
     // browser pages can `<script type="module" src="dist/X.js">` without
     // an import map or CDN dependency. Per-tool React instance is fine
     // because each tool is its own page (no cross-tool sharing).
-    plugins: [stripFrontmatterPlugin()],
+    plugins: [lucideReactGlobalsPlugin(), stripFrontmatterPlugin()],
     // Source files under docs/interactive/ have no sibling node_modules;
     // their ancestor walk doesn't reach tools/portal/node_modules either.
     // Explicit nodePaths makes esbuild resolve `react` / `react-dom/client`

@@ -552,7 +552,7 @@ window.addEventListener('pageshow', function(e) {
     // dist-bundle path code present at all (e.g. line-count, frontmatter,
     // cache-busting hash drift, or some other side-channel). If green,
     // the issue is specifically when the IF branch fires.
-    var ESM_TOOLS = ['tenant-manager', 'alert-builder', 'alert-simulator', 'alert-noise-analyzer', 'alert-timeline', 'operator-setup-wizard', 'rbac-setup-wizard', 'cicd-setup-wizard', 'deployment-wizard', 'master-onboarding'];
+    var ESM_TOOLS = ['tenant-manager', 'alert-builder', 'alert-simulator', 'alert-noise-analyzer', 'alert-timeline', 'operator-setup-wizard', 'rbac-setup-wizard', 'cicd-setup-wizard', 'deployment-wizard', 'master-onboarding', 'architecture-quiz', 'capacity-planner', 'cli-playground', 'component-health', 'config-diff', 'config-lint', 'cost-estimator', 'dependency-graph', 'glossary', 'health-dashboard', 'migration-roi-calculator', 'migration-simulator', 'multi-tenant-comparison', 'notification-previewer', 'onboarding-checklist', 'platform-demo', 'platform-health', 'playground', 'promql-tester', 'release-notes-generator', 'roi-calculator', 'routing-trace', 'rule-pack-detail', 'rule-pack-matrix', 'rule-pack-selector', 'runbook-viewer', 'schema-explorer', 'self-service-portal', 'simulate-preview', 'template-gallery', 'threshold-calculator', 'threshold-heatmap'];
     if (ESM_TOOLS.indexOf(name) >= 0) {
       // Migrated tool: load dist bundle directly. No HEAD probe.
       var distUrl = '../assets/dist/' + name + '.js';

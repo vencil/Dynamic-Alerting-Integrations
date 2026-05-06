@@ -58,7 +58,12 @@ export default function Boom() {
   throw new Error('intentional boundary test failure');
 }
 `;
-    await page.route('**/playground.jsx', (route) =>
+    // TD-030f: use a fictitious tool name not in ESM_TOOLS so jsx-loader
+    // takes the legacy fetch path. Real tools are now mostly ESM-bundled —
+    // mocking their .jsx URL no longer fires (dist bundle pre-empts).
+    // jsx-loader's bare-key resolution falls through to
+    // `../interactive/tools/<name>.jsx` for unknown names.
+    await page.route('**/__test_render_error__.jsx', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'text/plain; charset=utf-8',
@@ -66,7 +71,7 @@ export default function Boom() {
       }),
     );
 
-    await page.goto('../assets/jsx-loader.html?component=playground');
+    await page.goto('../assets/jsx-loader.html?component=__test_render_error__');
 
     await expect(page.getByTestId('error-boundary-fallback')).toBeVisible({
       timeout: 15000,
@@ -81,22 +86,33 @@ export default function Boom() {
   });
 
   test('dep 404 — loadDependencies surfaces wrapped error', async ({ page }) => {
-    // Intercept the loader's fetch for any _common/ dep and serve a 404
-    // so loadDependencies hits the catch path; the wrapped error from
-    // PR-portal-2 should then arrive at showError.
+    // TD-030f: all real tools now ESM-bundled, so we mock BOTH the tool
+    // entry (with a frontmatter dependency on _common/hooks/...) AND
+    // the dep itself as 404. jsx-loader takes legacy fetch path for the
+    // unknown tool name, parses deps, tries to load the dep, hits 404,
+    // → showError fires. After TD-030z (jsx-loader retired), this test
+    // becomes obsolete and gets removed.
+    const TOOL_WITH_DEP = `---
+title: "Boundary test fixture — dep 404"
+dependencies: [
+  "_common/hooks/useDebouncedValue.js"
+]
+---
+import React from 'react';
+export default function NoOp() { return null; }
+`;
+    await page.route('**/__test_dep_404__.jsx', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/plain; charset=utf-8',
+        body: TOOL_WITH_DEP,
+      }),
+    );
     await page.route('**/_common/hooks/useDebouncedValue.js', (route) =>
       route.fulfill({ status: 404, body: 'not found' }),
     );
 
-    // TD-030: tenant-manager is now ESM-bundled (loaded via dist path,
-    // bypassing legacy loadDependencies entirely — the 404 intercept
-    // wouldn't even fire). Use `simulate-preview` instead: it's still
-    // on the legacy path AND its frontmatter `dependencies:` block
-    // declares `_common/hooks/useDebouncedValue.js`, so the 404 trips
-    // its dep load. When TD-030f migrates simulate-preview, swap to
-    // any tool still on legacy. After TD-030z (jsx-loader retired),
-    // this test becomes obsolete and gets removed.
-    await page.goto('../assets/jsx-loader.html?component=simulate-preview');
+    await page.goto('../assets/jsx-loader.html?component=__test_dep_404__');
 
     // showError replaces the loader's #loading with #error; the
     // dep-load message should be self-explanatory.

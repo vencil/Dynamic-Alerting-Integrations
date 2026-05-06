@@ -353,3 +353,7 @@ function RoutingTraceTab() {
 
 /* Register for dependency loading */
 window.__RoutingTraceTab = RoutingTraceTab;
+
+// TD-030f: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { RoutingTraceTab };
