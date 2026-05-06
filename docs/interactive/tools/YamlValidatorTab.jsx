@@ -151,3 +151,7 @@ function YamlValidatorTab() {
 
 /* Register for dependency loading */
 window.__YamlValidatorTab = YamlValidatorTab;
+
+// TD-030f: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { YamlValidatorTab };

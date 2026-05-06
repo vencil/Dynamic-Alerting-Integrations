@@ -1,4 +1,17 @@
 {
-  "_comment": "Portal build manifest — TECH-DEBT-030 Option C. Each entry is the basename of a `tools/portal/entries/<name>.entry.jsx` file (the entry script imports the orchestrator + ErrorBoundary and mounts to #root). When TD-030z retires jsx-loader, this list contains all 46 top-level tools.",
-  "entries": ["tenant-manager", "alert-builder", "alert-simulator", "alert-noise-analyzer", "alert-timeline", "operator-setup-wizard", "rbac-setup-wizard", "cicd-setup-wizard", "deployment-wizard", "master-onboarding"]
+  "_comment": "Portal build manifest — TECH-DEBT-030 Option C. Each entry is the basename of a `tools/portal/entries/<name>.entry.jsx` file. When TD-030z retires jsx-loader, this list contains all migrated tools.",
+  "entries": [
+    "tenant-manager",
+    "alert-builder", "alert-simulator", "alert-noise-analyzer", "alert-timeline",
+    "operator-setup-wizard", "rbac-setup-wizard", "cicd-setup-wizard", "deployment-wizard", "master-onboarding",
+    "architecture-quiz", "capacity-planner", "cli-playground", "component-health",
+    "config-diff", "config-lint", "cost-estimator", "dependency-graph",
+    "glossary", "health-dashboard", "migration-roi-calculator", "migration-simulator",
+    "multi-tenant-comparison", "notification-previewer", "onboarding-checklist",
+    "platform-demo", "platform-health", "playground", "promql-tester",
+    "release-notes-generator", "roi-calculator", "routing-trace",
+    "rule-pack-detail", "rule-pack-matrix", "rule-pack-selector",
+    "runbook-viewer", "schema-explorer", "self-service-portal",
+    "simulate-preview", "template-gallery", "threshold-calculator", "threshold-heatmap"
+  ]
 }

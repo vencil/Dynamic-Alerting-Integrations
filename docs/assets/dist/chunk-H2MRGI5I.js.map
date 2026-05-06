@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["lucide-virtual:lucide-react"],
+  "sourcesContent": ["const lucide = (typeof window !== \"undefined\" && window.lucideReact) || {};\nconst fallback = (name) => (typeof window !== \"undefined\" && window.__iconFallback) ? window.__iconFallback(name) : null;\nexport default lucide;\nexport const Copy = lucide.Copy || fallback(\"Copy\");\nexport const ChevronDown = lucide.ChevronDown || fallback(\"ChevronDown\");\nexport const ChevronRight = lucide.ChevronRight || fallback(\"ChevronRight\");\nexport const Play = lucide.Play || fallback(\"Play\");\nexport const RotateCcw = lucide.RotateCcw || fallback(\"RotateCcw\");\nexport const Zap = lucide.Zap || fallback(\"Zap\");"],
+  "mappings": "AAAA,IAAMA,EAAU,OAAO,OAAW,KAAe,OAAO,aAAgB,CAAC,EACnEC,EAAYC,GAAU,OAAO,OAAW,KAAe,OAAO,eAAkB,OAAO,eAAeA,CAAI,EAAI,KAE7G,IAAMC,EAAOC,EAAO,MAAQC,EAAS,MAAM,EACrCC,EAAcF,EAAO,aAAeC,EAAS,aAAa,EAC1DE,EAAeH,EAAO,cAAgBC,EAAS,cAAc,EAC7DG,EAAOJ,EAAO,MAAQC,EAAS,MAAM,EACrCI,EAAYL,EAAO,WAAaC,EAAS,WAAW,EACpDK,EAAMN,EAAO,KAAOC,EAAS,KAAK",
+  "names": ["lucide", "fallback", "name", "Copy", "lucide", "fallback", "ChevronDown", "ChevronRight", "Play", "RotateCcw", "Zap"]
+}

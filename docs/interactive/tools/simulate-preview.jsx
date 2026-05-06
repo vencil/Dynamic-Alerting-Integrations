@@ -12,20 +12,13 @@ dependencies: [
 ---
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+// TD-030f: ESM imports for shared hooks/components (PR-portal-1+8).
+// jsx-loader transformImports rewrites to window reads on legacy path.
+import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
+import { Loading } from './_common/components/Loading.jsx';
 
 /* ── i18n + repo helpers ───────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
-
-/* ── Shared useDebouncedValue (PR-portal-1: promoted to _common/) ────
- *
- * Loaded via front-matter `dependencies:` block above; registers as
- * window.__useDebouncedValue. Pre-PR-portal-1 this file inlined an
- * 8-line copy because Tenant Manager owned the only hook copy and a
- * cross-tool dep felt heavyweight. With _common/hooks/ now hosting
- * the canonical hook, the inline copy is removed.
- * ──────────────────────────────────────────────────────────────────── */
-const useDebouncedValue = window.__useDebouncedValue;
-const Loading = window.__Loading;
 
 /* ── URL param helpers (S#94 deep-link pattern reuse) ────────────────
  *
