@@ -11,10 +11,15 @@ dependencies: [
 ---
 
 import React, { useState, useMemo, useEffect } from 'react';
+// TD-032e fix: ESM dist-bundle path doesn't pre-populate window.__Loading
+// before this module evaluates (the entry imports TemplateGallery
+// directly, not Loading), so the legacy `window.__Loading` lookup
+// returned undefined and React threw #130 on first render. Import the
+// named ESM export instead. The jsx-loader fallback path is gone
+// (TD-030z); window.__Loading is no longer authoritative.
+import { Loading } from './_common/components/Loading.jsx';
 
 const t = window.__t || ((zh, en) => en);
-// PR-portal-8: shared spinner replaces the inline 8x8 border-spin div.
-const Loading = window.__Loading;
 
 /* ── Fallback pack list (used if JSON fetch fails) ── */
 const FALLBACK_PACKS = [
