@@ -27,7 +27,15 @@ jobs:
   test:
     name: Smoke Tests (Chromium)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # TD-032e: bumped 10 → 15 min after PR-C/D/E added 56 specs (136 → 192).
+    # Tried --workers=2 first to keep 10 min cap; that cut runtime ~50% but
+    # introduced races against the single-threaded Python http.server (39
+    # failures observed locally, mostly tenant-manager specs that mock
+    # /api/v1 routes — fine at workers=1). Sticking with workers=1 +
+    # bumped cap is the safer trade. Revisit if count grows past ~300:
+    # at that point either swap to a multi-worker portal server or shard
+    # the test matrix across CI jobs.
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
@@ -82,7 +90,15 @@ jobs:
 
       - name: Run Playwright smoke tests
         working-directory: tests/e2e
-        run: npm test
+        # TD-032e debug-capability improvement:
+        #   --reporter=list,html  swap dots-only progress for inline test
+        #                names so CI failures are tagged with the spec
+        #                immediately (you can read them straight from the
+        #                gh run log without downloading the html report);
+        #                keep html for after-action artifact upload.
+        # Workers stay at 1 (Playwright config default for CI) — see the
+        # job-level timeout-minutes comment for why workers=2 was rejected.
+        run: npm test -- --reporter=list,html
         env:
           CI: 'true'
           BASE_URL: 'http://localhost:8080/interactive/'
