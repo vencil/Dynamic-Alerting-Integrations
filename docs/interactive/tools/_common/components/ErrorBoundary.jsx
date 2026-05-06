@@ -42,7 +42,7 @@ purpose: |
   Closure deps: none. Pure class component using React global.
 ---
 
-const { Component } = React;
+import { Component } from "react";  // TD-033 ESM import
 
 const FALLBACK_BOX_STYLE = {
   padding: '24px',

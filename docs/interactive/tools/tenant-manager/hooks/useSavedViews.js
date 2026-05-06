@@ -54,7 +54,7 @@ purpose: |
   controls. A 403 response from PUT/DELETE bubbles up via onError.
 ---
 
-const { useState, useEffect, useCallback, useRef } = React;
+import { useState, useEffect, useCallback, useRef } from "react";  // TD-033 ESM import
 
 const VIEWS_ENDPOINT = '/api/v1/views';
 

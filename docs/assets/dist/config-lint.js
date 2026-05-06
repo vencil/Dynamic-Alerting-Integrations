@@ -1,4 +1,4 @@
-import{a as f,b,c as $,d as y,e as h}from"./chunk-U6M6GTLZ.js";var v=f(b(),1),N=f($(),1);var u=f(b()),a=f(y()),s=window.__t||((n,o)=>o),L=`_defaults:
+import{a as f,b,c as $,d as y,e as h}from"./chunk-GVFEWY5A.js";var v=f(b(),1),N=f($(),1);var u=f(b()),a=f(y()),s=window.__t||((n,o)=>o),L=`_defaults:
   mariadb_connections_warning: 150
   mariadb_connections_warning_critical: 200
   redis_memory_usage_warning: 75

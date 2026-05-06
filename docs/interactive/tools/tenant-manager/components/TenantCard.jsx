@@ -32,9 +32,11 @@ purpose: |
     - onHoverLeave:    () => void — sets `hoveredCard = null`
 ---
 
-// Defensive explicit imports (per S#70): make orchestrator-shared
-// globals deterministic at lookup time.
-const styles = window.__styles;
+// TD-033: ESM dist-bundle chunk order is non-deterministic;
+// `window.__styles` may be undefined when this module evaluates.
+// Import the canonical export instead. See tenant-manager/styles.js.
+import { styles } from '../styles.js';
+
 const t = window.__t || ((zh, en) => en);
 
 // C-4 PR-1 (S#94) — deep-link URL builder for wizard tools.

@@ -27,7 +27,7 @@ purpose: |
     - the value, but only updated after `delayMs` ms of stability.
 ---
 
-const { useState, useEffect } = React;
+import { useState, useEffect } from "react";  // TD-033 ESM import
 
 function useDebouncedValue(value, delayMs) {
   const [debounced, setDebounced] = useState(value);

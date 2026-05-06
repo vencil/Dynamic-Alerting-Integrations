@@ -1,4 +1,4 @@
-import{a as O}from"./chunk-H2MRGI5I.js";import{a as u,b as S,c as K,d as T,e as M}from"./chunk-U6M6GTLZ.js";var v=u(S(),1),F=u(K(),1);var i=u(S());var a=u(T()),e=window.__t||((c,s)=>s),g={"check-alert":{label:"check-alert",description:e("\u67E5\u8A62\u7279\u5B9A\u79DF\u6236\u7684\u544A\u8B66\u72C0\u614B","Query alert status for a specific tenant"),category:e("Prometheus API \u5DE5\u5177","Prometheus API Tools"),popular:!0,preview:`$ da-tools check-alert HighMemoryUsage db-a
+import{a as O}from"./chunk-H2MRGI5I.js";import{a as u,b as S,c as K,d as T,e as M}from"./chunk-GVFEWY5A.js";var v=u(S(),1),F=u(K(),1);var i=u(S());var a=u(T()),e=window.__t||((c,s)=>s),g={"check-alert":{label:"check-alert",description:e("\u67E5\u8A62\u7279\u5B9A\u79DF\u6236\u7684\u544A\u8B66\u72C0\u614B","Query alert status for a specific tenant"),category:e("Prometheus API \u5DE5\u5177","Prometheus API Tools"),popular:!0,preview:`$ da-tools check-alert HighMemoryUsage db-a
 
 Alert:    HighMemoryUsage
 Tenant:   db-a
