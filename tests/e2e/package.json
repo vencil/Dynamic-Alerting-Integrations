@@ -15,7 +15,7 @@
     "test:critical": "playwright test --grep @critical",
     "test:visual": "playwright test --grep @visual",
     "test:visual:update": "playwright test --grep @visual --update-snapshots",
-    "serve:portal": "python -m http.server 8080 --directory ../../docs",
+    "serve:portal": "python3 serve_threaded.py 8080 ../../docs",
     "install-deps": "playwright install chromium",
     "lint": "eslint ."
   },

@@ -27,7 +27,26 @@ jobs:
   test:
     name: Smoke Tests (Chromium)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # TD-032e P1 (scope-reduced):
+    #   Bumped 10 → 15 min after PR-C/D/E added 56 specs (136 → 192).
+    #
+    #   Originally tried --workers=2 to keep 10-min cap. Threaded the
+    #   portal server first to unblock that (serve_threaded.py replaces
+    #   the single-threaded python -m http.server). Local repro at
+    #   workers=2 + threaded server: still 20 failures, all in specs that
+    #   transitively load `portal-shared.jsx` — which has 20+ unsafe
+    #   module-scope reads of `window.__X` data globals. ESM dist-bundle
+    #   chunk loading order is non-deterministic under parallel browser
+    #   contexts, so data chunks sometimes evaluate AFTER portal-shared
+    #   reads them as undefined. CPU is low; this is a module-init
+    #   ordering race, not a CPU contention issue.
+    #
+    #   Conclusion: workers=N (any N>1) is unsafe until the window.__X
+    #   pattern audit lands (separate issue — same family as the
+    #   template-gallery prod bug PR-E fixed). Threaded server kept (no
+    #   downside; modestly improves serial throughput); workers stays
+    #   at 1; cap bumped to absorb 192-spec runtime (~12 min observed).
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
@@ -82,7 +101,16 @@ jobs:
 
       - name: Run Playwright smoke tests
         working-directory: tests/e2e
-        run: npm test
+        # TD-032e debug-capability win:
+        #   --reporter=list,html  swap dots-only progress for inline test
+        #                names so CI failures are tagged with the spec
+        #                immediately (read straight from gh run log,
+        #                no need to download the html report just to
+        #                see what failed); keep html for the artifact
+        #                upload (deeper traces still available there).
+        # Workers stays at 1 — see job-level timeout-minutes comment for
+        # the workers=N investigation result.
+        run: npm test -- --reporter=list,html
         env:
           CI: 'true'
           BASE_URL: 'http://localhost:8080/interactive/'
