@@ -163,6 +163,7 @@ lang: zh
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
+| `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
