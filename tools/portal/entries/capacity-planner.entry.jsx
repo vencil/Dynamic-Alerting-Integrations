@@ -1,4 +1,3 @@
-import './_setup-globals.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import CapacityPlanner from '../../../docs/interactive/tools/capacity-planner.jsx';

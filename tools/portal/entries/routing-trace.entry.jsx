@@ -1,4 +1,3 @@
-import './_setup-globals.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import RoutingTrace from '../../../docs/interactive/tools/routing-trace.jsx';

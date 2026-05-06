@@ -18,14 +18,10 @@
  * a side-effect of importing the dual-track files), so window globals are
  * populated for any downstream consumer that still reads them.
  */
-// TD-031 fix: side-effect import MUST come first so `globalThis.__bundledReact`
-// is set before any component file's body executes. See _setup-globals.js
-// for the full rationale; the short version is: esbuild orders module
-// evaluation post-order, so a side-effect in the entry body runs AFTER
-// all imports — too late for component files that destructure from
-// `__bundledReact` at module-load time.
-import './_setup-globals.js';
-
+// TD-033/034: component files now use direct ESM React imports
+// (`import { useState } from 'react'`); no global side-effect setup
+// needed. The earlier _setup-globals.js + globalThis.__bundledReact
+// path was retired.
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import TenantManager from '../../../docs/interactive/tools/tenant-manager.jsx';

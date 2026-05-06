@@ -1,4 +1,3 @@
-import './_setup-globals.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import ThresholdHeatmap from '../../../docs/interactive/tools/threshold-heatmap.jsx';
