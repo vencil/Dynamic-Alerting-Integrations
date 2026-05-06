@@ -192,6 +192,7 @@ export default function RunbookViewer() {
             placeholder={t('搜尋告警名稱...', 'Search alert name...')}
             className="flex-1 min-w-48 px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
           <select value={filterPack} onChange={(e) => setFilterPack(e.target.value)}
+            aria-label={t('依 Rule Pack 篩選', 'Filter by Rule Pack')}
             className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
             {PACKS.map(p => <option key={p} value={p}>{p === 'all' ? t('所有 Rule Pack', 'All Rule Packs') : p}</option>)}
           </select>

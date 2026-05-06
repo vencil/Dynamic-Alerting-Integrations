@@ -19,11 +19,8 @@ test.describe('Alert Timeline Replay @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'alert-timeline');
     await runToolSmokeChecks(page, {
+      allowedNonCriticalViolations: 5,
       expectedTitleMatch: /Alert Timeline|告警時間軸/i,
-      // skipA11y: TD-032c surfaced real WCAG 2.1 AA critical violations
-      // (form labels / select-name) that predate this spec. Tracked
-      // separately as a11y debt; smoke retains dist-load + REG-004 gates.
-      skipA11y: true,
     });
   });
 

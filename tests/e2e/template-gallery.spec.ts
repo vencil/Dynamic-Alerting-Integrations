@@ -15,7 +15,7 @@ import {
 test.describe('Template Gallery @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'template-gallery');
-    await runToolSmokeChecks(page, { skipA11y: true });
+    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 5 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {

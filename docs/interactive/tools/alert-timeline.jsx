@@ -279,6 +279,7 @@ export default function AlertTimeline() {
           {/* Scrubber */}
           <input type="range" min={-1} max={scenario.points.length - 1} value={tick}
             onChange={(e) => { setPlaying(false); setTick(parseInt(e.target.value)); }}
+            aria-label={t('時間軸時間刻度', 'Timeline scrubber')}
             className="w-full mt-2" />
         </div>
 

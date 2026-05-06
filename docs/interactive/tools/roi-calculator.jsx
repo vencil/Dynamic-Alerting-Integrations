@@ -519,10 +519,11 @@ export default function ROICalculator() {
         </h3>
         <div style={styles.quickEstimateInputGroup}>
           <div>
-            <label style={styles.inputLabel}>
+            <label htmlFor="roi-quick-tenants" style={styles.inputLabel}>
               {t('您管理多少個租戶？', 'How many tenants do you manage?')}
             </label>
             <input
+              id="roi-quick-tenants"
               type="number"
               min="1"
               max="500"

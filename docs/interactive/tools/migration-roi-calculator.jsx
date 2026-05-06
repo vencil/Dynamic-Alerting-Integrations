@@ -350,6 +350,7 @@ function Slider({ label, value, onChange, min, max, step = 1, unit = '' }) {
         step={step}
         value={value}
         onChange={e => onChange(Number(e.target.value))}
+        aria-label={label}
         style={{
           ...styles.slider,
           WebkitAppearance: 'slider-horizontal',
