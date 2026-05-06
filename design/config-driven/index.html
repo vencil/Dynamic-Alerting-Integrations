@@ -1,0 +1,3272 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/design/config-driven/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../../en/design/config-driven/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Config-Driven 架構設計 — 三態配置、動態路由、Tenant API - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#config-driven" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Config-Driven 架構設計 — 三態配置、動態路由、Tenant API
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../en/design/config-driven/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#2-config-driven" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 核心設計：Config-Driven 架構
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 核心設計：Config-Driven 架構">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-three-state-logic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 三態邏輯 (Three-State Logic)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-directory-scanner-confd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Directory Scanner 模式 (conf.d/)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-tenant-namespace-tenant-namespace-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Tenant-Namespace 映射模式 (Tenant-Namespace Mapping)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-multi-tier-severity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 多層嚴重度 (Multi-tier Severity)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-regex-regex-dimension-thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5 Regex 維度閾值 (Regex Dimension Thresholds)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-scheduled-thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6 排程式閾值 (Scheduled Thresholds)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-operational-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.7 三態運營模式 (Operational Modes)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-severity-dedup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.8 Severity Dedup（嚴重度去重）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-alert-routing-config-driven-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.9 Alert Routing 客製化 (Config-Driven Routing)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#210-per-rule-routing-overrides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.10 Per-rule Routing Overrides
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#211-platform-enforced-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.11 Platform Enforced Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#212-routing-profiles-domain-policiesadr-007" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.12 Routing Profiles 與 Domain Policies（ADR-007）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#213-pre-computed-recording-rule-vs-runtime-aggregation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.13 效能架構：Pre-computed Recording Rule vs Runtime Aggregation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#214-tenant-management-api-architecture-adr-009" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.14 Tenant Management API Architecture (ADR-009)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">architecture</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">config-driven</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">design</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/design/config-driven.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/design/config-driven.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="config-driven">Config-Driven 架構設計<a class="headerlink" href="#config-driven" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Language / 語言：</strong> <strong>中文 (Current)</strong> | <a href="./config-driven.en.md">English</a></p>
+</blockquote>
+<!-- Language switcher is provided by mkdocs-static-i18n header. -->
+
+<blockquote>
+<p>← <a href="../../architecture-and-design/">返回主文件</a></p>
+</blockquote>
+<h2 id="2-config-driven">2. 核心設計：Config-Driven 架構<a class="headerlink" href="#2-config-driven" title="Permanent link">&para;</a></h2>
+<h3 id="21-three-state-logic">2.1 三態邏輯 (Three-State Logic)<a class="headerlink" href="#21-three-state-logic" title="Permanent link">&para;</a></h3>
+<p>平台支援「三態」配置模式，提供靈活的預設值、覆蓋和禁用機制：</p>
+<table>
+<thead>
+<tr>
+<th>狀態</th>
+<th>配置方式</th>
+<th>Prometheus 輸出</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Custom Value</strong></td>
+<td><code>metric_key: 42</code></td>
+<td>✓ 輸出自訂閾值</td>
+<td>租戶覆蓋預設值</td>
+</tr>
+<tr>
+<td><strong>Omitted (Default)</strong></td>
+<td>未在 YAML 中指定</td>
+<td>✓ 輸出平台預設值</td>
+<td>使用 <code>_defaults.yaml</code></td>
+</tr>
+<tr>
+<td><strong>Disable</strong></td>
+<td><code>metric_key: "disable"</code></td>
+<td>✗ 不輸出</td>
+<td>完全禁用該指標</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Prometheus 輸出示例：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a># Custom value (db-a 租戶)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>user_threshold{tenant=&quot;db-a&quot;, metric=&quot;mariadb_replication_lag&quot;, severity=&quot;warning&quot;} 10
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a># Default value (db-b 租戶，未覆蓋)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>user_threshold{tenant=&quot;db-b&quot;, metric=&quot;mariadb_replication_lag&quot;, severity=&quot;warning&quot;} 30
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a># Disabled (無輸出)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a># (metric not present)
+</code></pre></div>
+<h3 id="22-directory-scanner-confd">2.2 Directory Scanner 模式 (conf.d/)<a class="headerlink" href="#22-directory-scanner-confd" title="Permanent link">&para;</a></h3>
+<p><strong>層次結構：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conf.d/
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>├── _defaults.yaml         # Platform 全局預設值（Platform 團隊管理）
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>├── db-a.yaml             # 租戶 A 覆蓋（db-a 團隊管理）
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>├── db-b.yaml             # 租戶 B 覆蓋（db-b 團隊管理）
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>└── ...
+</code></pre></div></p>
+<p><strong><code>_defaults.yaml</code> 內容（Platform 管理）：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">defaults</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">mysql_cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">container_cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">container_memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">85</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nt">state_filters</span><span class="p">:</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">container_crashloop</span><span class="p">:</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">reasons</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;CrashLoopBackOff&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;critical&quot;</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nt">maintenance</span><span class="p">:</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="nt">reasons</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;info&quot;</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="nt">default_state</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;disable&quot;</span>
+</code></pre></div></p>
+<p><strong><code>db-a.yaml</code> 內容（租戶覆蓋）：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span><span class="w">          </span><span class="c1"># 覆蓋預設值 80</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">container_cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span><span class="w">              </span><span class="c1"># 覆蓋預設值 80</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">mysql_slave_lag</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;disable&quot;</span><span class="w">       </span><span class="c1"># 無 replica，停用</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="c1"># mysql_cpu 未指定 → 使用預設值 80</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="c1"># 維度標籤</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=&#39;tasks&#39;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;500&quot;</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=&#39;events&#39;,</span><span class="nv"> </span><span class="s">priority=&#39;high&#39;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;1000:critical&quot;</span>
+</code></pre></div></p>
+<h4 id="boundary-enforcement">邊界強制規則 (Boundary Enforcement)<a class="headerlink" href="#boundary-enforcement" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>檔案類型</th>
+<th>允許的區塊</th>
+<th>違規行為</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_</code> 前綴檔 (<code>_defaults.yaml</code>)</td>
+<td><code>defaults</code>, <code>state_filters</code>, <code>tenants</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>租戶檔 (<code>db-a.yaml</code>)</td>
+<td>僅 <code>tenants</code></td>
+<td>其他區塊自動忽略 + WARN log</td>
+</tr>
+</tbody>
+</table>
+<h4 id="sha-256-hot-reload">SHA-256 熱重新加載 (Hot-Reload)<a class="headerlink" href="#sha-256-hot-reload" title="Permanent link">&para;</a></h4>
+<p>不依賴檔案修改時間 (ModTime)，而是基於 <strong>SHA-256 內容雜湊</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 每次 ConfigMap 更新時</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>$<span class="w"> </span>sha256sum<span class="w"> </span>conf.d/_defaults.yaml<span class="w"> </span>conf.d/db-a.yaml<span class="w"> </span>conf.d/db-b.yaml
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>abc123...<span class="w"> </span>conf.d/_defaults.yaml
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>def456...<span class="w"> </span>conf.d/db-a.yaml
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>ghi789...<span class="w"> </span>conf.d/db-b.yaml
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Prometheus 掛載的 ConfigMap 符號鏈接會旋轉</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># 舊的雜湊值 → 新的雜湊值</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># threshold-exporter 偵測到變化，重新載入配置</span>
+</code></pre></div>
+<pre class="mermaid"><code>flowchart LR
+    A["kubectl patch&lt;br/&gt;ConfigMap"] --&gt; B["K8s 更新&lt;br/&gt;符號鏈接"]
+    B --&gt; C{"SHA-256&lt;br/&gt;比對"}
+    C --&gt;|hash 變更| D["重新載入&lt;br/&gt;受影響 tenant"]
+    C --&gt;|hash 相同| E["跳過&lt;br/&gt;無需操作"]
+    D --&gt; F["更新 Prometheus&lt;br/&gt;metrics"]
+    F --&gt; G["da_config_reload_total&lt;br/&gt;+1"]</code></pre>
+<p><strong>為什麼 SHA-256 而不是 ModTime？</strong>
+- Kubernetes ConfigMap 會建立符號鏈接層，ModTime 不可靠
+- 內容相同 = 雜湊相同，避免不必要的重新加載</p>
+<h4 id="incremental-reload-internal-mechanism-v210">Incremental Reload Internal Mechanism (v2.1.0)<a class="headerlink" href="#incremental-reload-internal-mechanism-v210" title="Permanent link">&para;</a></h4>
+<p><code>ConfigManager.IncrementalLoad()</code> 實現四階段增量重載，避免每次 reload 都全量解析：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Phase 1: Mtime Guard — 快速篩選
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  ├─ 每檔 stat() 取 mtime + size
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  ├─ 若 (mtime + size 不變) 且 (檔齡 &gt; 2s) → 複用快取 SHA-256
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  ├─ 否則 → 讀檔 + 計算 SHA-256
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>  └─ 組合所有 per-file hash → composite hash
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>     └─ composite hash == 前次 → 直接 RETURN（零成本）
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>Phase 2: Per-File Hash Diff
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>  ├─ 新 hash 不在舊表 → ADDED
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>  ├─ hash 值不同 → CHANGED
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>  └─ 舊 hash 不在新表 → REMOVED
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>Phase 3: Selective Re-Parse
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>  ├─ 僅重新解析 ADDED + CHANGED 檔案（YAML unmarshal）
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>  ├─ REMOVED 檔案的快取清除
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>  └─ Boundary enforcement（租戶檔不允許 state_filters 等）
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>Phase 4: Incremental Merge
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>  ├─ 若僅 tenant 檔變更（非 _defaults / _profiles）
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>  │   → shallow-copy 前次 config + patch 受影響 tenant（快速路徑）
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>  └─ 否則 → 全量 merge 所有 partial configs
+</code></pre></div>
+<p><strong>Atomic Swap</strong>：<code>RWMutex</code> 保護 config / hash / cache 的原子更新。讀端（Prometheus scrape）用 <code>RLock()</code>，reload 用 <code>Lock()</code>，確保 scrape 期間不會讀到半更新的狀態。</p>
+<p><strong>效能特性</strong>（benchmark 數據見 <a href="../../benchmarks/#12-incremental-hot-reload-b-1-scale-gate">§12</a>）：</p>
+<table>
+<thead>
+<tr>
+<th>場景</th>
+<th>延遲</th>
+<th>程式路徑</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1000 tenant，無變更（mtime guard 命中）</td>
+<td>~1.5ms</td>
+<td>stat-only + hash 比對</td>
+</tr>
+<tr>
+<td>1000 tenant，1 檔變更</td>
+<td>~6.9ms</td>
+<td>scan 6.2ms + re-parse 0.2ms + merge 0.5ms</td>
+</tr>
+<tr>
+<td>100 tenant，無變更</td>
+<td>~129µs</td>
+<td>per-file stat</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Fallback</strong>：若快取為空或損壞，自動退回 <code>fullDirLoad()</code>（全量載入）。</p>
+<h4 id="confd-v270adr-017-adr-018">階層式 conf.d/ + 繼承引擎 (v2.7.0，ADR-017 / ADR-018)<a class="headerlink" href="#confd-v270adr-017-adr-018" title="Permanent link">&para;</a></h4>
+<p>v2.7.0 將 conf.d/ 從扁平結構升級為四層階層目錄，並引入 <code>_defaults.yaml</code> 繼承語意、dual-hash 熱重載與 300ms debounce。平面模式（v2.1.0）完全相容，可混用。</p>
+<p><strong>四層階層結構（L0 → L3）</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>conf.d/
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>├── _defaults.yaml                         # L0 — 平台全局預設值（Platform Team 管理）
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>├── db-legacy.yaml                         # 平面模式（L3 單檔，向後相容）
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>└── mariadb/                               # L1 — domain 群組
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    ├── _defaults.yaml                     # L1 domain defaults
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    ├── prod/                              # L2 — environment 分群
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    │   ├── _defaults.yaml                 # L2 environment defaults
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    │   ├── db-a.yaml                      # L3 — tenant override（深度覆蓋）
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    │   └── db-b.yaml
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    └── staging/
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        └── db-c.yaml
+</code></pre></div>
+<p><strong>繼承語意（deep-merge，L0 → L1 → L2 → L3 後者覆蓋前者）</strong></p>
+<table>
+<thead>
+<tr>
+<th>規則</th>
+<th>行為</th>
+<th>典型使用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scalar / Map 深度合併</td>
+<td>同 key 深度合併；child 覆蓋 parent</td>
+<td>大部分 defaults override</td>
+</tr>
+<tr>
+<td>Array 完整取代（non-merge）</td>
+<td>Child array 完整替換 parent，不連接</td>
+<td><code>state_filters.reasons</code> / <code>_routing.group_by</code></td>
+</tr>
+<tr>
+<td><code>null</code> 即刪除</td>
+<td>Child <code>key: null</code> 從繼承鏈移除該 key</td>
+<td>禁用父層某個預設閾值</td>
+</tr>
+<tr>
+<td><code>_</code> 前綴保留</td>
+<td><code>_silent_mode</code> / <code>_state_maintenance</code> / <code>_routing</code> / <code>_severity_dedup</code> / <code>_namespaces</code> 等 meta 欄位全程保留</td>
+<td>租戶生命週期 meta</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Dual-Hash 熱重載</strong></p>
+<p>v2.7.0 從單一 SHA-256 升級為雙層 hash，區分「source 變更」與「merged 變更」：</p>
+<table>
+<thead>
+<tr>
+<th>Hash 類型</th>
+<th>輸入</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source_hash</code></td>
+<td>單一 YAML 原始內容</td>
+<td>偵測使用者的實際寫入操作</td>
+</tr>
+<tr>
+<td><code>merged_hash</code></td>
+<td>繼承 + canonical-JSON-normalized 後的 merged config</td>
+<td>偵測「對該 tenant 有實質影響的變更」（濾除 formatter 噪音）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Merge noop 偵測</strong>：若 <code>_defaults.yaml</code> 變更但 merged_hash 未改變，exporter 不觸發 reload；v2.8.0 (Issue #61) 起依 effect 拆兩條路徑：純註解/空白/排序差異 → <code>da_config_defaults_change_noop_total</code>（cosmetic）；變動的 key 全被 tenant override 蓋掉 → <code>da_config_defaults_shadowed_total</code>（shadowed）。</p>
+<p><strong>300ms Debounce</strong></p>
+<p><code>_defaults.yaml</code> 層通常觸發所有 tenant 的 merged_hash 重算，為避免批次編輯（如 <code>kubectl apply</code> 多個檔案）造成短時間內多次全量 reload，Go engine 以 300ms debounce window 聚合事件：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>t0    _defaults.yaml 寫入    → timer 啟動 300ms
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>t+50  db-a.yaml 寫入         → 延遲計時重啟
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>t+120 db-b.yaml 寫入         → 延遲計時重啟
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>t+420 timer fires            → 一次 reload 處理三筆變更
+</code></pre></div>
+<p>Debounce 可透過 <code>--scan-debounce=&lt;duration&gt;</code> 調整；壓測建議 100ms-500ms 區間。</p>
+<p><strong>新增 Prometheus metrics（v2.7.0）</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>說明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>da_config_scan_duration_seconds</code></td>
+<td>histogram</td>
+<td>單次 directory scan + merge 的延遲分佈（<code>le={0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}</code>）</td>
+</tr>
+<tr>
+<td><code>da_config_reload_trigger_total{reason}</code></td>
+<td>counter</td>
+<td>Reload 觸發原因統計，<code>reason ∈ {source, defaults, new_tenant, delete, forced}</code></td>
+</tr>
+<tr>
+<td><code>da_config_defaults_change_noop_total</code></td>
+<td>counter</td>
+<td><code>_defaults.yaml</code> 變更但 merged_hash 未變的次數。<strong>v2.8.0 (Issue #61) 起語義收窄為 cosmetic-only</strong>（comment-only / reorder / whitespace）</td>
+</tr>
+<tr>
+<td><code>da_config_defaults_shadowed_total</code></td>
+<td>counter</td>
+<td><strong>v2.8.0 (Issue #61)</strong> — defaults 變更被 tenant override 擋下的次數（從 <code>noop_total</code> 拆出）</td>
+</tr>
+<tr>
+<td><code>da_config_blast_radius_tenants_affected</code></td>
+<td>histogram</td>
+<td><strong>v2.8.0 (Issue #61)</strong> — 每 tick 受影響 tenant 分佈，labels = <code>reason / scope / effect</code>，buckets <code>[1, 5, 25, 100, 500, 1000, 2500, 5000, 10000]</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Tenant API <code>/effective</code> endpoint（v2.7.0 B-3 delivery）</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/v1/tenants/{id}/effective
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>→ 200 OK
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>{
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>  &quot;tenant_id&quot;: &quot;db-a&quot;,
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>  &quot;merged&quot;: { /* L0 + L1 + L2 + L3 合併後完整配置 */ },
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>  &quot;source_chain&quot;: [
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    &quot;conf.d/_defaults.yaml&quot;,
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    &quot;conf.d/mariadb/_defaults.yaml&quot;,
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    &quot;conf.d/mariadb/prod/_defaults.yaml&quot;,
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    &quot;conf.d/mariadb/prod/db-a.yaml&quot;
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>  ],
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>  &quot;source_hash&quot;: &quot;abc123...&quot;,
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>  &quot;merged_hash&quot;: &quot;def456...&quot;
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>}
+</code></pre></div>
+<ul>
+<li><code>404 ErrTenantNotFound</code> — tenant 不存在</li>
+<li><code>400</code> — tenant_id 驗證失敗（長度、字元集）</li>
+<li>Handler 直接調用 <code>pkg/config.ResolveEffective(tenantID)</code>，與 exporter 繼承邏輯 100% 一致（shared validation logic）</li>
+</ul>
+<p><strong>除錯 / 遷移 CLI（da-tools）</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># 檢視某 tenant 套完繼承後的 merged config + source chain</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>da-tools<span class="w"> </span>describe-tenant<span class="w"> </span>db-a<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># 顯示 L0→L3 各層貢獻</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>da-tools<span class="w"> </span>describe-tenant<span class="w"> </span>db-a<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--show-sources
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># 比較兩個 tenant 的 merged diff</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>da-tools<span class="w"> </span>describe-tenant<span class="w"> </span>db-a<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--diff<span class="w"> </span>db-b
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># 預覽某檔變更後的影響（不寫檔）</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>da-tools<span class="w"> </span>describe-tenant<span class="w"> </span>db-a<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--what-if<span class="w"> </span>conf.d/_defaults.yaml.new
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="c1"># 列出所有 tenant 的 merged hash（用於 drift audit）</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>da-tools<span class="w"> </span>describe-tenant<span class="w"> </span>--all<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="c1"># 從平面結構遷移至階層結構（dry-run 預設）</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>da-tools<span class="w"> </span>migrate-conf-d<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--dry-run
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a>da-tools<span class="w"> </span>migrate-conf-d<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--apply
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a>da-tools<span class="w"> </span>migrate-conf-d<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--infer-from<span class="w"> </span>metadata<span class="w">        </span><span class="c1"># 以 _domain/_env metadata 推導階層</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a>da-tools<span class="w"> </span>migrate-conf-d<span class="w"> </span>--conf-d<span class="w"> </span>conf.d/<span class="w"> </span>--output-plan<span class="w"> </span>migration.json<span class="w"> </span><span class="c1"># 輸出遷移計畫給 reviewer</span>
+</code></pre></div>
+<p><strong>ADR 參考</strong></p>
+<ul>
+<li><a href="../../adr/017-conf-d-directory-hierarchy-mixed-mode/">ADR-017：<code>conf.d/</code> 階層式目錄 + 混合模式遷移</a></li>
+<li><a href="../../adr/018-defaults-yaml-inheritance-dual-hash/">ADR-018：<code>_defaults.yaml</code> 繼承 + Dual-Hash 熱重載</a></li>
+</ul>
+<h3 id="23-tenant-namespace-tenant-namespace-mapping">2.3 Tenant-Namespace 映射模式 (Tenant-Namespace Mapping)<a class="headerlink" href="#23-tenant-namespace-tenant-namespace-mapping" title="Permanent link">&para;</a></h3>
+<p>平台的 <code>tenant</code> 是<strong>邏輯身分</strong>，由兩個獨立來源決定：</p>
+<ol>
+<li><strong>閾值側</strong>：threshold-exporter 從 YAML config key（<code>tenants.db-a</code>）取得 tenant，與 K8s namespace 零耦合</li>
+<li><strong>資料側</strong>：Prometheus <code>relabel_configs</code> 將抓取到的指標注入 <code>tenant</code> 標籤</li>
+</ol>
+<p>兩側的 <code>tenant</code> 值必須精確匹配，但<strong>來源可以不同</strong>。這使得以下三種映射模式都可行：</p>
+<table>
+<thead>
+<tr>
+<th>映射模式</th>
+<th>說明</th>
+<th>Prometheus relabel 策略</th>
+<th>適用場景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1:1</strong>（標準）</td>
+<td>一個 Namespace = 一個 Tenant</td>
+<td><code>source_labels: [__meta_kubernetes_namespace]</code> → <code>target_label: tenant</code></td>
+<td>大多數部署</td>
+</tr>
+<tr>
+<td><strong>N:1</strong></td>
+<td>多個 Namespace 視為同一 Tenant</td>
+<td>多個 namespace 的指標 relabel 到同一個 tenant 值</td>
+<td>讀寫分離（<code>db-a-read</code> + <code>db-a-write</code> → <code>db-a</code>）</td>
+</tr>
+<tr>
+<td><strong>1:N</strong></td>
+<td>一個 Namespace 內多個 Tenant</td>
+<td>以 Service label/annotation 而非 namespace 作為 tenant 來源</td>
+<td>共享 namespace 的多租戶架構</td>
+</tr>
+</tbody>
+</table>
+<p><strong>N:1 relabel 範例</strong>（多 namespace → 一個 tenant）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">relabel_configs</span><span class="p">:</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">__meta_kubernetes_namespace</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nt">action</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keep</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">regex</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;db-a-(read|write)&quot;</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="c1"># 統一映射為 db-a</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">__meta_kubernetes_namespace</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="nt">target_label</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="nt">regex</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;(db-[^-]+).*&quot;</span><span class="w">    </span><span class="c1"># 擷取第一段作為 tenant</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="nt">replacement</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;$1&quot;</span>
+</code></pre></div>
+<p><strong>1:N relabel 範例</strong>（一個 namespace → 多個 tenant）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">relabel_configs</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">__meta_kubernetes_namespace</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">action</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keep</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span><span class="nt">regex</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;shared-db&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="c1"># 從 Service annotation 讀取 tenant 身分</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">__meta_kubernetes_service_annotation_alerting_tenant</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="nt">target_label</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant</span>
+</code></pre></div>
+<p><strong>自動化工具</strong>：<code>scaffold_tenant.py --namespaces ns1,ns2</code> 可自動產出 N:1 relabel_configs snippet，並在 tenant YAML 中寫入 <code>_namespaces</code> 元資料欄位供工具參考（不影響 metric 邏輯）。</p>
+<p><strong>自動化工具（ADR-006）</strong>：<code>discover_instance_mappings.py</code> 可自動偵測 Prometheus 中的實例拓撲，<code>generate_tenant_mapping_rules.py</code> 從 <code>_instance_mapping.yaml</code> 產生 1:N 映射所需的 Recording Rules。詳見 <a href="../../adr/006-tenant-mapping-topologies/">ADR-006</a>。</p>
+<p><strong>設計原則</strong>：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 和 Recording Rules 提供，無需修改平台任何元件。詳見 <a href="../../integration/byo-prometheus-integration/">BYO Prometheus 整合指南</a>。</p>
+<h3 id="24-multi-tier-severity">2.4 多層嚴重度 (Multi-tier Severity)<a class="headerlink" href="#24-multi-tier-severity" title="Permanent link">&para;</a></h3>
+<p>支援 <code>_critical</code> 後綴與 <code>"value:severity"</code> 兩種語法：</p>
+<p><strong>方式一：<code>_critical</code> 後綴（適用於基本閾值）</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;100&quot;</span><span class="w">            </span><span class="c1"># warning 閾值</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">mysql_connections_critical</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;150&quot;</span><span class="w">   </span><span class="c1"># _critical → 自動產生 critical alert</span>
+</code></pre></div></p>
+<p><strong>方式二：<code>"value:severity"</code> 語法（適用於維度標籤）</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">redis-prod</span><span class="p">:</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=&#39;orders&#39;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;500:critical&quot;</span>
+</code></pre></div></p>
+<p><strong>Prometheus 輸出：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>user_threshold{tenant=&quot;db-a&quot;, component=&quot;mysql&quot;, metric=&quot;connections&quot;, severity=&quot;warning&quot;} 100
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>user_threshold{tenant=&quot;db-a&quot;, component=&quot;mysql&quot;, metric=&quot;connections&quot;, severity=&quot;critical&quot;} 150
+</code></pre></div></p>
+<h4 id="auto-suppression-severity-dedup-via-alertmanager-inhibit">自動抑制 (Auto-Suppression) — Severity Dedup via Alertmanager Inhibit<a class="headerlink" href="#auto-suppression-severity-dedup-via-alertmanager-inhibit" title="Permanent link">&para;</a></h4>
+<p>v1.2.0 起，Severity Dedup 從 PromQL 層移至 <strong>Alertmanager inhibit 層</strong>（詳見 §2.8）。Alert Rule 不再使用 <code>unless critical</code> 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由 Alertmanager per-tenant inhibit rule 控制。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Warning 和 Critical 獨立觸發，TSDB 完整保留</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MariaDBHighConnections</span><span class="w">          </span><span class="c1"># warning</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span><span class="no">( tenant:mysql_threads_connected:max &gt; on(tenant) group_left tenant:alert_threshold:connections )</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">    </span><span class="no">unless on(tenant) (user_state_filter{filter=&quot;maintenance&quot;} == 1)</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">warning</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">    </span><span class="nt">metric_group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">connections</span>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MariaDBHighConnectionsCritical</span><span class="w">  </span><span class="c1"># critical</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="w">    </span><span class="no">( tenant:mysql_threads_connected:max &gt; on(tenant) group_left tenant:alert_threshold:connections_critical )</span>
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">    </span><span class="no">unless on(tenant) (user_state_filter{filter=&quot;maintenance&quot;} == 1)</span>
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critical</span>
+<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="w">    </span><span class="nt">metric_group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">connections</span>
+</code></pre></div>
+<p><strong>結果：</strong> 連線數 ≥ 150 時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。</p>
+<h3 id="25-regex-regex-dimension-thresholds">2.5 Regex 維度閾值 (Regex Dimension Thresholds)<a class="headerlink" href="#25-regex-regex-dimension-thresholds" title="Permanent link">&para;</a></h3>
+<p>v0.12.0 起，Config parser 支援 <code>=~</code> 運算子，允許以 regex 模式精細匹配維度標籤。此設計在不引入外部資料依賴的前提下，讓閾值配置可針對特定維度子集生效。</p>
+<p><strong>配置語法：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="c1"># 精確匹配</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="s">&quot;oracle_tablespace_used_percent{tablespace=&#39;USERS&#39;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;85&quot;</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="c1"># Regex 匹配：所有 SYS 開頭的 tablespace</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="s">&quot;oracle_tablespace_used_percent{tablespace=~&#39;SYS.*&#39;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;95&quot;</span>
+</code></pre></div></p>
+<p><strong>實現路徑：</strong></p>
+<ol>
+<li><strong>Exporter 層</strong>：Config parser 偵測 <code>=~</code> 運算子，將 regex pattern 作為 <code>_re</code> 後綴 label 輸出
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>user_threshold{tenant=&quot;db-a&quot;, metric=&quot;oracle_tablespace_used_percent&quot;,
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>               tablespace_re=&quot;SYS.*&quot;, severity=&quot;warning&quot;} 95
+</code></pre></div></li>
+<li><strong>Recording Rule 層</strong>：PromQL 使用 <code>label_replace</code> + <code>=~</code> 在查詢時完成實際匹配</li>
+<li><strong>設計原則</strong>：Exporter 保持為純 config→metric 轉換器，匹配邏輯完全由 Prometheus 原生向量運算執行</li>
+</ol>
+<h3 id="26-scheduled-thresholds">2.6 排程式閾值 (Scheduled Thresholds)<a class="headerlink" href="#26-scheduled-thresholds" title="Permanent link">&para;</a></h3>
+<p>v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換不同閾值。典型場景：夜間維護窗口放寬閾值、尖峰時段收緊閾值。</p>
+<blockquote>
+<p><strong>時區注意事項：</strong> 所有時間窗口 (<code>window</code>) 與 recurring maintenance 的 cron 表達式均使用 <strong>UTC 時區</strong>。配置時請將本地時間轉換為 UTC。例如 UTC+8 的 06:00-14:00 在此應寫為 <code>"22:00-06:00"</code>。</p>
+</blockquote>
+<p><strong>配置語法：</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">      </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;100&quot;</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">      </span><span class="nt">overrides</span><span class="p">:</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;22:00-06:00&quot;</span><span class="w">    </span><span class="c1"># UTC 夜間窗口（支援跨午夜）</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;200&quot;</span><span class="w">             </span><span class="c1"># 夜間批次作業，放寬到 200</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;09:00-18:00&quot;</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;80&quot;</span><span class="w">              </span><span class="c1"># 日間高峰，收緊到 80</span>
+</code></pre></div></p>
+<p><strong>技術實現：</strong></p>
+<ul>
+<li><strong><code>ScheduledValue</code> 自訂 YAML 型別</strong>：支援雙格式解析——純量字串（向後相容）和結構化 <code>{default, overrides[{window, value}]}</code></li>
+<li><strong><code>ResolveAt(now time.Time)</code></strong>：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性</li>
+<li><strong>時間窗口格式</strong>：<code>HH:MM-HH:MM</code> (UTC)，支援跨午夜（如 <code>22:00-06:00</code> 表示晚上十點到隔天早上六點）</li>
+<li><strong>45 個測試案例</strong>：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides</li>
+</ul>
+<h3 id="27-operational-modes">2.7 三態運營模式 (Operational Modes)<a class="headerlink" href="#27-operational-modes" title="Permanent link">&para;</a></h3>
+<p>v1.2.0 新增 <strong>Silent Mode</strong>，與既有的 Maintenance Mode 形成三態運營模式，解決「使用者把 Maintenance Mode 當靜音用」的問題。</p>
+<p><strong>行為矩陣</strong></p>
+<table>
+<thead>
+<tr>
+<th>運營狀態</th>
+<th>語義</th>
+<th>Alert 觸發</th>
+<th>TSDB 紀錄</th>
+<th>通知</th>
+<th>控制層</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Normal</td>
+<td>正常運行</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Silent</td>
+<td>靜音</td>
+<td>✅</td>
+<td>✅</td>
+<td>❌</td>
+<td>Alertmanager</td>
+</tr>
+<tr>
+<td>Maintenance</td>
+<td>真正維護</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+<td>Prometheus (PromQL)</td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>stateDiagram-v2
+    [*] --&gt; Normal
+    Normal --&gt; Silent : _silent_mode = warning / all
+    Normal --&gt; Maintenance : _state_maintenance = enable
+    Silent --&gt; Normal : _silent_mode = disable / expires 到期
+    Maintenance --&gt; Normal : _state_maintenance = disable / expires 到期
+
+    note right of Normal
+        Alert ✅ TSDB ✅ 通知 ✅
+    end note
+    note right of Silent
+        Alert ✅ TSDB ✅ 通知 ❌
+        控制層 — Alertmanager inhibit
+    end note
+    note right of Maintenance
+        Alert ❌ TSDB ❌ 通知 ❌
+        控制層 — PromQL unless
+    end note</code></pre>
+<p><strong>設計原則</strong>：Prometheus 管「什麼該 alert」，Alertmanager 管「要不要通知」。</p>
+<ul>
+<li><strong>Maintenance Mode</strong>（既有）：在 PromQL 層透過 <code>unless on(tenant) (user_state_filter{filter="maintenance"} == 1)</code> 消滅 alert。Alert 不觸發，TSDB 無紀錄，無通知。</li>
+<li><strong>Silent Mode</strong>：Alert 在 Prometheus 正常觸發（TSDB 有 <code>ALERTS</code> 紀錄），但 Alertmanager 透過 <code>inhibit_rules</code> 攔截通知。</li>
+</ul>
+<p><strong>Silent Mode 資料流</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>tenant YAML: _silent_mode: &quot;warning&quot;
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    ↓
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>threshold-exporter: user_silent_mode{tenant=&quot;db-a&quot;, target_severity=&quot;warning&quot;} 1
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    ↓
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>Prometheus alert rule (rule-pack-operational.yaml):
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>    TenantSilentWarning{tenant=&quot;db-a&quot;} fires
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>    ↓
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>Alertmanager inhibit_rules:
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>    source: alertname=&quot;TenantSilentWarning&quot;
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>    target: severity=&quot;warning&quot;, equal: [&quot;tenant&quot;]
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>    ↓
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>結果: db-a 的 warning alert 照常觸發（TSDB 有紀錄），但通知被攔截
+</code></pre></div>
+<p><strong>Tenant 配置</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">    </span><span class="nt">_silent_mode</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;warning&quot;</span><span class="w">    </span><span class="c1"># 只靜音 warning 通知</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">  </span><span class="nt">db-b</span><span class="p">:</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">    </span><span class="nt">_silent_mode</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;all&quot;</span><span class="w">        </span><span class="c1"># 靜音 warning + critical 通知</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">  </span><span class="nt">db-c</span><span class="p">:</span>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">    </span><span class="nt">_state_maintenance</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;enable&quot;</span><span class="w">  </span><span class="c1"># 真正維護，完全不觸發 alert</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">  </span><span class="nt">db-d</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span><span class="w">                        </span><span class="c1"># Normal — 預設行為</span>
+</code></pre></div>
+<p>可用的 <code>_silent_mode</code> 值：<code>warning</code>、<code>critical</code>、<code>all</code>、<code>disable</code>。未設定等同 Normal。</p>
+<p><strong>自動失效 </strong>：<code>_silent_mode</code> 和 <code>_state_maintenance</code> 支援結構化物件（向後相容純量字串），帶 <code>expires</code> ISO8601 時戳。Go 引擎 <code>time.Now().After(expires)</code> 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge <code>da_config_event{event="silence_expired"}</code> 搭配 <code>TenantConfigEvent</code> alert rule 通知。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">    </span><span class="nt">_silent_mode</span><span class="p">:</span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">      </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;all&quot;</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="w">      </span><span class="nt">expires</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;2026-04-01T00:00:00Z&quot;</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">      </span><span class="nt">reason</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Migration</span><span class="nv"> </span><span class="s">shadow</span><span class="nv"> </span><span class="s">monitoring</span><span class="nv"> </span><span class="s">period&quot;</span>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="w">    </span><span class="nt">_state_maintenance</span><span class="p">:</span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="w">      </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;all&quot;</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="w">      </span><span class="nt">expires</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;2026-04-01T00:00:00Z&quot;</span>
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="w">      </span><span class="nt">reason</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Scheduled</span><span class="nv"> </span><span class="s">maintenance</span><span class="nv"> </span><span class="s">window&quot;</span>
+</code></pre></div>
+<p><strong>Alertmanager inhibit_rules 範本</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nt">inhibit_rules</span><span class="p">:</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span><span class="c1"># Severity Dedup: per-tenant inhibit rules (由 generate_alertmanager_routes.py 產出)</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span><span class="c1"># 僅 _severity_dedup: &quot;enable&quot; (預設) 的 tenant 會產出規則</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">  </span><span class="c1"># _severity_dedup: &quot;disable&quot; 的 tenant 不會有對應規則 → 兩種通知都收到</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_matchers</span><span class="p">:</span>
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">severity=&quot;critical&quot;</span>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metric_group=~&quot;.+&quot;</span>
+<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant=&quot;db-a&quot;</span>
+<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="w">    </span><span class="nt">target_matchers</span><span class="p">:</span>
+<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">severity=&quot;warning&quot;</span>
+<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metric_group=~&quot;.+&quot;</span>
+<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant=&quot;db-a&quot;</span>
+<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="w">    </span><span class="nt">equal</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;metric_group&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a>
+<a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="w">  </span><span class="c1"># Silent Mode: 壓制 warning 通知</span>
+<a id="__codelineno-22-16" name="__codelineno-22-16" href="#__codelineno-22-16"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_matchers</span><span class="p">:</span>
+<a id="__codelineno-22-17" name="__codelineno-22-17" href="#__codelineno-22-17"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">alertname=&quot;TenantSilentWarning&quot;</span>
+<a id="__codelineno-22-18" name="__codelineno-22-18" href="#__codelineno-22-18"></a><span class="w">    </span><span class="nt">target_matchers</span><span class="p">:</span>
+<a id="__codelineno-22-19" name="__codelineno-22-19" href="#__codelineno-22-19"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">severity=&quot;warning&quot;</span>
+<a id="__codelineno-22-20" name="__codelineno-22-20" href="#__codelineno-22-20"></a><span class="w">    </span><span class="nt">equal</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;tenant&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-22-21" name="__codelineno-22-21" href="#__codelineno-22-21"></a>
+<a id="__codelineno-22-22" name="__codelineno-22-22" href="#__codelineno-22-22"></a><span class="w">  </span><span class="c1"># Silent Mode: 壓制 critical 通知</span>
+<a id="__codelineno-22-23" name="__codelineno-22-23" href="#__codelineno-22-23"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_matchers</span><span class="p">:</span>
+<a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">alertname=&quot;TenantSilentCritical&quot;</span>
+<a id="__codelineno-22-25" name="__codelineno-22-25" href="#__codelineno-22-25"></a><span class="w">    </span><span class="nt">target_matchers</span><span class="p">:</span>
+<a id="__codelineno-22-26" name="__codelineno-22-26" href="#__codelineno-22-26"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">severity=&quot;critical&quot;</span>
+<a id="__codelineno-22-27" name="__codelineno-22-27" href="#__codelineno-22-27"></a><span class="w">    </span><span class="nt">equal</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;tenant&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<h3 id="28-severity-dedup">2.8 Severity Dedup（嚴重度去重）<a class="headerlink" href="#28-severity-dedup" title="Permanent link">&para;</a></h3>
+<p>v1.2.0 新增 <strong>Severity Dedup</strong>，解決「critical 觸發時 warning 的 TSDB 紀錄被消滅」的問題。</p>
+<p><strong>設計變更</strong>：Auto-Suppression 從 PromQL 層（<code>unless critical</code>）移至 Alertmanager 層（<code>inhibit_rules</code>）。TSDB 永遠同時記錄 warning 和 critical，dedup 只控制通知行為。</p>
+<pre class="mermaid"><code>flowchart TD
+    A["Prometheus&lt;br/&gt;warning alert 觸發"] --&gt; B["TSDB 記錄 ✅"]
+    C["Prometheus&lt;br/&gt;critical alert 觸發"] --&gt; D["TSDB 記錄 ✅"]
+    B --&gt; E{"Alertmanager&lt;br/&gt;inhibit_rules"}
+    D --&gt; E
+    E --&gt;|"critical 存在&lt;br/&gt;same metric_group + tenant"| F["warning 通知 ❌ 被抑制"]
+    E --&gt;|"只有 warning"| G["warning 通知 ✅"]
+    E --&gt;|"critical"| H["critical 通知 ✅"]</code></pre>
+<p><strong>Per-Tenant 控制機制</strong></p>
+<p>v1.2.0 採用 per-tenant inhibit rules 實現可選化：</p>
+<ol>
+<li><code>generate_alertmanager_routes.py</code> 掃描所有 tenant YAML 的 <code>_severity_dedup</code> 設定</li>
+<li>對每個 dedup enabled 的 tenant 產出一條專屬 inhibit rule（帶 <code>tenant="&lt;name&gt;"</code> matcher）</li>
+<li><code>_severity_dedup: "disable"</code> 的 tenant 不產出 rule → 兩種通知都收到</li>
+<li>Exporter 仍輸出 <code>user_severity_dedup{tenant, mode}</code> metric → Prometheus sentinel <code>TenantSeverityDedupEnabled</code> 供 Grafana 面板顯示各 tenant dedup 狀態</li>
+</ol>
+<p><strong>行為矩陣</strong></p>
+<table>
+<thead>
+<tr>
+<th>設定</th>
+<th>TSDB warning</th>
+<th>TSDB critical</th>
+<th>Warning 通知</th>
+<th>Critical 通知</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_severity_dedup: "enable"</code>（預設）</td>
+<td>✅</td>
+<td>✅</td>
+<td>❌ 被 AM 攔截</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>_severity_dedup: "disable"</code></td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<p><strong>配對機制</strong>：Alert rule 的 <code>metric_group</code> label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 <code>MariaDBHighConnections</code> 和 <code>MariaDBHighConnectionsCritical</code> 共享 <code>metric_group: "connections"</code>。每條 per-tenant inhibit rule 限定 <code>metric_group=~".+"</code> 確保無 <code>metric_group</code> 的 alert（如 <code>MariaDBDown</code>）不會參與 dedup。</p>
+<p><strong>Tenant 配置</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span><span class="w">                                </span><span class="c1"># 預設 enable — warning 被壓制</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span><span class="nt">db-b</span><span class="p">:</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">    </span><span class="nt">_severity_dedup</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;disable&quot;</span><span class="w">           </span><span class="c1"># 兩種通知都收到</span>
+</code></pre></div>
+<p><strong>產出 Alertmanager 設定</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>python3<span class="w"> </span>scripts/tools/ops/generate_alertmanager_routes.py<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--dry-run
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="c1"># 輸出包含 per-tenant inhibit_rules section，合併至 Alertmanager config</span>
+</code></pre></div>
+<h3 id="29-alert-routing-config-driven-routing">2.9 Alert Routing 客製化 (Config-Driven Routing)<a class="headerlink" href="#29-alert-routing-config-driven-routing" title="Permanent link">&para;</a></h3>
+<p>Tenant 可透過 <code>_routing</code> section 自主管理通知目的地、分群策略與時序控制。平台工具 <code>generate_alertmanager_routes.py</code> 讀取所有 tenant YAML，產出 Alertmanager route + receiver + inhibit_rules YAML fragment。</p>
+<blockquote>
+<p>支援 webhook / email / slack / teams / rocketchat / pagerduty 六種 receiver type。Receiver 為結構化物件（<code>{type, ...fields}</code>），由 <code>generate_alertmanager_routes.py</code> 驗證必要欄位並產出對應 Alertmanager config。</p>
+</blockquote>
+<p><strong>Schema</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">    </span><span class="nt">_routing</span><span class="p">:</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w">                                         </span><span class="c1"># required — 結構化物件</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;webhook&quot;</span><span class="w">                                 </span><span class="c1">#   type: webhook/email/slack/teams/rocketchat/pagerduty</span>
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="w">        </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://webhook.db-a.svc/alerts&quot;</span>
+<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a><span class="w">      </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;alertname&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;severity&quot;</span><span class="p p-Indicator">]</span><span class="w">               </span><span class="c1"># optional</span>
+<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a><span class="w">      </span><span class="nt">group_wait</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;30s&quot;</span><span class="w">                                  </span><span class="c1"># optional, guardrail 5s–5m</span>
+<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a><span class="w">      </span><span class="nt">group_interval</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1m&quot;</span><span class="w">                               </span><span class="c1"># optional, guardrail 5s–5m</span>
+<a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a><span class="w">      </span><span class="nt">repeat_interval</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4h&quot;</span><span class="w">                              </span><span class="c1"># optional, guardrail 1m–72h</span>
+<a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a><span class="w">      </span><span class="nt">overrides</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span><span class="w">                                      </span><span class="c1"># optional, per-rule routing (§2.10)</span>
+</code></pre></div>
+<p><strong>Timing Guardrails</strong></p>
+<p>平台對時序參數設定硬性上下界，超限值自動 clamp 並發出 WARN log：</p>
+<table>
+<thead>
+<tr>
+<th>參數</th>
+<th>最小值</th>
+<th>最大值</th>
+<th>預設值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>group_wait</code></td>
+<td>5s</td>
+<td>5m</td>
+<td>30s</td>
+</tr>
+<tr>
+<td><code>group_interval</code></td>
+<td>5s</td>
+<td>5m</td>
+<td>5m</td>
+</tr>
+<tr>
+<td><code>repeat_interval</code></td>
+<td>1m</td>
+<td>72h</td>
+<td>4h</td>
+</tr>
+</tbody>
+</table>
+<p><strong>與 Silent Mode 的交互</strong></p>
+<p>Silent Mode 天然 bypass routing：Alertmanager 的 inhibit_rules 在 route evaluation 之前攔截通知。因此即使 tenant 配置了自訂 routing，silent 的 alert 仍不會送出通知。</p>
+<p><strong>工具鏈</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># 預覽模式</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>python3<span class="w"> </span>scripts/tools/ops/generate_alertmanager_routes.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--dry-run
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="c1"># 產出 fragment + CI 驗證</span>
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>python3<span class="w"> </span>scripts/tools/ops/generate_alertmanager_routes.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>-o<span class="w"> </span>alertmanager-routes.yaml<span class="w"> </span>--validate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a><span class="w">  </span>--policy<span class="w"> </span>.github/custom-rule-policy.yaml
+<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a>
+<a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a><span class="c1"># 一站式合併至 Alertmanager ConfigMap + reload</span>
+<a id="__codelineno-26-11" name="__codelineno-26-11" href="#__codelineno-26-11"></a>python3<span class="w"> </span>scripts/tools/ops/generate_alertmanager_routes.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-12" name="__codelineno-26-12" href="#__codelineno-26-12"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--apply<span class="w"> </span>--yes
+</code></pre></div>
+<p><code>--validate</code> 檢查 YAML 合法性 + webhook domain allowlist（exit 0/1，供 CI 消費）。<code>--apply</code> 直接合併 fragment 至 Alertmanager ConfigMap 並觸發 reload。產出支援 webhook、email、slack、teams、rocketchat、pagerduty 六種 receiver type。</p>
+<h3 id="210-per-rule-routing-overrides">2.10 Per-rule Routing Overrides<a class="headerlink" href="#210-per-rule-routing-overrides" title="Permanent link">&para;</a></h3>
+<p>v1.8.0 新增 <strong>Per-rule Routing Overrides</strong> 功能，允許 tenant 針對特定 alert 或 metric group 指定不同的 receiver（例如：DBA 特定 alert 走 PagerDuty，其餘走 Slack）。</p>
+<p><strong>YAML 設定範例：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">    </span><span class="nt">_routing</span><span class="p">:</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">slack</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="w">        </span><span class="nt">api_url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://hooks.slack.com/services/...&quot;</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="w">      </span><span class="nt">overrides</span><span class="p">:</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alertname</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;MariaDBReplicationLag&quot;</span>
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="w">          </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pagerduty</span>
+<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a><span class="w">            </span><span class="nt">service_key</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;abc123&quot;</span>
+<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">metric_group</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;redis&quot;</span>
+<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a><span class="w">          </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a><span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">webhook</span>
+<a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a><span class="w">            </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://oncall.example.com/redis&quot;</span>
+</code></pre></div>
+<p><strong>設計規則：</strong></p>
+<ul>
+<li>每個 override 必須指定 <code>alertname</code> 或 <code>metric_group</code>（二擇一，不可同時設定）</li>
+<li>override receiver 走同一個 <code>build_receiver_config()</code> 驗證 + domain allowlist 檢查</li>
+<li><code>expand_routing_overrides()</code> 產出的子路由插入在 tenant 主路由之前，確保 Alertmanager 優先匹配 override</li>
+<li>Timing parameters（<code>group_wait</code>、<code>group_interval</code>、<code>repeat_interval</code>）可在 override 層級覆寫，同樣受平台 guardrails 約束</li>
+</ul>
+<h3 id="211-platform-enforced-routing">2.11 Platform Enforced Routing<a class="headerlink" href="#211-platform-enforced-routing" title="Permanent link">&para;</a></h3>
+<p>Platform Team 可在 <code>_defaults.yaml</code> 設定 <code>_routing_enforced</code>，在所有 tenant route 之前插入平台路由（帶 <code>continue: true</code>），實現「NOC 必收 + tenant 也收」雙軌通知：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># _defaults.yaml — 模式 A：統一 NOC 接收</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="nt">_routing_enforced</span><span class="p">:</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">  </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;webhook&quot;</span>
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://noc.example.com/alerts&quot;</span>
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="w">  </span><span class="nt">match</span><span class="p">:</span>
+<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;critical&quot;</span><span class="w">    </span><span class="c1"># 僅 critical 送 NOC</span>
+</code></pre></div>
+<p><strong>Per-tenant Enforced Channel：</strong> 若 receiver 欄位包含 <code>{{tenant}}</code>，系統自動為每個 tenant 建立獨立的 enforced route，讓 Platform 可 by-tenant 建立各自的通知通道，tenant 無法拒絕也無法覆寫：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># _defaults.yaml — 模式 B：per-tenant 獨立通道</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="nt">_routing_enforced</span><span class="p">:</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="w">  </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;slack&quot;</span>
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="w">    </span><span class="nt">api_url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://hooks.slack.com/services/T/B/x&quot;</span>
+<a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="w">    </span><span class="nt">channel</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;#alerts-{{tenant}}&quot;</span><span class="w">    </span><span class="c1"># → #alerts-db-a, #alerts-db-b, ...</span>
+</code></pre></div>
+<p><code>generate_alertmanager_routes.py</code> 在 tenant route 之前插入 platform route。模式 A 產生單一共用 route，模式 B 產生 N 個 per-tenant route（各帶 <code>tenant="&lt;name&gt;"</code> matcher + <code>continue: true</code>）。預設不啟用，Platform Team 按需開啟。詳見 <a href="../../integration/byo-alertmanager-integration/#8-platform-enforced-routing">BYO Alertmanager 整合指南 §8</a>。</p>
+<h3 id="212-routing-profiles-domain-policiesadr-007">2.12 Routing Profiles 與 Domain Policies（ADR-007）<a class="headerlink" href="#212-routing-profiles-domain-policiesadr-007" title="Permanent link">&para;</a></h3>
+<p>當多個租戶共享相同的 on-call 團隊和通知策略時，<code>_routing</code> 區塊會大量重複。ADR-007 引入兩層機制解決此問題：</p>
+<p><strong>Routing Profiles</strong>：在 <code>_routing_profiles.yaml</code> 中定義命名路由配置，租戶透過 <code>_routing_profile</code> 引用：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># _routing_profiles.yaml</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="nt">routing_profiles</span><span class="p">:</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="nt">team-sre-apac</span><span class="p">:</span>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">    </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">slack-sre-apac</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="w">    </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">tenant</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">alertname</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">severity</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="w">    </span><span class="nt">group_wait</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+<a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="w">    </span><span class="nt">repeat_interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4h</span>
+<a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a>
+<a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a><span class="c1"># db-a.yaml — 租戶只需引用 profile</span>
+<a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-30-12" name="__codelineno-30-12" href="#__codelineno-30-12"></a><span class="w">    </span><span class="nt">_routing_profile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">team-sre-apac</span>
+</code></pre></div>
+<p><strong>Domain Policies</strong>：在 <code>_domain_policy.yaml</code> 中定義業務域的合規約束（如金融域禁止 Slack 通知），在路由產生後驗證，不注入配置值。</p>
+<p><strong>四層合併流水線</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>_routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>     全域預設          團隊共享模板          租戶覆寫          NOC 不可變覆蓋
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>                                                    ↓
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a>                                          domain_policies（驗證約束）
+</code></pre></div>
+<p>後者覆蓋前者，<code>_routing_enforced</code> 永遠最終覆蓋。Domain Policies 不修改值，僅驗證最終結果是否符合約束。</p>
+<p><strong>偵錯工具</strong>：<code>explain_route.py --show-profile-expansion</code> 可顯示每一層合併的結果，定位配置來源。</p>
+<p>詳見 <a href="../../adr/007-cross-domain-routing-profiles/">ADR-007</a>。</p>
+<hr />
+<blockquote>
+<p>💡 <strong>互動工具</strong></p>
+<p><strong>Routing 與 Receiver 配置</strong>助手：</p>
+<ul>
+<li><a href="https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/config-diff.jsx">Config Diff</a> — 比較租戶路由與接收器配置的變更</li>
+<li><a href="https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/alert-simulator.jsx">Alert Simulator</a> — 模擬警報流經路由、分組與重複間隔的行為</li>
+<li><a href="https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/architecture-quiz.jsx">Architecture Quiz</a> — 通過互動測驗找出最適合你的架構模式</li>
+</ul>
+<p>更多工具見 <a href="https://vencil.github.io/Dynamic-Alerting-Integrations/">Interactive Tools Hub</a></p>
+</blockquote>
+<h3 id="213-pre-computed-recording-rule-vs-runtime-aggregation">2.13 效能架構：Pre-computed Recording Rule vs Runtime Aggregation<a class="headerlink" href="#213-pre-computed-recording-rule-vs-runtime-aggregation" title="Permanent link">&para;</a></h3>
+<p>客戶最常見的問題：「隨著 tenant 增加，Prometheus CPU/Memory 是否會暴增？」答案是不會，因為本平台的三層 Rule Pack 設計將運算成本從「告警評估時」移到「背景預算時」。</p>
+<p><strong>傳統做法（Runtime Aggregation）— 每次評估都掃全量原始資料：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c1"># 每次 Alert 評估：Prometheus 必須載入所有 Pod 的 raw time series，執行 rate + sum</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TenantCPUHigh</span>
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="w">    </span><span class="no">sum by (namespace) (rate(container_cpu_usage_seconds_total{container!=&quot;&quot;}[5m]))</span>
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="w">    </span><span class="no">&gt; on(namespace) group_left()</span>
+<a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a><span class="w">    </span><span class="no">tenant_cpu_threshold</span>
+</code></pre></div>
+<p>當有 N 個 tenant、底下有 10,000 個 Pod 時，每 15 秒評估一次，Prometheus 必須：從 TSDB 載入 10,000 條序列過去 5 分鐘的 chunks → 執行 <code>rate()</code> → 執行 <code>sum by (namespace)</code> → 最後才做 <code>&gt;</code> 比對。運算量 O(pods × tenants)，隨規模線性增長。</p>
+<p><strong>本平台做法（Pre-computed Vector Join）— 告警評估只做記憶體內數字比對：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="c1"># Part 2 Recording Rule（背景穩定執行，產出低基數指標）</span>
+<a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:cpu_usage:rate5m</span>
+<a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sum by (tenant) (rate(container_cpu_usage_seconds_total{container!=&quot;&quot;}[5m]))</span>
+<a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a>
+<a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a><span class="c1"># Part 3 Alert Rule（只比較兩組已預算好的數字向量）</span>
+<a id="__codelineno-33-6" name="__codelineno-33-6" href="#__codelineno-33-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TenantCPUHigh</span>
+<a id="__codelineno-33-7" name="__codelineno-33-7" href="#__codelineno-33-7"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-33-8" name="__codelineno-33-8" href="#__codelineno-33-8"></a><span class="w">    </span><span class="no">tenant:cpu_usage:rate5m</span>
+<a id="__codelineno-33-9" name="__codelineno-33-9" href="#__codelineno-33-9"></a><span class="w">    </span><span class="no">&gt; on(tenant) group_left()</span>
+<a id="__codelineno-33-10" name="__codelineno-33-10" href="#__codelineno-33-10"></a><span class="w">    </span><span class="no">tenant:alert_threshold:cpu_usage</span>
+</code></pre></div>
+<p>Recording Rule 在背景將 10,000 條 raw series 聚合成 N 個 tenant 級數字。Alert 評估時，Prometheus 只做 N 個數字 vs N 個數字的 Vector Join。運算量 O(tenants)，與 Pod 數量無關。</p>
+<p><strong>防護機制：</strong></p>
+<ul>
+<li><strong>Cardinality Guard</strong>：threshold-exporter 的 per-tenant 500 指標上限。即使配置異常，Go 引擎也會主動截斷輸出並記錄 ERROR，防止 TSDB 被撐爆</li>
+<li><strong>500 是告警情境數，不是 raw metric 數</strong>：一個 <code>cpu_warning_threshold: 80</code> 經由 Recording Rule 的 Vector Join 會自動套用到該 tenant 下所有 Pod。500 代表的是「500 種不同的告警閾值定義」，以 SRE 最佳實踐而言（核心告警 10-20 條），這個上限足以容納大量歷史包袱和特殊場景</li>
+</ul>
+<p><strong>在你的環境中驗證：</strong></p>
+<p>效能與你的 TSDB 大小、scrape interval、硬體規格高度相關。我們不提供合成 benchmark 數據，而是提供工具讓你在自己的環境中評估：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="c1"># 評估當前基數增長趨勢，預測何時觸頂</span>
+<a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>da-tools<span class="w"> </span>cardinality-forecast<span class="w"> </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span>--warn-days<span class="w"> </span><span class="m">30</span>
+<a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>
+<a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="c1"># 查看每個 tenant 的指標數量是否健康</span>
+<a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a>da-tools<span class="w"> </span>diagnose<span class="w"> </span>&lt;tenant&gt;<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/
+</code></pre></div>
+<blockquote>
+<p>threshold-exporter 層面的 micro-benchmark（config reload 延遲）見 <a href="../../benchmarks/">benchmarks.md</a>。漸進式遷移指南見 <a href="../../scenarios/incremental-migration-playbook/">incremental-migration-playbook</a>。</p>
+</blockquote>
+<h3 id="214-tenant-management-api-architecture-adr-009">2.14 Tenant Management API Architecture (ADR-009)<a class="headerlink" href="#214-tenant-management-api-architecture-adr-009" title="Permanent link">&para;</a></h3>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,4780 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/migration-guide/">
+      
+      
+        <link rel="prev" href="../integration/gitops-deployment/">
+      
+      
+        <link rel="next" href="../migration-engine/">
+      
+      
+        
+          <link rel="alternate" href="../../migration-guide/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migration-guide-from-traditional-monitoring-to-dynamic-alerting-platform" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../migration-guide/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install-the-migration-toolkit-v280" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install the Migration Toolkit (v2.8.0+)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-are-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where Are You? (你在哪個階段？)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zero-friction-onboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zero-Friction Onboarding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-enterprise-grade-reverse-analysis-da-tools-onboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Enterprise-Grade Reverse Analysis — da-tools onboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. Enterprise-Grade Reverse Analysis — da-tools onboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-new-tenant-quick-onboarding-da-tools-scaffold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. New Tenant Quick Onboarding — da-tools scaffold
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. New Tenant Quick Onboarding — da-tools scaffold">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-output_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#injection-into-k8s-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Injection into K8s Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-existing-rule-migration-da-tools-migrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Existing Rule Migration — da-tools migrate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Existing Rule Migration — da-tools migrate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#three-processing-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three Processing Scenarios
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-tool-output-three-piece-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Tool Output "Three-Piece Set"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-k8s-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploy to K8s Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aggregation-mode-intelligent-guessing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregation Mode Intelligent Guessing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-suppression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Suppression
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-deploy-threshold-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Deploy threshold-exporter
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Deploy threshold-exporter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-a-recommended-oci-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option A (Recommended): OCI Registry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-b-local-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option B: Local Build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-c-operator-crd-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option C: Operator CRD Path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-da-tools-in-k8s-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use da-tools in K8s Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-real-world-examples-five-migration-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Real-World Examples: Five Migration Scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Real-World Examples: Five Migration Scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-basic-value-comparison-connection-count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Basic Value Comparison (Connection Count)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-45-other-common-patterns-quick-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2-4.5 Other Common Patterns — Quick Reference Table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-alertmanager-routing-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Alertmanager Routing Migration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Alertmanager Routing Migration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#traditional-based-on-instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traditional (based on instance)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-migration-based-on-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After Migration (based on tenant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-driven-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config-Driven Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#advanced-routing-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Routing Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-post-migration-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Post-Migration Verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Post-Migration Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#complete-verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Verification Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-migration-tenant-self-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Post-Migration: Tenant Self-Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-dimensional-labels-multi-db-type-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Dimensional Labels — Multi-DB Type Support
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Dimensional Labels — Multi-DB Type Support">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#design-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Constraints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-team-promql-adaptation-important" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform Team PromQL Adaptation (Important)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reference-templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference Templates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-llm-assisted-manual-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. LLM-Assisted Manual Conversion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-advanced-extending-unsupported-db-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Advanced: Extending Unsupported DB Types
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Advanced: Extending Unsupported DB Types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#normalization-naming-convention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalization Naming Convention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aggregation-mode-selection-max-vs-sum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregation Mode Selection — Max vs. Sum
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creation-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creation Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q-how-long-does-threshold-config-take-to-take-effect-after-modification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: How long does threshold-config take to take effect after modification?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-what-needs-to-be-changed-when-adding-a-new-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: What needs to be changed when adding a new metric?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-can-old-and-new-coexist-during-migration-transition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: Can old and new coexist during migration transition?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-can-dimensional-keys-be-configured-in-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: Can dimensional keys be configured in defaults?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-how-to-specify-critical-for-dimensional-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: How to specify critical for dimensional key?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-how-to-confirm-hot-reload-succeeded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: How to confirm hot-reload succeeded?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-enterprise-grade-migration-large-tenant-1000-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Enterprise-Grade Migration — Large Tenant (1000+ rules)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Enterprise-Grade Migration — Large Tenant (1000+ rules)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-a-triage-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase A: Triage Analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-b-conversion-shadow-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase B: Conversion + Shadow Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-c-switchover-convergence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase C: Switchover &amp; Convergence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric-dictionary-auto-matching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metric Dictionary Auto-Matching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migration-automation-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration Automation Tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-rule-pack-dynamic-toggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Rule Pack Dynamic Toggle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Rule Pack Dynamic Toggle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unload-unnecessary-rule-packs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unload Unnecessary Rule Packs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#re-enable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Re-enable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typical-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Typical Scenarios
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-offboarding-process-tenant-and-rulemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Offboarding Process — Tenant and Rule/Metric
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Offboarding Process — Tenant and Rule/Metric">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenant-offboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant Offboarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rulemetric-offboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule/Metric Offboarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install-the-migration-toolkit-v280" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install the Migration Toolkit (v2.8.0+)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-are-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where Are You? (你在哪個階段？)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zero-friction-onboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zero-Friction Onboarding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-enterprise-grade-reverse-analysis-da-tools-onboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Enterprise-Grade Reverse Analysis — da-tools onboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. Enterprise-Grade Reverse Analysis — da-tools onboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-new-tenant-quick-onboarding-da-tools-scaffold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. New Tenant Quick Onboarding — da-tools scaffold
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. New Tenant Quick Onboarding — da-tools scaffold">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-output_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#injection-into-k8s-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Injection into K8s Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-existing-rule-migration-da-tools-migrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Existing Rule Migration — da-tools migrate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Existing Rule Migration — da-tools migrate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#three-processing-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three Processing Scenarios
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-tool-output-three-piece-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Tool Output "Three-Piece Set"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-k8s-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploy to K8s Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aggregation-mode-intelligent-guessing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregation Mode Intelligent Guessing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-suppression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Suppression
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-deploy-threshold-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Deploy threshold-exporter
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Deploy threshold-exporter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-a-recommended-oci-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option A (Recommended): OCI Registry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-b-local-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option B: Local Build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-c-operator-crd-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option C: Operator CRD Path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-da-tools-in-k8s-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use da-tools in K8s Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-real-world-examples-five-migration-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Real-World Examples: Five Migration Scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Real-World Examples: Five Migration Scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-basic-value-comparison-connection-count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Basic Value Comparison (Connection Count)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-45-other-common-patterns-quick-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2-4.5 Other Common Patterns — Quick Reference Table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-alertmanager-routing-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Alertmanager Routing Migration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Alertmanager Routing Migration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#traditional-based-on-instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traditional (based on instance)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-migration-based-on-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After Migration (based on tenant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-driven-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config-Driven Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#advanced-routing-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Routing Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-post-migration-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Post-Migration Verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Post-Migration Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#complete-verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Verification Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-migration-tenant-self-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Post-Migration: Tenant Self-Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-dimensional-labels-multi-db-type-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Dimensional Labels — Multi-DB Type Support
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Dimensional Labels — Multi-DB Type Support">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#design-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Constraints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-team-promql-adaptation-important" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform Team PromQL Adaptation (Important)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reference-templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference Templates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-llm-assisted-manual-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. LLM-Assisted Manual Conversion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-advanced-extending-unsupported-db-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Advanced: Extending Unsupported DB Types
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Advanced: Extending Unsupported DB Types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#normalization-naming-convention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalization Naming Convention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aggregation-mode-selection-max-vs-sum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggregation Mode Selection — Max vs. Sum
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creation-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creation Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q-how-long-does-threshold-config-take-to-take-effect-after-modification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: How long does threshold-config take to take effect after modification?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-what-needs-to-be-changed-when-adding-a-new-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: What needs to be changed when adding a new metric?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-can-old-and-new-coexist-during-migration-transition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: Can old and new coexist during migration transition?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-can-dimensional-keys-be-configured-in-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: Can dimensional keys be configured in defaults?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-how-to-specify-critical-for-dimensional-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: How to specify critical for dimensional key?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q-how-to-confirm-hot-reload-succeeded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q: How to confirm hot-reload succeeded?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-enterprise-grade-migration-large-tenant-1000-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Enterprise-Grade Migration — Large Tenant (1000+ rules)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Enterprise-Grade Migration — Large Tenant (1000+ rules)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-a-triage-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase A: Triage Analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-b-conversion-shadow-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase B: Conversion + Shadow Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-c-switchover-convergence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase C: Switchover &amp; Convergence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric-dictionary-auto-matching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metric Dictionary Auto-Matching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migration-automation-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration Automation Tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-rule-pack-dynamic-toggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Rule Pack Dynamic Toggle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Rule Pack Dynamic Toggle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unload-unnecessary-rule-packs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unload Unnecessary Rule Packs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#re-enable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Re-enable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typical-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Typical Scenarios
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-offboarding-process-tenant-and-rulemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Offboarding Process — Tenant and Rule/Metric
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Offboarding Process — Tenant and Rule/Metric">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenant-offboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant Offboarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rulemetric-offboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule/Metric Offboarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">getting-started</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">migration</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/migration-guide.en.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/migration-guide.en.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="migration-guide-from-traditional-monitoring-to-dynamic-alerting-platform">Migration Guide — From Traditional Monitoring to Dynamic Alerting Platform<a class="headerlink" href="#migration-guide-from-traditional-monitoring-to-dynamic-alerting-platform" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Language / 語言：</strong> <strong>English (Current)</strong> | <a href="./">中文</a></p>
+<p>Migrate from traditional Prometheus alerting to the dynamic multi-tenant threshold architecture.
+<strong>Other Documents:</strong> <a href="../">README</a> (Overview) · <a href="../architecture-and-design/">Architecture &amp; Design</a> (Technical Depth) · <a href="../rule-packs/">Rule Packs</a> (Rule Pack Directory)</p>
+<p><strong>First time migrating?</strong> Start with the <a href="../scenarios/incremental-migration-playbook/">Incremental Migration Playbook</a> — a 4-phase zero-downtime action guide with CLI commands and rollback steps at every stage. This document is a tool-level reference for looking up individual command details during migration.</p>
+<p><strong>⚠️ Migration Safety Guarantee:</strong> The migration process on this platform is designed to be <strong>progressive and reversible</strong>. Your legacy rules don't need to be switched all at once—new rules via the <code>custom_</code> prefix are completely isolated from existing rules and can be validated in parallel through Shadow Monitoring for weeks before deciding to switch. Any stage can be safely rolled back: the Projected Volume's <code>optional: true</code> mechanism ensures that deleting any rule pack will not affect Prometheus operation.</p>
+<p><strong>Tip:</strong> All <code>da-tools</code> commands can be executed directly via Docker (<code>docker run --rm --network=host ghcr.io/vencil/da-tools:v2.7.0 &lt;cmd&gt;</code>). The examples below use the simplified <code>da-tools &lt;cmd&gt;</code> notation.</p>
+</blockquote>
+<h2 id="install-the-migration-toolkit-v280">Install the Migration Toolkit (v2.8.0+)<a class="headerlink" href="#install-the-migration-toolkit-v280" title="Permanent link">&para;</a></h2>
+<p>Before migrating, install the toolkit. Pick one of three paths (Docker / static binary / air-gapped tar) — full guide in <a href="../migration-toolkit-installation/"><code>migration-toolkit-installation.en.md</code></a>. The two most common commands:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Path A: Docker pull from ghcr.io (simplest)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/vencil/da-tools:v2.7.0
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Path B: Download static binary onto PATH</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>curl<span class="w"> </span>-fsSLo<span class="w"> </span>da-guard.tar.gz<span class="w"> </span>https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.7.0/da-guard-linux-amd64.tar.gz
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>tar<span class="w"> </span>xzf<span class="w"> </span>da-guard.tar.gz<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">0755</span><span class="w"> </span>da-guard-linux-amd64<span class="w"> </span>/usr/local/bin/da-guard
+</code></pre></div>
+<p>Full command listing, hash verification, and air-gapped flow: <a href="../migration-toolkit-installation/"><code>migration-toolkit-installation.en.md</code></a>.</p>
+<h2 id="where-are-you">Where Are You? (你在哪個階段？)<a class="headerlink" href="#where-are-you" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Your Situation</th>
+<th>Recommended Path</th>
+<th>Tool (<code>da-tools</code> command)</th>
+<th>Estimated Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>New Tenant</strong> — First time onboarding</td>
+<td>Interactive configuration generation</td>
+<td><code>da-tools scaffold</code></td>
+<td>~5 min</td>
+</tr>
+<tr>
+<td><strong>Existing Mature Monitoring System</strong> — Enterprise reverse analysis</td>
+<td>Auto-generate migration plan</td>
+<td><code>da-tools onboard</code></td>
+<td>~10 min</td>
+</tr>
+<tr>
+<td><strong>Existing Traditional Alert Rules</strong> — Need migration</td>
+<td>Auto-convert to three-piece set</td>
+<td><code>da-tools migrate</code></td>
+<td>~15 min</td>
+</tr>
+<tr>
+<td><strong>Large Tenant (1000+ rules)</strong> — Enterprise-grade migration</td>
+<td>Triage → Shadow → Switchover</td>
+<td><code>da-tools migrate --triage</code> + <code>da-tools validate</code></td>
+<td>~1-2 weeks</td>
+</tr>
+<tr>
+<td><strong>Unsupported DB Type</strong> — Need extension</td>
+<td>Manual Recording + Alert Rules creation</td>
+<td>See <a href="#9-advanced-extending-unsupported-db-types">§9</a></td>
+<td>~30 min</td>
+</tr>
+<tr>
+<td><strong>Offboarding Tenant/Metrics</strong></td>
+<td>Safe removal</td>
+<td><code>da-tools offboard</code> / <code>da-tools deprecate</code></td>
+<td>~5 min</td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>flowchart TD
+    Start["Start Migration"] --&gt; Q0{"Existing&lt;br/&gt;Alertmanager/&lt;br/&gt;Rules/Scrape?"}
+    Q0 --&gt;|"Mature monitoring"| S0["da-tools onboard&lt;br/&gt;Reverse analysis → Migration plan"]
+    Q0 --&gt;|"None"| Q1{"Existing&lt;br/&gt;alert rules?"}
+    S0 --&gt; Q1
+    Q1 --&gt;|"None"| S1["da-tools scaffold&lt;br/&gt;Interactive configuration"]
+    Q1 --&gt;|"Yes"| Q2{"Number of rules?"}
+    Q2 --&gt;|"&lt; 100 rules"| S2["da-tools migrate&lt;br/&gt;--dry-run preview"]
+    Q2 --&gt;|"100+ rules"| S3["da-tools migrate&lt;br/&gt;--triage categorization"]
+    S2 --&gt; V["da-tools validate-config&lt;br/&gt;One-stop validation"]
+    S3 --&gt; S4["Shadow Monitoring&lt;br/&gt;da-tools validate"]
+    S4 --&gt; S5["Progressive switchover&lt;br/&gt;(weeks of parallel observation)"]
+    S1 --&gt; V
+    V --&gt; Done["Complete"]
+    S5 --&gt; Done
+
+    style Done fill:#c8e6c9,stroke:#2e7d32
+    style Start fill:#e3f2fd,stroke:#1565c0</code></pre>
+<h2 id="zero-friction-onboarding">Zero-Friction Onboarding<a class="headerlink" href="#zero-friction-onboarding" title="Permanent link">&para;</a></h2>
+<p>This platform comes pre-loaded with <strong>15 Rule Pack ConfigMaps</strong> (MariaDB, PostgreSQL, Kubernetes, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Operational, and Platform self-monitoring), distributed across independent ConfigMaps via Kubernetes <strong>Projected Volume</strong> architecture. Each Rule Pack contains a complete three-piece set: Normalization Recording Rules + Threshold Normalization + Alert Rules.</p>
+<p><strong>Rule Packs without deployed exporters won't generate metrics, and alerts won't fire incorrectly (near-zero cost)</strong>. After adding a new exporter, you only need to configure <code>_defaults.yaml</code> + tenant YAML without modifying Prometheus configuration.</p>
+<hr />
+<h2 id="0-enterprise-grade-reverse-analysis-da-tools-onboard">0. Enterprise-Grade Reverse Analysis — da-tools onboard<a class="headerlink" href="#0-enterprise-grade-reverse-analysis-da-tools-onboard" title="Permanent link">&para;</a></h2>
+<p>For enterprises with mature monitoring systems, <code>onboard_platform.py</code> supports <strong>reverse analysis</strong> of existing configurations to automatically generate migration plans:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Analyze existing Alertmanager configuration</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--alertmanager-config<span class="w"> </span>/data/alertmanager.yml<span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Analyze existing Prometheus rules</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--rule-files<span class="w"> </span><span class="s1">&#39;/data/rules/*.yml&#39;</span><span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Analyze scrape config (for Tenant-NS mapping)</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--scrape-config<span class="w"> </span>/data/prometheus.yml<span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/<span class="w"> </span>--tenant-label<span class="w"> </span>cluster
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># Analyze everything at once (three phases combined)</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span>--alertmanager-config<span class="w"> </span>/data/alertmanager.yml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">                  </span>--rule-files<span class="w"> </span><span class="s1">&#39;/data/rules/*.yml&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">                  </span>--scrape-config<span class="w"> </span>/data/prometheus.yml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">                  </span>--tenant-label<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span>/data/migration-plan/
+</code></pre></div>
+<h3 id="tool-output">Tool Output<a class="headerlink" href="#tool-output" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>extracted-tenants.yaml</code></td>
+<td>Auto-identified tenant list with Alertmanager receiver mapping</td>
+</tr>
+<tr>
+<td><code>migration-plan.csv</code></td>
+<td>Rule bucketing list (auto/review/skip/use_golden) + mapping recommendations</td>
+</tr>
+<tr>
+<td><code>relabel-config-suggestions.txt</code></td>
+<td>Prometheus scrape config relabel snippet (for Tenant-NS mapping)</td>
+</tr>
+</tbody>
+</table>
+<p>After reverse analysis completes, you can directly use <code>extracted-tenants.yaml</code> as input to <code>scaffold</code> and <code>migrate</code> to accelerate enterprise migration onboarding.</p>
+<hr />
+<h2 id="1-new-tenant-quick-onboarding-da-tools-scaffold">1. New Tenant Quick Onboarding — da-tools scaffold<a class="headerlink" href="#1-new-tenant-quick-onboarding-da-tools-scaffold" title="Permanent link">&para;</a></h2>
+<p>For brand-new tenants, use the interactive generator to complete setup in 30 seconds:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># CLI mode — one-liner</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--db<span class="w"> </span>redis,mariadb<span class="w"> </span>--non-interactive<span class="w"> </span>-o<span class="w"> </span>/data
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># With N:1 namespace-tenant mapping</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--db<span class="w"> </span>redis,mariadb<span class="w"> </span>--namespaces<span class="w"> </span>ns1,ns2,ns3<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">                  </span>--non-interactive<span class="w"> </span>-o<span class="w"> </span>/data
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># With routing configuration — output includes complete routing config</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--db<span class="w"> </span>redis,mariadb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">                  </span>--routing-receiver<span class="w"> </span><span class="s2">&quot;https://hooks.slack.com/services/T../B../xxx&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">                  </span>--routing-receiver-type<span class="w"> </span>slack<span class="w"> </span>--non-interactive<span class="w"> </span>-o<span class="w"> </span>/data
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="c1"># View supported DB types and metrics</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span>--catalog
+</code></pre></div>
+<h3 id="tool-output_1">Tool Output<a class="headerlink" href="#tool-output_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_defaults.yaml</code></td>
+<td>Platform global defaults (contains all selected DB metrics)</td>
+</tr>
+<tr>
+<td><code>&lt;tenant&gt;.yaml</code></td>
+<td>Tenant override configuration (contains three-state examples + <code>_routing</code> + <code>_severity_dedup</code>)</td>
+</tr>
+<tr>
+<td><code>scaffold-report.txt</code></td>
+<td>Deployment steps and Rule Pack status summary</td>
+</tr>
+<tr>
+<td><code>relabel-config-snippet.yaml</code></td>
+<td>Prometheus relabel_configs snippet (only output when <code>--namespaces</code> is used)</td>
+</tr>
+</tbody>
+</table>
+<p>All core Rule Packs (including self-monitoring) are pre-loaded via Projected Volume on the platform. Output configs can be directly copied to <code>conf.d/</code> for use without additional mounting.</p>
+<h3 id="injection-into-k8s-cluster">Injection into K8s Cluster<a class="headerlink" href="#injection-into-k8s-cluster" title="Permanent link">&para;</a></h3>
+<p>The files produced by scaffold need to be injected into the <code>threshold-config</code> ConfigMap so that threshold-exporter can read them:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Method A (recommended): Helm values override — OCI registry</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1">#   Merge the output tenant config into values-override.yaml, then helm upgrade</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>threshold-exporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>oci://ghcr.io/vencil/charts/threshold-exporter<span class="w"> </span>--version<span class="w"> </span><span class="m">2</span>.7.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>-f<span class="w"> </span>values-override.yaml
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Method B: Direct ConfigMap reconstruction (suitable for non-Helm environments)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>threshold-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span>--from-file<span class="o">=</span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<p>After ConfigMap changes, exporter will auto hot-reload within 1-3 minutes (K8s propagation + SHA-256 watcher) without needing to restart Pods.</p>
+<blockquote>
+<p>For detailed three injection methods (Helm / kubectl / GitOps), see <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-deployment-and-configuration-management">threshold-exporter README — K8s Deployment and Configuration Management</a>.</p>
+</blockquote>
+<hr />
+<h2 id="2-existing-rule-migration-da-tools-migrate">2. Existing Rule Migration — da-tools migrate<a class="headerlink" href="#2-existing-rule-migration-da-tools-migrate" title="Permanent link">&para;</a></h2>
+<p>Teams with existing traditional Prometheus alert rules can use the auto-conversion tool (v4 — AST + regex dual-engine):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Preview mode — no file output, only analysis results</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>--dry-run
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Formal conversion — output to output/</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>-o<span class="w"> </span>/data/output
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Triage + Dry Run (recommended for enterprise migration)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>-o<span class="w"> </span>/data/output<span class="w"> </span>--dry-run<span class="w"> </span>--triage
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1"># Force regex mode (don&#39;t use AST engine)</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>--no-ast
+</code></pre></div>
+<blockquote>
+<p>The tool uses the PromQL AST engine (<code>promql-parser</code>) by default to precisely identify metric names and automatically inject the <code>custom_</code> prefix and <code>tenant</code> label. When AST parsing fails, it automatically falls back to regex, ensuring backward compatibility.</p>
+</blockquote>
+<h3 id="three-processing-scenarios">Three Processing Scenarios<a class="headerlink" href="#three-processing-scenarios" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Trigger Condition</th>
+<th>Tool Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✅ <strong>Perfect Parse</strong></td>
+<td>Simple <code>metric &gt; value</code></td>
+<td>Auto-produce complete three-piece set</td>
+</tr>
+<tr>
+<td>⚠️ <strong>Complex Expression</strong></td>
+<td>Contains <code>rate()</code>, <code>[5m]</code>, math operations</td>
+<td>Produce three-piece set + ASCII warning box requesting aggregation mode confirmation</td>
+</tr>
+<tr>
+<td>🚨 <strong>Cannot Parse</strong></td>
+<td><code>absent()</code>, <code>predict_linear()</code>, etc.</td>
+<td>Don't produce, instead provide Prompt suitable for LLM</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-tool-output-three-piece-set">The Tool Output "Three-Piece Set"<a class="headerlink" href="#the-tool-output-three-piece-set" title="Permanent link">&para;</a></h3>
+<p>Conversion produces 4 files:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tenant-config.yaml</code></td>
+<td>YAML snippet that tenant needs to fill into <code>db-*.yaml</code></td>
+</tr>
+<tr>
+<td><code>platform-recording-rules.yaml</code></td>
+<td>Platform team's normalized Recording Rules (valid YAML, includes <code>groups:</code> boilerplate)</td>
+</tr>
+<tr>
+<td><code>platform-alert-rules.yaml</code></td>
+<td>Alert Rules including <code>group_left</code> + <code>unless maintenance</code> + Auto-Suppression</td>
+</tr>
+<tr>
+<td><code>migration-report.txt</code></td>
+<td>Conversion summary and LLM Prompt for unparsed rules</td>
+</tr>
+</tbody>
+</table>
+<h3 id="deploy-to-k8s-cluster">Deploy to K8s Cluster<a class="headerlink" href="#deploy-to-k8s-cluster" title="Permanent link">&para;</a></h3>
+<p>The converted three-piece set needs to be deployed to different locations:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 1. tenant-config.yaml → merge into threshold-config ConfigMap</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1">#    Merge tenant-config.yaml content into conf.d/&lt;tenant&gt;.yaml, then update ConfigMap</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>threshold-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--from-file<span class="o">=</span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># 2. Recording Rules + Alert Rules → create as independent ConfigMap, mounted to Prometheus</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>prometheus-rules-custom<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--from-file<span class="o">=</span>platform-recording-rules.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>--from-file<span class="o">=</span>platform-alert-rules.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="c1"># 3. Ensure Prometheus Projected Volume includes this ConfigMap</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="c1">#    If using Helm, add new source in values.yaml;</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="c1">#    If already have custom rule pack slot, ConfigMap auto-mounts after creation</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Helm users</strong>: You can also integrate recording/alert rules into Helm chart values for centralized management. See <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#k8s-deployment-and-configuration-management">threshold-exporter README</a>.</p>
+</blockquote>
+<h3 id="aggregation-mode-intelligent-guessing">Aggregation Mode Intelligent Guessing<a class="headerlink" href="#aggregation-mode-intelligent-guessing" title="Permanent link">&para;</a></h3>
+<p>For complex expressions, the tool automatically guesses <code>sum</code> or <code>max</code> based on 6 heuristic rules. Guessed recording rules carry a prominent ASCII warning box, reminding users to confirm the aggregation mode (<code>sum</code>=cluster total, <code>max</code>=single point bottleneck) before copy-pasting. If unsure, re-run with <code>--interactive</code> mode.</p>
+<h3 id="auto-suppression">Auto-Suppression<a class="headerlink" href="#auto-suppression" title="Permanent link">&para;</a></h3>
+<p>When input rules include both warning and critical versions (same base metric key), the tool automatically pairs them and injects a second-layer <code>unless</code> clause (Auto-Suppression) into the warning alert, ensuring that when critical fires, warning is suppressed. Pairing logic: warning key <code>custom_X</code> pairs with critical key <code>custom_X_critical</code>. If only single severity exists, no injection occurs.</p>
+<hr />
+<h2 id="3-deploy-threshold-exporter">3. Deploy threshold-exporter<a class="headerlink" href="#3-deploy-threshold-exporter" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Config Separation Principle</strong>: Both Helm chart and Docker image <strong>do not include test tenant data</strong>. The <code>thresholdConfig.tenants</code> in <code>values.yaml</code> defaults to empty. You need to inject your own tenant configuration through values-override or GitOps (see <a href="#injection-into-k8s-cluster">§1 Injection into K8s Cluster</a>). Development/test environments use <code>environments/local/threshold-exporter.yaml</code>, which already includes db-a and db-b example tenants.</p>
+</blockquote>
+<h3 id="option-a-recommended-oci-registry">Option A (Recommended): OCI Registry<a class="headerlink" href="#option-a-recommended-oci-registry" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Production deployment — install chart from OCI registry with custom values-override to inject tenant config</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>threshold-exporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>oci://ghcr.io/vencil/charts/threshold-exporter<span class="w"> </span>--version<span class="w"> </span><span class="m">2</span>.7.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>-f<span class="w"> </span>values-override.yaml
+</code></pre></div>
+<blockquote>
+<p>No need to clone the repo or specify image tag—the chart already has the corresponding image version bound.</p>
+</blockquote>
+<h3 id="option-b-local-build">Option B: Local Build<a class="headerlink" href="#option-b-local-build" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">cd</span><span class="w"> </span>components/threshold-exporter/app
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>threshold-exporter:dev<span class="w"> </span>.
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>threshold-exporter:dev<span class="w"> </span>--name<span class="w"> </span>dynamic-alerting-cluster
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>make<span class="w"> </span>component-deploy<span class="w"> </span><span class="nv">COMP</span><span class="o">=</span>threshold-exporter<span class="w"> </span><span class="nv">ENV</span><span class="o">=</span><span class="nb">local</span>
+</code></pre></div>
+<h3 id="option-c-operator-crd-path">Option C: Operator CRD Path<a class="headerlink" href="#option-c-operator-crd-path" title="Permanent link">&para;</a></h3>
+<p>For environments with kube-prometheus-stack already installed, use <code>operator-generate</code> to produce PrometheusRule CRD, replacing ConfigMap mounting:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>da-tools<span class="w"> </span>operator-generate<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--rule-packs<span class="w"> </span>rule-packs/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--output-dir<span class="w"> </span>operator-manifests/<span class="w"> </span>--gitops
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>operator-manifests/
+</code></pre></div>
+<p>For detailed comparison and decision guidance between the two paths, see <a href="../getting-started/decision-matrix/">Deployment Decision Matrix</a>.</p>
+<h3 id="verify-deployment">Verify Deployment<a class="headerlink" href="#verify-deployment" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>threshold-exporter
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8080/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>user_threshold
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8080/api/v1/config<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<h3 id="use-da-tools-in-k8s-cluster">Use da-tools in K8s Cluster<a class="headerlink" href="#use-da-tools-in-k8s-cluster" title="Permanent link">&para;</a></h3>
+<p>da-tools can also run directly as K8s Job (<code>image: ghcr.io/vencil/da-tools:v2.7.0</code>), eliminating port-forward setup. In-cluster da-tools can directly access Prometheus through K8s Service (<code>http://prometheus.monitoring.svc.cluster.local:9090</code>), suitable for commands like <code>check-alert</code>, <code>validate</code>, <code>baseline</code> that need Prometheus API.</p>
+<blockquote>
+<p>Job output can be retrieved via <code>kubectl cp</code>, then injected into <code>threshold-config</code> ConfigMap. For long-running Shadow Monitoring Job examples, see <a href="#phase-b-conversion-shadow-monitoring">§11 Enterprise-Grade Migration Phase B</a>.</p>
+</blockquote>
+<hr />
+<h2 id="4-real-world-examples-five-migration-scenarios">4. Real-World Examples: Five Migration Scenarios<a class="headerlink" href="#4-real-world-examples-five-migration-scenarios" title="Permanent link">&para;</a></h2>
+<p>Using Percona MariaDB Alert Rules as template, demonstrate complete migration path.</p>
+<h3 id="41-basic-value-comparison-connection-count">4.1 Basic Value Comparison (Connection Count)<a class="headerlink" href="#41-basic-value-comparison-connection-count" title="Permanent link">&para;</a></h3>
+<p><strong>Traditional approach</strong>:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MySQLTooManyConnections</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mysql_global_status_threads_connected &gt; 100</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> severity</span><span class="p">:</span><span class="w"> </span><span class="nv">warning</span><span class="w"> </span><span class="p p-Indicator">}</span>
+</code></pre></div></p>
+<p><strong>Migration three-piece set</strong>:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># 1. Recording Rule (Platform)</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:mysql_threads_connected:max</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max by(tenant) (mysql_global_status_threads_connected)</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># 2. Alert Rule (Platform) — group_left + unless maintenance</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MariaDBHighConnections</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="no">(</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">      </span><span class="no">tenant:mysql_threads_connected:max</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">      </span><span class="no">&gt; on(tenant) group_left</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">      </span><span class="no">tenant:alert_threshold:connections</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">    </span><span class="no">)</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">    </span><span class="no">unless on(tenant) (user_state_filter{filter=&quot;maintenance&quot;} == 1)</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">  </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> severity</span><span class="p">:</span><span class="w"> </span><span class="nv">warning</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="c1"># 3. Tenant Config (Tenant)</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;100&quot;</span>
+</code></pre></div></p>
+<h3 id="42-45-other-common-patterns-quick-reference-table">4.2-4.5 Other Common Patterns — Quick Reference Table<a class="headerlink" href="#42-45-other-common-patterns-quick-reference-table" title="Permanent link">&para;</a></h3>
+<p>The three-piece set structure demonstrated in 4.1 above applies to all scenarios. The table below lists key differences for common metrics:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Original Metric</th>
+<th>Recording Rule</th>
+<th>Tenant Config Example</th>
+<th>Special Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>4.2 Multi-layer Severity</strong></td>
+<td><code>mysql_global_status_threads_connected</code></td>
+<td><code>max by(tenant) (...)</code></td>
+<td><code>mysql_connections: "100"</code> + <code>mysql_connections_critical: "150"</code></td>
+<td>Alert Rule automatically handles <code>_critical</code> degradation logic</td>
+</tr>
+<tr>
+<td><strong>4.3 Replication Lag</strong></td>
+<td><code>mysql_slave_status_seconds_behind_master</code></td>
+<td><code>max by(tenant) (...)</code></td>
+<td><code>mysql_slave_lag: "30"</code> or <code>"disable"</code></td>
+<td>Max for "weakest link" (most lagging slave)</td>
+</tr>
+<tr>
+<td><strong>4.4 Rate Metric</strong></td>
+<td><code>rate(mysql_global_status_slow_queries[5m])</code></td>
+<td><code>sum by(tenant) (rate(...))</code></td>
+<td><code>mysql_slow_queries: "0.1"</code></td>
+<td>Sum for "cluster total" (slow queries overall)</td>
+</tr>
+<tr>
+<td><strong>4.5 Percentage Calculation</strong></td>
+<td><code>buffer_pool_pages_data / buffer_pool_pages_total * 100</code></td>
+<td><code>max by(...) (...) / max by(...) (...) * 100</code></td>
+<td><code>mysql_innodb_buffer_pool: "95"</code></td>
+<td>Percentage calculation completes in Recording Rule</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Summary:</strong> Sections 4.2-4.5 simply apply the 4.1 three-piece template by changing the metric name and tenant config key. Platform-side alert rule structure remains consistent. See <a href="../rule-packs/ALERT-REFERENCE/">Rule Packs ALERT-REFERENCE</a> for actual rules.</p>
+</blockquote>
+<hr />
+<h2 id="5-alertmanager-routing-migration">5. Alertmanager Routing Migration<a class="headerlink" href="#5-alertmanager-routing-migration" title="Permanent link">&para;</a></h2>
+<h3 id="traditional-based-on-instance">Traditional (based on instance)<a class="headerlink" href="#traditional-based-on-instance" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&#39;alertname&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;instance&#39;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">instance=~&quot;db-a-.*&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;team-a-slack&quot;</span>
+</code></pre></div>
+<h3 id="after-migration-based-on-tenant">After Migration (based on tenant)<a class="headerlink" href="#after-migration-based-on-tenant" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">route</span><span class="p">:</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&#39;tenant&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;alertname&#39;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">tenant=&quot;db-a&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;team-a-slack&quot;</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">      </span><span class="nt">routes</span><span class="p">:</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">severity=&quot;critical&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">          </span><span class="nt">receiver</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;team-a-pagerduty&quot;</span>
+</code></pre></div>
+<p>Route first by <code>tenant</code> dimension, supporting nested routing for severity layering.</p>
+<h3 id="config-driven-routing">Config-Driven Routing<a class="headerlink" href="#config-driven-routing" title="Permanent link">&para;</a></h3>
+<p>Tenants can configure the <code>_routing</code> section in their own YAML, with the platform tool auto-producing Alertmanager route + receiver config.</p>
+<blockquote>
+<p><strong>v1.3.0 Breaking Change</strong>: <code>receiver</code> changed from pure URL string to structured object (with <code>type</code> field). format is no longer compatible.</p>
+</blockquote>
+<p>Six receiver types supported: <code>webhook</code>, <code>email</code>, <code>slack</code>, <code>teams</code>, <code>rocketchat</code>, <code>pagerduty</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># tenant YAML (conf.d/db-a.yaml)</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">db-a</span><span class="p">:</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">    </span><span class="nt">mysql_connections</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="nt">_routing</span><span class="p">:</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">      </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;webhook&quot;</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">        </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://hooks.slack.com/services/T00/B00/xxx&quot;</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">      </span><span class="nt">group_by</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;alertname&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;severity&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">      </span><span class="nt">group_wait</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;30s&quot;</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">      </span><span class="nt">repeat_interval</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4h&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Validate config legality (including webhook domain allowlist check)</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--validate<span class="w"> </span>--policy<span class="w"> </span>.github/custom-rule-policy.yaml
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Produce Alertmanager fragment</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>-o<span class="w"> </span>alertmanager-routes.yaml
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="c1"># One-stop merge into Alertmanager ConfigMap + reload </span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--apply<span class="w"> </span>--yes
+</code></pre></div>
+<p>Platform has guardrails for timing parameters (group_wait 5s–5m, group_interval 5s–5m, repeat_interval 1m–72h), with out-of-range values automatically clamped. Complete receiver type examples and Go template message customization details see <a href="../integration/byo-alertmanager-integration/#5-receiver-類型">BYO Alertmanager Integration Guide §5</a>.</p>
+<h3 id="advanced-routing-features">Advanced Routing Features<a class="headerlink" href="#advanced-routing-features" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Per-rule Routing Overrides</td>
+<td><code>_routing.overrides[]</code> specify different receiver for specific alertname/metric_group</td>
+<td><a href="../integration/byo-alertmanager-integration/#7-per-rule-routing-overrides">BYO Alertmanager §7</a></td>
+</tr>
+<tr>
+<td>Silent / Maintenance Mode</td>
+<td><code>_silent_mode</code> / <code>_state_maintenance</code> + <code>expires</code> auto-expiry</td>
+<td><a href="../architecture-and-design/">Architecture §2.7</a></td>
+</tr>
+<tr>
+<td>Platform Enforced Routing</td>
+<td><code>_routing_enforced</code> ensures NOC receives all alerts (dual-channel)</td>
+<td><a href="../integration/byo-alertmanager-integration/#8-platform-enforced-routing">BYO Alertmanager §8</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-post-migration-verification">6. Post-Migration Verification<a class="headerlink" href="#6-post-migration-verification" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># 0. One-stop config validation (recommended to run before deployment, v1.7.0)</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>da-tools<span class="w"> </span>validate-config<span class="w"> </span>--config-dir<span class="w"> </span>/data/conf.d
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># 1. Confirm thresholds output correctly</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8080/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;user_threshold{.*connections&#39;</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="c1"># 2. Confirm Alert status</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>da-tools<span class="w"> </span>check-alert<span class="w"> </span>MariaDBHighConnections<span class="w"> </span>db-a
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="c1"># 3. Tenant health check (includes operational_mode, threshold parsing, alert status)</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>da-tools<span class="w"> </span>diagnose<span class="w"> </span>db-a
+</code></pre></div>
+<h3 id="complete-verification-checklist">Complete Verification Checklist<a class="headerlink" href="#complete-verification-checklist" title="Permanent link">&para;</a></h3>
+<p>See <a href="../scenarios/tenant-lifecycle/#階段-12上線day-0">Tenant Lifecycle — Onboarding Phase</a> for the complete verification checklist, covering YAML validation, alert status, three-state testing, routing, operational_mode confirmation, and blind spot scanning.</p>
+<h3 id="post-migration-tenant-self-management">Post-Migration: Tenant Self-Management<a class="headerlink" href="#post-migration-tenant-self-management" title="Permanent link">&para;</a></h3>
+<p>After migration completes, Tenants can self-manage the following in their own YAML (via PR → CI → GitOps workflow, without Platform Team intervention):</p>
+<table>
+<thead>
+<tr>
+<th>Configuration</th>
+<th>Description</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Threshold three-state</td>
+<td>Custom value / omit for default / <code>"disable"</code> to disable</td>
+<td><code>mysql_connections: "70"</code></td>
+</tr>
+<tr>
+<td><code>_critical</code> suffix</td>
+<td>Multi-layer severity</td>
+<td><code>mysql_connections_critical: "95"</code></td>
+</tr>
+<tr>
+<td><code>_routing</code></td>
+<td>Notification routing (6 receiver types)</td>
+<td><code>receiver: {type: "slack", ...}</code></td>
+</tr>
+<tr>
+<td><code>_routing.overrides[]</code></td>
+<td>Specific alert uses different receiver</td>
+<td><code>alertname: "..."</code> + <code>receiver: {...}</code></td>
+</tr>
+<tr>
+<td><code>_silent_mode</code></td>
+<td>Silent mode (TSDB has record but no notification)</td>
+<td><code>{target: "all", expires: "..."}</code></td>
+</tr>
+<tr>
+<td><code>_state_maintenance</code></td>
+<td>Maintenance mode (completely no firing)</td>
+<td>Same as above, supports <code>expires</code> auto-expiry</td>
+</tr>
+<tr>
+<td><code>_severity_dedup</code></td>
+<td>Severity deduplication</td>
+<td><code>enabled: true</code></td>
+</tr>
+</tbody>
+</table>
+<p>Platform Team controlled settings (in <code>_defaults.yaml</code>) include global defaults, <code>_routing_defaults</code>, <code>_routing_enforced</code>. See <a href="../integration/gitops-deployment/#7-tenant-self-service-configuration-scope">GitOps Deployment Guide §7</a>.</p>
+<hr />
+<h2 id="7-dimensional-labels-multi-db-type-support">7. Dimensional Labels — Multi-DB Type Support<a class="headerlink" href="#7-dimensional-labels-multi-db-type-support" title="Permanent link">&para;</a></h2>
+<p>When the platform supports multiple DB types like Redis, ES, MongoDB, the same metric can set different thresholds by "dimension".</p>
+<h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nt">tenants</span><span class="p">:</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">redis-prod</span><span class="p">:</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">    </span><span class="nt">redis_queue_length</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1000&quot;</span><span class="w">                              </span><span class="c1"># global default</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=\&quot;order-processing\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;100&quot;</span><span class="w">  </span><span class="c1"># strict</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=\&quot;analytics\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;5000&quot;</span><span class="w">        </span><span class="c1"># loose</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">    </span><span class="s">&quot;redis_queue_length{queue=\&quot;temp\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;disable&quot;</span><span class="w">          </span><span class="c1"># disabled</span>
+</code></pre></div>
+<p>Multiple labels:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="w">    </span><span class="s">&quot;mongodb_collection_count{database=\&quot;orders\&quot;,collection=\&quot;transactions\&quot;}&quot;</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="s">&quot;10000000&quot;</span>
+</code></pre></div></p>
+<h3 id="design-constraints">Design Constraints<a class="headerlink" href="#design-constraints" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Constraint</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>YAML needs quotes</strong></td>
+<td>Keys containing <code>{</code> must be wrapped in double quotes</td>
+</tr>
+<tr>
+<td><strong><code>_critical</code> suffix not supported</strong></td>
+<td>Use <code>"value:severity"</code> syntax instead, e.g., <code>"500:critical"</code></td>
+</tr>
+<tr>
+<td><strong>Tenant-only</strong></td>
+<td>Dimensional keys don't inherit from <code>defaults</code>, only allowed in tenant config</td>
+</tr>
+<tr>
+<td><strong>Three-state still applies</strong></td>
+<td>Value=Custom, omit=Default (basic key only), <code>"disable"</code>=Disabled</td>
+</tr>
+</tbody>
+</table>
+<h3 id="platform-team-promql-adaptation-important">Platform Team PromQL Adaptation (Important)<a class="headerlink" href="#platform-team-promql-adaptation-important" title="Permanent link">&para;</a></h3>
+<p>Dimensional labels must appear in Recording Rule's <code>by()</code> and Alert Rule's <code>on()</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Recording Rule — must by(tenant, queue)</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:redis_queue_length:max</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max by(tenant, queue) (redis_queue_length)</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1"># Threshold Normalization — must by(tenant, queue)</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">record</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant:alert_threshold:redis_queue_length</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">max by(tenant, queue) (user_threshold{metric=&quot;redis_queue_length&quot;})</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="c1"># Alert Rule — must on(tenant, queue) group_left</span>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">RedisQueueTooLong</span>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a><span class="w">  </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a><span class="w">    </span><span class="no">(</span>
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a><span class="w">      </span><span class="no">tenant:redis_queue_length:max</span>
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a><span class="w">      </span><span class="no">&gt; on(tenant, queue) group_left</span>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a><span class="w">      </span><span class="no">tenant:alert_threshold:redis_queue_length</span>
+<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a><span class="w">    </span><span class="no">)</span>
+<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a><span class="w">    </span><span class="no">unless on(tenant) (user_state_filter{filter=&quot;maintenance&quot;} == 1)</span>
+</code></pre></div>
+<h3 id="reference-templates">Reference Templates<a class="headerlink" href="#reference-templates" title="Permanent link">&para;</a></h3>
+<p>In <code>components/threshold-exporter/config/conf.d/examples/</code> directory:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>DB Type</th>
+<th>Dimension Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redis-tenant.yaml</code></td>
+<td>Redis</td>
+<td>queue, db</td>
+</tr>
+<tr>
+<td><code>elasticsearch-tenant.yaml</code></td>
+<td>Elasticsearch</td>
+<td>index, node</td>
+</tr>
+<tr>
+<td><code>mongodb-tenant.yaml</code></td>
+<td>MongoDB</td>
+<td>database, collection</td>
+</tr>
+<tr>
+<td><code>_defaults-multidb.yaml</code></td>
+<td>Multi-DB global default</td>
+<td>(no dimensions)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-llm-assisted-manual-conversion">8. LLM-Assisted Manual Conversion<a class="headerlink" href="#8-llm-assisted-manual-conversion" title="Permanent link">&para;</a></h2>
+<p>When <code>da-tools migrate</code> encounters unparseable rules, it produces a Prompt suitable for direct LLM input. The <code>migration-report.txt</code> includes a ready-to-use LLM System Prompt template that guides the LLM to extract thresholds, produce Recording Rules (with sum/max reasoning), Alert Rules (with <code>group_left</code> + <code>unless maintenance</code>), and flag items needing platform extra handling.</p>
+<hr />
+<h2 id="9-advanced-extending-unsupported-db-types">9. Advanced: Extending Unsupported DB Types<a class="headerlink" href="#9-advanced-extending-unsupported-db-types" title="Permanent link">&para;</a></h2>
+<p>The platform pre-loads 15 Rule Pack ConfigMaps, covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Oracle, DB2, ClickHouse, Kafka, RabbitMQ, JVM, Nginx, Kubernetes, Operational and Platform self-monitoring. To support DB types without Rule Packs, you need to manually create a normalization layer.</p>
+<h3 id="normalization-naming-convention">Normalization Naming Convention<a class="headerlink" href="#normalization-naming-convention" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>tenant:&lt;component&gt;_&lt;metric&gt;:&lt;aggregation_function&gt;
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Raw Metric</th>
+<th>After Normalization</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mysql_global_status_threads_connected</code></td>
+<td><code>tenant:mysql_threads_connected:max</code></td>
+<td>Single-point ceiling, take max</td>
+</tr>
+<tr>
+<td><code>rate(mysql_global_status_slow_queries[5m])</code></td>
+<td><code>tenant:mysql_slow_queries:rate5m</code></td>
+<td>Cluster summed rate</td>
+</tr>
+</tbody>
+</table>
+<h3 id="aggregation-mode-selection-max-vs-sum">Aggregation Mode Selection — Max vs. Sum<a class="headerlink" href="#aggregation-mode-selection-max-vs-sum" title="Permanent link">&para;</a></h3>
+<p>Decision matrix:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>Ask yourself: &quot;If one node exceeds threshold and others are normal, is there a problem?&quot;
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>  ├── Yes → max by(tenant) (weakest link)
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  └── No → sum by(tenant) (cluster total)
+</code></pre></div></p>
+<p><strong>max by(tenant)</strong> — resources with "single-point physical limits" (connection limit, disk space, replication lag).</p>
+<p><strong>sum by(tenant)</strong> — assess "overall system load" (slow queries, traffic, CPU usage).</p>
+<h3 id="creation-steps">Creation Steps<a class="headerlink" href="#creation-steps" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Create Recording Rule (normalization layer)</li>
+<li>Create Threshold Normalization Rule</li>
+<li>Create Alert Rule (includes <code>group_left</code> + <code>unless maintenance</code>)</li>
+<li>Create independent ConfigMap (<code>configmap-rules-&lt;db&gt;.yaml</code>)</li>
+<li>Add new source to projected volume in <code>deployment-prometheus.yaml</code></li>
+<li>Add default threshold to <code>_defaults.yaml</code></li>
+<li>Use <code>da-tools scaffold</code> to generate tenant config</li>
+</ol>
+<p>Complete Rule Pack structure see <a href="../rule-packs/">rule-packs/README.md</a>.</p>
+<hr />
+<h2 id="10-faq">10. FAQ<a class="headerlink" href="#10-faq" title="Permanent link">&para;</a></h2>
+<h3 id="q-how-long-does-threshold-config-take-to-take-effect-after-modification">Q: How long does threshold-config take to take effect after modification?<a class="headerlink" href="#q-how-long-does-threshold-config-take-to-take-effect-after-modification" title="Permanent link">&para;</a></h3>
+<p>Exporter reloads every 30 seconds, K8s ConfigMap propagation is about 1-2 minutes. Expected 1-3 minutes total.</p>
+<h3 id="q-what-needs-to-be-changed-when-adding-a-new-metric">Q: What needs to be changed when adding a new metric?<a class="headerlink" href="#q-what-needs-to-be-changed-when-adding-a-new-metric" title="Permanent link">&para;</a></h3>
+<p>For supported DB types (with Rule Pack): only add default value to <code>_defaults.yaml</code> + add threshold to tenant YAML. For unsupported DB: need to additionally create Recording Rule + Alert Rule + ConfigMap.</p>
+<h3 id="q-can-old-and-new-coexist-during-migration-transition">Q: Can old and new coexist during migration transition?<a class="headerlink" href="#q-can-old-and-new-coexist-during-migration-transition" title="Permanent link">&para;</a></h3>
+<p>Yes. The new architecture's alerts use different alertnames, no conflict. Recommend deploying new alerts first to observe, then remove old rules after confirming behavior matches.</p>
+<h3 id="q-can-dimensional-keys-be-configured-in-defaults">Q: Can dimensional keys be configured in defaults?<a class="headerlink" href="#q-can-dimensional-keys-be-configured-in-defaults" title="Permanent link">&para;</a></h3>
+<p>No. Dimensional keys are tenant-only because each tenant's queues/indices/databases are different, global defaults make no sense.</p>
+<h3 id="q-how-to-specify-critical-for-dimensional-key">Q: How to specify critical for dimensional key?<a class="headerlink" href="#q-how-to-specify-critical-for-dimensional-key" title="Permanent link">&para;</a></h3>
+<p>Use <code>"value:severity"</code> syntax: <code>"redis_queue_length{queue=\"orders\"}": "500:critical"</code>.</p>
+<h3 id="q-how-to-confirm-hot-reload-succeeded">Q: How to confirm hot-reload succeeded?<a class="headerlink" href="#q-how-to-confirm-hot-reload-succeeded" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>threshold-exporter<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="c1"># Expected: &quot;Config loaded (directory): X defaults, Y state_filters, Z tenants, N resolved thresholds, M resolved state filters&quot;</span>
+</code></pre></div>
+<hr />
+<h2 id="11-enterprise-grade-migration-large-tenant-1000-rules">11. Enterprise-Grade Migration — Large Tenant (1000+ rules)<a class="headerlink" href="#11-enterprise-grade-migration-large-tenant-1000-rules" title="Permanent link">&para;</a></h2>
+<p>For large tenants with 1600+ rules, the following three-phase migration strategy is recommended:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>Phase A              Phase B                    Phase C
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>Triage Analysis      Shadow Monitoring          Switchover &amp; Convergence
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>(~1 day)             (~1-2 weeks)               (~1 day)
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>┌──────────┐     ┌──────────────────────┐    ┌──────────────┐
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>│ migrate   │     │ validate --watch     │    │ Remove old   │
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>│ --triage  │────►│ --tolerance 0.001    │───►│ Enable golden│
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>│ CSV bucket│     │ Continuous comparison│    │ diagnose     │
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>└──────────┘     └──────────────────────┘    └──────────────┘
+</code></pre></div>
+<h3 id="phase-a-triage-analysis">Phase A: Triage Analysis<a class="headerlink" href="#phase-a-triage-analysis" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Produce CSV bucketing report — batch decision in Excel</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>--triage<span class="w"> </span>-o<span class="w"> </span>/data/triage_output/
+</code></pre></div>
+<p>Tool automatically buckets rules into four categories:</p>
+<table>
+<thead>
+<tr>
+<th>Triage Action</th>
+<th>Description</th>
+<th>Recommended Handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auto</code></td>
+<td>Simple expression, auto-convertible</td>
+<td>Directly adopt</td>
+</tr>
+<tr>
+<td><code>review</code></td>
+<td>Complex expression, aggregation mode guessed</td>
+<td>Confirm in CSV</td>
+</tr>
+<tr>
+<td><code>skip</code></td>
+<td>Cannot auto-convert</td>
+<td>Pass to LLM or manual handling</td>
+</tr>
+<tr>
+<td><code>use_golden</code></td>
+<td>Dictionary matched to golden standard</td>
+<td>Use <code>da-tools scaffold</code> to set threshold directly</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-b-conversion-shadow-monitoring">Phase B: Conversion + Shadow Monitoring<a class="headerlink" href="#phase-b-conversion-shadow-monitoring" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># 1. Formal conversion (auto add custom_ prefix)</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>da-tools<span class="w"> </span>migrate<span class="w"> </span>/data/legacy-rules.yml<span class="w"> </span>-o<span class="w"> </span>/data/migration_output/
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="c1"># 2. Deploy new rules (with shadow label, don&#39;t trigger notifications)</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>migration_output/platform-recording-rules.yaml
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>migration_output/platform-alert-rules.yaml
+<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>
+<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a><span class="c1"># 3. Intercept shadow alerts in Alertmanager</span>
+<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a><span class="c1"># Configure route: matchers: [migration_status=&quot;shadow&quot;] → null receiver</span>
+<a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a>
+<a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a><span class="c1"># 4. Continuously compare old and new Recording Rule values (in cluster)</span>
+<a id="__codelineno-25-12" name="__codelineno-25-12" href="#__codelineno-25-12"></a>da-tools<span class="w"> </span>validate<span class="w"> </span>--mapping<span class="w"> </span>/data/prefix-mapping.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-13" name="__codelineno-25-13" href="#__codelineno-25-13"></a><span class="w">                  </span>--tolerance<span class="w"> </span><span class="m">0</span>.001<span class="w"> </span>--watch<span class="w"> </span>--interval<span class="w"> </span><span class="m">60</span><span class="w"> </span>--rounds<span class="w"> </span><span class="m">1440</span>
+<a id="__codelineno-25-14" name="__codelineno-25-14" href="#__codelineno-25-14"></a>
+<a id="__codelineno-25-15" name="__codelineno-25-15" href="#__codelineno-25-15"></a><span class="c1"># Or local dev: first port-forward, then execute above command</span>
+<a id="__codelineno-25-16" name="__codelineno-25-16" href="#__codelineno-25-16"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/prometheus<span class="w"> </span><span class="m">9090</span>:9090<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="p">&amp;</span>
+</code></pre></div>
+<p><strong>Long-term Shadow Monitoring (K8s Job)</strong>: Large customers should package <code>da-tools validate --watch</code> as a K8s Job running in-cluster for 1-2 weeks (e.g., <code>--interval 300 --rounds 4032</code> = every 5 minutes × 14 days). For K8s Job pattern, see <a href="#use-da-tools-in-k8s-cluster">§3 Use da-tools in K8s Cluster</a>.</p>
+<h3 id="phase-c-switchover-convergence">Phase C: Switchover &amp; Convergence<a class="headerlink" href="#phase-c-switchover-convergence" title="Permanent link">&para;</a></h3>
+<p>After running 1-2 weeks with <code>da-tools validate</code> continuously comparing all rule pair outputs, confirm all mismatches have been investigated and resolved:</p>
+<p><strong>Automated Switchover </strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Dry run preview</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span>--readiness-json<span class="w"> </span>/data/cutover-readiness.json<span class="w"> </span>--tenant<span class="w"> </span>db-a<span class="w"> </span>--dry-run
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="c1"># Execute switchover (auto completes: stop Job → remove old rules → remove label → remove shadow route → verify)</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span>--readiness-json<span class="w"> </span>/data/cutover-readiness.json<span class="w"> </span>--tenant<span class="w"> </span>db-a
+</code></pre></div>
+<p><code>cutover-readiness.json</code> is auto-produced by <code>validate --auto-detect-convergence</code> when convergence criteria are met. If manually confirming convergence (no readiness JSON), use <code>--force</code> to skip readiness check. See <a href="../shadow-monitoring-sop/#7-退出-shadow-monitoring">Shadow Monitoring SOP §7</a>.</p>
+<blockquote>
+<p><strong>Tip</strong>: Before switchover, use <code>da-tools shadow-verify all</code> for a one-command full readiness check (preflight + runtime + convergence), replacing manual step-by-step verification.</p>
+</blockquote>
+<p><strong>Manual Switchover Steps</strong> (if not using automated tool):</p>
+<ol>
+<li>Remove old rules</li>
+<li>Remove <code>migration_status: shadow</code> label from new rules</li>
+<li>Progressively enable golden Rule Packs to replace <code>custom_</code> rules</li>
+<li>Reference <code>prefix-mapping.yaml</code> for convergence tracking</li>
+</ol>
+<p><strong>Post-Switchover Verification</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Batch health check</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>da-tools<span class="w"> </span>batch-diagnose
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="c1"># Monitor blind spot scan — confirm all cluster DB instances have corresponding tenant config</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>da-tools<span class="w"> </span>blind-spot<span class="w"> </span>--config-dir<span class="w"> </span>/data/conf.d
+</code></pre></div>
+<p><code>blind-spot</code> lists instances in cluster running exporters but not covered by tenant config (blind spots). After migration, recommend running regularly (e.g., when adding new exporters) to ensure all DB instances are protected by threshold monitoring.</p>
+<h3 id="metric-dictionary-auto-matching">Metric Dictionary Auto-Matching<a class="headerlink" href="#metric-dictionary-auto-matching" title="Permanent link">&para;</a></h3>
+<p><code>da-tools migrate</code> (v4) has built-in heuristic dictionary (<code>metric-dictionary.yaml</code>) to auto-match traditional metrics to golden standards:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>📖 MySQLTooManyConnections: recommend using golden standard MariaDBHighConnections (da-tools scaffold)
+</code></pre></div>
+<p>Platform Team can directly edit <code>scripts/tools/metric-dictionary.yaml</code> to expand dictionary without code changes.</p>
+<h3 id="migration-automation-tools">Migration Automation Tools<a class="headerlink" href="#migration-automation-tools" title="Permanent link">&para;</a></h3>
+<p>The following tools reduce manual intervention in large migrations:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Usage</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Onboard→Scaffold pipeline</strong></td>
+<td><code>onboard</code> → <code>scaffold --from-onboard &lt;hints&gt;</code></td>
+<td>One-click migration prep</td>
+</tr>
+<tr>
+<td><strong>Auto-convergence detection</strong></td>
+<td><code>validate --auto-detect-convergence --stability-window 5</code></td>
+<td>Auto-produce <code>cutover-readiness.json</code> after N consecutive matches</td>
+</tr>
+<tr>
+<td><strong>One-command cutover</strong></td>
+<td><code>cutover --readiness-json &lt;path&gt; --tenant &lt;t&gt;</code></td>
+<td>Single command completes full Shadow Monitoring switchover</td>
+</tr>
+<tr>
+<td><strong>Post-cutover health report</strong></td>
+<td><code>batch-diagnose</code></td>
+<td>Auto-discover tenants → parallel <code>diagnose</code> → health score</td>
+</tr>
+<tr>
+<td><strong>Blind spot discovery</strong></td>
+<td><code>blind-spot --config-dir &lt;dir&gt;</code></td>
+<td>Scan cluster targets vs tenant config for blind spots</td>
+</tr>
+<tr>
+<td><strong>Rule Pack gap analysis</strong></td>
+<td><code>analyze-gaps --config &lt;path&gt;</code></td>
+<td>Three-layer matching analyze <code>custom_</code> rules to official Rule Packs</td>
+</tr>
+<tr>
+<td><strong>Threshold backtest</strong></td>
+<td><code>backtest --git-diff --prometheus &lt;url&gt;</code></td>
+<td>PR threshold changes 7-day history backtest + risk level</td>
+</tr>
+<tr>
+<td><strong>Config diff</strong></td>
+<td><code>config-diff --old-dir &lt;old&gt; --new-dir &lt;new&gt;</code></td>
+<td>Directory-level config diff blast radius report</td>
+</tr>
+<tr>
+<td><strong>Config patch preview</strong></td>
+<td><code>patch-config --diff &lt;tenant&gt; &lt;metric&gt; &lt;value&gt;</code></td>
+<td>Single metric live before/after comparison</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-rule-pack-dynamic-toggle">12. Rule Pack Dynamic Toggle<a class="headerlink" href="#12-rule-pack-dynamic-toggle" title="Permanent link">&para;</a></h2>
+<p>All 15 Rule Pack ConfigMaps have <code>optional: true</code> in Projected Volume, allowing selective unloading.</p>
+<h3 id="unload-unnecessary-rule-packs">Unload Unnecessary Rule Packs<a class="headerlink" href="#unload-unnecessary-rule-packs" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Large customer has own MariaDB rules, disable golden standard to avoid conflicts</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>cm<span class="w"> </span>prometheus-rules-mariadb<span class="w"> </span>-n<span class="w"> </span>monitoring
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1"># Prometheus will gracefully ignore missing ConfigMap on next reload</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="c1"># No Prometheus restart needed</span>
+</code></pre></div>
+<h3 id="re-enable">Re-enable<a class="headerlink" href="#re-enable" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># Recreate ConfigMap from rule-packs/ directory</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>prometheus-rules-mariadb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span>--from-file<span class="o">=</span>rule-pack-mariadb.yaml<span class="o">=</span>rule-packs/rule-pack-mariadb.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">  </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<h3 id="typical-scenarios">Typical Scenarios<a class="headerlink" href="#typical-scenarios" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Customer Type</th>
+<th>Recommended Rule Pack Setting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New tenant</td>
+<td>Keep all (default)</td>
+</tr>
+<tr>
+<td>Self-supplied MariaDB rules</td>
+<td>Disable <code>prometheus-rules-mariadb</code></td>
+</tr>
+<tr>
+<td>Redis only</td>
+<td>Disable MariaDB, MongoDB, Elasticsearch</td>
+</tr>
+<tr>
+<td>All self-supplied</td>
+<td>Keep only <code>prometheus-rules-platform</code> (self-monitoring)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="13-offboarding-process-tenant-and-rulemetric">13. Offboarding Process — Tenant and Rule/Metric<a class="headerlink" href="#13-offboarding-process-tenant-and-rulemetric" title="Permanent link">&para;</a></h2>
+<h3 id="tenant-offboarding">Tenant Offboarding<a class="headerlink" href="#tenant-offboarding" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1"># Pre-check mode — confirm no external dependencies</span>
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>da-tools<span class="w"> </span>offboard<span class="w"> </span>db-a
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="c1"># Execute after confirmation</span>
+<a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>da-tools<span class="w"> </span>offboard<span class="w"> </span>db-a<span class="w"> </span>--execute
+</code></pre></div>
+<p>Pre-check items: config file existence, cross-file reference scanning, configured metrics list.</p>
+<p>After offboarding effects:
+- threshold-exporter auto-clears thresholds on next reload (30s)
+- Prometheus vectors disappear on next scrape
+- All related Alerts auto-resolve
+- <strong>Does not affect other Tenants</strong></p>
+<h3 id="rulemetric-offboarding">Rule/Metric Offboarding<a class="headerlink" href="#rulemetric-offboarding" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c1"># Preview mode</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>da-tools<span class="w"> </span>deprecate<span class="w"> </span>mysql_slave_lag
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="c1"># Execute (modify files)</span>
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a>da-tools<span class="w"> </span>deprecate<span class="w"> </span>mysql_slave_lag<span class="w"> </span>--execute
+<a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a>
+<a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a><span class="c1"># Batch processing</span>
+<a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a>da-tools<span class="w"> </span>deprecate<span class="w"> </span>mysql_slave_lag<span class="w"> </span>mysql_innodb_buffer_pool<span class="w"> </span>--execute
+</code></pre></div>
+<p>Three-step automation:
+1. Set to <code>"disable"</code> in <code>_defaults.yaml</code>
+2. Scan and clean residuals in all tenant configs
+3. Produce ConfigMap cleanup guidance (manual execution in next Release Cycle)</p>
+<h2 id="related-resources">Related Resources<a class="headerlink" href="#related-resources" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Relevance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="./">"Migration Guide — 遷移指南"</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../getting-started/for-tenants/">"Tenant Quick Start Guide"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>["AST Migration Engine Architecture"]</td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>["da-tools CLI Reference"]</td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../getting-started/for-domain-experts/">"Domain Expert (DBA) Quick Start Guide"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../getting-started/for-platform-engineers/">"Platform Engineer Quick Start Guide"</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>["Shadow Monitoring SRE SOP"]</td>
+<td>⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

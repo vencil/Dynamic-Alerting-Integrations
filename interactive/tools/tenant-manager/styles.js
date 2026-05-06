@@ -1,0 +1,439 @@
+---
+title: "Tenant Manager — Styles"
+purpose: |
+  Single source of truth for tenant-manager styling. Uses CSS custom
+  properties (--da-*) from design-tokens.css for theme support.
+
+  Style tokens (v2.7.0 Phase .a0 migration):
+  - Spacing / radius / font-size mapped to var(--da-*) tokens where exact match exists.
+  - Remaining literals (6 / 11 / 14 / 18 / 28 / 48px) are intentional bridge values pending
+    design-system decision. See v2.7.0-planning.md §3.
+  - Layout constants (280 / 140 / 180 / 600 / 420 / 1400 / 1600px) stay literal — component-specific dimensions.
+
+  Extracted from tenant-manager.jsx in PR-2d (#153). Behavior identical
+  to inline definition; keys / values byte-for-byte preserved so no
+  visual regression risk.
+---
+
+const styles = {
+  container: {
+    minHeight: '100vh',
+    background: 'var(--da-color-bg)',
+    padding: 'var(--da-space-8)',
+  },
+  layout: {
+    display: 'grid',
+    gridTemplateColumns: '280px 1fr',
+    gap: 'var(--da-space-6)',
+    maxWidth: '1600px',
+    margin: '0 auto',
+  },
+  layoutNoSidebar: {
+    maxWidth: '1400px',
+    margin: '0 auto',
+  },
+  header: {
+    marginBottom: 'var(--da-space-6)',
+    maxWidth: '1600px',
+    margin: '0 auto var(--da-space-6)',
+  },
+  title: {
+    fontSize: 'var(--da-font-size-2xl)',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-2)',
+  },
+  subtitle: {
+    fontSize: 'var(--da-font-size-base)',
+    color: 'var(--da-color-muted)',
+  },
+  authBanner: {
+    backgroundColor: 'var(--da-color-info-soft)',
+    border: '1px solid var(--da-color-accent)',
+    borderRadius: 'var(--da-radius-md)',
+    padding: 'var(--da-space-2) var(--da-space-4)',
+    marginBottom: 'var(--da-space-4)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    fontSize: 'var(--da-font-size-sm-md)',
+    color: 'var(--da-color-info)',
+  },
+  sidebar: {
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    boxShadow: 'var(--da-shadow-subtle)',
+    alignSelf: 'start',
+    position: 'sticky',
+    top: 'var(--da-space-8)',
+  },
+  sidebarTitle: {
+    fontSize: 'var(--da-font-size-md)',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-3)',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  groupItem: {
+    padding: '10px var(--da-space-3)',
+    borderRadius: 'var(--da-radius-md)',
+    cursor: 'pointer',
+    marginBottom: 'var(--da-space-1)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    transition: 'background-color var(--da-transition-fast)',
+  },
+  groupItemActive: {
+    backgroundColor: 'var(--da-color-accent-soft)',
+    color: 'var(--da-color-accent)',
+    fontWeight: 'var(--da-font-weight-semibold)',
+  },
+  groupItemDefault: {
+    backgroundColor: 'transparent',
+    color: 'var(--da-color-fg)',
+  },
+  groupMemberCount: {
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-muted)',
+    marginLeft: 'var(--da-space-1)',
+  },
+  emptyState: {
+    textAlign: 'center',
+    padding: 'var(--da-space-8) var(--da-space-4)',
+    color: 'var(--da-color-muted)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    lineHeight: 'var(--da-line-height-relaxed)',
+  },
+  statsBar: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: 'var(--da-space-4)',
+    marginBottom: 'var(--da-space-6)',
+  },
+  statCard: {
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    boxShadow: 'var(--da-shadow-subtle)',
+  },
+  statValue: {
+    fontSize: 'var(--da-font-size-xl)',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-accent)',
+    marginBottom: 'var(--da-space-1)',
+  },
+  statLabel: {
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-muted)',
+    fontWeight: 'var(--da-font-weight-medium)',
+  },
+  controlsPanel: {
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    marginBottom: 'var(--da-space-6)',
+    boxShadow: 'var(--da-shadow-subtle)',
+  },
+  searchInput: {
+    width: '100%',
+    padding: '10px var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-base)',
+    marginBottom: 'var(--da-space-3)',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+    backgroundColor: 'var(--da-color-surface)',
+    color: 'var(--da-color-fg)',
+  },
+  filterRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+    gap: 'var(--da-space-3)',
+    marginBottom: 'var(--da-space-3)',
+  },
+  filterSelect: {
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    fontFamily: 'inherit',
+    backgroundColor: 'var(--da-color-surface)',
+    color: 'var(--da-color-fg)',
+  },
+  chipContainer: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 'var(--da-space-2)',
+    marginBottom: 'var(--da-space-3)',
+  },
+  chip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    backgroundColor: 'var(--da-color-accent-soft)',
+    color: 'var(--da-color-accent)',
+    padding: '6px var(--da-space-3)',
+    borderRadius: 'var(--da-radius-pill)',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-medium)',
+  },
+  chipClose: {
+    cursor: 'pointer',
+    fontWeight: 'var(--da-font-weight-bold)',
+  },
+  buttonGroup: {
+    display: 'flex',
+    gap: 'var(--da-space-2)',
+    marginBottom: 'var(--da-space-3)',
+    flexWrap: 'wrap',
+  },
+  button: {
+    padding: 'var(--da-space-2) var(--da-space-4)',
+    backgroundColor: 'var(--da-color-accent)',
+    color: 'var(--da-color-accent-fg)',
+    border: 'none',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    fontWeight: 'var(--da-font-weight-medium)',
+    cursor: 'pointer',
+    transition: 'background-color var(--da-transition-base)',
+  },
+  buttonSecondary: {
+    backgroundColor: 'var(--da-color-tag-bg)',
+    color: 'var(--da-color-tag-fg)',
+    border: '1px solid var(--da-color-surface-border)',
+  },
+  buttonSmall: {
+    padding: 'var(--da-space-1) 10px',
+    fontSize: 'var(--da-font-size-xs)',
+  },
+  buttonDanger: {
+    backgroundColor: 'var(--da-color-error-soft)',
+    color: 'var(--da-color-error-text)',
+    border: '1px solid var(--da-color-error)',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+    cursor: 'not-allowed',
+  },
+  actionBar: {
+    backgroundColor: 'var(--da-color-info-soft)',
+    border: '1px solid var(--da-color-accent)',
+    borderRadius: 'var(--da-radius-md)',
+    padding: 'var(--da-space-3)',
+    marginBottom: 'var(--da-space-3)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 'var(--da-space-2)',
+  },
+  actionText: {
+    fontSize: 'var(--da-font-size-sm-md)',
+    color: 'var(--da-color-info)',
+    fontWeight: 'var(--da-font-weight-medium)',
+  },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+    gap: 'var(--da-space-4)',
+    marginBottom: 'var(--da-space-6)',
+  },
+  card: {
+    backgroundColor: 'var(--da-color-surface)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-4)',
+    boxShadow: 'var(--da-shadow-subtle)',
+    transition: 'all var(--da-transition-base)',
+    cursor: 'pointer',
+    position: 'relative',
+  },
+  cardHover: {
+    boxShadow: 'var(--da-shadow-hover)',
+    transform: 'translateY(-2px)',
+  },
+  cardCheckbox: {
+    position: 'absolute',
+    top: 'var(--da-space-3)',
+    right: 'var(--da-space-3)',
+    width: 'var(--da-space-5)',
+    height: 'var(--da-space-5)',
+    cursor: 'pointer',
+  },
+  cardTitle: {
+    fontSize: '18px',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-3)',
+    paddingRight: '28px',
+  },
+  // C-4 PR-1 (S#94) — wizard deep-link footer row.
+  // Two icon-link buttons in tenant card footer that open
+  // alert-builder + routing-trace in a new tab with `?tenant_id=<name>`
+  // pre-filled. `position: relative` keeps icon stacking inside card.
+  cardToolsRow: {
+    display: 'flex',
+    gap: 'var(--da-space-2)',
+    marginTop: 'var(--da-space-3)',
+    paddingTop: 'var(--da-space-3)',
+    borderTop: '1px solid var(--da-color-section-border)',
+    justifyContent: 'flex-end',
+  },
+  cardToolLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 'var(--da-space-1)',
+    padding: 'var(--da-space-1) var(--da-space-2)',
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-accent)',
+    textDecoration: 'none',
+    borderRadius: 'var(--da-radius-sm)',
+    border: '1px solid var(--da-color-surface-border)',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease',
+  },
+  badge: {
+    display: 'inline-block',
+    padding: 'var(--da-space-1) var(--da-space-2)',
+    borderRadius: 'var(--da-radius-sm)',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-semibold)',
+    marginRight: '6px',
+    marginBottom: 'var(--da-space-2)',
+  },
+  environmentBadge: {
+    production: { backgroundColor: 'var(--da-color-error-soft)', color: 'var(--da-color-error-text)' },
+    staging: { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning-text)' },
+    development: { backgroundColor: 'var(--da-color-success-soft)', color: 'var(--da-color-success)' },
+  },
+  tierBadge: {
+    'tier-1': { backgroundColor: 'var(--da-color-warning-soft)', color: 'var(--da-color-warning-text)' },
+    'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
+    'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
+  },
+  pills: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 'var(--da-space-1)',
+    marginBottom: 'var(--da-space-3)',
+  },
+  pill: {
+    backgroundColor: 'var(--da-color-tag-bg)',
+    color: 'var(--da-color-tag-fg)',
+    padding: 'var(--da-space-1) var(--da-space-2)',
+    borderRadius: 'var(--da-radius-pill)',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-medium)',
+  },
+  row: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 'var(--da-space-2) 0',
+    borderTop: '1px solid var(--da-color-tag-bg)',
+    fontSize: 'var(--da-font-size-sm-md)',
+  },
+  rowLabel: {
+    color: 'var(--da-color-muted)',
+    fontWeight: 'var(--da-font-weight-medium)',
+  },
+  rowValue: {
+    color: 'var(--da-color-fg)',
+    fontWeight: 'var(--da-font-weight-semibold)',
+  },
+  modeIndicator: {
+    display: 'inline-block',
+    width: 'var(--da-space-2)',
+    height: 'var(--da-space-2)',
+    borderRadius: 'var(--da-radius-full)',
+    marginRight: 'var(--da-space-1)',
+  },
+  modal: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'var(--da-color-modal-backdrop)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    backgroundColor: 'var(--da-color-surface)',
+    borderRadius: 'var(--da-radius-lg)',
+    padding: 'var(--da-space-6)',
+    maxWidth: '600px',
+    width: '90%',
+    maxHeight: '80vh',
+    overflow: 'auto',
+    boxShadow: 'var(--da-shadow-modal)',
+  },
+  modalTitle: {
+    fontSize: '18px',
+    fontWeight: 'var(--da-font-weight-bold)',
+    color: 'var(--da-color-fg)',
+    marginBottom: 'var(--da-space-4)',
+  },
+  codeBlock: {
+    backgroundColor: 'var(--da-color-hero-bg)',
+    color: 'var(--da-color-hero-fg)',
+    padding: 'var(--da-space-3)',
+    borderRadius: 'var(--da-radius-md)',
+    fontFamily: 'var(--da-font-mono)',
+    fontSize: 'var(--da-font-size-xs)',
+    lineHeight: '1.4',
+    marginBottom: 'var(--da-space-3)',
+    overflow: 'auto',
+    whiteSpace: 'pre-wrap',
+  },
+  buttonGroup2: {
+    display: 'flex',
+    gap: 'var(--da-space-2)',
+    marginTop: 'var(--da-space-4)',
+  },
+  tooltip: {
+    position: 'relative',
+    display: 'inline-block',
+  },
+  tooltipText: {
+    fontSize: 'var(--da-font-size-xs)',
+    color: 'var(--da-color-muted)',
+    fontStyle: 'italic',
+    marginTop: 'var(--da-space-1)',
+  },
+  inputField: {
+    width: '100%',
+    padding: 'var(--da-space-2) var(--da-space-3)',
+    border: '1px solid var(--da-color-surface-border)',
+    borderRadius: 'var(--da-radius-md)',
+    fontSize: 'var(--da-font-size-sm-md)',
+    fontFamily: 'inherit',
+    marginBottom: 'var(--da-space-2)',
+    boxSizing: 'border-box',
+    backgroundColor: 'var(--da-color-surface)',
+    color: 'var(--da-color-fg)',
+  },
+  formLabel: {
+    display: 'block',
+    fontSize: 'var(--da-font-size-xs)',
+    fontWeight: 'var(--da-font-weight-semibold)',
+    color: 'var(--da-color-tag-fg)',
+    marginBottom: 'var(--da-space-1)',
+  },
+};
+
+// Register on window for orchestrator pickup.
+window.__styles = styles;
+
+// TD-030b: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { styles };

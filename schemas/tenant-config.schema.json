@@ -1,0 +1,913 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/tenant-config.schema.json",
+  "title": "Dynamic Alerting Platform — Tenant Configuration Schema",
+  "description": "JSON Schema (draft-07) for validating tenant YAML configuration files in conf.d/. Supports threshold customization, alert routing, maintenance windows, and metadata injection.",
+  "version": "v2.7.0",
+  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/tenant-config.schema.json\": \"conf.d/*.yaml\" }",
+  "type": "object",
+  "required": ["tenants"],
+  "properties": {
+    "tenants": {
+      "type": "object",
+      "title": "Tenant Configuration Map",
+      "description": "Mapping of tenant-id (string) to per-tenant configuration (object). Each tenant can define thresholds, routing, metadata, and operational modes.",
+      "additionalProperties": {
+        "$ref": "#/definitions/tenantConfig"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "tenantConfig": {
+      "type": "object",
+      "title": "Per-Tenant Configuration",
+      "description": "Configuration for a single tenant. Supports metric thresholds (from Rule Packs), operational modes (_state_*, _silent_mode), routing, metadata, and scheduled overrides.",
+      "properties": {
+        "_profile": {
+          "type": "string",
+          "title": "Profile Reference (v1.12.0)",
+          "description": "Reference to a profile name defined in _profiles.yaml. Profile values act as fill-in (not overwrite) — tenant settings take precedence. Inheritance chain: _defaults.yaml → profile → tenant config.",
+          "minLength": 1,
+          "examples": ["standard-db", "high-volume-service"]
+        },
+        "_metadata": {
+          "$ref": "#/definitions/metadata",
+          "title": "Tenant Metadata",
+          "description": "Optional metadata fields injected into all alert annotations. Exposed as tenant_metadata_info{tenant, runbook_url, owner, tier} = 1 metric. Supports {{tenant}} placeholder in runbook_url."
+        },
+        "_silent_mode": {
+          "$ref": "#/definitions/silentMode",
+          "title": "Silent Mode Configuration",
+          "description": "Suppress Alertmanager notifications while keeping TSDB records. Alerts still fire and are recorded, but notifications are blocked. Useful for transient noisy alerts during known issues."
+        },
+        "_state_maintenance": {
+          "$ref": "#/definitions/maintenanceMode",
+          "title": "Maintenance Mode Configuration",
+          "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance windows. Supports one-time expiry and recurring schedules (v1.11.0). Distinct from silent_mode."
+        },
+        "_severity_dedup": {
+          "type": "string",
+          "title": "Severity Deduplication Mode",
+          "description": "Controls Alertmanager inhibition behavior for multi-severity alerts. Values: 'auto' (default), 'manual', 'disable'. See architecture-and-design.md §2.8 for details.",
+          "enum": ["auto", "manual", "disable"],
+          "default": "auto"
+        },
+        "_namespaces": {
+          "type": "array",
+          "title": "Kubernetes Namespaces (N:1 Tenant Mapping)",
+          "description": "List of Kubernetes namespaces this tenant maps to. Used by scaffold_tenant.py and da-tools N:1 mapping tooling (v1.8.0+). See architecture-and-design.md §2.3.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "examples": [["ns-prod-db-a", "ns-backup-db-a"]]
+        },
+        "_routing_profile": {
+          "type": "string",
+          "title": "Routing Profile Reference (v2.1.0 ADR-007)",
+          "description": "Reference to a named routing profile defined in _routing_profiles.yaml. Profile values act as Layer 2 in the four-layer merge: _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced. Tenant _routing keys override profile values.",
+          "minLength": 1,
+          "examples": ["team-sre-apac", "team-dba-global", "domain-finance-tier1"]
+        },
+        "_routing": {
+          "$ref": "#/definitions/routing",
+          "title": "Alert Routing Configuration",
+          "description": "Per-tenant alert routing to custom receivers (webhook, email, slack, teams, rocketchat, pagerduty). Supports per-alertname and metric_group overrides. Tenant routing is inserted after _routing_enforced."
+        },
+        "_routing_enforced": {
+          "$ref": "#/definitions/routingEnforced",
+          "title": "Platform-Enforced Dual Routing (v1.13.0)",
+          "description": "Platform-level dual-perspective routing. Inserted before tenant routes with continue: true. NOC receives platform_summary annotation. See architecture-and-design.md §2.11 and scenarios/alert-routing-split.md."
+        },
+        "_routing_defaults": {
+          "$ref": "#/definitions/routingDefaults",
+          "title": "Routing Defaults (v1.4.0+)",
+          "description": "Default routing config for tenants without explicit _routing. Supports {{tenant}} placeholder for per-tenant dynamic values. Typically set in _defaults.yaml, not per-tenant."
+        },
+        "_operator": {
+          "$ref": "#/definitions/operatorConfig",
+          "title": "Operator CRD Settings (v2.6.0)",
+          "description": "Per-tenant Operator mode overrides. Used by operator-generate and migrate-to-operator tools."
+        }
+      },
+      "additionalProperties": {
+        "oneOf": [
+          { "$ref": "#/definitions/thresholdScalar" },
+          { "$ref": "#/definitions/scheduledValue" }
+        ]
+      },
+      "patternProperties": {
+        "^[a-z_][a-z0-9_]*\\{.*\\}$": {
+          "oneOf": [
+            { "$ref": "#/definitions/thresholdScalar" },
+            { "$ref": "#/definitions/scheduledValue" }
+          ],
+          "title": "Dimensional Threshold",
+          "description": "Metric with dimensional labels: metric{label=\"value\"} or metric{label=~\"regex\"}. Labels can be literal (=) or regex (=~). Examples: redis_queue_length{queue=\"orders\"}, mysql_connections{schema=~\"temp.*\"}"
+        }
+      }
+    },
+    "thresholdScalar": {
+      "type": "string",
+      "title": "Threshold Value (Scalar)",
+      "description": "Simple string threshold. Values: numeric threshold (e.g., '70'), 'disable' (stop alerting), or 'value:severity' (e.g., '1000:critical'). Three-state design: custom value, omit (use default), or 'disable'.",
+      "examples": ["70", "1000", "disable", "500:critical", "85.5"]
+    },
+    "scheduledValue": {
+      "type": "object",
+      "title": "Scheduled Threshold with Time-Window Overrides",
+      "description": "Structured threshold with default and optional time-window overrides (v1.11.0 B4). Allows different thresholds at different UTC times. Supports cross-midnight windows (e.g., 22:00-06:00). See architecture-and-design.md §2.5.",
+      "required": ["default"],
+      "properties": {
+        "default": {
+          "$ref": "#/definitions/thresholdScalar",
+          "title": "Default Threshold Value",
+          "description": "Default threshold applied outside any override window."
+        },
+        "overrides": {
+          "type": "array",
+          "title": "Time-Window Overrides",
+          "description": "List of UTC time windows with override values. First matching window wins. Matched as HH:MM-HH:MM (24-hour format, UTC-only). Supports cross-midnight (e.g., 22:00-06:00 = 10PM to 6AM).",
+          "items": {
+            "$ref": "#/definitions/timeWindowOverride"
+          },
+          "examples": [
+            [
+              {
+                "window": "01:00-09:00",
+                "value": "1000"
+              },
+              {
+                "window": "22:00-06:00",
+                "value": "80"
+              }
+            ]
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "timeWindowOverride": {
+      "type": "object",
+      "title": "Time-Window Override",
+      "description": "Override threshold value for a specific UTC time window (HH:MM-HH:MM format, 24-hour).",
+      "required": ["window", "value"],
+      "properties": {
+        "window": {
+          "type": "string",
+          "title": "UTC Time Window",
+          "description": "Window in HH:MM-HH:MM format (24-hour, UTC-only). Example: '01:00-09:00' (1AM to 9AM). Supports cross-midnight (e.g., '22:00-06:00' = 10PM to 6AM).",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "examples": ["01:00-09:00", "22:00-06:00", "12:00-14:00"]
+        },
+        "value": {
+          "$ref": "#/definitions/thresholdScalar",
+          "title": "Override Threshold Value",
+          "description": "Threshold value to use within this window. Same syntax as scalar thresholds (numeric, 'disable', or 'value:severity')."
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "title": "Tenant Metadata",
+      "description": "Optional metadata injected into all alerts from this tenant. Exposed as tenant_metadata_info{tenant, runbook_url, owner, tier} = 1 metric. Supports {{tenant}} placeholder.",
+      "$comment": "v2.7.0 ADR-017: When files are in hierarchical conf.d/ (domain/region/env/), the directory path infers default values for domain, region, and environment. Explicit _metadata fields override path-inferred values. CI may warn when path and field disagree.",
+      "properties": {
+        "runbook_url": {
+          "type": "string",
+          "title": "Runbook URL",
+          "description": "Base URL to tenant-specific runbooks/documentation. Supports {{tenant}} placeholder. Example: 'https://wiki.example.com/{{tenant}}'",
+          "format": "uri",
+          "examples": ["https://wiki.example.com/db-team", "https://wiki.example.com/{{tenant}}"]
+        },
+        "owner": {
+          "type": "string",
+          "title": "Owner/Team",
+          "description": "Team or person responsible for this tenant's monitoring. Free-form string for annotation purposes.",
+          "examples": ["dba-team", "platform-engineering", "alice@example.com"]
+        },
+        "tier": {
+          "type": "string",
+          "title": "Business Tier",
+          "description": "Business tier/SLA level for prioritization. Examples: tier-1, tier-2, non-critical.",
+          "examples": ["tier-1", "tier-2", "non-critical"]
+        },
+        "environment": {
+          "type": "string",
+          "title": "Environment",
+          "description": "Deployment environment for RBAC filtering. Examples: production, staging, development.",
+          "examples": ["production", "staging", "development"]
+        },
+        "region": {
+          "type": "string",
+          "title": "Region",
+          "description": "Geographic region or data center for this tenant.",
+          "examples": ["us-east-1", "eu-west-1", "ap-northeast-1"]
+        },
+        "domain": {
+          "type": "string",
+          "title": "Business Domain",
+          "description": "Business domain for RBAC filtering and grouping. Examples: finance, ecommerce, infrastructure.",
+          "examples": ["finance", "ecommerce", "infrastructure"]
+        },
+        "db_type": {
+          "type": "string",
+          "title": "Database Type",
+          "description": "Primary database type for this tenant. Used for dimension-based grouping.",
+          "examples": ["postgresql", "mariadb", "mongodb", "redis"]
+        },
+        "tags": {
+          "type": "array",
+          "title": "Tags",
+          "description": "Free-form tags for flexible categorization and filtering.",
+          "items": { "type": "string" },
+          "examples": [["critical-path", "pci-compliant"]]
+        },
+        "groups": {
+          "type": "array",
+          "title": "Groups",
+          "description": "Group membership references. Groups are defined in _groups.yaml.",
+          "items": { "type": "string" },
+          "examples": [["team-alpha", "tier-1-dbs"]]
+        }
+      },
+      "additionalProperties": true
+    },
+    "silentMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "title": "Silent Mode (Scalar, Backward Compatible)",
+          "description": "Legacy scalar format: 'warning', 'critical', 'all', or 'disable'. For new configs, prefer structured format with expires/reason.",
+          "enum": ["warning", "critical", "all", "disable"],
+          "examples": ["warning", "disable"]
+        },
+        {
+          "type": "object",
+          "title": "Silent Mode (Structured, v1.7.0+)",
+          "description": "Structured format with optional expiry and reason. Alerts fire but Alertmanager suppresses notifications. Distinct from maintenance mode which suppresses at PromQL level.",
+          "required": ["target"],
+          "properties": {
+            "target": {
+              "type": "string",
+              "title": "Target Severity",
+              "description": "Which severity levels to suppress: 'warning', 'critical', or 'all'.",
+              "enum": ["warning", "critical", "all"]
+            },
+            "expires": {
+              "type": "string",
+              "title": "Expiration Timestamp (ISO 8601)",
+              "description": "ISO 8601 UTC timestamp. Silent mode auto-expires at this time. Optional; omit for indefinite silent mode.",
+              "format": "date-time",
+              "examples": ["2026-03-13T12:00:00Z", "2026-04-01T06:00:00Z"]
+            },
+            "reason": {
+              "type": "string",
+              "title": "Reason",
+              "description": "Human-readable reason for silent mode. Optional; appears in observability logs.",
+              "examples": ["Known noisy alert during migration", "Suppressing until upgrade"]
+            }
+          },
+          "additionalProperties": false
+        }
+      ],
+      "examples": [
+        "warning",
+        {
+          "target": "warning",
+          "expires": "2026-03-13T12:00:00Z",
+          "reason": "Known noisy alert during migration"
+        }
+      ]
+    },
+    "maintenanceMode": {
+      "type": "object",
+      "title": "Maintenance Mode Configuration",
+      "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance. Supports one-time expiry and recurring schedules (cron). Distinct from silent_mode.",
+      "properties": {
+        "target": {
+          "type": "string",
+          "title": "Target",
+          "description": "Status: 'enable' (default) or 'disable'. When 'disable', maintenance mode is inactive.",
+          "enum": ["enable", "disable"],
+          "default": "enable"
+        },
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled Flag",
+          "description": "Boolean equivalent of target field. true = 'enable', false = 'disable'. Use either 'target' (string) or 'enabled' (boolean).",
+          "examples": [true, false]
+        },
+        "expires": {
+          "type": "string",
+          "title": "Expiration Timestamp (ISO 8601)",
+          "description": "ISO 8601 UTC timestamp. Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance.",
+          "format": "date-time",
+          "examples": ["2026-03-15T06:00:00Z", "2026-03-20T18:00:00Z"]
+        },
+        "reason": {
+          "type": "string",
+          "title": "Reason",
+          "description": "Human-readable reason for maintenance. Optional; appears in observability logs.",
+          "examples": ["Planned DB migration", "Hardware upgrade", "System maintenance window"]
+        },
+        "recurring": {
+          "type": "array",
+          "title": "Recurring Maintenance Windows (v1.11.0+)",
+          "description": "List of periodic maintenance schedules (e.g., weekly backups). Processed by maintenance_scheduler.py CronJob to auto-generate Alertmanager silences.",
+          "items": {
+            "$ref": "#/definitions/recurringSchedule"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "recurringSchedule": {
+      "type": "object",
+      "title": "Recurring Schedule",
+      "description": "Periodic maintenance window defined by cron expression and duration. Processed by maintenance_scheduler.py to auto-generate Alertmanager silences. See docs/architecture-and-design.md §2.7.",
+      "required": ["cron", "duration"],
+      "properties": {
+        "cron": {
+          "type": "string",
+          "title": "Cron Expression",
+          "description": "Standard 5-field cron (minute hour dayOfMonth month dayOfWeek) in UTC. Examples: '0 2 * * *' (daily 2AM), '0 3 * * 0' (Sunday 3AM).",
+          "pattern": "^(\\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\\*\\/([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])) (\\*|([0-9]|1[0-9]|2[0-3])|\\*\\/([0-9]|1[0-9]|2[0-3])) (\\*|([1-9]|1[0-9]|2[0-9]|3[01])|\\*\\/([1-9]|1[0-9]|2[0-9]|3[01])) (\\*|([1-9]|1[0-2])|\\*\\/([1-9]|1[0-2])) (\\*|([0-6])|\\*\\/([0-6]))$",
+          "examples": ["0 2 * * *", "0 3 * * 0", "0 1 * * 1-5", "30 */4 * * *"]
+        },
+        "duration": {
+          "type": "string",
+          "title": "Duration",
+          "description": "Go-style duration (e.g., '4h', '30m', '2h30m'). Maintenance window = cron start time + duration.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["4h", "30m", "2h30m", "1h15m"]
+        },
+        "reason": {
+          "type": "string",
+          "title": "Reason",
+          "description": "Human-readable reason for recurring maintenance. Optional.",
+          "examples": ["Weekly backup window", "Nightly index rebuild", "Database maintenance"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "routing": {
+      "type": "object",
+      "title": "Alert Routing Configuration",
+      "description": "Per-tenant alert routing to custom receivers. Supports one primary receiver and per-alertname/metric_group overrides. Replaces _routing_defaults. See architecture-and-design.md §2.9 and cli-reference.md.",
+      "properties": {
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "Primary Receiver",
+          "description": "Default receiver for alerts from this tenant. Can be webhook, email, slack, teams, rocketchat, or pagerduty."
+        },
+        "group_by": {
+          "type": "array",
+          "title": "Group By Labels",
+          "description": "Alertmanager grouping labels (e.g., ['alertname', 'tenant']). Optional; defaults to Alertmanager config.",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["alertname", "tenant"], ["alertname", "severity", "instance"]]
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Group Wait Duration",
+          "description": "Wait time before sending initial notification (Go duration, e.g., '30s'). Guardrail: 5s–5m. See architecture-and-design.md §2.9.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["30s", "1m", "5m"]
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Group Interval Duration",
+          "description": "Interval between notifications for same group (Go duration, e.g., '5m'). Guardrail: 5s–5m. See architecture-and-design.md §2.9.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["5s", "1m", "5m"]
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Repeat Interval Duration",
+          "description": "Interval for re-sending unresolved alerts (Go duration, e.g., '4h'). Guardrail: 1m–72h. See architecture-and-design.md §2.9.",
+          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+          "examples": ["1h", "4h", "24h"]
+        },
+        "overrides": {
+          "type": "array",
+          "title": "Per-Alertname/Metric-Group Overrides",
+          "description": "List of routing overrides for specific alert names or metric groups. First matching override wins. See architecture-and-design.md §2.9.",
+          "items": {
+            "$ref": "#/definitions/routingOverride"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "receiver": {
+      "oneOf": [
+        { "$ref": "#/definitions/webhookReceiver" },
+        { "$ref": "#/definitions/emailReceiver" },
+        { "$ref": "#/definitions/slackReceiver" },
+        { "$ref": "#/definitions/teamsReceiver" },
+        { "$ref": "#/definitions/rocketchatReceiver" },
+        { "$ref": "#/definitions/pagerdutReceiver" }
+      ],
+      "title": "Receiver Configuration",
+      "description": "Alert receiver definition. Must specify 'type' and required fields based on type. See cli-reference.md for field details."
+    },
+    "webhookReceiver": {
+      "type": "object",
+      "title": "Webhook Receiver",
+      "description": "Generic HTTP POST receiver. Sends alert to a webhook URL. Supports optional HTTP config.",
+      "required": ["type", "url"],
+      "properties": {
+        "type": {
+          "const": "webhook",
+          "description": "Receiver type identifier."
+        },
+        "url": {
+          "type": "string",
+          "title": "Webhook URL",
+          "description": "HTTP endpoint to POST alerts to. Subject to webhook domain allowlist policy (if configured).",
+          "format": "uri",
+          "examples": ["https://webhook.example.com/alerts", "https://hooks.example.com/monitoring"]
+        },
+        "send_resolved": {
+          "type": "boolean",
+          "title": "Send Resolved",
+          "description": "Whether to send alert resolved notifications. Default: true.",
+          "default": true
+        },
+        "http_config": {
+          "$ref": "#/definitions/httpConfig",
+          "title": "HTTP Configuration",
+          "description": "Optional HTTP client settings (auth, TLS, proxy). See Alertmanager http_config docs."
+        }
+      },
+      "additionalProperties": false
+    },
+    "emailReceiver": {
+      "type": "object",
+      "title": "Email Receiver",
+      "description": "SMTP email receiver. Sends alerts via email to specified recipients.",
+      "required": ["type", "to", "smarthost"],
+      "properties": {
+        "type": {
+          "const": "email",
+          "description": "Receiver type identifier."
+        },
+        "to": {
+          "type": "array",
+          "title": "Recipient Email Addresses",
+          "description": "List of email addresses to send alerts to.",
+          "items": {
+            "type": "string",
+            "format": "email"
+          },
+          "minItems": 1,
+          "examples": [["dba-team@example.com"], ["alice@example.com", "bob@example.com"]]
+        },
+        "smarthost": {
+          "type": "string",
+          "title": "SMTP Server",
+          "description": "SMTP server address in host:port format. Example: 'smtp.example.com:587'",
+          "examples": ["smtp.example.com:587", "mail.company.com:25"]
+        },
+        "from": {
+          "type": "string",
+          "title": "From Address",
+          "description": "Sender email address. Default: Alertmanager config.",
+          "format": "email",
+          "examples": ["alerts@example.com"]
+        },
+        "auth_username": {
+          "type": "string",
+          "title": "SMTP Username",
+          "description": "Username for SMTP authentication. Optional.",
+          "examples": ["alerts-user"]
+        },
+        "auth_password": {
+          "type": "string",
+          "title": "SMTP Password",
+          "description": "Password for SMTP authentication. Optional. Use Kubernetes Secrets in production.",
+          "examples": ["password-here"]
+        },
+        "require_tls": {
+          "type": "boolean",
+          "title": "Require TLS",
+          "description": "Require TLS for SMTP connection. Default: true.",
+          "default": true
+        },
+        "html": {
+          "type": "string",
+          "title": "HTML Template",
+          "description": "Alertmanager template for HTML email body. Optional; uses Alertmanager default if omitted."
+        },
+        "headers": {
+          "type": "object",
+          "title": "Email Headers",
+          "description": "Custom email headers (e.g., X-Custom-Header).",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "send_resolved": {
+          "type": "boolean",
+          "title": "Send Resolved",
+          "description": "Whether to send resolved notifications. Default: true.",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "slackReceiver": {
+      "type": "object",
+      "title": "Slack Receiver",
+      "description": "Slack webhook receiver. Posts alerts to a Slack channel.",
+      "required": ["type", "api_url"],
+      "properties": {
+        "type": {
+          "const": "slack",
+          "description": "Receiver type identifier."
+        },
+        "api_url": {
+          "type": "string",
+          "title": "Slack Webhook URL",
+          "description": "Slack incoming webhook URL. Create at https://api.slack.com/messaging/webhooks",
+          "format": "uri",
+          "examples": ["https://hooks.slack.com/services/T/B/xxx"]
+        },
+        "channel": {
+          "type": "string",
+          "title": "Slack Channel",
+          "description": "Channel to post to (optional; defaults to webhook's configured channel). Example: '#alerts' or '#my-team'",
+          "examples": ["#alerts", "#db-team-notifications"]
+        },
+        "title": {
+          "type": "string",
+          "title": "Message Title",
+          "description": "Custom title/heading for Slack message. Alertmanager template string (e.g., '{{ .GroupLabels.alertname }}')."
+        },
+        "text": {
+          "type": "string",
+          "title": "Message Body",
+          "description": "Custom body text for Slack message. Alertmanager template string."
+        },
+        "send_resolved": {
+          "type": "boolean",
+          "title": "Send Resolved",
+          "description": "Whether to send resolved notifications. Default: true.",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "teamsReceiver": {
+      "type": "object",
+      "title": "Microsoft Teams Receiver",
+      "description": "Microsoft Teams webhook receiver. Posts alerts to Teams channel.",
+      "required": ["type", "webhook_url"],
+      "properties": {
+        "type": {
+          "const": "teams",
+          "description": "Receiver type identifier."
+        },
+        "webhook_url": {
+          "type": "string",
+          "title": "Teams Webhook URL",
+          "description": "Microsoft Teams incoming webhook URL. Create at https://outlook.webhook.office.com",
+          "format": "uri",
+          "examples": ["https://outlook.webhook.office.com/webhookb2/XXX@XXX/xxx"]
+        },
+        "title": {
+          "type": "string",
+          "title": "Card Title",
+          "description": "Custom title for Teams card. Alertmanager template string."
+        },
+        "text": {
+          "type": "string",
+          "title": "Card Text",
+          "description": "Custom body text for Teams card. Alertmanager template string."
+        },
+        "send_resolved": {
+          "type": "boolean",
+          "title": "Send Resolved",
+          "description": "Whether to send resolved notifications. Default: true.",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "rocketchatReceiver": {
+      "type": "object",
+      "title": "Rocket.Chat Receiver",
+      "description": "Rocket.Chat webhook receiver. Posts alerts to Rocket.Chat channel.",
+      "required": ["type", "url"],
+      "properties": {
+        "type": {
+          "const": "rocketchat",
+          "description": "Receiver type identifier."
+        },
+        "url": {
+          "type": "string",
+          "title": "Rocket.Chat Webhook URL",
+          "description": "Rocket.Chat incoming webhook URL.",
+          "format": "uri",
+          "examples": ["https://chat.example.com/hooks/xxx"]
+        },
+        "channel": {
+          "type": "string",
+          "title": "Channel",
+          "description": "Channel name. Metadata field (not passed to Alertmanager).",
+          "examples": ["#alerts", "#monitoring"]
+        },
+        "username": {
+          "type": "string",
+          "title": "Bot Username",
+          "description": "Bot username for posting. Metadata field (not passed to Alertmanager).",
+          "examples": ["alert-bot", "monitoring"]
+        },
+        "icon_url": {
+          "type": "string",
+          "title": "Icon URL",
+          "description": "Icon URL for bot avatar. Metadata field (not passed to Alertmanager).",
+          "format": "uri"
+        },
+        "send_resolved": {
+          "type": "boolean",
+          "title": "Send Resolved",
+          "description": "Whether to send resolved notifications. Default: true.",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "pagerdutReceiver": {
+      "type": "object",
+      "title": "PagerDuty Receiver",
+      "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "pagerduty",
+          "description": "Receiver type identifier."
+        },
+        "service_key": {
+          "type": "string",
+          "title": "Service Key (Integration Key)",
+          "description": "PagerDuty service integration key for events API v1. Deprecated in favor of routing_key (v2).",
+          "examples": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+        },
+        "routing_key": {
+          "type": "string",
+          "title": "Routing Key (v2 API)",
+          "description": "PagerDuty integration key for events API v2. Recommended over service_key.",
+          "examples": ["xxxxx/xxxxx/xxxxx"]
+        },
+        "severity": {
+          "type": "string",
+          "title": "Severity Mapping",
+          "description": "PagerDuty severity level. Alertmanager template string (e.g., '{{ .Status }}'). Default: 'error'.",
+          "examples": ["critical", "error", "warning"]
+        },
+        "description": {
+          "type": "string",
+          "title": "Incident Description",
+          "description": "Custom incident description. Alertmanager template string."
+        },
+        "client": {
+          "type": "string",
+          "title": "Client Name",
+          "description": "Monitoring tool name. Alertmanager template string (e.g., 'Prometheus')."
+        },
+        "client_url": {
+          "type": "string",
+          "title": "Client URL",
+          "description": "Link back to monitoring system. Alertmanager template string.",
+          "format": "uri"
+        },
+        "send_resolved": {
+          "type": "boolean",
+          "title": "Send Resolved",
+          "description": "Whether to resolve PagerDuty incidents on alert resolution. Default: true.",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "httpConfig": {
+      "type": "object",
+      "title": "HTTP Client Configuration",
+      "description": "Optional HTTP client settings for webhook receiver (auth, TLS, proxy). See Alertmanager documentation.",
+      "properties": {
+        "basic_auth": {
+          "type": "object",
+          "title": "Basic Authentication",
+          "properties": {
+            "username": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            }
+          }
+        },
+        "bearer_token": {
+          "type": "string",
+          "title": "Bearer Token",
+          "description": "HTTP Bearer token for authentication."
+        },
+        "proxy_url": {
+          "type": "string",
+          "title": "Proxy URL",
+          "description": "HTTP proxy URL.",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false
+    },
+    "routingOverride": {
+      "type": "object",
+      "title": "Routing Override",
+      "description": "Per-alertname or metric_group routing override. First matching override wins.",
+      "properties": {
+        "alertname": {
+          "type": "string",
+          "title": "Alert Name",
+          "description": "Alert rule name to match (e.g., 'HighConnections'). Mutually exclusive with metric_group."
+        },
+        "metric_group": {
+          "type": "string",
+          "title": "Metric Group",
+          "description": "Metric group to match (e.g., 'mysql_connections'). Mutually exclusive with alertname."
+        },
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "Override Receiver",
+          "description": "Receiver for alerts matching this override."
+        },
+        "group_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "title": "Override Group By"
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Override Group Wait"
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Override Group Interval"
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Override Repeat Interval"
+        }
+      },
+      "additionalProperties": false
+    },
+    "routingEnforced": {
+      "type": "object",
+      "title": "Platform-Enforced Routing (v1.13.0+)",
+      "description": "Platform-level routing inserted before tenant routes. Enables dual-perspective alerts: NOC receives platform_summary, tenant receives summary. Inserted with continue: true so tenant routes also fire. See scenarios/alert-routing-split.md.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "description": "Whether to enable platform-enforced routing. Set to false or omit to disable.",
+          "default": false
+        },
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "NOC Receiver",
+          "description": "Receiver for NOC (platform-perspective notifications). Usually a webhook to incident management system."
+        },
+        "match": {
+          "type": "array",
+          "title": "Match Conditions",
+          "description": "List of Alertmanager label matchers (e.g., 'severity=\"critical\"'). Alerts matching ANY condition are routed here.",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["severity=\"critical\""], ["severity=\"critical\"", "severity=\"warning\""]]
+        },
+        "group_by": {
+          "type": "array",
+          "title": "Group By Labels",
+          "items": {
+            "type": "string"
+          }
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Group Wait Duration"
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Group Interval Duration"
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Repeat Interval Duration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "routingDefaults": {
+      "type": "object",
+      "title": "Routing Defaults (v1.4.0+)",
+      "description": "Default routing config for tenants without explicit _routing. Supports {{tenant}} placeholder for dynamic per-tenant values. Typically set in _defaults.yaml, not per-tenant.",
+      "properties": {
+        "receiver": {
+          "$ref": "#/definitions/receiver",
+          "title": "Default Receiver",
+          "description": "Default receiver for tenants. Receiver fields can use {{tenant}} placeholder."
+        },
+        "group_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "title": "Default Group By"
+        },
+        "group_wait": {
+          "type": "string",
+          "title": "Default Group Wait"
+        },
+        "group_interval": {
+          "type": "string",
+          "title": "Default Group Interval"
+        },
+        "repeat_interval": {
+          "type": "string",
+          "title": "Default Repeat Interval"
+        }
+      },
+      "additionalProperties": false
+    },
+    "operatorConfig": {
+      "type": "object",
+      "title": "Operator CRD Settings (v2.6.0)",
+      "description": "Per-tenant Operator mode overrides. Used by operator-generate and migrate-to-operator tools.",
+      "properties": {
+        "receiver_template": {
+          "type": "string",
+          "enum": ["slack", "pagerduty", "email", "teams", "opsgenie", "webhook"],
+          "title": "Receiver Template Type",
+          "description": "Receiver template type for AlertmanagerConfig generation"
+        },
+        "secret_name": {
+          "type": "string",
+          "title": "K8s Secret Name",
+          "description": "K8s Secret name for receiver credentials (default: da-{tenant}-{type})"
+        },
+        "secret_key": {
+          "type": "string",
+          "title": "Secret Key",
+          "description": "Key within K8s Secret (default: type-specific, e.g. webhook-url for slack)"
+        },
+        "service_monitor": {
+          "type": "boolean",
+          "title": "ServiceMonitor Generation",
+          "description": "Whether to generate ServiceMonitor for this tenant",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaultsConfig": {
+      "type": "object",
+      "title": "_defaults.yaml Configuration (v2.7.0 ADR-018)",
+      "description": "Schema for _defaults.yaml files placed at domain, region, or environment levels in hierarchical conf.d/. Values are deep-merged into all tenant configs under that directory. Merge semantics: dict=deep merge with child override, array=replace (not concat), null=opt-out (remove inherited key). _metadata fields are skipped during merge.",
+      "$comment": "A _defaults.yaml at conf.d/finance/_defaults.yaml applies to all tenants under finance/. Deeper _defaults.yaml files override shallower ones (env > region > domain).",
+      "properties": {
+        "_metadata": {
+          "$ref": "#/definitions/metadata",
+          "description": "Default metadata inherited by all tenants under this directory. Individual tenant _metadata fields override these defaults."
+        },
+        "_routing": {
+          "$ref": "#/definitions/routing",
+          "description": "Default routing configuration inherited by all tenants under this directory."
+        },
+        "_routing_profile": {
+          "type": "string",
+          "description": "Default routing profile for tenants under this directory.",
+          "minLength": 1
+        },
+        "_silent_mode": {
+          "$ref": "#/definitions/silentMode",
+          "description": "Default silent mode inherited by all tenants under this directory."
+        },
+        "_severity_dedup": {
+          "type": "string",
+          "enum": ["auto", "manual", "disable"],
+          "description": "Default severity dedup mode for tenants under this directory."
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

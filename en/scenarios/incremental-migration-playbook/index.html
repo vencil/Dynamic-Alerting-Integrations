@@ -1,0 +1,3513 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/en/scenarios/incremental-migration-playbook/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="../../../scenarios/incremental-migration-playbook/" hreflang="zh">
+        
+          <link rel="alternate" href="./" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Scenario: Incremental Migration Playbook - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#scenario-incremental-migration-playbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Scenario: Incremental Migration Playbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../scenarios/incremental-migration-playbook/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Core Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Governance & Security
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Scenarios
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Governance & Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Governance & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule Governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scenarios
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Scenarios
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../internal/test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring Cutover
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-cluster Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Cheat Sheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-timeline-typical-case" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration Timeline (Typical Case)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-0-audit-assessment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0: Audit &amp; Assessment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 0: Audit &amp; Assessment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-01-analyze-existing-alertmanager-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 0.1: Analyze Existing Alertmanager Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-02-analyze-existing-prometheus-alert-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 0.2: Analyze Existing Prometheus Alert Rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-03-scan-active-alerts-in-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 0.3: Scan Active Alerts in Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-04-decision-matrix-select-pilot-domain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 0.4: Decision Matrix — Select Pilot Domain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0 Rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-pilot-domain-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Pilot Domain Deployment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Pilot Domain Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-11-generate-tenant-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.1: Generate Tenant Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-12-edit-threshold-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.2: Edit Threshold Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-13-deploy-threshold-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.3: Deploy threshold-exporter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-14-verify-metrics-emission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.4: Verify Metrics Emission
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-15-mount-rule-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.5: Mount Rule Pack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-16-verify-recording-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.6: Verify Recording Rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-17-verify-alerts-not-routed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.7: Verify Alerts Not Routed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 Verification Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 Rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-dual-run-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Dual-Run Validation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: Dual-Run Validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-21-generate-alertmanager-routing-fragment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.1: Generate Alertmanager Routing Fragment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-22-prepare-dual-run-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.2: Prepare Dual-Run Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-23-preflight-check-shadow-verify-preflight" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.3: Preflight Check (Shadow Verify Preflight)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-24-monitor-dual-run-1-2-weeks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.4: Monitor Dual-Run (1-2 weeks)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-25-summarize-decide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.5: Summarize &amp; Decide
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 Rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Cutover
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3: Cutover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-31-dry-run-cutover-rehearsal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.1: Dry-Run Cutover Rehearsal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-32-execute-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.2: Execute Cutover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-33-comprehensive-health-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.3: Comprehensive Health Check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-34-confirm-old-alerts-disabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.4: Confirm Old Alerts Disabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 Verification Checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 Rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-expand-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: Expand &amp; Cleanup
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4: Expand &amp; Cleanup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-41-migrate-next-domain-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.1: Migrate Next Domain (Loop)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-42-full-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.2: Full Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-43-batch-diagnosis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.3: Batch Diagnosis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-44-clean-up-legacy-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.4: Clean Up Legacy Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-45-clean-up-test-tenants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.5: Clean Up Test Tenants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-46-update-documentation-handover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.6: Update Documentation &amp; Handover
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#emergency-rollback-procedures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emergency Rollback Procedures
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Emergency Rollback Procedures">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rollback-order-strict-reverse-of-merge-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback order: strict reverse of merge order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#watchloop-debounce-verification-linked-to-b-3-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WatchLoop debounce verification (linked to B-3 metrics)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#staging-rehearsal-mandatory-t-2-weeks-before-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Staging rehearsal mandatory (T-2 weeks before cutover)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollback-time-budget-based-on-phase-1-baseline-1000-tenant-pr-59" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback time budget (based on Phase 1 baseline @ 1000-tenant, PR #59)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verification-checklist-tick-each-after-rollback-completes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification checklist (tick each after rollback completes)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tooling-follow-up-not-yet-implemented-on-v28x-backlog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tooling follow-up (not yet implemented, on v2.8.x backlog)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frequently-asked-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frequently Asked Questions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Frequently Asked Questions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q1-do-i-need-to-clean-up-scrape-config-before-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q1: Do I need to clean up scrape config before migration?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q2-what-if-one-domain-fails-during-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q2: What if one domain fails during migration?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q3-how-long-does-the-entire-migration-take" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q3: How long does the entire migration take?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q4-how-do-i-monitor-threshold-exporter-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q4: How do I monitor threshold-exporter performance?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q5-what-if-i-get-duplicate-alerts-both-old-and-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q5: What if I get duplicate alerts (both old and new)?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q6-what-if-a-rule-pack-doesnt-fit-my-domain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q6: What if a Rule Pack doesn't fit my domain?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-timeline-typical-5-domain-case" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration Timeline (Typical 5-Domain Case)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">adoption</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">migration</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">playbook</span>
+      
+    
+      
+      
+      
+      
+        <span class="md-tag">scenario</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/scenarios/incremental-migration-playbook.en.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/scenarios/incremental-migration-playbook.en.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="scenario-incremental-migration-playbook">Scenario: Incremental Migration Playbook<a class="headerlink" href="#scenario-incremental-migration-playbook" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Language / 語言：</strong> <strong>English (Current)</strong> | <a href="./">中文</a></p>
+<p><strong>v2.7.0</strong> | Related docs: <a href="../../migration-guide/"><code>migration-guide.md</code></a>, <a href="../shadow-monitoring-cutover/"><code>shadow-monitoring-cutover.md</code></a>, <a href="../../architecture-and-design/"><code>architecture-and-design.md</code> §2</a></p>
+</blockquote>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>This playbook guides enterprises through migrating from an existing messy Prometheus + Alertmanager setup to the Dynamic Alerting platform <strong>incrementally, with zero downtime</strong>. The core principle is the <strong>"Strangler Fig Pattern"</strong>: build a clean overlay without cleaning the swamp first.</p>
+<p>Each phase is <strong>independently valuable</strong>—you can stop at any phase without system breakage. Migration speed is entirely in your control.</p>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Running Prometheus instance (<code>http://prometheus:9090</code>)</li>
+<li>Running Alertmanager (<code>http://alertmanager:9093</code>)</li>
+<li>Kubernetes cluster (Kind, EKS, GKE, etc.)</li>
+<li><code>da-tools</code> image pushed to private registry or publicly available (<code>ghcr.io/vencil/da-tools:v2.7.0</code>)</li>
+<li>At least one namespace for monitoring (e.g., <code>monitoring</code>, <code>observability</code>)</li>
+</ul>
+<h2 id="migration-timeline-typical-case">Migration Timeline (Typical Case)<a class="headerlink" href="#migration-timeline-typical-case" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Effort</th>
+<th>Risk</th>
+<th>Duration</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phase 0: Audit &amp; Assessment</td>
+<td>1 person-day</td>
+<td>None</td>
+<td>1 day</td>
+</tr>
+<tr>
+<td>Phase 1: Pilot Domain Deployment</td>
+<td>2 person-days</td>
+<td>Low</td>
+<td>3-5 days</td>
+</tr>
+<tr>
+<td>Phase 2: Dual-Run Validation</td>
+<td>1 person-day (monitoring)</td>
+<td>Low</td>
+<td>1-2 weeks</td>
+</tr>
+<tr>
+<td>Phase 3: Cutover</td>
+<td>0.5 person-day</td>
+<td>Low</td>
+<td>4 hours</td>
+</tr>
+<tr>
+<td>Phase 4: Expand &amp; Cleanup</td>
+<td>1 person-day × N domains</td>
+<td>Low</td>
+<td>2-3 weeks per domain</td>
+</tr>
+<tr>
+<td><strong>Total (5 domains)</strong></td>
+<td><strong>~15 person-days</strong></td>
+<td><strong>Low</strong></td>
+<td><strong>2-3 months</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="phase-0-audit-assessment">Phase 0: Audit &amp; Assessment<a class="headerlink" href="#phase-0-audit-assessment" title="Permanent link">&para;</a></h2>
+<p><strong>Goal</strong>: Understand your current monitoring setup without changing anything. This phase is <strong>read-only</strong> and completely risk-free.</p>
+<h3 id="step-01-analyze-existing-alertmanager-configuration">Step 0.1: Analyze Existing Alertmanager Configuration<a class="headerlink" href="#step-01-analyze-existing-alertmanager-configuration" title="Permanent link">&para;</a></h3>
+<p>Run a command to analyze your Alertmanager routing tree, receiver count, and identify any tenant-like labels:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--alertmanager-config<span class="w"> </span>alertmanager.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--output<span class="w"> </span>audit-report.json
+</code></pre></div>
+<p><strong>Expected output</strong>: <code>audit-report.json</code> contains Alertmanager version, global config, receivers list (name, channels), routing tree, inhibit rules, and migration recommendations. Analysis points:
+- Receiver count → potential tenant count
+- Existing group_wait / repeat_interval → reference values for Dynamic Alerting routing guardrails
+- Inhibit rules → whether to migrate to Dynamic Alerting severity dedup</p>
+<h3 id="step-02-analyze-existing-prometheus-alert-rules">Step 0.2: Analyze Existing Prometheus Alert Rules<a class="headerlink" href="#step-02-analyze-existing-prometheus-alert-rules" title="Permanent link">&para;</a></h3>
+<p>Analyze existing rules, categorize by type (Recording Rules / Alerting Rules), and identify migration candidates:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>da-tools<span class="w"> </span>onboard<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--prometheus-rules<span class="w"> </span>prometheus-rules.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--prometheus-rules<span class="w"> </span>/etc/prometheus/rules.d/*.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--output<span class="w"> </span>rule-audit.json
+</code></pre></div>
+<p><strong>Expected output</strong>: <code>rule-audit.json</code> summarizes alert rule statistics, per-rule migration priority scores, and rule-pack correspondence recommendations. Prioritize migrating high-priority rules (Redis, MariaDB), defer custom business rules.</p>
+<h3 id="step-03-scan-active-alerts-in-cluster">Step 0.3: Scan Active Alerts in Cluster<a class="headerlink" href="#step-03-scan-active-alerts-in-cluster" title="Permanent link">&para;</a></h3>
+<p>Scan all active scrape targets in Prometheus to understand what's actually being monitored:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>da-tools<span class="w"> </span>blind-spot<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--config-dir<span class="w"> </span>/dev/null<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>&gt;<span class="w"> </span>blind-spot-report.json
+</code></pre></div>
+<p><strong>Expected output</strong>: <code>blind-spot-report.json</code> enumerates scrape targets, database types covered by rule-packs, and recommendations for directly usable Rule Packs.</p>
+<h3 id="step-04-decision-matrix-select-pilot-domain">Step 0.4: Decision Matrix — Select Pilot Domain<a class="headerlink" href="#step-04-decision-matrix-select-pilot-domain" title="Permanent link">&para;</a></h3>
+<p>Based on Phase 0.1-0.3 outputs, fill out a decision matrix to select your pilot domain (typically the cleanest metrics or most obvious pain point):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">candidates</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">redis-prod</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">metrics_cleanliness</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9/10</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">rule_pack_coverage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9/10</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">pain_points</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Alert</span><span class="nv"> </span><span class="s">noise,</span><span class="nv"> </span><span class="s">15%</span><span class="nv"> </span><span class="s">false</span><span class="nv"> </span><span class="s">positive</span><span class="nv"> </span><span class="s">rate&quot;</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">team_readiness</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;High&quot;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">recommendation</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;✓</span><span class="nv"> </span><span class="s">PRIMARY</span><span class="nv"> </span><span class="s">CHOICE&quot;</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">mariadb-prod</span><span class="p">:</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nt">metrics_cleanliness</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">7/10</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="nt">rule_pack_coverage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8/10</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="nt">pain_points</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Alert</span><span class="nv"> </span><span class="s">latency</span><span class="nv"> </span><span class="s">&gt;10min,</span><span class="nv"> </span><span class="s">affects</span><span class="nv"> </span><span class="s">RTO&quot;</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="nt">recommendation</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;✓</span><span class="nv"> </span><span class="s">SECONDARY</span><span class="nv"> </span><span class="s">CHOICE&quot;</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">  </span><span class="nt">custom-app</span><span class="p">:</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">    </span><span class="nt">metrics_cleanliness</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3/10</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">    </span><span class="nt">rule_pack_coverage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1/10</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="nt">recommendation</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;✗</span><span class="nv"> </span><span class="s">Migrate</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">Phase</span><span class="nv"> </span><span class="s">4</span><span class="nv"> </span><span class="s">last&quot;</span>
+</code></pre></div>
+<p><strong>Selection guidance</strong>: Prioritize domains with rule-pack coverage &gt;= 8/10, avoid highly customized business rules early, prioritize domains with obvious pain points to quickly demonstrate value.</p>
+<h3 id="phase-0-rollback">Phase 0 Rollback<a class="headerlink" href="#phase-0-rollback" title="Permanent link">&para;</a></h3>
+<p>No rollback needed. This phase is read-only; no system changes made.</p>
+<hr />
+<h2 id="phase-1-pilot-domain-deployment">Phase 1: Pilot Domain Deployment<a class="headerlink" href="#phase-1-pilot-domain-deployment" title="Permanent link">&para;</a></h2>
+<p><strong>Goal</strong>: Deploy the selected domain (e.g., Redis) on the Dynamic Alerting platform in shadow mode, running parallel to existing alerts. New alerts are emitted but not routed to any receiver yet.</p>
+<h3 id="step-11-generate-tenant-configuration">Step 1.1: Generate Tenant Configuration<a class="headerlink" href="#step-11-generate-tenant-configuration" title="Permanent link">&para;</a></h3>
+<p>Based on Phase 0 decision, use the <code>scaffold</code> command to generate initial configuration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>conf.d/
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--db<span class="w"> </span>redis<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--non-interactive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--output<span class="w"> </span>conf.d/redis-prod.yaml
+</code></pre></div>
+<p><strong>Expected output</strong>: <code>conf.d/redis-prod.yaml</code> contains recording rules config, threshold initial values (conservative), and routing config (initially disabled).</p>
+<h3 id="step-12-edit-threshold-configuration">Step 1.2: Edit Threshold Configuration<a class="headerlink" href="#step-12-edit-threshold-configuration" title="Permanent link">&para;</a></h3>
+<p>Based on Phase 0.2 audit results, adjust threshold parameters to match existing rule logic. <strong>Prioritize conservative settings</strong>; refine after data collection in Phase 2.</p>
+<h3 id="step-13-deploy-threshold-exporter">Step 1.3: Deploy threshold-exporter<a class="headerlink" href="#step-13-deploy-threshold-exporter" title="Permanent link">&para;</a></h3>
+<p>Deploy threshold-exporter in the pilot environment, mounting the conf.d/ directory:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>helm<span class="w"> </span>repo<span class="w"> </span>add<span class="w"> </span>vencil<span class="w"> </span>https://ghcr.io/vencil/charts
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>helm<span class="w"> </span>repo<span class="w"> </span>update
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>helm<span class="w"> </span>install<span class="w"> </span>threshold-exporter-redis<span class="w"> </span>vencil/threshold-exporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--namespace<span class="w"> </span>monitoring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--set<span class="w"> </span>image.tag<span class="o">=</span>v2.7.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--set<span class="w"> </span>config.dir<span class="o">=</span>/etc/threshold-exporter/conf.d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">replicaCount</span><span class="o">=</span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--values<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt; &#39;EOF&#39;</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="s">extraVolumes:</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="s">  - name: config</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="s">    configMap:</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="s">      name: threshold-exporter-config-redis</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="s">extraVolumeMounts:</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="s">  - name: config</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="s">    mountPath: /etc/threshold-exporter/conf.d</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="s">EOF</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>threshold-exporter-config-redis<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">  </span>--from-file<span class="o">=</span>conf.d/redis-prod.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">  </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<h3 id="step-14-verify-metrics-emission">Step 1.4: Verify Metrics Emission<a class="headerlink" href="#step-14-verify-metrics-emission" title="Permanent link">&para;</a></h3>
+<p>Query the metrics emitted by threshold-exporter:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>svc/threshold-exporter-redis<span class="w"> </span><span class="m">8080</span>:8080<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>curl<span class="w"> </span>http://localhost:8080/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>redis_user_threshold
+</code></pre></div>
+<p><strong>Expected</strong>: <code>redis_user_threshold_memory_warning</code>, <code>redis_user_threshold_memory_critical</code>, and similar metrics appear with tenant labels.</p>
+<h3 id="step-15-mount-rule-pack">Step 1.5: Mount Rule Pack<a class="headerlink" href="#step-15-mount-rule-pack" title="Permanent link">&para;</a></h3>
+<p>Create a ConfigMap containing the Rule Pack and mount it in Prometheus:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>-o<span class="w"> </span>rule-pack-redis.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>https://raw.githubusercontent.com/vencil/vibe-k8s-lab/main/rule-packs/rule-pack-redis.yaml
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>rule-pack-redis<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span>--from-file<span class="o">=</span>rule-pack-redis.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cm<span class="w"> </span>prometheus-config<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;data&quot;: {&quot;prometheus.yaml&quot;: &quot;... (with rule-pack-redis.yaml in rule_files) ...&quot;}}&#39;</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment/prometheus<span class="w"> </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<h3 id="step-16-verify-recording-rules">Step 1.6: Verify Recording Rules<a class="headerlink" href="#step-16-verify-recording-rules" title="Permanent link">&para;</a></h3>
+<p>Wait for Prometheus to load rules, then verify the metrics generated by recording rules:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>svc/prometheus<span class="w"> </span><span class="m">9090</span>:9090<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>curl<span class="w"> </span><span class="s1">&#39;http://localhost:9090/api/v1/query?query=redis:memory:usage_percent&#39;</span>
+</code></pre></div>
+<p><strong>Expected</strong>: Returns time-series values for <code>redis:memory:usage_percent</code>.</p>
+<h3 id="step-17-verify-alerts-not-routed">Step 1.7: Verify Alerts Not Routed<a class="headerlink" href="#step-17-verify-alerts-not-routed" title="Permanent link">&para;</a></h3>
+<p>Confirm new alerts are generated by Prometheus but not yet routed by Alertmanager:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span><span class="s1">&#39;http://localhost:9090/api/v1/alerts&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.data.alerts[] | select(.labels.tenant==&quot;redis-prod&quot;)&#39;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>curl<span class="w"> </span><span class="s1">&#39;http://localhost:9093/api/v1/alerts&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.[].alerts[] | select(.labels.tenant==&quot;redis-prod&quot;)&#39;</span>
+</code></pre></div>
+<p><strong>Expected</strong>: New alerts in Prometheus; no corresponding groups in Alertmanager (routing not yet added).</p>
+<h3 id="phase-1-verification-checklist">Phase 1 Verification Checklist<a class="headerlink" href="#phase-1-verification-checklist" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> threshold-exporter deployment successful, 2 pods running</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> metrics queries return <code>redis_user_threshold_*</code> series</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Rule Pack mounted, Prometheus logs clean</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Recording Rules generating output</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Alerting Rules generated (visible in Prometheus), not routed to Alertmanager</li>
+</ul>
+<h3 id="phase-1-rollback">Phase 1 Rollback<a class="headerlink" href="#phase-1-rollback" title="Permanent link">&para;</a></h3>
+<p>If rollback needed, execute:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>helm<span class="w"> </span>uninstall<span class="w"> </span>threshold-exporter-redis<span class="w"> </span>-n<span class="w"> </span>monitoring
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>cm<span class="w"> </span>rule-pack-redis<span class="w"> </span>-n<span class="w"> </span>monitoring
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cm<span class="w"> </span>prometheus-config<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;data&quot;: {&quot;prometheus.yaml&quot;: &quot;... (original) ...&quot;}}&#39;</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment/prometheus<span class="w"> </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<hr />
+<h2 id="phase-2-dual-run-validation">Phase 2: Dual-Run Validation<a class="headerlink" href="#phase-2-dual-run-validation" title="Permanent link">&para;</a></h2>
+<p><strong>Goal</strong>: Run new and old alerts simultaneously, compare quality. Collect data over 1-2 weeks, verify Dynamic Alerting alert quality equals or exceeds existing system.</p>
+<h3 id="step-21-generate-alertmanager-routing-fragment">Step 2.1: Generate Alertmanager Routing Fragment<a class="headerlink" href="#step-21-generate-alertmanager-routing-fragment" title="Permanent link">&para;</a></h3>
+<p>Use <code>generate-routes</code> command to generate Alertmanager routing config for pilot tenant:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>da-tools<span class="w"> </span>generate-routes<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--output<span class="w"> </span>alertmanager-fragment.yaml
+</code></pre></div>
+<p><strong>Expected output</strong>: YAML fragment containing new route (pointing to da-pilot-slack receiver, matching <code>tenant=redis-prod</code>), priority settings, group_wait / group_interval / repeat_interval configuration.</p>
+<h3 id="step-22-prepare-dual-run-configuration">Step 2.2: Prepare Dual-Run Configuration<a class="headerlink" href="#step-22-prepare-dual-run-configuration" title="Permanent link">&para;</a></h3>
+<p>Backup existing Alertmanager config, then insert new route at top:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>cp<span class="w"> </span>alertmanager.yaml<span class="w"> </span>alertmanager.yaml.backup-phase1
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="c1"># Use kubectl patch to merge config (avoid cat &lt;&lt;EOF)</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>alertmanager-config-phase2<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span>--from-file<span class="o">=</span>alertmanager.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<p>New route should match <code>da_managed: "true" &amp;&amp; tenant: redis-prod</code> at top with priority, set <code>continue: true</code> to allow dual-run recording.</p>
+<h3 id="step-23-preflight-check-shadow-verify-preflight">Step 2.3: Preflight Check (Shadow Verify Preflight)<a class="headerlink" href="#step-23-preflight-check-shadow-verify-preflight" title="Permanent link">&para;</a></h3>
+<p>Run preflight check to ensure dual-run config is sound:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>da-tools<span class="w"> </span>shadow-verify<span class="w"> </span>preflight<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span>--alertmanager<span class="w"> </span>http://alertmanager:9093
+</code></pre></div>
+<p><strong>Expected output</strong>: Syntax check passes, route priority conflict-free, mapping coverage high (&gt;90%), warnings level reasonable. If warnings present (e.g., repeat_interval mismatch), evaluate and adjust if needed.</p>
+<h3 id="step-24-monitor-dual-run-1-2-weeks">Step 2.4: Monitor Dual-Run (1-2 weeks)<a class="headerlink" href="#step-24-monitor-dual-run-1-2-weeks" title="Permanent link">&para;</a></h3>
+<p>Let the system run in parallel for 1-2 weeks, observing both Slack channels in real-time:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Run quality assessment daily</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>da-tools<span class="w"> </span>alert-quality<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span>--lookback<span class="w"> </span>24h<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">  </span>--json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">  </span>&gt;<span class="w"> </span>alert-quality-<span class="k">$(</span>date<span class="w"> </span>+%Y-%m-%d<span class="k">)</span>.json
+</code></pre></div>
+<p><strong>Expected output</strong>: JSON contains alert latency percentiles, false positive rate, grouping effectiveness score, and comparison with old alerts.</p>
+<h3 id="step-25-summarize-decide">Step 2.5: Summarize &amp; Decide<a class="headerlink" href="#step-25-summarize-decide" title="Permanent link">&para;</a></h3>
+<p>Based on dual-run data collection, make cutover decision:</p>
+<p><strong>Decision criteria</strong>:
+- New alert latency &lt; old alert latency (typically 75%+ improvement)
+- New alert false positive rate &lt;= old alert rate
+- New alert grouping &gt; old alert grouping (better observability)</p>
+<p>If all three met, proceed to Phase 3. If concerns, extend dual-run or rollback.</p>
+<h3 id="phase-2-rollback">Phase 2 Rollback<a class="headerlink" href="#phase-2-rollback" title="Permanent link">&para;</a></h3>
+<p>If dual-run validation fails, revert to end of Phase 1:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cm<span class="w"> </span>alertmanager-config<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>--type<span class="w"> </span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;data&quot;: {&quot;alertmanager.yaml&quot;: &quot;... (original) ...&quot;}}&#39;</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment/alertmanager<span class="w"> </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<hr />
+<h2 id="phase-3-cutover">Phase 3: Cutover<a class="headerlink" href="#phase-3-cutover" title="Permanent link">&para;</a></h2>
+<p><strong>Goal</strong>: Disable old alerts for pilot domain, make Dynamic Alerting the primary alert source. System experiences no interruption.</p>
+<h3 id="step-31-dry-run-cutover-rehearsal">Step 3.1: Dry-Run Cutover Rehearsal<a class="headerlink" href="#step-31-dry-run-cutover-rehearsal" title="Permanent link">&para;</a></h3>
+<p>Before actual execution, rehearse the cutover process to ensure correctness:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span>--alertmanager<span class="w"> </span>http://alertmanager:9093<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">  </span>--dry-run<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">  </span>--verbose
+</code></pre></div>
+<p><strong>Expected output</strong>: Dry-run report contains current state (Recording Rules, Alerting Rules, Alertmanager routing), planned actions (disable old rules, update route priority), expected result, health checks, and rollback command.</p>
+<p><strong>Verify dry-run output</strong>: Confirm only old Alerting Rules disabled, Recording Rules stay enabled; confirm Alertmanager routing points to new receiver only, no duplicates.</p>
+<h3 id="step-32-execute-cutover">Step 3.2: Execute Cutover<a class="headerlink" href="#step-32-execute-cutover" title="Permanent link">&para;</a></h3>
+<p>Confirm dry-run results look good, then execute actual cutover:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span>--alertmanager<span class="w"> </span>http://alertmanager:9093<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span>--execute
+</code></pre></div>
+<p><strong>Execution steps</strong>: Tool automatically disables old Alerting Rules (keeps Recording Rules), updates Alertmanager routing (removes <code>continue: true</code>, sets new receiver as only route), removes shadow labels.</p>
+<h3 id="step-33-comprehensive-health-check">Step 3.3: Comprehensive Health Check<a class="headerlink" href="#step-33-comprehensive-health-check" title="Permanent link">&para;</a></h3>
+<p>After cutover completes, run comprehensive check:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>da-tools<span class="w"> </span>diagnose<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--alertmanager<span class="w"> </span>http://alertmanager:9093<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span>--json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">  </span>&gt;<span class="w"> </span>diagnose-post-cutover.json
+</code></pre></div>
+<p><strong>Expected output</strong>: Diagnostic report contains recording rules status (ACTIVE), new alerting rules status (ACTIVE), old alerting rules status (DISABLED), routing health (100%), cardinality (&lt; 500).</p>
+<h3 id="step-34-confirm-old-alerts-disabled">Step 3.4: Confirm Old Alerts Disabled<a class="headerlink" href="#step-34-confirm-old-alerts-disabled" title="Permanent link">&para;</a></h3>
+<p>Verify old alerts disappeared from Alertmanager, old alert stream in Slack channel stopped:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>curl<span class="w"> </span><span class="s1">&#39;http://localhost:9093/api/v1/alerts&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.[].alerts[] | select(.labels.alertname==&quot;RedisHighMemory&quot; and .labels.da_managed!=&quot;true&quot;)&#39;</span>
+</code></pre></div>
+<p><strong>Expected</strong>: No results (old alerts disabled).</p>
+<h3 id="phase-3-verification-checklist">Phase 3 Verification Checklist<a class="headerlink" href="#phase-3-verification-checklist" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Dry-run report confirms no anomalies</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Cutover execution successful, no error logs</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Diagnostics report: Recording Rules ACTIVE, new Rules ACTIVE, old Rules DISABLED</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Old alerts gone from Alertmanager, new alerts sending normally</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Alert stream in Slack channel stable (no duplicates, no gaps)</li>
+</ul>
+<h3 id="phase-3-rollback">Phase 3 Rollback<a class="headerlink" href="#phase-3-rollback" title="Permanent link">&para;</a></h3>
+<p>If cutover fails, execute rollback:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>da-tools<span class="w"> </span>cutover<span class="w"> </span>--tenant<span class="w"> </span>redis-prod<span class="w"> </span>--rollback
+</code></pre></div>
+<p>Tool automatically re-enables old Alerting Rules, restores old Alertmanager routing, restores shadow labels.</p>
+<hr />
+<h2 id="phase-4-expand-cleanup">Phase 4: Expand &amp; Cleanup<a class="headerlink" href="#phase-4-expand-cleanup" title="Permanent link">&para;</a></h2>
+<p><strong>Goal</strong>: Based on pilot success, migrate other domains in bulk; complete legacy config cleanup; hand over documentation.</p>
+<h3 id="step-41-migrate-next-domain-loop">Step 4.1: Migrate Next Domain (Loop)<a class="headerlink" href="#step-41-migrate-next-domain-loop" title="Permanent link">&para;</a></h3>
+<p>Repeat Phases 1-3 to migrate the next domain (e.g., MariaDB):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>da-tools<span class="w"> </span>scaffold<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span>--tenant<span class="w"> </span>mariadb-prod<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">  </span>--db<span class="w"> </span>mariadb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">  </span>--non-interactive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="w">  </span>--output<span class="w"> </span>conf.d/mariadb-prod.yaml
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># Edit thresholds</span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="c1"># Deploy threshold-exporter (second instance)</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="c1"># Mount Rule Pack</span>
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="c1"># Generate routes</span>
+<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="c1"># Dual-run validation 1-2 weeks</span>
+<a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a><span class="c1"># Execute cutover</span>
+</code></pre></div>
+<p>Each domain independently goes through complete Phase 1-3; no need to wait for others.</p>
+<h3 id="step-42-full-validation">Step 4.2: Full Validation<a class="headerlink" href="#step-42-full-validation" title="Permanent link">&para;</a></h3>
+<p>After all domains migrated, validate all configs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>da-tools<span class="w"> </span>validate-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span>--ci<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">  </span>&gt;<span class="w"> </span>validation-report.json
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="c1"># Expected: all tenants status = PASS, cardinality violations = 0</span>
+</code></pre></div>
+<h3 id="step-43-batch-diagnosis">Step 4.3: Batch Diagnosis<a class="headerlink" href="#step-43-batch-diagnosis" title="Permanent link">&para;</a></h3>
+<p>Run health check on all tenants:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>da-tools<span class="w"> </span>batch-diagnose<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span>--prometheus<span class="w"> </span>http://prometheus:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span>--alertmanager<span class="w"> </span>http://alertmanager:9093<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="w">  </span>--json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="w">  </span>&gt;<span class="w"> </span>batch-diagnose.json
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="c1"># Expected: all tenants status = GOOD</span>
+</code></pre></div>
+<h3 id="step-44-clean-up-legacy-configuration">Step 4.4: Clean Up Legacy Configuration<a class="headerlink" href="#step-44-clean-up-legacy-configuration" title="Permanent link">&para;</a></h3>
+<p>Remove old Prometheus rules no longer needed:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>cp<span class="w"> </span>prometheus-rules.yaml<span class="w"> </span>prometheus-rules.yaml.backup-phase4
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="c1"># Remove rules for migrated domains</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>grep<span class="w"> </span>-v<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;redis&quot;</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;mariadb&quot;</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;kafka&quot;</span><span class="w"> </span>prometheus-rules.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">  </span>&gt;<span class="w"> </span>prometheus-rules-cleaned.yaml
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>
+<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>diff<span class="w"> </span>prometheus-rules.yaml<span class="w"> </span>prometheus-rules-cleaned.yaml
+<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a>
+<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>prometheus-rules-cleaned<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a><span class="w">  </span>--from-file<span class="o">=</span>prometheus-rules-cleaned.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a><span class="w">  </span>-n<span class="w"> </span>monitoring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a><span class="w">  </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<h3 id="step-45-clean-up-test-tenants">Step 4.5: Clean Up Test Tenants<a class="headerlink" href="#step-45-clean-up-test-tenants" title="Permanent link">&para;</a></h3>
+<p>If any test or trial tenants exist, remove them:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>da-tools<span class="w"> </span>ls<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>da-tools<span class="w"> </span>offboard<span class="w"> </span>--tenant<span class="w"> </span>test-domain-1
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>da-tools<span class="w"> </span>validate-config<span class="w"> </span>--config-dir<span class="w"> </span>conf.d/<span class="w"> </span>--ci
+</code></pre></div>
+<h3 id="step-46-update-documentation-handover">Step 4.6: Update Documentation &amp; Handover<a class="headerlink" href="#step-46-update-documentation-handover" title="Permanent link">&para;</a></h3>
+<p>Update internal docs to record migration completion details:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>cat<span class="w"> </span>&gt;<span class="w"> </span>migration-report.yaml<span class="w"> </span><span class="s">&lt;&lt; &#39;EOF&#39;</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="s">migration_summary:</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="s">  start_date: 2026-03-18</span>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="s">  completion_date: 2026-05-20</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="s">  duration_weeks: 9</span>
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="s">domains_migrated:</span>
+<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a><span class="s">  - name: redis-prod</span>
+<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a><span class="s">    phase_3_date: 2026-04-01</span>
+<a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a><span class="s">    quality_improvement: &quot;75% latency reduction, 100% false positive elimination&quot;</span>
+<a id="__codelineno-26-11" name="__codelineno-26-11" href="#__codelineno-26-11"></a><span class="s">  - name: mariadb-prod</span>
+<a id="__codelineno-26-12" name="__codelineno-26-12" href="#__codelineno-26-12"></a><span class="s">    phase_3_date: 2026-04-23</span>
+<a id="__codelineno-26-13" name="__codelineno-26-13" href="#__codelineno-26-13"></a><span class="s">    quality_improvement: &quot;60% latency reduction&quot;</span>
+<a id="__codelineno-26-14" name="__codelineno-26-14" href="#__codelineno-26-14"></a>
+<a id="__codelineno-26-15" name="__codelineno-26-15" href="#__codelineno-26-15"></a><span class="s">legacy_rules_removed: 127</span>
+<a id="__codelineno-26-16" name="__codelineno-26-16" href="#__codelineno-26-16"></a><span class="s">total_cardinality_reduction: &quot;18%&quot;</span>
+<a id="__codelineno-26-17" name="__codelineno-26-17" href="#__codelineno-26-17"></a>
+<a id="__codelineno-26-18" name="__codelineno-26-18" href="#__codelineno-26-18"></a><span class="s">lessons_learned:</span>
+<a id="__codelineno-26-19" name="__codelineno-26-19" href="#__codelineno-26-19"></a><span class="s">  - &quot;Pick the cleanest-metrics domain as pilot to accelerate early learning&quot;</span>
+<a id="__codelineno-26-20" name="__codelineno-26-20" href="#__codelineno-26-20"></a><span class="s">  - &quot;During dual-run validation, actively communicate quality improvements to alert receivers&quot;</span>
+<a id="__codelineno-26-21" name="__codelineno-26-21" href="#__codelineno-26-21"></a><span class="s">  - &quot;Extend Phase 2 beyond 2 weeks to cover diverse alert scenarios&quot;</span>
+<a id="__codelineno-26-22" name="__codelineno-26-22" href="#__codelineno-26-22"></a><span class="s">EOF</span>
+</code></pre></div>
+<hr />
+<h2 id="emergency-rollback-procedures">Emergency Rollback Procedures<a class="headerlink" href="#emergency-rollback-procedures" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Applies to</strong>: structural bug discovered after customer cutover (e.g. parser eats labels / Dangling Guard false positives / mass false alerts) requiring batch reversal of a Base Infrastructure PR plus multiple tenant PRs.
+Distinct from per-phase 0/1/2/3 rollback above (single-domain pilot retreat); this section covers post-cutover batch-PR pipeline reversal with cascading defaults and hierarchical dependencies.</p>
+<p><strong>Added in v2.8.0 B-4</strong> to complement the Phase .c C-10 Batch PR Pipeline hierarchy-aware chunking design.</p>
+</blockquote>
+<h3 id="rollback-order-strict-reverse-of-merge-order">Rollback order: strict reverse of merge order<a class="headerlink" href="#rollback-order-strict-reverse-of-merge-order" title="Permanent link">&para;</a></h3>
+<p><strong>Do NOT click "Revert" arbitrarily on GitHub</strong> — under hierarchical layout cascading defaults have inter-dependencies; out-of-order rollback triggers cycling reloads and intermediate-state false alerts. The correct order is the strict reverse of the merge order:</p>
+<table>
+<thead>
+<tr>
+<th>Merge phase (forward)</th>
+<th>Rollback phase (reverse)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. <code>[Base Infrastructure PR]</code> — <code>_defaults.yaml</code> changes</td>
+<td><strong>rollback step 4</strong> (last)</td>
+</tr>
+<tr>
+<td>2. cascading defaults (outer → inner)</td>
+<td><strong>rollback step 3</strong> (inner → outer reverse)</td>
+</tr>
+<tr>
+<td>3. tenant PR chunk 1 (<code>Blocked by: #base-pr</code>)</td>
+<td><strong>rollback step 2</strong> (parallel with chunks 4-N)</td>
+</tr>
+<tr>
+<td>4. tenant PR chunks 2-N</td>
+<td><strong>rollback step 1</strong> (first)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Why inner first</strong>: if you revert outer <code>_defaults.yaml</code> before tenant PRs, inner tenants briefly land in a hybrid state — "outer defaults already reverted, tenant override still present" — and the inheritance graph's merged_hash will not match any pre-Base-PR historical value.</p>
+<h3 id="watchloop-debounce-verification-linked-to-b-3-metrics">WatchLoop debounce verification (linked to B-3 metrics)<a class="headerlink" href="#watchloop-debounce-verification-linked-to-b-3-metrics" title="Permanent link">&para;</a></h3>
+<p>During a rollback wave, git-sync applies multiple commits sequentially within ~50-300ms, firing consecutive fsnotify events. The <code>config_debounce.go</code> sliding-window debounce must collapse the entire wave into a <strong>single</strong> reload — intermediate state must NOT fire alerts.</p>
+<p><strong>Verification metrics</strong> (added in v2.8.0 B-3, PR #75):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># During rollback wave, sliding window should collapse all reload triggers into one fire:</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="c1"># 1 fire ⇒ 1 reloadDuration sample; multiple fires ⇒ multiple samples (bad signal)</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="kr">increase</span><span class="o">(</span><span class="nv">da_config_reload_duration_seconds_count</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="c1"># debounce_batch sum should approximate the count of files changed in the wave;</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="c1"># sum/count = &quot;average coalescing rate&quot;</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="c1"># 1 = no coalescing (every event fires alone); wave size = perfect coalescing</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="k">sum</span><span class="o">(</span><span class="kr">rate</span><span class="o">(</span><span class="nv">da_config_debounce_batch_size_sum</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span>
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="w">  </span><span class="o">/</span>
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="k">sum</span><span class="o">(</span><span class="kr">rate</span><span class="o">(</span><span class="nv">da_config_debounce_batch_size_count</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span>
+</code></pre></div>
+<p><strong>New test case (v2.8.0 follow-up, scheduled with C-10 implementation PR)</strong>: <code>TestDebouncedReload_RollbackWave</code> — simulates N git-sync commits applied in reverse order with 100ms debounce window, asserts fire count always == 1 (same pattern as B-7 <code>TestSlowWriteTornStateStress</code>, but with reversed time series + cascading defaults retreating in lockstep). Detailed design deferred to the C-10 PR.</p>
+<h3 id="staging-rehearsal-mandatory-t-2-weeks-before-cutover">Staging rehearsal mandatory (T-2 weeks before cutover)<a class="headerlink" href="#staging-rehearsal-mandatory-t-2-weeks-before-cutover" title="Permanent link">&para;</a></h3>
+<p><strong>No formal cutover without a passed rehearsal first</strong> — written into the cutover checklist as a hard gate (Customer Delivery milestone calendar).</p>
+<p>Rehearsal contents:
+1. Apply one full batch-PR pipeline output in customer's staging environment (any size, minimum 1 Base PR + 5 tenant PRs)
+2. <strong>Immediately</strong> trigger reverse-order rollback (no cooldown wait)
+3. Measure each segment: per-PR review/merge/git-sync apply/WatchLoop settle in seconds; end-to-end time for entire rollback to converge <code>merged_hash</code> back to the pre-Base-PR state
+4. Fill data into the "rollback time budget" table below; if production cutover measures &gt; 1.5× of rehearsed budget, treat as anomaly and abort</p>
+<h3 id="rollback-time-budget-based-on-phase-1-baseline-1000-tenant-pr-59">Rollback time budget (based on Phase 1 baseline @ 1000-tenant, PR #59)<a class="headerlink" href="#rollback-time-budget-based-on-phase-1-baseline-1000-tenant-pr-59" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Source</strong>: <code>config_hierarchy_bench_test.go</code> PR #59 baseline (B-1 Phase 1 1000/2000/5000-tenant scaling characterization).
+<strong>Scope</strong>: ≤ 1000 tenants = baseline; 2000-5000 use the §"Phase 1 scaling characterization" linear extrapolation (5×=4.6-5.4×).</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Rollback action</th>
+<th>1000-tenant budget</th>
+<th>5000-tenant budget</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Single tenant PR revert + git-sync apply</td>
+<td>&lt; 5s</td>
+<td>&lt; 5s</td>
+<td>git-sync polling 5s + scan_dir ≈ 51-273ms</td>
+</tr>
+<tr>
+<td>Single <code>_defaults.yaml</code> revert (region-level) → 21t affected @ 1000 / 105t @ 5000</td>
+<td>&lt; 600ms reload</td>
+<td>&lt; 1.5s reload</td>
+<td>BlastRadius bench 266ms / 1308ms</td>
+</tr>
+<tr>
+<td>Full wave rollback (Base PR + 10 tenant PRs + 2 cascading defaults)</td>
+<td>&lt; 90s</td>
+<td>&lt; 4 min</td>
+<td>git-sync poll × N + reload × N</td>
+</tr>
+<tr>
+<td><code>merged_hash</code> convergence verification</td>
+<td>&lt; 30s</td>
+<td>&lt; 2 min</td>
+<td><code>da-tools tenant-verify --all</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Threshold</strong>: measurements &gt; 1.5× of the table = anomaly → <strong>pause rollback</strong>, inspect <code>da_config_reload_duration_seconds</code> p99 and <code>da_config_blast_radius_tenants_affected{effect="applied"}</code> distribution; escalate to maintainer if abnormal.</p>
+<h3 id="verification-checklist-tick-each-after-rollback-completes">Verification checklist (tick each after rollback completes)<a class="headerlink" href="#verification-checklist-tick-each-after-rollback-completes" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>[ ] 1. All N PRs reverted (git log --oneline | head -N all &quot;Revert ...&quot; commits)
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>[ ] 2. git-sync applied all reverts (kubectl exec git-sync -- git rev-parse HEAD == expected SHA)
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>[ ] 3. da_config_reload_trigger_total{reason=&quot;defaults&quot;} delta from wave start == expected cascading defaults file count
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>[ ] 4. da_config_reload_duration_seconds_count delta from wave start == 1 (debounce coalesced correctly)
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>[ ] 5. da_config_blast_radius_tenants_affected{effect=&quot;applied&quot;} delta sum ≈ expected affected-tenant count
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>[ ] 6. Sample 5 tenants: da-tools tenant-verify &lt;id&gt; --expect-merged-hash &lt;pre-base-snapshot&gt; (exit 0 = pass, exit 2 = mismatch)
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>[ ] 7. ALERTS{severity!=&quot;info&quot;} count over last 10 min ≤ pre-wave baseline + 5%
+<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>[ ] 8. Alertmanager Silenced alerts list is empty (no leftover silences obscuring observation)
+</code></pre></div>
+<p><strong>Item 6 is the core</strong>: checksums must return to the pre-Base-PR <code>merged_hash</code>. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed). Capture a pre-Base-PR snapshot with <code>da-tools tenant-verify --all --json &gt; pre-base.json</code> first, then compare after rollback to pinpoint drifted tenants.</p>
+<h3 id="tooling-follow-up-not-yet-implemented-on-v28x-backlog">Tooling follow-up (not yet implemented, on v2.8.x backlog)<a class="headerlink" href="#tooling-follow-up-not-yet-implemented-on-v28x-backlog" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make rollback-dryrun</code> Makefile target — one-command staging rehearsal in customer environment that auto-fills the time-budget table above</li>
+<li><code>da-tools batch-pr rollback --plan</code> — given a Base PR #, derive the full reverse-order plan and output a markdown plan for ops review</li>
+<li><code>da-tools batch-pr rollback --execute</code> — automated reverse-order revert; waits for git-sync apply + reload settle between steps</li>
+</ul>
+<p>These tools are out of scope for the B-4 doc PR but the procedures defined here are their specification.</p>
+<hr />
+<h2 id="frequently-asked-questions">Frequently Asked Questions<a class="headerlink" href="#frequently-asked-questions" title="Permanent link">&para;</a></h2>
+<h3 id="q1-do-i-need-to-clean-up-scrape-config-before-migration">Q1: Do I need to clean up scrape config before migration?<a class="headerlink" href="#q1-do-i-need-to-clean-up-scrape-config-before-migration" title="Permanent link">&para;</a></h3>
+<p><strong>A</strong>: No. Dynamic Alerting's Recording Rules create a clean abstraction over existing scrape config. Even if scrape config is messy, Recording Rules aggregate and normalize to produce standard metrics. You can incrementally improve scrape config after migration completes.</p>
+<h3 id="q2-what-if-one-domain-fails-during-migration">Q2: What if one domain fails during migration?<a class="headerlink" href="#q2-what-if-one-domain-fails-during-migration" title="Permanent link">&para;</a></h3>
+<p><strong>A</strong>: Each domain is independent. If Redis cutover fails, just <code>da-tools cutover --tenant redis-prod --rollback</code>. Other domains (MariaDB, Kafka, etc.) continue unaffected. Re-evaluate the issue and retry once fixed.</p>
+<h3 id="q3-how-long-does-the-entire-migration-take">Q3: How long does the entire migration take?<a class="headerlink" href="#q3-how-long-does-the-entire-migration-take" title="Permanent link">&para;</a></h3>
+<p><strong>A</strong>: Phase 0 (audit) 1 day; Phase 1-3 per domain 2-3 weeks (Phase 2 usually 1-2 weeks); Phase 4 cleanup 2-3 days. Typical 5-domain migration takes 2-3 months.</p>
+<h3 id="q4-how-do-i-monitor-threshold-exporter-performance">Q4: How do I monitor threshold-exporter performance?<a class="headerlink" href="#q4-how-do-i-monitor-threshold-exporter-performance" title="Permanent link">&para;</a></h3>
+<p><strong>A</strong>: <code>threshold-exporter</code> itself exposes Prometheus metrics. Query <code>threshold_exporter_scrape_duration_seconds</code> to verify scan latency; query <code>threshold_exporter_metrics_generated</code> to verify output metrics count.</p>
+<h3 id="q5-what-if-i-get-duplicate-alerts-both-old-and-new">Q5: What if I get duplicate alerts (both old and new)?<a class="headerlink" href="#q5-what-if-i-get-duplicate-alerts-both-old-and-new" title="Permanent link">&para;</a></h3>
+<p><strong>A</strong>: Phase 2 sets <code>continue: true</code> to allow both routes, which is intentional. Phase 3 cutover disables old rules to eliminate duplicates.</p>
+<h3 id="q6-what-if-a-rule-pack-doesnt-fit-my-domain">Q6: What if a Rule Pack doesn't fit my domain?<a class="headerlink" href="#q6-what-if-a-rule-pack-doesnt-fit-my-domain" title="Permanent link">&para;</a></h3>
+<p><strong>A</strong>: Keep it in the old config. Dynamic Alerting supports incremental migration—some domains use Rule Packs, others stay on legacy rules.</p>
+<hr />
+<h2 id="migration-timeline-typical-5-domain-case">Migration Timeline (Typical 5-Domain Case)<a class="headerlink" href="#migration-timeline-typical-5-domain-case" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Duration</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phase 0 (global audit)</td>
+<td>1 day</td>
+</tr>
+<tr>
+<td>Phase 1-3 (Redis)</td>
+<td>3 weeks</td>
+</tr>
+<tr>
+<td>Phase 1-3 (MariaDB)</td>
+<td>2 weeks</td>
+</tr>
+<tr>
+<td>Phase 1-3 (Kafka)</td>
+<td>2 weeks</td>
+</tr>
+<tr>
+<td>Phase 1-3 (JVM)</td>
+<td>1.5 weeks</td>
+</tr>
+<tr>
+<td>Phase 1-3 (Custom)</td>
+<td>2.5 weeks</td>
+</tr>
+<tr>
+<td>Phase 4 (cleanup)</td>
+<td>2 days</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>~11 weeks (2.5 months)</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="related-resources">Related Resources<a class="headerlink" href="#related-resources" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Relevance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../migration-guide/">Migration Guide (tool-level reference)</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../shadow-monitoring-cutover/">Scenario: Shadow Monitoring Full-Auto Cutover Workflow</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../../architecture-and-design/">Architecture &amp; Design §2.13 Performance Architecture</a></td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../../cli-reference/">da-tools CLI Reference</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../tenant-lifecycle/">Scenario: Tenant Complete Lifecycle Management</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../gitops-ci-integration/">Scenario: GitOps CI/CD Integration Guide</a></td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><a href="../hands-on-lab/">Scenario: Hands-on Lab Tutorial</a></td>
+<td>⭐⭐</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

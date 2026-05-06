@@ -1,0 +1,4182 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Enterprise-grade Multi-Tenant Dynamic Alerting Platform for Kubernetes">
+      
+      
+        <meta name="author" content="Vencil Contributors">
+      
+      
+        <link rel="canonical" href="https://vencil.github.io/Dynamic-Alerting-Integrations/internal/windows-mcp-playbook/">
+      
+      
+      
+      
+        
+          <link rel="alternate" href="./" hreflang="zh">
+        
+          <link rel="alternate" href="../../en/internal/windows-mcp-playbook/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Windows-MCP — Dev Container 操作手冊 (Playbook) - Dynamic Alerting Platform</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#windows-mcp-dev-container-playbook" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-header__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Dynamic Alerting Platform
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Windows-MCP — Dev Container 操作手冊 (Playbook)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="deep-orange"  aria-label="淺色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="淺色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../en/internal/windows-mcp-playbook/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  首頁
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/for-platform-engineers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  快速入門
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture-and-design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  核心架構
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../integration/byo-prometheus-integration/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  整合指南
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../migration-guide/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  遷移
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../governance-security/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  治理與安全
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/alert-routing-split/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  場景
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  參考
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Dynamic Alerting Platform" class="md-nav__button md-logo" aria-label="Dynamic Alerting Platform" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Dynamic Alerting Platform
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vencil/Dynamic-Alerting-Integrations
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首頁
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    快速入門
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    快速入門
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-platform-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-domain-experts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/for-tenants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    核心架構
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    核心架構
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture-and-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構與設計
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    性能基準
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    架構決策 (ADR)
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    架構決策 (ADR)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/001-severity-dedup-via-inhibit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-001 Severity Dedup via Inhibit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/002-oci-registry-over-chartmuseum/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-002 OCI Registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/003-sentinel-alert-pattern/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-003 Sentinel Alert Pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/004-federation-central-exporter-first/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-004 Federation Central Exporter First
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/005-projected-volume-for-rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-005 Projected Volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    整合指南
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    整合指南
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-prometheus-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/byo-alertmanager-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYO Alertmanager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/federation-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integration/gitops-deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitOps 部署
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    遷移
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移指南
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    遷移引擎
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shadow-monitoring-sop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring SOP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    治理與安全
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../governance-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    治理與安全
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-rule-governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Rule 治理
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    場景
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    場景
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/alert-routing-split/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Routing Split
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    測試覆蓋矩陣
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/shadow-monitoring-cutover/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shadow Monitoring 切換
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/multi-cluster-federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    多叢集 Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/tenant-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant 生命週期
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    參考
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    參考
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    da-tools CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheat-sheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI 速查表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../interactive-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    互動式工具
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rule Packs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rule-packs/ALERT-REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert 速查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    故障排查
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    術語表
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CHANGELOG/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-action-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Action Index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        環境概覽
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docker-exec-stdout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心原則：docker exec stdout 為空 🛡️
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shell-cmd-powershell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell 選擇：用 cmd 不用 PowerShell
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Shell 選擇：用 cmd 不用 PowerShell">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v270-llcmdexe-c-batfile-path-pathext-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.7.0 LL：cmd.exe /c batfile 執行時 PATH 與 PATHEXT 要同時 set
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        黃金法則：複雜指令寫成獨立腳本
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mcp-shell-pitfalls-bat-ps1-wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MCP Shell Pitfalls（編寫 .bat / .ps1 wrapper 時必讀）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MCP Shell Pitfalls（編寫 .bat / .ps1 wrapper 時必讀）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wrapper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wrapper 起手式模板（複製即用）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subcommand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        驗證步驟（新增 subcommand 後自測）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mcp-caller-pattern-powershell-bat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MCP Caller Pattern（從 PowerShell 呼叫 .bat 的正確姿勢）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#60s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        長時間操作 (&gt;60s)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具選擇策略
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#port-forward" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Port-Forward 模式
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Port-Forward 模式">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prometheus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alertmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alertmanager
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helm-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Helm Upgrade 防衝突
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#powershell-rest-apigithub" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PowerShell REST API（GitHub 等）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PowerShell REST API（GitHub 等）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#body" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        長 Body 的建議做法
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        已知陷阱速查
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#windows-clone-symlink" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Windows Clone 初次設定 — Symlink 支援
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Windows Clone 初次設定 — Symlink 支援">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#symlink" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        已知會被影響的 symlink
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#windows-developer-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        推薦方案：開啟 Windows Developer Mode（一次性設定）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#symlink_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        退路方案：Symlink 物化檢測腳本
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        工具層配合（已完成）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v271-llend-of-file-fixer-symlink-blob" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.7.1 LL：end-of-file-fixer 會把 symlink blob 弄壞
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fuse-phantom-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FUSE Phantom Lock 防治
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FUSE Phantom Lock 防治">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v270-phase-e-ll" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ⛔ 明確禁止清單（v2.7.0 Phase .e LL 固化）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        預防層：降低 Lock 發生機率
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lock_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        診斷層：遇到 Lock 時的安全處理
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#line-ending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        跨平台 Line Ending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v280-resilience-toolingpr-44-session-resilience-token-economy-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2.8.0 Resilience Tooling（PR #44 session resilience + token economy bundle）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pre-commit-unstaged-stash-recoverys31-s86-codify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-commit unstaged-stash recovery（S#31, S#86 codify）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bfuse-cache-level-1-5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        修復層 B：FUSE Cache 重建（Level 1 ~ 5）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#git" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Git 操作決策樹
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        三層環境職責矩陣
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cwindows-git-fallbackfuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        修復層 C：Windows 原生 Git Fallback（FUSE 側卡死時的備援路徑）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c1escape-helpersmcp-60s-timeout-fuse-cache-bypass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        修復層 C.1：Escape Helpers（MCP 60s timeout + FUSE cache bypass）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ddev-container-pushpre-push-hook-drift" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        修復層 D：Dev Container Push（pre-push hook 撈到無關 drift 時的備援）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  <nav class="md-tags" >
+    
+      
+      
+      
+      
+        <span class="md-tag">documentation</span>
+      
+    
+  </nav>
+
+
+  
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/edit/main/internal/windows-mcp-playbook.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/raw/main/internal/windows-mcp-playbook.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0 8a5 5 0 0 1-5-5 5 5 0 0 1 5-5 5 5 0 0 1 5 5 5 5 0 0 1-5 5m0-12.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5"/></svg>
+    </a>
+  
+
+
+<h1 id="windows-mcp-dev-container-playbook">Windows-MCP — Dev Container 操作手冊 (Playbook)<a class="headerlink" href="#windows-mcp-dev-container-playbook" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>AI Agent 透過 Windows-MCP Shell / Desktop Commander / Cowork VM 操作 Dev Container 的最佳實踐與已知陷阱。
+<strong>相關文件：</strong> <a href="../testing-playbook/">Testing Playbook</a>（K8s/測試排錯）· <a href="../benchmark-playbook/">Benchmark Playbook</a>（方法論、踩坑）· <a href="../github-release-playbook/">GitHub Release Playbook</a>（push + release 流程）</p>
+</blockquote>
+<h3 id="quick-action-index">Quick Action Index<a class="headerlink" href="#quick-action-index" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>AI agent 直接跳到需要的操作步驟，跳過敘事。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>我要做什麼</th>
+<th>跳到</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>docker exec 拿輸出</td>
+<td><a href="#核心原則docker-exec-stdout-為空">§核心原則</a></td>
+</tr>
+<tr>
+<td>port-forward Prometheus/AM</td>
+<td><a href="#port-forward-模式">§Port-Forward 模式</a></td>
+</tr>
+<tr>
+<td>Helm upgrade 衝突</td>
+<td><a href="#helm-upgrade-防衝突">§Helm Upgrade 防衝突</a></td>
+</tr>
+<tr>
+<td>GitHub API (PS)</td>
+<td><a href="#powershell-rest-apigithub-等">§PowerShell REST API</a></td>
+</tr>
+<tr>
+<td>git 卡住 / FUSE lock</td>
+<td><a href="#git-操作決策樹">§Git 操作決策樹</a></td>
+</tr>
+<tr>
+<td>Windows 逃生門</td>
+<td><a href="#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑">§修復層 C</a></td>
+</tr>
+<tr>
+<td>寫 <code>.bat</code> / <code>.ps1</code> wrapper</td>
+<td><a href="#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀">§MCP Shell Pitfalls</a></td>
+</tr>
+<tr>
+<td>環境職責快查</td>
+<td><a href="#三層環境職責矩陣">§三層環境職責矩陣</a></td>
+</tr>
+<tr>
+<td>已知陷阱查表</td>
+<td><a href="#已知陷阱速查">§已知陷阱速查</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="_1">環境概覽<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>元件</th>
+<th>位置</th>
+<th>備註</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>kubectl / kind / go / helm</td>
+<td>Dev Container (<code>vibe-dev-container</code>) 內</td>
+<td>Cowork VM 無法直接使用</td>
+</tr>
+<tr>
+<td>Python tests</td>
+<td>Cowork VM 可直接跑</td>
+<td><code>python3 -m pytest tests/ -v</code></td>
+</tr>
+<tr>
+<td>Go build/test</td>
+<td>Dev Container 內</td>
+<td><code>-w ../components/threshold-exporter/app</code></td>
+</tr>
+<tr>
+<td>純 Python 工具 (routing-bench 等)</td>
+<td>兩者皆可</td>
+<td>不依賴 K8s 的優先用 Cowork VM</td>
+</tr>
+<tr>
+<td>Mounted workspace</td>
+<td><code>/workspaces/vibe-k8s-lab</code> (container 內)</td>
+<td>雙向可見</td>
+</tr>
+</tbody>
+</table>
+<h2 id="docker-exec-stdout">核心原則：docker exec stdout 為空 🛡️<a class="headerlink" href="#docker-exec-stdout" title="Permanent link">&para;</a></h2>
+<p>Windows MCP Shell 執行 <code>docker exec</code> 時，<strong>stdout 被 PowerShell 吞掉</strong>。這個陷阱已由 wrapper 自動化（v2.8.0 Plan B），<strong>日常 session 不需記憶 redirect pattern</strong>。</p>
+<p><strong>主路徑（use this）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>dc-test<span class="w">                          </span><span class="c1"># pytest in container</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>dc-go-test<span class="w">                       </span><span class="c1"># go test ./...</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>make<span class="w"> </span>dc-run<span class="w"> </span><span class="nv">CMD</span><span class="o">=</span><span class="s2">&quot;kubectl get pods -A&quot;</span><span class="w"> </span><span class="c1"># arbitrary command</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>make<span class="w"> </span>dc-status<span class="w">                        </span><span class="c1"># is container running?</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>make<span class="w"> </span>dc-up<span class="w">                            </span><span class="c1"># start container if stopped</span>
+</code></pre></div>
+<p>或直接呼叫 wrapper：<code>scripts/ops/dx-run.sh &lt;cmd&gt;</code>（Linux）／<code>scripts\ops\dx-run.bat &lt;cmd&gt;</code>（Windows）。wrapper 會 <code>bash -c "&lt;cmd&gt; &gt; /workspaces/...&lt;file&gt; 2&gt;&amp;1"</code>、讀回 exit code、把 stdout tee 回 host — 一次解掉 stdout-swallow + <code>-d</code> 模式的 redirect 遺漏。</p>
+<p><strong>只有自己寫 one-off <code>docker exec</code> 時才需要原始 pattern</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># ✅ bash -c 內部重定向到 mounted workspace</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="s2">  kubectl get pods -A &gt; /workspaces/vibe-k8s-lab/_output.txt 2&gt;&amp;1&quot;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># → 再用 Read tool 讀 _output.txt</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># ❌ 以下全部不可靠</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>&gt;<span class="w"> </span>output.txt<span class="w">   </span><span class="c1"># PS 搶走重定向</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-A<span class="w">              </span><span class="c1"># stdout 為空</span>
+</code></pre></div>
+<h2 id="shell-cmd-powershell">Shell 選擇：用 cmd 不用 PowerShell<a class="headerlink" href="#shell-cmd-powershell" title="Permanent link">&para;</a></h2>
+<p>PowerShell 對 docker exec 有額外的編碼/引號問題：</p>
+<ul>
+<li>PowerShell 會自動轉碼 UTF-8 輸出，產生亂碼</li>
+<li>巢狀引號被 PowerShell 預處理後再傳給 docker，導致語法錯誤</li>
+<li><strong>Windows MCP Shell 指定 <code>shell: "cmd"</code> 可避免多數問題</strong></li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># ✅ 用 cmd shell</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>/workspaces/vibe-k8s-lab/scripts/_task.sh
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># ❌ PowerShell 下巢狀引號被拆解</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;echo &#39;{\&quot;key\&quot;: \&quot;value\&quot;}&#39;&quot;</span>
+</code></pre></div>
+<h3 id="v270-llcmdexe-c-batfile-path-pathext-set">v2.7.0 LL：<code>cmd.exe /c batfile</code> 執行時 PATH 與 PATHEXT 要同時 set<a class="headerlink" href="#v270-llcmdexe-c-batfile-path-pathext-set" title="Permanent link">&para;</a></h3>
+<p>Cowork session 從 PowerShell 呼叫 <code>cmd.exe /c batfile.bat</code> 時，子程序<strong>繼承一個最精簡的 Windows PATH</strong>（有時連 <code>where.exe</code> 都找不到），且 <code>PATHEXT</code> 環境變數會被稀釋。這對 <code>gh.exe</code> 特別致命 — <code>gh</code> 需要呼叫 <code>git.exe</code> 做本地操作，<code>git.exe</code> 透過 PATH 查找但 lookup 被 <code>PATHEXT</code> 的成員決定。</p>
+<p><strong>症狀</strong>：<code>gh pr checks 26</code> 回報 <code>unable to find git executable in PATH; please install Git for Windows before retrying</code>，但 Git for Windows 其實裝好。</p>
+<p><strong>根因</strong>：
+- 只 <code>set PATH=...</code> 不夠：新 PATH 有指向 <code>git.exe</code>，但 <code>PATHEXT</code> 被子 shell 稀釋（預設可能只剩 <code>.COM;.EXE</code>），Windows command resolution 還是漏
+- 用 PowerShell 的 <code>$env:PATH</code> 在 <code>Start-Process</code> 下不會被子 cmd.exe 繼承
+- inline <code>cmd /c "set PATH=...;command"</code> 也有同樣問題（cmd 會把 set 和 command 當同一行解析）</p>
+<p><strong>正確做法</strong>：寫成 <code>.bat</code> 檔，<strong>同時</strong> set <code>PATH</code> 和 <code>PATHEXT</code>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">@</span><span class="k">echo</span> off
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">set</span> <span class="s2">&quot;PATHEXT=.COM;.EXE;.BAT;.CMD&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">set</span> <span class="s2">&quot;PATH=C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd;C:\Program Files\Git\bin&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">cd</span> /d C:\Users\vencs\vibe-k8s-lab
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="s2">&quot;C:\Program Files\GitHub CLI\gh.exe&quot;</span> pr checks 26 <span class="p">&gt;</span> output.log <span class="mi">2</span><span class="p">&gt;&amp;</span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>驗收</strong>：<code>gh.exe</code> 會透過增強的 PATH 找到 <code>git.exe</code>，<code>gh pr checks</code> / <code>gh pr view</code> / <code>gh pr merge</code> 全部可用。</p>
+<p><strong>不要做</strong>：
+- <code>cmd /c "set PATH=...&amp;&amp; gh pr checks 26"</code> — set 不會真的寫入環境
+- 只信任 PowerShell 端的 <code>$env:PATH</code> — cmd 子 shell 不繼承
+- 跳過 <code>PATHEXT</code> — Windows 仍會判 <code>git.exe</code> 找不到</p>
+<p><strong>相關</strong>：v2.7.0 PR <a href="https://github.com/vencil/Dynamic-Alerting-Integrations/pull/26">#26</a> Day 9 Session 3（2026-04-18）final-gate loop 驗證此 LL。詳細 session 記錄見 v2.7.0-planning.md §8.13（internal planning doc，<code>.gitignore</code> 排除）。</p>
+<h2 id="_2">黃金法則：複雜指令寫成獨立腳本<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>只要指令含引號嵌套、管道、JSON 處理、多步邏輯，一律：
+1. 用 Write tool 寫 <code>.sh</code> 或 <code>.py</code> 腳本到 mounted workspace
+2. <code>docker exec bash /workspaces/vibe-k8s-lab/scripts/_task.sh</code>
+3. 結果從重定向檔案讀取
+4. 完成後清理暫存腳本</p>
+<p>這比嘗試修復 <code>bash -c "..."</code> 引號問題更快更可靠。</p>
+<p><strong>Windows 側例外</strong>：若腳本是給 Windows MCP / Desktop Commander 呼叫的 <code>.bat</code> / <code>.ps1</code>，<strong>不要寫到 <code>/tmp/</code> 或 sandbox-only 路徑</strong>，而是放進 <code>scripts/ops/</code>（受 <code>check_ad_hoc_git_scripts</code> hook 把關）。臨時需求用既有 wrapper 的 <code>raw &lt;args&gt;</code> 逃生門；真的缺子命令就擴充 wrapper。詳見 <a href="#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀">§MCP Shell Pitfalls</a>。</p>
+<h2 id="mcp-shell-pitfalls-bat-ps1-wrapper">MCP Shell Pitfalls（編寫 .bat / .ps1 wrapper 時必讀）<a class="headerlink" href="#mcp-shell-pitfalls-bat-ps1-wrapper" title="Permanent link">&para;</a></h2>
+<p>Windows MCP (Desktop Commander) 下 <code>.bat</code> / <code>.ps1</code> 會踩到 <strong>4 個 encoding / parsing 雷</strong>。<strong>任何 session 擴充 <code>scripts/ops/win_*.bat</code> 前都必須照這份清單檢查</strong>，否則新 subcommand 在 MCP session 看起來就是「隨機失敗」。</p>
+<table>
+<thead>
+<tr>
+<th>雷</th>
+<th>症狀</th>
+<th>對策</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. 含空格的路徑被 PowerShell 拆解</td>
+<td><code>"C:\Program Files\GitHub CLI\gh.exe"</code> 變成 <code>'"C:\Program Files\...\gh.exe"'</code>，cmd 回 <code>不是內部或外部命令</code></td>
+<td><strong>一律用 8.3 short path</strong>（<code>C:\PROGRA~1\GITHUB~1\gh.exe</code>、<code>C:\PROGRA~1\Git\cmd\git.exe</code>）+ 外層以 <code>shell: cmd.exe</code> 呼叫 <code>.bat</code></td>
+</tr>
+<tr>
+<td>2. LF-only line endings → cmd 把 <code>REM</code> 當指令</td>
+<td>cmd.exe 報 <code>'REM' is not recognized</code>、<code>'echo' is not recognized</code> —— 逐行把每個 token 當 command 找</td>
+<td><code>.bat</code> 檔<strong>必須 CRLF</strong>。Write tool 寫入後用 <code>Get-Content .\file.bat -Encoding Byte \| Select -First 4</code> 檢查是否有 <code>0D 0A</code>。若少了，用 Write tool 重寫（勿用 <code>sed -i</code>，見規則 #1）</td>
+</tr>
+<tr>
+<td>3. CJK 註解觸發 Desktop Commander encoding bug（<strong>CI-gated ✅</strong>）</td>
+<td><code>.bat</code> 內含中文會讓整個 batch parser 看到截斷指令（byte-level 根因見陷阱 #45）</td>
+<td><code>.bat</code> 內<strong>全 ASCII + CRLF + no-BOM</strong>（<code>REM</code>、English 註解、echo 字串）。CJK 解說只放在對應的 <code>.md</code> 旁註，不嵌進 code。<strong>自動攔截</strong>：pre-commit <code>bat-ascii-purity-check</code> (<code>scripts/tools/lint/check_bat_ascii_purity.py</code>) + pytest <code>tests/dx/test_bat_label_integrity.py::{test_bat_files_are_ascii_pure,test_bat_files_are_crlf,test_bat_files_have_no_utf8_bom}</code></td>
+</tr>
+<tr>
+<td>4. cmd <code>-m "..."</code> 嵌 em-dash / 全形引號崩潰</td>
+<td><code>git commit -m "feat: X — Y"</code> 每個 space 後的 word 變成 <code>pathspec</code> error（見陷阱 #46）</td>
+<td>Commit message 一律走檔案（<code>commit-file</code> 子命令），<code>[IO.File]::WriteAllText($p, $m, [Text.UTF8Encoding]::new($false))</code> 寫無 BOM UTF-8</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wrapper">Wrapper 起手式模板（複製即用）<a class="headerlink" href="#wrapper" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">@</span><span class="k">echo</span> off
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1">REM my_wrapper.bat -- &lt;one line purpose&gt;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1">REM Why this exists:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1">REM   &lt;why not inline the command? which MCP pitfall does this wrapper avoid?&gt;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">REM Usage:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1">REM   my_wrapper.bat &lt;subcommand&gt; [args...]</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1">REM</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1">REM Rules (see docs/internal/windows-mcp-playbook.md#mcp-shell-pitfalls):</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1">REM   * ASCII only (no CJK in comments or strings)</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1">REM   * CRLF line endings</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1">REM   * 8.3 short path for any exe under &quot;Program Files&quot;</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1">REM   * Set both PATH and PATHEXT (cmd child shell strips them)</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="k">setlocal</span> enabledelayedexpansion
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="k">set</span> <span class="s2">&quot;PYTHONUTF8=1&quot;</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>chcp 65001 <span class="p">&gt;</span>nul <span class="mi">2</span><span class="p">&gt;&amp;</span><span class="mi">1</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="k">set</span> <span class="s2">&quot;PATHEXT=.COM;.EXE;.BAT;.CMD&quot;</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="k">set</span> <span class="s2">&quot;PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;</span><span class="nv">%PATH%</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="c1">REM --- dispatch: never write sibling _foo.bat; extend this wrapper ---</span>
+</code></pre></div>
+<h3 id="subcommand">驗證步驟（新增 subcommand 後自測）<a class="headerlink" href="#subcommand" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c"># 1. Line ending check (must have 0D 0A)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">Get-Content</span> <span class="p">.\</span><span class="n">scripts</span><span class="p">\</span><span class="n">ops</span><span class="p">\</span><span class="n">my_wrapper</span><span class="p">.</span><span class="n">bat</span> <span class="n">-Encoding</span> <span class="n">Byte</span> <span class="n">-TotalCount</span> <span class="n">200</span> <span class="p">|</span> <span class="p">`</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  <span class="nb">Select-String</span> <span class="n">-Pattern</span> <span class="s2">&quot;13,10&quot;</span> <span class="n">-SimpleMatch</span> <span class="n">-Quiet</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c"># 2. ASCII check (fail if any byte &gt;= 0x80)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nv">$bytes</span> <span class="p">=</span> <span class="no">[IO.File]</span><span class="p">::</span><span class="n">ReadAllBytes</span><span class="p">(</span><span class="s2">&quot;.\scripts\ops\my_wrapper.bat&quot;</span><span class="p">)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="k">if</span> <span class="p">(</span><span class="nv">$bytes</span> <span class="p">|</span> <span class="nb">Where-Object</span> <span class="p">{</span> <span class="nv">$_</span> <span class="o">-ge</span> <span class="n">0x80</span> <span class="p">})</span> <span class="p">{</span> <span class="nb">Write-Error</span> <span class="s2">&quot;Non-ASCII byte present&quot;</span> <span class="p">}</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c"># 3. Functional smoke test via Desktop Commander</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c">#    Call `cmd /c scripts\ops\my_wrapper.bat &lt;subcmd&gt;` from MCP; confirm no</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c">#    &quot;&#39;REM&#39; is not recognized&quot; or encoding-mangled output.</span>
+</code></pre></div>
+<p><code>check_ad_hoc_git_scripts</code> hook 只把關「腳本放在對的目錄」；encoding / CRLF / BOM 在 PR #45 之後已由 <code>check_bat_ascii_purity.py</code> pre-commit hook + <code>test_bat_label_integrity.py</code> pytest 雙層攔截（scripts/ops/*.bat 限定，其他 .bat 不受管）。8.3 short path 與 em-dash 引號（雷 1、4）目前仍是人工紀律。違反這 4 條的 session 會一而再踩到同一個坑——這份清單是為了讓下一個 session「讀完 5 分鐘」就能避開 1 小時的 debug。</p>
+<h3 id="mcp-caller-pattern-powershell-bat">MCP Caller Pattern（從 PowerShell 呼叫 <code>.bat</code> 的正確姿勢）<a class="headerlink" href="#mcp-caller-pattern-powershell-bat" title="Permanent link">&para;</a></h3>
+<p>寫好了合規的 <code>.bat</code> 還有第二關：<strong>怎麼從 MCP PowerShell session 把它叫起來</strong>。PR #44 C5 close-loop 實測發現，「天真」的呼叫法（<code>&amp; $bat pr-checks</code>、<code>Start-Process -Wait</code>）在 Windows-MCP 下會 <strong>靜默 timeout</strong>（60s RPC 上限），即使 <code>.bat</code> 自己 1 秒內就跑完。</p>
+<p>根因：MCP 的 PowerShell 傳輸機制會 inherit 子 process 的 <strong>console handle</strong>。即使 <code>.bat</code> 早已 <code>exit /b 0</code>，只要 console handle 還在 MCP stdout pipe chain 上，RPC 就不會回 — 直到 60s timeout 才截斷。</p>
+<p><strong>唯一穩定的呼叫模板</strong>（三個非可選要素：<code>CreateNoWindow=$true</code> + <code>cmd.exe /s /c</code> + <code>WaitForExit(ms)</code>）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">$bat</span>  <span class="p">=</span> <span class="s2">&quot;C:\Users\&lt;you&gt;\vibe-k8s-lab\scripts\ops\win_gh.bat&quot;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nv">$t</span>    <span class="p">=</span> <span class="s2">&quot;$env:TEMP\vibe-gh-out.txt&quot;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">Remove-Item</span> <span class="nv">$t</span> <span class="n">-ErrorAction</span> <span class="n">SilentlyContinue</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c"># /s /c 的兩個旗標缺一不可：</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c">#   /c  告訴 cmd.exe 執行後就退出</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c">#   /s  讓 cmd.exe 只剝**一層**外部雙引號（否則嵌在 args 裡的內層引號會被亂剝）</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="nv">$args</span> <span class="p">=</span> <span class="s1">&#39;/s /c &quot;&#39;</span> <span class="p">+</span> <span class="s1">&#39;&quot;&#39;</span> <span class="p">+</span> <span class="nv">$bat</span> <span class="p">+</span> <span class="s1">&#39;&quot; pr-checks &gt; &quot;&#39;</span> <span class="p">+</span> <span class="nv">$t</span> <span class="p">+</span> <span class="s1">&#39;&quot; 2&gt;&amp;1&quot;&#39;</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="nv">$psi</span> <span class="p">=</span> <span class="nb">New-Object</span> <span class="n">Diagnostics</span><span class="p">.</span><span class="n">ProcessStartInfo</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="nv">$psi</span><span class="p">.</span><span class="n">FileName</span>         <span class="p">=</span> <span class="s2">&quot;cmd.exe&quot;</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="nv">$psi</span><span class="p">.</span><span class="n">Arguments</span>        <span class="p">=</span> <span class="nv">$args</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="nv">$psi</span><span class="p">.</span><span class="n">UseShellExecute</span>  <span class="p">=</span> <span class="nv">$false</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="nv">$psi</span><span class="p">.</span><span class="n">CreateNoWindow</span>   <span class="p">=</span> <span class="nv">$true</span>     <span class="c"># CRITICAL — 不加這行 MCP 還是會 inherit console handle 然後 hang</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="nv">$psi</span><span class="p">.</span><span class="n">WorkingDirectory</span> <span class="p">=</span> <span class="s2">&quot;C:\Users\&lt;you&gt;\vibe-k8s-lab&quot;</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="nv">$p</span> <span class="p">=</span> <span class="no">[Diagnostics.Process]</span><span class="p">::</span><span class="n">Start</span><span class="p">(</span><span class="nv">$psi</span><span class="p">)</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="no">[void]</span><span class="nv">$p</span><span class="p">.</span><span class="n">WaitForExit</span><span class="p">(</span><span class="n">30000</span><span class="p">)</span>       <span class="c"># 給一個毫秒為單位的硬 timeout，避免萬一 hang</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="nb">Get-Content</span> <span class="nv">$t</span> <span class="n">-Raw</span>
+</code></pre></div>
+<p><strong>為什麼三個要素都不能省：</strong></p>
+<table>
+<thead>
+<tr>
+<th>要素</th>
+<th>省略的症狀</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CreateNoWindow = $true</code></td>
+<td>MCP RPC 卡 60s 後截斷（<code>.bat</code> 明明瞬間跑完）</td>
+<td>阻止 child 建立 console → 斷開 MCP 對 console handle 的 inheritance</td>
+</tr>
+<tr>
+<td><code>cmd.exe /s /c "..."</code> 的 <code>/s</code></td>
+<td>內層引號被意外剝掉 → <code>.bat</code> 收到半截 args / 路徑空字串</td>
+<td>告訴 cmd 只拆掉最外層的一對引號 — 剛好對應上面 <code>$args</code> 組裝的雙包結構</td>
+</tr>
+<tr>
+<td><code>$p.WaitForExit(ms)</code></td>
+<td><code>.bat</code> 還在跑 PowerShell 就往下跑 → <code>Get-Content</code> 讀到空檔</td>
+<td>用毫秒 timeout 的同步等待取代「傳 pipe 去等 stdout」；MCP 拿到的是 process handle，不是 open pipe</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>實測基準</strong>（PR #44 C5 dogfood）：
+- 錯誤寫法（<code>&amp; $bat</code>）：<code>waited=False, exit=None, MCP timeout @ 60s</code>
+- 缺 <code>CreateNoWindow</code>：<code>waited=False, exit=None, MCP timeout @ 60s</code>
+- 缺 <code>/s</code> 用 <code>/c</code> only：<code>waited=True, exit=0, len=0</code>（cmd 把 <code>.bat</code> 路徑的外層引號剝掉之後、又把內層引號當內容）
+- 三個都加：<code>waited=True, exit=0, len=39</code>（正常）</p>
+</blockquote>
+<p><code>scripts/ops/win_git_escape.bat</code> 和 <code>scripts/ops/win_gh.bat</code> 的檔頭都嵌入了這段模板作為 in-tree 單一來源，並由 <code>tests/dx/test_bat_label_integrity.py::test_mcp_caller_pattern_documented</code> 強制要求 header 包含 <code>Process.Start</code> / <code>WaitForExit</code> / <code>CreateNoWindow</code> / <code>/s /c</code> 四個關鍵字 — 任何未來改動都會擋 CI。</p>
+<h2 id="60s">長時間操作 (&gt;60s)<a class="headerlink" href="#60s" title="Permanent link">&para;</a></h2>
+<p>Desktop Commander <code>start_process</code> 硬上限 <strong>60 秒</strong>（<code>timeout_ms</code> 參數無效）。超過的操作用背景腳本：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Step 1: Write tool 寫腳本</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1">#!/bin/bash</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nb">exec</span><span class="w"> </span>&gt;<span class="w"> </span>/workspaces/vibe-k8s-lab/_result.txt<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># ... 操作 ...</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;DONE&quot;</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># Step 2: 背景啟動（-d 只接腳本路徑）</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-d<span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>/workspaces/vibe-k8s-lab/scripts/_task.sh
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="c1"># Step 3: Cowork VM Bash tool 等待</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>sleep<span class="w"> </span><span class="m">120</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="c1"># Step 4: Read tool 讀 _result.txt，確認結尾有 &quot;DONE&quot;</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="c1"># Step 5: 清理暫存</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/workspaces/vibe-k8s-lab/scripts/_task.sh<span class="w"> </span>/workspaces/vibe-k8s-lab/_result.txt
+</code></pre></div>
+<p><strong>注意：</strong> <code>docker exec -d</code> 的 stdout 不返回 → 腳本開頭必須 <code>exec &gt; file 2&gt;&amp;1</code>。</p>
+<h2 id="_3">工具選擇策略<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>情境</th>
+<th>推薦方式</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>純 Python（routing-bench、validate）</td>
+<td>Cowork VM 直接跑</td>
+<td>最快，無 docker 開銷</td>
+</tr>
+<tr>
+<td>K8s 查詢</td>
+<td>先試 K8s MCP → fallback docker exec</td>
+<td>K8s MCP 常 TLS timeout</td>
+</tr>
+<tr>
+<td>多步 K8s 操作</td>
+<td>寫腳本 → <code>docker exec bash script.sh</code></td>
+<td>避免 timeout + 引號問題</td>
+</tr>
+<tr>
+<td>Prometheus / Alertmanager API</td>
+<td>docker exec + port-forward</td>
+<td>ClusterIP 在 container 外不可達</td>
+</tr>
+<tr>
+<td>Go build/test</td>
+<td><code>docker exec -w ../app vibe-dev-container go ...</code></td>
+<td>Go 僅在 container 內</td>
+</tr>
+<tr>
+<td>檔案清理 (mounted workspace)</td>
+<td><code>docker exec ... rm -f</code></td>
+<td>Cowork VM 無法直接 rm 掛載路徑</td>
+</tr>
+</tbody>
+</table>
+<p><strong>K8s MCP 已知限制：</strong> 常 TLS timeout、<code>name</code> 必填、不支援 pipe/重定向。timeout 直接 fallback docker exec，不重試。</p>
+<h2 id="port-forward">Port-Forward 模式<a class="headerlink" href="#port-forward" title="Permanent link">&para;</a></h2>
+<h3 id="prometheus">Prometheus<a class="headerlink" href="#prometheus" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="s2">  kubectl port-forward svc/prometheus 9090:9090 -n monitoring &amp;&gt;/dev/null &amp; \</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="s2">  sleep 2 &amp;&amp; \</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="s2">  curl -sg &#39;http://localhost:9090/api/v1/query?query=up&#39; \</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="s2">    &gt; /workspaces/vibe-k8s-lab/_prom.txt 2&gt;&amp;1 &amp;&amp; \</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="s2">  kill %1 2&gt;/dev/null&quot;</span>
+</code></pre></div>
+<h3 id="alertmanager">Alertmanager<a class="headerlink" href="#alertmanager" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>vibe-dev-container<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="s2">  kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &amp;&gt;/dev/null &amp; \</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="s2">  sleep 2 &amp;&amp; \</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="s2">  curl -sg &#39;http://localhost:9093/api/v2/status&#39; \</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="s2">    &gt; /workspaces/vibe-k8s-lab/_am.txt 2&gt;&amp;1 &amp;&amp; \</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="s2">  kill %1 2&gt;/dev/null&quot;</span>
+</code></pre></div>
+<p><strong>殘留處理：</strong> <code>pkill -f "port-forward.*prometheus"</code> 或 <code>fuser -k 9090/tcp</code>。</p>
+<p><strong>Pod 重啟後 port-forward 斷開：</strong> 等新 Pod Running → kill 舊 port-forward → 建新 → sleep 2s。</p>
+<h2 id="helm-upgrade">Helm Upgrade 防衝突<a class="headerlink" href="#helm-upgrade" title="Permanent link">&para;</a></h2>
+<p>ConfigMap 被 <code>kubectl patch</code> 修改過 → Helm field-manager conflict：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Step 1: server-side apply 取回 ownership</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="w"> </span>--force-conflicts<span class="w"> </span>--field-manager<span class="o">=</span>helm<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-f<span class="w"> </span>&lt;<span class="o">(</span>helm<span class="w"> </span>template<span class="w"> </span>threshold-exporter<span class="w"> </span>components/threshold-exporter/<span class="w"> </span>-n<span class="w"> </span>monitoring<span class="o">)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Step 2: 正常 helm upgrade</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>threshold-exporter<span class="w"> </span>components/threshold-exporter/<span class="w"> </span>-n<span class="w"> </span>monitoring
+</code></pre></div>
+<h2 id="powershell-rest-apigithub">PowerShell REST API（GitHub 等）<a class="headerlink" href="#powershell-rest-apigithub" title="Permanent link">&para;</a></h2>
+<p>Windows MCP PowerShell 是 Cowork VM 無法直連的 API（如 <code>api.github.com</code>）的橋樑。</p>
+<p><strong>JSON body 統一做法（ConvertTo-Json + UTF8 Bytes）：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c"># ✅ 唯一推薦做法 — 同時支援 ASCII 和 CJK</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">$payload</span> <span class="p">=</span> <span class="p">@{</span> <span class="n">tag_name</span> <span class="p">=</span> <span class="s2">&quot;v1.9.0&quot;</span><span class="p">;</span> <span class="n">name</span> <span class="p">=</span> <span class="s2">&quot;title&quot;</span><span class="p">;</span> <span class="n">body</span> <span class="p">=</span> <span class="nv">$longText</span> <span class="p">}</span> <span class="p">|</span> <span class="nb">ConvertTo-Json</span> <span class="n">-Depth</span> <span class="n">3</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nb">Invoke-RestMethod</span> <span class="n">-Uri</span> <span class="nv">$url</span> <span class="n">-Method</span> <span class="n">Post</span> <span class="n">-Headers</span> <span class="nv">$headers</span> <span class="p">`</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">-Body</span> <span class="p">(</span><span class="no">[System.Text.Encoding]</span><span class="p">::</span><span class="n">UTF8</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="nv">$payload</span><span class="p">))</span> <span class="p">`</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">-ContentType</span> <span class="s2">&quot;application/json; charset=utf-8&quot;</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="c"># ⚠️ 必須用 UTF8.GetBytes()，否則 CJK 字元亂碼</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="c"># ❌ 單行 JSON 字串 — 不支援 CJK，容易手滑引號配對，不推薦</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c"># ❌ 外部 .ps1 腳本 — OneDrive 路徑含空格找不到</span>
+</code></pre></div>
+<p><strong>Headers 模板：</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nv">$headers</span> <span class="p">=</span> <span class="p">@{</span> <span class="s2">&quot;Authorization&quot;</span> <span class="p">=</span> <span class="s2">&quot;token $token&quot;</span><span class="p">;</span> <span class="s2">&quot;Accept&quot;</span> <span class="p">=</span> <span class="s2">&quot;application/vnd.github+json&quot;</span> <span class="p">}</span>
+</code></pre></div>
+<p>詳見 <a href="../github-release-playbook/">GitHub Release Playbook</a>。</p>
+<h3 id="body">長 Body 的建議做法<a class="headerlink" href="#body" title="Permanent link">&para;</a></h3>
+<p><strong>優先用 here-string（<code>@"..."@</code>）</strong>，避免 File Staging 的 PSObject 陷阱：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c"># ✅ 推薦：here-string 直接定義 body（結果是純 [string]）</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nv">$body</span> <span class="p">=</span> <span class="sh">@&quot;</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="sh">## Highlights</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="sh">- Feature A</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="sh">- Feature B（支援 CJK）</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="sh">&quot;@</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="nv">$payload</span> <span class="p">=</span> <span class="p">@{</span> <span class="n">name</span> <span class="p">=</span> <span class="s2">&quot;title&quot;</span><span class="p">;</span> <span class="n">body</span> <span class="p">=</span> <span class="nv">$body</span> <span class="p">}</span> <span class="p">|</span> <span class="nb">ConvertTo-Json</span> <span class="n">-Depth</span> <span class="n">3</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="nb">Invoke-RestMethod</span> <span class="n">-Uri</span> <span class="nv">$url</span> <span class="n">-Method</span> <span class="n">Patch</span> <span class="n">-Headers</span> <span class="nv">$headers</span> <span class="p">`</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>    <span class="n">-Body</span> <span class="p">(</span><span class="no">[System.Text.Encoding]</span><span class="p">::</span><span class="n">UTF8</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="nv">$payload</span><span class="p">))</span> <span class="p">`</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>    <span class="n">-ContentType</span> <span class="s2">&quot;application/json; charset=utf-8&quot;</span>
+</code></pre></div>
+<p><strong>File Staging 模式</strong>（body 太長超出 here-string 限制時）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c"># Step 1: Desktop Commander write_file 寫 body 到暫存路徑</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c">#   C:/Users/&lt;user&gt;/AppData/Local/Temp/release-body.txt</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c"># Step 2: PowerShell 讀檔 — ⚠️ 必須 .ToString() 或 [string] 轉型</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="nv">$bodyText</span> <span class="p">=</span> <span class="no">[string]</span><span class="p">(</span><span class="nb">Get-Content</span> <span class="s2">&quot;C:/Users/&lt;user&gt;/AppData/Local/Temp/release-body.txt&quot;</span> <span class="n">-Raw</span><span class="p">)</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="nv">$payload</span> <span class="p">=</span> <span class="p">@{</span> <span class="n">name</span> <span class="p">=</span> <span class="s2">&quot;title&quot;</span><span class="p">;</span> <span class="n">body</span> <span class="p">=</span> <span class="nv">$bodyText</span> <span class="p">}</span> <span class="p">|</span> <span class="nb">ConvertTo-Json</span> <span class="n">-Depth</span> <span class="n">3</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="nb">Invoke-RestMethod</span> <span class="n">-Uri</span> <span class="nv">$url</span> <span class="n">-Method</span> <span class="n">Patch</span> <span class="n">-Headers</span> <span class="nv">$headers</span> <span class="p">`</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    <span class="n">-Body</span> <span class="p">(</span><span class="no">[System.Text.Encoding]</span><span class="p">::</span><span class="n">UTF8</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="nv">$payload</span><span class="p">))</span> <span class="p">`</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>    <span class="n">-ContentType</span> <span class="s2">&quot;application/json; charset=utf-8&quot;</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="c"># Step 3: 清理</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="nb">Remove-Item</span> <span class="s2">&quot;C:/Users/&lt;user&gt;/AppData/Local/Temp/release-body.txt&quot;</span> <span class="n">-Force</span>
+</code></pre></div>
+<blockquote>
+<p><strong>⚠️ 已知陷阱</strong>：<code>Get-Content -Raw</code> 回傳的是 PSObject（帶 PSPath、PSDrive、PSProvider 等 metadata），不是純字串。若直接放入 hashtable 再 <code>ConvertTo-Json</code>，會把整個 filesystem metadata 序列化進 JSON body，導致 API payload 變成數千行的物件 dump。必須用 <code>[string]</code> cast 或 <code>.ToString()</code> 確保是純文字。</p>
+</blockquote>
+<h2 id="_4">已知陷阱速查<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>陷阱</th>
+<th>解法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>docker exec stdout 為空</td>
+<td><code>bash -c</code> 內重定向至 workspace 檔案</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>bash -c "..."</code> 引號被拆解</td>
+<td>寫成獨立 <code>.sh</code> / <code>.py</code> 腳本</td>
+</tr>
+<tr>
+<td>3</td>
+<td>PowerShell 編碼亂碼</td>
+<td>MCP Shell 指定 <code>shell: "cmd"</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>docker exec -d bash -c "..."</code> 失敗</td>
+<td><code>-d</code> 只接腳本路徑，腳本內 <code>exec &gt; file 2&gt;&amp;1</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>Go test <code>./...</code> 找不到 module</td>
+<td><code>-w ../components/threshold-exporter/app</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>start_process</code> 硬上限 60s</td>
+<td>寫腳本 → <code>docker exec -d</code> → sleep → 讀結果</td>
+</tr>
+<tr>
+<td>7</td>
+<td>kubeconfig 過期</td>
+<td><code>kind export kubeconfig --name dynamic-alerting-cluster</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td>port-forward 殘留 / Pod 重啟後斷開</td>
+<td><code>pkill -f port-forward</code>；重建需等 Pod Ready</td>
+</tr>
+<tr>
+<td>9</td>
+<td>mounted workspace 無法從 VM 刪檔</td>
+<td><code>docker exec ... rm -f</code></td>
+</tr>
+<tr>
+<td>10</td>
+<td>K8s MCP TLS timeout</td>
+<td>直接 fallback docker exec</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>set -euo pipefail</code> + 未初始化變數</td>
+<td>所有條件路徑都要有 default 值</td>
+</tr>
+<tr>
+<td>12</td>
+<td>彩色輸出 / ANSI 碼污染 JSON</td>
+<td><code>--json</code> 模式避免 source <code>_lib.sh</code>，或 <code>2&gt;/dev/null</code> + 過濾 ANSI</td>
+</tr>
+<tr>
+<td>13</td>
+<td>版號 drift</td>
+<td><code>make version-check</code>；修正用 <code>make bump-docs</code></td>
+</tr>
+<tr>
+<td>14</td>
+<td>PS JSON body CJK 亂碼</td>
+<td>統一用 <code>ConvertTo-Json</code> + <code>UTF8.GetBytes()</code> + <code>charset=utf-8</code>（見 <a href="#powershell-rest-apigithub-等">§PowerShell REST API</a>）</td>
+</tr>
+<tr>
+<td>15</td>
+<td>PS 外部 <code>.ps1</code> 腳本路徑含空格</td>
+<td>OneDrive 預設路徑含空格；避免外部腳本，用 inline</td>
+</tr>
+<tr>
+<td>16</td>
+<td>PAT push <code>.github/workflows/</code> 被 reject</td>
+<td>PAT 需含 Workflows scope（詳見 <a href="../github-release-playbook/">GitHub Release Playbook</a>）</td>
+</tr>
+<tr>
+<td>17</td>
+<td>Windows MCP Shell 長 REST body timeout</td>
+<td>用 Desktop Commander <code>write_file</code> 寫暫存檔 → PowerShell <code>Get-Content -Raw</code> 讀入 → 完成後 <code>Remove-Item</code></td>
+</tr>
+<tr>
+<td>18</td>
+<td>~~GitHub Release <code>already_exists</code> 422~~</td>
+<td>🗄️ 已歸檔（PATCH 繞道已固化為 Re-tag SOP）。詳見 <a href="../archive/lessons-learned/">archive/lessons-learned.md</a></td>
+</tr>
+<tr>
+<td>19</td>
+<td>Dev Container <code>Exited (255)</code> 未啟動</td>
+<td><code>docker start vibe-dev-container</code>；每次 session 開始先 <code>docker ps</code> 確認</td>
+</tr>
+<tr>
+<td>20</td>
+<td>Benchmark / Go test 複雜指令在 PowerShell 下失敗</td>
+<td>寫 <code>.sh</code> 輔助腳本 → <code>docker exec [-d] bash script.sh</code>（見 <a href="../benchmark-playbook/#在-dev-container-內執行">Benchmark Playbook → 在 Dev Container 內執行</a>）</td>
+</tr>
+<tr>
+<td>21</td>
+<td>Go test 從 repo root 執行失敗</td>
+<td><code>go.mod</code> 在 <code>components/threshold-exporter/app/</code>，必須 <code>-w</code> 指定或 <code>cd</code> 進去</td>
+</tr>
+<tr>
+<td>22</td>
+<td><code>Get-Content -Raw</code> 是 PSObject 非純字串</td>
+<td>放入 hashtable → <code>ConvertTo-Json</code> 會序列化 filesystem metadata；用 <code>[string]</code> cast 或改用 here-string <code>@"..."@</code></td>
+</tr>
+<tr>
+<td>23</td>
+<td>刪除再重建 GitHub tag 導致 Release 消失</td>
+<td><code>git push origin :refs/tags/v*</code> 會連帶刪除關聯 Release；重推 tag 後須重新 create release</td>
+</tr>
+<tr>
+<td>24</td>
+<td>Repo rename 導致 POST API 靜默失敗</td>
+<td>Repo 改名後舊 URL 的 GET 自動 redirect，但 POST 回 307 且 <code>Invoke-RestMethod</code> 不跟隨 POST redirect，靜默回 401 Unauthorized。必須用新 repo name（如 <code>Dynamic-Alerting-Integrations</code>）或 repo ID URL（<code>/repositories/{id}/releases</code>）</td>
+</tr>
+<tr>
+<td>25</td>
+<td>Fine-grained PAT 權限不足建立 Release</td>
+<td>詳見 <a href="../github-release-playbook/">GitHub Release Playbook §PAT 權限</a>。摘要：需 <strong>Contents: Read and Write</strong> scope</td>
+</tr>
+<tr>
+<td>26</td>
+<td>PAT 查 GHCR packages 回 403</td>
+<td>需 <code>packages:read</code> scope；驗證 image 最快用瀏覽器開 <code>github.com/{owner}?tab=packages</code></td>
+</tr>
+<tr>
+<td>27</td>
+<td><code>.git/*.lock</code> 殘留阻擋 git 操作</td>
+<td><strong>首選</strong>：<code>bash scripts/session-guards/git_check_lock.sh --clean</code>（診斷後安全清理）。VM 無法刪除時 fallback Windows MCP <code>Remove-Item "path\.git\*.lock" -Force</code>。若連 Windows MCP 也沒有（純 Cowork sandbox + phantom dentry），見 <a href="#修復層-bfuse-cache-重建level-1-5">§修復層 B Level 6 rename-trick</a>。詳細背景：<a href="#fuse-phantom-lock-防治">§ FUSE Phantom Lock 防治</a></td>
+</tr>
+<tr>
+<td>28</td>
+<td><code>Invoke-RestMethod</code> 對 GitHub API 頻繁 timeout</td>
+<td>Windows MCP PowerShell 的 <code>Invoke-RestMethod</code> 對 HTTPS API 極不穩定（模組初始化 + TLS 握手 → 常超過 60s timeout）。改用 <code>curl.exe</code> 替代：寫 JSON 到 temp 檔（<code>[IO.File]::WriteAllText</code> 無 BOM）→ <code>curl.exe --data-binary @file</code></td>
+</tr>
+<tr>
+<td>29</td>
+<td><code>mkdocs gh-deploy</code> site/ 權限錯誤</td>
+<td>MkDocs 建置產生 <code>site/</code> 後 Cowork VM 無法再次 <code>clean_directory</code>；部署前用 Windows MCP <code>Remove-Item site/ -Recurse -Force</code>。也可手動 push：temp repo → <code>gh-pages</code> branch → <code>git push --force</code></td>
+</tr>
+<tr>
+<td>30</td>
+<td><code>ghp_import</code> TypeError bytes vs str</td>
+<td>Python 3.10 + 新版 ghp_import 的 <code>sys.stdout.write(enc(...))</code> 回傳 bytes 而非 str。Workaround：手動建 temp git repo、複製 <code>site/*</code>、push 到 <code>gh-pages</code> branch</td>
+</tr>
+<tr>
+<td>31</td>
+<td>Cowork VM proxy 封鎖 <code>api.github.com</code></td>
+<td><code>git push</code> 走得通（git 協議通道），但 <code>requests</code> / <code>curl</code> 對 <code>api.github.com</code> 回 403 Forbidden（proxy 層封鎖）。GitHub API 操作必須透過 Windows MCP 的 <code>curl.exe</code></td>
+</tr>
+<tr>
+<td>32</td>
+<td><code>Set-Content</code> 預設加 BOM 導致 JSON parse 失敗</td>
+<td>GitHub API <code>curl.exe --data-binary @file</code> 讀入含 BOM 的 UTF-8 檔案會回 <code>Problems parsing JSON</code>。用 <code>[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))</code> 寫入無 BOM 版本</td>
+</tr>
+<tr>
+<td>33</td>
+<td>MCP <code>start_process</code> 的 runtime ≠ 子行程真正執行時間</td>
+<td><code>cmd.exe</code> 啟動 <code>git push</code> 後，MCP 可能在 ~1s 就 report「completed exit 0」，log 看起來被截在中間，但 git.exe 其實還在背景跑完。<strong>不要信 MCP runtime</strong>，一律用 side-effect 驗證：<code>git ls-remote origin HEAD</code> 比對遠端 SHA，或 <code>git fetch origin main</code> 看 refs 有沒有更新。詳見 <a href="#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑">§修復層 C：Windows 原生 Git Fallback</a></td>
+</tr>
+<tr>
+<td>34</td>
+<td>Windows <code>cmd</code> batch 少了 <code>PATHEXT</code> 就找不到 <code>git.exe</code></td>
+<td>MCP 繼承到的 <code>PATHEXT</code> 可能沒包含 <code>.EXE</code>。所有 batch 起手必寫：<code>set "PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"</code></td>
+</tr>
+<tr>
+<td>35</td>
+<td>cmd <code>(echo ... &amp; echo ...)</code> parenthesized group 被 <code>%PATH%</code> 裡的 NVIDIA 閉括號拆掉</td>
+<td><code>C:\Program Files (x86)\NVIDIA ...</code> 的 <code>)</code> 會提早結束 group，報 <code>此時候不應有 \NVIDIA</code>。<strong>不要用 parenthesized group 包 echo</strong>，改成獨立 <code>echo</code> 行</td>
+</tr>
+<tr>
+<td>36</td>
+<td>pre-commit 產生的 <code>.git/hooks/pre-push</code> 硬寫死 Linux python 路徑</td>
+<td><code>INSTALL_PYTHON=/usr/local/python/3.13.12/bin/python3</code> 在 Windows 不存在 → fallback 去找 <code>pre-commit</code> on PATH，但 Python 通常沒裝 console script shim。解法：把 hook 的第 6 行改成 <code>INSTALL_PYTHON=/c/Users/&lt;USER&gt;/AppData/Local/Python/bin/python.exe</code>（Git Bash 吃 POSIX 路徑），或 <code>pip install --force-reinstall pre-commit</code> 重建 entry point</td>
+</tr>
+<tr>
+<td>37</td>
+<td><code>~/.ssh/</code> 無 private key 但 <code>credential.helper=manager</code> 有存 token</td>
+<td>Windows 使用者常走 Git Credential Manager 不走 SSH。push 前臨時把 remote URL 切 HTTPS，讓 GCM 自動帶 stored token；push 完切回 SSH：<code>git remote set-url origin https://github.com/&lt;o&gt;/&lt;r&gt;.git; git push origin main; git remote set-url origin git@github.com:&lt;o&gt;/&lt;r&gt;.git</code></td>
+</tr>
+<tr>
+<td>38</td>
+<td>pre-commit 範圍模式 <code>--from-ref A --to-ref B</code> 的觸發 glob 只看範圍內改動檔案</td>
+<td>要避免 hook 掃到整個 repo 的累積 drift（例如 <code>bilingual-structure-check</code> 對整個 repo 的 <code>.en.md</code>），把 trigger glob 會命中的檔案從 commit 範圍內拿掉就夠。例：把 <code>docs/internal/doc-map.en.md</code> 以 <code>git rm --cached</code> 移出 commit，hook 就 Skipped</td>
+</tr>
+<tr>
+<td>39</td>
+<td>Windows clone 的 <code>rule-packs/</code> 和 <code>docs/CHANGELOG.md</code> 變成 ~13 byte 純文字檔</td>
+<td>Git 物化 symlink 為 target 字串。非 bug，是權限問題——Windows 10+ 預設不允許非 admin 建立 symlink。<strong>解法</strong>：開啟 Developer Mode（見 <a href="#windows-clone-初次設定-symlink-支援">§Windows Clone 初次設定</a>）</td>
+</tr>
+<tr>
+<td>40</td>
+<td>Markdown heading 用 em-dash <code>—</code> 時，Python Markdown / MkDocs slugify 產出<strong>單 hyphen</strong> 而非雙 hyphen</td>
+<td>例：<code>## Windows Clone 初次設定 — Symlink 支援</code> → slug 是 <code>windows-clone-初次設定-symlink-支援</code>（不是 <code>--symlink-支援</code>）。em-dash 被當作 space 處理，兩側 space 合併成一個 hyphen。PR #18 因此打到 broken anchor CI fail。<strong>檢測</strong>：本地跑 <code>python scripts/tools/lint/check_doc_links.py --ci</code>。<strong>修法</strong>：link 裡的 <code>--</code> 改成 <code>-</code>，或 heading 改成 ASCII hyphen <code>-</code>（會 slugify 成 <code>--</code>，但可讀性差）</td>
+</tr>
+<tr>
+<td>41</td>
+<td><code>git rebase -i --autosquash</code> 在 MCP 下無法開編輯器</td>
+<td>想非互動地跑 <code>git commit --fixup=&lt;sha&gt; &amp;&amp; git rebase -i --autosquash &lt;base&gt;</code>，但 <code>GIT_SEQUENCE_EDITOR=rem</code> 或 <code>=cmd /c rem</code> 會被 Git for Windows 的 bundled sh 當成 shell command 解讀，報 <code>rem: command not found</code>。<strong>正解</strong>：用 <code>true</code>（msys 的內建 no-op），並透過 <code>-c</code> 臨時設定避免污染 env：<code>git -c sequence.editor=true -c core.editor=true rebase -i --autosquash &lt;base&gt;</code>。autosquash 會在 sequence file 寫入後立即以 <code>true</code> 結束編輯器，保留預設順序。驗證：<code>git log --oneline</code> 看到 <code>fixup!</code> 已被摺進 target commit</td>
+</tr>
+<tr>
+<td>42</td>
+<td>pre-commit hook CRLF shebang + dual shebang 雙重問題</td>
+<td>Windows 端 <code>pre-commit install</code> 產生的 <code>.git/hooks/pre-commit</code> 有兩個問題：(1) CRLF 行尾導致 Linux/FUSE 找不到 <code>#!/bin/sh\r</code>（報 <code>cannot run .git/hooks/pre-commit: No such file or directory</code>）；(2) 修完 CRLF 後，<code>#!/bin/sh</code> 無法解析 bash array <code>ARGS=(...)</code>（報 <code>Syntax error: "(" unexpected</code>）。<strong>修法</strong>：<code>tr -d '\r' &lt; hook &gt; hook.tmp &amp;&amp; mv hook.tmp hook &amp;&amp; chmod +x hook</code>，再把 <code>#!/bin/sh</code> 改成 <code>#!/usr/bin/env bash</code>。已內建到 <code>win_git_escape.bat fix-hooks</code> 子命令</td>
+</tr>
+<tr>
+<td>43</td>
+<td>pre-commit stash + FUSE 交互形成死鎖</td>
+<td>pre-commit 偵測到 unstaged changes → <code>git stash</code> → stash 操作在 FUSE 上衝突 → 嘗試 <code>git checkout -- .</code> → 建立 <code>index.lock</code> → FUSE phantom lock → 整個 git 卡死。<strong>防治</strong>：(1) commit 前先 <code>git stash</code> 手動處理 unstaged changes，不要讓 pre-commit 自動 stash；(2) 大量 unstaged files 時改用 Windows 逃生門 commit；(3) 已發生時用 <code>make git-lock ARGS="--clean"</code> 或 Windows MCP <code>Remove-Item</code> 清鎖</td>
+</tr>
+<tr>
+<td>44</td>
+<td>Phantom lock 薛丁格態：ls 顯示存在但所有操作都失敗</td>
+<td>FUSE dentry cache 殘留的 <code>.git/index.lock</code>，<code>ls</code> 同時報 "No such file" 卻又列出檔案。<code>os.unlink</code> 報 "Operation not permitted"，<code>os.rename</code> 報 "No such file"。Level 1 <code>drop_caches</code> 和 Level 6 rename-trick 皆無效。<strong>唯一可靠解法</strong>：放棄從 FUSE 側操作，切換到 Windows 原生 git（<code>win_git_escape.bat</code>）完成所有 git 操作。這是「逃生門」設計存在的核心理由</td>
+</tr>
+<tr>
+<td>45</td>
+<td>Desktop Commander <code>start_process</code> 執行 <code>.bat</code> 檔案時編碼損壞</td>
+<td>Desktop Commander 的 <code>start_process</code> 直接執行 <code>.bat</code> 會對 <code>@echo off</code>、<code>setlocal</code>、<code>goto</code> 等<strong>下游</strong>關鍵字產生亂碼，batch 無法正確解析（症狀：CJK 那行 OK，但「之後幾行」才出現 <code>'@echo' 不是內部或外部命令</code>）。<strong>Byte-level 根因</strong>（v2.8.0 PR #45 定位）：<code>start_process</code> 啟動的子 <code>cmd.exe</code> <strong>繼承父行程 OEM codepage</strong>（zh-TW 是 cp950，en-US 是 cp437），<strong>不是 cp65001</strong>；cmd batch parser 是<strong>逐 byte 讀檔</strong>、<strong>不做 UTF-8 normalization</strong>，當 <code>.bat</code> 以 UTF-8 儲存且含 CJK 或 em-dash，任何 byte ≥ 0x80 都可能落在 parser 視為 shell metachar 的範圍（0x80–0xBF 包含 cp1252 多個標點 continuation byte），parser 內部狀態機被破壞，<strong>後續幾行</strong>指令才開始被誤判。<strong>為何 <code>cmd /c</code> 不救</strong>：子 cmd 仍繼承父 codepage，byte-level collision 不變。<strong>為何 <code>chcp 65001</code> 不救</strong>：chcp 要 parser 執行到那行才生效，preamble (<code>@echo off</code> / <code>setlocal</code>) 已用錯誤 codepage 讀完。<strong>為何 PowerShell 呼 .bat 能過</strong>：PS runtime 先把 command line decode 成 UTF-16 再交給 cmd，byte collision 發生在更上層。<strong>三條鐵律</strong>（scripts/ops/<em>.bat only）：(a) 全 ASCII（byte &lt; 0x80），CJK 只放在 <code>.md</code>；(b) CRLF 行尾（pitfall #2）；(c) 不得有 UTF-8 BOM（<code>EF BB BF</code> 破壞第一道指令）。</em><em>CI gate ✅</em>*：<code>tests/dx/test_bat_label_integrity.py::{test_bat_files_are_ascii_pure,test_bat_files_are_crlf,test_bat_files_have_no_utf8_bom}</code> + pre-commit <code>scripts/tools/lint/check_bat_ascii_purity.py</code>（L1 本地攔 commit，pytest CI 捕逃逸）。<code>win_git_escape.bat</code> / <code>win_gh.bat</code> / <code>dx-run.bat</code> 已在 <code>e55d9af</code> + PR #45 改為全 ASCII 🛡️</td>
+</tr>
+<tr>
+<td>46</td>
+<td>cmd <code>git commit -m</code> 無法處理 UTF-8 特殊字元（em-dash、CJK）</td>
+<td><code>git commit -m "feat(ops): playbook audit — harness"</code> 中的 em-dash（U+2014）不在 cmd codepage 內，導致引號解析崩潰，每個空格後的單字都被當成獨立 pathspec，產生大量 <code>fatal: pathspec 'xxx' did not match any file</code> 錯誤。<strong>正解</strong>：永遠用 <code>git commit -F file.txt</code> 檔案傳遞 commit message。已內建到 <code>win_git_escape.bat commit-file</code> 子命令。UTF-8 檔案用 <code>[IO.File]::WriteAllText($path, $msg, [Text.UTF8Encoding]::new($false))</code> 或 <code>echo msg &gt; file</code> 產生</td>
+</tr>
+<tr>
+<td>47</td>
+<td>Windows MCP PowerShell 對大型 working tree 的 git 操作 timeout</td>
+<td>當 working tree 有 ~90+ unstaged files 時，透過 Windows MCP PowerShell 執行 <code>git add</code> 和 <code>git status</code> 會反覆超過 60s timeout（連續 3 次失敗）。原因是 Git 需要 stat 大量檔案 + PowerShell MCP 模組初始化開銷。<strong>繞道</strong>：(1) 改用 Desktop Commander 的 cmd shell（<code>cmd /c "git add file1 file2"</code>）；(2) 用 <code>win_git_escape.bat</code> 直接操作；(3) 對 fire-and-forget 需求用 <code>scripts/ops/win_async_exec.ps1</code> 派工取 PID，sandbox 側輪詢 log，見 <a href="#修復層-c1escape-helpersmcp-60s-timeout-fuse-cache-bypass">§修復層 C.1 Escape Helpers</a></td>
+</tr>
+<tr>
+<td>48</td>
+<td>Desktop Commander cmd shell 拆解 <code>--title</code> 引號</td>
+<td><code>gh pr create --title "multi word title"</code> 在 cmd 內被拆成獨立 arguments。<strong>正解</strong>：把完整命令寫入 <code>.bat</code> 檔再執行（bat 內引號正常解析）。PowerShell 可正確處理引號，但有 PATH (#49) 和 timeout (#47) 問題</td>
+</tr>
+<tr>
+<td>49</td>
+<td><code>gh</code> 不在 Desktop Commander PowerShell PATH</td>
+<td>Desktop Commander 的 PowerShell shell 找不到 <code>C:\Program Files\GitHub CLI\gh.exe</code>，但 cmd 可以。原因：PowerShell MCP 的 PATH 繼承與 cmd 不同。<strong>正解</strong>：用 cmd shell + bat 檔；或在 PowerShell 用全路徑 <code>&amp; "C:\Program Files\GitHub CLI\gh.exe"</code></td>
+</tr>
+<tr>
+<td>50</td>
+<td><code>gh pr checks --json</code> 沒有 <code>conclusion</code> 欄位</td>
+<td>可用欄位：<code>name, state, bucket, description, event, link, startedAt, completedAt, workflow</code>。<code>bucket</code> 值為 <code>pass/fail/pending/skipping</code>。很多網路範例用 <code>conclusion</code> 是錯的</td>
+</tr>
+<tr>
+<td>51</td>
+<td>Windows cmd console (cp950) 印 emoji 會 UnicodeEncodeError</td>
+<td>Python <code>print()</code> 在 Windows cmd 預設用 cp950 encoding，遇到 ✅⚠️❌ 等 emoji 直接 crash。<strong>正解</strong>：script 開頭偵測 <code>cp*</code> encoding 時強制 <code>sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')</code></td>
+</tr>
+<tr>
+<td>52</td>
+<td>Bash 工具傳 Windows 絕對路徑（<code>C:\...</code>）產生 FUSE phantom 檔案</td>
+<td>當 Bash/Shell 工具接收到 <code>C:\Users\...\_bench.bat</code> 這類 Windows 絕對路徑作為<strong>位置參數</strong>，FUSE 層會把 <code>:</code> 翻成 U+F03A、<code>\</code> 翻成 U+F05C（PUA 區碼位），在 Linux 側建出路徑合法但在 Windows 側看到的是 <code>CUsersvencsvibe-k8s-lab_bench.bat</code> 這種「中間夾隱形字元」的殘檔。殘檔會被 <code>git status</code> 當 untracked 列出但 wildcard（如 <code>*vibe-k8s-lab*</code>）匹配不到，須用 regex 比對 <code>_bench_f1b\|_bench_poll\|_poll\.bat</code> 等片段。<strong>正解</strong>：(1) 任何跨 Windows 路徑的寫入操作用 Write 工具或 Windows MCP PowerShell，不要塞給 Bash 工具；(2) <code>.gitignore</code> 已加 <code>CUsersvencs*</code> + <code>/C:\*</code> 雙重防守（PR #v2.7.1-doc-hygiene）；(3) 清理用 Windows 側 <code>Remove-Item -LiteralPath</code> + regex match，非從 FUSE 側 <code>rm</code>（會 <code>Operation not permitted</code>）</td>
+</tr>
+<tr>
+<td>53</td>
+<td><code>win_async_exec.ps1</code> 派 <code>gh pr create --title "...(v2.9.0+)"</code> 時 title 尾段被 cmd /c 吞掉（misleading 成功誤判）</td>
+<td><code>win_async_exec.ps1</code> 內部走 <code>cmd.exe /c "&lt;Command&gt; &gt; log 2&gt;&amp;1"</code>，cmd 的 parenthesis / operator parsing 會把 nested double-quote 中的 <code>(</code> / <code>+</code> 當成 grouping char / concat operator，導致 <code>--title</code> 參數尾段在 cmd 層被吞掉。<strong>典型症狀</strong>：log 只印出 <code>Creating PR: docs(governance): ... SSOT +</code> 後就截斷，PR 實際<strong>建立成功</strong>但 title 缺尾綴，operator 誤判失敗去重試，第二次才撞上 "a pull request already exists"，繞一大圈才察覺。<strong>正解（§黃金法則的具體應用）</strong>：把整段命令寫成獨立 <code>.ps1</code>，title 用 single-quoted variable 宣告後 <code>&amp; gh ... --title $title --body-file _pr_body.md</code>，再以 <code>win_async_exec.ps1 -Command 'powershell -File _pr_make.ps1'</code> 派工，cmd /c 就只看到一個外層命令字串，不會吃到內層 <code>(</code> / <code>+</code>。<strong>差異於 #48</strong>：#48 是 Desktop Commander cmd 把 <code>--title "x y z"</code> 拆成空格切開的多參數；#53 是 win_async_exec 的 cmd /c 把完整引號內字元因 <code>(</code> / <code>+</code> 提早截斷。兩者配方不同，前者用 .bat 包裝，後者用 .ps1 包裝</td>
+</tr>
+<tr>
+<td>54</td>
+<td>Ad-hoc <code>_commit.ps1</code> / <code>_pr.bat</code> script proliferation — 每個 session 重寫一次</td>
+<td>PR #39 寫了 <code>_p39_commit.ps1</code>；PR #40 寫了 <code>_p40_commit.ps1</code>、<code>_p40_pr.bat</code>、<code>_p40_checks.bat</code>、<code>_p40_failog.bat</code>、<code>_p40_diag.bat</code>（五隻！）—— 全部 reinvent 既有 <code>scripts/ops/win_git_escape.bat</code> 的功能。<strong>根因</strong>：session agent 沒讀 playbook 就動手，每次撞到 FUSE/MCP 問題就寫 throw-away script，下次 session 看不到（被 <code>.gitignore _*.bat</code> 藏起來）又重寫一次。<strong>長期解法</strong>（v2.8.0, PR #41）：(1) <code>scripts/tools/lint/check_ad_hoc_git_scripts.py</code> 以 whitelist 模式阻擋 <code>scripts/ops/</code> / <code>scripts/tools/</code> / <code>tools/</code> 外的 <code>*.bat</code> / <code>*.ps1</code> / <code>*.cmd</code>；(2) <code>.gitignore</code> 不再藏 scratch script（adopt-or-delete 政策）；(3) 新 subcommand 直接擴充 <code>win_git_escape.bat</code> / <code>win_gh.bat</code>。<strong>下次 session 要寫 <code>_foo.bat</code> 前</strong>：先 <code>scripts/ops/win_gh.bat raw gh ...</code> 或 <code>scripts/ops/win_git_escape.bat raw git ...</code>；真的需要新 subcommand 就擴充 wrapper（whitelist hook 會強制如此）🛡️</td>
+</tr>
+<tr>
+<td>55</td>
+<td><code>.bat</code> wrapper 三要素（Short path + CRLF + ASCII）沒有全備</td>
+<td>PR #41 新增 <code>win_gh.bat</code> 初次執行時三次失敗：(1) 行尾 LF → cmd 報 <code>'REM' is not recognized</code>（每個 token 當 command 找）；(2) 忘 <code>set PATH=...Git\cmd...</code> → gh 報 <code>unable to find git executable in PATH</code>；(3) <code>"C:\Program Files\GitHub CLI\gh.exe"</code> 在 PowerShell 下被多層 quote 破壞，不管怎麼逃脫都失敗。<strong>三個對策一次到位</strong>：(a) 8.3 short path <code>C:\PROGRA~1\GITHUB~1\gh.exe</code>（避免任何 quote 問題）；(b) wrapper 開頭強制 <code>set "PATH=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%PATH%"</code>；(c) 檔案以 CRLF 儲存、全 ASCII（驗證：<code>Get-Content -Encoding Byte -TotalCount 200</code> 看到 <code>0D 0A</code>）。詳見 <a href="#mcp-shell-pitfalls編寫-bat-ps1-wrapper-時必讀">§MCP Shell Pitfalls</a></td>
+</tr>
+<tr>
+<td>56</td>
+<td>Squash-merge base PR 造成下游 stacked PR 進入 <code>mergeStateStatus: DIRTY</code> → GH 靜默跳過 <code>pull_request</code> CI（零 workflow 觸發）</td>
+<td>PR #41 堆在 PR #40 分支上推開；PR #40 以 <strong>squash</strong> merge 到 main，PR #40 原 commits (<code>f5ccb7d</code>, <code>84e6ab5</code>) 在 PR #41 分支還在，跟 main 的 squashed 版本 (<code>23c189c</code>) 在 GH server 比對時算「重複但不同 hash」→ 無法自動合成 merge-ref → <code>mergeStateStatus=DIRTY</code>。<strong>關鍵副作用</strong>：<code>on: pull_request</code> 的 workflow <strong>完全不觸發</strong>（<code>gh run list --branch &lt;br&gt;</code> 空，<code>gh pr checks</code> 回 <code>no checks reported</code>），很容易被誤判成「GH Actions 壞了」或「path filter 過濾掉」。<strong>正解</strong>：(1) 在 Windows 側 <code>git rebase origin/main</code>（squashed commits 會自動丟掉，重複 diff 被 cherry-pick 去重）→ <code>git push --force-with-lease</code>；(2) 若 squash diff 不完全對得上，手動 <code>git rebase -i origin/main</code> drop 掉重複 commits。<strong>常伴陷阱</strong>：同時確認 wrapper 的 <code>PATHEXT</code> 有設（#34）—— PR #41 首次 dogfood 時雖然 playbook template 寫了 <code>set PATHEXT=...</code> 但 <code>win_gh.bat</code> / <code>win_git_escape.bat</code> 實際程式碼忘設，撞到使用者 profile 的 <code>PATHEXT=.CPL</code> 直接讓 gh 回 <code>unable to find git executable in PATH</code>（雖然 PATH 有 Git\cmd）。Template ↔ actual code 之間會 drift，wrapper 起手式固定六行（<code>setlocal</code> / <code>PYTHONUTF8</code> / <code>chcp 65001</code> / <code>PATHEXT</code> / <code>PATH</code> / <code>GH_CMD</code> 或 <code>GIT_CMD</code>）缺一不可 🛡️</td>
+</tr>
+<tr>
+<td>57</td>
+<td><code>pre-commit</code> 跑 <code>head-blob-hygiene</code> hook 長時間 0-output 疑似卡死</td>
+<td><strong>🟢 Resolved（v2.8.0, PR #164）</strong>：實際有<strong>兩個正交根因</strong>，治哪個取決於症狀。<br><br><strong>根因 A — FUSE stale temp 累積（S#18, FUSE 側才會發生）</strong>：<code>make fuse-reset</code> 串 Level 1+3 含 stale temp 清除；S#18 親手清掉 288 個 &gt;60min stale 後 hook 從 17+ 分鐘恢復 6 秒。<strong>recovery 路徑</strong>：(a) <code>kill pre-commit</code> + <code>make fuse-locks</code> 確認 phantom；(b) <code>make commit-bypass-hh MSG=_msg.txt</code> 走窄 bypass；(c) Windows 側 <code>git fsck --no-reflog</code> 清 stale；(d) 復活後 <code>~/.cache/pre-commit/patch{TS}-{PID}</code> backup 可 <code>git apply</code> 還原 unstaged-stash 吃掉的檔（S#31）。<br><br><strong>根因 B — Popen pipe deadlock（PR #164 / S#74，NTFS / FUSE 都會發生）</strong>：<code>_batch_cat_blobs</code> 用 single-thread write-then-read-loop pattern + <code>git cat-file --batch --buffer</code>。<code>--buffer</code> 讓 git 累積全部 stdout 到 stdin EOF 才一次 flush；total output &gt; OS pipe buffer (~64KB on Windows) 時 git 阻塞在 stdout write，script 在另一個 path 的 body 裡 read，<strong>單執行緒就無法 drain</strong> → 經典 Popen pipe deadlock。1040 個 blob × 平均 ~2KB = ~2.18MB output，遠超 buffer threshold，<strong>每次 commit 都會 hang</strong>。<strong>正解（PR #164 已落地）</strong>：改用 <code>proc.communicate(input=request, timeout=60)</code>，內部用 thread 同時 drain stdin/stdout/stderr。fix 後 0.57s for 1040 blobs。<code>tests/lint/test_check_head_blob_hygiene.py</code> 有 18 tests 含 deadlock regression（300 / 1000 file 場景），下次有人改回 write-then-read-loop 會被 CI 攔下。<br><br><strong>辨識</strong>：症狀都是「hook stuck，0 output」。判斷哪個根因：(i) 平台是 NTFS / Cowork VM（無 FUSE）→ 100% 是根因 B；(ii) FUSE 側 + <code>make fuse-locks</code> 看到 phantom → 根因 A；(iii) FUSE 側但 fuse-locks 乾淨 → 可能是根因 B（PR #164 前 FUSE 側也會撞 Popen deadlock，只是 stale temp 案例壓過去）。<br><br><strong>Hang-localization milestones（PR #165）</strong>：hook 現在主動印三個 observation point — <code>Reading N HEAD blob(s)...</code> (進入 batch read) → <code>✓ batch read complete: N loaded in Xs</code> (batch read 完) → <code>...scanned I/N</code> 每 100 個 (scan 進度，default mode) → 最後 summary。三層讓「hang 在哪」清楚可辨：(a) 看到 "Reading..." 但沒 "✓ batch read complete" → 還在 <code>_batch_cat_blobs</code> 內（根因 B class）；(b) batch read complete 但 scan 進度停 → scan_blob 對某個 path 卡住；(c) default mode &gt; 60s 沒輸出 → 跑 <code>--verbose</code> 看 per-file 定位。<code>tests/lint/test_check_head_blob_hygiene.py::TestMainProgressMilestones</code> 鎖定這三條 milestones 不被誤刪 🛡️</td>
+</tr>
+<tr>
+<td>58</td>
+<td><code>make git-preflight</code> 把自身 bash 程序誤判為「活躍 git 程序」跳過清理</td>
+<td>preflight helper <code>scripts/session-guards/git_check_lock.sh</code> 用 <code>pgrep git</code> 偵測 active git 程序決定要不要清 <code>.git/*.lock</code>，卻把 Makefile 本身啟動的 bash subshell（其 argv 含 <code>git</code> 字串的 path）當成活 git，於是<strong>永遠跳過清理</strong>。<strong>表現</strong>：<code>make git-preflight</code> 回報「lock exists but git active → skip」但實際沒有 git 在跑，lock 永久存在。<strong>修法</strong>：過濾自身 PID + parent PID：<code>pgrep git \| grep -v -E "^($$\|$PPID)$"</code>；或改偵測 <code>.git/index.lock</code> 的 mtime（&gt; 60s 無進度視為 stale）。歸檔於 <code>v2.8.0-planning.md</code> §12.4 #2，排入 A-12 子項 (v) 施工週。<strong>手動繞道</strong>：直接 <code>rm -f .git/*.lock</code> 或 Windows 側 <code>Remove-Item .git\*.lock -Force</code></td>
+</tr>
+<tr>
+<td>59</td>
+<td><code>.git/HEAD</code> 被 null byte 填充至 57 bytes（正常 45）→ <code>git rev-parse HEAD</code> fatal</td>
+<td>FUSE 寫 cache 在 context compaction 被 drop 時，部分檔案沒 flush 完整，<code>.git/HEAD</code> 尾巴殘 NUL bytes。正常內容 <code>ref: refs/heads/&lt;branch&gt;\n</code> 約 40-50 bytes；若檔案 ≥ 55 bytes 且尾端 hexdump 全是 <code>00 00 00</code>，基本是 FUSE cache loss（見 trap #9）。<strong>診斷</strong>：<code>wc -c .git/HEAD</code> + <code>hexdump -C .git/HEAD \| tail</code>。<strong>修法</strong>（不需 full fuse-reset）：<code>printf 'ref: refs/heads/&lt;branch&gt;\n' &gt; .git/HEAD</code>（若在 FUSE 側失敗則走 Windows 側 <code>[IO.File]::WriteAllText("C:\...\.git\HEAD", "ref: refs/heads/&lt;branch&gt;</code>n", [Text.UTF8Encoding]::new($false))<code>）。**長期**：</code>scripts/ops/git_check_lock.sh` 加 HEAD 長度 + 首行格式 sanity check，異常即 report + auto-repair。歸檔於 §12.4 #4，排入 A-12 子項 (v)</td>
+</tr>
+<tr>
+<td>60</td>
+<td><code>generate_doc_map.py</code> / 類似 regen 工具執行途中遭 FUSE fsync 中斷 → HEAD corruption + 全檔假 "new file"</td>
+<td><strong>✅ Codified（PR #56, v2.8.0）</strong>：regen 工具走 <code>--safe</code> flag，<code>scripts/tools/dx/_atomic_write.py::atomic_write_text()</code> 寫 tmp → chmod → <code>os.replace</code> 原子搬檔；目標檔不再短暫以半寫狀態存在。<code>generate_doc_map.py --generate --safe</code> / <code>generate_tool_map.py --generate --safe</code> 已 opt-in 支援。<strong>出事救援</strong>：<code>make recover-index</code>（PR #44 plumbing 逃生門）或 <code>git reset HEAD -- .</code>。原 RCA + 手動 recovery SOP → <a href="../archive/automation-origins/trap-60-fuse-fsync/"><code>archive/automation-origins/trap-60-fuse-fsync.md</code></a></td>
+</tr>
+<tr>
+<td>61</td>
+<td>PowerShell <code>Out-File -Encoding utf8</code> 寫 commit message 加 U+FEFF BOM → commitlint 三層 fail</td>
+<td><strong>✅ Codified（PR #56, v2.8.0）</strong>：<code>scripts/tools/dx/pr_preflight.py::check_commit_msg_file()</code> 讀檔前先 <code>detect_commit_msg_bom()</code> 掃首 3 bytes 偵測 UTF-8 / UTF-16 LE / UTF-16 BE BOM；命中時 stderr 直接印對應 PS <code>[IO.File]::WriteAllText(…, UTF8Encoding(false))</code> / bash <code>printf</code> 修法 + <code>git filter-branch --msg-filter sed</code> recovery SOP。commit-msg hook 以 exit 1 擋 commit，不會流到 commitlint cascade。原 RCA + 修法矩陣 → <a href="../archive/automation-origins/trap-61-bom/"><code>archive/automation-origins/trap-61-bom.md</code></a></td>
+</tr>
+<tr>
+<td>62</td>
+<td>Dev Container 只掛 <strong>主 worktree</strong>，claude worktree 的 Edit 不會進 container — 測試看到舊 source</td>
+<td><code>scripts/ops/dx-run.sh</code> 用 <code>docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container</code> 進 container，mount 的是 <code>C:\Users\vencs\vibe-k8s-lab\</code>（主 worktree），不是 <code>C:\Users\vencs\vibe-k8s-lab\.claude\worktrees\&lt;name&gt;\</code>。若在 claude worktree 用 Edit 修 <code>components/.../xxx_test.go</code> 後跑 <code>make dc-go-test</code> 或 <code>bash scripts/ops/dx-run.sh go test ...</code>，<strong>container 看到的是主 worktree 舊檔</strong>，測試結果跟剛改的 code 無關。<strong>症狀</strong>：edit 後 re-run test，錯誤訊息的 line number 對不到已改過的行；<code>diff claude-worktree-file main-worktree-file</code> 發現差異。<strong>解法三選一</strong>：(a) <strong>臨時同步</strong>（推薦 for 單 test 驗證）— <code>cp claude-worktree/path main-worktree/path</code> → 跑 test → <code>cd /c/Users/vencs/vibe-k8s-lab &amp;&amp; git checkout -- path</code> revert，claude worktree 保留為 SoT；(b) <strong>分支同步</strong> — 先 commit+push 到 remote branch，主 worktree <code>git fetch</code> + apply patch；(c) 改寫 <code>dx-run.sh</code> 或 Makefile 吃 <code>WORKTREE=</code> 參數把 <code>-w</code> 指向任意 worktree（需 container 端 bind mount 覆蓋，複雜度較高）。Session #19 首次踩到，A-10 flake 再量測時才發現 edit 未同步 🛡️</td>
+</tr>
+</tbody>
+</table>
+<h2 id="windows-clone-symlink">Windows Clone 初次設定 — Symlink 支援<a class="headerlink" href="#windows-clone-symlink" title="Permanent link">&para;</a></h2>
+<p><code>vibe-k8s-lab</code> repo 裡有數個重要的 symlink，在 <strong>Windows clone 端</strong> 必須啟用 symlink
+支援才能正確 checkout。症狀是某些 <code>.md</code> / YAML 檔案變成 ~13 byte 的純文字，
+內容是 target 字串（例如 <code>docs/CHANGELOG.md</code> 會變成含 <code>"../CHANGELOG.md"</code> 的
+純文字檔）。</p>
+<h3 id="symlink">已知會被影響的 symlink<a class="headerlink" href="#symlink" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Repo 路徑</th>
+<th>Target</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docs/CHANGELOG.md</code></td>
+<td><code>../CHANGELOG.md</code></td>
+<td>讓 MkDocs 能 serve repo root 的 CHANGELOG</td>
+</tr>
+<tr>
+<td><code>docs/README-root.md</code></td>
+<td><code>../README.md</code></td>
+<td>中文版 README 的 docs-tree 鏡像</td>
+</tr>
+<tr>
+<td><code>docs/README-root.en.md</code></td>
+<td><code>../README.en.md</code></td>
+<td>英文版 README 的 docs-tree 鏡像</td>
+</tr>
+<tr>
+<td><code>rule-packs/*.yaml</code>（部分）</td>
+<td><code>../conf.d/...</code></td>
+<td>Rule pack hot-reload 來源</td>
+</tr>
+</tbody>
+</table>
+<h3 id="windows-developer-mode">推薦方案：開啟 Windows Developer Mode（一次性設定）<a class="headerlink" href="#windows-developer-mode" title="Permanent link">&para;</a></h3>
+<p>Windows 10 1703+ / Windows 11 內建「開發人員模式」，啟用後 symlink 建立
+<strong>不再需要 admin 權限</strong>，對所有工具透明。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c"># 方法 A — Windows Settings UI</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c"># 設定 → 隱私權與安全性 → 開發人員專用 → 「開發人員模式」ON</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c"># 方法 B — Registry（需 admin 一次；啟用後永久）</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">reg</span> <span class="n">add</span> <span class="s2">&quot;HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock&quot;</span> <span class="p">`</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>  <span class="p">/</span><span class="n">t</span> <span class="n">REG_DWORD</span> <span class="p">/</span><span class="n">f</span> <span class="p">/</span><span class="n">v</span> <span class="n">AllowDevelopmentWithoutDevLicense</span> <span class="p">/</span><span class="n">d</span> <span class="n">1</span>
+</code></pre></div>
+<p>啟用後，在 Windows clone 端設定 Git 並重新 checkout：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># 在 Windows Git Bash / MSYS2 / WSL 的 clone 目錄下</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>git<span class="w"> </span>config<span class="w"> </span>core.symlinks<span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># 強制重建 working tree（已物化的純文字檔會變回真 symlink）</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>git<span class="w"> </span>rm<span class="w"> </span>--cached<span class="w"> </span>-r<span class="w"> </span>.
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>HEAD
+</code></pre></div>
+<h3 id="symlink_1">退路方案：Symlink 物化檢測腳本<a class="headerlink" href="#symlink_1" title="Permanent link">&para;</a></h3>
+<p>如果 Developer Mode 不能開（例如公司 IT 鎖管制原則），至少要偵測物化
+情形，避免不小心把 <code>"../CHANGELOG.md"</code> 當成真實內容 commit 回去。
+建議把下列檢測加到 pre-commit 或 CI：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">for</span><span class="w"> </span>f<span class="w"> </span><span class="k">in</span><span class="w"> </span>docs/CHANGELOG.md<span class="w"> </span>docs/README-root.md<span class="w"> </span>docs/README-root.en.md<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="c1"># 真 symlink：git ls-files -s 前綴 120000</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span><span class="nv">mode</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>ls-files<span class="w"> </span>-s<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $1}&#39;</span><span class="k">)</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$mode</span><span class="s2">&quot;</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="s2">&quot;120000&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;ERROR: </span><span class="nv">$f</span><span class="s2"> 已物化為一般檔案 (mode=</span><span class="nv">$mode</span><span class="s2">)，將損壞 MkDocs serve&quot;</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">  </span><span class="k">fi</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="k">done</span>
+</code></pre></div>
+<h3 id="_5">工具層配合（已完成）<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<p>專案內的文件品質工具都已經知道要跳過這些 symlink proxy，避免在 FUSE 側
+或誤物化時覆蓋 target 字串：</p>
+<ul>
+<li><code>scripts/tools/dx/doc_coverage.py</code> — <code>EXCLUDE_RELATIVE_PATHS</code></li>
+<li><code>scripts/tools/dx/add_frontmatter.py</code> — <code>EXCLUDE_RELATIVE_PATHS</code> + <code>os.path.islink</code> 跳過</li>
+<li><code>scripts/tools/dx/generate_doc_map.py</code> — <code>SKIP_FILES</code> / <code>SKIP_FILENAME_PREFIXES</code></li>
+</ul>
+<p>寫新的 doc-scanning 工具時<strong>請沿用同一套清單</strong>，否則會在 FUSE 側踩雷
+（見 <code>archive/lessons-learned.md</code> 的 add_frontmatter.py 事件）。</p>
+<h3 id="v271-llend-of-file-fixer-symlink-blob">v2.7.1 LL：<code>end-of-file-fixer</code> 會把 symlink blob 弄壞<a class="headerlink" href="#v271-llend-of-file-fixer-symlink-blob" title="Permanent link">&para;</a></h3>
+<p><strong>事件</strong>（PR #30 / commit <code>e148cd9</code> → fix <code>e697fec</code>）：跨 session 清理「FUSE EOF
+newline drift」36 檔時，把 <code>docs/CHANGELOG.md</code> 這個 symlink 也一起 sweep，
+結果 blob 從 15 bytes <code>../CHANGELOG.md</code> 變成 16 bytes <code>../CHANGELOG.md\n</code>。
+Linux CI 的 <code>readlink()</code> 解不了 <code>../CHANGELOG.md\n</code> 這個路徑，四個 CI job 同時爆：</p>
+<ul>
+<li><strong>Check Documentation Links</strong>：三處 <code>../CHANGELOG.md</code> 反向引用全壞（<code>docs/design/roadmap-future{,.en}.md</code> + <code>docs/internal/design-system-guide.md</code>）</li>
+<li><strong>Lint</strong>（Repo name guard）/ <strong>Drift Detection</strong>（repo_name）：<code>FileNotFoundError: docs/CHANGELOG.md</code></li>
+<li><strong>Go Tests</strong>：watcher 掃描 config dir 時 walk error（symlink loop 失敗）</li>
+</ul>
+<p><strong>根因</strong>：<code>fix_file_hygiene.py</code> 本身有 <code>os.path.islink()</code> runtime guard，Linux 側
+會被擋下；但 Windows clone 若 <code>core.symlinks=false</code>（Developer Mode 未開），
+symlink 被物化成純文字檔，<code>os.path.islink()</code> 回傳 False → 換行照寫進 blob。</p>
+<p><strong>防線</strong>（此事件後固化，two-layer）：</p>
+<ol>
+<li><strong>pre-commit <code>file-hygiene</code> exclude 正則</strong>（Windows-side safety net）
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># .pre-commit-config.yaml</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nt">exclude</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;^docs/(README-root(\.en)?|CHANGELOG)\.md$&#39;</span>
+</code></pre></div>
+   涵蓋 repo 所有 symlink proxy md 檔。新增 symlink 時必須同步擴充這個
+   regex，否則下次 Windows-side commit 會重演同樣劇本。</li>
+<li><strong>runtime <code>os.path.islink()</code> guard</strong>（Linux/FUSE-side 原有防線，仍保留）</li>
+</ol>
+<p><strong>Rule of thumb — 做 bulk cleanup 前先過濾 120000 blob</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># 任何「掃全 repo 補換行 / 改 encoding / 做 find-replace」的 bulk commit</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1"># 前，都要先把 symlink 排除：</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>git<span class="w"> </span>ls-files<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="k">while</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>f<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">  </span><span class="nv">mode</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>ls-files<span class="w"> </span>-s<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $1}&#39;</span><span class="k">)</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">  </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$mode</span><span class="s2">&quot;</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="s2">&quot;120000&quot;</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="k">done</span><span class="w"> </span>&gt;<span class="w"> </span>_bulk_candidates.txt
+</code></pre></div>
+<p><strong>現況確認</strong>（repo 有 4 個 symlink）：</p>
+<table>
+<thead>
+<tr>
+<th>路徑</th>
+<th>類型</th>
+<th>防線</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docs/README-root.md</code></td>
+<td>file symlink</td>
+<td><code>file-hygiene</code> exclude regex ✅</td>
+</tr>
+<tr>
+<td><code>docs/README-root.en.md</code></td>
+<td>file symlink</td>
+<td><code>file-hygiene</code> exclude regex ✅</td>
+</tr>
+<tr>
+<td><code>docs/CHANGELOG.md</code></td>
+<td>file symlink</td>
+<td><code>file-hygiene</code> exclude regex ✅（v2.7.1 補）</td>
+</tr>
+<tr>
+<td><code>docs/rule-packs</code></td>
+<td>dir symlink</td>
+<td>目錄不走 <code>file-hygiene</code>，天然安全</td>
+</tr>
+</tbody>
+</table>
+<h2 id="fuse-phantom-lock">FUSE Phantom Lock 防治<a class="headerlink" href="#fuse-phantom-lock" title="Permanent link">&para;</a></h2>
+<p>FUSE 跨層掛載（Windows NTFS → VirtioFS → Cowork VM → Docker bind mount）是 <code>.git/*.lock</code> 殘留的根本原因。以下是分層防治措施（預防 → 偵測 → 修復 → 驗證）：</p>
+<h3 id="v270-phase-e-ll">⛔ 明確禁止清單（v2.7.0 Phase .e LL 固化）<a class="headerlink" href="#v270-phase-e-ll" title="Permanent link">&para;</a></h3>
+<p>以下操作在 FUSE 環境下<strong>確認會壞事</strong>，一律禁用：</p>
+<table>
+<thead>
+<tr>
+<th>禁用</th>
+<th>根因</th>
+<th>正確做法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cp .git/index /tmp/xxx</code> + <code>GIT_INDEX_FILE=/tmp/xxx git commit-tree</code></td>
+<td>FUSE 側 <code>.git/index</code> 永遠是 stale 的；temp index + commit-tree 產出的 tree 物件不含真實修改 → push 後遠端看到空 commit</td>
+<td>所有 git add/commit/push <strong>必須從 Windows 側執行</strong>：<code>scripts/ops/win_git_escape.bat</code> 或 <code>cd C:\Users\&lt;USER&gt;\vibe-k8s-lab &amp;&amp; git add ... &amp;&amp; git commit --no-verify -F _msg.txt &amp;&amp; git push</code></td>
+</tr>
+<tr>
+<td><code>docker exec vibe-dev-container git add ...</code>（在 FUSE mount 上）</td>
+<td>Dev Container bind-mount 看到的是 FUSE 側的 <code>.git/</code>，index 讀取在 stat cache 層可能不一致；與 Windows 側併用時會互踩 index lock</td>
+<td>git write 操作全集中在 <strong>Windows 原生 git</strong>；Dev Container 只做 <code>git log</code> / <code>git status</code> / Go test / pre-commit 等唯讀或可重跑的操作</td>
+</tr>
+<tr>
+<td><code>.bat</code> 檔案內含 CJK 註解或字串（e.g. 中文的 <code>rem</code>）</td>
+<td>Desktop Commander <code>start_process</code> 讀取 <code>.bat</code> 的 encoding 不一致 → batch parser 看到截斷指令；<code>cmd /c</code> 間接呼叫同樣失敗</td>
+<td><code>.bat</code> 內<strong>全 ASCII 註解與字串</strong>；CJK 內容只放對應 <code>.md</code> playbook。範例：<code>win_git_escape.bat</code> 在 commit <code>e55d9af</code> 已改全英文註解 🛡️（詳見 <a href="#已知陷阱速查">陷阱 #45</a>）</td>
+</tr>
+<tr>
+<td>任何 git 子命令的 <code>-i</code> / <code>--interactive</code> flag</td>
+<td>MCP shell 無法開啟編輯器；rebase/add/commit 會 hang 直到 timeout</td>
+<td>用非互動替代：<code>git -c sequence.editor=true -c core.editor=true rebase --autosquash</code>、<code>git commit -F file.txt</code>、<code>git rm --cached</code> 直接下 path（詳見 <a href="#已知陷阱速查">陷阱 #41</a>）</td>
+</tr>
+<tr>
+<td>從 FUSE 側用 <code>rm -f .git/*.lock</code> 清 phantom lock</td>
+<td>FUSE dentry cache 薛丁格態：<code>ls</code> 看得到、<code>unlink</code> 回 EPERM；清了也只是假象</td>
+<td>用 <code>bash scripts/session-guards/git_check_lock.sh --clean</code>（會自動偵測並給出正確動作建議）；真正清不掉時走 Windows MCP <code>Remove-Item</code> 或 §修復層 B Level 6 rename-trick</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>決策助記</strong>：FUSE 側可以 <strong>read</strong> (stat/cat/diff)，但一切會<strong>寫 NTFS metadata</strong> 的操作（commit / add / lock acquire / 清 lock）都走 Windows 原生 git。</p>
+</blockquote>
+<h3 id="lock">預防層：降低 Lock 發生機率<a class="headerlink" href="#lock" title="Permanent link">&para;</a></h3>
+<p><strong>1. VS Code Git 開關（專案級，不影響其他專案）</strong></p>
+<p>✅ <strong>已自動化（v2.8.0）</strong>：<code>scripts/session-guards/session-init.py</code> PreToolUse hook 在每個 Claude Code session 第一次 <code>Bash</code>/<code>Edit</code>/<code>Write</code> 呼叫時自動跑 <code>vscode_git_toggle off</code>，後續同 session 為 O(1) no-op；不需要手動 invoke。詳見 repo root <code>CLAUDE.md</code> §Agent 起手式。</p>
+<p>僅以下情境需手動：(a) 非 Claude Code 的人類 dev session；(b) hook 失效偵錯；(c) session 結束後恢復 IDE 體驗：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>python<span class="w"> </span>scripts/session-guards/vscode_git_toggle.py<span class="w"> </span>off<span class="w">    </span><span class="c1"># 關</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>python<span class="w"> </span>scripts/session-guards/vscode_git_toggle.py<span class="w"> </span>on<span class="w">     </span><span class="c1"># 開</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>python<span class="w"> </span>scripts/session-guards/vscode_git_toggle.py<span class="w">        </span><span class="c1"># 查看</span>
+</code></pre></div>
+<p>切換靠 VS Code hot-reload <code>.vscode/settings.json</code>，立即生效。<code>session-init</code> telemetry 寫到 <code>~/.cache/vibe/session-init.log</code>（Windows <code>%LOCALAPPDATA%\vibe\</code>）。</p>
+<p><strong>2. Git Config FUSE 調校（路徑條件式，只影響本 repo）</strong></p>
+<p>安裝 <code>scripts/ops/gitconfig-fuse-tuning.sample</code>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Windows 端：</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>copy<span class="w"> </span>scripts<span class="se">\o</span>ps<span class="se">\g</span>itconfig-fuse-tuning.sample<span class="w"> </span>%USERPROFILE%<span class="se">\g</span>itconfig-fuse-tuning
+</code></pre></div>
+<p>然後在 <code>%USERPROFILE%\.gitconfig</code> 加入：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="k">[includeIf &quot;gitdir:C:/Users/&lt;USERNAME&gt;/vibe-k8s-lab/&quot;]</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">    </span><span class="na">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">~/gitconfig-fuse-tuning</span>
+</code></pre></div>
+<blockquote>
+<p>將 <code>&lt;USERNAME&gt;</code> 替換為你的 Windows 使用者名稱。路徑用正斜線 <code>/</code>、結尾需有 <code>/</code>。</p>
+</blockquote>
+<p>效果：<code>fsmonitor=false</code> + <code>trustctime=false</code> + <code>untrackedCache=false</code> + <code>filesRefLockTimeout=1500</code>，只在本 repo 生效。</p>
+<p><strong>3. Windows 端降噪</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c"># Defender 排除 .git/ 即時掃描（以系統管理員執行）</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="nb">Add-MpPreference</span> <span class="n">-ExclusionPath</span> <span class="s2">&quot;C:\Users\&lt;USERNAME&gt;\vibe-k8s-lab\.git&quot;</span>
+</code></pre></div>
+<h3 id="lock_1">診斷層：遇到 Lock 時的安全處理<a class="headerlink" href="#lock_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># 診斷（不刪除，只報告）</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>bash<span class="w"> </span>scripts/session-guards/git_check_lock.sh
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="c1"># 診斷 + 清理（只清 &gt;30s 且無活躍 git process 的 stale lock）</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>bash<span class="w"> </span>scripts/session-guards/git_check_lock.sh<span class="w"> </span>--clean
+</code></pre></div>
+<p>若 Cowork VM 無法刪除（<code>Operation not permitted</code>），腳本會輸出對應的 Windows MCP 指令。</p>
+<h3 id="line-ending">跨平台 Line Ending<a class="headerlink" href="#line-ending" title="Permanent link">&para;</a></h3>
+<p><code>.gitattributes</code> 確保 repo 內一律 LF，避免 CRLF/LF 混用在 FUSE 上造成額外的 diff 雜訊和 index 更新。</p>
+<h3 id="v280-resilience-toolingpr-44-session-resilience-token-economy-bundle">v2.8.0 Resilience Tooling（PR #44 session resilience + token economy bundle）<a class="headerlink" href="#v280-resilience-toolingpr-44-session-resilience-token-economy-bundle" title="Permanent link">&para;</a></h3>
+<p><code>win_git_escape.bat</code> 是 FUSE 側卡死時的 <strong>大逃生門</strong>（需要 Windows-MCP 可用）。PR #44 加了一組更細顆粒度、<strong>從 sandbox 側就能跑</strong> 的工具，涵蓋 index 損壞 / phantom lock / commit-msg 驗證 / pre-push gate 四類 session resilience 問題。</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>解決的具體問題</th>
+<th>典型呼叫</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scripts/ops/fuse_plumbing_commit.py</code></td>
+<td><code>.git/index</code> 鎖住 / phantom 或 partially-corrupt 時仍需 commit — 用 git plumbing (<code>hash-object</code> → <code>update-index --cacheinfo</code> → <code>write-tree</code> → <code>commit-tree</code> → 直寫 <code>refs/heads/&lt;branch&gt;</code>) 走下去，完全不觸發 <code>.git/index.lock</code> 路徑</td>
+<td><code>python3 scripts/ops/fuse_plumbing_commit.py --auto --msg _msg.txt &lt;files...&gt;</code>（<code>--auto</code> 偵測 phantom lock 後自動選 plumbing path）</td>
+</tr>
+<tr>
+<td><code>scripts/ops/recover_index.sh</code></td>
+<td><code>.git/index</code> 已經 corrupt 或寫入一半；用 <code>git read-tree HEAD</code> 在 tmp 產生新 index，<strong>以 atomic cp+rename 換掉 <code>.git/index</code></strong>（同 FS 上的 rename 才保證原子性 — trap EXIT 清 staging 檔）</td>
+<td><code>bash scripts/ops/recover_index.sh</code>（或 <code>make recover-index</code>）</td>
+</tr>
+<tr>
+<td><code>make fuse-locks</code></td>
+<td>列出 <code>.git/*.lock</code> 殘留、每個 lock 的 age / holder process / FUSE phantom 狀態</td>
+<td><code>make fuse-locks</code></td>
+</tr>
+<tr>
+<td><code>make fuse-commit MSG=_msg.txt FILES="a b"</code></td>
+<td>前項 <code>fuse_plumbing_commit.py --auto</code> 的 Make 封裝</td>
+<td><code>make fuse-commit MSG=_msg.txt FILES="scripts/ops/x.sh docs/y.md"</code></td>
+</tr>
+<tr>
+<td><code>scripts/hooks/commit-msg</code></td>
+<td>Conventional Commits <strong>本地驗證</strong>（不依賴 PyYAML，手解 <code>.commitlintrc.yaml</code> 的 <code>type-enum</code> / <code>scope-enum</code>）— 讓 Windows 側 <code>--no-verify</code> 的 commit 仍有 commit-msg gate</td>
+<td><code>git commit -F _msg.txt</code>（hook 自動觸發；session-init hook 會 auto-install）</td>
+</tr>
+<tr>
+<td><code>scripts/tools/dx/pr_preflight.py</code></td>
+<td>pre-push marker 寫 <code>.git/.preflight-ok.&lt;SHA&gt;</code>；<strong>狀態感知</strong>：透過 <code>gh pr view &lt;branch&gt;</code> 判斷 PR 狀態，OPEN PR 時 <code>require_preflight_pass.sh</code> 才擋，WIP 允許 push 觸發 CI smoke</td>
+<td><code>make pr-preflight</code>（pre-push hook 自動 consume marker）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>什麼時候用哪一條</strong>（決策助記）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>git commit 失敗，錯誤訊息是 ...
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>│
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>├─ &quot;Unable to create &#39;.git/index.lock&#39;: File exists&quot;
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>│   └─ 先跑 `bash scripts/session-guards/git_check_lock.sh --clean`；
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>│      清不掉 → `make fuse-locks` 看 phantom 狀態；
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>│      仍卡 → `python3 scripts/ops/fuse_plumbing_commit.py --auto --msg &lt;file&gt; &lt;paths&gt;`（繞過 index.lock）
+<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>│
+<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>├─ &quot;fatal: index file corrupt&quot;（或 `git status` 讀 index 崩）
+<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>│   └─ `make recover-index`（atomic 重建 `.git/index` from HEAD tree）→ 再跑 `git status`
+<a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a>│
+<a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a>├─ Commit message 被 commitlint 打回（本地沒裝 commitlint 而不自覺）
+<a id="__codelineno-25-12" name="__codelineno-25-12" href="#__codelineno-25-12"></a>│   └─ 自家 `scripts/hooks/commit-msg`（session-init 已自動 install）跑 `.commitlintrc.yaml` 的 type/scope 驗證
+<a id="__codelineno-25-13" name="__codelineno-25-13" href="#__codelineno-25-13"></a>│
+<a id="__codelineno-25-14" name="__codelineno-25-14" href="#__codelineno-25-14"></a>└─ pre-push hook 說 &quot;preflight marker missing&quot;，但 branch 是 WIP 還沒開 PR
+<a id="__codelineno-25-15" name="__codelineno-25-15" href="#__codelineno-25-15"></a>    └─ v2.8.0 後：`require_preflight_pass.sh` 用 `gh pr view &lt;branch&gt;` 判 PR 狀態；
+<a id="__codelineno-25-16" name="__codelineno-25-16" href="#__codelineno-25-16"></a>       OPEN 才擋，WIP 直接放行 → 適合快速 push 觸發 CI smoke
+</code></pre></div>
+<blockquote>
+<p><strong>為什麼 plumbing 路徑可以繞 phantom lock</strong>：git porcelain (<code>git commit</code>) 一定會 acquire <code>.git/index.lock</code>；plumbing 直接操作 object database + refs — <code>hash-object</code> 寫 blob 到 <code>.git/objects/</code>（新檔，無 lock 爭用），<code>write-tree</code> / <code>commit-tree</code> 寫 tree &amp; commit 物件（同理），最後只 <code>echo &lt;sha&gt; &gt; .git/refs/heads/&lt;branch&gt;</code>（單檔 atomic write）。完全不觸發 <code>.git/index.lock</code>。</p>
+<p><strong>為什麼 <code>recover_index.sh</code> 要 cp-to-sibling + mv，而不是直接 <code>git read-tree</code> 就好</strong>：<code>git read-tree</code> 本身也會嘗試 acquire <code>.git/index.lock</code>；若 phantom lock 還在、或 VFS 不允許 <code>rename(tmp_outside_gitdir, .git/index)</code> 跨 device/FS，會直接 EPERM。正確做法是先在 <code>.git/</code> 內用 <code>cp "$TMP_IDX" "$INDEX.recover.$$"</code> 做 staging（同 FS），再 <code>mv "$INDEX.recover.$$" "$INDEX"</code> 原子換過去；<code>trap 'rm -f ...' EXIT</code> 保證半成品會被清乾淨。</p>
+</blockquote>
+<h3 id="pre-commit-unstaged-stash-recoverys31-s86-codify">Pre-commit unstaged-stash recovery（S#31, S#86 codify）<a class="headerlink" href="#pre-commit-unstaged-stash-recoverys31-s86-codify" title="Permanent link">&para;</a></h3>
+<p>當 pre-commit hook 中途被 kill（FUSE phantom hang / Popen pipe deadlock /
+Ctrl-C / OOM），有時 unstaged changes 不會自動 restore — 看起來「我的修改不見了」。</p>
+<p>這個情境<strong>不需要重做修改</strong>：pre-commit 在執行 hook 前會把 unstaged changes
+patch backup 寫到 <code>~/.cache/pre-commit/patch{TIMESTAMP}-{PID}</code>（每次 hook
+執行都產生一份），即使後續 hook 崩潰也保留下來。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># 1. 找最新的 patch backup（按 mtime 排序）</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>ls<span class="w"> </span>-lt<span class="w"> </span>~/.cache/pre-commit/patch*<span class="w"> </span><span class="p">|</span><span class="w"> </span>head<span class="w"> </span>-3
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="c1"># 2. 預覽要還原的內容（dry-run 確認方向對）</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>git<span class="w"> </span>apply<span class="w"> </span>--check<span class="w"> </span>~/.cache/pre-commit/patch1234567890-12345
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="c1"># 3. 套用還原</span>
+<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>git<span class="w"> </span>apply<span class="w"> </span>~/.cache/pre-commit/patch1234567890-12345
+</code></pre></div>
+<blockquote>
+<p><strong>與既有工具的關係</strong>：<code>make fuse-locks</code> / <code>make recover-index</code> 處理 <code>.git/</code>
+端的 lock / index 損壞；本路徑處理 <strong>work tree 端的 unstaged-changes 遺失</strong>，
+互補不重疊。三者並列是 hook-hang 後 full recovery 三件套。</p>
+<p><strong>保留期限</strong>：pre-commit 預設不主動清這些 patch backup（檔案會堆積），
+確認復原後可手動 <code>rm ~/.cache/pre-commit/patch*</code> 清掉。Cowork VM 上
+<code>~/.cache/</code> 是 ephemeral，session reset 也會清掉（所以救援動作要在同 session 內做完）。</p>
+</blockquote>
+<h3 id="bfuse-cache-level-1-5">修復層 B：FUSE Cache 重建（Level 1 ~ 5）<a class="headerlink" href="#bfuse-cache-level-1-5" title="Permanent link">&para;</a></h3>
+<p>殘影 / phantom lock 反覆 / <code>rm</code> 過的檔案還看得到 / index 與磁碟內容對不上時，輕→重逐層走。每層原由與設計脈絡 → <a href="../archive/automation-origins/fuse-cache-recovery/"><code>archive/automation-origins/fuse-cache-recovery.md</code></a>。</p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>動作</th>
+<th>Codified</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>sync; echo 2 \| sudo tee /proc/sys/vm/drop_caches</code>（VM kernel cache；常無 sudo）</td>
+<td>✅ <code>make fuse-reset</code> 串</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>最實用</strong>：Cowork 桌面 UI 把 workspace 取消再重選 → FUSE driver per-session cold start（解 9 成殘影）</td>
+<td>⛔ 需手動 UI 操作</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Windows 端清壓著 inode 的 process：(a) <code>vscode_git_toggle off</code> (b) <code>git_check_lock.sh --clean</code> (c) <code>Stop-Process Code, git, pre-commit</code></td>
+<td>✅ <code>make fuse-reset</code> 串 a/b/c</td>
+</tr>
+<tr>
+<td>4</td>
+<td>核彈：<code>make session-cleanup</code> → 關 Cowork 桌面、重開、開新 session</td>
+<td>✅ make target</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Sysinternals <code>handle64.exe -nobanner vibe-k8s-lab</code> 找壓 inode 的 PID → <code>Stop-Process -Id &lt;PID&gt; -Force</code>；仍殘 → <code>chkdsk C: /scan</code></td>
+<td>⛔ admin tool</td>
+</tr>
+</tbody>
+</table>
+<p><strong>建議順序</strong>：<code>make fuse-reset</code> → Level 2 unmount-remount → <code>make session-cleanup</code> → Level 5。<strong>驗證</strong>：<code>ls -la .git/ \| grep -E 'lock\|index'</code> 應無 <code>*.lock</code> + <code>git status -sb</code> 應無殘影。</p>
+<p><strong>Level 6 — rename-trick</strong> ✅ <strong>superseded by Trap #44 + Windows 逃生門</strong></p>
+<p>當 Level 1–5 全部不可用時，原本的 fallback 是 Cowork VM 內走 <code>os.rename</code>-over-phantom 的繞道。v2.8.0 起此路徑已被 Trap #44 結論「phantom 薛丁格態唯一可靠解法 = <code>win_git_escape.bat</code> 走 Windows 原生 git」與 PR #44 plumbing 逃生門（<code>scripts/ops/fuse_plumbing_commit.py</code> / <code>make recover-index</code>）取代。原 RCA + 2026-04-10 case study + Python 範例 → <a href="../archive/automation-origins/fuse-rename-trick/"><code>archive/automation-origins/fuse-rename-trick.md</code></a>。</p>
+<h3 id="git">Git 操作決策樹<a class="headerlink" href="#git" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>Git 操作入口
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>│
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>├─ 1. make git-preflight（每次 git 操作前必跑）
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>│  ├─ ✅ 成功 → 在 Cowork VM / Dev Container 正常操作
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>│  └─ ❌ 失敗（lock 清不掉）
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>│     │
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a>│     ├─ 2. make fuse-reset（等 10 秒）
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>│     │  ├─ ✅ 成功 → 正常操作
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a>│     │  └─ ❌ 仍失敗
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a>│     │     │
+<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a>│     │     ├─ 3. Windows 逃生門
+<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a>│     │     │  └─ scripts/ops/win_git_escape.bat &lt;command&gt;
+<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a>│     │     │     不要重新造輪子寫腳本！
+<a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a>│     │     │
+<a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a>│     │     └─ 4. 連 Windows 也失敗 → 回報使用者，不要無限重試
+<a id="__codelineno-27-16" name="__codelineno-27-16" href="#__codelineno-27-16"></a>│     │
+<a id="__codelineno-27-17" name="__codelineno-27-17" href="#__codelineno-27-17"></a>│     ⚠️ 嘗試上限：每層最多重試 2 次，總計不超過 5 分鐘
+</code></pre></div>
+<h3 id="_6">三層環境職責矩陣<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>主路徑：Dev Container</th>
+<th>備援：Cowork VM</th>
+<th>逃生門：Windows Native</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Code editing</td>
+<td>✅</td>
+<td>✅ Read+Edit</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Go test</td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Python test</td>
+<td>✅</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>git add/commit</td>
+<td>✅</td>
+<td>⚠️ FUSE 風險</td>
+<td>✅ <code>win_git_escape.bat</code></td>
+</tr>
+<tr>
+<td>git push</td>
+<td>✅</td>
+<td>⚠️ FUSE 風險</td>
+<td>✅ <code>win_git_escape.bat</code></td>
+</tr>
+<tr>
+<td>git tag</td>
+<td>✅</td>
+<td>⚠️ FUSE 風險</td>
+<td>✅ <code>win_git_escape.bat</code></td>
+</tr>
+<tr>
+<td>gh pr create / pr checks / run view</td>
+<td>✅</td>
+<td>❌ gh 不在 VM</td>
+<td>✅ <code>win_gh.bat</code>（推薦） / <code>win_git_escape.ps1</code>（legacy）</td>
+</tr>
+<tr>
+<td>pre-commit</td>
+<td>✅</td>
+<td>✅</td>
+<td>❌ 環境不完整</td>
+</tr>
+<tr>
+<td>Helm / K8s</td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>設計原則</strong>：Dev Container 是主路徑。FUSE 卡死時 Windows 是逃生門。目標是不讓 session 卡死。</p>
+</blockquote>
+<h3 id="cwindows-git-fallbackfuse">修復層 C：Windows 原生 Git Fallback（FUSE 側卡死時的備援路徑）<a class="headerlink" href="#cwindows-git-fallbackfuse" title="Permanent link">&para;</a></h3>
+<p>FUSE 側 git 操作反覆卡住、或 pre-commit hook 在 FUSE mount 上一直踩到 index lock 時，<strong>Windows 原生 cmd/PowerShell 是第二條可走的路徑</strong>。</p>
+<p><strong>⛔⛔⛔ 鐵則：絕對不要自己寫 <code>_*.bat</code> / <code>_*.ps1</code> 腳本。</strong></p>
+<p>PR #39 寫了 1 個 <code>_p39_commit.ps1</code>。PR #40 寫了 5 個 <code>_p40_*.bat|.ps1</code>。每次都 reinvent wheel、每次都踩新坑、每次都留下 cleanup burden。<strong>PR #41 (v2.8.0) 起，<code>scripts/tools/lint/check_ad_hoc_git_scripts.py</code> (L1 pre-commit hook) 會 physically block</strong> 任何在 <code>scripts/ops/</code>、<code>scripts/tools/</code>、<code>tools/</code> 之外的 <code>*.bat</code>/<code>*.ps1</code>/<code>*.cmd</code>。這是 whitelist（不是 blacklist regex），不能用新動詞繞過。</p>
+<p><strong>已有的標準化逃生門工具</strong>（Agent session 用這些，不要寫新的）：</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>用途</th>
+<th>典型呼叫</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scripts/ops/win_git_escape.bat</code></td>
+<td>Git 操作（FUSE 卡死時的主路徑）</td>
+<td><code>status\|add\|commit-file\|push\|tag\|branch\|log\|diff\|preflight\|pr-preflight\|fix-hooks</code></td>
+</tr>
+<tr>
+<td><code>scripts/ops/win_gh.bat</code></td>
+<td>GitHub CLI（MCP-friendly 短路徑 + CRLF + ASCII）<strong>v2.8.0 新增</strong></td>
+<td><code>pr-checks [PR#]\|pr-view [PR#]\|pr-create &lt;flags&gt;\|run-view &lt;ID&gt;\|run-log &lt;ID&gt;\|raw &lt;args&gt;</code></td>
+</tr>
+<tr>
+<td><code>scripts/ops/win_git_escape.ps1</code></td>
+<td>GitHub 操作（Release 流程用，保留 legacy）</td>
+<td><code>pr-create\|pr-list\|ci-status\|release-create</code></td>
+</tr>
+<tr>
+<td><code>make win-commit</code></td>
+<td>Hook-gated commit（sandbox pre-commit + Windows git 三步）</td>
+<td><code>make win-commit MSG=_msg.txt FILES="a b"</code></td>
+</tr>
+<tr>
+<td><code>scripts/ops/run_hooks_sandbox.sh</code></td>
+<td>Sandbox 側 pre-commit gate（補 Windows 側 <code>--no-verify</code> 漏洞）</td>
+<td><code>bash scripts/ops/run_hooks_sandbox.sh a.md b.yaml</code></td>
+</tr>
+<tr>
+<td><code>scripts/ops/win_async_exec.ps1</code></td>
+<td>MCP 60s timeout 繞道（派工 + poll log）</td>
+<td><code>-Command "..." -LogFile _out.log</code></td>
+</tr>
+<tr>
+<td><code>scripts/ops/win_read_fresh.ps1</code></td>
+<td>FUSE dentry cache bypass</td>
+<td><code>-Path &lt;src&gt; -OutFile &lt;dest&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>子命令缺失？擴充現有 wrapper，不要寫 sibling script。</strong> <code>win_git_escape.bat</code> / <code>win_gh.bat</code> 都有 <code>raw &lt;args&gt;</code> 逃生門可以塞任意命令。真的需要新 subcommand 就開 PR 加進去，下次 session 才能重複使用。</p>
+</blockquote>
+<p>工作模式：</p>
+<table>
+<thead>
+<tr>
+<th>操作類型</th>
+<th>走哪邊</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>檔案 Read/Edit/Write</td>
+<td>Claude 的檔案 tool（走 FUSE mount）</td>
+<td>雙向可見、原子寫入</td>
+</tr>
+<tr>
+<td><code>git status</code> / <code>git add</code> / <code>git commit</code> / <code>git push</code></td>
+<td><code>win_git_escape.bat</code> → Windows 原生 git</td>
+<td>git index lock 寫在 Windows NTFS，不走 FUSE metadata</td>
+</tr>
+<tr>
+<td>Hook-gated commit（pre-commit + stage + commit-file + push）</td>
+<td><code>make win-commit MSG=... FILES=... [SKIP=...]</code></td>
+<td>分層：sandbox 跑 hook-gate，Windows 跑 git；Windows 端 <code>--no-verify</code> 是內部實作（陷阱 #36）</td>
+</tr>
+<tr>
+<td><code>gh pr create</code> / <code>gh run list</code></td>
+<td><code>win_git_escape.ps1</code> → Windows 原生 gh</td>
+<td>gh CLI 不在 Cowork VM 內</td>
+</tr>
+<tr>
+<td>預期 &gt; 60s 的命令（<code>gh pr checks</code>、大型 <code>git push</code>、pre-push 全量 hook）</td>
+<td><code>win_async_exec.ps1</code> → fire-and-forget + poll log</td>
+<td>避開 MCP RPC 60s timeout（陷阱 #47）</td>
+</tr>
+<tr>
+<td>剛被 Windows 側修改的檔案需 sandbox 側讀</td>
+<td><code>win_read_fresh.ps1</code> → Win32 ReadAllBytes → 新 inode</td>
+<td>繞過 FUSE dentry cache（陷阱 #44）</td>
+</tr>
+<tr>
+<td>pre-commit 執行（手動跑）</td>
+<td>推薦走 <code>run_hooks_sandbox.sh</code>（sandbox），或 Windows 原生 Python + <code>python -m pre_commit</code></td>
+<td>sandbox 路徑無 FUSE stat 延遲、無 <code>.git/index</code> 風險</td>
+</tr>
+</tbody>
+</table>
+<p>兩端共用同一份工作樹，但 git 的檔案鎖、pre-commit 的 hook cache 都在 NTFS 上，不受 FUSE phantom lock 影響。</p>
+<p><strong>Batch 起手式模板</strong>（含所有必填 env，複製即用）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="p">@</span><span class="k">echo</span> off
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="k">setlocal</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="k">set</span> <span class="s2">&quot;PATH=C:\Users\&lt;USER&gt;\AppData\Local\Python\bin;C:\Program Files\Git\cmd;C:\Program Files\Git\usr\bin;C:\Windows\System32;C:\Windows;</span><span class="nv">%PATH%</span><span class="s2">&quot;</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="k">set</span> <span class="s2">&quot;PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW&quot;</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="k">set</span> <span class="s2">&quot;PYTHONUTF8=1&quot;</span>
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="k">set</span> <span class="s2">&quot;PYTHONIOENCODING=utf-8&quot;</span>
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="k">set</span> <span class="s2">&quot;GIT_TERMINAL_PROMPT=0&quot;</span>
+<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a><span class="k">cd</span> /d C:\Users\<span class="p">&lt;</span>USER<span class="p">&gt;</span>\vibe-k8s-lab
+<a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a>
+<a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a><span class="p">:</span><span class="c1">: 所有輸出一律重導到檔案 — MCP stdout 擷取不可靠</span>
+<a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a>git status -sb <span class="p">&gt;</span> C:\Users\<span class="p">&lt;</span>USER<span class="p">&gt;</span>\vibe-k8s-lab\_out.log <span class="mi">2</span><span class="p">&gt;&amp;</span><span class="mi">1</span>
+</code></pre></div>
+<p>然後用 Claude 的 <code>Read</code> tool 讀 <code>_out.log</code>。<strong>不要</strong>用 <code>(echo ... &amp; echo ...)</code> parenthesized group 包 echo（會被 <code>%PATH%</code> 裡 NVIDIA 路徑的閉括號拆掉，見陷阱 #35）。</p>
+<p><strong>PowerShell 模式</strong>（需要 <code>$LASTEXITCODE</code> 或複雜物件處理時）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nv">$git</span> <span class="p">=</span> <span class="s1">&#39;C:\Program Files\Git\cmd\git.exe&#39;</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="nb">Start-Process</span> <span class="n">-FilePath</span> <span class="nv">$git</span> <span class="n">-ArgumentList</span> <span class="s1">&#39;ls-remote&#39;</span><span class="p">,</span><span class="s1">&#39;origin&#39;</span><span class="p">,</span><span class="s1">&#39;HEAD&#39;</span> <span class="p">`</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>  <span class="n">-NoNewWindow</span> <span class="n">-Wait</span> <span class="p">`</span>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>  <span class="n">-RedirectStandardOutput</span> <span class="s1">&#39;C:\Users\&lt;USER&gt;\vibe-k8s-lab\_lsr.txt&#39;</span> <span class="p">`</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>  <span class="n">-RedirectStandardError</span>  <span class="s1">&#39;C:\Users\&lt;USER&gt;\vibe-k8s-lab\_lsr_err.txt&#39;</span>
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="nb">Get-Content</span> <span class="n">C</span><span class="p">:\</span><span class="n">Users</span><span class="p">\&lt;</span><span class="n">USER</span><span class="p">&gt;\</span><span class="n">vibe-k8s-lab</span><span class="p">\</span><span class="n">_lsr</span><span class="p">.</span><span class="n">txt</span>
+</code></pre></div>
+<p>用 <code>Start-Process -NoNewWindow -Wait</code> 比 <code>&amp; $git args 2&gt;&amp;1 | Tee-Object</code> 穩得多——後者在 MCP session 下常拿不到 <code>$LASTEXITCODE</code>。</p>
+<p><strong>驗證 push 成功的唯一可靠方法</strong>（陷阱 #33：MCP runtime 不可信）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c"># 跑完 git push 之後，不看 MCP 回報的 runtime/exit，改問遠端</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="nb">Start-Process</span> <span class="n">-FilePath</span> <span class="nv">$git</span> <span class="n">-ArgumentList</span> <span class="s1">&#39;ls-remote&#39;</span><span class="p">,</span><span class="s1">&#39;origin&#39;</span><span class="p">,</span><span class="s1">&#39;HEAD&#39;</span> <span class="p">`</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>  <span class="n">-NoNewWindow</span> <span class="n">-Wait</span> <span class="n">-RedirectStandardOutput</span> <span class="n">_lsr</span><span class="p">.</span><span class="n">txt</span>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c"># 比對 _lsr.txt 裡的 SHA 是否 == 本地 HEAD</span>
+</code></pre></div>
+<p><strong>Auth 路徑切換</strong>：若 <code>~/.ssh/</code> 沒有 private key，但 <code>git config credential.helper</code> 是 <code>manager</code>（Git Credential Manager）、且 Windows Credential Manager 有存 <code>git:https://x-access-token@github.com</code> 這種憑證，則臨時切 HTTPS 讓 GCM 自動帶 token：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>git remote set-url origin https://github.com/<span class="p">&lt;</span>owner<span class="p">&gt;</span>/<span class="p">&lt;</span>repo<span class="p">&gt;</span>.git
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>git push origin main
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>git remote set-url origin git@github.com:<span class="p">&lt;</span>owner<span class="p">&gt;</span>/<span class="p">&lt;</span>repo<span class="p">&gt;</span>.git
+</code></pre></div>
+<p><strong>pre-push hook 相容性</strong>：pre-commit 產生的 <code>.git/hooks/pre-push</code> 會寫死 Linux python 路徑，修法見上方陷阱 #36。</p>
+<h3 id="c1escape-helpersmcp-60s-timeout-fuse-cache-bypass">修復層 C.1：Escape Helpers（MCP 60s timeout + FUSE cache bypass）<a class="headerlink" href="#c1escape-helpersmcp-60s-timeout-fuse-cache-bypass" title="Permanent link">&para;</a></h3>
+<p>逃生門路徑本身還會踩到兩類環境問題：</p>
+<ol>
+<li><strong>MCP PowerShell 60 秒硬 timeout</strong> — 任何同步執行（即使 <code>Start-Process -PassThru</code> 取 PID）只要 MCP RPC 還沒回應就會被截斷（陷阱 #47）。<code>gh pr checks</code>、大型 <code>git push</code>、pre-push 全量 hook 都會中招。</li>
+<li><strong>FUSE dentry / attribute cache</strong> — Windows 側剛寫完的檔案，sandbox 側 <code>Read</code> tool 可能仍拿 stale 內容（陷阱 #44、#52）；CI log、pre-commit hook 寫回的檔案尤其常見。</li>
+</ol>
+<p>為此打包了 4 個 helper，取代自己寫一次性 PowerShell snippet：</p>
+<table>
+<thead>
+<tr>
+<th>Helper</th>
+<th>解決問題</th>
+<th>典型用法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scripts/ops/win_async_exec.ps1</code></td>
+<td>MCP 60s timeout</td>
+<td>派工 → 拿 PID → sandbox 側輪詢 log 檔案</td>
+</tr>
+<tr>
+<td><code>scripts/ops/win_read_fresh.ps1</code></td>
+<td>FUSE dentry cache</td>
+<td>用 Win32 <code>ReadAllBytes</code> 讀 source → 寫到新 inode（預設 <code>&lt;path&gt;.fresh</code>）</td>
+</tr>
+<tr>
+<td><code>scripts/ops/run_hooks_sandbox.sh</code></td>
+<td>sandbox-side pre-commit gate（補 Windows 側 <code>--no-verify</code> 的漏洞）</td>
+<td><code>bash scripts/ops/run_hooks_sandbox.sh a.md b.yaml</code></td>
+</tr>
+<tr>
+<td><code>make win-commit</code></td>
+<td>包 hook-gate + <code>win_git_escape.bat</code> 三步（pre-commit → add → commit-file → push）</td>
+<td><code>make win-commit MSG=_msg.txt FILES="a b" SKIP=head-blob-hygiene</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="1-win_async_execps1-fire-and-forget">1. <code>win_async_exec.ps1</code> — fire-and-forget<a class="headerlink" href="#1-win_async_execps1-fire-and-forget" title="Permanent link">&para;</a></h4>
+<p>解決陷阱 #47 的根因：MCP RPC 不等 <code>Start-Process</code> 回來就會 timeout。這個 helper <code>Start-Process -WindowStyle Hidden -PassThru</code> 後立即輸出 <code>ASYNC PID=&lt;pid&gt; LOG=&lt;path&gt;</code>（grep-friendly 格式），MCP 呼叫馬上返回。</p>
+<p>三段式流程：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c"># 1. Windows 側派工（MCP 馬上拿回 PID，不會 timeout）</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="p">.\</span><span class="n">scripts</span><span class="p">\</span><span class="n">ops</span><span class="p">\</span><span class="n">win_async_exec</span><span class="p">.</span><span class="n">ps1</span> <span class="p">`</span>
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>  <span class="n">-Command</span> <span class="s2">&quot;gh pr checks 27&quot;</span> <span class="p">`</span>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a>  <span class="n">-LogFile</span> <span class="n">_pr</span><span class="p">.</span><span class="n">log</span>
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="c"># 輸出: ASYNC PID=12345 LOG=C:\...\_pr.log</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="c1"># 2. Sandbox 側輪詢 log（MCP timeout 不是問題，bash sleep 是 sandbox 本地）</span>
+<a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>sleep<span class="w"> </span><span class="m">10</span>
+<a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="c1"># 3. 用 Read tool 讀最終結果</span>
+</code></pre></div>
+<p>Parameters 設計：
+- <code>-Command</code>（必填）：cmd.exe 解析，可直接寫 pipeline（<code>script1.bat &amp;&amp; script2.bat</code>）
+- <code>-LogFile</code>：預設 <code>%TEMP%\vibe-async-&lt;timestamp&gt;.log</code>；已存在會被覆寫避免舊內容誤導
+- <code>-PidFile</code>：選填；寫入 child PID 方便後續 kill / 檢查
+- <code>-WorkingDirectory</code>：預設當前目錄，推薦傳絕對路徑（例：<code>C:\Users\&lt;USER&gt;\vibe-k8s-lab</code>）</p>
+<p>⚠️ <strong>Caveat — nested quote 含 <code>(</code> / <code>+</code> 會被 cmd /c 吞掉（見陷阱 #53）</strong>：
+<code>-Command</code> 最終交給 <code>cmd.exe /c</code>，如果你傳的命令內含有<strong>雙層引號</strong> + 括號或運算符號（如 <code>gh pr create --title "docs: promote X to SSOT + retire Y (v2.9.0+)"</code>），cmd 的 parenthesis / operator parser 會把 title 尾段吃掉，<strong>PR 其實建成功但 title 缺尾</strong>，log 只看到前半截、operator 誤判失敗去重試。<strong>對症解法</strong>：把複雜命令寫成獨立 <code>.ps1</code>，內部用 single-quote variable 宣告完整 title，然後 <code>win_async_exec.ps1 -Command 'powershell -File _pr_make.ps1'</code> 派工。這是 §黃金法則「複雜指令寫成獨立腳本」的具體應用場景（gh PR create / git 大批次 add 等皆適用）。</p>
+<h4 id="2-win_read_freshps1-bypass-fuse-cache">2. <code>win_read_fresh.ps1</code> — bypass FUSE cache<a class="headerlink" href="#2-win_read_freshps1-bypass-fuse-cache" title="Permanent link">&para;</a></h4>
+<p>Windows 側剛修完的檔案（pre-commit hook EOF 換行、CI 剛寫完的 log），sandbox 側 <code>Read</code> tool 可能仍拿舊內容。這個 helper 用 <code>[System.IO.File]::ReadAllBytes()</code>（走 Win32 原生路徑，不走 FUSE）讀取 source，再 <code>WriteAllBytes</code> 到 dest，產生<strong>新 mtime + 新 inode 參照</strong>讓 FUSE 側看到全新 entry。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="c"># 典型用途：讀 CI log 到 sandbox 可見的新 inode</span>
+<a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="p">.\</span><span class="n">scripts</span><span class="p">\</span><span class="n">ops</span><span class="p">\</span><span class="n">win_read_fresh</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Path</span> <span class="n">_pr</span><span class="p">.</span><span class="n">log</span> <span class="n">-OutFile</span> <span class="n">_pr</span><span class="p">.</span><span class="n">fresh</span><span class="p">.</span><span class="n">log</span>
+<a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="c"># 輸出: FRESH SRC=... DEST=... BYTES=1234</span>
+<a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="c"># sandbox: Read _pr.fresh.log（保證不 stale）</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="c"># 快速 dump 小檔到 stdout（&gt; 1MB 自動截斷 + warning）</span>
+<a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="p">.\</span><span class="n">scripts</span><span class="p">\</span><span class="n">ops</span><span class="p">\</span><span class="n">win_read_fresh</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Path</span> <span class="n">docs</span><span class="p">\</span><span class="n">internal</span><span class="p">\</span><span class="n">component-health-snapshot</span><span class="p">.</span><span class="nb">md </span><span class="n">-PrintToStdout</span>
+</code></pre></div>
+<p>單向設計（Windows → sandbox）。反向（sandbox → Windows 寫檔）直接用 <code>Write</code> tool 即可，FUSE write-through 通常即時生效。若某路徑長期 stale 仍不更新，升級到 <a href="#修復層-bfuse-cache-重建level-1-5">§修復層 B Level 1 drop_caches</a> 做全域重建。</p>
+<h4 id="3-run_hooks_sandboxsh-sandbox-side-pre-commit-gate">3. <code>run_hooks_sandbox.sh</code> — sandbox-side pre-commit gate<a class="headerlink" href="#3-run_hooks_sandboxsh-sandbox-side-pre-commit-gate" title="Permanent link">&para;</a></h4>
+<p><code>win_git_escape.bat commit-file</code> 內部跑 <code>git commit --no-verify</code>（陷阱 #36：pre-commit 的 shebang 寫死 Linux python path，Windows 側 git.exe 呼叫 hook 直接 404）。這意味著走 Windows 逃生門時，<strong>本地 pre-commit hooks 完全被繞過</strong>——只剩 CI 接住，但 CI 失敗時你已經 push 上去了。</p>
+<p>這個 wrapper 在 Cowork VM（sandbox）側跑 pre-commit，補上那個漏洞：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>bash<span class="w"> </span>scripts/ops/run_hooks_sandbox.sh<span class="w"> </span>scripts/ops/run_hooks_sandbox.sh<span class="w"> </span>docs/internal/windows-mcp-playbook.md
+<a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="c1"># 輸出: HOOKS STATUS=PASS FILES=2 DURATION=28s</span>
+</code></pre></div>
+<p>為什麼 sandbox 側可行：
+1. <strong>乾淨 ext4</strong>，無 FUSE dentry cache / lock 陷阱
+2. 31 個 auto-stage hook 都是純 Python（+ pyyaml）— 完全不需 docker / Go / Helm
+3. 用 <code>pre-commit run --files</code> 模式，<strong>繞過 pre-commit 的 stash 邏輯</strong>（避開 FUSE 側 <code>.git/index</code> 可能 corrupt 的問題，見規則 #2b）</p>
+<p>輸出格式（grep-friendly 最後一行）：
+- 成功：<code>HOOKS STATUS=PASS FILES=&lt;n&gt; DURATION=&lt;s&gt;s</code>
+- 失敗：<code>HOOKS STATUS=FAIL FILES=&lt;n&gt; DURATION=&lt;s&gt;s LOG=&lt;path&gt;</code></p>
+<h4 id="4-make-win-commit-hook-gated-windows-commit-workflow">4. <code>make win-commit</code> — hook-gated Windows commit workflow<a class="headerlink" href="#4-make-win-commit-hook-gated-windows-commit-workflow" title="Permanent link">&para;</a></h4>
+<p><code>win_git_escape.bat</code> 已經提供 <code>add</code> / <code>commit-file</code> / <code>push</code> 三個子命令，但實際 session 常需三個連著跑，加上 sandbox hook-gate 一共四步。這個 Make target 把它們封成一行：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>make<span class="w"> </span>win-commit<span class="w"> </span><span class="nv">MSG</span><span class="o">=</span>_msg.txt<span class="w"> </span><span class="nv">FILES</span><span class="o">=</span><span class="s2">&quot;scripts/ops/run_hooks_sandbox.sh docs/internal/windows-mcp-playbook.md&quot;</span>
+</code></pre></div>
+<p><strong>執行順序（三階段，每階段失敗即 abort；log 實際印的 label 就是 <code>[1/3]</code> / <code>[2/3]</code> / <code>[3/3]</code>）</strong>：</p>
+<ol>
+<li><strong>[1/3] Sandbox hook gate</strong> — 呼叫 <code>run_hooks_sandbox.sh $(FILES)</code>，失敗就停；緊急繞道：<code>SKIP_HOOKS=1</code></li>
+<li><strong>[2/3] Windows stage + commit</strong> — <code>cmd /c win_git_escape.bat add $(FILES)</code> 後接 <code>commit-file $(MSG)</code>（內部 <code>--no-verify</code>，因 Windows 端 hook 本來就無法執行；add + commit 合併為同一階段、同一 label，不拆 <code>[2/3a]</code> / <code>[2/3b]</code>）</li>
+<li><strong>[3/3] Windows push</strong> — <code>cmd /c win_git_escape.bat push</code>（內部 <code>--no-verify</code> 避開陷阱 #36 的 pre-push hook）</li>
+</ol>
+<p>必填：<code>MSG=&lt;message-file&gt;</code>（UTF-8 without BOM）
+選填：
+- <code>FILES=&lt;space-separated paths&gt;</code>（省略時跳過 hook-gate 和 add，假設已 staged）
+- <code>SKIP=&lt;hook1,hook2&gt;</code>（targeted skip，pre-commit 原生 env var）
+- <code>SKIP_HOOKS=1</code>（緊急完全繞過 sandbox hook-gate，只在 runner 異常時用）</p>
+<p><strong>分層設計（誠實版）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>層</th>
+<th>執行位置</th>
+<th>--no-verify？</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sandbox hook-gate</td>
+<td>Cowork VM（ext4）</td>
+<td>❌ 不繞過</td>
+<td>環境完整，hooks 真的有執行</td>
+</tr>
+<tr>
+<td>Windows git</td>
+<td>Windows（NTFS）</td>
+<td>✅ 內部固定繞過</td>
+<td>陷阱 #36：Windows git.exe 無法呼叫 hook</td>
+</tr>
+</tbody>
+</table>
+<p>換句話說：<strong>hooks 不是被 <code>--no-verify</code> 繞過的，而是移到 sandbox 側跑</strong>。Windows 側的 <code>--no-verify</code> 是內部實作細節，不是設計漏洞。</p>
+<p>其他設計選擇：
+- Message 一律走檔案（<code>commit-file</code> 子命令）— 避開陷阱 #46（cmd 對 em-dash/CJK 引號解析崩潰）
+- Sandbox 側呼叫時自動 detect <code>cmd.exe</code>，不存在則印出可複製的 Windows 指令給 user 手動執行（那種情境下 hook-gate 仍會先跑，結果是 sandbox 驗過再手動收尾）</p>
+<h3 id="ddev-container-pushpre-push-hook-drift">修復層 D：Dev Container Push（pre-push hook 撈到無關 drift 時的備援）<a class="headerlink" href="#ddev-container-pushpre-push-hook-drift" title="Permanent link">&para;</a></h3>
+<p><strong>適用情境</strong>：<code>.pre-commit-config.yaml</code> 未設 <code>default_stages</code>、或設為多 stage 時，<code>git push</code> 會觸發非 <code>pre-commit</code> stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：<code>bilingual-structure-check</code> 掃 <code>.en.md</code> 整份對照），就可能因 <strong>pre-existing drift</strong>（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：<code>chore/structure-cleanup-2026-04-11</code> 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。</p>
+<p>⚠️ <strong>長期解在 Layer 3 不在這個章節</strong>：如果你發現自己要走 Layer 1/2，那代表 <code>.pre-commit-config.yaml</code> 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。</p>
+<h4 id="layer-1-ab-one-liner-self-check">Layer 1 — A/B 驗證 one-liner（機械化 self-check）<a class="headerlink" href="#layer-1-ab-one-liner-self-check" title="Permanent link">&para;</a></h4>
+<p>pre-push hook 擋路時，第一件事：<strong>證明失敗是否跟這次 commits 有關</strong>。用 <code>git worktree</code> 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 <code>--no-verify</code>；若結果不同 → 這次 commits 引入新問題，必須修。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="c1"># 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx</span>
+<a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="nv">BASE</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>merge-base<span class="w"> </span>HEAD<span class="w"> </span>origin/main<span class="k">)</span>
+<a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="nv">WT</span><span class="o">=</span>/tmp/wt-<span class="nv">$BASE</span>
+<a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a>
+<a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$WT</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$BASE</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-38-6" name="__codelineno-38-6" href="#__codelineno-38-6"></a><span class="nb">cd</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$WT</span><span class="s2">&quot;</span>
+<a id="__codelineno-38-7" name="__codelineno-38-7" href="#__codelineno-38-7"></a>pre-commit<span class="w"> </span>run<span class="w"> </span>bilingual-structure-check<span class="w"> </span>--all-files<span class="w"> </span>&gt;<span class="w"> </span>/tmp/wt-base.log<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span>
+<a id="__codelineno-38-8" name="__codelineno-38-8" href="#__codelineno-38-8"></a><span class="nv">ERR_BASE</span><span class="o">=</span><span class="k">$(</span>grep<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;error:&quot;</span><span class="w"> </span>/tmp/wt-base.log<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="m">0</span><span class="k">)</span>
+<a id="__codelineno-38-9" name="__codelineno-38-9" href="#__codelineno-38-9"></a>
+<a id="__codelineno-38-10" name="__codelineno-38-10" href="#__codelineno-38-10"></a><span class="nb">cd</span><span class="w"> </span>-<span class="w"> </span>&gt;/dev/null
+<a id="__codelineno-38-11" name="__codelineno-38-11" href="#__codelineno-38-11"></a>pre-commit<span class="w"> </span>run<span class="w"> </span>bilingual-structure-check<span class="w"> </span>--all-files<span class="w"> </span>&gt;<span class="w"> </span>/tmp/wt-head.log<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span>
+<a id="__codelineno-38-12" name="__codelineno-38-12" href="#__codelineno-38-12"></a><span class="nv">ERR_HEAD</span><span class="o">=</span><span class="k">$(</span>grep<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;error:&quot;</span><span class="w"> </span>/tmp/wt-head.log<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="m">0</span><span class="k">)</span>
+<a id="__codelineno-38-13" name="__codelineno-38-13" href="#__codelineno-38-13"></a>
+<a id="__codelineno-38-14" name="__codelineno-38-14" href="#__codelineno-38-14"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;base=</span><span class="nv">$ERR_BASE</span><span class="s2"> head=</span><span class="nv">$ERR_HEAD</span><span class="s2">&quot;</span>
+<a id="__codelineno-38-15" name="__codelineno-38-15" href="#__codelineno-38-15"></a><span class="c1"># base==head 且 &gt;0 → 100% pre-existing drift，本次 PR 無辜</span>
+<a id="__codelineno-38-16" name="__codelineno-38-16" href="#__codelineno-38-16"></a><span class="c1"># head &gt; base → 這次引入了新問題，不要 --no-verify</span>
+<a id="__codelineno-38-17" name="__codelineno-38-17" href="#__codelineno-38-17"></a>git<span class="w"> </span>worktree<span class="w"> </span>remove<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$WT</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>同時驗證 CI <strong>是否真的會跑這個 hook</strong>（CI 用 <code>pre-commit run &lt;id&gt;</code> 按名字叫，不會自動跑全部）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>grep<span class="w"> </span>-r<span class="w"> </span><span class="s2">&quot;&lt;hook-id&gt;&quot;</span><span class="w"> </span>.github/workflows/<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;CI 沒叫這個 hook — pre-push 擋下來是 local-only false positive&quot;</span>
+</code></pre></div>
+<h4 id="layer-2-if-else">Layer 2 — 決策樹（明確 if-else）<a class="headerlink" href="#layer-2-if-else" title="Permanent link">&para;</a></h4>
+<p>pre-push hook 失敗後，按順序回答：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>Q1. base/head error count 一樣嗎？（用 Layer 1 one-liner）
+<a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>    ├─ 否（head &gt; base）→ 這次 commits 引入新問題，修掉，不要 --no-verify
+<a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a>    └─ 是（pre-existing drift）→ 走 Q2
+<a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a>
+<a id="__codelineno-40-5" name="__codelineno-40-5" href="#__codelineno-40-5"></a>
+<a id="__codelineno-40-6" name="__codelineno-40-6" href="#__codelineno-40-6"></a>### 修復層 D · pre-push drift 三層改進（Layer 1-3）
+<a id="__codelineno-40-7" name="__codelineno-40-7" href="#__codelineno-40-7"></a>
+<a id="__codelineno-40-8" name="__codelineno-40-8" href="#__codelineno-40-8"></a>與 §修復層 C · 替代路線 D 互補但不同根因：§替代路線 D 處理「pre-push hook spawn 失敗（Linux python 路徑寫死）」，本節處理「pre-push hook 跑起來了、但掃到**非本次 commits 的 pre-existing drift**」。Windows 原生 git + 容器 git 兩條路徑都可能遇到。
+<a id="__codelineno-40-9" name="__codelineno-40-9" href="#__codelineno-40-9"></a>
+<a id="__codelineno-40-10" name="__codelineno-40-10" href="#__codelineno-40-10"></a>**適用情境**：`.pre-commit-config.yaml` 未設 `default_stages`、或設為多 stage 時，`git push` 會觸發非 `pre-commit` stage 的全量 hook 跑。若其中任一 hook 掃全 repo 而非「只看 staged files」（例：`bilingual-structure-check` 掃 `.en.md` 整份對照），就可能因 **pre-existing drift**（非這次 commits 造成的）而擋住 push。PR #21 就踩到這個坑：`chore/structure-cleanup-2026-04-11` 的內容完全乾淨，但 pre-push 掃到 62 對 ZH/EN 檔案的舊 drift → 23 errors + 18 warnings。
+<a id="__codelineno-40-11" name="__codelineno-40-11" href="#__codelineno-40-11"></a>
+<a id="__codelineno-40-12" name="__codelineno-40-12" href="#__codelineno-40-12"></a>⚠️ **長期解在 Layer 3 不在這個章節**：如果你發現自己要走 Layer 1/2，那代表 `.pre-commit-config.yaml` 需要先確認 Layer 3 已套用。走 Layer 1/2 是「這次 PR 救火」，不是「下次可以當正規流程」。
+<a id="__codelineno-40-13" name="__codelineno-40-13" href="#__codelineno-40-13"></a>
+<a id="__codelineno-40-14" name="__codelineno-40-14" href="#__codelineno-40-14"></a>#### Layer 1 — A/B 驗證 one-liner（機械化 self-check）
+<a id="__codelineno-40-15" name="__codelineno-40-15" href="#__codelineno-40-15"></a>
+<a id="__codelineno-40-16" name="__codelineno-40-16" href="#__codelineno-40-16"></a>pre-push hook 擋路時，第一件事：**證明失敗是否跟這次 commits 有關**。用 `git worktree` 跳到 base commit 重跑同一個 hook，若結果一樣 → drift 跟這次無關，可走 `--no-verify`；若結果不同 → 這次 commits 引入新問題，必須修。
+<a id="__codelineno-40-17" name="__codelineno-40-17" href="#__codelineno-40-17"></a>
+<a id="__codelineno-40-18" name="__codelineno-40-18" href="#__codelineno-40-18"></a>```bash
+<a id="__codelineno-40-19" name="__codelineno-40-19" href="#__codelineno-40-19"></a># 假設 broken hook 是 bilingual-structure-check，當前 branch 是 feat/xxx
+<a id="__codelineno-40-20" name="__codelineno-40-20" href="#__codelineno-40-20"></a>BASE=$(git merge-base HEAD origin/main)
+<a id="__codelineno-40-21" name="__codelineno-40-21" href="#__codelineno-40-21"></a>WT=/tmp/wt-$BASE
+<a id="__codelineno-40-22" name="__codelineno-40-22" href="#__codelineno-40-22"></a>
+<a id="__codelineno-40-23" name="__codelineno-40-23" href="#__codelineno-40-23"></a>git worktree add &quot;$WT&quot; &quot;$BASE&quot; 2&gt;/dev/null || true
+<a id="__codelineno-40-24" name="__codelineno-40-24" href="#__codelineno-40-24"></a>cd &quot;$WT&quot;
+<a id="__codelineno-40-25" name="__codelineno-40-25" href="#__codelineno-40-25"></a>pre-commit run bilingual-structure-check --all-files &gt; /tmp/wt-base.log 2&gt;&amp;1
+<a id="__codelineno-40-26" name="__codelineno-40-26" href="#__codelineno-40-26"></a>ERR_BASE=$(grep -c &quot;error:&quot; /tmp/wt-base.log || echo 0)
+<a id="__codelineno-40-27" name="__codelineno-40-27" href="#__codelineno-40-27"></a>
+<a id="__codelineno-40-28" name="__codelineno-40-28" href="#__codelineno-40-28"></a>cd - &gt;/dev/null
+<a id="__codelineno-40-29" name="__codelineno-40-29" href="#__codelineno-40-29"></a>pre-commit run bilingual-structure-check --all-files &gt; /tmp/wt-head.log 2&gt;&amp;1
+<a id="__codelineno-40-30" name="__codelineno-40-30" href="#__codelineno-40-30"></a>ERR_HEAD=$(grep -c &quot;error:&quot; /tmp/wt-head.log || echo 0)
+<a id="__codelineno-40-31" name="__codelineno-40-31" href="#__codelineno-40-31"></a>
+<a id="__codelineno-40-32" name="__codelineno-40-32" href="#__codelineno-40-32"></a>echo &quot;base=$ERR_BASE head=$ERR_HEAD&quot;
+<a id="__codelineno-40-33" name="__codelineno-40-33" href="#__codelineno-40-33"></a># base==head 且 &gt;0 → 100% pre-existing drift，本次 PR 無辜
+<a id="__codelineno-40-34" name="__codelineno-40-34" href="#__codelineno-40-34"></a># head &gt; base → 這次引入了新問題，不要 --no-verify
+<a id="__codelineno-40-35" name="__codelineno-40-35" href="#__codelineno-40-35"></a>git worktree remove &quot;$WT&quot;
+</code></pre></div>
+<p>同時驗證 CI <strong>是否真的會跑這個 hook</strong>（CI 用 <code>pre-commit run &lt;id&gt;</code> 按名字叫，不會自動跑全部）:</p>
+<p>```bash
+grep -r "</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Vencil. Licensed under Apache 2.0.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/vencil/Dynamic-Alerting-Integrations" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.loading", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.tracking", "navigation.top", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.action.edit", "content.action.view", "content.code.copy", "content.code.select", "content.code.annotate", "content.tabs.link", "content.tooltips", "announce.dismiss"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>
