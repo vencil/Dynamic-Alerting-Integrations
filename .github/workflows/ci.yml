@@ -266,6 +266,12 @@ jobs:
         working-directory: tools/portal
         run: npm run build
 
+      - name: Enforce portal bundle size budget (TD-032a)
+        # Per-tool 100 KB / shared chunk 200 KB / total 4 MB.
+        # Calibrated headroom over current sizes — catches accidents
+        # (full lodash bundle, etc.) without chasing micro-optimization.
+        run: python3 scripts/tools/lint/check_portal_bundle_size.py --ci
+
       - name: Run Vitest unit tests
         working-directory: tools/portal
         run: npm run test
