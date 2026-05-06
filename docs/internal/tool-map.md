@@ -152,6 +152,7 @@ lang: zh
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
+| `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
