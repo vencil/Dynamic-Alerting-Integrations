@@ -123,6 +123,7 @@ export default function AlertSimulator() {
                         type="number"
                         value={val}
                         onChange={(e) => updateConfig(key, e.target.value)}
+                        aria-label={t('閾值', 'Threshold') + ` — ${key}`}
                         className="w-24 px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
                       />
                       <span className={`text-xs px-1.5 py-0.5 rounded ${def?.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
@@ -137,6 +138,7 @@ export default function AlertSimulator() {
                 <div className="mt-3">
                   <select
                     onChange={(e) => { if (e.target.value) { addMetric(e.target.value); e.target.value = ''; } }}
+                    aria-label={t('加入新指標', 'Add new metric')}
                     className="text-xs px-2 py-1 border border-slate-300 rounded bg-white text-slate-600"
                     defaultValue=""
                   >
@@ -163,6 +165,7 @@ export default function AlertSimulator() {
                         value={val}
                         onChange={(e) => updateMetric(key, e.target.value)}
                         placeholder="current value"
+                        aria-label={t('指標當前值', 'Current metric value') + ` — ${def?.label || key}`}
                         className="w-24 px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
                       />
                     </div>
@@ -178,7 +181,7 @@ export default function AlertSimulator() {
                   <input type="checkbox" checked={dedupEnabled} onChange={(e) => setDedupEnabled(e.target.checked)} className="w-4 h-4 rounded" />
                   <span className="text-slate-700">{t('嚴重度去重', 'Severity Dedup')}</span>
                 </label>
-                <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} className="text-xs px-2 py-1 border border-slate-300 rounded bg-white">
+                <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} aria-label={t('通知通道', 'Routing channel')} className="text-xs px-2 py-1 border border-slate-300 rounded bg-white">
                   <option value="slack">Slack</option>
                   <option value="webhook">Webhook</option>
                   <option value="email">Email</option>

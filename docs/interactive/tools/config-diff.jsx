@@ -159,6 +159,7 @@ export default function ConfigDiff() {
               value={oldYaml}
               onChange={(e) => setOldYaml(e.target.value)}
               rows={14}
+              aria-label={t('舊版本 YAML', 'Old version YAML')}
               className="w-full font-mono text-xs bg-slate-900 text-slate-100 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               spellCheck="false"
             />
@@ -169,6 +170,7 @@ export default function ConfigDiff() {
               value={newYaml}
               onChange={(e) => setNewYaml(e.target.value)}
               rows={14}
+              aria-label={t('新版本 YAML', 'New version YAML')}
               className="w-full font-mono text-xs bg-slate-900 text-slate-100 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               spellCheck="false"
             />

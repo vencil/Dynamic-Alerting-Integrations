@@ -285,6 +285,7 @@ export default function SchemaExplorer() {
             className="flex-1 min-w-48 px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
           <select value={filterPack} onChange={(e) => setFilterPack(e.target.value)}
+            aria-label={t('依 Rule Pack 篩選', 'Filter by Rule Pack')}
             className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
             {RULE_PACKS.map(rp => (
               <option key={rp} value={rp}>{rp === 'all' ? t('所有 Rule Pack', 'All Rule Packs') : rp}</option>

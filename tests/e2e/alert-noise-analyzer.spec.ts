@@ -18,12 +18,7 @@ import {
 test.describe('Alert Noise Analyzer @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'alert-noise-analyzer');
-    // skipA11y: true — TD-032c discovered real WCAG 2.1 AA critical
-    // violations (missing form labels / select accessible names) that
-    // pre-date this spec. Smoke gate retains: dist load, document.title
-    // mount, no "Failed to load" body sentinel, REG-004 hrefs (separate
-    // test below). A11y debt tracked separately, see PR description.
-    await runToolSmokeChecks(page, { skipA11y: true });
+    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 5 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {
