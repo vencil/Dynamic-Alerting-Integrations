@@ -738,6 +738,10 @@ portal-build-watch: ## Watch-mode portal build for dev iteration (TD-030)
 test-portal: ## Vitest unit tests for portal components (TD-030; tests in tests/portal/)
 	@cd tools/portal && npm run test
 
+.PHONY: portal-bundle-budget
+portal-bundle-budget: ## Check portal dist bundle size budgets (TD-032a; per-tool 100KB / shared chunk 200KB / total 4MB)
+	@python3 scripts/tools/lint/check_portal_bundle_size.py --ci
+
 .PHONY: test-skip-audit
 test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
 	@echo "=== Test Skip Audit ==="
