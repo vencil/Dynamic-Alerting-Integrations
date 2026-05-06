@@ -315,3 +315,7 @@ secrets:
 }
 
 window.__deployGenerateHelmValues = deployGenerateHelmValues;
+
+// TD-030e: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { deployGenerateHelmValues };

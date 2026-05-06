@@ -99,3 +99,7 @@ window.__generateOperatorCommand = generateOperatorCommand;
 window.__generateMigrationCommand = generateMigrationCommand;
 window.__generateAlertmanagerConfigPreview = generateAlertmanagerConfigPreview;
 window.__getReceiverConfig = getReceiverConfig;
+
+// TD-030e: ESM exports. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { validateTenantName, generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview, getReceiverConfig };

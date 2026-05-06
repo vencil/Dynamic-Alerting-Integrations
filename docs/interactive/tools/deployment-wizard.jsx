@@ -22,17 +22,11 @@ dependencies: [
 //   * DEC-G (B): Portal-wide slate->gray unification is implicit here.
 //   * REG-004: hardcoded portal paths replaced with proper jsx-loader URLs.
 import React, { useState, useMemo } from 'react';
+// TD-030e: ESM imports.
+import { DEPLOY_STEPS as STEPS, DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENANT_SIZES as TENANT_SIZES, DEPLOY_OAUTH2_PROVIDERS as OAUTH2_PROVIDERS, DEPLOY_RULE_PACKS as RULE_PACKS } from './deployment-wizard/fixtures/wizard-defaults.js';
+import { deployGenerateHelmValues as generateHelmValues } from './deployment-wizard/utils/generators.js';
 
 const t = window.__t || ((zh, en) => en);
-
-const STEPS = window.__DEPLOY_STEPS;
-const TIERS = window.__DEPLOY_TIERS;
-const ENVIRONMENTS = window.__DEPLOY_ENVIRONMENTS;
-const TENANT_SIZES = window.__DEPLOY_TENANT_SIZES;
-const OAUTH2_PROVIDERS = window.__DEPLOY_OAUTH2_PROVIDERS;
-const RULE_PACKS = window.__DEPLOY_RULE_PACKS;
-
-const generateHelmValues = window.__deployGenerateHelmValues;
 
 
 export default function DeploymentWizard() {
