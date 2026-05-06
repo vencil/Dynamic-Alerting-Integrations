@@ -68,6 +68,7 @@ export default defineConfig({
       '@testing-library/react': resolve(__dirname, 'node_modules/@testing-library/react'),
       '@testing-library/jest-dom': resolve(__dirname, 'node_modules/@testing-library/jest-dom'),
       '@testing-library/jest-dom/vitest': resolve(__dirname, 'node_modules/@testing-library/jest-dom/vitest.js'),
+      'fast-check': resolve(__dirname, 'node_modules/fast-check'),
     },
   },
 });
