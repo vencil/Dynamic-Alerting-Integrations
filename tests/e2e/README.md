@@ -5,8 +5,9 @@ purpose: |
   父 README（tests/README.md）回答「我要寫什麼測試該擺哪」；本檔回答
   「進到 tests/e2e/ 後，怎麼下手」。
 
-  歷史：本檔 v1 寫於 2024 只列 5 個 critical path spec，已嚴重過時。
-  v2（2026-05，TD-032a）對齊現況：24 specs / 136 tests / 7 fixtures。
+  TD-032a 對齊現況：24 specs / 136 tests / 5 fixtures。先前版本只列
+  5 個 critical path spec、未文件化任何 fixture 或 tag 語意，已隨本次
+  改寫汰換。
 audience: [contributors, ai-agent]
 lang: zh
 ---
@@ -15,7 +16,7 @@ lang: zh
 
 父 README：[`tests/README.md`](../README.md)。先看父檔的決策樹（測試擺哪、CI 對應、跑法 cheat sheet）；本檔處理進到 `tests/e2e/` 之後的細節：tag 語意、fixture 契約、新 spec 模板、REG 編號制度。
 
-## 目前規模（2026-05）
+## 目前規模（TD-032a snapshot）
 
 - **24 specs / 136 tests**（chromium-only smoke + 互動）
 - **5 fixtures**（`fixtures/`）：portal-tool-smoke / axe-helper / diagnostic-matchers / mock-data / test-helpers
