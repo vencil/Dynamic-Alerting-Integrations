@@ -135,3 +135,7 @@ window.__cicdGenerateInitCommand = cicdGenerateInitCommand;
 window.__cicdGenerateDockerCommand = cicdGenerateDockerCommand;
 window.__cicdGenerateFileTree = cicdGenerateFileTree;
 window.__cicdGenerateGitHubActionsPreview = cicdGenerateGitHubActionsPreview;
+
+// TD-030e: ESM exports. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

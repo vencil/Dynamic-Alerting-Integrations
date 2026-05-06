@@ -13,21 +13,13 @@ dependencies: [
 ---
 
 import React, { useState, useMemo, useCallback } from 'react';
+// TD-030e: ESM imports (jsx-loader rewrites to window reads on legacy).
+import { RBAC_STEPS as STEPS, RBAC_PERMISSION_HIERARCHY as PERMISSION_HIERARCHY, RBAC_ENVIRONMENTS as ENVIRONMENTS, RBAC_DOMAIN_EXAMPLES as DOMAIN_EXAMPLES } from './rbac-setup-wizard/fixtures/wizard-defaults.js';
+import { rbacGenerateYaml as generateRbacYaml, rbacValidate as validateRbac } from './rbac-setup-wizard/utils/generators.js';
+// PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
+import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
 
 const t = window.__t || ((zh, en) => en);
-
-// PR-portal-10: data + helpers extracted to sibling subdirectory
-// (mirrors operator-setup-wizard PR-portal-4 + cicd / deployment in
-// this same PR). Step components remain inline; future PR can extract.
-const STEPS = window.__RBAC_STEPS;
-const PERMISSION_HIERARCHY = window.__RBAC_PERMISSION_HIERARCHY;
-const ENVIRONMENTS = window.__RBAC_ENVIRONMENTS;
-const DOMAIN_EXAMPLES = window.__RBAC_DOMAIN_EXAMPLES;
-
-const generateRbacYaml = window.__rbacGenerateYaml;
-const validateRbac = window.__rbacValidate;
-// PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
-const ErrorBoundary = window.__ErrorBoundary;
 
 /* ── Step Components ── */
 

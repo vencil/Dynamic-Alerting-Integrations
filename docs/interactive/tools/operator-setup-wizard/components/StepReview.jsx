@@ -25,10 +25,11 @@ purpose: |
 
 const { useState, useCallback } = React;
 
+// TD-030e: ESM imports for sibling utilities. jsx-loader transformImports
+// rewrites to `const X = window.__X`; esbuild bundles natively.
+import { generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview } from '../utils/generators.js';
+
 const t = window.__t || ((zh, en) => en);
-const generateOperatorCommand = window.__generateOperatorCommand;
-const generateMigrationCommand = window.__generateMigrationCommand;
-const generateAlertmanagerConfigPreview = window.__generateAlertmanagerConfigPreview;
 
 function StepReview({ config }) {
   const [activeTab, setActiveTab] = useState('command');
@@ -271,3 +272,7 @@ function StepReview({ config }) {
 }
 
 window.__StepReview = StepReview;
+
+// TD-030e: ESM export. Removed in TD-030z.
+// <!-- jsx-loader-compat: ignore -->
+export { StepReview };

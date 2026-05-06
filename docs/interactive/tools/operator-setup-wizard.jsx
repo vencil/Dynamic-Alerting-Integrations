@@ -15,26 +15,18 @@ dependencies: [
 
 import React, { useState, useMemo, useCallback } from 'react';
 
-const t = window.__t || ((zh, en) => en);
-
-// PR-portal-4 decomposition: data + helpers + StepReview pulled from
-// the dependency block above. Inline StepEnvironment / StepCRDConfig /
-// StepReceiver / StepTenants stay (this PR keeps the orchestrator
-// above the sed-damage shrink threshold; a follow-up can extract the
-// remaining 4 step components and the heavy form helpers).
-const STEPS = window.__OSW_STEPS;
-const DEMO_TENANTS = window.__OSW_DEMO_TENANTS;
-const OPERATOR_VERSIONS = window.__OSW_OPERATOR_VERSIONS;
-const CLUSTER_TYPES = window.__OSW_CLUSTER_TYPES;
-const RECEIVER_TYPES = window.__OSW_RECEIVER_TYPES;
-const RULE_MODES = window.__OSW_RULE_MODES;
-
-const validateTenantName = window.__validateTenantName;
-const StepReview = window.__StepReview;
+// TD-030e: ESM imports. jsx-loader transformImports rewrites these to
+// `const X = window.__X` reads on legacy path; esbuild bundles them
+// natively on dist path.
+import { OSW_STEPS as STEPS, OSW_DEMO_TENANTS as DEMO_TENANTS, OSW_OPERATOR_VERSIONS as OPERATOR_VERSIONS, OSW_CLUSTER_TYPES as CLUSTER_TYPES, OSW_RECEIVER_TYPES as RECEIVER_TYPES, OSW_RULE_MODES as RULE_MODES } from './operator-setup-wizard/fixtures/wizard-defaults.js';
+import { validateTenantName } from './operator-setup-wizard/utils/generators.js';
+import { StepReview } from './operator-setup-wizard/components/StepReview.jsx';
 // PR-portal-11: per-step boundary so a render error in step N
 // doesn't crash the wizard chrome — user can still hit "Back" and
 // recover state from step N-1.
-const ErrorBoundary = window.__ErrorBoundary;
+import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
+
+const t = window.__t || ((zh, en) => en);
 
 /* ── Step Components ── */
 

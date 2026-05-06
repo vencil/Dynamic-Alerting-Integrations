@@ -13,23 +13,13 @@ dependencies: [
 ---
 
 import React, { useState, useMemo } from 'react';
+// TD-030e: ESM imports.
+import { CICD_STEPS as STEPS, CICD_RULE_PACKS as RULE_PACKS, CICD_CI_OPTIONS as CI_OPTIONS, CICD_DEPLOY_OPTIONS as DEPLOY_OPTIONS } from './cicd-setup-wizard/fixtures/wizard-defaults.js';
+import { cicdGenerateInitCommand as generateInitCommand, cicdGenerateDockerCommand as generateDockerCommand, cicdGenerateFileTree as generateFileTree, cicdGenerateGitHubActionsPreview as generateGitHubActionsPreview } from './cicd-setup-wizard/utils/generators.js';
+// PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
+import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
 
 const t = window.__t || ((zh, en) => en);
-
-// PR-portal-10: data + helpers extracted to sibling subdirectory
-// (mirrors operator-setup-wizard PR-portal-4 pattern). Step
-// components remain inline; future PR can extract them.
-const STEPS = window.__CICD_STEPS;
-const RULE_PACKS = window.__CICD_RULE_PACKS;
-const CI_OPTIONS = window.__CICD_CI_OPTIONS;
-const DEPLOY_OPTIONS = window.__CICD_DEPLOY_OPTIONS;
-
-const generateInitCommand = window.__cicdGenerateInitCommand;
-const generateDockerCommand = window.__cicdGenerateDockerCommand;
-const generateFileTree = window.__cicdGenerateFileTree;
-const generateGitHubActionsPreview = window.__cicdGenerateGitHubActionsPreview;
-// PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
-const ErrorBoundary = window.__ErrorBoundary;
 
 /* ── Step components ── */
 
