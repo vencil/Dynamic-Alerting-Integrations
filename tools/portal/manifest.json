@@ -1,7 +1,7 @@
 {
   "_comment": "Portal build manifest — TECH-DEBT-030 Option C. Each entry is the basename of a `tools/portal/entries/<name>.entry.jsx` file. When TD-030z retires jsx-loader, this list contains all migrated tools.",
   "entries": [
-    "tenant-manager",
+    "tenant-manager", "wizard",
     "alert-builder", "alert-simulator", "alert-noise-analyzer", "alert-timeline",
     "operator-setup-wizard", "rbac-setup-wizard", "cicd-setup-wizard", "deployment-wizard", "master-onboarding",
     "architecture-quiz", "capacity-planner", "cli-playground", "component-health",

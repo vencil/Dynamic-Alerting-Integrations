@@ -165,6 +165,15 @@ def run_checks() -> Tuple[List[Dict], Dict]:
     content = JSX_LOADER.read_text(encoding="utf-8")
 
     # Check 1: TOOL_META ↔ CUSTOM_FLOW_MAP key consistency
+    #
+    # TD-030z note: TOOL_META lived inside the legacy `renderJSX` function
+    # that drove the in-page "Related tools footer" for the fetch+Babel
+    # path. That function (and TOOL_META with it) was removed when every
+    # tool migrated to the ESM dist-bundle entrypoint. CUSTOM_FLOW_MAP
+    # remains because flow mode (`?flow=...`) still consumes it. When
+    # TOOL_META is absent we skip the cross-sync check entirely — there's
+    # no second source of truth left to drift against. Window.__t and
+    # language-toggle checks below are still meaningful and run regardless.
     meta_keys, meta_line = parse_object_keys(content, "TOOL_META")
     flow_keys, flow_line = parse_object_keys(content, "CUSTOM_FLOW_MAP")
 
@@ -173,31 +182,32 @@ def run_checks() -> Tuple[List[Dict], Dict]:
         "flow_map_count": len(flow_keys),
     }
 
-    meta_only = meta_keys - flow_keys
-    flow_only = flow_keys - meta_keys
+    if meta_keys:
+        meta_only = meta_keys - flow_keys
+        flow_only = flow_keys - meta_keys
 
-    if meta_only:
-        for key in sorted(meta_only):
-            issues.append({
-                "severity": "error",
-                "check": "meta-flow-sync",
-                "message": (
-                    f"'{key}' 在 TOOL_META 中但不在 CUSTOM_FLOW_MAP 中。"
-                    f" Guided Flow 無法載入此工具。"
-                ),
-                "line": meta_line,
-            })
-    if flow_only:
-        for key in sorted(flow_only):
-            issues.append({
-                "severity": "error",
-                "check": "meta-flow-sync",
-                "message": (
-                    f"'{key}' 在 CUSTOM_FLOW_MAP 中但不在 TOOL_META 中。"
-                    f" Related tools footer 無法顯示此工具。"
-                ),
-                "line": flow_line,
-            })
+        if meta_only:
+            for key in sorted(meta_only):
+                issues.append({
+                    "severity": "error",
+                    "check": "meta-flow-sync",
+                    "message": (
+                        f"'{key}' 在 TOOL_META 中但不在 CUSTOM_FLOW_MAP 中。"
+                        f" Guided Flow 無法載入此工具。"
+                    ),
+                    "line": meta_line,
+                })
+        if flow_only:
+            for key in sorted(flow_only):
+                issues.append({
+                    "severity": "error",
+                    "check": "meta-flow-sync",
+                    "message": (
+                        f"'{key}' 在 CUSTOM_FLOW_MAP 中但不在 TOOL_META 中。"
+                        f" Related tools footer 無法顯示此工具。"
+                    ),
+                    "line": flow_line,
+                })
 
     # Check 2: window.__t duplicate params
     dup_t = find_duplicate_t_params(content)
