@@ -45,8 +45,12 @@ purpose: |
                                        reload, save, remove }
 ---
 
-const { useState, useMemo } = React;
-const styles = window.__styles;
+// TD-033: ESM dist-bundle chunk order is non-deterministic;
+// `window.__styles` may be undefined when this module evaluates.
+// Import the canonical export instead. See tenant-manager/styles.js.
+import { styles } from '../styles.js';
+
+import { useState, useMemo } from "react";  // TD-033 ESM import
 const t = window.__t || ((zh, en) => en);
 
 /**

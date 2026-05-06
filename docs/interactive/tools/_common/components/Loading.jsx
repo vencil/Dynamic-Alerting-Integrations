@@ -33,7 +33,7 @@ purpose: |
   Closure deps: none. Pure functional component using React global.
 ---
 
-const { useEffect } = React;
+import { useEffect } from "react";  // TD-033 ESM import
 
 const SPINNER_KEYFRAMES = '@keyframes daSpin { to { transform: rotate(360deg); } }';
 const SIZES = { sm: 16, md: 28, lg: 44 };

@@ -39,7 +39,7 @@ purpose: |
     - No SSR concern (jsx-loader is browser-only).
 ---
 
-const { useState, useEffect, useCallback } = React;
+import { useState, useEffect, useCallback } from "react";  // TD-033 ESM import
 
 function useURLState(keys) {
   // Read once on mount; subsequent updates flow through setKey/reset.

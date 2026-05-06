@@ -32,7 +32,7 @@ purpose: |
   Same shape as the inline version pre-PR-2d-Phase-2.
 ---
 
-const { useState, useEffect } = React;
+import { useState, useEffect } from "react";  // TD-033 ESM import
 
 // Pull deps from window globals (registered by orchestrator's earlier
 // dependencies: DEMO_TENANTS / DEMO_GROUPS).

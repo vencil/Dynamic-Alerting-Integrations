@@ -30,7 +30,7 @@ purpose: |
   `window.__X = X;` self-registration pattern this file uses.
 ---
 
-const { useState, useEffect, useMemo } = React;
+import { useState, useEffect, useMemo } from "react";  // TD-033 ESM import
 
 // Defensive explicit imports (per S#70 self-review): no shared
 // globals needed — this hook is pure-DOM + React state.

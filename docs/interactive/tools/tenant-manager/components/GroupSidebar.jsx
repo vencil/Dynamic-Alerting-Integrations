@@ -14,17 +14,20 @@ purpose: |
   ARIA / keyboard nav semantics preserved.
 ---
 
-const { useState } = React;
+// TD-033: ESM dist-bundle chunk order is non-deterministic;
+// `window.__styles` may be undefined when this module evaluates
+// (the path `entry → tenant-manager.jsx → GroupSidebar.jsx` doesn't
+// guarantee styles.js evaluates first under esbuild's chunk
+// allocation). Import the canonical ESM export.
+//
+// History: PR-2d's `const styles = window.__styles;` worked under
+// Babel-standalone (the legacy jsx-loader runtime) because the
+// indirect-eval frame leaked `const styles` to global scope. After
+// TD-030z retired the Babel runtime, the legacy reasoning no longer
+// applies and the lookup is exposed to chunk-arrival races.
+import { styles } from '../styles.js';
 
-// Defensive explicit import (PR-2d Phase 2 self-review): Phase 1 worked
-// in Chromium without this line because Babel-standalone's compiled
-// output appears to leak `const styles` from styles.js's eval frame
-// to global scope (or otherwise resolves it through closure). Per
-// MDN's strict reading of indirect-eval semantics this shouldn't
-// happen — but empirically PR #156 CI was green. This explicit
-// `const styles = window.__styles;` makes the lookup deterministic
-// and resilient to future Babel-standalone version drift.
-const styles = window.__styles;
+import { useState } from "react";  // TD-033 ESM import
 
 function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onDeleteGroup, canWrite }) {
   const [showCreate, setShowCreate] = useState(false);

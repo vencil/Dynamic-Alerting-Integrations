@@ -22,7 +22,7 @@ purpose: |
   descendants of modalRef.current, focus auto-applies on open.
 ---
 
-const { useRef, useEffect } = React;
+import { useRef, useEffect } from "react";  // TD-033 ESM import
 
 function useModalFocusTrap(modalType, setModalType) {
   const modalRef = useRef(null);

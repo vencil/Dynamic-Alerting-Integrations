@@ -23,7 +23,7 @@ purpose: |
   loads them before this component.
 ---
 
-const { useState, useCallback } = React;
+import { useState, useCallback } from "react";  // TD-033 ESM import
 
 // TD-030e: ESM imports for sibling utilities. jsx-loader transformImports
 // rewrites to `const X = window.__X`; esbuild bundles natively.

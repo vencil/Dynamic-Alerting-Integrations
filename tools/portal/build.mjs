@@ -148,17 +148,29 @@ async function main() {
     // and dev-only warnings, trimming the bundle by ~85% (1.1MB → ~150KB).
     // Watch mode (--watch) runs unminified for clearer stack traces.
     //
-    // TD-031 fix: free `React` references in component files (the
-    // `const { useState } = React;` pattern used across the migrated
-    // subtree) must resolve to the BUNDLED React, not the host page's
-    // CDN React. Without this, the host's React.useCallback fires with
-    // a null dispatcher (the bundled React's dispatcher is set, but the
-    // CDN one is unused) — TypeError: Cannot read properties of null.
-    // entry script populates `globalThis.__bundledReact` from its
-    // `import React from 'react'` statement.
+    // TD-033 history (logged so the next dev doesn't regress):
+    //   Pre-TD-033 used `define: { React: 'globalThis.__bundledReact' }`
+    //   paired with a `_setup-globals.js` side-effect import to satisfy
+    //   the legacy `const { useState } = React;` pattern in component
+    //   files. That broke under esbuild's `splitting: true` because
+    //   chunks containing the destructure could execute BEFORE the
+    //   chunk that ran the global assignment.
+    //
+    //   First fix attempt (TD-033a) tried `inject: [react-shim]`. That
+    //   broke the React module itself: inject auto-injects the shim
+    //   import into EVERY module — including react/cjs/* internals —
+    //   creating a circular dep that left React's namespace partially
+    //   undefined when its own code ran.
+    //
+    //   Final fix (this commit): change the 11 component files using
+    //   `const { useState } = React;` to use explicit ESM imports
+    //   (`import { useState } from 'react';`). No build-time tricks
+    //   needed; esbuild handles the dep graph and chunk order
+    //   automatically. _setup-globals.js becomes a no-op (left in
+    //   place for now to avoid touching every entry; can be removed
+    //   in a follow-up cleanup).
     define: {
       'process.env.NODE_ENV': '"production"',
-      'React': 'globalThis.__bundledReact',
     },
     minify: !watch,
     logLevel: 'info',
