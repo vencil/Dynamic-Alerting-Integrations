@@ -58,28 +58,57 @@ def scan_unicode_status(src: str) -> list[tuple[int, str]]:
     window) to have aria-hidden or aria-label.
 
     This is the most important WCAG 1.4.1 check for the colorblind hotfix.
-    We walk backward from each symbol occurrence to find the nearest `<tag`
-    open and check its attributes up to the matching `>`.
+    We walk backward from each symbol occurrence to find the nearest enclosing
+    `<tag` open and check its attributes up to the matching `>`.
+
+    Backward walk algorithm:
+      Walking from the symbol position back toward index 0, the FIRST `>`
+      we hit must be the close of an opening tag whose body contains the
+      symbol — UNLESS that `>` belongs to a closing tag (`</tag>`), which
+      means a sibling element that ended before our symbol. In the latter
+      case we step OVER the entire `<...>` block and keep walking back to
+      find the actual wrapping element.
+
+      Pre-fix bug (PR #290 audit follow-up): the prior implementation
+      gave up at the first `>`, which made the flag path unreachable for
+      typical JSX like `<div>✓</div>` (the `>` of `<div>` ended the walk
+      before any `<` was found). Verified with hand-crafted samples that
+      the function returned [] for every realistic JSX input.
     """
     out: list[tuple[int, str]] = []
     for i, ch in enumerate(src):
         if ch not in UNICODE_STATUS:
             continue
-        # Walk backwards to find the nearest `<tag` open
+        # Walk backwards to find the nearest enclosing `<tag` open.
         k = i
+        opener_lt = -1
         while k > 0:
             k -= 1
-            if src[k] == "<" and (
-                src[k + 1 : k + 2].isalpha()
-                or src[k + 1 : k + 2] in ("_",)
-            ):
+            if src[k] == "<":
+                # Opening tag if next char is alpha/underscore.
+                # Closing tag (</) handled by the `>` branch below.
+                if src[k + 1 : k + 2].isalpha() or src[k + 1 : k + 2] == "_":
+                    opener_lt = k
+                    break
+                # Otherwise (e.g. `<<` or `<5`) keep walking.
+            elif src[k] == ">":
+                # End of some `<...>` block. Find its matching `<`.
+                lt = src.rfind("<", 0, k)
+                if lt == -1:
+                    # Stray `>` with no opener — bail out.
+                    break
+                if src[lt + 1 : lt + 2] == "/":
+                    # Closing tag </tag>: a sibling that ended before our
+                    # symbol. Step over the whole block and keep walking.
+                    k = lt
+                    continue
+                # Opening tag <tag>: this `>` ends an opener whose body
+                # encloses our symbol. The opener starts at `lt`.
+                opener_lt = lt
                 break
-            if src[k] == ">":
-                # passed a close; give up on backward scan
-                k = -1
-                break
-        if k <= 0:
+        if opener_lt < 0:
             continue
+        k = opener_lt
         # Skip if this symbol is inside a comment/string — approximate by
         # checking the opening `<` is at col 0 of text content (not inside
         # attribute value). A cheap way: require the intervening `>` exists

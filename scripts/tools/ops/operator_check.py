@@ -178,7 +178,10 @@ class OperatorChecker:
             exporter_targets = [t for t in targets if any(
                 kw in t.get("labels", {}).get("job", "").lower() for kw in ["threshold", "exporter"]
             )]
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, AttributeError):
+            # AttributeError: data is None or a string (e.g. when
+            # http_get_json returns a non-dict body). Surfaced during
+            # the audit-list coverage sweep — see PR #291 description.
             exporter_targets = []
 
         if not exporter_targets:
