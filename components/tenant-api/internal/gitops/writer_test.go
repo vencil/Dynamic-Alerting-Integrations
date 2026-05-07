@@ -6,6 +6,7 @@ import (
 )
 
 func TestValidate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -36,6 +37,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			errs := validate(tt.tenantID, tt.yaml)
 			if (len(errs) > 0) != (tt.wantErrs > 0) {
 				t.Errorf("validate(%q, ...) returned %d errors %v, want %d",
@@ -46,6 +48,7 @@ func TestValidate(t *testing.T) {
 }
 
 func TestNewWriter(t *testing.T) {
+	t.Parallel()
 	w := NewWriter("/conf.d", "")
 	if w.gitDir != "/conf.d" {
 		t.Errorf("gitDir should default to configDir, got %q", w.gitDir)
@@ -58,6 +61,7 @@ func TestNewWriter(t *testing.T) {
 }
 
 func TestDiffNewFile(t *testing.T) {
+	t.Parallel()
 	// Diff against a non-existent file should show all lines as additions
 	w := NewWriter(t.TempDir(), "")
 	diff, err := w.Diff("new-tenant", "line1\nline2\n")
