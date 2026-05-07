@@ -131,6 +131,7 @@ lang: zh
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
+| `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TD-039). |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
@@ -157,6 +158,7 @@ lang: zh
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
+| `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_techdebt_drift.py` | TECH-DEBT / REG registry drift checker. |

@@ -550,6 +550,32 @@ repos:
         # escape via `<!-- window-x-no-fallback: ignore -->` for legitimate
         # exceptions (illustrative comments only).
 
+      - id: dist-source-consistency-check
+        name: "Catch portal dist commits without matching source change (testing-playbook §LL v2.8.0 §2, TD-039)"
+        entry: python3 -X utf8 scripts/tools/lint/check_dist_source_consistency.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        # Auto-stage, FATAL on findings. Triggers when staged files include
+        # docs/assets/dist/*.js but no matching source-of-rebuild signal
+        # (entries / build.mjs / manifest / interactive / getting-started).
+        # Codifies the PR-E (#269) regression pattern: dist drift hidden
+        # behind a single visible source change. Escape: BYPASS_DIST_CHECK=1
+        # for legitimate dist-only commits (e.g. CI bot regen).
+
+      - id: skip-a11y-justification-check
+        name: "Require TD-ticket justification for `skipA11y: true` (testing-playbook §LL v2.8.0 §5, TD-039)"
+        entry: python3 -X utf8 scripts/tools/lint/check_skip_a11y_justification.py --ci
+        language: python
+        pass_filenames: false
+        files: ^tests/e2e/.*\.spec\.ts$
+        # Auto-stage, FATAL on findings. Codebase audit at scaffold time:
+        # ✓ 0 violations (TD-035 cleared all 25 cases). `skipA11y: true`
+        # in code requires `// skipA11y: TD-NNN <justification>` within the
+        # 3 preceding lines. Block-comment / line-comment occurrences are
+        # auto-skipped (JSDoc-style file headers commonly mention the
+        # pattern in prose).
+
       - id: playwright-rtl-drift-check
         name: Detect React Testing Library API names in Playwright specs (S#96; mechanical safety net for testing-playbook §LL §10)
         entry: python3 -X utf8 scripts/tools/lint/check_playwright_rtl_drift.py --ci
