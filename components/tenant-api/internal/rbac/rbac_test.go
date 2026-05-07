@@ -3,6 +3,7 @@ package rbac
 import "testing"
 
 func TestTenantMatches(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		patterns []string
@@ -20,6 +21,7 @@ func TestTenantMatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tenantMatches(tt.patterns, tt.tenantID); got != tt.want {
 				t.Errorf("tenantMatches(%v, %q) = %v, want %v", tt.patterns, tt.tenantID, got, tt.want)
 			}
@@ -28,6 +30,7 @@ func TestTenantMatches(t *testing.T) {
 }
 
 func TestPermCovers(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		grant Permission
@@ -47,6 +50,7 @@ func TestPermCovers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := permCovers(tt.grant, tt.want); got != tt.ok {
 				t.Errorf("permCovers(%s, %s) = %v, want %v", tt.grant, tt.want, got, tt.ok)
 			}
@@ -55,6 +59,7 @@ func TestPermCovers(t *testing.T) {
 }
 
 func TestHasPermission(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "platform-admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
@@ -82,6 +87,7 @@ func TestHasPermission(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := m.HasPermission(tt.groups, tt.tenant, tt.want); got != tt.expected {
 				t.Errorf("HasPermission(%v, %q, %s) = %v, want %v",
 					tt.groups, tt.tenant, tt.want, got, tt.expected)
@@ -91,6 +97,7 @@ func TestHasPermission(t *testing.T) {
 }
 
 func TestOpenModeReadOnly(t *testing.T) {
+	t.Parallel()
 	// Empty config (open mode) allows read, denies write
 	m := NewForTest(&RBACConfig{})
 

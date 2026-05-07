@@ -3,6 +3,7 @@ package handler
 import "testing"
 
 func TestValidateTenantID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		id      string
 		wantErr bool
@@ -35,6 +36,7 @@ func TestValidateTenantID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateTenantID(tt.id)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateTenantID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)

@@ -6,6 +6,7 @@ import (
 )
 
 func TestPlanMarkdown_NilPlanSafe(t *testing.T) {
+	t.Parallel()
 	var p *Plan
 	got := p.Markdown()
 	if got == "" {
@@ -14,6 +15,7 @@ func TestPlanMarkdown_NilPlanSafe(t *testing.T) {
 }
 
 func TestPlanMarkdown_ContainsAllItems(t *testing.T) {
+	t.Parallel()
 	plan, err := BuildPlan(PlanInput{
 		Proposals: []ProposalRef{
 			{MemberTenantIDs: []string{"alpha", "beta"}, Dialect: "prom",
@@ -51,6 +53,7 @@ func TestPlanMarkdown_ContainsAllItems(t *testing.T) {
 }
 
 func TestPlanMarkdown_WarningsRenderedWhenPresent(t *testing.T) {
+	t.Parallel()
 	plan, err := BuildPlan(PlanInput{
 		Proposals: []ProposalRef{
 			{MemberTenantIDs: []string{"known", "missing-dir"}, Dialect: "prom"},
@@ -72,6 +75,7 @@ func TestPlanMarkdown_WarningsRenderedWhenPresent(t *testing.T) {
 }
 
 func TestPlanMarkdown_NoWarningsSectionWhenClean(t *testing.T) {
+	t.Parallel()
 	plan, err := BuildPlan(PlanInput{
 		Proposals: []ProposalRef{
 			{MemberTenantIDs: []string{"t1"}, Dialect: "prom"},
