@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import CapacityPlanner from '../../../docs/interactive/tools/capacity-planner.jsx';
-import { ErrorBoundary } from '../../../docs/interactive/tools/_common/components/ErrorBoundary.jsx';
+import CapacityPlanner from '../src/interactive/tools/capacity-planner.jsx';
+import { ErrorBoundary } from '../src/interactive/tools/_common/components/ErrorBoundary.jsx';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {

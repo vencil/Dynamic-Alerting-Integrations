@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import DependencyGraph from '../../../docs/interactive/tools/dependency-graph.jsx';
-import { ErrorBoundary } from '../../../docs/interactive/tools/_common/components/ErrorBoundary.jsx';
+import DependencyGraph from '../src/interactive/tools/dependency-graph.jsx';
+import { ErrorBoundary } from '../src/interactive/tools/_common/components/ErrorBoundary.jsx';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {

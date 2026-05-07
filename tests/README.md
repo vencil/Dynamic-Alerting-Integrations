@@ -59,7 +59,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 | `Python Tests (3.13)` (ci.yml) | `pytest tests/ scripts/tools/`，跳過 3 個 `@slow` 測試（見下） |
 | `Go Tests (1.26)` (ci.yml) | `go test ./cmd/... ./internal/...`（tenant-api）+ `./...`（threshold-exporter） |
 | `Smoke Tests (Chromium)` (Playwright E2E workflow) | `tests/e2e/*.spec.ts`（排除 `@visual` tag） |
-| `Portal Tests` (ci.yml) | `tests/portal/*.test.{ts,tsx}` Vitest 單元測試（TD-030 Option C） |
+| `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（TD-030 Option C；TD-042 monorepo restructure 後從 tests/portal/ 搬入） |
 | `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10`，advisory only（TD-026） |
 | `Lint Documentation` (ci.yml) | `make lint-docs`（含 changelog / link / structure check） |
 | `Visual Regression Baseline Update` (visual-baseline.yaml) | manual `workflow_dispatch`，重產 visual.spec.ts 基線（TD-029） |
@@ -79,7 +79,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 測試 Go 程式碼?                       → 同檔案旁 *_test.go（不在 tests/）
 測試使用者操作 portal UI?              → tests/e2e/*.spec.ts
 要鎖視覺回歸（pixel-diff baseline）?  → tests/e2e/visual.spec.ts（Ubuntu CI 才能產基線，TD-029）
-要單元測試 portal JSX 元件邏輯?       → tests/portal/<Component>.test.tsx（Vitest，TD-030 Option C）
+要單元測試 portal JSX 元件邏輯?       → tools/portal/tests/<Component>.test.tsx（Vitest，TD-030 Option C / TD-042 restructure 後）
 測試前端跨工具效能 / 頁面載入?         → tests/e2e-bench/
 測試需要真實 DB / Prometheus / docker? → tests/scenarios/ + Makefile target
 ```

@@ -1,4 +1,4 @@
-import{a as b,b as h,c as E,d as y,e as N}from"./chunk-YWPHFBSF.js";var u=b(h(),1),_=b(E(),1);var f=b(h()),e=b(y()),l=window.__t||((i,d)=>d),A=`tenants:
+import{a as b,b as h,c as E,d as y,e as N}from"./chunk-EXOPYGTA.js";var u=b(h(),1),_=b(E(),1);var f=b(h(),1),e=b(y(),1),l=window.__t||((i,d)=>d),A=`tenants:
   db-a:
     mysql_connections: "80"
     mysql_cpu: "75"

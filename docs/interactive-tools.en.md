@@ -14,7 +14,7 @@ The platform provides four interactive React components that can run in any Reac
 
 ## Getting Started Wizard
 
-**File:** `docs/getting-started/wizard.jsx`
+**File:** `tools/portal/src/getting-started/wizard.jsx`
 
 Guides users to the appropriate getting-started documentation based on their role (Platform Engineer / Domain Expert / Tenant), with dynamic display of key operational steps per role.
 
@@ -22,7 +22,7 @@ Guides users to the appropriate getting-started documentation based on their rol
 
 ## Tenant YAML Playground
 
-**File:** `docs/interactive/tools/playground.jsx`
+**File:** `tools/portal/src/interactive/tools/playground.jsx`
 
 Interactive Tenant YAML editor with real-time syntax validation (key names, three-state values, schedule format) and live preview of generated Prometheus metrics.
 
@@ -30,7 +30,7 @@ Interactive Tenant YAML editor with real-time syntax validation (key names, thre
 
 ## Rule Pack Selector
 
-**File:** `docs/interactive/tools/rule-pack-selector.jsx`
+**File:** `tools/portal/src/interactive/tools/rule-pack-selector.jsx`
 
 Recommends applicable Rule Packs based on technology stack (MySQL / PostgreSQL / Redis / JVM / Nginx, etc.), showing alert count and covered metrics for each pack.
 
@@ -38,7 +38,7 @@ Recommends applicable Rule Packs based on technology stack (MySQL / PostgreSQL /
 
 ## CLI Command Builder
 
-**File:** `docs/interactive/tools/cli-playground.jsx`
+**File:** `tools/portal/src/interactive/tools/cli-playground.jsx`
 
 Select a da-tools subcommand, fill in parameters, and automatically generate a complete `docker run` command ready to copy.
 
@@ -46,7 +46,7 @@ Select a da-tools subcommand, fill in parameters, and automatically generate a c
 
 ## ROI Calculator
 
-**File:** `docs/interactive/tools/roi-calculator.jsx`
+**File:** `tools/portal/src/interactive/tools/roi-calculator.jsx`
 
 Adoption benefit estimator — input organization scale (tenant count, Rule Pack count, on-call staff) and current operational costs (config change time, alert storm frequency, manual onboarding time) to instantly calculate three benefit dimensions: Rule maintenance time reduction from O(N×M) to O(M), alert storm auto-suppression rate, and onboard automation speedup. Supports importing actual `alert_quality.py --json` data for more accurate projections.
 

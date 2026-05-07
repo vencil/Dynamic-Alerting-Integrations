@@ -24,8 +24,8 @@
 // path was retired.
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import TenantManager from '../../../docs/interactive/tools/tenant-manager.jsx';
-import { ErrorBoundary } from '../../../docs/interactive/tools/_common/components/ErrorBoundary.jsx';
+import TenantManager from '../src/interactive/tools/tenant-manager.jsx';
+import { ErrorBoundary } from '../src/interactive/tools/_common/components/ErrorBoundary.jsx';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {

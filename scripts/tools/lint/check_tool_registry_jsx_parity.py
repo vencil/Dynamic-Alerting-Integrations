@@ -50,9 +50,13 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY = REPO_ROOT / "docs" / "assets" / "tool-registry.yaml"
-JSX_ROOT = REPO_ROOT / "docs"
+# TD-042 monorepo restructure: portal source moved to tools/portal/src/.
+# JSX_ROOT is the directory under which `interactive/tools/...` and
+# `getting-started/...` paths are interpreted (matches the registry's
+# `file:` field convention).
+JSX_ROOT = REPO_ROOT / "tools" / "portal" / "src"
 
-# Paths under docs/interactive/tools/ that are NOT user-facing tools
+# Paths under <JSX_ROOT>/interactive/tools/ that are NOT user-facing tools
 # and therefore should NOT have a registry entry.
 INTERNAL_DIR_PREFIXES = (
     "_common/",

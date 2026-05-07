@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import AlertSimulator from '../../../docs/interactive/tools/alert-simulator.jsx';
-import { ErrorBoundary } from '../../../docs/interactive/tools/_common/components/ErrorBoundary.jsx';
+import AlertSimulator from '../src/interactive/tools/alert-simulator.jsx';
+import { ErrorBoundary } from '../src/interactive/tools/_common/components/ErrorBoundary.jsx';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {

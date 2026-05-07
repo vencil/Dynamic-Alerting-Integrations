@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import ArchitectureQuiz from '../../../docs/interactive/tools/architecture-quiz.jsx';
-import { ErrorBoundary } from '../../../docs/interactive/tools/_common/components/ErrorBoundary.jsx';
+import ArchitectureQuiz from '../src/interactive/tools/architecture-quiz.jsx';
+import { ErrorBoundary } from '../src/interactive/tools/_common/components/ErrorBoundary.jsx';
 
 const rootEl = document.getElementById('root');
 if (rootEl) {

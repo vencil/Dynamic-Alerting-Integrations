@@ -470,14 +470,16 @@ def main():
     # Determine base directories
     script_dir = Path(__file__).parent
     repo_root = script_dir.parent.parent.parent
-    docs_dir = repo_root / "docs"
+    # TD-042 monorepo restructure: JSX source moved from docs/ to
+    # tools/portal/src/. Scan that subtree for the JSX coverage check.
+    portal_src_dir = repo_root / "tools" / "portal" / "src"
     rule_pack_dir = repo_root / "rule-packs"
     scripts_dir = script_dir
     components_dir = repo_root / "components"
 
     # Check for required directories
-    if not docs_dir.exists():
-        print(f"Error: docs directory not found at {docs_dir}", file=sys.stderr)
+    if not portal_src_dir.exists():
+        print(f"Error: portal src directory not found at {portal_src_dir}", file=sys.stderr)
         sys.exit(1)
 
     if not rule_pack_dir.exists():
@@ -488,8 +490,9 @@ def main():
         print(f"Error: scripts/tools directory not found at {scripts_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Run checks
-    jsx_checker = JSXCoverageChecker(docs_dir)
+    # Run checks (JSXCoverageChecker name kept for compatibility; it now
+    # walks portal_src_dir not docs_dir).
+    jsx_checker = JSXCoverageChecker(portal_src_dir)
     jsx_result = jsx_checker.run()
 
     rule_pack_checker = RulePackCoverageChecker(rule_pack_dir)

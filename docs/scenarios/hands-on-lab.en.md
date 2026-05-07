@@ -297,7 +297,7 @@ cd ~ && rm -rf ~/da-lab
 ## What's Next?
 
 - **Deploy to a real cluster**: Follow the [GitOps CI/CD Guide](gitops-ci-integration.en.md) to set up the full pipeline
-- **Explore interactive tools**: Open the [Self-Service Portal](../interactive/tools/self-service-portal.jsx) in your browser for visual validation
+- **Explore interactive tools**: Open the [Self-Service Portal](../assets/jsx-loader.html?component=self-service-portal) in your browser for visual validation
 - **Run the showcase**: `make demo-showcase` runs all these exercises as an automated script
 - **Deep dive**: Read the [Architecture & Design](../architecture-and-design.md) doc for full platform concepts
 

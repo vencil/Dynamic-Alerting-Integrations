@@ -42,10 +42,12 @@ ALLOWED_TOOLS_ROOT = {
     "__init__.py",       # in case it's ever added
 }
 
-# Allowed .jsx locations (relative to PROJECT_ROOT)
+# Allowed .jsx locations (relative to PROJECT_ROOT) — TD-042 monorepo restructure
 ALLOWED_JSX_DIRS = {
-    "docs/interactive/tools",
-    "docs/getting-started",
+    "tools/portal/src/interactive/tools",
+    "tools/portal/src/getting-started",
+    "tools/portal/entries",  # build entry scripts (.entry.jsx)
+    "tools/portal/tests",    # *.test.tsx Vitest specs
 }
 
 # Directories that should never be tracked in git

@@ -26,19 +26,27 @@ make portal-build-watch
 make test-portal
 ```
 
-## 結構
+## 結構（TD-042 monorepo restructure 後）
 
 ```
 tools/portal/
 ├── package.json        # esbuild + Vitest + RTL deps
-├── manifest.json       # list of tool entries to bundle (initially empty)
+├── manifest.json       # list of tool entries to bundle
 ├── build.mjs           # esbuild script — strips frontmatter, bundles per-entry
 ├── vitest.config.ts    # Vitest config — jsdom + frontmatter strip plugin
 ├── test-setup.ts       # global mocks for window.__styles / window.__t / React
-└── tsconfig.json       # TS config for both build and test files
+├── tsconfig.json       # TS config covering src/ + tests/
+├── src/                # ★ JSX source (was docs/interactive/ + docs/getting-started/)
+│   ├── interactive/
+│   │   └── tools/      # 43 portal tools + _common/ + subtree components
+│   └── getting-started/
+│       └── wizard.jsx
+├── entries/            # *.entry.jsx — esbuild entry points
+├── shims/              # build-time shims (lucide-react etc.)
+└── tests/              # ★ Vitest specs (was tests/portal/)
 
-docs/assets/dist/       # build output (per-tool ESM bundles)
-tests/portal/           # unit test files (sibling to tools/, not under it)
+docs/assets/dist/       # build output (per-tool ESM bundles) — written from build.mjs
+docs/interactive/index.html  # portal hub page — STAYS in docs/ (it's a real docs page)
 ```
 
 ## 為什麼 esbuild
@@ -59,10 +67,10 @@ tests/portal/           # unit test files (sibling to tools/, not under it)
 
 新加一個工具到 ESM build：
 
-1. 把工具從 `window.__X` 改成 `export { X }`
+1. 在 `tools/portal/src/interactive/tools/<name>.jsx` 寫工具（用 ESM `export default`）
 2. `tools/portal/manifest.json` 的 `entries` array 加入工具名（不含 `.jsx`）
-3. 對應 HTML 從 `jsx-loader.html?component=...` 改成 `<script type="module" src="../assets/dist/<name>.js">`
-4. （可選）寫 Vitest 測試在 `tests/portal/<Component>.test.tsx`
+3. 在 `tools/portal/entries/<name>.entry.jsx` 加 entry script（仿既有的）
+4. （可選）寫 Vitest 測試在 `tools/portal/tests/<Component>.test.tsx`
 
 ## 並存契約
 

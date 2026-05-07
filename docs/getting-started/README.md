@@ -17,4 +17,4 @@ Dynamic Alerting 平台有三種主要使用角色。選擇最符合你的角色
 
 > 不確定？從 [Tenant User 入門](for-tenants.md) 開始 — 它涵蓋最基本的概念。
 
-**互動式嚮導：** 也可以使用 [Setup Wizard](wizard.jsx) 透過問答方式引導你完成初始設定。
+**互動式嚮導：** 也可以使用 [Setup Wizard](../assets/jsx-loader.html?component=wizard) 透過問答方式引導你完成初始設定。
