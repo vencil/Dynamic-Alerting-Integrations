@@ -148,7 +148,7 @@ class TestCheckToolMeta:
 class TestCheckJsxFrontmatter:
     def test_valid_related(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, 'PROJECT_ROOT', tmp_path)
-        jsx_dir = tmp_path / "docs" / "interactive" / "tools"
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         (jsx_dir / "a.jsx").write_text(
             "---\nrelated: ['b']\n---\ncontent", encoding="utf-8"
@@ -166,7 +166,7 @@ class TestCheckJsxFrontmatter:
 
     def test_invalid_related_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, 'PROJECT_ROOT', tmp_path)
-        jsx_dir = tmp_path / "docs" / "interactive" / "tools"
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         (jsx_dir / "a.jsx").write_text(
             "---\nrelated: ['nonexistent']\n---\ncontent", encoding="utf-8"
@@ -228,9 +228,14 @@ class TestCheckAppearsIn:
 class TestCheckFlowComponents:
     def test_valid_flow(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, 'PROJECT_ROOT', tmp_path)
+        # TD-042: flow component paths now resolve against tools/portal/src/
+        # (after stripping leading "./" / "../"); flows.json itself stays
+        # under docs/assets/.
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
-        (assets / "step.jsx").write_text("content")
+        portal_src = tmp_path / "tools" / "portal" / "src"
+        portal_src.mkdir(parents=True)
+        (portal_src / "step.jsx").write_text("content")
         import json
         (assets / "flows.json").write_text(json.dumps({
             "flows": {"onboard": {"steps": [
