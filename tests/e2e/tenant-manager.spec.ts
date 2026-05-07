@@ -62,7 +62,7 @@ test.describe('Tenant Manager @critical', () => {
     expect(iframeCount + contentDivCount).toBeGreaterThanOrEqual(0);
 
     // Wait a moment for data to load or show graceful message
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     const bodyText = await page.locator('body').textContent();
     expect(bodyText).toBeTruthy();
@@ -72,7 +72,7 @@ test.describe('Tenant Manager @critical', () => {
     await loadTenantManager(page);
 
     // Wait for any tenant list or filter inputs to load
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Look for filter/search input
     const filterInputs = page.locator('input[type="text"], input[placeholder*="search" i], input[aria-label*="filter" i]');
@@ -99,7 +99,7 @@ test.describe('Tenant Manager @critical', () => {
   test('should support metadata filtering', async ({ page }) => {
     await loadTenantManager(page);
 
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Look for filter controls - common patterns: buttons, selects, checkboxes
     const filterControls = page.locator(
@@ -118,7 +118,7 @@ test.describe('Tenant Manager @critical', () => {
   test('should display result count or list', async ({ page }) => {
     await loadTenantManager(page);
 
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Look for result indicators: list items, table rows, badges with counts
     const listItems = page.locator('[data-testid="result-item"], li, tr');
@@ -137,7 +137,7 @@ test.describe('Tenant Manager @critical', () => {
   test('should handle filter state persistence', async ({ page }) => {
     await loadTenantManager(page);
 
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Find a filter input
     const filterInputs = page.locator('input[type="text"], input[placeholder*="search" i]');
@@ -159,7 +159,7 @@ test.describe('Tenant Manager @critical', () => {
   test('should show graceful degradation on data load errors', async ({ page }) => {
     await loadTenantManager(page);
 
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Check for error message or empty state
     const errorMessages = page.locator(
@@ -218,7 +218,7 @@ test.describe('Tenant Manager @critical', () => {
     });
 
     await loadTenantManagerDirect(page);
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Layered assertions:
     //   (a) Wire-level — JSX must call our endpoint with page_size=500.
@@ -270,7 +270,7 @@ test.describe('Tenant Manager @critical', () => {
     });
 
     await loadTenantManagerDirect(page);
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
 
     // The overflow banner contains "500" and "2000" plus a hint to
     // refine filters. We use a regex so the test survives small
@@ -346,7 +346,7 @@ test.describe('Tenant Manager @critical', () => {
     });
 
     await loadTenantManagerDirect(page);
-    await page.waitForTimeout(2000); // initial fetch (q='')
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {}); // initial fetch (q='')
 
     // Type into the search input. `q` is debounced 300ms; pre-fix
     // would have fired one fetch per keystroke.
@@ -387,7 +387,7 @@ test.describe('Tenant Manager @critical', () => {
     // Navigate WITH ?q=preset already in the URL.
     await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx&q=preset');
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // The very first API call should already include q=preset
     // (initial state seeded from URL, not from empty string).
@@ -423,7 +423,7 @@ test.describe('Tenant Manager @critical', () => {
     });
 
     await loadTenantManagerDirect(page);
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // The virtualized container has data-testid="tenant-grid-virtual"
     // and is only rendered when `filtered.length > 50`. Its presence
@@ -462,7 +462,7 @@ test.describe('Tenant Manager @critical', () => {
     });
 
     await loadTenantManagerDirect(page);
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Below threshold → no virtual container. All 10 cards in DOM.
     await expect(page.locator('[data-testid="tenant-grid-virtual"]')).toHaveCount(0);
