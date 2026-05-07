@@ -187,10 +187,16 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
 
-      - name: Cache Go modules
+      - name: Cache Go modules + build cache
+        # path expanded to include ~/.cache/go-build so `go install swag@latest`
+        # below benefits from a warm build cache on cache-hit runs (saves ~5-8s
+        # on the swag CLI install step). Module cache (~/go/pkg/mod) is the
+        # primary key; build cache rides along.
         uses: actions/cache@v5
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-${{ matrix.go }}-
@@ -227,6 +233,18 @@ jobs:
       # Builds tenant-api, starts on a random port, fuzzes GET endpoints
       # with response_schema_conformance check. CONTRACT_MAX_EXAMPLES=5 keeps
       # CI runtime ~10-20s. The runner already has timeout=600 + auth header.
+      - name: Cache pip packages (schemathesis)
+        # Saves ~5-7s on the schemathesis install step on cache-hit runs.
+        # The Lint and Python Tests jobs already have pip cache; this brings
+        # parity to the Go Tests job which transitively pip-installs.
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-go-tests-schemathesis-v1
+          restore-keys: |
+            ${{ runner.os }}-pip-go-tests-
+            ${{ runner.os }}-pip-
+
       - name: Install schemathesis
         run: pip install schemathesis
 
