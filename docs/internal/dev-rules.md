@@ -299,6 +299,31 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 **收束驗收**：(1) design-tokens.css 每個 foreground token 須有 JSDoc-style 註解標明「allowed bg contexts + contrast ratio」；(2) axe-core `color-contrast` rule 在 light + dark dual-mode 皆 0 violations；(3) design-system-guide.md §TL;DR 的「Token 速查」應列出 surface scope 分類。
 
+### S6. JSX 工具一律 ESM import，禁止 module-scope `window.__X` 無 fallback 讀取（TD-033/034 新增）
+
+**規則**：`docs/interactive/tools/**` 下的 `.jsx` / `.js`，**禁止** module-scope 寫 `const X = window.__X;` / `const X = globalThis.__X;`（無 fallback）。React hooks 同理——禁 `const { useState } = React;`，必須 `import { useState } from 'react';`。
+
+**為什麼**：portal 走 ESM dist-bundle（TD-030 Option C）後，esbuild `splitting: true` 切出的 chunk 之間 evaluation 順序非 deterministic——consumer chunk 可能在 `window.__X` 設定的 chunk 之前 evaluate → 讀到 `undefined` → render 失敗。TD-033 的 PR-E rebuild 觸發過一次，20 個 spec 在 main 上靜默壞掉直到 audit 才發現。
+
+**反 / 正例**：
+
+```jsx
+// ❌ Module-scope no-fallback global read
+const RULE_PACK_DATA = window.__RULE_PACK_DATA;
+const styles = window.__styles;
+const { useState } = React;
+
+// ✅ ESM imports
+import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
+import { styles } from '../styles.js';
+import { useState } from 'react';
+
+// ✅ 例外：fallback 形式仍允許（undefined 時走 fallback function）
+const t = window.__t || ((zh, en) => en);
+```
+
+**實作檢查**：pre-commit hook（TD-036 Plan C）grep `^const \w+\s*=\s*window\.__\w+\s*;` 阻擋此 pattern。配套：`tools/portal/build.mjs` 禁用 `define: { React: ... }` 之類把 bare identifier rewrite 成 global 讀取的技巧——任何 esbuild splitting 都會打破假設。
+
 ## §T 工具生命週期（v2.8.0 Phase .a A-5b 新增）
 
 互動工具（`docs/assets/tool-registry.yaml` 註冊的 JSX）在生命週期中會經歷以下四種狀態。
