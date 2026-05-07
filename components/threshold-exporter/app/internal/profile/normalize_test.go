@@ -3,6 +3,7 @@ package profile
 import "testing"
 
 func TestNormaliseExpr_StripsNumericLiterals(t *testing.T) {
+	t.Parallel()
 	// Whitespace is fully stripped at the end of normalisation, so
 	// expected values collapse spaces between tokens.
 	cases := []struct{ in, want string }{
@@ -17,6 +18,7 @@ func TestNormaliseExpr_StripsNumericLiterals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
 			if got := normaliseExpr(tc.in); got != tc.want {
 				t.Errorf("normaliseExpr(%q) = %q, want %q", tc.in, got, tc.want)
 			}
@@ -25,6 +27,7 @@ func TestNormaliseExpr_StripsNumericLiterals(t *testing.T) {
 }
 
 func TestNormaliseExpr_StripsLabelStringValues(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{`x{tenant="tenant-a"}`, `x{tenant="<STR>"}`},
 		{`x{tenant="tenant-b"}`, `x{tenant="<STR>"}`},
@@ -34,6 +37,7 @@ func TestNormaliseExpr_StripsLabelStringValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
 			if got := normaliseExpr(tc.in); got != tc.want {
 				t.Errorf("normaliseExpr(%q) = %q, want %q", tc.in, got, tc.want)
 			}
@@ -42,6 +46,7 @@ func TestNormaliseExpr_StripsLabelStringValues(t *testing.T) {
 }
 
 func TestNormaliseExpr_PerTenantVariantsCollapse(t *testing.T) {
+	t.Parallel()
 	// The motivating use case: same alert per tenant, only label
 	// value + threshold differ. Both must normalise to the same
 	// signature so they cluster.
@@ -53,6 +58,7 @@ func TestNormaliseExpr_PerTenantVariantsCollapse(t *testing.T) {
 }
 
 func TestNormaliseExpr_DifferentFunctionsStayDistinct(t *testing.T) {
+	t.Parallel()
 	// rate() and irate() are different signals — they must NOT
 	// collapse, even with identical surroundings.
 	r := `rate(foo[5m]) > 1`
@@ -63,6 +69,7 @@ func TestNormaliseExpr_DifferentFunctionsStayDistinct(t *testing.T) {
 }
 
 func TestNormaliseExpr_CollapsesWhitespace(t *testing.T) {
+	t.Parallel()
 	// Two formattings of the same expression normalise identically.
 	tight := `rate(foo[5m])>1`
 	loose := `rate(foo[5m])  >   1`
@@ -73,12 +80,14 @@ func TestNormaliseExpr_CollapsesWhitespace(t *testing.T) {
 }
 
 func TestNormaliseExpr_EmptyReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	if got := normaliseExpr(""); got != "" {
 		t.Errorf("normaliseExpr(\"\") = %q, want empty", got)
 	}
 }
 
 func TestNormaliseExpr_DigitsInIdentifiersPreserved(t *testing.T) {
+	t.Parallel()
 	// `node_cpu_seconds_total` contains no digits but other metric
 	// names like `http_requests_total_5xx` do. The normaliser must
 	// not strip digits that are part of an identifier.
