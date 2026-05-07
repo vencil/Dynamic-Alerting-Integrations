@@ -1308,6 +1308,94 @@ if hierErr := m.populateHierarchyState(); hierErr != nil {
 
 本節的三個 pattern 不限於 `tenant-api/internal/async`。任何具備 **worker goroutine + shared mutex + 可變 timestamp/status** 的 Go 套件（如 `ws/hub`、`gitops/reconcile`）都該用同樣的三條 checklist 掃過：(a) 初始狀態斷言是否寫死 pending/running、(b) time bounds 是否跨過 Get/snapshot、(c) 是否只跑 `-count=1`。
 
+## v2.8.0 Lessons Learned — Portal E2E coverage push + ESM dist regression（2026-05-07, TD-032..TD-035）
+
+> **觸發**：TD-032 系列把 portal E2E 從 15/43 工具覆蓋拉到 43/43，期間意外觸發了 PR-E（template-gallery 修復）的 esbuild rebuild → 20 個既存 spec 在 main 上靜默壞掉。Root cause 不是 chunk loading order race（早期假設），而是 esbuild `define + globalThis side-effect` 模式的 chunk-split 失效。本節 codify 三條規則，避免同類「rebuild artifact 變化炸測試」在後續 portal 工作再現。
+>
+> **Authority**：本節為「ESM dist-bundle + esbuild splitting + 跨 chunk module-load order」class 的 design rule。違反會出現「workers=N race」、「`Cannot destructure property of undefined`」、「`No data-testid elements visible` smoke timeout」這三種症狀，但 root cause 是同一個。
+
+### 1. 不要對 `window.__X` 全域做 module-scope no-fallback 讀取
+
+**現象（TD-033 修的 PR-E-pre 行為）**：
+
+```jsx
+// portal-shared.jsx — pre-TD-033/034 pattern
+const RULE_PACK_DATA = window.__RULE_PACK_DATA;   // (1) module-scope no-fallback read
+const styles = window.__styles;                   // (2) ditto in tenant-manager components
+const { useState } = React;                       // (3) destructure with esbuild `define` rewrite
+
+// build.mjs `define: { React: 'globalThis.__bundledReact' }`
+// + entry side-effect `import './_setup-globals.js';`
+//   that runs `globalThis.__bundledReact = React;`
+```
+
+PR-E 修 template-gallery 時 `npm run build` 重排 chunks（Loading.jsx 多了一個 transitive importer），新的 chunk-split 配置下 component chunk 比 setup chunk 先 evaluate → `globalThis.__bundledReact = undefined` → destructure throws → no testid renders → 20 個 spec timeout 30s。
+
+**Durable fix**：所有 `window.__X` / `globalThis.__X` 改成 ESM import：
+
+```jsx
+import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
+import { styles } from '../styles.js';
+import { useState } from 'react';
+```
+
+esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是唯一可預測的順序。
+
+**反例（不能用的「`define` + side-effect global」設計）**：esbuild `define` 把 bare identifier 改寫成 global 讀取，配合 entry-side `import './_setup-globals.js'` 設 global。問題：`splitting: true` 下，entry 的 import 順序不保證對應 chunk 載入順序——chunk 之間的 evaluation 是 topological，但 `_setup-globals` 的 chunk 可能跟 component chunk 平行載入，誰先 evaluate 看 esbuild 的 chunk-allocation heuristic。任何 rebuild 改動 chunk 形狀都可能翻轉這個順序。
+
+### 2. 不要把 build artifacts 當 commit 期望的不變量
+
+**現象**：PR-E 把 template-gallery.jsx 補 1 個 ESM import → `npm run build` 觸發 esbuild 重新計算 chunk graph → tenant-manager.js / simulate-preview.js / saved-views 相關 chunks 全部換新 hash + 部分內容洗牌 → main merge 後**其他 spec** 開始 fail，但 PR diff 看起來只動了 template-gallery。
+
+**Durable rule**：**rebuild dist 後必跑全套 E2E**，不能只跑被改的 spec。`make portal-build` + `npm test` 是 rebuild 的 minimum verification gate。
+
+**配套自動化**：CI 的 `Portal Tests` job 已經 build → bundle-size-budget → vitest 三段；建議追加「rebuild + re-run E2E」於本機 dev workflow（pre-push hook 或 docs sync），但**不**鎖在 CI（runtime 太貴）。
+
+### 3. 並行測試（workers>1）只在 module-load order 完全 deterministic 後才安全
+
+**現象（TD-032e 第一次嘗試的 path-not-taken）**：CI smoke E2E 撞 10 min cap → 試 `--workers=2` 想拉到 5 min cap 內 → 60 個 spec fail（後縮到 20 fail）→ 誤診為 workers=N race，實際是 §1 的 module-load order race 在 parallel browser context 下放大。
+
+**辨識訊號**：
+- `Cannot destructure property X of <global> as it is undefined`
+- `Cannot read properties of undefined (reading 'forwardRef')` 或類似 React 內部 namespace 錯誤
+- 工具不渲染任何 testid，但 dist 檔案 200 OK（`#root` 是空或只有 ErrorBoundary fallback）
+- 同樣的 spec 在 `--workers=1` 過、`--workers=N>1` 失敗
+
+**Durable rule**：上 `--workers=N>1` 之前先確認**所有** module-scope global 讀取都已改成 ESM import（grep `^const \w+\s*=\s*window\.__\w+\s*;` 必須 0 hits in `docs/interactive/`）。本機驗證鏈：`workers=1 → workers=2 → workers=4`，每階段都跑全套 + 看 0 fail 才往上。
+
+**配套**：`tools/portal/build.mjs` 不要再用 `define: { React: ... }` 之類把 bare identifier 改寫成全域讀取的技巧——任何 esbuild splitting 都會打破假設。React 用 `import { useState } from 'react'`，業務 data 用 `import { X } from '_common/.../X.js'`，沒例外。
+
+### 4. 加 smoke test 的副作用：暴露既有的 prod bug
+
+**現象（TD-032e 順手撈到）**：給 template-gallery 加第一個 smoke spec → React error #130 → ErrorBoundary fallback render → **每個用戶開 template-gallery 都看到 broken page**，已經壞了至少一個版本但因為沒有 spec 沒人發現。
+
+**Durable rule**：**新 spec failed 的第一假設是「真 bug」不是「spec 寫錯」**。先看 ErrorBoundary fallback 有沒有出現、`document.title` 有沒有 mount、有沒有 React error。確認 spec 邏輯沒問題之前，不要急著加 `skipA11y: true` 或 `expectedTitleMatch` 放寬。
+
+### 5. axe critical=0 是合理 gate；non-critical 用 budget 而非 skip
+
+**現象（TD-035）**：PR-C/D/E 為了快速 ship 給 17 個工具加 `skipA11y: true`，把 a11y debt 完全藏起來。Audit 後實際只有 12 個有 critical 違反（form labels / select-name），13 個本來就乾淨，根本不需要 skip。
+
+**Durable rule**：
+- **`runToolSmokeChecks` 預設 `allowedNonCriticalViolations: 0` + `skipA11y: false`** — 不要為了 ship 一個 spec 把 a11y 整個關掉
+- **真有 critical 違反**：fix at source（`<input>` 加 `aria-label`、`<label>` 加 `htmlFor` 配 `id`、共用 component 改一處等於修多處）
+- **serious / moderate / minor 違反**：用 `allowedNonCriticalViolations: 5` 或更小，不要 `skipA11y: true`
+- **整批 a11y 還沒清前**：可暫時容忍 budget=5；之後逐步降到 1 → 0
+
+### 6. CI runtime 治理：reporter 比 timeout 重要
+
+**現象（TD-032e CI debug）**：CI 用 default dot reporter（`···×F×F×T×F×F×F···`），看 log 完全不知道哪些 spec 失敗，要下載 HTML artifact 再翻——對「reproduce locally first」原則是反向 friction。
+
+**Durable rule**：CI 的 playwright invocation 永遠用 `--reporter=list,html`：
+- `list` 在 stdout 直接印每個 spec 名稱 + 時長 + ✓/✘
+- `html` 仍然產生 artifact 給深度 trace 看
+- 兩個 reporter 互補，沒有 trade-off
+
+`timeout-minutes` 是 cap，不是設計目標。192 specs 的 smoke suite 在 workers=4 + threaded server 下 1.5 min 跑完；CI cap 設 10 min 已經有 6× headroom。**不要再用「bump timeout」當第一反應**——先看是不是 server bottleneck（`python -m http.server` 是單執行緒）或 module-load race。
+
+### 適用範圍
+
+本節 6 個規則適用於所有 `docs/interactive/tools/` 下的 JSX 工具 + `tools/portal/build.mjs` esbuild config + `tests/e2e/*.spec.ts` + `.github/workflows/playwright.yml`。新工具 onboarding 流程必走 §1 的 grep 檢查 + §3 的 workers=N 漸進驗證 + §5 的 a11y critical=0 gate。
+
 ## 相關資源
 
 | 資源 | 相關性 |

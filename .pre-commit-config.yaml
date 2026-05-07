@@ -539,6 +539,17 @@ repos:
         # Per-line escape via `<!-- jsx-loader-compat: ignore -->` for legitimate
         # exceptions / illustrative quotes.
 
+      - id: window-x-no-fallback-check
+        name: Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6, TD-037)
+        entry: python3 -X utf8 scripts/tools/lint/check_window_x_no_fallback.py --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/(interactive|getting-started)/.*\.(jsx|js)$
+        # Auto-stage, FATAL on findings. Codebase audit at scaffold time
+        # showed 0 violations (TD-033/034 cleared all instances). Per-line
+        # escape via `<!-- window-x-no-fallback: ignore -->` for legitimate
+        # exceptions (illustrative comments only).
+
       - id: playwright-rtl-drift-check
         name: Detect React Testing Library API names in Playwright specs (S#96; mechanical safety net for testing-playbook §LL §10)
         entry: python3 -X utf8 scripts/tools/lint/check_playwright_rtl_drift.py --ci

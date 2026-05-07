@@ -42,7 +42,7 @@ test.describe('Getting Started Wizard @critical', () => {
       // Wizard has a known amber "START HERE" badge with borderline contrast
       // that is tracked separately (see wizard.md critique §Accessibility).
       // Allow up to 2 non-Critical violations while migration is in-flight.
-      allowedNonCriticalViolations: 2,
+      allowedNonCriticalViolations: 0,
     });
   });
 

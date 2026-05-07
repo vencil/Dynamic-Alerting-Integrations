@@ -13,7 +13,7 @@ import {
 test.describe('Platform Health @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'platform-health');
-    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 5 });
+    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 1 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {

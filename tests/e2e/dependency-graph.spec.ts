@@ -19,7 +19,7 @@ test.describe('Dependency Graph @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'dependency-graph');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /Dependency Graph|依賴關係/i,
     });
   });

@@ -14,7 +14,7 @@ test.describe('PromQL Tester @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'promql-tester');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /PromQL|查詢測試/i,
     });
   });

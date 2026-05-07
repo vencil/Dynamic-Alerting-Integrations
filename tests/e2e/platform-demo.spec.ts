@@ -14,7 +14,7 @@ test.describe('Platform Demo @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'platform-demo');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /Platform Demo|平台展示/i,
     });
   });

@@ -19,7 +19,7 @@ test.describe('CLI Playground @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'cli-playground');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 2,
       expectedTitleMatch: /CLI Playground|CLI 遊樂場/i,
     });
   });

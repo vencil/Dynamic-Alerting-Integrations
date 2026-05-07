@@ -22,7 +22,7 @@ test.describe('Threshold Heatmap @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Heatmap|Threshold|Overview|Matrix/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
     });
   });
 

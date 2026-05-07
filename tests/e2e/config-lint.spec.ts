@@ -21,7 +21,7 @@ test.describe('Config Lint @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Lint|Config|Validat|Check/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 2,
     });
   });
 

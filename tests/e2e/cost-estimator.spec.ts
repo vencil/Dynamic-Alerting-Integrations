@@ -21,7 +21,7 @@ test.describe('Cost Estimator @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Cost|Estimat|Pric|Resource/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
     });
   });
 
