@@ -95,8 +95,8 @@ class TestCheckToolMeta:
 class TestCheckJsxFrontmatter:
     """check_jsx_frontmatter() tests."""
 
-    def test_valid_frontmatter(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_valid_frontmatter(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
@@ -116,8 +116,8 @@ class TestCheckJsxFrontmatter:
         ltc.check_jsx_frontmatter(tools, errors, warnings)
         assert errors == []
 
-    def test_missing_jsx_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_missing_jsx_file(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         (tmp_path / "docs").mkdir()
         tools = [{"key": "ghost", "file": "interactive/tools/ghost.jsx"}]
         errors = []
@@ -126,8 +126,8 @@ class TestCheckJsxFrontmatter:
         assert len(errors) == 1
         assert "not found" in errors[0]
 
-    def test_no_frontmatter(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_no_frontmatter(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
@@ -139,8 +139,8 @@ class TestCheckJsxFrontmatter:
         assert len(warnings) == 1
         assert "frontmatter" in warnings[0]
 
-    def test_no_related_in_frontmatter(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_no_related_in_frontmatter(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
@@ -152,8 +152,8 @@ class TestCheckJsxFrontmatter:
         assert len(warnings) == 1
         assert "related" in warnings[0]
 
-    def test_unknown_related_key(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_unknown_related_key(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
@@ -174,8 +174,8 @@ class TestCheckJsxFrontmatter:
 class TestCheckAppearsIn:
     """check_appears_in() tests."""
 
-    def test_link_found(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_link_found(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         md = tmp_path / "docs" / "guide.md"
         md.parent.mkdir(parents=True)
         md.write_text("See [tool](interactive/tools/tool-a.jsx)",
@@ -188,8 +188,8 @@ class TestCheckAppearsIn:
         ltc.check_appears_in(tools, errors, warnings)
         assert errors == []
 
-    def test_link_not_found(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_link_not_found(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         md = tmp_path / "docs" / "guide.md"
         md.parent.mkdir(parents=True)
         md.write_text("No links here", encoding="utf-8")
@@ -202,8 +202,8 @@ class TestCheckAppearsIn:
         assert len(errors) == 1
         assert "no link found" in errors[0]
 
-    def test_nonexistent_md(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_nonexistent_md(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         tools = [{"key": "tool-a",
                   "file": "interactive/tools/tool-a.jsx",
                   "appears_in": ["docs/nonexistent.md"]}]
@@ -227,8 +227,8 @@ class TestCheckAppearsIn:
 class TestCheckFlowComponents:
     """check_flow_components() tests."""
 
-    def test_no_flows_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_no_flows_file(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         (tmp_path / "docs" / "assets").mkdir(parents=True)
         tools = []
         errors = []
@@ -237,8 +237,8 @@ class TestCheckFlowComponents:
         assert len(warnings) == 1
         assert "not found" in warnings[0]
 
-    def test_empty_flows(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_empty_flows(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
         (assets / "flows.json").write_text('{"flows": {}}',
@@ -250,8 +250,8 @@ class TestCheckFlowComponents:
         assert len(warnings) == 1
         assert "no flows" in warnings[0]
 
-    def test_valid_flow(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_valid_flow(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         # TD-042: flow component paths now resolve against tools/portal/src/
         # (after stripping leading "./" / "../"); flows.json itself stays
         # under docs/assets/.
@@ -272,8 +272,8 @@ class TestCheckFlowComponents:
         ltc.check_flow_components(tools, errors, warnings)
         assert errors == []
 
-    def test_flow_unknown_tool(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_flow_unknown_tool(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
         flows = {"flows": {"onboard": {"steps": [
@@ -288,8 +288,8 @@ class TestCheckFlowComponents:
         assert len(errors) == 1
         assert "nonexistent" in errors[0]
 
-    def test_flow_missing_title(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_flow_missing_title(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
         flows = {"flows": {"onboard": {"steps": [
@@ -303,8 +303,8 @@ class TestCheckFlowComponents:
         ltc.check_flow_components(tools, errors, warnings)
         assert any("title" in w for w in warnings)
 
-    def test_flow_empty_steps(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_flow_empty_steps(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
         flows = {"flows": {"empty-flow": {"steps": []}}}
@@ -316,8 +316,8 @@ class TestCheckFlowComponents:
         ltc.check_flow_components(tools, errors, warnings)
         assert any("no steps" in w for w in warnings)
 
-    def test_flow_bad_json(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+    def test_flow_bad_json(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
         (assets / "flows.json").write_text("{bad json", encoding="utf-8")

@@ -71,6 +71,44 @@ def routing_dir():
         yield tmpdir
 
 
+@pytest.fixture
+def patch_repo_root(monkeypatch, tmp_path):
+    """Replace a tool module's repo-root constant with `tmp_path`.
+
+    Returns a callable: `patch_repo_root(module, attr="REPO_ROOT") -> Path`.
+    The returned Path is the same `tmp_path` so the caller can populate
+    fixture data on it.
+
+    Why this exists: 60+ tests across 13 files were repeating
+    `monkeypatch.setattr(my_module, "REPO_ROOT", tmp_path)` (or `PROJECT_ROOT`,
+    `CLAUDE_MD`, etc.) verbatim. The audit's TD-042 sweep showed how easily
+    one renamed constant breaks every test that hard-codes the attribute
+    name; this fixture funnels them through one indirection.
+
+    Usage:
+        def test_foo(patch_repo_root):
+            root = patch_repo_root(my_module)              # default REPO_ROOT
+            (root / "docs").mkdir()
+            ...
+
+        def test_bar(patch_repo_root):
+            root = patch_repo_root(my_module, "PROJECT_ROOT")   # explicit attr
+            ...
+
+        def test_file_path(patch_repo_root):
+            root = patch_repo_root(my_module)
+            claude_md = root / "CLAUDE.md"
+            claude_md.write_text("...")
+            patch_repo_root(my_module, "CLAUDE_MD", value=claude_md)
+            ...
+    """
+    def _patch(module, attr: str = "REPO_ROOT", value=None):
+        target = tmp_path if value is None else value
+        monkeypatch.setattr(module, attr, target)
+        return tmp_path
+    return _patch
+
+
 # ── pytest configuration ──────────────────────────────────────────────
 
 def pytest_addoption(parser):
