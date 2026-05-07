@@ -6,7 +6,12 @@ on:
       - main
       - develop
     paths:
-      - 'docs/interactive/**'
+      # TD-042: portal source moved to tools/portal/src/. Watch the
+      # whole portal package (source + build config + manifest) so any
+      # change that affects bundle output triggers smoke. Also watch
+      # docs/interactive/index.html which is the runtime entry loader.
+      - 'tools/portal/**'
+      - 'docs/interactive/index.html'
       - 'tests/e2e/**'
       - 'package.json'
       - '.github/workflows/playwright.yml'
@@ -14,7 +19,8 @@ on:
     branches:
       - main
     paths:
-      - 'docs/interactive/**'
+      - 'tools/portal/**'
+      - 'docs/interactive/index.html'
       - 'tests/e2e/**'
       - 'package.json'
       - '.github/workflows/playwright.yml'
@@ -59,6 +65,18 @@ jobs:
       - name: Install E2E dependencies
         working-directory: tests/e2e
         run: npm ci
+
+      # Cache Playwright browser binaries (~150 MB chromium download).
+      # `npx playwright install` is idempotent: re-running with cache hit
+      # is a fast no-op. Key includes the playwright version derived from
+      # tests/e2e/package-lock.json so cache invalidates on bump.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
       - name: Install Playwright browsers
         working-directory: tests/e2e

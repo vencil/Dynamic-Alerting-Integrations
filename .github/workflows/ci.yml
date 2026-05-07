@@ -142,7 +142,11 @@ jobs:
         # hangs (e.g. PR #165 deadlock-regression tests assert
         # _batch_cat_blobs returns; without pytest-timeout the test
         # would hang for the full CI workflow timeout if regressed)
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout promql-parser hypothesis
+        # pytest-xdist: parallelize across runner vCPUs. ubuntu-latest
+        # has 4 vCPUs; local benchmark on 16-core showed 3.95x at -n
+        # auto (160s -> 40s) and 2.51x at -n 4 (160s -> 63s). CI uses
+        # -n auto which resolves to 4 here.
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:
@@ -156,7 +160,8 @@ jobs:
         # Coverage source is defined in pyproject.toml [tool.coverage.run]
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
         # and would silently exclude components/da-tools/app from measurement.
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py -x --tb=short --cov --cov-report=xml --cov-fail-under=75
+        # -n auto: parallel execution via pytest-xdist (see Install step).
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py -x --tb=short -n auto --cov --cov-report=xml --cov-fail-under=75
 
       - name: Upload coverage artifact
         if: always()
