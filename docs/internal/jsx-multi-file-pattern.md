@@ -16,11 +16,11 @@ verified-at-version: v2.7.0
 
 ## TL;DR
 
-When `docs/interactive/tools/foo.jsx` grows past ~1500 lines (the
+When `tools/portal/src/interactive/tools/foo.jsx` grows past ~1500 lines (the
 soft cap codified by issue #152 / PR #154), split it into:
 
 ```
-docs/interactive/tools/
+tools/portal/src/interactive/tools/
   foo.jsx                       ← orchestrator (front-matter declares deps; ~200-800 lines)
   foo/
     fixtures/                   ← static data (DEMO_X)
@@ -125,7 +125,7 @@ manually move it earlier in the list.
 ## Lint coverage
 
 `scripts/tools/lint/lint_jsx_babel.py` recursively scans
-`docs/interactive/tools/**/*.jsx` (PR #156 changed the glob from
+`tools/portal/src/interactive/tools/**/*.jsx` (PR #156 changed the glob from
 `*.jsx` to `rglob("*.jsx")`). All decomposed `.jsx` files individually
 go through:
 

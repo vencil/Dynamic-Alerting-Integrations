@@ -97,7 +97,7 @@ class TestCheckJsxFrontmatter:
 
     def test_valid_frontmatter(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
-        jsx_dir = tmp_path / "docs" / "interactive" / "tools"
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
         jsx.write_text(
@@ -128,7 +128,7 @@ class TestCheckJsxFrontmatter:
 
     def test_no_frontmatter(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
-        jsx_dir = tmp_path / "docs" / "interactive" / "tools"
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
         jsx.write_text("// no frontmatter\ncontent", encoding="utf-8")
@@ -141,7 +141,7 @@ class TestCheckJsxFrontmatter:
 
     def test_no_related_in_frontmatter(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
-        jsx_dir = tmp_path / "docs" / "interactive" / "tools"
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
         jsx.write_text("---\ntitle: Tool A\n---\ncontent", encoding="utf-8")
@@ -154,7 +154,7 @@ class TestCheckJsxFrontmatter:
 
     def test_unknown_related_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
-        jsx_dir = tmp_path / "docs" / "interactive" / "tools"
+        jsx_dir = tmp_path / "tools" / "portal" / "src" / "interactive" / "tools"
         jsx_dir.mkdir(parents=True)
         jsx = jsx_dir / "tool-a.jsx"
         jsx.write_text(
@@ -252,10 +252,14 @@ class TestCheckFlowComponents:
 
     def test_valid_flow(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ltc, "PROJECT_ROOT", tmp_path)
+        # TD-042: flow component paths now resolve against tools/portal/src/
+        # (after stripping leading "./" / "../"); flows.json itself stays
+        # under docs/assets/.
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
-        comp = assets / "test-comp.jsx"
-        comp.write_text("component", encoding="utf-8")
+        portal_src = tmp_path / "tools" / "portal" / "src"
+        portal_src.mkdir(parents=True)
+        (portal_src / "test-comp.jsx").write_text("component", encoding="utf-8")
         flows = {"flows": {"onboard": {"steps": [
             {"tool": "tool-a", "component": "test-comp.jsx",
              "title": "Step 1", "hint": "Do this"}

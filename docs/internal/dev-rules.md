@@ -110,7 +110,7 @@ lang: zh
 ### 9. i18n 三層架構
 
 **規則**：i18n 必須三層各自獨立處理，不能混：
-- **JSX 工具**（`docs/interactive/tools/*.jsx`）— 用 `window.__t(zh, en)` helper
+- **JSX 工具**（`tools/portal/src/interactive/tools/*.jsx`）— 用 `window.__t(zh, en)` helper
 - **Rule Pack annotation** — 用 `*_zh` 後綴欄位（例如 `summary` + `summary_zh`）
 - **Python CLI help**（`scripts/tools/**`）— 用 `detect_cli_lang()` 切換 argparse help 字串
 
@@ -208,13 +208,13 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 ### S1. 中性色禁 slate，用 `--da-neutral-*` 或 `gray-*`
 
-**規則**：`docs/interactive/tools/` 下的 JSX 禁止使用 Tailwind `slate-*` 類別。中性色統一走 `--da-neutral-*` token 或對應的 `gray-*` shade。
+**規則**：`tools/portal/src/interactive/tools/` 下的 JSX 禁止使用 Tailwind `slate-*` 類別。中性色統一走 `--da-neutral-*` token 或對應的 `gray-*` shade。
 
 **為什麼**：`design-tokens.css` 的 `--da-neutral-*` 色值是 Tailwind `gray` scale（暖中性灰）。`slate` 是冷藍灰，兩者色調不同。混用會導致同頁面兩種中性灰色調。Day 3 deployment-wizard 遷移時確立（commit `8634ea2`）。
 
 **Waiver**：IDE / code preview 情境可保留 `bg-slate-900 text-slate-100`（深底等寬字型視覺），需在 JSX 註解中標明。
 
-**收束驗收**：`grep -rE '(bg|text|border)-slate-[0-9]+' docs/interactive/tools/` 僅剩 waiver。
+**收束驗收**：`grep -rE '(bg|text|border)-slate-[0-9]+' tools/portal/src/interactive/tools/` 僅剩 waiver。
 
 ### S2. Playwright spec 含 `assertNoAbsoluteRootHrefs` 守門
 
@@ -226,7 +226,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 ### S3. Scrollable container 必附 `tabIndex={0}` + accessible name（v2.8.0 Phase .a 新增）
 
-**規則**：`docs/interactive/tools/` 下任何產生 scrollable overflow 的容器（`overflow-auto` / `overflowY: 'auto'` / `overflow-y-auto` / `overflow-scroll` 並搭配 `max-h` / `maxHeight` 或 flex 限高）**必須**同時滿足：
+**規則**：`tools/portal/src/interactive/tools/` 下任何產生 scrollable overflow 的容器（`overflow-auto` / `overflowY: 'auto'` / `overflow-y-auto` / `overflow-scroll` 並搭配 `max-h` / `maxHeight` 或 flex 限高）**必須**同時滿足：
 
 1. `tabIndex={0}` — 讓鍵盤使用者能 Tab 進容器 → 方向鍵捲動
 2. `aria-label={t('繁體中文標籤', 'English label')}` 或相等的 `aria-labelledby` — 讓 screen reader 宣告容器用途
@@ -301,7 +301,7 @@ Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
 ### S6. JSX 工具一律 ESM import，禁止 module-scope `window.__X` 無 fallback 讀取（TD-033/034 新增）
 
-**規則**：`docs/interactive/tools/**` 下的 `.jsx` / `.js`，**禁止** module-scope 寫 `const X = window.__X;` / `const X = globalThis.__X;`（無 fallback）。React hooks 同理——禁 `const { useState } = React;`，必須 `import { useState } from 'react';`。
+**規則**：`tools/portal/src/interactive/tools/**` 下的 `.jsx` / `.js`，**禁止** module-scope 寫 `const X = window.__X;` / `const X = globalThis.__X;`（無 fallback）。React hooks 同理——禁 `const { useState } = React;`，必須 `import { useState } from 'react';`。
 
 **為什麼**：portal 走 ESM dist-bundle（TD-030 Option C）後，esbuild `splitting: true` 切出的 chunk 之間 evaluation 順序非 deterministic——consumer chunk 可能在 `window.__X` 設定的 chunk 之前 evaluate → 讀到 `undefined` → render 失敗。TD-033 的 PR-E rebuild 觸發過一次，20 個 spec 在 main 上靜默壞掉直到 audit 才發現。
 

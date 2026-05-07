@@ -14,7 +14,7 @@ lang: zh
 
 ## 入門精靈 (Wizard)
 
-**檔案：** `docs/getting-started/wizard.jsx`
+**檔案：** `tools/portal/src/getting-started/wizard.jsx`
 
 根據使用者角色（Platform Engineer / Domain Expert / Tenant）引導至對應的入門文件，並動態顯示各角色的關鍵操作步驟。
 
@@ -22,7 +22,7 @@ lang: zh
 
 ## Tenant YAML Playground
 
-**檔案：** `docs/interactive/tools/playground.jsx`
+**檔案：** `tools/portal/src/interactive/tools/playground.jsx`
 
 互動式 Tenant YAML 編輯器，支援即時語法驗證（key 名稱、三態值、排程格式）並即時預覽產出的 Prometheus metrics。
 
@@ -30,7 +30,7 @@ lang: zh
 
 ## Rule Pack 選擇器
 
-**檔案：** `docs/interactive/tools/rule-pack-selector.jsx`
+**檔案：** `tools/portal/src/interactive/tools/rule-pack-selector.jsx`
 
 根據技術棧（MySQL / PostgreSQL / Redis / JVM / Nginx 等）推薦適用的 Rule Packs，顯示每個 Pack 的 alert 數量與涵蓋指標。
 
@@ -38,7 +38,7 @@ lang: zh
 
 ## CLI 指令建構器
 
-**檔案：** `docs/interactive/tools/cli-playground.jsx`
+**檔案：** `tools/portal/src/interactive/tools/cli-playground.jsx`
 
 選擇 da-tools 子命令 → 填入參數 → 自動產生完整 `docker run` 指令，一鍵複製。
 
@@ -46,7 +46,7 @@ lang: zh
 
 ## ROI Calculator
 
-**檔案：** `docs/interactive/tools/roi-calculator.jsx`
+**檔案：** `tools/portal/src/interactive/tools/roi-calculator.jsx`
 
 採用效益試算器 — 輸入組織規模（租戶數、Rule Pack 數、On-call 人員數）和現有運維成本（配置變更耗時、告警風暴頻率、手動 Onboard 時間），即時計算三項效益：Rule 維護時間 O(N×M) → O(M) 降幅、告警風暴自動壓制率、Onboard 自動化加速。支援匯入 `alert_quality.py --json` 實際數據修正預估。
 

@@ -63,6 +63,9 @@ from typing import List, Set
 
 # Source-of-rebuild signals — if a commit stages dist AND any of these,
 # the rebuild was intentional.
+#
+# TD-042 monorepo restructure: portal source moved from docs/* to
+# tools/portal/src/*. Patterns updated accordingly.
 SOURCE_PATTERNS = [
     # Entry scripts — adding / modifying entries triggers chunk rebuild
     lambda p: p.startswith("tools/portal/entries/") and p.endswith(".entry.jsx"),
@@ -70,9 +73,8 @@ SOURCE_PATTERNS = [
     lambda p: p == "tools/portal/build.mjs",
     lambda p: p == "tools/portal/manifest.json",
     lambda p: p.startswith("tools/portal/shims/") and p.endswith(".js"),
-    # JSX/JS source files
-    lambda p: p.startswith("docs/interactive/") and (p.endswith(".jsx") or p.endswith(".js")),
-    lambda p: p.startswith("docs/getting-started/") and (p.endswith(".jsx") or p.endswith(".js")),
+    # JSX/JS source files (post-TD-042)
+    lambda p: p.startswith("tools/portal/src/") and (p.endswith(".jsx") or p.endswith(".js")),
 ]
 
 # Dist-side patterns — staging any of these is what triggers the check.

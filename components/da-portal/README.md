@@ -11,7 +11,7 @@
 
 ## 1. What & Why
 
-- **Input** — `docs/interactive/tools/*.jsx`（43 個工具，由 `tool-registry.yaml` 為 SSOT 列管）+ `docs/getting-started/wizard.jsx` + `docs/assets/{platform-data.json, flows.json, design-tokens.css, tool-registry.yaml, vendor/}`，build 階段 `COPY` 進 image
+- **Input** — `tools/portal/src/interactive/tools/*.jsx`（43 個工具，由 `tool-registry.yaml` 為 SSOT 列管）+ `tools/portal/src/getting-started/wizard.jsx` + `docs/assets/{platform-data.json, flows.json, design-tokens.css, tool-registry.yaml, vendor/}`，build 階段 `COPY` 進 image
 - **Output** — 一顆 nginx-alpine image，跑起來給瀏覽器讀靜態檔案；JSX 由 `jsx-loader.html` 用 Babel standalone 在瀏覽器端轉譯
 - **Why static + zero build** — 1) 內網 / air-gapped 場景不能跑 npm CI；2) 工具作者改 JSX 推 PR 即可，無 webpack / vite watch；3) image 純靜態 → 不需 secret，不需 runtime config
 - **Why bundled vendor** — `make vendor-download` 把 React 18.3 / Tailwind / Babel 7.26 / Lucide 抓進 `docs/assets/vendor/`，build 時一起塞進 image；瀏覽器啟動先 probe local，找不到才 fallback CDN
@@ -178,7 +178,7 @@ docker run -p 8080:80 \
 | 步驟 | 命令 |
 |------|------|
 | 1. Scaffold 新工具的 dep 檔 | `python3 scripts/tools/dx/scaffold_jsx_dep.py --tool foo --kind hook --name useFoo` |
-| 2. 編寫工具 JSX | `docs/interactive/tools/foo.jsx` |
+| 2. 編寫工具 JSX | `tools/portal/src/interactive/tools/foo.jsx` |
 | 3. 註冊到 SSOT | 編 `docs/assets/tool-registry.yaml` 加 `- key: foo` block |
 | 4. 重新產 platform-data | `make platform-data` |
 | 5. Lint（auto-stage） | `pre-commit run --all-files` |

@@ -145,9 +145,13 @@ def scan(paths: List[Path]) -> List[Tuple[Path, int, str, str]]:
 
 
 def collect_default_paths() -> List[Path]:
+    # TD-042 monorepo restructure: portal source moved from docs/* to
+    # tools/portal/src/*. Old paths kept as fallback for any future
+    # contributor splitting source back into docs/ (shouldn't happen,
+    # but cheap insurance).
     roots = [
-        REPO_ROOT / "docs" / "interactive",
-        REPO_ROOT / "docs" / "getting-started",
+        REPO_ROOT / "tools" / "portal" / "src" / "interactive",
+        REPO_ROOT / "tools" / "portal" / "src" / "getting-started",
     ]
     paths: List[Path] = []
     for root in roots:

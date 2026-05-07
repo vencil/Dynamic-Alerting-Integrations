@@ -180,9 +180,13 @@ def check_jsx_frontmatter(tools: list, errors: list, warnings: list):
     """Verify each JSX file exists and its related keys reference valid tools."""
     registry_keys = {t["key"] for t in tools}
 
+    # TD-042: registry's `file:` values are kept in legacy form
+    # ("interactive/tools/X.jsx" / "getting-started/X.jsx"), now resolved
+    # against tools/portal/src/ instead of docs/.
+    portal_src = PROJECT_ROOT / "tools" / "portal" / "src"
     for tool in tools:
         key = tool["key"]
-        jsx_path = PROJECT_ROOT / "docs" / tool["file"]
+        jsx_path = portal_src / tool["file"]
 
         if not jsx_path.exists():
             errors.append(f"[jsx] Tool '{key}' file not found: {tool['file']}")
@@ -300,9 +304,23 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                     f"tool '{tool_key}' not in tool-registry.yaml"
                 )
 
-            # Check component file exists
+            # Check component file exists. TD-042: legacy component paths
+            # like "../interactive/tools/X.jsx" resolved relative to
+            # jsx-loader.html (in docs/assets/) used to land at
+            # docs/interactive/tools/X.jsx. Post-restructure they live at
+            # tools/portal/src/interactive/tools/X.jsx. Strip the leading
+            # "../" navigation and resolve against the new portal src.
             if component:
-                resolved = (PROJECT_ROOT / "docs" / "assets" / component).resolve()
+                # Component paths in flows.json keep legacy form
+                # (e.g. "../interactive/tools/playground.jsx"). The leading
+                # "../" navigates out of docs/assets/. Anything that's
+                # left after stripping "../" or "./" is what we need to
+                # resolve against the new portal-src root.
+                clean = component.lstrip("./")
+                if clean.startswith("../"):
+                    clean = clean[3:]
+                clean = clean.replace("../", "")
+                resolved = (PROJECT_ROOT / "tools" / "portal" / "src" / clean).resolve()
                 if not resolved.exists():
                     errors.append(
                         f"[flow] Flow '{flow_name}' step {i}: "
@@ -339,10 +357,16 @@ def check_markdown_tool_links(tools: list, errors: list, warnings: list):
                 site_url = m.group(1).rstrip("/")
                 break
 
-    # Collect valid JSX files
+    # Collect valid JSX files. TD-042 monorepo restructure: portal source
+    # moved from docs/ to tools/portal/src/. The md-link convention still
+    # uses paths relative to the OLD docs/ root (e.g. "interactive/tools/X.jsx"),
+    # so collect from the new location but key by the legacy convention.
     valid_jsx = set()
-    for f in (PROJECT_ROOT / "docs").rglob("*.jsx"):
-        valid_jsx.add(f.relative_to(PROJECT_ROOT / "docs").as_posix())
+    portal_src = PROJECT_ROOT / "tools" / "portal" / "src"
+    for f in portal_src.rglob("*.jsx"):
+        # Keep keys in legacy "interactive/tools/X.jsx" form so md links don't
+        # need to know about the restructure.
+        valid_jsx.add(f.relative_to(portal_src).as_posix())
 
     # Pre-filter: only scan files that contain jsx-loader (fast grep)
     needle = b"jsx-loader.html?component="

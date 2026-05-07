@@ -74,7 +74,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _IGNORE_MARKER = "<!-- jsx-loader-compat: ignore -->"
 _IGNORE_LOOKBACK_LINES = 3
 
-_DEFAULT_SCAN_DIR = PROJECT_ROOT / "docs" / "interactive"
+_DEFAULT_SCAN_DIR = PROJECT_ROOT / "tools" / "portal" / "src" / "interactive"  # TD-042
 _DEFAULT_SCAN_EXTS = (".jsx",)
 
 # Allowlist of import sources that jsx-loader.html transformImports()

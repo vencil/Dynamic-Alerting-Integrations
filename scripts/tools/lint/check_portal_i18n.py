@@ -23,12 +23,12 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
-DOCS_DIR = PROJECT_ROOT / "docs"
+PORTAL_SRC = PROJECT_ROOT / "tools" / "portal" / "src"  # TD-042 monorepo restructure
 
 # Directories to scan
 SCAN_DIRS = [
-    DOCS_DIR / "interactive" / "tools",
-    DOCS_DIR / "getting-started",
+    PORTAL_SRC / "interactive" / "tools",
+    PORTAL_SRC / "getting-started",
 ]
 
 # UI keywords indicating user-visible text

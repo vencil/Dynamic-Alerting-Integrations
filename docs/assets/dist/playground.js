@@ -1,4 +1,4 @@
-import{a as k,b as E,c as K,d as T,e as C}from"./chunk-YWPHFBSF.js";var S=k(E(),1),M=k(K(),1);var b=k(E()),e=k(T()),o=window.__t||((a,r)=>r),w={minimal:`# This is ALL a tenant needs to write \u2014 just 3 lines!
+import{a as k,b as E,c as K,d as T,e as C}from"./chunk-EXOPYGTA.js";var S=k(E(),1),M=k(K(),1);var b=k(E(),1),e=k(T(),1),o=window.__t||((a,r)=>r),w={minimal:`# This is ALL a tenant needs to write \u2014 just 3 lines!
 tenants:
   my-app:
     mysql_connections: "100"`,mariadb:`tenants:
