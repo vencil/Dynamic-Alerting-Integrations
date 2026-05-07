@@ -89,7 +89,7 @@ async function mountTenantManagerWithBackend(page: Page) {
 async function loadTenantManager(page: Page) {
   await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx');
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(1500);
+  await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => {});
 }
 
 test.describe('Saved Views (Smart Views) @critical', () => {

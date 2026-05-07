@@ -71,7 +71,7 @@ test.describe('Operator Setup Wizard @critical', () => {
 
     // Wait for wizard to load
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('networkidle', { timeout: 1000 }).catch(() => {});
 
     // Look for Next/Back buttons
     const nextButton = page.locator(
@@ -147,7 +147,7 @@ test.describe('Operator Setup Wizard @critical', () => {
 
       try {
         await nextButton.click({ noWaitAfter: true });
-        await page.waitForTimeout(500);
+        await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
         clickCount++;
       } catch {
         break;
@@ -269,7 +269,7 @@ test.describe('Operator Setup Wizard @critical', () => {
       } else {
         // Button is enabled — click and check for validation feedback
         await nextButton.click({ noWaitAfter: true });
-        await page.waitForTimeout(500);
+        await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
         const errorMessages = page.locator('[role="alert"], .error-message, .validation-error');
         const errorCount = await errorMessages.count();

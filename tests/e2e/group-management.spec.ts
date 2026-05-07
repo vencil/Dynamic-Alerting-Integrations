@@ -22,7 +22,7 @@ test.describe('Group Management @critical', () => {
 
     if (linkExists > 0) {
       await tenantLink.click();
-      await page.waitForTimeout(2000);
+      await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
     }
 
     // Verify page has loaded
@@ -69,7 +69,7 @@ test.describe('Group Management @critical', () => {
       await createButton.click({ noWaitAfter: true });
 
       // Wait for potential dialog/form to appear
-      await page.waitForTimeout(1000);
+      await page.waitForLoadState('networkidle', { timeout: 1000 }).catch(() => {});
 
       // Check for form fields: name input, description, etc.
       const inputs = page.locator('input, textarea, [role="combobox"]');
@@ -128,7 +128,7 @@ test.describe('Group Management @critical', () => {
       await expect(memberSearch).toHaveValue('test-user');
 
       // Look for results dropdown
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
       const results = page.locator('[role="option"], .search-result, .member-option');
       const resultCount = await results.count();
 
@@ -173,7 +173,7 @@ test.describe('Group Management @critical', () => {
       await firstGroup.click({ noWaitAfter: true });
 
       // Wait for UI update
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
       // Verify group details or member list appears
       const details = page.locator('[data-testid="group-details"], .group-details, .member-list');
