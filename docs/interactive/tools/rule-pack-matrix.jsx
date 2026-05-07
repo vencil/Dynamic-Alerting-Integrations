@@ -92,11 +92,13 @@ export default function RulePackMatrix() {
             className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
           />
           <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)}
+            aria-label={t('依分類篩選', 'Filter by category')}
             className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
             <option value="all">{t('所有分類', 'All')}</option>
             {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+            aria-label={t('排序方式', 'Sort by')}
             className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
             <option value="alert">{t('按告警數排序', 'Sort by Alerts')}</option>
             <option value="rec">{t('按記錄數排序', 'Sort by Recording')}</option>

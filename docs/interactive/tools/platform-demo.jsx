@@ -472,6 +472,7 @@ export default function PlatformDemo() {
               <select
                 value={typingSpeed}
                 onChange={(e) => setTypingSpeed(parseInt(e.target.value))}
+                aria-label={t('打字速度', 'Typing speed')}
                 className="px-3 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium text-sm"
               >
                 <option value={5}>{t('速度: 快', 'Speed: Fast')}</option>

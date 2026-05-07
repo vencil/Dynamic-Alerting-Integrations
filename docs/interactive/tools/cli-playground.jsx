@@ -491,6 +491,7 @@ export default function CLIPlayground() {
                   <select
                     value={networkMode}
                     onChange={(e) => setNetworkMode(e.target.value)}
+                    aria-label={t('網路配置', 'Network Configuration')}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
                   >
                     {Object.entries(NETWORK_MODES).map(([key, mode]) => (

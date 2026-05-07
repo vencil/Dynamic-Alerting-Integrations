@@ -163,12 +163,14 @@ export default function ThresholdCalculator() {
                         max={profile.typical.max}
                         value={val}
                         onChange={(e) => updateCustomValue(pct, e.target.value)}
+                        aria-label={t('百分位數', 'Percentile') + ` ${pct} (${t('滑桿', 'slider')})`}
                         className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-slate-200"
                       />
                       <input
                         type="number"
                         value={val}
                         onChange={(e) => updateCustomValue(pct, e.target.value)}
+                        aria-label={t('百分位數', 'Percentile') + ` ${pct} (${t('精確值', 'exact value')})`}
                         className="w-24 text-right text-sm border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
                       />
                       <span className="text-xs text-slate-400 w-20">{profile.unit}</span>
