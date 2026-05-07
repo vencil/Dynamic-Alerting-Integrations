@@ -327,6 +327,19 @@ class TestCheckTargetHealth:
         result = checker.check_target_health()
         assert result.status == "warn"
 
+    def test_malformed_response_does_not_crash(self, monkeypatch):
+        # PR #291 audit follow-up: when http_get_json returns a non-dict
+        # body (None / string / list), `data.get(...)` raises AttributeError.
+        # The except clause now catches AttributeError too, so the function
+        # degrades gracefully to the "no targets found" warn path.
+        for malformed in (None, "not a dict", ["list-not-dict"], 42):
+            monkeypatch.setattr(oc, "http_get_json",
+                                lambda *a, _body=malformed, **kw: (_body, None))
+            checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
+            result = checker.check_target_health()
+            assert result.status == "warn"
+            assert "no targets" in result.detail
+
 
 # ---------------------------------------------------------------------------
 # run_all_checks + reports + exit_code

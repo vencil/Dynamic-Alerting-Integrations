@@ -41,12 +41,9 @@ class TestStripFrontmatter:
 # ---------------------------------------------------------------------------
 # scan_unicode_status — WCAG 1.4.1
 # ---------------------------------------------------------------------------
-# NOTE: The scanner's backward-walk logic short-circuits at the first `>`
-# encountered between symbol and `<` — for typical JSX (`<div>✓</div>`)
-# this means the "bare symbol" path is unreachable in practice. The tests
-# below exercise the entry points that DO trigger (no-symbol shortcut,
-# attribute-value ignore path) plus negative space (no crash on empty /
-# non-JSX input).
+# NOTE: PR #290 surfaced that the original backward-walk gave up at the
+# first `>`, making the flag path unreachable for typical JSX. This bug
+# is now fixed (this PR); the tests below pin the corrected behaviour.
 class TestScanUnicodeStatus:
     def test_empty_input_no_findings(self):
         assert axe.scan_unicode_status("") == []
@@ -60,16 +57,45 @@ class TestScanUnicodeStatus:
         src = '<input title="✓ done" />'
         assert axe.scan_unicode_status(src) == []
 
-    def test_symbol_inside_long_attribute_value_with_aria_hidden_ignored(self):
-        # Even though aria-hidden is present, the early `close_gt > i`
-        # branch handles attribute-resident symbols first.
-        src = '<span aria-hidden="true" title="✓ ok">x</span>'
+    def test_aria_hidden_passes(self):
+        # aria-hidden on the wrapping element silences the warning.
+        src = '<span aria-hidden="true">✓</span>'
         assert axe.scan_unicode_status(src) == []
 
-    def test_normal_text_content_returns_empty(self):
-        # Backward-walk gives up at `>` of the opening tag, so visible-
-        # text symbols return empty. This pins current behaviour.
-        src = '<div>✓ done</div>'
+    def test_aria_label_passes(self):
+        src = '<span aria-label="success">✓</span>'
+        assert axe.scan_unicode_status(src) == []
+
+    def test_aria_labelledby_passes(self):
+        src = '<span aria-labelledby="status-msg">✓</span>'
+        assert axe.scan_unicode_status(src) == []
+
+    def test_bare_symbol_in_div_flagged(self):
+        # Post-fix: backward walk now finds the wrapping <div> and flags
+        # because no aria-* attribute is present.
+        src = '<div>⚠ warning</div>'
+        findings = axe.scan_unicode_status(src)
+        assert len(findings) == 1
+        line, msg = findings[0]
+        assert "status symbol" in msg
+        assert "aria-hidden" in msg or "aria-label" in msg
+
+    def test_multiple_bare_symbols_each_flagged(self):
+        src = '<div>✓</div>\n<section>❌</section>'
+        findings = axe.scan_unicode_status(src)
+        assert len(findings) == 2
+
+    def test_walks_past_closing_sibling_to_find_real_wrapper(self):
+        # The fix: walking backward from ✓, we encounter `</span>` first.
+        # Pre-fix this was treated as "give up at >". Post-fix we walk
+        # PAST the closing sibling to find <div>, the real wrapper.
+        src = '<div><span>x</span>✓</div>'
+        findings = axe.scan_unicode_status(src)
+        assert len(findings) == 1
+
+    def test_parent_aria_label_within_window_passes(self):
+        # Wrapper has no aria-* but parent within 500-char window does.
+        src = '<div aria-label="status"><span>✓</span></div>'
         assert axe.scan_unicode_status(src) == []
 
     def test_returns_list_type(self):
