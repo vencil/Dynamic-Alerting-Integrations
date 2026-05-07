@@ -15,7 +15,7 @@ import {
 test.describe('Self-Service Portal @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'self-service-portal');
-    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 5 });
+    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 0 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {

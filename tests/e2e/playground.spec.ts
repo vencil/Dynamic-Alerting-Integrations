@@ -21,7 +21,7 @@ test.describe('Playground @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Playground|Config|YAML|Alert/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
     });
   });
 

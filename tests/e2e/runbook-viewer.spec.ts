@@ -14,7 +14,7 @@ test.describe('Runbook Viewer @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'runbook-viewer');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
       expectedTitleMatch: /Runbook|檢視器/i,
     });
   });

@@ -26,7 +26,7 @@ test.describe('Master Onboarding @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Onboarding|Dual Entry|入門/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
     });
   });
 

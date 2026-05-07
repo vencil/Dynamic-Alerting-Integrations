@@ -24,7 +24,7 @@ test.describe('Alert Builder Wizard @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Alert Builder|告警/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
     });
   });
 

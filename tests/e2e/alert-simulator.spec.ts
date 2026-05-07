@@ -19,7 +19,7 @@ test.describe('Alert Simulator @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'alert-simulator');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /Alert Simulator|告警模擬器/i,
     });
   });

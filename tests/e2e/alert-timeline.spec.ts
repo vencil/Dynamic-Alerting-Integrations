@@ -19,7 +19,7 @@ test.describe('Alert Timeline Replay @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'alert-timeline');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
       expectedTitleMatch: /Alert Timeline|告警時間軸/i,
     });
   });
