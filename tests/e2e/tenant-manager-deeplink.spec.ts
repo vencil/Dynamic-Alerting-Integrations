@@ -98,7 +98,7 @@ async function loadTenantManagerWithMockedApi(page: Page) {
     '../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx'
   );
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(2000);
+  await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 }
 
 test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
@@ -347,7 +347,7 @@ test.describe('Tenant Manager × Wizard Deep-Link @critical', () => {
       '../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx'
     );
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // All 3 footer buttons must contain the EXACT tenant id (URL-
     // encoded by URLSearchParams). encodeURIComponent leaves dashes

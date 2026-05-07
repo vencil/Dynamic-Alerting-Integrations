@@ -87,7 +87,7 @@ test.describe('Authentication Flow @critical', () => {
     await page.goto('./');
 
     // Optionally wait for auth to be loaded by the app
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('networkidle', { timeout: 1000 }).catch(() => {});
 
     // Look for email display in various common locations
     const emailDisplays = page.locator(

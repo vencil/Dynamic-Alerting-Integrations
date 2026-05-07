@@ -16,7 +16,7 @@ async function navigateToTenantManager(page: Page) {
 
   if (exists > 0) {
     await tenantLink.click();
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
   }
 }
 
@@ -38,7 +38,7 @@ test.describe('Batch Operations @critical', () => {
 
       // Click to select
       await firstGroup.click({ noWaitAfter: true });
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
   });
 
@@ -51,7 +51,7 @@ test.describe('Batch Operations @critical', () => {
 
     if (groupCount > 0) {
       await groupItems.first().click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
 
     // Look for batch operation button/menu
@@ -96,7 +96,7 @@ test.describe('Batch Operations @critical', () => {
 
     if (groupCount > 0) {
       await groupItems.first().click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
 
     // Open batch operations menu
@@ -105,7 +105,7 @@ test.describe('Batch Operations @critical', () => {
 
     if (buttonExists > 0) {
       await batchButton.click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
       // Look for Silent Mode option
       const silentOption = page.locator(
@@ -118,7 +118,7 @@ test.describe('Batch Operations @critical', () => {
 
       if (optionCount > 0) {
         await silentOption.click({ noWaitAfter: true });
-        await page.waitForTimeout(500);
+        await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
       }
     }
   });
@@ -130,20 +130,20 @@ test.describe('Batch Operations @critical', () => {
     const groupItems = page.locator('[data-testid="group-item"], .group-item, .sidebar li');
     if (await groupItems.count() > 0) {
       await groupItems.first().click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
 
     // Click batch operation
     const batchButton = page.locator('button:has-text("Batch"), button:has-text("Operation")').first();
     if (await batchButton.count() > 0) {
       await batchButton.click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
       // Look for silent mode option
       const silentOption = page.locator(':text("Silent Mode"), button:has-text("Silent")').first();
       if (await silentOption.count() > 0) {
         await silentOption.click({ noWaitAfter: true });
-        await page.waitForTimeout(500);
+        await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
       }
     }
 
@@ -189,24 +189,24 @@ test.describe('Batch Operations @critical', () => {
     const groupItems = page.locator('[data-testid="group-item"], .group-item, .sidebar li');
     if (await groupItems.count() > 0) {
       await groupItems.first().click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
 
     const batchButton = page.locator('button:has-text("Batch"), button:has-text("Operation")').first();
     if (await batchButton.count() > 0) {
       await batchButton.click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
       const silentOption = page.locator(':text("Silent Mode"), button:has-text("Silent")').first();
       if (await silentOption.count() > 0) {
         await silentOption.click({ noWaitAfter: true });
-        await page.waitForTimeout(500);
+        await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
         // Click confirm button if present
         const confirmButton = page.locator('button:has-text("Confirm"), button:has-text("Apply")').first();
         if (await confirmButton.count() > 0) {
           await confirmButton.click({ noWaitAfter: true });
-          await page.waitForTimeout(1000);
+          await page.waitForLoadState('networkidle', { timeout: 1000 }).catch(() => {});
         }
       }
     }
@@ -241,23 +241,23 @@ test.describe('Batch Operations @critical', () => {
     const groupItems = page.locator('[data-testid="group-item"], .group-item, .sidebar li');
     if (await groupItems.count() > 0) {
       await groupItems.first().click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
 
     const batchButton = page.locator('button:has-text("Batch"), button:has-text("Operation")').first();
     if (await batchButton.count() > 0) {
       await batchButton.click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
       const silentOption = page.locator(':text("Silent Mode"), button:has-text("Silent")').first();
       if (await silentOption.count() > 0) {
         await silentOption.click({ noWaitAfter: true });
-        await page.waitForTimeout(500);
+        await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
 
         const confirmButton = page.locator('button:has-text("Confirm"), button:has-text("Apply")').first();
         if (await confirmButton.count() > 0) {
           await confirmButton.click({ noWaitAfter: true });
-          await page.waitForTimeout(1000);
+          await page.waitForLoadState('networkidle', { timeout: 1000 }).catch(() => {});
         }
       }
     }
@@ -294,7 +294,7 @@ test.describe('Batch Operations @critical', () => {
     const groupItems = page.locator('[data-testid="group-item"], .group-item, .sidebar li');
     if (await groupItems.count() > 0) {
       await groupItems.first().click();
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle', { timeout: 500 }).catch(() => {});
     }
 
     // Page should still be functional
