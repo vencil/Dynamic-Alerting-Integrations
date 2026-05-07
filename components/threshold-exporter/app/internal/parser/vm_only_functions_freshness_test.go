@@ -41,6 +41,7 @@ import (
 // functions, add them to vm_only_functions.yaml, then bump
 // `metricsql_version:` to match go.mod.
 func TestVMOnlyFunctions_VersionPinMatchesGoMod(t *testing.T) {
+	t.Parallel()
 	yamlVer := VMOnlyMetricsqlVersion()
 	if yamlVer == "" {
 		t.Fatal("vm_only_functions.yaml has no metricsql_version field")
@@ -78,6 +79,7 @@ func TestVMOnlyFunctions_VersionPinMatchesGoMod(t *testing.T) {
 // The number gets bumped manually when the allowlist grows, with a
 // commit message reviewer can sanity-check.
 func TestVMOnlyFunctions_AllowlistCoverageFloor(t *testing.T) {
+	t.Parallel()
 	const floor = 80 // PR-2 seed: 95 entries; floor leaves margin for purposeful trim
 	got := len(VMOnlyFunctionNames())
 	if got < floor {
@@ -89,6 +91,7 @@ func TestVMOnlyFunctions_AllowlistCoverageFloor(t *testing.T) {
 // of "definitely VM-only" functions that we never expect Prometheus
 // to add. If any of these go missing the allowlist is corrupt.
 func TestVMOnlyFunctions_CoreEntriesAlwaysPresent(t *testing.T) {
+	t.Parallel()
 	mustHave := []string{
 		"rollup_rate",
 		"quantiles_over_time",

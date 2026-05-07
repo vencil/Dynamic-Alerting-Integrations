@@ -6,6 +6,7 @@ import (
 )
 
 func TestValidateStrictPromQL_ValidExpressions(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, expr string }{
 		{"simple gauge", `up == 1`},
 		{"rate sum", `sum(rate(http_requests_total[5m]))`},
@@ -16,6 +17,7 @@ func TestValidateStrictPromQL_ValidExpressions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if err := ValidateStrictPromQL(tc.expr); err != nil {
 				t.Errorf("ValidateStrictPromQL(%q) = %v, want nil", tc.expr, err)
 			}
@@ -27,6 +29,7 @@ func TestValidateStrictPromQL_ValidExpressions(t *testing.T) {
 }
 
 func TestValidateStrictPromQL_RejectsVMOnlyFunctions(t *testing.T) {
+	t.Parallel()
 	// VM-only function names are syntactically valid PromQL function
 	// calls (the parser sees them as unknown function-name tokens),
 	// so promql/parser will reject them at parse time. This pins the
@@ -39,6 +42,7 @@ func TestValidateStrictPromQL_RejectsVMOnlyFunctions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if err := ValidateStrictPromQL(tc.expr); err == nil {
 				t.Errorf("ValidateStrictPromQL(%q) = nil, want non-nil — VM-only fns must fail strict PromQL", tc.expr)
 			}
@@ -50,13 +54,15 @@ func TestValidateStrictPromQL_RejectsVMOnlyFunctions(t *testing.T) {
 }
 
 func TestValidateStrictPromQL_RejectsSyntaxErrors(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		`sum(rate(foo[5m]`, // missing close paren
 		`foo[`,             // truncated range selector
-		`{job="x"`,          // unmatched brace
+		`{job="x"`,         // unmatched brace
 	}
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
+			t.Parallel()
 			err := ValidateStrictPromQL(expr)
 			if err == nil {
 				t.Errorf("ValidateStrictPromQL(%q) = nil, want syntax error", expr)
@@ -70,6 +76,7 @@ func TestValidateStrictPromQL_RejectsSyntaxErrors(t *testing.T) {
 }
 
 func TestValidateStrictPromQL_EmptyExpression(t *testing.T) {
+	t.Parallel()
 	err := ValidateStrictPromQL("")
 	if err == nil {
 		t.Fatal("ValidateStrictPromQL(\"\") = nil, want empty-expression error")
@@ -83,6 +90,7 @@ func TestValidateStrictPromQL_EmptyExpression(t *testing.T) {
 }
 
 func TestParsePromRulesWithOptions_PromCompatibleOnPureProm(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_basic.yaml")
 	res, err := ParsePromRulesWithOptions(src, "promrule_basic.yaml", testGeneratedBy, ParseOptions{StrictPromQL: true})
 	if err != nil {
@@ -102,6 +110,7 @@ func TestParsePromRulesWithOptions_PromCompatibleOnPureProm(t *testing.T) {
 }
 
 func TestParsePromRulesWithOptions_VMOnlyMarkedIncompatible(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_metricsql.yaml")
 	res, err := ParsePromRulesWithOptions(src, "promrule_metricsql.yaml", testGeneratedBy, ParseOptions{StrictPromQL: true})
 	if err != nil {
@@ -124,6 +133,7 @@ func TestParsePromRulesWithOptions_VMOnlyMarkedIncompatible(t *testing.T) {
 }
 
 func TestParsePromRulesWithOptions_AmbiguousMarkedIncompatibleWithoutDoublePass(t *testing.T) {
+	t.Parallel()
 	// Pin behavior: ambiguous rules (metricsql parse failed) are
 	// marked PromCompatible=false but StrictPromError is left empty —
 	// running the strict parser too just produces a second confusing
@@ -155,6 +165,7 @@ func TestParsePromRulesWithOptions_AmbiguousMarkedIncompatibleWithoutDoublePass(
 }
 
 func TestParsePromRulesWithOptions_StrictOffLeavesFieldsZero(t *testing.T) {
+	t.Parallel()
 	// Default options (StrictPromQL=false) MUST NOT touch
 	// PromCompatible / StrictPromError. PR-1 callers depend on this
 	// to avoid the upstream parser cost.
@@ -174,6 +185,7 @@ func TestParsePromRulesWithOptions_StrictOffLeavesFieldsZero(t *testing.T) {
 }
 
 func TestParsePromRules_BackwardsCompatPreservesPR1Behavior(t *testing.T) {
+	t.Parallel()
 	// ParsePromRules is the PR-1 contract. PR-2 made it a thin
 	// wrapper around ParsePromRulesWithOptions(opts={}); this test
 	// pins that the wrapper doesn't accidentally turn StrictPromQL

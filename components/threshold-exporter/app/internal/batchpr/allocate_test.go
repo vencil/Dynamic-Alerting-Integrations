@@ -19,6 +19,7 @@ func fixtureAllocPlan() *Plan {
 }
 
 func TestAllocateFiles_HappyPath(t *testing.T) {
+	t.Parallel()
 	plan := fixtureAllocPlan()
 	files := map[string][]byte{
 		"db/_defaults.yaml": []byte("base body"),
@@ -52,6 +53,7 @@ func TestAllocateFiles_HappyPath(t *testing.T) {
 }
 
 func TestAllocateFiles_EmptyPlan(t *testing.T) {
+	t.Parallel()
 	got, warns := AllocateFiles(nil, map[string][]byte{"a": {}})
 	if got != nil {
 		t.Errorf("expected nil result for nil plan; got %v", got)
@@ -62,6 +64,7 @@ func TestAllocateFiles_EmptyPlan(t *testing.T) {
 }
 
 func TestAllocateFiles_EmptyFiles(t *testing.T) {
+	t.Parallel()
 	got, warns := AllocateFiles(fixtureAllocPlan(), nil)
 	if len(got) != 0 {
 		t.Errorf("expected empty result for empty files; got %v", got)
@@ -72,6 +75,7 @@ func TestAllocateFiles_EmptyFiles(t *testing.T) {
 }
 
 func TestAllocateFiles_UnknownTenantWarns(t *testing.T) {
+	t.Parallel()
 	plan := fixtureAllocPlan()
 	_, warns := AllocateFiles(plan, map[string][]byte{
 		"db/tenant-zzz.yaml": []byte("body"),
@@ -91,6 +95,7 @@ func TestAllocateFiles_UnknownTenantWarns(t *testing.T) {
 }
 
 func TestAllocateFiles_UnrecognisedShapeWarns(t *testing.T) {
+	t.Parallel()
 	plan := fixtureAllocPlan()
 	_, warns := AllocateFiles(plan, map[string][]byte{
 		"db/random.txt": []byte("not yaml"),
@@ -107,6 +112,7 @@ func TestAllocateFiles_UnrecognisedShapeWarns(t *testing.T) {
 }
 
 func TestAllocateFiles_NoBasePR(t *testing.T) {
+	t.Parallel()
 	// Plan with no base PR (only tenant chunks); _defaults.yaml
 	// has nowhere to go → warning + skipped.
 	plan := &Plan{
@@ -123,6 +129,7 @@ func TestAllocateFiles_NoBasePR(t *testing.T) {
 }
 
 func TestAllocateFiles_DuplicateTenantInTwoChunksGoesToFirst(t *testing.T) {
+	t.Parallel()
 	// Defensive: same tenant ID in two chunks (PR-1 contract
 	// violation, but allocator must not crash).
 	plan := &Plan{
