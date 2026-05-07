@@ -21,7 +21,7 @@ test.describe('CI/CD Setup Wizard @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /CI\/?CD|Pipeline|Setup|Deploy|Integration/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
     });
   });
 

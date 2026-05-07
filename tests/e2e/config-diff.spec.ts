@@ -19,7 +19,7 @@ test.describe('Config Version Diff @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'config-diff');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /Config.*Diff|配置版本比較/i,
     });
   });

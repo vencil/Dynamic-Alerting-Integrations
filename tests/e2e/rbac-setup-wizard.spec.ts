@@ -21,7 +21,7 @@ test.describe('RBAC Setup Wizard @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /RBAC|Role|Access|Permission|Setup/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
     });
   });
 

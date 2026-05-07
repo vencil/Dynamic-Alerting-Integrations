@@ -21,7 +21,7 @@ test.describe('Notification Previewer @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Notification|Preview|Alert|Channel/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
     });
   });
 

@@ -19,7 +19,7 @@ test.describe('Component Health Dashboard @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'component-health');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /Component Health|元件健康/i,
     });
   });

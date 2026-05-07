@@ -65,7 +65,7 @@ test.describe('Simulate Preview Widget @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Simulate|Preview|預覽/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
     });
   });
 

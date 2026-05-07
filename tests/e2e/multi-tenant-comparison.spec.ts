@@ -13,7 +13,7 @@ import {
 test.describe('Multi-Tenant Comparison @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'multi-tenant-comparison');
-    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 5 });
+    await runToolSmokeChecks(page, { allowedNonCriticalViolations: 1 });
   });
 
   test('uses portal-safe hrefs (REG-004 regression guard)', async ({ page }) => {

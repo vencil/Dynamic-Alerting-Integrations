@@ -25,7 +25,7 @@ test.describe('Routing Trace Wizard @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Routing|Trace|路由/i,
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 0,
     });
   });
 

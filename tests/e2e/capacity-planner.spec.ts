@@ -19,7 +19,7 @@ test.describe('Capacity Planner @critical', () => {
   test('loads via jsx-loader and passes smoke checks', async ({ page }) => {
     await loadPortalTool(page, 'capacity-planner');
     await runToolSmokeChecks(page, {
-      allowedNonCriticalViolations: 5,
+      allowedNonCriticalViolations: 1,
       expectedTitleMatch: /Capacity Planner|容量規劃/i,
     });
   });
