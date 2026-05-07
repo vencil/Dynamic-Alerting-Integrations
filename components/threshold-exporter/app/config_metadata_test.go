@@ -14,6 +14,7 @@ import (
 // ============================================================
 
 func TestResolveMetadata_WithMetadata(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
@@ -38,6 +39,7 @@ func TestResolveMetadata_WithMetadata(t *testing.T) {
 }
 
 func TestResolveMetadata_WithoutMetadata(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {"mysql_connections": SV("70")},
@@ -58,6 +60,7 @@ func TestResolveMetadata_WithoutMetadata(t *testing.T) {
 }
 
 func TestResolveMetadata_PartialMetadata(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
@@ -81,6 +84,7 @@ func TestResolveMetadata_PartialMetadata(t *testing.T) {
 }
 
 func TestResolveMetadata_Sorted(t *testing.T) {
+	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-c": {"mysql_connections": SV("70")},
@@ -98,6 +102,7 @@ func TestResolveMetadata_Sorted(t *testing.T) {
 }
 
 func TestResolveMetadata_UnconditionalOutput(t *testing.T) {
+	t.Parallel()
 	// All tenants must appear regardless of _metadata presence
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{

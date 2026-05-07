@@ -27,6 +27,7 @@ func fixtureRefreshInputJSON() []byte {
 }
 
 func TestRefresh_HelpExitsOK(t *testing.T) {
+	t.Parallel()
 	stderr := &bytes.Buffer{}
 	stdout := &bytes.Buffer{}
 	code := cmdRefresh([]string{"--help"}, stdout, stderr)
@@ -36,6 +37,7 @@ func TestRefresh_HelpExitsOK(t *testing.T) {
 }
 
 func TestRefresh_MalformedInputJSON(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bad := filepath.Join(tmp, "bad.json")
 	mustWriteFile(t, bad, []byte(`{not json`))
@@ -56,6 +58,7 @@ func TestRefresh_MalformedInputJSON(t *testing.T) {
 // --- runRefresh happy path -------------------------------------
 
 func TestRunRefresh_HappyPath_StubClients(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	report := filepath.Join(tmp, "report.md")
 	resultJSON := filepath.Join(tmp, "result.json")
@@ -100,6 +103,7 @@ func TestRunRefresh_HappyPath_StubClients(t *testing.T) {
 // --- runRefresh with library validation error ------------------
 
 func TestRunRefresh_LibraryValidationError(t *testing.T) {
+	t.Parallel()
 	flags := &refreshFlags{reportPath: "-", resultJSONPath: "-"}
 	// Empty BaseMergedSHA → batchpr.Refresh returns hard error.
 	in := batchpr.RefreshInput{
@@ -119,6 +123,7 @@ func TestRunRefresh_LibraryValidationError(t *testing.T) {
 // --- exitCodeForRefresh mapping --------------------------------
 
 func TestExitCodeForRefresh(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		s    batchpr.RefreshSummary

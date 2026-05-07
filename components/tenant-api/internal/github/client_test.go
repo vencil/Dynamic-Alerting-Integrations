@@ -10,6 +10,7 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		repo    string
@@ -23,6 +24,7 @@ func TestNewClient(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := NewClient("token", tt.repo, "main")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewClient() error = %v, wantErr %v", err, tt.wantErr)
@@ -32,6 +34,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestNewClientDefaultBranch(t *testing.T) {
+	t.Parallel()
 	c, err := NewClient("tok", "o/r", "")
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +45,7 @@ func TestNewClientDefaultBranch(t *testing.T) {
 }
 
 func TestProviderName(t *testing.T) {
+	t.Parallel()
 	c, _ := NewClient("tok", "o/r", "main")
 	if c.ProviderName() != "GitHub" {
 		t.Errorf("expected 'GitHub', got %q", c.ProviderName())
@@ -49,6 +53,7 @@ func TestProviderName(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer good-token" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -73,6 +78,7 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestCreatePR(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/pulls") && r.Method == "POST" {
 			resp := map[string]interface{}{
@@ -116,6 +122,7 @@ func TestCreatePR(t *testing.T) {
 }
 
 func TestListOpenPRs(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		prs := []map[string]interface{}{
 			{
@@ -170,6 +177,7 @@ func TestListOpenPRs(t *testing.T) {
 }
 
 func TestListOpenPRs_APIError(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(w, `{"message":"internal error"}`)

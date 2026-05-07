@@ -37,6 +37,7 @@ func newTestTracker(t *testing.T, mrs []platform.PRInfo) (*Tracker, *httptest.Se
 }
 
 func TestTrackerSync(t *testing.T) {
+	t.Parallel()
 	tracker, srv := newTestTracker(t, []platform.PRInfo{
 		{Number: 1, WebURL: "https://gl/1", State: "opened", Title: "MR1", HeadRef: "tenant-api/db-a/20260406", CreatedAt: "2026-04-06T10:00:00Z"},
 		{Number: 2, WebURL: "https://gl/2", State: "opened", Title: "MR2", HeadRef: "tenant-api/db-b/20260406", CreatedAt: "2026-04-06T11:00:00Z"},
@@ -62,6 +63,7 @@ func TestTrackerSync(t *testing.T) {
 }
 
 func TestTrackerPendingPRForTenant(t *testing.T) {
+	t.Parallel()
 	tracker, srv := newTestTracker(t, []platform.PRInfo{
 		{Number: 5, WebURL: "https://gl/5", State: "opened", Title: "MR5", HeadRef: "tenant-api/db-a/20260406", CreatedAt: "2026-04-06T10:00:00Z"},
 	})
@@ -84,6 +86,7 @@ func TestTrackerPendingPRForTenant(t *testing.T) {
 }
 
 func TestTrackerRegisterPR(t *testing.T) {
+	t.Parallel()
 	tracker, srv := newTestTracker(t, []platform.PRInfo{})
 	defer srv.Close()
 
@@ -111,6 +114,7 @@ func TestTrackerRegisterPR(t *testing.T) {
 }
 
 func TestTrackerRegisterPR_ReplaceSameTenant(t *testing.T) {
+	t.Parallel()
 	tracker, srv := newTestTracker(t, []platform.PRInfo{})
 	defer srv.Close()
 
@@ -131,6 +135,7 @@ func TestTrackerRegisterPR_ReplaceSameTenant(t *testing.T) {
 }
 
 func TestTrackerLastSyncTime(t *testing.T) {
+	t.Parallel()
 	tracker, srv := newTestTracker(t, []platform.PRInfo{})
 	defer srv.Close()
 
@@ -146,6 +151,7 @@ func TestTrackerLastSyncTime(t *testing.T) {
 }
 
 func TestTrackerMostRecentMRPerTenant(t *testing.T) {
+	t.Parallel()
 	tracker, srv := newTestTracker(t, []platform.PRInfo{
 		{Number: 1, WebURL: "https://gl/1", State: "opened", Title: "Old", HeadRef: "tenant-api/db-a/20260401", CreatedAt: "2026-04-01T10:00:00Z"},
 		{Number: 5, WebURL: "https://gl/5", State: "opened", Title: "New", HeadRef: "tenant-api/db-a/20260406", CreatedAt: "2026-04-06T10:00:00Z"},
@@ -164,6 +170,7 @@ func TestTrackerMostRecentMRPerTenant(t *testing.T) {
 }
 
 func TestMinSyncInterval(t *testing.T) {
+	t.Parallel()
 	c, _ := NewClient("token", "group/project", "main")
 	tracker := NewTracker(c, 1*time.Second) // below minimum
 	if got := tracker.SyncInterval(); got < 10*time.Second {
