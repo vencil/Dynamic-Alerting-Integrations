@@ -73,6 +73,25 @@ TD-030 sweep 期間 jsx-loader.html 與 dist bundle **同時存在**：
 
 最後 TD-030z PR 退役 jsx-loader.html。
 
+## Mutation testing — investigated, deferred (TD-041, 2026-05-07)
+
+> 簡短記錄一個試過但沒採用的方向，避免下次重複踩。
+
+**目的**：給 9 個 Vitest spec / 65 tests 加 Stryker mutation testing，驗證 assertions 不是空殼。
+
+**踩到的問題**：
+- Stryker 的 `mutate` glob rooted in 「config 所在目錄」（`tools/portal/`）
+- 我們的 source 在 `docs/interactive/tools/**`、test 在 `tests/portal/**` —— 三處分散
+- 即使用絕對路徑也失敗：`Glob did not result in any files`，因為 Stryker 把 project 拷貝到 `.stryker-tmp/` 時不會跨 project root 抓檔
+- vitest-runner 額外抱怨 `failed to find test files related to mutated files`
+
+**繞過選項（評估後不採用）**：
+1. 把 `stryker.config.json` 移到 repo root → 污染專案根目錄
+2. 用 `inPlace: true` 跳過拷貝 → mutation 直接改 working tree，CI 失敗時殘留壞檔
+3. 把 portal source 搬進 `tools/portal/src/` → 是 TD-030 結構大改，超出單一 testing PR 範圍
+
+**結論**：以目前 9 spec 規模，mutation testing 投入產出比不划算。建議再增加到 ~30 spec 或 portal monorepo restructure 之後再評估。npm devDep / config 都已 rollback，沒留下 dead artifacts。
+
 ## 相關
 - TD-030 sub-issues: [#247-253](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/247)
 - Project memory: `project_portal_vitest_choice.md`
