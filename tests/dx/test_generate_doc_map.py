@@ -20,14 +20,14 @@ import generate_doc_map as gdm  # noqa: E402
 
 
 @pytest.fixture
-def fake_repo(tmp_path, monkeypatch):
+def fake_repo(patch_repo_root, monkeypatch):
     """Mount a tmp_path tree as REPO_ROOT.
 
     Yields the tmp_path so tests can populate docs/ etc. The
     DOC_MAP_ZH / DOC_MAP_EN module-level paths are also redirected so
     the writer / checker hit the temp tree.
     """
-    monkeypatch.setattr(gdm, "REPO_ROOT", tmp_path)
+    tmp_path = patch_repo_root(gdm)
     monkeypatch.setattr(
         gdm, "DOC_MAP_ZH", tmp_path / "docs" / "internal" / "doc-map.md",
     )
