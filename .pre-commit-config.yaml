@@ -148,6 +148,19 @@ repos:
         files: \.jsx$
         stages: [manual]
 
+      # WCAG 1.4.1 / 3.3.2 / 4.1.2 floor — auto-runs on changed JSX files,
+      # exit 1 if any new violation surfaces. Codifies the WCAG cleanup
+      # finished in PRs #298 / #300 / #303 / #309 / #310 / #311; the scanner
+      # currently reports 0 violations across all 56 portal JSX files
+      # (Cat A / B / C / D all clean). This hook prevents regressions.
+      - id: axe-lite-static
+        name: WCAG static a11y scan (axe-lite-static heuristic)
+        entry: python3 -X utf8 scripts/tools/dx/axe_lite_static.py
+        language: python
+        files: ^tools/portal/src/.*\.jsx$
+        # pass_filenames: true (default) — only re-scans the JSX files
+        # touched by the commit, keeping the hook fast (<100ms typical).
+
       - id: includes-sync
         name: Include snippet zh/en sync
         entry: python3 -X utf8 scripts/tools/lint/check_includes_sync.py --check
