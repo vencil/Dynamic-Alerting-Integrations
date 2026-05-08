@@ -350,7 +350,7 @@ class TestRenderReportAdvanced:
 class TestMainIntegration:
     """main() CLI 整合測試。"""
 
-    def test_text_output(self, monkeypatch, capsys, tmp_path):
+    def test_text_output(self, monkeypatch, capsys, tmp_path, cli_argv):
         """main() 預設文字輸出。"""
         conf_dir = tmp_path / "conf.d"
         conf_dir.mkdir()
@@ -358,11 +358,9 @@ class TestMainIntegration:
             "mariadb:\n  connection_count:\n    warning: 100\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(sys, "argv", [
-            "blind_spot_discovery",
+        cli_argv("blind_spot_discovery",
             "--config-dir", str(conf_dir),
-            "--prometheus", "http://prom:9090",
-        ])
+            "--prometheus", "http://prom:9090")
         monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [
             {"job": "mysqld_exporter", "instance": "10.0.0.1:9104",
              "namespace": "db-a", "labels": {}},
@@ -371,7 +369,7 @@ class TestMainIntegration:
         out = capsys.readouterr().out
         assert "Summary" in out
 
-    def test_json_output(self, monkeypatch, capsys, tmp_path):
+    def test_json_output(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--json-output 輸出 JSON。"""
         conf_dir = tmp_path / "conf.d"
         conf_dir.mkdir()
@@ -379,19 +377,17 @@ class TestMainIntegration:
             "mariadb:\n  connection_count:\n    warning: 100\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(sys, "argv", [
-            "blind_spot_discovery",
+        cli_argv("blind_spot_discovery",
             "--config-dir", str(conf_dir),
             "--prometheus", "http://prom:9090",
-            "--json-output",
-        ])
+            "--json-output")
         monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [])
         bsd.main()
         out = capsys.readouterr().out
         data = json.loads(out)
         assert isinstance(data, list)
 
-    def test_exclude_jobs(self, monkeypatch, capsys, tmp_path):
+    def test_exclude_jobs(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--exclude-jobs 正確排除 job。"""
         conf_dir = tmp_path / "conf.d"
         conf_dir.mkdir()
@@ -399,12 +395,10 @@ class TestMainIntegration:
             "mariadb:\n  connection_count:\n    warning: 100\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(sys, "argv", [
-            "blind_spot_discovery",
+        cli_argv("blind_spot_discovery",
             "--config-dir", str(conf_dir),
             "--prometheus", "http://prom:9090",
-            "--exclude-jobs", "prometheus,node-exporter",
-        ])
+            "--exclude-jobs", "prometheus,node-exporter")
         monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [
             {"job": "prometheus", "instance": "localhost:9090",
              "namespace": "monitoring", "labels": {}},
@@ -413,16 +407,14 @@ class TestMainIntegration:
         out = capsys.readouterr().out
         assert "Summary" in out
 
-    def test_prom_env_fallback(self, monkeypatch, capsys, tmp_path):
+    def test_prom_env_fallback(self, monkeypatch, capsys, tmp_path, cli_argv):
         """PROMETHEUS_URL env var 作為 fallback。"""
         conf_dir = tmp_path / "conf.d"
         conf_dir.mkdir()
         (conf_dir / "t1.yaml").write_text("redis:\n  x: {}\n",
                                           encoding="utf-8")
         monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
-        monkeypatch.setattr(sys, "argv", [
-            "blind_spot_discovery", "--config-dir", str(conf_dir),
-        ])
+        cli_argv("blind_spot_discovery", "--config-dir", str(conf_dir))
         captured_url = []
         def mock_targets(url):
             captured_url.append(url)

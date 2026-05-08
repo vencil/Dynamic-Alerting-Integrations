@@ -135,17 +135,17 @@ class TestProcessFile:
 # main — directory walk + filtering
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_missing_rule_packs_dir_exits_one(self, tmp_path, monkeypatch, capsys):
+    def test_missing_rule_packs_dir_exits_one(self, tmp_path, monkeypatch, capsys, cli_argv):
         ghost = tmp_path / "no-such-dir"
         monkeypatch.setattr(imj, "RULE_PACKS_DIR", str(ghost))
-        monkeypatch.setattr(sys, "argv", ["inject_metadata_join.py"])
+        cli_argv("inject_metadata_join.py")
         with pytest.raises(SystemExit) as exc:
             imj.main()
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "Rule packs directory not found" in err
 
-    def test_skips_operational_pack_and_non_yaml(self, tmp_path, monkeypatch, capsys):
+    def test_skips_operational_pack_and_non_yaml(self, tmp_path, monkeypatch, capsys, cli_argv):
         # 3 files: operational (skipped), README.md (not yaml), real pack.
         # Real pack has no alerts needing inject → process_file returns False
         # → count stays 0 in the summary.
@@ -160,7 +160,7 @@ class TestMain:
             encoding="utf-8",
         )
         monkeypatch.setattr(imj, "RULE_PACKS_DIR", str(rp_dir))
-        monkeypatch.setattr(sys, "argv", ["inject_metadata_join.py"])
+        cli_argv("inject_metadata_join.py")
         imj.main()
         out = capsys.readouterr().out
         assert "Modified 0 Rule Pack files" in out

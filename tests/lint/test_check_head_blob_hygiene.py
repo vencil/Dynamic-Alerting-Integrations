@@ -272,11 +272,11 @@ class TestMainProgressMilestones:
     """
 
     @pytest.mark.timeout(30)
-    def test_default_mode_emits_milestones(self, git_repo, capsys, monkeypatch):
+    def test_default_mode_emits_milestones(self, git_repo, capsys, monkeypatch, cli_argv):
         """Default mode must show: 'Reading N...' + 'batch read complete' + final summary."""
         repo = git_repo(20, content_size_bytes=200)
         # main() reads sys.argv via argparse; simulate `--ci` invocation.
-        monkeypatch.setattr(sys, "argv", ["check_head_blob_hygiene.py", "--ci"])
+        cli_argv("check_head_blob_hygiene.py", "--ci")
         rc = chbh.main()
         out = capsys.readouterr().out
         assert rc == 0
@@ -289,11 +289,11 @@ class TestMainProgressMilestones:
 
     @pytest.mark.timeout(30)
     def test_default_mode_emits_per_100_progress_for_large_batch(
-        self, git_repo, capsys, monkeypatch
+        self, git_repo, capsys, monkeypatch, cli_argv
     ):
         """At 200+ files, default mode must show ...scanned 100/N and 200/N progress."""
         repo = git_repo(250, content_size_bytes=200)
-        monkeypatch.setattr(sys, "argv", ["check_head_blob_hygiene.py", "--ci"])
+        cli_argv("check_head_blob_hygiene.py", "--ci")
         rc = chbh.main()
         out = capsys.readouterr().out
         assert rc == 0
@@ -303,15 +303,11 @@ class TestMainProgressMilestones:
 
     @pytest.mark.timeout(30)
     def test_verbose_mode_shows_per_file_progress(
-        self, git_repo, capsys, monkeypatch
+        self, git_repo, capsys, monkeypatch, cli_argv
     ):
         """--verbose: per-file scan line for each blob (not per-100)."""
         repo = git_repo(5, content_size_bytes=100)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["check_head_blob_hygiene.py", "--ci", "--verbose"],
-        )
+        cli_argv("check_head_blob_hygiene.py", "--ci", "--verbose")
         rc = chbh.main()
         out = capsys.readouterr().out
         assert rc == 0

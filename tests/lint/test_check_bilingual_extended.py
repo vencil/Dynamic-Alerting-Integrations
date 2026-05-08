@@ -250,16 +250,14 @@ class TestCheckAlert:
 class TestMain:
     """main() CLI tests."""
 
-    def test_main_check_mode(self, tmp_path, monkeypatch, capsys):
+    def test_main_check_mode(self, tmp_path, monkeypatch, capsys, cli_argv):
         rp_dir = tmp_path / "rule-packs"
         rp_dir.mkdir()
         _write_pack(rp_dir, "rule-pack-test.yaml", [
             {"name": "test", "rules": [_make_bilingual_alert("Alert1")]}
         ])
         monkeypatch.setattr(cba, "Path", lambda x: rp_dir if "rule-packs" in str(x) else Path(x))
-        monkeypatch.setattr(sys, "argv", [
-            "check_bilingual_annotations", "--check"
-        ])
+        cli_argv("check_bilingual_annotations", "--check")
         # We need to monkeypatch the default rule_pack_dir
         # The main function constructs the path internally
         # Let's use a different approach

@@ -226,39 +226,35 @@ class TestRunConfig:
 # main — caller-error surfaces (avoids the long soak loop)
 # ---------------------------------------------------------------------------
 class TestMainCallerErrors:
-    def test_missing_config_dir_returns_one(self, monkeypatch, tmp_path, capsys):
+    def test_missing_config_dir_returns_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         out_dir = tmp_path / "out"
         ghost = tmp_path / "ghost-config"
-        monkeypatch.setattr(sys, "argv", [
-            "run_chaos_soak.py",
+        cli_argv("run_chaos_soak.py",
             "--target-url", "http://localhost:8080",
             "--config-dir", str(ghost),
             "--output-dir", str(out_dir),
-            "--duration-min", "1",
-        ])
+            "--duration-min", "1")
         # main() returns 1 on missing config dir before the soak loop.
         assert rcs.main() == 1
         err = capsys.readouterr().err
         assert "config-dir not found" in err
 
-    def test_unreachable_target_returns_one(self, monkeypatch, tmp_path, capsys):
+    def test_unreachable_target_returns_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         config_dir = tmp_path / "conf"
         config_dir.mkdir()
         out_dir = tmp_path / "out"
         # fetch_metrics returns None → "cannot reach" → exit 1.
         monkeypatch.setattr(rcs, "fetch_metrics", lambda *a, **kw: None)
-        monkeypatch.setattr(sys, "argv", [
-            "run_chaos_soak.py",
+        cli_argv("run_chaos_soak.py",
             "--target-url", "http://localhost:8080",
             "--config-dir", str(config_dir),
             "--output-dir", str(out_dir),
-            "--duration-min", "1",
-        ])
+            "--duration-min", "1")
         assert rcs.main() == 1
         err = capsys.readouterr().err
         assert "cannot reach" in err
 
-    def test_zero_duration_completes_with_empty_metrics(self, monkeypatch, tmp_path):
+    def test_zero_duration_completes_with_empty_metrics(self, monkeypatch, tmp_path, cli_argv):
         # Empty initial metrics is a WARN, not a hard error. Pair it with
         # `--duration-min 0` so the soak loop exits immediately on the first
         # `time.time() < end_at` check — verifies the harness completes
@@ -267,13 +263,11 @@ class TestMainCallerErrors:
         config_dir.mkdir()
         out_dir = tmp_path / "out"
         monkeypatch.setattr(rcs, "fetch_metrics", lambda *a, **kw: {})
-        monkeypatch.setattr(sys, "argv", [
-            "run_chaos_soak.py",
+        cli_argv("run_chaos_soak.py",
             "--target-url", "http://localhost:8080",
             "--config-dir", str(config_dir),
             "--output-dir", str(out_dir),
-            "--duration-min", "0",
-        ])
+            "--duration-min", "0")
         # `--duration-min 0` → loop never executes → returns 0 cleanly.
         assert rcs.main() == 0
         # Output files were created in the finally block.

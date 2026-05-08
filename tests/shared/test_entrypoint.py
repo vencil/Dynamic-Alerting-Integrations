@@ -176,30 +176,30 @@ class TestPrintUsage:
 class TestMainRouting:
     """main() subcommand dispatch 測試。"""
 
-    def test_unknown_command_exits(self, monkeypatch):
+    def test_unknown_command_exits(self, monkeypatch, cli_argv):
         """未知 command 應 sys.exit(1)。"""
-        monkeypatch.setattr(sys, "argv", ["da-tools", "nonexistent-xyz"])
+        cli_argv("da-tools", "nonexistent-xyz")
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
         assert exc_info.value.code == 1
 
-    def test_help_exits_zero(self, monkeypatch):
+    def test_help_exits_zero(self, monkeypatch, cli_argv):
         """--help 應 sys.exit(0)。"""
-        monkeypatch.setattr(sys, "argv", ["da-tools", "--help"])
+        cli_argv("da-tools", "--help")
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
         assert exc_info.value.code == 0
 
-    def test_no_args_exits_zero(self, monkeypatch):
+    def test_no_args_exits_zero(self, monkeypatch, cli_argv):
         """無參數時顯示 usage 並 sys.exit(0)。"""
-        monkeypatch.setattr(sys, "argv", ["da-tools"])
+        cli_argv("da-tools")
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
         assert exc_info.value.code == 0
 
-    def test_version_flag_exits_zero(self, monkeypatch):
+    def test_version_flag_exits_zero(self, monkeypatch, cli_argv):
         """--version 應 sys.exit(0)。"""
-        monkeypatch.setattr(sys, "argv", ["da-tools", "--version"])
+        cli_argv("da-tools", "--version")
         with pytest.raises(SystemExit) as exc_info:
             entrypoint.main()
         assert exc_info.value.code == 0

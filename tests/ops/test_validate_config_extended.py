@@ -208,21 +208,17 @@ class TestMainCLI:
             }}}, f)
         return str(d)
 
-    def test_main_basic(self, tmp_path, monkeypatch, capsys):
+    def test_main_basic(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_config", "--config-dir", config_dir
-        ])
+        cli_argv("validate_config", "--config-dir", config_dir)
         with pytest.raises(SystemExit) as exc:
             vc.main()
         out = capsys.readouterr().out
         assert "validate-config" in out or "Validation" in out
 
-    def test_main_json(self, tmp_path, monkeypatch, capsys):
+    def test_main_json(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_config", "--config-dir", config_dir, "--json"
-        ])
+        cli_argv("validate_config", "--config-dir", config_dir, "--json")
         with pytest.raises(SystemExit) as exc:
             vc.main()
         out = capsys.readouterr().out
@@ -230,23 +226,19 @@ class TestMainCLI:
         assert isinstance(parsed, list)
         assert any(r["check"] == "yaml_syntax" for r in parsed)
 
-    def test_main_nonexistent_dir(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", [
-            "validate_config", "--config-dir", "/nonexistent/path"
-        ])
+    def test_main_nonexistent_dir(self, monkeypatch, capsys, cli_argv):
+        cli_argv("validate_config", "--config-dir", "/nonexistent/path")
         with pytest.raises(SystemExit) as exc:
             vc.main()
         assert exc.value.code == 1
 
-    def test_main_with_policy(self, tmp_path, monkeypatch, capsys):
+    def test_main_with_policy(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
         policy = tmp_path / "policy.yaml"
         policy.write_text(yaml.dump({"allowed_domains": ["hooks.example.com"]}),
                           encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_config", "--config-dir", config_dir,
-            "--policy", str(policy)
-        ])
+        cli_argv("validate_config", "--config-dir", config_dir,
+            "--policy", str(policy))
         with pytest.raises(SystemExit) as exc:
             vc.main()
         out = capsys.readouterr().out
