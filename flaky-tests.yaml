@@ -1,0 +1,48 @@
+# flaky-tests.yaml — Per-test retry policy registry (HA-10)
+#
+# Why this file exists
+# --------------------
+# Some tests are stochastically flaky (time-dependent, fsnotify-dependent,
+# CI-runner-load-dependent) and we need a controlled retry policy that:
+#
+#   1. Reduces manual `gh run rerun --failed` toil
+#   2. Doesn't mask new regressions (only retries listed tests)
+#   3. Forces root-cause fix via expire_at (entries expire on a target version)
+#
+# Anti-pattern this avoids: blanket `--rerun-fails=N` on every test, which
+# turns every flaky → permanent green and hides genuine new regressions.
+#
+# Usage
+# -----
+#   scripts/ops/ci_flake_retry.py -- go test ./... -race -count=1
+#
+# The wrapper runs the command; on failure, parses failing test names; only
+# retries tests that match an entry below; passes through original exit
+# code if any non-listed test fails.
+#
+# Schema (per entry)
+# ------------------
+#   test:        Display name (FOR HUMANS — appears in CI logs).
+#   pattern:     Go test name regex passed to `go test -run`.
+#                Anchor with $ to avoid matching test prefixes.
+#   max_retries: How many times to retry just this test on failure (1-3 typical).
+#   owner:       GitHub team / handle responsible for root-cause fix.
+#   tracked_by:  Issue or backlog ref (HA-NN, issue #NNN, etc.) — must exist.
+#   expire_at:   Platform version after which this entry FAILS CI (drives fix).
+#                Format matches CHANGELOG version (`v2.9.0`, `exporter/v2.9.0`).
+#
+# Adding a new entry: every entry MUST have tracked_by + expire_at; the
+# expire_at gate is what prevents this list from growing unbounded.
+
+known_flakes:
+  - test: "TestWatchLoop_DebouncedReload_DetectsFileChange"
+    pattern: "^TestWatchLoop_DebouncedReload_DetectsFileChange$"
+    max_retries: 2
+    owner: "@exporter-team"
+    tracked_by: "HA-11 (fake-clock injection) in docs/internal/dx-tooling-backlog.md"
+    expire_at: "v2.9.0"
+    # Source: v2.7.0 PR #26 — first attempt fail, first rerun fail, 33s
+    # delay before second rerun passed. Real cause is real time.Sleep()
+    # waiting for 300ms debounce to fire under CI runner load. HA-11 is
+    # the root-cause fix (clockwork/clock interface injection); this entry
+    # buys time until that lands.
