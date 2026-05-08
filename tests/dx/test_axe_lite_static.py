@@ -183,6 +183,25 @@ class TestScanUnlabeledInputs:
         src = '<label htmlFor={`name${suffix}`}>L</label><input type="text" id="name" />'
         assert axe.scan_unlabeled_inputs(src) == []
 
+    def test_implicit_label_wrap_passes(self):
+        # <label>…<input/>…</label> creates a valid implicit association, no
+        # htmlFor needed (HTML/ARIA spec). Coarse heuristic: scanner looks for
+        # the nearest preceding `<label` open and a `</label>` close that
+        # surround the input.
+        src = '<label className="block"><span>Name</span><input type="text" /></label>'
+        assert axe.scan_unlabeled_inputs(src) == []
+
+    def test_textarea_inside_label_wrap_passes(self):
+        src = '<label><span>Comments</span><textarea /></label>'
+        assert axe.scan_unlabeled_inputs(src) == []
+
+    def test_input_after_closed_label_still_flagged(self):
+        # Sibling <label> without htmlFor doesn't label the input.
+        # </label> closes BEFORE the <input>, so the input isn't wrapped.
+        src = '<label>Name</label><input type="text" />'
+        findings = axe.scan_unlabeled_inputs(src)
+        assert len(findings) == 1
+
 
 # ---------------------------------------------------------------------------
 # scan_color_only_severity — WCAG 1.4.1 complementary
