@@ -504,9 +504,10 @@ export default function RoutingTrace() {
           </Field>
           <div className="p-3 border-l-4 border-[color:var(--da-color-info)] bg-[color:var(--da-color-info-soft)] rounded">
             <p className="text-xs text-[color:var(--da-color-muted)]">
+              <span aria-hidden="true">⚠</span>{' '}
               {t(
-                '⚠ Honest scope：本 wizard 不模擬 group_wait / group_interval / repeat_interval timing；僅模擬「哪個 receiver 收到」。',
-                '⚠ Honest scope: this wizard does not simulate group_wait / group_interval / repeat_interval timing; only "which receiver receives".'
+                'Honest scope：本 wizard 不模擬 group_wait / group_interval / repeat_interval timing；僅模擬「哪個 receiver 收到」。',
+                'Honest scope: this wizard does not simulate group_wait / group_interval / repeat_interval timing; only "which receiver receives".'
               )}
             </p>
           </div>
