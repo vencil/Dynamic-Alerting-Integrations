@@ -134,7 +134,7 @@ export default function DeploymentWizard() {
                       : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)] '
                   }`}
                 >
-                  {i < stepIndex ? '✓' : i + 1} {s.label()}
+                  {i < stepIndex ? <span aria-hidden="true">✓</span> : i + 1} {s.label()}
                 </button>
               ))}
             </div>
@@ -421,7 +421,7 @@ export default function DeploymentWizard() {
                       : 'bg-[color:var(--da-color-accent)] text-white hover:bg-[color:var(--da-color-accent-hover)]'
                   }`}
                 >
-                  {copied ? '✓ ' + t('已複製', 'Copied') : t('複製', 'Copy')}
+                  {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製', 'Copy')}
                 </button>
               </div>
             </div>

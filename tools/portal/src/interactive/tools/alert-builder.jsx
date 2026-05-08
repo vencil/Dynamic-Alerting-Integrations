@@ -513,10 +513,7 @@ export default function AlertBuilder() {
                 (k) => k && !isValidLabelKey(k)
               ) && (
                 <p className="text-xs text-[color:var(--da-color-warning)]">
-                  {t(
-                    '⚠ Label key 慣例：[a-z][a-z0-9_]*（小寫 + 底線）',
-                    '⚠ Label key convention: [a-z][a-z0-9_]* (lowercase + underscore)'
-                  )}
+                  <><span aria-hidden="true">⚠</span> {t('Label key 慣例：[a-z][a-z0-9_]*（小寫 + 底線）', 'Label key convention: [a-z][a-z0-9_]* (lowercase + underscore)')}</>
                 </p>
               )}
             </div>
@@ -547,7 +544,7 @@ export default function AlertBuilder() {
                 data-testid="alert-builder-copy"
                 className="px-3 py-1.5 text-xs font-medium rounded bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] hover:bg-[color:var(--da-color-accent-hover)]"
               >
-                {copied ? t('✓ 已複製', '✓ Copied') : t('複製 YAML', 'Copy YAML')}
+                {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製 YAML', 'Copy YAML')}
               </button>
             </div>
             <pre

@@ -590,7 +590,7 @@ export default function TenantYAMLPlayground() {
                 shareCopied ? 'bg-[color:var(--da-color-accent)] text-[color:var(--da-color-card-bg)]' : 'bg-[color:var(--da-color-accent-soft)] text-[color:var(--da-color-accent)] hover:bg-[color:var(--da-color-accent-soft)]'
               }`}
             >
-              {shareCopied ? t('✓ 已複製', '✓ Link Copied') : t('分享連結', 'Share Link')}
+              {shareCopied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Link Copied')}</> : t('分享連結', 'Share Link')}
             </button>
           </div>
         </div>
@@ -687,7 +687,7 @@ export default function TenantYAMLPlayground() {
                       : 'text-[color:var(--da-color-muted)]'
                   }`}
                 >
-                  {validation.summary.routing === 'configured' ? '✓' : '○'}
+                  {validation.summary.routing === 'configured' ? <span aria-hidden="true">✓</span> : '○'}
                 </div>
                 <div className="text-xs text-[color:var(--da-color-fg)] mt-1">{t('路由狀態', 'Routing Status')}</div>
                 <div className="text-xs text-[color:var(--da-color-muted)] mt-2">

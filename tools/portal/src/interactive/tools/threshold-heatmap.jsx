@@ -336,7 +336,7 @@ export default function ThresholdHeatmap() {
                   : 'bg-[color:var(--da-color-accent)] text-[color:var(--da-color-card-bg)] hover:bg-[color:var(--da-color-accent-hover)]'
               }`}
             >
-              {csvExported ? '✓ ' + t('已下載', 'Downloaded') : t('下載 CSV', 'Download CSV')}
+              {csvExported ? <><span aria-hidden="true">✓</span> {t('已下載', 'Downloaded')}</> : t('下載 CSV', 'Download CSV')}
             </button>
           </div>
 

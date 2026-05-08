@@ -254,7 +254,7 @@ export default function ArchitectureQuiz() {
                     i === currentQ ? 'bg-blue-600 text-white ring-4 ring-blue-200' :
                     'bg-slate-200 text-slate-500'
                   }`}>
-                  {answers[q.id] ? '✓' : i + 1}
+                  {answers[q.id] ? <span aria-hidden="true">✓</span> : i + 1}
                 </button>
               ))}
               <span className="ml-auto text-sm text-slate-500">{progress}/{totalQ}</span>

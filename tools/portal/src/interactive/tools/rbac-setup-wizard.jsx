@@ -581,7 +581,7 @@ export default function RBACSetupWizard() {
                     : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)]'
                 }`}
               >
-                {idx < currentStep && '✓ '}{step.label()}
+                {idx < currentStep && <span aria-hidden="true">✓ </span>}{step.label()}
               </button>
             ))}
           </div>

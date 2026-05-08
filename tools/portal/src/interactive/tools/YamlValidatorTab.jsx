@@ -117,7 +117,7 @@ function YamlValidatorTab() {
         <div className="mt-4 space-y-2">
           {result.issues.length === 0 ? (
             <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-800">
-              {t('✓ 所有檢查通過', '✓ All checks passed')}
+              <><span aria-hidden="true">✓</span> {t('所有檢查通過', 'All checks passed')}</>
             </div>
           ) : (
             result.issues.map((issue, i) => (
