@@ -120,6 +120,22 @@ class TestExtractMetricsFromExprProperties:
                 f"output token {token!r} not in input {expr!r}"
             )
 
+    def test_uppercase_label_tokens_excluded(self):
+        # Mutation-pilot kill-test: dropping the `not m[0].isupper()` filter
+        # would let labels like `Tenant` (PromQL convention: uppercase =
+        # label, lowercase = metric) leak into the metrics output. The
+        # property test_no_uppercase_starting_tokens covers this in
+        # principle, but Hypothesis's random text strategy doesn't reliably
+        # generate uppercase-prefixed tokens followed by `{`/`[`/whitespace.
+        # This deterministic case pins the behavior.
+        expr = 'rate(http_requests_total{Tenant="db-a"}[5m])'
+        result = grps.extract_metrics_from_expr(expr)
+        assert "Tenant" not in result, (
+            f"uppercase label `Tenant` leaked into metrics: {result!r}"
+        )
+        # And confirm the lowercase metric does pass through.
+        assert "http_requests_total" in result
+
 
 # ---------------------------------------------------------------------------
 # _parse_front_matter — YAML-ish frontmatter parser
@@ -163,6 +179,19 @@ class TestParseFrontMatterProperties:
             assert parsed.get(k) == v, (
                 f"round-trip lost {k}={v!r}; got {parsed!r}"
             )
+
+    def test_unterminated_list_value_stays_string(self):
+        # Mutation-pilot kill-test: dropping the `endswith("]")` check would
+        # cause `key: [a, b` (no closing bracket) to be parsed as a list
+        # `["a"]` (because val[1:-1] then split by comma drops the trailing
+        # `b`). With both startswith+endswith, it stays a string.
+        content = "---\nkey: [a, b\n---\n"
+        parsed = gdm._parse_front_matter(content)
+        # Value should remain a string (no closing bracket = not a list)
+        assert isinstance(parsed["key"], str), (
+            f"unterminated list `[a, b` was parsed as {type(parsed['key']).__name__}: "
+            f"{parsed['key']!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +276,20 @@ class TestParseCommitProperties:
         assert result["type"] == type_
         assert result["scope"] == scope
         assert result["breaking"] is False  # no `!` marker
+
+    def test_missing_scope_returns_empty_string_not_none(self):
+        # Mutation-pilot kill-test: removing the `or ""` fallback in
+        # `m.group("scope") or ""` would let scope=None leak through when
+        # the commit subject has no `(scope)` group. Downstream code in
+        # generate_changelog assumes scope is a string (uses `c["scope"]`
+        # in f-strings); a None there would render as the literal "None".
+        result = gc.parse_commit("feat: add new feature")
+        assert result is not None
+        assert result["scope"] == "", (
+            f"missing-scope commit returned scope={result['scope']!r}; "
+            f"expected '' for downstream string concat to work"
+        )
+        assert isinstance(result["scope"], str)
 
     @given(
         st.sampled_from(["feat", "fix", "docs", "refactor", "perf"]),
