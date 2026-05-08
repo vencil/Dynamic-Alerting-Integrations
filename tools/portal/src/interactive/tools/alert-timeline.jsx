@@ -121,7 +121,10 @@ function EventLog({ events, currentIdx }) {
         <div key={i} className="flex gap-2">
           <span className="w-8 text-right flex-shrink-0" style={{color: 'var(--da-color-muted)'}}>{ev.tick}s</span>
           <span className={`font-bold flex-shrink-0 ${ev.color}`}>{ev.badge}</span>
-          <span style={{color: 'var(--da-color-fg)'}}>{ev.text}</span>
+          <span style={{color: 'var(--da-color-fg)'}}>
+            {ev.icon && <><span aria-hidden="true">{ev.icon}</span>{' '}</>}
+            {ev.text}
+          </span>
         </div>
       ))}
     </div>
@@ -155,7 +158,7 @@ export default function AlertTimeline() {
         warnPending++;
       } else if (state === 'warning' && warnPending === FOR_DURATION) {
         warnPending = FOR_DURATION + 1;
-        evts.push({ tick: i, badge: 'FIRING', color: 'text-amber-600', text: `⚠️ Warning alert FIRES — ${scenario.metric} = ${val}${scenario.unit}` });
+        evts.push({ tick: i, badge: 'FIRING', color: 'text-amber-600', icon: '⚠️', text: `Warning alert FIRES — ${scenario.metric} = ${val}${scenario.unit}` });
       }
 
       if (state === 'critical' && prevState !== 'critical') {
@@ -165,7 +168,7 @@ export default function AlertTimeline() {
         critPending++;
       } else if (state === 'critical' && critPending === FOR_DURATION) {
         critPending = FOR_DURATION + 1;
-        evts.push({ tick: i, badge: 'FIRING', color: 'text-red-600', text: `🔴 Critical alert FIRES — ${scenario.metric} = ${val}${scenario.unit}` });
+        evts.push({ tick: i, badge: 'FIRING', color: 'text-red-600', icon: '🔴', text: `Critical alert FIRES — ${scenario.metric} = ${val}${scenario.unit}` });
         if (warnPending > FOR_DURATION) {
           evts.push({ tick: i, badge: 'DEDUP', color: 'text-purple-600', text: `Severity dedup: Warning alert SUPPRESSED by Critical` });
         }
