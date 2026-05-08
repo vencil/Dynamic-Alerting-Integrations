@@ -323,47 +323,42 @@ class TestMainCLI:
         _write_file(src_b / "db-b.yaml", "tenants:\n  db-b:\n    y: '2'")
         return f"{src_a},{src_b}"
 
-    def test_check_mode_no_conflicts(self, config_dir, monkeypatch):
+    def test_check_mode_no_conflicts(self, config_dir, monkeypatch, cli_argv):
         """--check 模式無衝突回傳 0。"""
         sources = self._setup_sources(config_dir)
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", sources, "--check"])
+        cli_argv("assemble", "--sources", sources, "--check")
         assert main() == 0
 
-    def test_check_mode_json(self, config_dir, monkeypatch, capsys):
+    def test_check_mode_json(self, config_dir, monkeypatch, capsys, cli_argv):
         """--check --json 輸出 JSON 格式。"""
         sources = self._setup_sources(config_dir)
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", sources, "--check", "--json"])
+        cli_argv("assemble", "--sources", sources, "--check", "--json")
         assert main() == 0
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "ok"
         assert output["file_count"] == 2
 
-    def test_assemble_mode(self, config_dir, monkeypatch):
+    def test_assemble_mode(self, config_dir, monkeypatch, cli_argv):
         """組裝模式正確複製檔案。"""
         sources = self._setup_sources(config_dir)
         out = Path(config_dir) / "output"
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", sources, "--output", str(out)])
+        cli_argv("assemble", "--sources", sources, "--output", str(out))
         assert main() == 0
         assert (out / "db-a.yaml").exists()
         assert (out / "db-b.yaml").exists()
 
-    def test_assemble_with_manifest(self, config_dir, monkeypatch):
+    def test_assemble_with_manifest(self, config_dir, monkeypatch, cli_argv):
         """組裝模式產生 manifest JSON。"""
         sources = self._setup_sources(config_dir)
         out = Path(config_dir) / "output"
         manifest_path = Path(config_dir) / "manifest.json"
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", sources,
-                             "--output", str(out), "--manifest", str(manifest_path)])
+        cli_argv("assemble", "--sources", sources, "--output", str(out), "--manifest", str(manifest_path))
         assert main() == 0
         assert manifest_path.exists()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["file_count"] == 2
 
-    def test_conflict_returns_1(self, config_dir, monkeypatch):
+    def test_conflict_returns_1(self, config_dir, monkeypatch, cli_argv):
         """檔案衝突回傳 exit code 1。"""
         src_a = Path(config_dir) / "team-a"
         src_b = Path(config_dir) / "team-b"
@@ -371,11 +366,10 @@ class TestMainCLI:
         src_b.mkdir()
         _write_file(src_a / "db-a.yaml", "a: 1")
         _write_file(src_b / "db-a.yaml", "a: 99")
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", f"{src_a},{src_b}", "--check"])
+        cli_argv("assemble", "--sources", f"{src_a},{src_b}", "--check")
         assert main() == 1
 
-    def test_conflict_json_output(self, config_dir, monkeypatch, capsys):
+    def test_conflict_json_output(self, config_dir, monkeypatch, capsys, cli_argv):
         """衝突時 --json 輸出衝突詳情。"""
         src_a = Path(config_dir) / "team-a"
         src_b = Path(config_dir) / "team-b"
@@ -383,37 +377,30 @@ class TestMainCLI:
         src_b.mkdir()
         _write_file(src_a / "db-a.yaml", "a: 1")
         _write_file(src_b / "db-a.yaml", "a: 99")
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", f"{src_a},{src_b}",
-                             "--check", "--json"])
+        cli_argv("assemble", "--sources", f"{src_a},{src_b}", "--check", "--json")
         assert main() == 1
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "conflict"
         assert "db-a.yaml" in output["conflicts"]
 
-    def test_missing_source_returns_2(self, config_dir, monkeypatch):
+    def test_missing_source_returns_2(self, config_dir, monkeypatch, cli_argv):
         """不存在的 source 目錄回傳 exit code 2。"""
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", "/nonexistent/dir", "--check"])
+        cli_argv('assemble', '--sources', '/nonexistent/dir', '--check')
         assert main() == 2
 
-    def test_assemble_json_output(self, config_dir, monkeypatch, capsys):
+    def test_assemble_json_output(self, config_dir, monkeypatch, capsys, cli_argv):
         """組裝模式 --json 輸出結構化結果。"""
         sources = self._setup_sources(config_dir)
         out = Path(config_dir) / "output"
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", sources,
-                             "--output", str(out), "--json"])
+        cli_argv("assemble", "--sources", sources, "--output", str(out), "--json")
         assert main() == 0
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "ok"
         assert output["file_count"] == 2
 
-    def test_assemble_with_validate(self, config_dir, monkeypatch):
+    def test_assemble_with_validate(self, config_dir, monkeypatch, cli_argv):
         """組裝模式含 --validate 檢查 YAML 有效性。"""
         sources = self._setup_sources(config_dir)
         out = Path(config_dir) / "output"
-        monkeypatch.setattr(sys, "argv",
-                            ["assemble", "--sources", sources,
-                             "--output", str(out), "--validate"])
+        cli_argv("assemble", "--sources", sources, "--output", str(out), "--validate")
         assert main() == 0

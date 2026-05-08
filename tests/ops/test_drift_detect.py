@@ -481,57 +481,41 @@ class TestCLI:
         assert args.json is False
         assert args.ci is False
 
-    def test_main_text_output(self, two_dirs, monkeypatch, capsys):
+    def test_main_text_output(self, two_dirs, monkeypatch, capsys, cli_argv):
         """預設 text 輸出。"""
         dir_a, dir_b = two_dirs
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{dir_a},{dir_b}",
-            "--labels", "A,B",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,B")
         dd.main()
         out = capsys.readouterr().out
         assert "Cross-Cluster" in out
         assert "Unexpected" in out
 
-    def test_main_json_output(self, two_dirs, monkeypatch, capsys):
+    def test_main_json_output(self, two_dirs, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON。"""
         dir_a, dir_b = two_dirs
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{dir_a},{dir_b}",
-            "--json",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--json")
         dd.main()
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "pair_count" in data
 
-    def test_main_markdown_output(self, two_dirs, monkeypatch, capsys):
+    def test_main_markdown_output(self, two_dirs, monkeypatch, capsys, cli_argv):
         """--markdown 輸出 Markdown。"""
         dir_a, dir_b = two_dirs
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{dir_a},{dir_b}",
-            "--markdown",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--markdown")
         dd.main()
         out = capsys.readouterr().out
         assert "# Cross-Cluster" in out
 
-    def test_main_ci_exits_on_drift(self, two_dirs, monkeypatch, capsys):
+    def test_main_ci_exits_on_drift(self, two_dirs, monkeypatch, capsys, cli_argv):
         """--ci 有 unexpected drift 時 exit 1。"""
         dir_a, dir_b = two_dirs
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{dir_a},{dir_b}",
-            "--ci",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--ci")
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
         assert exc_info.value.code == 1
 
-    def test_main_ci_success(self, tmp_path, monkeypatch, capsys):
+    def test_main_ci_success(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--ci 無 drift 時 exit 0。"""
         d1 = tmp_path / "d1"
         d2 = tmp_path / "d2"
@@ -539,45 +523,32 @@ class TestCLI:
         d2.mkdir()
         _write_yaml(d1, "db-a.yaml", "same: true")
         _write_yaml(d2, "db-a.yaml", "same: true")
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{d1},{d2}",
-            "--ci",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{d1},{d2}", "--ci")
         # Should not raise
         dd.main()
 
-    def test_main_insufficient_dirs(self, tmp_path, monkeypatch):
+    def test_main_insufficient_dirs(self, tmp_path, monkeypatch, cli_argv):
         """只給 1 個目錄 → exit 1。"""
         d = tmp_path / "only"
         d.mkdir()
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect", "--dirs", str(d),
-        ])
+        cli_argv("drift_detect", "--dirs", str(d))
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
         assert exc_info.value.code == 1
 
-    def test_main_missing_dir(self, tmp_path, monkeypatch):
+    def test_main_missing_dir(self, tmp_path, monkeypatch, cli_argv):
         """不存在的目錄 → exit 1。"""
         d = tmp_path / "exists"
         d.mkdir()
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{d},{tmp_path / 'nope'}",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{d},{tmp_path / 'nope'}")
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
         assert exc_info.value.code == 1
 
-    def test_main_label_mismatch(self, two_dirs, monkeypatch):
+    def test_main_label_mismatch(self, two_dirs, monkeypatch, cli_argv):
         """--labels 數量不符 → exit 1。"""
         dir_a, dir_b = two_dirs
-        monkeypatch.setattr(sys, "argv", [
-            "drift_detect",
-            "--dirs", f"{dir_a},{dir_b}",
-            "--labels", "A,B,C",
-        ])
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,B,C")
         with pytest.raises(SystemExit) as exc_info:
             dd.main()
         assert exc_info.value.code == 1
