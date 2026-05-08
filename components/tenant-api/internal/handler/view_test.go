@@ -10,15 +10,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/testutil"
 	"github.com/vencil/tenant-api/internal/views"
 )
 
 func setupViewsFile(t *testing.T, configDir, content string) {
 	t.Helper()
 	if content != "" {
-		if err := os.WriteFile(filepath.Join(configDir, "_views.yaml"), []byte(content), 0644); err != nil {
-			t.Fatalf("write _views.yaml: %v", err)
-		}
+		testutil.WriteYAML(t, configDir, "_views.yaml", content)
 	}
 }
 

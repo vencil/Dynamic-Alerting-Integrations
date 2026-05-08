@@ -12,14 +12,13 @@ import (
 
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 func setupGroupsFile(t *testing.T, configDir, content string) {
 	t.Helper()
 	if content != "" {
-		if err := os.WriteFile(filepath.Join(configDir, "_groups.yaml"), []byte(content), 0644); err != nil {
-			t.Fatalf("write _groups.yaml: %v", err)
-		}
+		testutil.WriteYAML(t, configDir, "_groups.yaml", content)
 	}
 }
 
