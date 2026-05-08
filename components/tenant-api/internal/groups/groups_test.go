@@ -1,9 +1,9 @@
 package groups
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 const sampleGroupsYAML = `groups:
@@ -147,11 +147,7 @@ func TestNewManager_NoFile(t *testing.T) {
 }
 
 func TestNewManager_WithFile(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, "_groups.yaml"), []byte(sampleGroupsYAML), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
 	mgr := NewManager(dir)
 
@@ -170,11 +166,7 @@ func TestNewManager_WithFile(t *testing.T) {
 }
 
 func TestManager_GetGroup(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, "_groups.yaml"), []byte(sampleGroupsYAML), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
 	mgr := NewManager(dir)
 
@@ -193,11 +185,7 @@ func TestManager_GetGroup(t *testing.T) {
 }
 
 func TestManager_Reload(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, "_groups.yaml"), []byte(sampleGroupsYAML), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
 	mgr := NewManager(dir)
 	if len(mgr.ListGroups()) != 2 {
@@ -211,10 +199,7 @@ func TestManager_Reload(t *testing.T) {
     members:
       - tenant-1
 `
-	err = os.WriteFile(filepath.Join(dir, "_groups.yaml"), []byte(updatedYAML), 0644)
-	if err != nil {
-		t.Fatalf("write updated: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_groups.yaml", updatedYAML)
 
 	if err := mgr.Reload(); err != nil {
 		t.Fatalf("Reload: %v", err)

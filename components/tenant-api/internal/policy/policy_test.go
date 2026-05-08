@@ -1,10 +1,10 @@
 package policy
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 const sampleDomainPolicyYAML = `domain_policies:
@@ -40,11 +40,7 @@ func TestNewManager_NoFile(t *testing.T) {
 
 func TestNewManager_ValidFile(t *testing.T) {
 	// When policy file exists with valid content, manager should load it
-	dir := t.TempDir()
-	path := filepath.Join(dir, "_domain_policy.yaml")
-	if err := os.WriteFile(path, []byte(sampleDomainPolicyYAML), 0644); err != nil {
-		t.Fatalf("failed to write policy file: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", sampleDomainPolicyYAML)
 
 	m := NewManager(dir)
 
@@ -418,11 +414,7 @@ func TestCheckWrite_EmptyConstraints(t *testing.T) {
 
 func TestNewManager_InvalidYAML(t *testing.T) {
 	// When policy file contains invalid YAML, NewManager should handle gracefully
-	dir := t.TempDir()
-	path := filepath.Join(dir, "_domain_policy.yaml")
-	if err := os.WriteFile(path, []byte("{{invalid yaml"), 0644); err != nil {
-		t.Fatalf("failed to write invalid file: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", "{{invalid yaml")
 
 	m := NewManager(dir)
 
@@ -435,13 +427,8 @@ func TestNewManager_InvalidYAML(t *testing.T) {
 
 func TestWatchLoop(t *testing.T) {
 	// Test that policy changes are picked up by watch loop
-	dir := t.TempDir()
-	path := filepath.Join(dir, "_domain_policy.yaml")
-
 	// Start with empty policy file
-	if err := os.WriteFile(path, []byte("domain_policies: {}"), 0644); err != nil {
-		t.Fatalf("failed to write initial file: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", "domain_policies: {}")
 
 	m := NewManager(dir)
 	stopCh := make(chan struct{})
@@ -460,9 +447,7 @@ func TestWatchLoop(t *testing.T) {
     description: Test policy
     tenants: [db-a]
     constraints: {}`
-	if err := os.WriteFile(path, []byte(newPolicy), 0644); err != nil {
-		t.Fatalf("failed to update file: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", newPolicy)
 
 	// TD-024: replace blind 200ms sleep with poll-until-loaded. The 100ms
 	// WatchLoop tick + 200ms sleep was tight on slow CI. Now we poll for
