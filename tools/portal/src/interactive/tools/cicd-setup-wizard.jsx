@@ -326,7 +326,7 @@ function StepReview({ config }) {
                 aria-label={t('複製 da-tools init 命令', 'Copy da-tools init command')}
                 className={`text-xs px-2 py-1 rounded ${copiedCmd ? 'bg-[color:var(--da-color-success)] text-white' : 'bg-[color:var(--da-color-tag-bg)] hover:bg-[color:var(--da-color-surface-hover)]'}`}
               >
-                {copiedCmd ? '✓' : t('複製', 'Copy')}
+                {copiedCmd ? <span aria-hidden="true">✓</span> : t('複製', 'Copy')}
               </button>
             </div>
             <pre className="bg-[color:var(--da-color-hero-bg)] text-[color:var(--da-color-success)] p-4 rounded-lg text-xs font-mono overflow-x-auto">
@@ -343,7 +343,7 @@ function StepReview({ config }) {
                 aria-label={t('複製 Docker 命令', 'Copy Docker command')}
                 className={`text-xs px-2 py-1 rounded ${copiedDocker ? 'bg-[color:var(--da-color-success)] text-white' : 'bg-[color:var(--da-color-tag-bg)] hover:bg-[color:var(--da-color-surface-hover)]'}`}
               >
-                {copiedDocker ? '✓' : t('複製', 'Copy')}
+                {copiedDocker ? <span aria-hidden="true">✓</span> : t('複製', 'Copy')}
               </button>
             </div>
             <pre className="bg-[color:var(--da-color-hero-bg)] text-[color:var(--da-color-hero-accent)] p-4 rounded-lg text-xs font-mono overflow-x-auto">
@@ -448,7 +448,7 @@ export default function CICDSetupWizard() {
                 i < step ? 'bg-[color:var(--da-color-accent-soft)] text-[color:var(--da-color-accent)]' :
                 i === step ? 'bg-[color:var(--da-color-surface)] text-[color:var(--da-color-accent)]' : 'bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-tag-fg)]'
               }`} aria-hidden="true">
-                {i < step ? '✓' : i + 1}
+                {i < step ? <span aria-hidden="true">✓</span> : i + 1}
               </span>
               <span className="hidden sm:inline">{s.label()}</span>
             </button>

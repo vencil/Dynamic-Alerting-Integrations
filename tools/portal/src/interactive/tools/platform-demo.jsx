@@ -257,7 +257,7 @@ function Stepper({ phases, currentPhase, completedPhases }) {
             <div
               className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center font-bold border-2 ${bgColor} ${borderColor}`}
             >
-              {isCompleted ? '✓' : idx + 1}
+              {isCompleted ? <span aria-hidden="true">✓</span> : idx + 1}
             </div>
             <div className="flex-1">
               <h3

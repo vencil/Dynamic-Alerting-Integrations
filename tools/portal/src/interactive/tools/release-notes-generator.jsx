@@ -566,7 +566,7 @@ export default function ReleaseNotesGenerator() {
                   if (!copied) e.target.style.backgroundColor = 'var(--da-color-info-soft)';
                 }}
               >
-                {copied ? '✓ ' + t('已複製', 'Copied') : t('複製', 'Copy')}
+                {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製', 'Copy')}
               </button>
             </div>
 

@@ -281,7 +281,7 @@ const ProgressIndicator = ({ step, totalSteps }) => {
               : "bg-[color:var(--da-color-surface-border)] text-[color:var(--da-color-muted)]"
         }`}
       >
-        {i < step ? "✓" : i + 1}
+        {i < step ? <span aria-hidden="true">✓</span> : i + 1}
       </div>
     );
     if (i < totalSteps - 1) {

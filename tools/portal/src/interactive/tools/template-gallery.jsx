@@ -257,7 +257,7 @@ export default function TemplateGallery() {
                           : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                       }`}
                     >
-                      {copiedId === tpl.id ? t('✓ 已複製', '✓ Copied') : t('複製 YAML', 'Copy YAML')}
+                      {copiedId === tpl.id ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製 YAML', 'Copy YAML')}
                     </button>
                   </div>
                 </div>
@@ -285,7 +285,7 @@ export default function TemplateGallery() {
                   coveredPacks.has(p.id) ? PACK_COLORS[p.id] || 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'
                 }`}
               >
-                {coveredPacks.has(p.id) ? '✓' : '✗'} {p.label}
+                {coveredPacks.has(p.id) ? <span aria-hidden="true">✓</span> : <span aria-hidden="true">✗</span>} {p.label}
               </span>
             ))}
           </div>

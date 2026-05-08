@@ -170,7 +170,7 @@ function RoutingTraceTab() {
               <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
                 result.trace.isInhibited ? 'bg-purple-600 text-white' : 'bg-gray-300 text-gray-600'
               }`}>
-                {result.trace.isInhibited ? '!' : '✓'}
+                {result.trace.isInhibited ? '!' : <span aria-hidden="true">✓</span>}
               </span>
               <span className="font-medium">
                 {t('Inhibit Rule 檢查', 'Inhibit Rule Check')}
@@ -184,11 +184,11 @@ function RoutingTraceTab() {
                 </span>
               ) : result.trace.hasCritical && result.trace.severity === 'critical' ? (
                 <span className="text-green-700">
-                  {t('✓ CRITICAL 直通 — 同時會抑制對應的 WARNING 告警', '✓ CRITICAL passes through — also suppresses corresponding WARNING alert')}
+                  <><span aria-hidden="true">✓</span> {t('CRITICAL 直通 — 同時會抑制對應的 WARNING 告警', 'CRITICAL passes through — also suppresses corresponding WARNING alert')}</>
                 </span>
               ) : (
                 <span className="text-gray-600">
-                  {t('✓ 通過 — 無 inhibit 規則影響此告警', '✓ Pass — no inhibit rules affect this alert')}
+                  <><span aria-hidden="true">✓</span> {t('通過 — 無 inhibit 規則影響此告警', 'Pass — no inhibit rules affect this alert')}</>
                 </span>
               )}
             </div>
@@ -268,7 +268,7 @@ function RoutingTraceTab() {
                   </div>
                   <div className="p-3 rounded-lg border-2 border-orange-300 bg-orange-50">
                     <div className="text-sm font-medium text-orange-800 mb-1">
-                      {t('⚠ Domain Policy 警告', '⚠ Domain Policy Warnings')}
+                      <><span aria-hidden="true">⚠</span> {t('Domain Policy 警告', 'Domain Policy Warnings')}</>
                     </div>
                     {result.trace.policyViolations.map((v, i) => (
                       <div key={i} className="text-xs text-orange-700">

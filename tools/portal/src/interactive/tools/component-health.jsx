@@ -449,7 +449,7 @@ export default function ComponentHealth() {
                       role="img"
                       aria-label={tool.pw ? t('有 Playwright 測試', 'Has Playwright test') : t('無 Playwright 測試', 'No Playwright test')}
                     >
-                      {tool.pw ? '✓' : '—'}
+                      {tool.pw ? <span aria-hidden="true">✓</span> : '—'}
                     </span>
                   </td>
                   <td style={styles.td}>{tool.loc}</td>

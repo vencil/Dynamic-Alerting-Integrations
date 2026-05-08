@@ -642,7 +642,7 @@ export default function RoutingTrace() {
                 data-testid="routing-trace-copy"
                 className="px-3 py-1.5 text-xs font-medium rounded bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] hover:bg-[color:var(--da-color-accent-hover)]"
               >
-                {copied ? t('✓ 已複製', '✓ Copied') : t('複製追蹤結果', 'Copy Trace')}
+                {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製追蹤結果', 'Copy Trace')}
               </button>
             </div>
             <p className="text-base font-bold text-[color:var(--da-color-fg)]">

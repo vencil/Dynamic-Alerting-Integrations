@@ -784,7 +784,7 @@ export default function OperatorSetupWizard() {
                     : 'var(--da-color-muted)',
                 }}
               >
-                {idx < currentStep && '✓ '}{step.label()}
+                {idx < currentStep && <span aria-hidden="true">✓ </span>}{step.label()}
               </button>
             ))}
           </div>
