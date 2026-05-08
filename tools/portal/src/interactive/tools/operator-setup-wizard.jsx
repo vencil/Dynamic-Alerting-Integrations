@@ -145,7 +145,7 @@ function StepEnvironment({ config, onChange, helpOpen, setHelpOpen }) {
               }}
             >
               {ver.label}
-              {ver.recommended && <span style={{ display: 'block', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-success)', marginTop: 'var(--da-space-1)' }}>✓ {t('推薦', 'Recommended')}</span>}
+              {ver.recommended && <span style={{ display: 'block', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-success)', marginTop: 'var(--da-space-1)' }}><span aria-hidden="true">✓</span> {t('推薦', 'Recommended')}</span>}
             </button>
           ))}
         </div>
@@ -332,7 +332,7 @@ function StepCRDConfig({ config, onChange, helpOpen, setHelpOpen }) {
               </div>
               {mode.riskLevel === 'medium' && (
                 <div style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-warning)', marginTop: 'var(--da-space-1)' }}>
-                  ⚠️ {t('需要仔細測試', 'Requires careful testing')}
+                  <span aria-hidden="true">⚠</span>️ {t('需要仔細測試', 'Requires careful testing')}
                 </div>
               )}
             </button>
@@ -637,7 +637,7 @@ function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
         </div>
         {customTenant.trim() && !validateTenantName(customTenant.trim()) && (
           <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-error)', marginTop: 'var(--da-space-1)' }}>
-            ✗ {t('無效的 tenant 名稱。必須符合 RFC 1123', 'Invalid tenant name. Must comply with RFC 1123')}
+            <span aria-hidden="true">✗</span> {t('無效的 tenant 名稱。必須符合 RFC 1123', 'Invalid tenant name. Must comply with RFC 1123')}
           </p>
         )}
       </div>

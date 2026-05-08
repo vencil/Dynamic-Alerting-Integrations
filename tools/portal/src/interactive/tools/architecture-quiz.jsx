@@ -273,7 +273,7 @@ export default function ArchitectureQuiz() {
                       }`}>
                       <span className="text-2xl">{opt.icon}</span>
                       <span className={`text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-slate-700'}`}>{opt.label}</span>
-                      {isSelected && <span className="ml-auto text-blue-500 font-bold">✓</span>}
+                      {isSelected && <span className="ml-auto text-blue-500 font-bold"><span aria-hidden="true">✓</span></span>}
                     </button>
                   );
                 })}

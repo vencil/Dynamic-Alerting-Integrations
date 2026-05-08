@@ -656,9 +656,9 @@ export default function TenantYAMLPlayground() {
               <div className="text-right">
                 <div className="text-3xl font-bold">
                   {validation.valid ? (
-                    <span className="text-[color:var(--da-color-success)]">✓</span>
+                    <span className="text-[color:var(--da-color-success)]"><span aria-hidden="true">✓</span></span>
                   ) : (
-                    <span className="text-[color:var(--da-color-error)]">✗</span>
+                    <span className="text-[color:var(--da-color-error)]"><span aria-hidden="true">✗</span></span>
                   )}
                 </div>
               </div>
@@ -700,7 +700,7 @@ export default function TenantYAMLPlayground() {
             {validation.errors.length > 0 && (
               <div>
                 <h3 className="font-semibold text-[color:var(--da-color-error)] mb-3 flex items-center gap-2">
-                  <span className="text-lg">✗</span> {t('錯誤', 'Errors')} ({validation.errors.length})
+                  <span className="text-lg"><span aria-hidden="true">✗</span></span> {t('錯誤', 'Errors')} ({validation.errors.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.errors.map((err, i) => (
@@ -720,7 +720,7 @@ export default function TenantYAMLPlayground() {
             {validation.warnings.length > 0 && (
               <div>
                 <h3 className="font-semibold text-[color:var(--da-color-warning)] mb-3 flex items-center gap-2">
-                  <span className="text-lg">⚠</span> {t('警告', 'Warnings')} ({validation.warnings.length})
+                  <span className="text-lg"><span aria-hidden="true">⚠</span></span> {t('警告', 'Warnings')} ({validation.warnings.length})
                 </h3>
                 <div className="space-y-2">
                   {validation.warnings.map((warn, i) => (
@@ -761,7 +761,7 @@ export default function TenantYAMLPlayground() {
             {/* All Valid */}
             {validation.valid && validation.errors.length === 0 && (
               <div className="bg-[color:var(--da-color-success-soft)] border border-[color:var(--da-color-success)] rounded-md p-4 text-center">
-                <div className="text-2xl mb-2">✓</div>
+                <div className="text-2xl mb-2"><span aria-hidden="true">✓</span></div>
                 <div className="text-[color:var(--da-color-success)] font-semibold">{t('配置有效!', 'Configuration is valid!')}</div>
                 <div className="text-xs text-[color:var(--da-color-success)] mt-2">
                   {validation.summary.thresholds} {t('閾值', 'thresholds')} • {validation.summary.specialKeys} {t('特殊鍵', 'special keys')} •

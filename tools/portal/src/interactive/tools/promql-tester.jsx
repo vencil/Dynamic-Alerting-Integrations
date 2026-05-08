@@ -263,7 +263,7 @@ export default function PromQLTester() {
               <div className="space-y-2">
                 {analysis.warnings.map((w, i) => (
                   <div key={`w-${i}`} className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-                    ⚠️ {w}
+                    <span aria-hidden="true">⚠</span>️ {w}
                   </div>
                 ))}
                 {analysis.suggestions.map((s, i) => (

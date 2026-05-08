@@ -258,7 +258,7 @@ function StepReview({ config }) {
         lineHeight: '1.6',
       }}>
         <p style={{ fontWeight: 'var(--da-font-weight-semibold)', marginBottom: 'var(--da-space-1)' }}>
-          ⚠️ {t('重要提示', 'Important Notes')}
+          <span aria-hidden="true">⚠</span>️ {t('重要提示', 'Important Notes')}
         </p>
         <ul style={{ marginLeft: 'var(--da-space-4)', listStyleType: 'disc' }}>
           <li>{t('在生產環境中執行之前，務必在 staging 環境測試', 'Always test in staging before running in production')}</li>

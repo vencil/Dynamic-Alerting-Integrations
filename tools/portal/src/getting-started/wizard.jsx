@@ -352,7 +352,7 @@ const DocumentLink = ({ doc, isRead, onToggleRead }) => {
         }`}
         title={isRead ? t("標記為未讀", "Mark as unread") : t("標記為已讀", "Mark as read")}
       >
-        {isRead && <span className="text-xs font-bold">✓</span>}
+        {isRead && <span className="text-xs font-bold"><span aria-hidden="true">✓</span></span>}
       </button>
       <a href={href} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
         <div className="flex items-start justify-between">

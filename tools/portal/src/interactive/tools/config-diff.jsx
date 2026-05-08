@@ -233,7 +233,7 @@ export default function ConfigDiff() {
           </div>
         ) : (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 text-center">
-            <div className="text-3xl mb-3">✓</div>
+            <div className="text-3xl mb-3"><span aria-hidden="true">✓</span></div>
             <p className="text-sm text-slate-500">{t('兩個版本完全相同', 'Both versions are identical')}</p>
           </div>
         )}

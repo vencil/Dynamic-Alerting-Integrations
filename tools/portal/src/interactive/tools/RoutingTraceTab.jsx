@@ -285,7 +285,7 @@ function RoutingTraceTab() {
               </div>
               <div className="p-4 rounded-lg border-2 border-green-400 bg-green-50">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="w-6 h-6 rounded-full bg-green-600 text-white flex items-center justify-center text-xs font-bold">✓</span>
+                  <span className="w-6 h-6 rounded-full bg-green-600 text-white flex items-center justify-center text-xs font-bold"><span aria-hidden="true">✓</span></span>
                   <span className="text-green-800 font-bold text-sm">
                     {t('通知送達', 'Notification Delivered')}
                   </span>

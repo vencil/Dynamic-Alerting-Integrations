@@ -173,7 +173,7 @@ export default function DeploymentWizard() {
                               {t('成本', 'Cost')}: {tier.cost}
                             </p>
                           </div>
-                          {config.tier === tier.id && <span className="text-[color:var(--da-color-accent)] font-bold">✓</span>}
+                          {config.tier === tier.id && <span className="text-[color:var(--da-color-accent)] font-bold"><span aria-hidden="true">✓</span></span>}
                         </div>
                       </button>
                     ))}
@@ -203,7 +203,7 @@ export default function DeploymentWizard() {
                             <div className="font-medium text-[color:var(--da-color-fg)]">{env.label}</div>
                             <div className="text-xs text-[color:var(--da-color-muted)] mt-0.5">{env.desc}</div>
                           </div>
-                          {config.environment === env.id && <span className="text-[color:var(--da-color-accent)]">✓</span>}
+                          {config.environment === env.id && <span className="text-[color:var(--da-color-accent)]"><span aria-hidden="true">✓</span></span>}
                         </div>
                       </button>
                     ))}
@@ -236,7 +236,7 @@ export default function DeploymentWizard() {
                               <div>{t('保留期', 'Retention')}: {size.retention} | {t('基數上限', 'Cardinality')}: {size.cardinality}</div>
                             </div>
                           </div>
-                          {config.tenantSize === size.id && <span className="text-[color:var(--da-color-accent)]">✓</span>}
+                          {config.tenantSize === size.id && <span className="text-[color:var(--da-color-accent)]"><span aria-hidden="true">✓</span></span>}
                         </div>
                       </button>
                     ))}
@@ -269,7 +269,7 @@ export default function DeploymentWizard() {
                               {t('範圍', 'Scopes')}: {provider.scopes.join(', ')}
                             </div>
                           </div>
-                          {config.auth === provider.id && <span className="text-[color:var(--da-color-accent)]">✓</span>}
+                          {config.auth === provider.id && <span className="text-[color:var(--da-color-accent)]"><span aria-hidden="true">✓</span></span>}
                         </div>
                       </button>
                     ))}
@@ -318,7 +318,7 @@ export default function DeploymentWizard() {
                         <div className="text-2xl mb-2">{pack.icon}</div>
                         <div className="text-xs font-medium text-[color:var(--da-color-fg)]">{pack.label}</div>
                         {config.packs.includes(pack.id) && (
-                          <div className="text-[color:var(--da-color-accent)] text-sm mt-1">✓</div>
+                          <div className="text-[color:var(--da-color-accent)] text-sm mt-1"><span aria-hidden="true">✓</span></div>
                         )}
                       </button>
                     ))}

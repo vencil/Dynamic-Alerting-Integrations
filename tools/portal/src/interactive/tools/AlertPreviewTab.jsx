@@ -275,7 +275,7 @@ function AlertPreviewTab() {
                                 {recData.recommendations[a.metric].confidence}
                               </span>
                               {a.threshold != null && Math.abs(a.threshold - recData.recommendations[a.metric].recommended) / recData.recommendations[a.metric].recommended > 0.3 && (
-                                <span title={t('閾值與推薦值差異 > 30%', 'Threshold differs >30% from recommended')}>⚠️</span>
+                                <span title={t('閾值與推薦值差異 > 30%', 'Threshold differs >30% from recommended')}><span aria-hidden="true">⚠</span>️</span>
                               )}
                             </div>
                           ) : '-'}

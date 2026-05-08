@@ -643,7 +643,7 @@ export default function CLIPlayground() {
                   </button>
                 </div>
                 {copied && (
-                  <p className="mt-2 text-sm text-green-600 font-medium">✓ {t('已複製到剪貼板', 'Copied to clipboard')}</p>
+                  <p className="mt-2 text-sm text-green-600 font-medium"><span aria-hidden="true">✓</span> {t('已複製到剪貼板', 'Copied to clipboard')}</p>
                 )}
                 {(requiredArgsEmpty || requiredFlagsEmpty) && (
                   <p className="mt-2 text-xs text-amber-600">{t('填寫必填欄位以啟用複製', 'Fill required fields to enable copy')}</p>
