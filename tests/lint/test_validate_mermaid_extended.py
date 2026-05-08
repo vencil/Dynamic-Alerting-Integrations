@@ -232,80 +232,66 @@ class TestCheckArrowSyntax:
 class TestMainCLI:
     """validate_mermaid main() CLI tests."""
 
-    def test_main_with_valid_file(self, tmp_path, monkeypatch, capsys):
+    def test_main_with_valid_file(self, tmp_path, monkeypatch, capsys, cli_argv):
         md = tmp_path / "test.md"
         md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
                       encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", str(md)
-        ])
+        cli_argv("validate_mermaid", str(md))
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 0
         combined = capsys.readouterr()
         assert "Total diagrams found: 1" in combined.out
 
-    def test_main_with_directory(self, tmp_path, monkeypatch, capsys):
+    def test_main_with_directory(self, tmp_path, monkeypatch, capsys, cli_argv):
         md = tmp_path / "test.md"
         md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
                       encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", str(tmp_path)
-        ])
+        cli_argv("validate_mermaid", str(tmp_path))
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 0
         combined = capsys.readouterr()
         assert "Total diagrams found:" in combined.out
 
-    def test_main_nonexistent_path(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", "/nonexistent/path"
-        ])
+    def test_main_nonexistent_path(self, monkeypatch, capsys, cli_argv):
+        cli_argv("validate_mermaid", "/nonexistent/path")
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 1
 
-    def test_main_no_md_files(self, tmp_path, monkeypatch, capsys):
+    def test_main_no_md_files(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Directory with no .md files."""
         (tmp_path / "readme.txt").write_text("not markdown", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", str(tmp_path)
-        ])
+        cli_argv("validate_mermaid", str(tmp_path))
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 0
 
-    def test_main_ci_with_errors(self, tmp_path, monkeypatch, capsys):
+    def test_main_ci_with_errors(self, tmp_path, monkeypatch, capsys, cli_argv):
         md = tmp_path / "bad.md"
         md.write_text(
             "```mermaid\ngraph TD\n    subgraph X\n    A-->B\n```\n",
             encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", "--ci", str(md)
-        ])
+        cli_argv("validate_mermaid", "--ci", str(md))
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 1
 
-    def test_main_verbose(self, tmp_path, monkeypatch, capsys):
+    def test_main_verbose(self, tmp_path, monkeypatch, capsys, cli_argv):
         md = tmp_path / "test.md"
         md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
                       encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", "--verbose", str(md)
-        ])
+        cli_argv("validate_mermaid", "--verbose", str(md))
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 0
 
-    def test_main_single_non_md_file(self, tmp_path, monkeypatch, capsys):
+    def test_main_single_non_md_file(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Single file that's not .md."""
         f = tmp_path / "test.txt"
         f.write_text("not markdown", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "validate_mermaid", str(f)
-        ])
+        cli_argv("validate_mermaid", str(f))
         with pytest.raises(SystemExit) as exc:
             vm.main()
         assert exc.value.code == 0

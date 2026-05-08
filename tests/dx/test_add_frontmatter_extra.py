@@ -231,82 +231,71 @@ class TestFindMarkdownFiles:
 # main — CLI orchestrator
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_missing_base_dir_returns_one(self, monkeypatch, tmp_path, caplog):
+    def test_missing_base_dir_returns_one(self, monkeypatch, tmp_path, caplog, cli_argv):
         ghost = tmp_path / "ghost"
-        monkeypatch.setattr(sys, "argv",
-                            ["add_frontmatter.py", "--base-dir", str(ghost)])
+        cli_argv("add_frontmatter.py", "--base-dir", str(ghost))
         assert af.main() == 1
 
-    def test_no_md_files_returns_zero(self, monkeypatch, tmp_path):
+    def test_no_md_files_returns_zero(self, monkeypatch, tmp_path, cli_argv):
         # Empty base dir → 0 md files → return 0 (warning logged).
-        monkeypatch.setattr(sys, "argv",
-                            ["add_frontmatter.py", "--base-dir", str(tmp_path)])
+        cli_argv("add_frontmatter.py", "--base-dir", str(tmp_path))
         assert af.main() == 0
 
-    def test_dry_run_returns_zero_and_does_not_modify(self, monkeypatch, tmp_path):
+    def test_dry_run_returns_zero_and_does_not_modify(self, monkeypatch, tmp_path, cli_argv):
         docs = tmp_path / "docs"
         docs.mkdir()
         f = docs / "a.md"
         original = "# A\n\nbody\n"
         f.write_text(original, encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "add_frontmatter.py",
+        cli_argv("add_frontmatter.py",
             "--base-dir", str(tmp_path),
-            "--dry-run",
-        ])
+            "--dry-run")
         assert af.main() == 0
         # File unchanged.
         assert f.read_text(encoding="utf-8") == original
 
     def test_check_mode_with_missing_frontmatter_returns_one(
-        self, monkeypatch, tmp_path,
+        self, monkeypatch, tmp_path, cli_argv,
     ):
         docs = tmp_path / "docs"
         docs.mkdir()
         (docs / "missing.md").write_text("# No FM\n", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "add_frontmatter.py",
+        cli_argv("add_frontmatter.py",
             "--base-dir", str(tmp_path),
-            "--check",
-        ])
+            "--check")
         assert af.main() == 1
 
     def test_check_mode_when_all_have_frontmatter_returns_zero(
-        self, monkeypatch, tmp_path,
+        self, monkeypatch, tmp_path, cli_argv,
     ):
         docs = tmp_path / "docs"
         docs.mkdir()
         (docs / "ok.md").write_text(
             "---\ntitle: x\n---\nbody\n", encoding="utf-8",
         )
-        monkeypatch.setattr(sys, "argv", [
-            "add_frontmatter.py",
+        cli_argv("add_frontmatter.py",
             "--base-dir", str(tmp_path),
-            "--check",
-        ])
+            "--check")
         assert af.main() == 0
 
-    def test_check_mode_does_not_modify_files(self, monkeypatch, tmp_path):
+    def test_check_mode_does_not_modify_files(self, monkeypatch, tmp_path, cli_argv):
         docs = tmp_path / "docs"
         docs.mkdir()
         f = docs / "missing.md"
         original = "# No FM\n"
         f.write_text(original, encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "add_frontmatter.py",
+        cli_argv("add_frontmatter.py",
             "--base-dir", str(tmp_path),
-            "--check",
-        ])
+            "--check")
         af.main()
         # --check is read-only.
         assert f.read_text(encoding="utf-8") == original
 
-    def test_real_run_writes_frontmatter(self, monkeypatch, tmp_path):
+    def test_real_run_writes_frontmatter(self, monkeypatch, tmp_path, cli_argv):
         docs = tmp_path / "docs"
         docs.mkdir()
         f = docs / "a.md"
         f.write_text("# Title\n\nbody\n", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv",
-                            ["add_frontmatter.py", "--base-dir", str(tmp_path)])
+        cli_argv("add_frontmatter.py", "--base-dir", str(tmp_path))
         assert af.main() == 0
         assert f.read_text(encoding="utf-8").startswith("---\n")
