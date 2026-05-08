@@ -237,6 +237,63 @@ class TestScanColorOnlySeverity:
         src = '<div role="alert" className="text-[color:var(--da-color-error)]">err</div>'
         assert axe.scan_color_only_severity(src) == []
 
+    def test_color_with_font_semibold_passes(self):
+        # font-semibold (600) is one weight below font-bold (700) but provides
+        # similar non-color visual weight signal vs surrounding regular text.
+        src = '<h4 className="font-semibold text-[color:var(--da-color-success)]">Shared</h4>'
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_soft_bg_paired_with_severity_text_passes(self):
+        # bg-[--*-soft] creates a tinted box (visual container) that's a
+        # non-color signal independent of the foreground severity color.
+        src = (
+            '<span className="bg-[color:var(--da-color-warning-soft)] '
+            'text-[color:var(--da-color-warning)] px-2 rounded">3 issues</span>'
+        )
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_severity_bg_with_white_fg_passes(self):
+        # Solid filled state: severity color as bg + text-white = inverse
+        # contrast, button/chip pattern.
+        src = (
+            '<button className="bg-[color:var(--da-color-success)] text-white '
+            'px-4 py-2 rounded">Save</button>'
+        )
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_hover_only_severity_passes(self):
+        # If severity color is only on the hover state, the default appearance
+        # uses a non-severity color — meaning isn't conveyed by color alone.
+        src = (
+            '<button className="text-[color:var(--da-color-muted)] '
+            'hover:text-[color:var(--da-color-error)]">×</button>'
+        )
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_severity_bg_alone_still_flagged(self):
+        # bg-severity without text-white or *-soft is still color-only.
+        src = '<div className="bg-[color:var(--da-color-error)] h-2"></div>'
+        findings = axe.scan_color_only_severity(src)
+        assert len(findings) == 1
+
+    def test_role_progressbar_in_window_passes(self):
+        # role="progressbar" on the parent container provides ARIA semantics
+        # that convey state/value beyond the color fill.
+        src = (
+            '<div role="progressbar" aria-valuenow={50}>'
+            '<div className="bg-[color:var(--da-color-success)] h-full"></div>'
+            '</div>'
+        )
+        assert axe.scan_color_only_severity(src) == []
+
+    def test_role_status_in_window_passes(self):
+        src = (
+            '<div role="status">'
+            '<span className="text-[color:var(--da-color-success)]">Saved</span>'
+            '</div>'
+        )
+        assert axe.scan_color_only_severity(src) == []
+
 
 # ---------------------------------------------------------------------------
 # check_file + main — file-bound + CLI

@@ -454,7 +454,14 @@ const RecommendationsSummary = ({ recommendations, readDocs, onToggleRead }) => 
           {t('點擊任一文件開始閱讀，優先從「START HERE」開始。', 'Click any document to read. Start with "START HERE" first.')}
         </p>
         <div className="mt-3 flex items-center gap-3">
-          <div className="flex-1 h-2 bg-[color:var(--da-color-accent-soft)] rounded-full overflow-hidden">
+          <div
+            className="flex-1 h-2 bg-[color:var(--da-color-accent-soft)] rounded-full overflow-hidden"
+            role="progressbar"
+            aria-valuenow={done}
+            aria-valuemin={0}
+            aria-valuemax={total}
+            aria-label={t('閱讀進度', 'Reading progress')}
+          >
             <div className="h-full bg-[color:var(--da-color-success)] rounded-full transition-all" style={progressStyle}></div>
           </div>
           <span className="text-sm font-medium text-[color:var(--da-color-muted)]">{done}/{total}</span>

@@ -286,19 +286,53 @@ def scan_color_only_severity(src: str) -> list[tuple[int, str]]:
         klass = m.group(1) or m.group(2) or ""
         if not any(tok in klass for tok in SEVERITY_COLOR_TOKENS):
             continue
-        # Non-color signals we accept: border, underline, font-bold, ring-,
-        # symbol character present in immediate neighborhood, aria-describedby.
+        # Non-color signals we accept: border, underline, font-bold/semibold,
+        # ring-, italic, line-through, soft-bg pairing (a softly tinted box
+        # provides a visual container distinct from color), and severity-bg
+        # paired with text-white (solid filled state — non-color contrast).
         non_color_ok = any(
             marker in klass
             for marker in (
                 "border-",
                 "underline",
                 "font-bold",
+                "font-semibold",
                 "ring-",
                 "italic",
                 "line-through",
             )
         )
+        # Soft-bg pairing: bg-[--*-soft] with severity text creates a box
+        # signal independent of the text color itself.
+        if not non_color_ok and re.search(
+            r"bg-\[color:var\(--da-color-(error|warning|success)-soft\)\]",
+            klass,
+        ):
+            non_color_ok = True
+        # Inverse contrast: severity used as background WITH text-white (or
+        # similar high-contrast foreground) — solid filled chip/button.
+        if not non_color_ok:
+            has_severity_bg = re.search(
+                r"bg-\[color:var\(--da-color-(error|warning|success)\)\]", klass
+            )
+            has_white_fg = "text-white" in klass or "text-[color:var(--da-color-accent-fg)]" in klass
+            if has_severity_bg and has_white_fg:
+                non_color_ok = True
+        # Hover-only severity: if the severity color appears ONLY behind a
+        # `hover:` prefix, the default state is non-severity, so the color
+        # alone isn't carrying the meaning.
+        if not non_color_ok:
+            severity_hits = list(
+                re.finditer(
+                    r"(?:^|\s)(\S*?(?:text-|bg-)\[color:var\(--da-color-(?:error|warning|success)(?:-soft)?\)\])",
+                    klass,
+                )
+            )
+            if severity_hits and all(
+                "hover:" in tok.group(1) or "focus:" in tok.group(1)
+                for tok in severity_hits
+            ):
+                non_color_ok = True
         # Walk ± 200 chars around the match for context signals.
         window_start = max(0, m.start() - 200)
         window_end = min(len(src), m.end() + 200)
@@ -309,6 +343,10 @@ def scan_color_only_severity(src: str) -> list[tuple[int, str]]:
             elif "aria-describedby" in window:
                 non_color_ok = True
             elif "role=\"alert\"" in window or "role='alert'" in window:
+                non_color_ok = True
+            elif "role=\"status\"" in window or "role='status'" in window:
+                non_color_ok = True
+            elif "role=\"progressbar\"" in window or "role='progressbar'" in window:
                 non_color_ok = True
         if non_color_ok:
             continue

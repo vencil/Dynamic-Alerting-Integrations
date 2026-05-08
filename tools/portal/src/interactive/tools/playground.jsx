@@ -708,7 +708,7 @@ export default function TenantYAMLPlayground() {
                       key={i}
                       className="bg-[color:var(--da-color-error-soft)] border border-[color:var(--da-color-error)] rounded-md p-3 text-sm text-[color:var(--da-color-error)]"
                     >
-                      <div className="font-mono text-xs text-[color:var(--da-color-error)] mb-1">{err.rule}</div>
+                      <div className="font-mono font-bold text-xs text-[color:var(--da-color-error)] mb-1">{err.rule}</div>
                       <div>{err.message}</div>
                     </div>
                   ))}
@@ -728,7 +728,7 @@ export default function TenantYAMLPlayground() {
                       key={i}
                       className="bg-[color:var(--da-color-warning-soft)] border border-[color:var(--da-color-warning)] rounded-md p-3 text-sm text-[color:var(--da-color-warning)]"
                     >
-                      <div className="font-mono text-xs text-[color:var(--da-color-warning)] mb-1">{warn.rule}</div>
+                      <div className="font-mono font-bold text-xs text-[color:var(--da-color-warning)] mb-1">{warn.rule}</div>
                       <div>{warn.message}</div>
                     </div>
                   ))}
