@@ -213,33 +213,33 @@ class TestVerifyDashboards:
 # main — CLI
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_no_args_errors_and_exits(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["grafana_import.py"])
+    def test_no_args_errors_and_exits(self, monkeypatch, cli_argv):
+        cli_argv("grafana_import.py")
         with pytest.raises(SystemExit) as exc:
             gi.main()
         # parser.error() exits 2.
         assert exc.value.code == 2
 
-    def test_verify_pass_exits_zero(self, monkeypatch, capsys):
+    def test_verify_pass_exits_zero(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gi, "verify_dashboards",
                             lambda ns: [{"check": "x", "status": "pass", "detail": "ok"}])
-        monkeypatch.setattr(sys, "argv", ["grafana_import.py", "--verify", "--namespace", "monitoring"])
+        cli_argv("grafana_import.py", "--verify", "--namespace", "monitoring")
         with pytest.raises(SystemExit) as exc:
             gi.main()
         assert exc.value.code == 0
 
-    def test_verify_fail_exits_one(self, monkeypatch):
+    def test_verify_fail_exits_one(self, monkeypatch, cli_argv):
         monkeypatch.setattr(gi, "verify_dashboards",
                             lambda ns: [{"check": "x", "status": "fail", "detail": "broken"}])
-        monkeypatch.setattr(sys, "argv", ["grafana_import.py", "--verify"])
+        cli_argv("grafana_import.py", "--verify")
         with pytest.raises(SystemExit) as exc:
             gi.main()
         assert exc.value.code == 1
 
-    def test_verify_json_output(self, monkeypatch, capsys):
+    def test_verify_json_output(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gi, "verify_dashboards",
                             lambda ns: [{"check": "c", "status": "pass", "detail": "d"}])
-        monkeypatch.setattr(sys, "argv", ["grafana_import.py", "--verify", "--json"])
+        cli_argv("grafana_import.py", "--verify", "--json")
         with pytest.raises(SystemExit):
             gi.main()
         out = capsys.readouterr().out
@@ -248,33 +248,30 @@ class TestMain:
         assert payload["mode"] == "verify"
         assert payload["status"] == "pass"
 
-    def test_dashboard_dir_not_found_exits_one(self, monkeypatch, tmp_path, capsys):
+    def test_dashboard_dir_not_found_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         ghost = tmp_path / "no-such-dir"
-        monkeypatch.setattr(sys, "argv",
-                            ["grafana_import.py", "--dashboard-dir", str(ghost)])
+        cli_argv("grafana_import.py", "--dashboard-dir", str(ghost))
         with pytest.raises(SystemExit) as exc:
             gi.main()
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "not found" in err.lower()
 
-    def test_dashboard_dir_no_jsons_exits_one(self, monkeypatch, tmp_path, capsys):
+    def test_dashboard_dir_no_jsons_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         d = tmp_path / "empty-dir"
         d.mkdir()
         (d / "readme.txt").write_text("x", encoding="utf-8")  # not .json
-        monkeypatch.setattr(sys, "argv",
-                            ["grafana_import.py", "--dashboard-dir", str(d)])
+        cli_argv("grafana_import.py", "--dashboard-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             gi.main()
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "No dashboard files" in err
 
-    def test_single_dashboard_dry_run_exits_zero(self, monkeypatch, tmp_path, capsys):
+    def test_single_dashboard_dry_run_exits_zero(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
-        monkeypatch.setattr(sys, "argv",
-                            ["grafana_import.py", "--dashboard", str(f), "--dry-run"])
+        cli_argv("grafana_import.py", "--dashboard", str(f), "--dry-run")
         with pytest.raises(SystemExit) as exc:
             gi.main()
         assert exc.value.code == 0

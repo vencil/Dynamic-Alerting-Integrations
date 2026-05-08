@@ -135,65 +135,62 @@ class TestFixFileNonRegular:
 # main — CLI surface
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_no_args_returns_zero(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py"])
+    def test_no_args_returns_zero(self, monkeypatch, cli_argv):
+        cli_argv("fix_file_hygiene.py")
         assert ffh.main() == 0
 
-    def test_help_long_flag_returns_zero(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py", "--help"])
+    def test_help_long_flag_returns_zero(self, monkeypatch, capsys, cli_argv):
+        cli_argv("fix_file_hygiene.py", "--help")
         assert ffh.main() == 0
         out = capsys.readouterr().out
         assert "Usage" in out
         assert "--check" in out
 
-    def test_help_short_flag_returns_zero(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py", "-h"])
+    def test_help_short_flag_returns_zero(self, monkeypatch, capsys, cli_argv):
+        cli_argv("fix_file_hygiene.py", "-h")
         assert ffh.main() == 0
         assert "Usage" in capsys.readouterr().out
 
-    def test_unknown_flag_returns_two(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py", "--bogus"])
+    def test_unknown_flag_returns_two(self, monkeypatch, capsys, cli_argv):
+        cli_argv("fix_file_hygiene.py", "--bogus")
         assert ffh.main() == 2
         err = capsys.readouterr().err
         assert "--bogus" in err
 
-    def test_clean_files_return_zero(self, monkeypatch, tmp_path, capsys):
+    def test_clean_files_return_zero(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "ok.txt"
         f.write_bytes(b"clean\n")
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py", str(f)])
+        cli_argv("fix_file_hygiene.py", str(f))
         assert ffh.main() == 0
         # No "fixed N file(s)" line on clean run.
         assert "file-hygiene" not in capsys.readouterr().out
 
-    def test_dirty_file_fixed_returns_one(self, monkeypatch, tmp_path, capsys):
+    def test_dirty_file_fixed_returns_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "needs_fix.txt"
         f.write_bytes(b"no newline")
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py", str(f)])
+        cli_argv("fix_file_hygiene.py", str(f))
         assert ffh.main() == 1
         # File mutated in-place.
         assert f.read_bytes() == b"no newline\n"
         out = capsys.readouterr().out
         assert "fixed 1 file" in out
 
-    def test_check_mode_reports_without_modifying(self, monkeypatch, tmp_path, capsys):
+    def test_check_mode_reports_without_modifying(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "dirty.txt"
         f.write_bytes(b"no newline")
-        monkeypatch.setattr(sys, "argv", ["fix_file_hygiene.py", "--check", str(f)])
+        cli_argv("fix_file_hygiene.py", "--check", str(f))
         assert ffh.main() == 1
         # File NOT mutated in check mode.
         assert f.read_bytes() == b"no newline"
         out = capsys.readouterr().out
         assert "would fix 1 file" in out
 
-    def test_mixed_clean_and_dirty(self, monkeypatch, tmp_path, capsys):
+    def test_mixed_clean_and_dirty(self, monkeypatch, tmp_path, capsys, cli_argv):
         clean = tmp_path / "clean.txt"
         clean.write_bytes(b"good\n")
         dirty = tmp_path / "dirty.txt"
         dirty.write_bytes(b"\x00bad")
-        monkeypatch.setattr(
-            sys, "argv",
-            ["fix_file_hygiene.py", str(clean), str(dirty)],
-        )
+        cli_argv("fix_file_hygiene.py", str(clean), str(dirty))
         assert ffh.main() == 1
         assert clean.read_bytes() == b"good\n"
         assert dirty.read_bytes() == b"bad\n"
