@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -302,19 +303,13 @@ func TestSimulate_VsResolve_ParityHash(t *testing.T) {
 	l1Bytes := []byte("defaults:\n  mysql_connections: 90\n  custom_label: \"team-a\"\n")
 	tenantBytes := []byte("tenants:\n  tenant-a:\n    cpu_threshold: 70\n    receivers:\n      - pagerduty\n    _metadata:\n      contact: \"alice\"\n")
 
-	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), l0Bytes, 0o644); err != nil {
-		t.Fatalf("write L0: %v", err)
-	}
+	testutil.WriteYAMLBytes(t, dir, "_defaults.yaml", l0Bytes)
 	teamDir := filepath.Join(dir, "team-a")
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(teamDir, "_defaults.yaml"), l1Bytes, 0o644); err != nil {
-		t.Fatalf("write L1: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(teamDir, "tenant-a.yaml"), tenantBytes, 0o644); err != nil {
-		t.Fatalf("write tenant: %v", err)
-	}
+	testutil.WriteYAMLBytes(t, teamDir, "_defaults.yaml", l1Bytes)
+	testutil.WriteYAMLBytes(t, teamDir, "tenant-a.yaml", tenantBytes)
 
 	// Disk path
 	m := NewConfigManager(dir)
