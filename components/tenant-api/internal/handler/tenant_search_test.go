@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 // ── fixture helpers ─────────────────────────────────────────────────
@@ -423,11 +422,8 @@ func TestSnapshotCache_ReuseDuringTTL(t *testing.T) {
 
 	// Mutate disk — add a second tenant. Within TTL the snapshot
 	// must NOT pick it up (proves cache reuse).
-	if err := os.WriteFile(filepath.Join(dir, "b.yaml"),
-		[]byte(fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice")),
-		0644); err != nil {
-		t.Fatalf("write b: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "b.yaml",
+		fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice"))
 	second, err := cache.snapshot(dir)
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
@@ -452,11 +448,8 @@ func TestSnapshotCache_RebuildsAfterTTL(t *testing.T) {
 
 	// Wait past TTL + add tenant; second snapshot MUST see it.
 	time.Sleep(5 * time.Millisecond)
-	if err := os.WriteFile(filepath.Join(dir, "b.yaml"),
-		[]byte(fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice")),
-		0644); err != nil {
-		t.Fatalf("write b: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "b.yaml",
+		fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice"))
 	second, err := cache.snapshot(dir)
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
@@ -474,11 +467,8 @@ func TestSnapshotCache_InvalidateForcesRebuild(t *testing.T) {
 	if _, err := cache.snapshot(dir); err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "b.yaml"),
-		[]byte(fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice")),
-		0644); err != nil {
-		t.Fatalf("write b: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "b.yaml",
+		fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice"))
 	cache.invalidate()
 	second, err := cache.snapshot(dir)
 	if err != nil {
