@@ -15,6 +15,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 // newRequestWithChiParam creates an *http.Request with a chi URL parameter set.
@@ -34,9 +35,7 @@ func setupConfigDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+		testutil.WriteYAML(t, dir, name, content)
 	}
 	return dir
 }
@@ -56,11 +55,7 @@ func newRBACManager(t *testing.T, yaml string) *rbac.Manager {
 		}
 		return mgr
 	}
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
-	if err := os.WriteFile(rbacFile, []byte(yaml), 0644); err != nil {
-		t.Fatalf("write rbac: %v", err)
-	}
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", yaml)
 	mgr, err := rbac.NewManager(rbacFile)
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)

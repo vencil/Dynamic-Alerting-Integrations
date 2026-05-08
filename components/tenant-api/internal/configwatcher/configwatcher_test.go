@@ -1,11 +1,12 @@
 package configwatcher
 
 import (
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 // testConfig is a tiny payload type for exercising the generic.
@@ -55,13 +56,11 @@ func emptyTestConfig() *testConfig {
 	return &testConfig{Items: map[string]string{}}
 }
 
+// writeYAML wraps testutil.WriteYAML with the package's "test.yaml"
+// convention so the existing call sites stay 1-arg.
 func writeYAML(t *testing.T, dir, body string) string {
 	t.Helper()
-	p := filepath.Join(dir, "test.yaml")
-	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	return p
+	return testutil.WriteYAML(t, dir, "test.yaml", body)
 }
 
 func TestNew_EmptyPath(t *testing.T) {
@@ -99,9 +98,7 @@ func TestReload_PicksUpFileChange(t *testing.T) {
 		t.Fatalf("initial foo = %q, want bar", got)
 	}
 
-	if err := os.WriteFile(path, []byte("foo: baz\nextra: hello\n"), 0644); err != nil {
-		t.Fatalf("rewrite: %v", err)
-	}
+	writeYAML(t, dir, "foo: baz\nextra: hello\n")
 	if err := w.Reload(); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -194,9 +191,7 @@ func TestWatchLoop_PicksUpChangeOnTick(t *testing.T) {
 	}()
 
 	// Rewrite + wait for at least one tick.
-	if err := os.WriteFile(path, []byte("foo: v2\n"), 0644); err != nil {
-		t.Fatalf("rewrite: %v", err)
-	}
+	writeYAML(t, dir, "foo: v2\n")
 
 	// Poll for up to 1s — flake guard for slow CI.
 	deadline := time.Now().Add(time.Second)

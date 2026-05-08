@@ -4,9 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 // --- NewManager tests ---
@@ -35,8 +36,6 @@ func TestNewManager_FileNotFound(t *testing.T) {
 }
 
 func TestNewManager_ValidFile(t *testing.T) {
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
 	content := `groups:
   - name: admins
     tenants: ["*"]
@@ -45,9 +44,7 @@ func TestNewManager_ValidFile(t *testing.T) {
     tenants: ["db-a-*", "db-b-*"]
     permissions: [read, write]
 `
-	if err := os.WriteFile(rbacFile, []byte(content), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content)
 
 	m, err := NewManager(rbacFile)
 	if err != nil {
@@ -60,11 +57,7 @@ func TestNewManager_ValidFile(t *testing.T) {
 }
 
 func TestNewManager_InvalidYAML(t *testing.T) {
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
-	if err := os.WriteFile(rbacFile, []byte("{{not valid yaml"), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", "{{not valid yaml")
 
 	_, err := NewManager(rbacFile)
 	if err == nil {
@@ -75,16 +68,12 @@ func TestNewManager_InvalidYAML(t *testing.T) {
 // --- Load / hot-reload tests ---
 
 func TestLoad_NoChangeSkipsUpdate(t *testing.T) {
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
 	content := `groups:
   - name: admins
     tenants: ["*"]
     permissions: [admin]
 `
-	if err := os.WriteFile(rbacFile, []byte(content), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content)
 
 	m, err := NewManager(rbacFile)
 	if err != nil {
@@ -102,16 +91,12 @@ func TestLoad_NoChangeSkipsUpdate(t *testing.T) {
 }
 
 func TestLoad_DetectsChange(t *testing.T) {
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
 	content1 := `groups:
   - name: admins
     tenants: ["*"]
     permissions: [admin]
 `
-	if err := os.WriteFile(rbacFile, []byte(content1), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	dir, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content1)
 
 	m, err := NewManager(rbacFile)
 	if err != nil {
@@ -131,9 +116,7 @@ func TestLoad_DetectsChange(t *testing.T) {
     tenants: ["*"]
     permissions: [read]
 `
-	if err := os.WriteFile(rbacFile, []byte(content2), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_rbac.yaml", content2)
 
 	if err := m.Reload(); err != nil {
 		t.Fatalf("load after change: %v", err)
@@ -145,16 +128,12 @@ func TestLoad_DetectsChange(t *testing.T) {
 }
 
 func TestLoad_DeletedFile(t *testing.T) {
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
 	content := `groups:
   - name: admins
     tenants: ["*"]
     permissions: [admin]
 `
-	if err := os.WriteFile(rbacFile, []byte(content), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content)
 
 	m, err := NewManager(rbacFile)
 	if err != nil {
@@ -198,11 +177,7 @@ func TestWatchLoop_EmptyPath(t *testing.T) {
 }
 
 func TestWatchLoop_StopsOnClose(t *testing.T) {
-	dir := t.TempDir()
-	rbacFile := filepath.Join(dir, "_rbac.yaml")
-	if err := os.WriteFile(rbacFile, []byte("groups: []\n"), 0644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", "groups: []\n")
 
 	m, err := NewManager(rbacFile)
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 // --- Validate extended tests ---
@@ -154,9 +156,7 @@ func TestDiff_NewFile(t *testing.T) {
 func TestDiff_IdenticalContent(t *testing.T) {
 	dir := t.TempDir()
 	content := "tenants:\n  db-a:\n    cpu: \"80\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "db-a.yaml"), []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteYAML(t, dir, "db-a.yaml", content)
 
 	w := NewWriter(dir, "")
 	diff, err := w.Diff("db-a", content)
@@ -171,9 +171,7 @@ func TestDiff_IdenticalContent(t *testing.T) {
 func TestDiff_ModifiedContent(t *testing.T) {
 	dir := t.TempDir()
 	original := "tenants:\n  db-a:\n    cpu: \"80\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "db-a.yaml"), []byte(original), 0644); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteYAML(t, dir, "db-a.yaml", original)
 
 	w := NewWriter(dir, "")
 	proposed := "tenants:\n  db-a:\n    cpu: \"90\"\n"
