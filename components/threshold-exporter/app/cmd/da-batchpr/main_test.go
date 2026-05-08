@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // --- Dispatcher --------------------------------------------------
@@ -258,12 +260,7 @@ func TestWriteReport_ToFileAndStdout(t *testing.T) {
 
 func mustWriteFile(t *testing.T, path string, body []byte) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		t.Fatalf("write %q: %v", path, err)
-	}
+	testutil.WriteFile(t, path, string(body))
 }
 
 func keysOfBytesMap(m map[string][]byte) []string {

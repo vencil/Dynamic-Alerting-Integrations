@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // ============================================================
@@ -448,9 +450,9 @@ func TestConfigManager_IsLoaded(t *testing.T) {
 // Helper
 // ============================================================
 
+// writeTestYAML wraps testutil.WriteFilePathMode with the package's
+// 0600 mode convention, keeping call sites 2-arg.
 func writeTestYAML(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("failed to write %s: %v", path, err)
-	}
+	testutil.WriteFilePathMode(t, path, content, 0600)
 }
