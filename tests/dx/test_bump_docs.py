@@ -274,18 +274,16 @@ import sys
 class TestMainCLI:
     """main() CLI 路徑覆蓋。"""
 
-    def test_show_current(self, monkeypatch, capsys):
+    def test_show_current(self, monkeypatch, capsys, cli_argv):
         """--show-current 顯示版號。"""
-        monkeypatch.setattr(sys, "argv", ["bump_docs", "--show-current"])
+        cli_argv("bump_docs", "--show-current")
         bump_docs.main()
         out = capsys.readouterr().out
         assert "Current versions" in out
 
-    def test_check_only(self, monkeypatch, capsys):
+    def test_check_only(self, monkeypatch, capsys, cli_argv):
         """--check 模式不修改檔案。"""
-        monkeypatch.setattr(sys, "argv", [
-            "bump_docs", "--platform", "99.99.99", "--check",
-        ])
+        cli_argv("bump_docs", "--platform", "99.99.99", "--check")
         # Should not raise (just reports mismatches)
         try:
             bump_docs.main()
@@ -294,32 +292,26 @@ class TestMainCLI:
         out = capsys.readouterr().out
         assert "platform" in out.lower() or "PLATFORM" in out or len(out) > 0
 
-    def test_dry_run(self, monkeypatch, capsys):
+    def test_dry_run(self, monkeypatch, capsys, cli_argv):
         """--dry-run 顯示差異但不修改。"""
-        monkeypatch.setattr(sys, "argv", [
-            "bump_docs", "--platform", "99.99.99", "--dry-run",
-        ])
+        cli_argv("bump_docs", "--platform", "99.99.99", "--dry-run")
         bump_docs.main()
         out = capsys.readouterr().out
         # Should show diffs or "no changes"
         assert len(out) > 0
 
-    def test_init_changelog(self, tmp_path, monkeypatch, capsys):
+    def test_init_changelog(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--init-changelog 插入 stub。"""
         cl = tmp_path / "CHANGELOG.md"
         cl.write_text("# CL\n\n## [v1.0.0]\n", encoding="utf-8")
         monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "bump_docs", "--init-changelog", "3.0.0",
-        ])
+        cli_argv("bump_docs", "--init-changelog", "3.0.0")
         bump_docs.main()
         assert "v3.0.0" in cl.read_text(encoding="utf-8")
 
-    def test_what_if(self, monkeypatch, capsys):
+    def test_what_if(self, monkeypatch, capsys, cli_argv):
         """--what-if 顯示規則審計。"""
-        monkeypatch.setattr(sys, "argv", [
-            "bump_docs", "--what-if",
-        ])
+        cli_argv("bump_docs", "--what-if")
         try:
             bump_docs.main()
         except SystemExit:
@@ -328,12 +320,10 @@ class TestMainCLI:
         # Should show some rule audit output
         assert len(out) > 0
 
-    def test_scope_flag(self, monkeypatch, capsys):
+    def test_scope_flag(self, monkeypatch, capsys, cli_argv):
         """--scope 限制範圍。"""
-        monkeypatch.setattr(sys, "argv", [
-            "bump_docs", "--platform", "99.99.99",
-            "--check", "--scope", "docs",
-        ])
+        cli_argv("bump_docs", "--platform", "99.99.99",
+            "--check", "--scope", "docs")
         try:
             bump_docs.main()
         except SystemExit:

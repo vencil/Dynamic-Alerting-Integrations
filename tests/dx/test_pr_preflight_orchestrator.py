@@ -328,7 +328,7 @@ class TestMainOrchestrator:
         monkeypatch.setattr(pp, "clear_markers", lambda repo_root: 0)
         monkeypatch.setattr(os, "chdir", lambda p: None)
 
-    def test_check_commit_msg_path_short_circuits(self, monkeypatch, tmp_path, capsys):
+    def test_check_commit_msg_path_short_circuits(self, monkeypatch, tmp_path, capsys, cli_argv):
         # Provide a valid commit-msg file → check_commit_msg_file returns 0.
         f = tmp_path / "msg"
         f.write_text("feat: ok\n", encoding="utf-8")
@@ -337,39 +337,37 @@ class TestMainOrchestrator:
         # through the full validation (we just want orchestrator dispatch).
         monkeypatch.setattr(pp, "check_commit_msg_file",
                             lambda path, repo_root: 0)
-        monkeypatch.setattr(sys, "argv",
-                            ["pr_preflight.py", "--check-commit-msg", str(f)])
+        cli_argv("pr_preflight.py", "--check-commit-msg", str(f))
         assert pp.main() == 0
 
-    def test_check_pr_title_path_short_circuits(self, monkeypatch, tmp_path):
+    def test_check_pr_title_path_short_circuits(self, monkeypatch, tmp_path, cli_argv):
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         monkeypatch.setattr(pp, "check_pr_title",
                             lambda title, repo_root, max_length=70: 0)
-        monkeypatch.setattr(sys, "argv",
-                            ["pr_preflight.py", "--check-pr-title", "feat: x"])
+        cli_argv("pr_preflight.py", "--check-pr-title", "feat: x")
         assert pp.main() == 0
 
-    def test_all_pass_returns_zero(self, monkeypatch, tmp_path):
+    def test_all_pass_returns_zero(self, monkeypatch, tmp_path, cli_argv):
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["pr_preflight.py", "--ci"])
+        cli_argv("pr_preflight.py", "--ci")
         assert pp.main() == 0
 
-    def test_failure_with_ci_flag_returns_one(self, monkeypatch, tmp_path):
+    def test_failure_with_ci_flag_returns_one(self, monkeypatch, tmp_path, cli_argv):
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch, fail_check="Conflict")
-        monkeypatch.setattr(sys, "argv", ["pr_preflight.py", "--ci"])
+        cli_argv("pr_preflight.py", "--ci")
         assert pp.main() == 1
 
-    def test_failure_without_ci_flag_returns_zero(self, monkeypatch, tmp_path):
+    def test_failure_without_ci_flag_returns_zero(self, monkeypatch, tmp_path, cli_argv):
         # Without --ci, even a FAIL exits 0 (interactive mode shows summary
         # but doesn't gate).
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch, fail_check="Conflict")
-        monkeypatch.setattr(sys, "argv", ["pr_preflight.py"])
+        cli_argv("pr_preflight.py")
         assert pp.main() == 0
 
-    def test_skip_hooks_records_skip_status(self, monkeypatch, tmp_path, capsys):
+    def test_skip_hooks_records_skip_status(self, monkeypatch, tmp_path, capsys, cli_argv):
         self._stub_repo_root_and_marker(monkeypatch, tmp_path)
         self._stub_all_checks(monkeypatch)
 
@@ -378,7 +376,7 @@ class TestMainOrchestrator:
             raise AssertionError("check_local_hooks should be skipped")
         monkeypatch.setattr(pp, "check_local_hooks", fail_if_called)
 
-        monkeypatch.setattr(sys, "argv", ["pr_preflight.py", "--skip-hooks", "--ci"])
+        cli_argv("pr_preflight.py", "--skip-hooks", "--ci")
         assert pp.main() == 0
         out = capsys.readouterr().out
         assert "Local hooks" in out
