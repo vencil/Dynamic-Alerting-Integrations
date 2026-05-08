@@ -171,7 +171,7 @@ function Field({ label, hint, error, children }) {
         </span>
       )}
       {error && (
-        <span className="block text-xs text-[color:var(--da-color-error)] mt-1">
+        <span className="block text-xs font-semibold text-[color:var(--da-color-error)] mt-1" role="alert">
           {error}
         </span>
       )}
@@ -499,7 +499,7 @@ export default function AlertBuilder() {
                     type="button"
                     onClick={() => removeLabel(k)}
                     aria-label={t('移除', 'Remove')}
-                    className="px-2 text-sm text-[color:var(--da-color-error)]"
+                    className="px-2 text-sm font-bold text-[color:var(--da-color-error)]"
                   >
                     ✕
                   </button>

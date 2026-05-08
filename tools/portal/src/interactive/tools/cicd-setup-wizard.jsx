@@ -236,7 +236,7 @@ function StepTenants({ config, onChange }) {
               <button
                 onClick={() => removeTenant(name)}
                 aria-label={t(`移除 tenant ${name}`, `Remove tenant ${name}`)}
-                className="text-xs text-[color:var(--da-color-error)] hover:opacity-80"
+                className="text-xs font-semibold text-[color:var(--da-color-error)] hover:opacity-80"
               >
                 {t('移除', 'Remove')}
               </button>
