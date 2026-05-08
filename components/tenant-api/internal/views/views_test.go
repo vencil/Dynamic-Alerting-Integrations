@@ -2,8 +2,9 @@ package views
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 const sampleViewsYAML = `views:
@@ -182,11 +183,7 @@ func TestNewManager_NoFile(t *testing.T) {
 
 // TestNewManager_WithFile tests Manager creation with an existing _views.yaml file.
 func TestNewManager_WithFile(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, "_views.yaml"), []byte(sampleViewsYAML), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_views.yaml", sampleViewsYAML)
 
 	mgr := NewManager(dir)
 
@@ -206,11 +203,7 @@ func TestNewManager_WithFile(t *testing.T) {
 
 // TestManager_GetView tests retrieving a single view by ID.
 func TestManager_GetView(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, "_views.yaml"), []byte(sampleViewsYAML), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	dir, _ := testutil.MkTempYAML(t, "_views.yaml", sampleViewsYAML)
 
 	mgr := NewManager(dir)
 
@@ -254,10 +247,7 @@ func TestManager_ListViews(t *testing.T) {
     filters:
       env: staging
 `
-	err := os.WriteFile(filepath.Join(dir, "_views.yaml"), []byte(multiViewYAML), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_views.yaml", multiViewYAML)
 
 	mgr := NewManager(dir)
 	list := mgr.ListViews()
@@ -286,11 +276,7 @@ func TestManager_Reload(t *testing.T) {
     filters:
       env: prod
 `
-	filePath := filepath.Join(dir, "_views.yaml")
-	err := os.WriteFile(filePath, []byte(initialYAML), 0644)
-	if err != nil {
-		t.Fatalf("write initial: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_views.yaml", initialYAML)
 
 	mgr := NewManager(dir)
 	initial := mgr.Get()
@@ -313,10 +299,7 @@ func TestManager_Reload(t *testing.T) {
     filters:
       env: dev
 `
-	err = os.WriteFile(filePath, []byte(updatedYAML), 0644)
-	if err != nil {
-		t.Fatalf("write updated: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_views.yaml", updatedYAML)
 
 	// Before reload, should still see old config
 	beforeReload := mgr.Get()
@@ -353,11 +336,7 @@ func TestManager_Reload_NoFile(t *testing.T) {
     filters:
       env: prod
 `
-	filePath := filepath.Join(dir, "_views.yaml")
-	err := os.WriteFile(filePath, []byte(initialYAML), 0644)
-	if err != nil {
-		t.Fatalf("write initial: %v", err)
-	}
+	filePath := testutil.WriteYAML(t, dir, "_views.yaml", initialYAML)
 
 	mgr := NewManager(dir)
 	initial := mgr.Get()
@@ -366,8 +345,7 @@ func TestManager_Reload_NoFile(t *testing.T) {
 	}
 
 	// Delete the file
-	err = os.Remove(filePath)
-	if err != nil {
+	if err := os.Remove(filePath); err != nil {
 		t.Fatalf("remove file: %v", err)
 	}
 
@@ -393,11 +371,7 @@ func TestManager_Reload_HashCaching(t *testing.T) {
     filters:
       env: prod
 `
-	filePath := filepath.Join(dir, "_views.yaml")
-	err := os.WriteFile(filePath, []byte(yaml), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	testutil.WriteYAML(t, dir, "_views.yaml", yaml)
 
 	mgr := NewManager(dir)
 	first := mgr.Get()
