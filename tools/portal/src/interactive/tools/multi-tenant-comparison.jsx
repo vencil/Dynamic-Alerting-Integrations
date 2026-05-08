@@ -310,7 +310,7 @@ function MultiTenantComparison() {
                 return (
                 <th key={i} style={tenantHeaderStyle}>
                   {tenant.name}
-                  {tenant.maintenance && <span title="Maintenance" style={maintenanceIconStyle}> ⚠</span>}
+                  {tenant.maintenance && <span title="Maintenance" style={maintenanceIconStyle}> <span aria-hidden="true">⚠</span></span>}
                   {tenant.silentMode !== 'none' && <span title={`Silent: ${tenant.silentMode}`} style={silentIconStyle}> 🔇</span>}
                 </th>
                 );

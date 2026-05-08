@@ -516,9 +516,9 @@ function StepReview({ groups }) {
       <div className="p-4 bg-[color:var(--da-color-info-soft)] border border-[color:var(--da-color-info)]/30 rounded-lg" role="status" aria-live="polite" aria-atomic="true">
         <h4 className="text-sm font-semibold text-[color:var(--da-color-fg)] mb-2">{t('配置摘要', 'Configuration Summary')}</h4>
         <ul className="text-sm text-[color:var(--da-color-fg)] space-y-1">
-          <li>✓ {t('群組數量：', 'Number of groups: ')}<span className="font-mono font-semibold">{groups.length}</span></li>
-          <li>✓ {t('已設定權限：', 'Permissions set: ')}<span className="font-mono font-semibold">{groups.filter(g => g.permission).length}/{groups.length}</span></li>
-          <li>✓ {t('有篩選條件：', 'With filters: ')}<span className="font-mono font-semibold">{groups.filter(g => g.environments.length > 0 || g.domains.length > 0).length}</span></li>
+          <li><span aria-hidden="true">✓</span> {t('群組數量：', 'Number of groups: ')}<span className="font-mono font-semibold">{groups.length}</span></li>
+          <li><span aria-hidden="true">✓</span> {t('已設定權限：', 'Permissions set: ')}<span className="font-mono font-semibold">{groups.filter(g => g.permission).length}/{groups.length}</span></li>
+          <li><span aria-hidden="true">✓</span> {t('有篩選條件：', 'With filters: ')}<span className="font-mono font-semibold">{groups.filter(g => g.environments.length > 0 || g.domains.length > 0).length}</span></li>
         </ul>
       </div>
     </div>

@@ -117,7 +117,7 @@ class ErrorBoundary extends Component {
     return (
       <div data-testid="error-boundary-fallback" style={FALLBACK_BOX_STYLE}>
         <div style={FALLBACK_TITLE_STYLE}>
-          ⚠ {t('此工具暫時無法載入', 'Tool failed to load')}{scope}
+          <span aria-hidden="true">⚠</span> {t('此工具暫時無法載入', 'Tool failed to load')}{scope}
         </div>
         <div style={FALLBACK_HINT_STYLE}>
           {t('其他工具仍可使用。詳細錯誤請開啟 DevTools console。',

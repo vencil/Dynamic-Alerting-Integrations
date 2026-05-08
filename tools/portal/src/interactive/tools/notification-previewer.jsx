@@ -792,7 +792,7 @@ function LivePreview({ receiverType, template }) {
         )}
         {isNearLimit && !isOverLimit && (
           <div style={{ ...styles.alertBox, ...styles.alertWarning, marginTop: 'var(--da-space-2)' }}>
-            ⚠️ {t('接近字數限制', 'Approaching character limit')} ({charCount}/{limit})
+            <span aria-hidden="true">⚠</span>️ {t('接近字數限制', 'Approaching character limit')} ({charCount}/{limit})
           </div>
         )}
       </div>

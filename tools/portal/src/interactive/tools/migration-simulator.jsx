@@ -221,7 +221,7 @@ export default function MigrationSimulator() {
                       {conversion.results.map((r, i) => (
                         <div key={i} className="border border-slate-100 rounded-lg p-3">
                           <div className="flex items-center gap-2 mb-2">
-                            <span className="text-green-500 text-xs font-bold">✓</span>
+                            <span className="text-green-500 text-xs font-bold"><span aria-hidden="true">✓</span></span>
                             <span className="font-mono text-sm font-semibold text-slate-900">{r.alertName}</span>
                             <span className={`text-xs px-1.5 py-0.5 rounded ${
                               r.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'

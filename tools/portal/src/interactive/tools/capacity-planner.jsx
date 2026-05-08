@@ -257,10 +257,10 @@ export default function CapacityPlanner() {
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
               <h3 className="font-semibold mb-2">{t('建議', 'Recommendations')}</h3>
               <ul className="space-y-1 text-xs">
-                {estimates.totalSeries > 100000 && <li>⚠️ {t('時間序列超過 100K，考慮啟用 cardinality guard', 'Series > 100K — consider enabling cardinality guard')}</li>}
-                {estimates.tsdbGB > 50 && <li>⚠️ {t('TSDB > 50 GB，考慮縮短 retention 或使用遠端儲存', 'TSDB > 50 GB — consider shorter retention or remote storage')}</li>}
-                {estimates.promMemMB > 2048 && <li>⚠️ {t('Prometheus 記憶體 > 2 GB，考慮 sharding 或 federation', 'Prometheus memory > 2 GB — consider sharding or federation')}</li>}
-                {estimates.reloadMs > 2000 && <li>⚠️ {t('Reload 時間 > 2s，考慮 incremental reload', 'Reload time > 2s — consider incremental reload')}</li>}
+                {estimates.totalSeries > 100000 && <li><span aria-hidden="true">⚠</span>️ {t('時間序列超過 100K，考慮啟用 cardinality guard', 'Series > 100K — consider enabling cardinality guard')}</li>}
+                {estimates.tsdbGB > 50 && <li><span aria-hidden="true">⚠</span>️ {t('TSDB > 50 GB，考慮縮短 retention 或使用遠端儲存', 'TSDB > 50 GB — consider shorter retention or remote storage')}</li>}
+                {estimates.promMemMB > 2048 && <li><span aria-hidden="true">⚠</span>️ {t('Prometheus 記憶體 > 2 GB，考慮 sharding 或 federation', 'Prometheus memory > 2 GB — consider sharding or federation')}</li>}
+                {estimates.reloadMs > 2000 && <li><span aria-hidden="true">⚠</span>️ {t('Reload 時間 > 2s，考慮 incremental reload', 'Reload time > 2s — consider incremental reload')}</li>}
                 {estimates.totalSeries <= 100000 && estimates.tsdbGB <= 50 && estimates.promMemMB <= 2048 && (
                   <li>✅ {t('所有指標在健康範圍內', 'All metrics within healthy range')}</li>
                 )}

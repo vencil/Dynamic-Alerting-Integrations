@@ -352,7 +352,7 @@ ${generateHelmValues()}`;
                   </button>
                 </div>
                 {copied && (
-                  <p className="mt-2 text-sm text-green-600 font-medium">✓ {t('已複製到剪貼簿', 'Copied to clipboard')}</p>
+                  <p className="mt-2 text-sm text-green-600 font-medium"><span aria-hidden="true">✓</span> {t('已複製到剪貼簿', 'Copied to clipboard')}</p>
                 )}
                 <p className="mt-4 text-xs text-slate-600">
                   {t('將此配置應用到您的 Prometheus 部署並重啟服務。', 'Apply this configuration to your Prometheus deployment and restart the service.')}
