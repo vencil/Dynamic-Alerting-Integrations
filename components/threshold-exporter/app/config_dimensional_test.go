@@ -6,11 +6,11 @@ package main
 // config_test.go.
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // region DimensionalMetrics — label parsing and dimensional resolution
@@ -352,10 +352,7 @@ tenants:
     "oracle_tablespace{tablespace=~\"SYS.*\"}": "95"
 `
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	path := testutil.WriteFileMode(t, dir, "config.yaml", content, 0600)
 
 	mgr := NewConfigManager(path)
 	if err := mgr.Load(); err != nil {

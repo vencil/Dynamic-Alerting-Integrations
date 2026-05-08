@@ -20,22 +20,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/testutil"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// writeFile is a small helper that mkdirs + writes with test-failure cleanup.
+// writeFile is a thin wrapper kept for call-site brevity; delegates to the
+// shared testutil.WriteFile (mkdir + write).
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	testutil.WriteFile(t, path, content)
 }
 
 func TestGetTenantEffective_Success_Flat(t *testing.T) {

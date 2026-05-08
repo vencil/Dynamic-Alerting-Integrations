@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // region DirectoryLoading — LoadDir tests and file hashing
@@ -39,10 +40,7 @@ tenants:
     _state_container_crashloop: "disable"
 `
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	path := testutil.WriteFileMode(t, dir, "config.yaml", content, 0600)
 
 	mgr := NewConfigManager(path)
 	if err := mgr.Load(); err != nil {

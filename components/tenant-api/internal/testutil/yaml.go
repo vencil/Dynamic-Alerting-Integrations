@@ -55,3 +55,18 @@ func MkTempYAML(t testing.TB, name, content string) (dir, path string) {
 	path = WriteYAML(t, dir, name, content)
 	return dir, path
 }
+
+// WriteFile writes content to an absolute path, creating parent directories
+// as needed. Returns the path. Use this when the caller already has a
+// pre-computed deep path (e.g. `dir/sub/tenant-x.yaml`) instead of
+// (dir, name) — common in hierarchy / nested-fixture tests.
+func WriteFile(t testing.TB, path, content string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("WriteFile mkdir %q: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	return path
+}
