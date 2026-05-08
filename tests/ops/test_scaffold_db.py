@@ -626,15 +626,13 @@ class TestGenerateProfile:
         assert "profiles" in result
         assert result["profiles"]["empty"] == {}
 
-    def test_generate_profile_cli(self, monkeypatch):
+    def test_generate_profile_cli(self, monkeypatch, cli_argv):
         """--generate-profile via CLI writes _profiles.yaml."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            monkeypatch.setattr(sys, "argv", [
-                "scaffold_tenant.py",
+            cli_argv("scaffold_tenant.py",
                 "--generate-profile", "test-profile",
                 "--db", "mariadb",
-                "-o", tmpdir,
-            ])
+                "-o", tmpdir)
             with pytest.raises(SystemExit) as exc_info:
                 scaffold_tenant.main()
             assert exc_info.value.code == 0

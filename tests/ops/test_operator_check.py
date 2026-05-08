@@ -415,17 +415,17 @@ class TestExitCode:
 # main — CLI entry
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_default_run_exits_zero(self, monkeypatch):
+    def test_default_run_exits_zero(self, monkeypatch, cli_argv):
         # Stub everything so main() doesn't actually contact a cluster.
         monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", lambda self: None)
         monkeypatch.setattr(oc.OperatorChecker, "print_human_report", lambda self: None)
         monkeypatch.setattr(oc.OperatorChecker, "exit_code", lambda self: 0)
-        monkeypatch.setattr(sys, "argv", ["operator_check.py"])
+        cli_argv("operator_check.py")
         with pytest.raises(SystemExit) as exc:
             oc.main()
         assert exc.value.code == 0
 
-    def test_json_flag_picks_json_reporter(self, monkeypatch):
+    def test_json_flag_picks_json_reporter(self, monkeypatch, cli_argv):
         called = {"json": False, "human": False}
         monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", lambda self: None)
         monkeypatch.setattr(
@@ -437,18 +437,18 @@ class TestMain:
             lambda self: called.__setitem__("human", True),
         )
         monkeypatch.setattr(oc.OperatorChecker, "exit_code", lambda self: 0)
-        monkeypatch.setattr(sys, "argv", ["operator_check.py", "--json"])
+        cli_argv("operator_check.py", "--json")
         with pytest.raises(SystemExit):
             oc.main()
         assert called["json"] is True
         assert called["human"] is False
 
-    def test_ci_flag_propagates_to_exit_code(self, monkeypatch):
+    def test_ci_flag_propagates_to_exit_code(self, monkeypatch, cli_argv):
         # When --ci is set and exit_code returns 1, main() exits 1.
         monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", lambda self: None)
         monkeypatch.setattr(oc.OperatorChecker, "print_human_report", lambda self: None)
         monkeypatch.setattr(oc.OperatorChecker, "exit_code", lambda self: 1)
-        monkeypatch.setattr(sys, "argv", ["operator_check.py", "--ci"])
+        cli_argv("operator_check.py", "--ci")
         with pytest.raises(SystemExit) as exc:
             oc.main()
         assert exc.value.code == 1

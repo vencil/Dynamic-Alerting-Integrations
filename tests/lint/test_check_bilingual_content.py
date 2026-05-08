@@ -233,22 +233,18 @@ class TestOutputFormatting:
 class TestCLI:
     """CLI main() 測試。"""
 
-    def test_main_no_findings(self, tmp_path, monkeypatch, capsys):
+    def test_main_no_findings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """無 findings 時正常退出。"""
-        monkeypatch.setattr(sys, "argv", [
-            "check_bilingual_content",
-        ])
+        cli_argv("check_bilingual_content")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         cbc.main()
         out = capsys.readouterr().out
         assert "passed" in out
 
-    def test_main_json_flag(self, tmp_path, monkeypatch, capsys):
+    def test_main_json_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON。"""
-        monkeypatch.setattr(sys, "argv", [
-            "check_bilingual_content", "--json",
-        ])
+        cli_argv("check_bilingual_content", "--json")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         cbc.main()
@@ -256,25 +252,21 @@ class TestCLI:
         data = json.loads(out)
         assert "status" in data
 
-    def test_main_ci_exits_on_warnings(self, tmp_path, monkeypatch, capsys):
+    def test_main_ci_exits_on_warnings(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--ci 有 warnings 時 exit 1。"""
         en_doc = tmp_path / "bad.en.md"
         en_doc.write_text("# 完全中文\n\n全部中文內容。" * 10,
                           encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "check_bilingual_content", "--ci",
-        ])
+        cli_argv("check_bilingual_content", "--ci")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             cbc.main()
         assert exc_info.value.code == 1
 
-    def test_main_threshold_flag(self, tmp_path, monkeypatch, capsys):
+    def test_main_threshold_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--threshold 參數生效。"""
-        monkeypatch.setattr(sys, "argv", [
-            "check_bilingual_content", "--threshold", "0.99",
-        ])
+        cli_argv("check_bilingual_content", "--threshold", "0.99")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
         cbc.main()

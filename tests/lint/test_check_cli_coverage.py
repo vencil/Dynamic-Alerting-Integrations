@@ -398,30 +398,29 @@ class TestOutputFormatting:
 # ---------------------------------------------------------------------------
 
 class TestCLI:
-    def test_main_no_ci_always_zero(self, monkeypatch, capsys):
+    def test_main_no_ci_always_zero(self, monkeypatch, capsys, cli_argv):
         """Without --ci, main() exits 0 even with errors (display-only mode)."""
         monkeypatch.setattr(cc, "ENTRYPOINT_PATH",
                             cc.Path("/nonexistent"))
-        monkeypatch.setattr(sys, "argv", ["check_cli_coverage.py"])
+        cli_argv("check_cli_coverage.py")
         with pytest.raises(SystemExit) as exc_info:
             cc.main()
         assert exc_info.value.code == 0
 
-    def test_main_ci_with_errors(self, monkeypatch, capsys):
+    def test_main_ci_with_errors(self, monkeypatch, capsys, cli_argv):
         """With --ci and errors, main() exits 1."""
         monkeypatch.setattr(cc, "ENTRYPOINT_PATH",
                             cc.Path("/nonexistent"))
-        monkeypatch.setattr(sys, "argv", ["check_cli_coverage.py", "--ci"])
+        cli_argv("check_cli_coverage.py", "--ci")
         with pytest.raises(SystemExit) as exc_info:
             cc.main()
         assert exc_info.value.code == 1
 
-    def test_main_json_flag(self, monkeypatch, capsys):
+    def test_main_json_flag(self, monkeypatch, capsys, cli_argv):
         """Test main() with --json flag."""
         monkeypatch.setattr(cc, "ENTRYPOINT_PATH",
                             cc.Path("/nonexistent"))
-        monkeypatch.setattr(sys, "argv",
-                            ["check_cli_coverage.py", "--json"])
+        cli_argv("check_cli_coverage.py", "--json")
         with pytest.raises(SystemExit):
             cc.main()
         captured = capsys.readouterr()

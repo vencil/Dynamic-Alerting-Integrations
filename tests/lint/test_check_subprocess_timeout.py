@@ -428,32 +428,28 @@ class TestMain:
     """
 
     @pytest.mark.timeout(30)
-    def test_main_clean_codebase_exits_0(self, tmp_path, capsys, monkeypatch):
+    def test_main_clean_codebase_exits_0(self, tmp_path, capsys, monkeypatch, cli_argv):
         """No violations + --ci → exit 0 + clean message."""
         clean = tmp_path / "clean.py"
         clean.write_text(
             "import subprocess\n"
             "subprocess.run(['ls'], timeout=30)\n"
         )
-        monkeypatch.setattr(
-            sys, "argv", ["check_subprocess_timeout.py", "--ci", str(clean)]
-        )
+        cli_argv("check_subprocess_timeout.py", "--ci", str(clean))
         rc = cst.main()
         out = capsys.readouterr().out
         assert rc == 0
         assert "no subprocess calls without timeout=" in out
 
     @pytest.mark.timeout(30)
-    def test_main_violations_under_ci_only_warns(self, tmp_path, capsys, monkeypatch):
+    def test_main_violations_under_ci_only_warns(self, tmp_path, capsys, monkeypatch, cli_argv):
         """Violations + --ci (no --strict-...) → exit 0, but reports."""
         dirty = tmp_path / "dirty.py"
         dirty.write_text(
             "import subprocess\n"
             "subprocess.run(['ls'])\n"
         )
-        monkeypatch.setattr(
-            sys, "argv", ["check_subprocess_timeout.py", "--ci", str(dirty)]
-        )
+        cli_argv("check_subprocess_timeout.py", "--ci", str(dirty))
         rc = cst.main()
         out = capsys.readouterr().out
         assert rc == 0  # warn-only
@@ -461,38 +457,31 @@ class TestMain:
         assert "subprocess.run-no-timeout" in out
 
     @pytest.mark.timeout(30)
-    def test_main_violations_under_strict_exits_1(self, tmp_path, capsys, monkeypatch):
+    def test_main_violations_under_strict_exits_1(self, tmp_path, capsys, monkeypatch, cli_argv):
         """Violations + --ci + --strict-subprocess-timeout → exit 1."""
         dirty = tmp_path / "dirty.py"
         dirty.write_text(
             "import subprocess\n"
             "subprocess.run(['ls'])\n"
         )
-        monkeypatch.setattr(
-            sys, "argv",
-            [
-                "check_subprocess_timeout.py",
+        cli_argv("check_subprocess_timeout.py",
                 "--ci",
                 "--strict-subprocess-timeout",
-                str(dirty),
-            ],
-        )
+                str(dirty))
         rc = cst.main()
         out = capsys.readouterr().out
         assert rc == 1
         assert "ERROR" in out
 
     @pytest.mark.timeout(30)
-    def test_main_no_ci_always_exits_0(self, tmp_path, capsys, monkeypatch):
+    def test_main_no_ci_always_exits_0(self, tmp_path, capsys, monkeypatch, cli_argv):
         """Violations + no --ci → exit 0 (audit mode never fails)."""
         dirty = tmp_path / "dirty.py"
         dirty.write_text(
             "import subprocess\n"
             "subprocess.run(['ls'])\n"
         )
-        monkeypatch.setattr(
-            sys, "argv", ["check_subprocess_timeout.py", str(dirty)]
-        )
+        cli_argv("check_subprocess_timeout.py", str(dirty))
         rc = cst.main()
         assert rc == 0  # audit mode never fails
 
