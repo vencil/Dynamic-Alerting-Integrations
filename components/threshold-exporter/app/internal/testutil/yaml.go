@@ -79,3 +79,17 @@ func WriteFile(t testing.TB, path, content string) string {
 	}
 	return path
 }
+
+// WriteFilePathMode is the mode-explicit + full-path variant. Mkdirs the
+// parent. Combines WriteFile (full path + mkdir) with WriteFileMode (custom
+// permission). Common in security-sensitive fixtures with nested layout.
+func WriteFilePathMode(t testing.TB, path, content string, mode os.FileMode) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("WriteFilePathMode mkdir %q: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("WriteFilePathMode(%q, %v): %v", path, mode, err)
+	}
+	return path
+}

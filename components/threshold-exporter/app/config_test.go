@@ -30,6 +30,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // SV is a test helper to create a scalar ScheduledValue.
@@ -57,10 +59,7 @@ tenants:
     mysql_cpu: "40"
 `
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	path := testutil.WriteFileMode(t, dir, "config.yaml", content, 0600)
 
 	mgr := NewConfigManager(path)
 	if err := mgr.Load(); err != nil {
@@ -450,12 +449,12 @@ tenants:
 // Helpers
 // ============================================================
 
-// writeTestFile is a helper to create YAML files in test directories.
+// writeTestFile is a thin wrapper kept for call-site brevity (callers in
+// config_silent_mode_test.go and other sibling _test.go files); delegates
+// to the shared testutil.WriteFileMode with the package's 0600 convention.
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFileMode(t, dir, name, content, 0600)
 }
 
 // endregion

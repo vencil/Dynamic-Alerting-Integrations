@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // writeTree renders a literal directory layout for a single test.
@@ -30,12 +32,8 @@ func writeTree(t *testing.T, tmp string, files map[string]string) {
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
-			t.Fatalf("mkdir parent of %q: %v", clean, err)
-		}
-		if err := os.WriteFile(clean, []byte(body), 0o644); err != nil {
-			t.Fatalf("write %q: %v", clean, err)
-		}
+		// testutil.WriteFile handles the mkdir + write pair below.
+		testutil.WriteFile(t, clean, body)
 	}
 }
 

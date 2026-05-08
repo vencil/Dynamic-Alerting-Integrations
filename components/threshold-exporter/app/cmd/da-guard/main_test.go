@@ -17,6 +17,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // runOnce is the test harness — wraps run() with captured stdout
@@ -28,9 +30,9 @@ func runOnce(t *testing.T, args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-// writeTree replicates the helper from pkg/config/scope_test.go
-// because the cmd package can't import test-only helpers from
-// pkg/config (Go's test isolation rule).
+// writeTree renders a literal directory layout for a single test.
+// (Previously replicated from pkg/config/scope_test.go; both now share
+// testutil.WriteFile for the body-write step.)
 func writeTree(t *testing.T, tmp string, files map[string]string) {
 	t.Helper()
 	for rel, body := range files {
@@ -41,12 +43,7 @@ func writeTree(t *testing.T, tmp string, files map[string]string) {
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
-			t.Fatalf("mkdir parent of %q: %v", clean, err)
-		}
-		if err := os.WriteFile(clean, []byte(body), 0o644); err != nil {
-			t.Fatalf("write %q: %v", clean, err)
-		}
+		testutil.WriteFile(t, clean, body)
 	}
 }
 

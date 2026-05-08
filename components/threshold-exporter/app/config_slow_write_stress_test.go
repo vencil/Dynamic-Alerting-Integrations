@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // waitForQuiescence polls counterFn until its observed value is
@@ -153,9 +154,7 @@ func TestSlowWriteTornStateStress_FinalConvergence(t *testing.T) {
 		tid := fmt.Sprintf("tenant-%04d", i)
 		path := filepath.Join(dir, "team-a", tid+".yaml")
 		content := fmt.Sprintf("tenants:\n  %s:\n    mysql_connections: \"%d\"\n", tid, 100+i)
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write tenant %s: %v", tid, err)
-		}
+		testutil.WriteFilePathMode(t, path, content, 0o600)
 		// Synthetic fsnotify-equivalent: drive the trigger explicitly so
 		// the test stays deterministic across OS fsnotify implementations.
 		m.triggerDebouncedReload(ReloadReasonSource)
