@@ -89,6 +89,29 @@ class TestLoadRegistry:
         assert len(entries) == 1
         assert entries[0].test == "Real"
 
+    def test_pyyaml_missing_degrades_to_empty(self, tmp_path, capsys):
+        """PyYAML ImportError → empty registry + stderr advisory.
+
+        Defends the CI activation contract: missing pyyaml shouldn't crash
+        the wrapper; the wrapper degrades to pure pass-through and the
+        env-setup error is reported to stderr where CI logs catch it.
+        """
+        f = tmp_path / "flakes.yaml"
+        f.write_text(
+            "known_flakes:\n  - test: T\n    pattern: ^T$\n"
+            "    max_retries: 1\n    owner: o\n    tracked_by: t\n"
+            "    expire_at: v2.9.0\n",
+            encoding="utf-8",
+        )
+        # Force ImportError on the local `import yaml` inside load_registry.
+        # `sys.modules['yaml'] = None` makes `import yaml` raise ImportError
+        # without unloading the real module from other contexts.
+        with patch.dict(sys.modules, {"yaml": None}):
+            entries = ci_retry.load_registry(f)
+        assert entries == []
+        captured = capsys.readouterr()
+        assert "pyyaml not installed" in captured.err
+
 
 # ============================================================
 # parse_failing_tests

@@ -90,7 +90,18 @@ def load_registry(path: Path) -> list[FlakeEntry]:
     """
     if not path.is_file():
         return []
-    import yaml  # local import: keeps script importable for unit tests
+    try:
+        import yaml  # local import: keeps script importable for unit tests
+    except ImportError:
+        # PyYAML missing — degrade to pure pass-through with a stderr
+        # advisory rather than crashing the wrapper. CI / pre-commit
+        # configuration is responsible for installing pyyaml when the
+        # registry has entries that matter.
+        sys.stderr.write(
+            "ci_flake_retry: pyyaml not installed; ignoring registry "
+            f"({path.name}). pip install pyyaml to enable retries.\n"
+        )
+        return []
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     raw = data.get("known_flakes") or []
