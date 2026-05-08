@@ -370,100 +370,85 @@ class TestMain:
         "          summary: 'High CPU'\n"
     )
 
-    def test_missing_input_file_exits_one(self, monkeypatch, tmp_path, capsys):
+    def test_missing_input_file_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         ghost = tmp_path / "ghost.yaml"
-        monkeypatch.setattr(sys, "argv", ["migrate_rule.py", str(ghost)])
+        cli_argv("migrate_rule.py", str(ghost))
         with pytest.raises(SystemExit) as exc:
             mr.main()
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "Error reading YAML" in err
 
-    def test_invalid_yaml_exits_one(self, monkeypatch, tmp_path, capsys):
+    def test_invalid_yaml_exits_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "bad.yaml"
         f.write_text("groups: [unterminated", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", ["migrate_rule.py", str(f)])
+        cli_argv("migrate_rule.py", str(f))
         with pytest.raises(SystemExit) as exc:
             mr.main()
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "Error reading YAML" in err
 
-    def test_no_groups_returns_cleanly(self, monkeypatch, tmp_path, capsys):
+    def test_no_groups_returns_cleanly(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "empty.yaml"
         f.write_text("groups: []\n", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", ["migrate_rule.py", str(f)])
+        cli_argv("migrate_rule.py", str(f))
         # No SystemExit — main() returns normally.
         mr.main()
         out = capsys.readouterr().out
         assert "No 'groups' found" in out
 
-    def test_groups_without_rules_returns_cleanly(self, monkeypatch, tmp_path, capsys):
+    def test_groups_without_rules_returns_cleanly(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "empty-rules.yaml"
         f.write_text(
             "groups:\n  - name: x\n    rules: []\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(sys, "argv", ["migrate_rule.py", str(f)])
+        cli_argv("migrate_rule.py", str(f))
         mr.main()
         out = capsys.readouterr().out
         assert "No alert rules found" in out
 
-    def test_dry_run_does_not_create_output_dir(self, monkeypatch, tmp_path):
+    def test_dry_run_does_not_create_output_dir(self, monkeypatch, tmp_path, cli_argv):
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
-        monkeypatch.setattr(sys, "argv", [
-            "migrate_rule.py", str(f),
-            "-o", str(out_dir),
-            "--dry-run",
-        ])
+        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--dry-run")
         mr.main()
         # --dry-run doesn't create files.
         assert not out_dir.exists()
 
-    def test_triage_creates_csv(self, monkeypatch, tmp_path, capsys):
+    def test_triage_creates_csv(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
-        monkeypatch.setattr(sys, "argv", [
-            "migrate_rule.py", str(f),
-            "-o", str(out_dir),
-            "--triage",
-        ])
+        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--triage")
         mr.main()
         csv_path = out_dir / "triage-report.csv"
         assert csv_path.exists()
         out = capsys.readouterr().out
         assert "CSV" in out
 
-    def test_default_run_writes_outputs(self, monkeypatch, tmp_path, capsys):
+    def test_default_run_writes_outputs(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
-        monkeypatch.setattr(sys, "argv", [
-            "migrate_rule.py", str(f),
-            "-o", str(out_dir),
-        ])
+        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir))
         mr.main()
         # Output directory exists and contains files.
         assert out_dir.is_dir()
         assert any(out_dir.iterdir())
 
-    def test_no_prefix_strips_custom_prefix(self, monkeypatch, tmp_path):
+    def test_no_prefix_strips_custom_prefix(self, monkeypatch, tmp_path, cli_argv):
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
-        monkeypatch.setattr(sys, "argv", [
-            "migrate_rule.py", str(f),
-            "-o", str(out_dir),
-            "--no-prefix",
-        ])
+        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--no-prefix")
         mr.main()
         # No prefix-mapping.yaml when --no-prefix.
         assert not (out_dir / "prefix-mapping.yaml").exists()
 
-    def test_no_dictionary_disables_dict_loading(self, monkeypatch, tmp_path):
+    def test_no_dictionary_disables_dict_loading(self, monkeypatch, tmp_path, cli_argv):
         # When --no-dictionary, load_metric_dictionary must NOT be called.
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
@@ -476,17 +461,12 @@ class TestMain:
             return {}
 
         monkeypatch.setattr(mr, "load_metric_dictionary", fake_load)
-        monkeypatch.setattr(sys, "argv", [
-            "migrate_rule.py", str(f),
-            "-o", str(out_dir),
-            "--no-dictionary",
-            "--dry-run",
-        ])
+        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--no-dictionary", "--dry-run")
         mr.main()
         assert called["loaded"] is False
 
     def test_no_ast_warns_when_promql_parser_missing(
-        self, monkeypatch, tmp_path, capsys,
+        self, monkeypatch, tmp_path, capsys, cli_argv,
     ):
         # Force HAS_AST=False so the warning branch fires under --no-ast=False.
         # (We deliberately do NOT pass --no-ast — the warn fires only when
@@ -495,11 +475,7 @@ class TestMain:
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
         monkeypatch.setattr(mr, "HAS_AST", False)
-        monkeypatch.setattr(sys, "argv", [
-            "migrate_rule.py", str(f),
-            "-o", str(out_dir),
-            "--dry-run",
-        ])
+        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--dry-run")
         mr.main()
         err = capsys.readouterr().err
         assert "promql-parser" in err

@@ -332,83 +332,74 @@ class TestGenerateDocMap:
 # main — CLI
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_default_prints_to_stdout(self, fake_repo, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", ["generate_doc_map.py"])
+    def test_default_prints_to_stdout(self, fake_repo, monkeypatch, capsys, cli_argv):
+        cli_argv('generate_doc_map.py')
         gdm.main()
         out = capsys.readouterr().out
         assert "文件導覽" in out  # zh default
 
-    def test_lang_en_prints_english_map(self, fake_repo, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--lang", "en"])
+    def test_lang_en_prints_english_map(self, fake_repo, monkeypatch, capsys, cli_argv):
+        cli_argv('generate_doc_map.py', '--lang', 'en')
         gdm.main()
         out = capsys.readouterr().out
         assert "Documentation Map" in out
         assert "文件導覽" not in out
 
-    def test_generate_writes_zh_file(self, fake_repo, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--generate"])
+    def test_generate_writes_zh_file(self, fake_repo, monkeypatch, capsys, cli_argv):
+        cli_argv('generate_doc_map.py', '--generate')
         gdm.main()
         out = capsys.readouterr().out
         assert "Generated" in out
         assert (fake_repo / "docs" / "internal" / "doc-map.md").exists()
 
-    def test_generate_lang_all_writes_both(self, fake_repo, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--generate", "--lang", "all"])
+    def test_generate_lang_all_writes_both(self, fake_repo, monkeypatch, capsys, cli_argv):
+        cli_argv('generate_doc_map.py', '--generate', '--lang', 'all')
         gdm.main()
         zh_path = fake_repo / "docs" / "internal" / "doc-map.md"
         en_path = fake_repo / "docs" / "internal" / "doc-map.en.md"
         assert zh_path.exists() and en_path.exists()
 
-    def test_check_clean_returns_zero(self, fake_repo, monkeypatch, capsys):
+    def test_check_clean_returns_zero(self, fake_repo, monkeypatch, capsys, cli_argv):
         # Generate first, then check — must be clean.
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--generate"])
+        cli_argv('generate_doc_map.py', '--generate')
         gdm.main()
         capsys.readouterr()  # clear output
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--check"])
+        cli_argv('generate_doc_map.py', '--check')
         gdm.main()  # should not exit
         out = capsys.readouterr().out
         assert "up to date" in out
 
-    def test_check_missing_file_exits_one(self, fake_repo, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--check"])
+    def test_check_missing_file_exits_one(self, fake_repo, monkeypatch, capsys, cli_argv):
+        cli_argv('generate_doc_map.py', '--check')
         with pytest.raises(SystemExit) as exc:
             gdm.main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "does not exist" in out
 
-    def test_check_outdated_file_exits_one(self, fake_repo, monkeypatch, capsys):
+    def test_check_outdated_file_exits_one(self, fake_repo, monkeypatch, capsys, cli_argv):
         # Write a placeholder that doesn't match the generated content.
         (fake_repo / "docs" / "internal" / "doc-map.md").write_text(
             "stale content", encoding="utf-8",
         )
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--check"])
+        cli_argv('generate_doc_map.py', '--check')
         with pytest.raises(SystemExit) as exc:
             gdm.main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "outdated" in out
 
-    def test_check_diff_lists_missing_extra(self, fake_repo, monkeypatch, capsys):
+    def test_check_diff_lists_missing_extra(self, fake_repo, monkeypatch, capsys, cli_argv):
         # Generate once with one doc.
         f1 = fake_repo / "docs" / "first.md"
         f1.write_text("# First\n", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--generate"])
+        cli_argv('generate_doc_map.py', '--generate')
         gdm.main()
         capsys.readouterr()
         # Add a new doc; existing doc-map.md is now stale (missing the new doc).
         f2 = fake_repo / "docs" / "second.md"
         f2.write_text("# Second\n", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--check"])
+        cli_argv('generate_doc_map.py', '--check')
         with pytest.raises(SystemExit):
             gdm.main()
         out = capsys.readouterr().out
@@ -416,18 +407,17 @@ class TestMain:
         assert "second.md" in out
 
     def test_no_adr_overrides_include_adr_default(
-        self, fake_repo, monkeypatch, capsys,
+        self, fake_repo, monkeypatch, capsys, cli_argv,
     ):
         adr = fake_repo / "docs" / "adr"
         adr.mkdir()
         (adr / "0001-x.md").write_text("# ADR\n", encoding="utf-8")
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--no-adr"])
+        cli_argv('generate_doc_map.py', '--no-adr')
         gdm.main()
         out = capsys.readouterr().out
         assert "0001-x" not in out
 
-    def test_safe_flag_uses_atomic_write(self, fake_repo, monkeypatch, capsys):
+    def test_safe_flag_uses_atomic_write(self, fake_repo, monkeypatch, capsys, cli_argv):
         called = {"atomic": False, "regular": False}
 
         def fake_atomic(path, content, newline=None):
@@ -435,7 +425,6 @@ class TestMain:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text(content, encoding="utf-8")
         monkeypatch.setattr(gdm, "atomic_write_text", fake_atomic)
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_doc_map.py", "--generate", "--safe"])
+        cli_argv('generate_doc_map.py', '--generate', '--safe')
         gdm.main()
         assert called["atomic"] is True

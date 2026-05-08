@@ -291,104 +291,81 @@ class TestMainCLI:
         (d / "db-a.yaml").write_text(yaml.dump(tenant), encoding="utf-8")
         return str(d)
 
-    def test_dry_run(self, tmp_path, monkeypatch, capsys):
+    def test_dry_run(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir, "--dry-run"
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--dry-run")
         gar.main()
         out = capsys.readouterr().out
         assert "DRY RUN" in out
         assert "route" in out.lower() or "receiver" in out.lower()
 
-    def test_validate_mode(self, tmp_path, monkeypatch, capsys):
+    def test_validate_mode(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir, "--validate"
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--validate")
         with pytest.raises(SystemExit) as exc:
             gar.main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "Validation" in out or "OK" in out
 
-    def test_stdout_output(self, tmp_path, monkeypatch, capsys):
+    def test_stdout_output(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir)
         gar.main()
         out = capsys.readouterr().out
         assert "route" in out.lower() or "receiver" in out.lower()
 
-    def test_output_file(self, tmp_path, monkeypatch, capsys):
+    def test_output_file(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
         out_file = str(tmp_path / "output.yaml")
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir,
-            "-o", out_file
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "-o", out_file)
         gar.main()
         assert os.path.isfile(out_file)
         content = open(out_file, encoding="utf-8").read()
         assert "route" in content.lower() or "receiver" in content.lower()
 
-    def test_output_configmap(self, tmp_path, monkeypatch, capsys):
+    def test_output_configmap(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir,
-            "--output-configmap"
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--output-configmap")
         gar.main()
         out = capsys.readouterr().out
         parsed = yaml.safe_load(out)
         assert parsed["kind"] == "ConfigMap"
 
-    def test_output_configmap_dry_run(self, tmp_path, monkeypatch, capsys):
+    def test_output_configmap_dry_run(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir,
-            "--output-configmap", "--dry-run"
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--output-configmap", "--dry-run")
         gar.main()
         out = capsys.readouterr().out
         assert "DRY RUN" in out
         assert "ConfigMap" in out
 
-    def test_output_configmap_to_file(self, tmp_path, monkeypatch, capsys):
+    def test_output_configmap_to_file(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
         out_file = str(tmp_path / "cm.yaml")
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir,
-            "--output-configmap", "-o", out_file
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--output-configmap", "-o", out_file)
         gar.main()
         assert os.path.isfile(out_file)
 
-    def test_policy_flag(self, tmp_path, monkeypatch, capsys):
+    def test_policy_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
         policy = tmp_path / "policy.yaml"
         policy.write_text(yaml.dump({"allowed_domains": ["hooks.example.com"]}),
                           encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", config_dir,
-            "--policy", str(policy)
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--policy", str(policy))
         gar.main()
         out = capsys.readouterr().out
         assert "Policy" in out or "route" in out.lower()
 
-    def test_empty_config_dir(self, tmp_path, monkeypatch, capsys):
+    def test_empty_config_dir(self, tmp_path, monkeypatch, capsys, cli_argv):
         d = tmp_path / "empty"
         d.mkdir()
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", str(d)
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             gar.main()
         assert exc.value.code == 0
 
-    def test_validate_with_errors(self, tmp_path, monkeypatch, capsys):
+    def test_validate_with_errors(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Validate mode with bad config should exit 1."""
         d = tmp_path / "conf.d"
         d.mkdir()
@@ -400,9 +377,7 @@ class TestMainCLI:
             "_severity_dedup": "enable",
         }}}
         (d / "db-a.yaml").write_text(yaml.dump(tenant), encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "generate_alertmanager_routes", "--config-dir", str(d), "--validate"
-        ])
+        cli_argv("generate_alertmanager_routes", "--config-dir", str(d), "--validate")
         with pytest.raises(SystemExit) as exc:
             gar.main()
         # May be 0 or 1 depending on whether it generates valid routes

@@ -72,6 +72,29 @@ def routing_dir():
 
 
 @pytest.fixture
+def cli_argv(monkeypatch):
+    """Replace `sys.argv` with the given args. Auto-restored after test.
+
+    Convenience over the repeated
+    `monkeypatch.setattr(sys, "argv", [...])` pattern (195 sites across
+    the suite as of audit verification). Variadic API — pass the
+    program name as the first positional arg, then flags + values:
+
+        def test_x(cli_argv):
+            cli_argv("script.py", "--input", str(tmp_path / "in.yaml"))
+            ...
+
+    Same semantics as monkeypatch.setattr — the fixture's monkeypatch
+    dependency means the override is automatically reverted at end of
+    test. Tests that ALSO patch other things keep their monkeypatch
+    arg alongside cli_argv.
+    """
+    def _set(*args):
+        monkeypatch.setattr(sys, "argv", list(args))
+    return _set
+
+
+@pytest.fixture
 def patch_repo_root(monkeypatch, tmp_path):
     """Replace a tool module's repo-root constant with `tmp_path`.
 
