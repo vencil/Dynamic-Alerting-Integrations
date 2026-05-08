@@ -202,15 +202,34 @@ jobs:
             ${{ runner.os }}-go-${{ matrix.go }}-
             ${{ runner.os }}-go-
 
+      # ci_flake_retry.py (HA-10) needs pyyaml to parse flaky-tests.yaml.
+      # ubuntu-latest ships python3 but not always pyyaml; install only
+      # if missing (no-op on most runners since python3-yaml is widely
+      # pre-installed). Apt is faster than pip for this single dep.
+      - name: Install pyyaml for flake-retry wrapper
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
       - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app
-        run: go test ./... -race -count=1 -coverprofile=coverage.out
+        # Wrapped with ci_flake_retry.py (HA-10, PR #325): consults
+        # `flaky-tests.yaml` registry to retry only the listed tests; any
+        # unlisted failure fails immediately (regression doesn't get
+        # masked by retry). Pass-through behavior is identical when all
+        # tests pass on first try, which is the normal case.
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
+            go test ./... -race -count=1 -coverprofile=coverage.out
 
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
         # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
         # (not a go.mod dependency). Only cmd/... and internal/... contain testable code.
-        run: go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
+            go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
 
       # TECH-DEBT-021 (#226): Verify generated OpenAPI spec is in sync
       # with the swag annotations in handler/*. Drift = annotation
