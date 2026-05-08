@@ -31,11 +31,13 @@ import os
 import csv
 import io
 import argparse
+from pathlib import Path
+
 import yaml
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _THIS_DIR)  # Docker flat layout
-sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+_THIS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
+sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import write_text_secure  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -248,9 +250,8 @@ def rewrite_expr_tenant_label(expr_str, metric_names):
 
 def load_metric_dictionary(script_dir=None):
     """載入 metric-dictionary.yaml 啟發式字典。"""
-    if script_dir is None:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-    dict_path = os.path.join(script_dir, "metric-dictionary.yaml")
+    base = Path(script_dir) if script_dir is not None else _THIS_DIR
+    dict_path = str(base / "metric-dictionary.yaml")
     if os.path.exists(dict_path):
         with open(dict_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
@@ -743,7 +744,7 @@ def apply_auto_suppression(results):
 
 def write_triage_csv(results, output_dir, dictionary):
     """產出 CSV 分桶報告，供大規模遷移時在 Excel 中批次決策。"""
-    csv_path = os.path.join(output_dir, "triage-report.csv")
+    csv_path = str(Path(output_dir) / "triage-report.csv")
     buf = io.StringIO()
     # lineterminator='\n' — write_text_secure opens in text mode, which on
     # Windows translates each \n → \r\n. csv.writer's default \r\n would then
@@ -818,7 +819,7 @@ def write_prefix_mapping(results, output_dir, prefix):
     if not mapping:
         return None
 
-    mapping_path = os.path.join(output_dir, "prefix-mapping.yaml")
+    mapping_path = str(Path(output_dir) / "prefix-mapping.yaml")
     mapping_content = (
         "# ============================================================\n"
         "# Prefix Mapping Table — custom_ 前綴對應關係\n"
@@ -851,7 +852,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
         for k, v in r.tenant_config.items():
             tenant_configs[k] = v
 
-    tenant_config_path = os.path.join(output_dir, "tenant-config.yaml")
+    tenant_config_path = str(Path(output_dir) / "tenant-config.yaml")
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
@@ -899,7 +900,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     total_output = len(deduplicated_rules)
 
     group_name = f"{prefix}migrated-recording-rules" if prefix else "migrated-recording-rules"
-    recording_rules_path = os.path.join(output_dir, "platform-recording-rules.yaml")
+    recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
@@ -935,7 +936,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
 
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     alert_group_name = f"{prefix}migrated-alert-rules" if prefix else "migrated-alert-rules"
-    alert_rules_path = os.path.join(output_dir, "platform-alert-rules.yaml")
+    alert_rules_path = str(Path(output_dir) / "platform-alert-rules.yaml")
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
@@ -973,7 +974,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     unparseable = [r for r in results if r.status == "unparseable"]
     golden_matches = [r for r in results if r.triage_action == "use_golden"]
 
-    report_path = os.path.join(output_dir, "migration-report.txt")
+    report_path = str(Path(output_dir) / "migration-report.txt")
     buf = io.StringIO()
     buf.write("=" * 60 + "\n")
     engine = "AST" if HAS_AST else "regex"

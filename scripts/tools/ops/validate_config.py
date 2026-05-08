@@ -38,11 +38,12 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 # Add script dir to path for lib imports
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _THIS_DIR)  # Docker flat layout
-sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+_THIS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
+sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 
 # Language detection for bilingual help
@@ -115,7 +116,7 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     for fname in sorted(os.listdir(config_dir)):
         if not fname.endswith((".yaml", ".yml")):
             continue
-        fpath = os.path.join(config_dir, fname)
+        fpath = str(Path(config_dir) / fname)
         if not os.path.isfile(fpath):
             continue
         file_count += 1
@@ -251,8 +252,7 @@ def check_custom_rules(
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
 
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    cmd = [sys.executable, os.path.join(tools_dir, "lint_custom_rules.py"),
+    cmd = [sys.executable, str(_THIS_DIR / "lint_custom_rules.py"),
            rule_packs_dir, "--ci"]
     if policy_file and os.path.isfile(policy_file):
         cmd.extend(["--policy", policy_file])
@@ -298,12 +298,13 @@ def check_profiles(config_dir: str) -> dict[str, object]:
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
     """
-    profiles_path = os.path.join(config_dir, "_profiles.yaml")
+    cfg = Path(config_dir)
+    profiles_path = str(cfg / "_profiles.yaml")
     profiles_raw = load_yaml_file(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     # Load defaults for cross-referencing
-    defaults_path = os.path.join(config_dir, "_defaults.yaml")
+    defaults_path = str(cfg / "_defaults.yaml")
     defaults_raw = load_yaml_file(defaults_path, default={})
     known_defaults = set()
     if isinstance(defaults_raw, dict):
@@ -340,7 +341,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
             continue
         if fname.startswith("_") or fname.startswith("."):
             continue
-        fpath = os.path.join(config_dir, fname)
+        fpath = str(cfg / fname)
         raw = load_yaml_file(fpath, default={})
         if not isinstance(raw, dict):
             continue
@@ -391,7 +392,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     rules = []
 
     # From _defaults.yaml
-    defaults_path = os.path.join(config_dir, "_defaults.yaml")
+    defaults_path = str(Path(config_dir) / "_defaults.yaml")
     if os.path.isfile(defaults_path):
         rules.extend(pe.load_policies(defaults_path))
 
@@ -433,8 +434,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
 # ============================================================
 def check_versions() -> dict[str, object]:
     """Run bump_docs.py --check for version consistency."""
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    cmd = [sys.executable, os.path.join(tools_dir, "bump_docs.py"), "--check"]
+    cmd = [sys.executable, str(_THIS_DIR / "bump_docs.py"), "--check"]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True,
