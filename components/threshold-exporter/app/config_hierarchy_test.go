@@ -18,18 +18,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
-// writeFile is a test helper that creates the parent dir and writes content.
-// Using a helper keeps the fixture-building code in tests readable.
+// writeFile is a thin wrapper kept for call-site brevity (23 callers in
+// this file); delegates to the shared testutil.WriteFile.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	testutil.WriteFile(t, path, content)
 }
 
 // TestScanDirHierarchical_FlatMode covers the degenerate case of a conf.d/
