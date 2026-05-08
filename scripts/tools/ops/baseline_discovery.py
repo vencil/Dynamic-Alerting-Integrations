@@ -274,7 +274,21 @@ def main():
         print()
 
     # 寫入 CSV
+    #
+    # CRLF note: csv.writer emits "\r\n" line terminators per RFC 4180.
+    # If we route through write_text_secure (default text-mode open),
+    # Python's universal-newlines on Windows translates "\n" → "\r\n"
+    # again, producing "\r\r\n" on disk. csv.reader can technically
+    # recover but produces empty rows that break parsers/tests. Fix:
+    # write in binary mode (UTF-8 + BOM) so the writer's terminators
+    # reach disk verbatim. Matches write_text_secure's UTF-8 + 0o600
+    # contract without the newline translation step.
     os.makedirs(args.output_dir, exist_ok=True)
+
+    def _write_csv_secure(path: str, body_with_bom: str) -> None:
+        with open(path, "wb") as fh:
+            fh.write(body_with_bom.encode("utf-8"))
+        os.chmod(path, 0o600)
 
     # 原始時間序列
     ts_path = os.path.join(args.output_dir, f"baseline-{args.tenant}-timeseries.csv")
@@ -285,7 +299,7 @@ def main():
     for i, ts in enumerate(timestamps):
         row = [ts] + [samples[key][i] for key in metrics]
         writer.writerow(row)
-    write_text_secure(ts_path, "\ufeff" + buf.getvalue())
+    _write_csv_secure(ts_path, "\ufeff" + buf.getvalue())
 
     # 統計摘要 + 建議
     summary_path = os.path.join(args.output_dir, f"baseline-{args.tenant}-summary.csv")
@@ -305,7 +319,7 @@ def main():
             stats["p50"], stats["p90"], stats["p95"], stats["p99"],
             suggestion["warning"], suggestion["critical"], suggestion["note"],
         ])
-    write_text_secure(summary_path, "\ufeff" + buf.getvalue())
+    _write_csv_secure(summary_path, "\ufeff" + buf.getvalue())
 
     print(f"📁 輸出:")
     print(f"  時間序列: {ts_path}")

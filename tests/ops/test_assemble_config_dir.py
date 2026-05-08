@@ -211,6 +211,13 @@ class TestAssemble:
         count = assemble({}, out)
         assert count == 0
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows file ACL semantics don't match Unix mode bits "
+               "(group/other distinction collapses to 0o666). The "
+               "production code's chmod call is a no-op on Windows; "
+               "this test asserts Unix-specific semantics.",
+    )
     def test_file_permissions(self, config_dir):
         """組裝後檔案權限正確（owner rw, group r, other r）。"""
         src = Path(config_dir) / "src"

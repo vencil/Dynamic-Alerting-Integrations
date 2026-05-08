@@ -220,7 +220,13 @@ def _send_notification(title: str, message: str) -> None:
 
 
 def _snapshot_mtimes(repo_root: Path) -> Dict[str, float]:
-    """Build a dict of relative_path → mtime for watched files."""
+    """Build a dict of relative_path → mtime for watched files.
+
+    Path keys always use forward slashes (POSIX-style) so the snapshot is
+    cross-platform identical: snapshots taken on Windows/macOS/Linux can
+    be diffed without separator translation. `Path.as_posix()` does this
+    portably without any string mangling.
+    """
     snap: Dict[str, float] = {}
     watch_dirs = ["docs", "rule-packs", "scripts/tools", "components"]
     watch_files = ["CLAUDE.md", "CHANGELOG.md", "CHANGELOG.en.md",
@@ -241,7 +247,7 @@ def _snapshot_mtimes(repo_root: Path) -> Dict[str, float]:
             if f.suffix not in (".md", ".py", ".yaml", ".yml", ".json",
                                 ".jsx"):
                 continue
-            rel = str(f.relative_to(repo_root))
+            rel = f.relative_to(repo_root).as_posix()
             snap[rel] = f.stat().st_mtime
 
     return snap
