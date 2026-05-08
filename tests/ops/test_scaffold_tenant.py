@@ -15,8 +15,19 @@
 import argparse
 import json
 import os
+import sys
 import tempfile
 from unittest import mock
+
+import pytest
+
+# Some tests assert exact Unix mode bits (0o600). Windows NTFS doesn't
+# honor those — chmod() is a no-op and stat returns 0o666. Tests skip
+# when sys.platform == "win32" so local Windows runs match CI Linux.
+_skipif_unix_modes = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows NTFS doesn't honor Unix mode bits; chmod is a no-op",
+)
 
 import pytest
 import yaml
@@ -251,6 +262,7 @@ class TestWriteOutputs:
             assert os.path.isfile(os.path.join(tmpdir, "db-c.yaml"))
             assert os.path.isfile(os.path.join(tmpdir, "scaffold-report.txt"))
 
+    @_skipif_unix_modes
     def test_secure_permissions(self):
         """輸出檔案權限為 0o600。"""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -699,6 +711,7 @@ class TestRunNonInteractive:
             assert not os.path.exists(os.path.join(d, "_instance_mapping.yaml"))
             assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.yaml"))
 
+    @_skipif_unix_modes
     def test_mapping_file_secure_permissions(self):
         """_instance_mapping.yaml has secure 0o600 permissions."""
         with tempfile.TemporaryDirectory() as d:

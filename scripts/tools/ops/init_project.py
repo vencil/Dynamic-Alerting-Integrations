@@ -23,11 +23,13 @@ import textwrap
 from datetime import datetime, timezone
 from typing import Optional
 
+from pathlib import Path
+
 import yaml
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _THIS_DIR)  # Docker flat layout
-sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+_THIS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
+sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, write_text_secure  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -1065,25 +1067,35 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 # ============================================================
 
 def _preview_files(config: dict, output_dir: str) -> list[str]:
-    """Return list of file paths that would be created (without writing)."""
+    """Return list of file paths that would be created (without writing).
+
+    Paths use POSIX separators (forward-slash) regardless of OS, since
+    these strings are shown to the user as "what will be created" preview
+    output — cross-platform consistent display matters more than native
+    separator. Same rationale as _snapshot_mtimes (PR #319).
+    """
+    out = Path(output_dir)
     paths: list[str] = []
     ci, deploy = config['ci'], config['deploy']
     tenants = config['tenants']
 
-    paths.append(os.path.join(output_dir, 'conf.d', '_defaults.yaml'))
+    def _add(p: Path) -> None:
+        paths.append(p.as_posix())
+
+    _add(out / 'conf.d' / '_defaults.yaml')
     for t in tenants:
-        paths.append(os.path.join(output_dir, 'conf.d', f'{t}.yaml'))
+        _add(out / 'conf.d' / f'{t}.yaml')
     if ci in ('github', 'both'):
-        paths.append(os.path.join(output_dir, '.github', 'workflows', 'dynamic-alerting.yaml'))
+        _add(out / '.github' / 'workflows' / 'dynamic-alerting.yaml')
     if ci in ('gitlab', 'both'):
-        paths.append(os.path.join(output_dir, '.gitlab-ci.d', 'dynamic-alerting.yml'))
+        _add(out / '.gitlab-ci.d' / 'dynamic-alerting.yml')
     if deploy == 'kustomize':
-        paths.append(os.path.join(output_dir, 'kustomize', 'base', 'kustomization.yaml'))
-        paths.append(os.path.join(output_dir, 'kustomize', 'base', 'README.md'))
-        paths.append(os.path.join(output_dir, 'kustomize', 'overlays', 'dev', 'kustomization.yaml'))
-        paths.append(os.path.join(output_dir, 'kustomize', 'overlays', 'prod', 'kustomization.yaml'))
-    paths.append(os.path.join(output_dir, '.pre-commit-config.da.yaml'))
-    paths.append(os.path.join(output_dir, '.da-init.yaml'))
+        _add(out / 'kustomize' / 'base' / 'kustomization.yaml')
+        _add(out / 'kustomize' / 'base' / 'README.md')
+        _add(out / 'kustomize' / 'overlays' / 'dev' / 'kustomization.yaml')
+        _add(out / 'kustomize' / 'overlays' / 'prod' / 'kustomization.yaml')
+    _add(out / '.pre-commit-config.da.yaml')
+    _add(out / '.da-init.yaml')
     return paths
 
 
@@ -1104,17 +1116,18 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     git_period = config.get('git_period', 60)
 
     # ── 1. conf.d/ ─────────────────────────────────────────
-    conf_dir = os.path.join(output_dir, 'conf.d')
+    out = Path(output_dir)
+    conf_dir = out / 'conf.d'
 
     _write_file(
-        os.path.join(conf_dir, '_defaults.yaml'),
+        str(conf_dir / '_defaults.yaml'),
         _gen_defaults_yaml(rule_packs, namespace),
         created,
     )
 
     for tenant in tenants:
         _write_file(
-            os.path.join(conf_dir, f'{tenant}.yaml'),
+            str(conf_dir / f'{tenant}.yaml'),
             _gen_tenant_yaml(tenant, rule_packs),
             created,
         )
@@ -1122,23 +1135,23 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # ── 2. CI/CD pipelines ─────────────────────────────────
     if ci in ('github', 'both'):
         _write_file(
-            os.path.join(output_dir, '.github', 'workflows', 'dynamic-alerting.yaml'),
+            str(out / '.github' / 'workflows' / 'dynamic-alerting.yaml'),
             _gen_github_actions(namespace, da_tools_image, deploy),
             created,
         )
 
     if ci in ('gitlab', 'both'):
         _write_file(
-            os.path.join(output_dir, '.gitlab-ci.d', 'dynamic-alerting.yml'),
+            str(out / '.gitlab-ci.d' / 'dynamic-alerting.yml'),
             _gen_gitlab_ci(namespace, da_tools_image, deploy),
             created,
         )
 
     # ── 3. Kustomize overlays ──────────────────────────────
     if deploy == 'kustomize':
-        kust_base = os.path.join(output_dir, 'kustomize', 'base')
+        kust_base = out / 'kustomize' / 'base'
         _write_file(
-            os.path.join(kust_base, 'kustomization.yaml'),
+            str(kust_base / 'kustomization.yaml'),
             _gen_kustomize_base(tenants, namespace),
             created,
         )
@@ -1146,7 +1159,7 @@ def run_init(config: dict, output_dir: str) -> list[str]:
         # Copy conf.d files into kustomize base (symlink in production)
         # For now, generate a README explaining the setup
         _write_file(
-            os.path.join(kust_base, 'README.md'),
+            str(kust_base / 'README.md'),
             textwrap.dedent("""\
             # Kustomize Base
 
@@ -1168,21 +1181,21 @@ def run_init(config: dict, output_dir: str) -> list[str]:
 
         for env_name in ('dev', 'prod'):
             _write_file(
-                os.path.join(output_dir, 'kustomize', 'overlays', env_name, 'kustomization.yaml'),
+                str(out / 'kustomize' / 'overlays' / env_name / 'kustomization.yaml'),
                 _gen_kustomize_overlay(env_name, namespace),
                 created,
             )
 
     # ── 3b. GitOps Native Mode (git-sync sidecar) ──────────
     if config_source == 'git' and git_repo:
-        gitsync_dir = os.path.join(output_dir, 'kustomize', 'overlays', 'gitops')
+        gitsync_dir = out / 'kustomize' / 'overlays' / 'gitops'
         _write_file(
-            os.path.join(gitsync_dir, 'kustomization.yaml'),
+            str(gitsync_dir / 'kustomization.yaml'),
             _gen_git_sync_kustomization(namespace),
             created,
         )
         _write_file(
-            os.path.join(gitsync_dir, 'git-sync-patch.yaml'),
+            str(gitsync_dir / 'git-sync-patch.yaml'),
             _gen_git_sync_deployment(
                 namespace, git_repo, git_branch, git_path, git_period,
             ),
@@ -1191,14 +1204,14 @@ def run_init(config: dict, output_dir: str) -> list[str]:
 
     # ── 4. Pre-commit config ───────────────────────────────
     _write_file(
-        os.path.join(output_dir, '.pre-commit-config.da.yaml'),
+        str(out / '.pre-commit-config.da.yaml'),
         _gen_precommit_snippet(),
         created,
     )
 
     # ── 5. Marker file ─────────────────────────────────────
     _write_file(
-        os.path.join(output_dir, '.da-init.yaml'),
+        str(out / '.da-init.yaml'),
         _gen_da_init_marker(ci, deploy, rule_packs, tenants, config_source, git_repo),
         created,
     )
@@ -1288,7 +1301,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
 
 def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser) -> None:
     """Check if directory is already initialized."""
-    marker_path = os.path.join(output_dir, '.da-init.yaml')
+    marker_path = str(Path(output_dir) / '.da-init.yaml')
     if os.path.isfile(marker_path) and not force:
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
