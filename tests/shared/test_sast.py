@@ -40,8 +40,13 @@ def _read_source(path):
 
 
 def _short_path(path):
-    """回傳相對於 repo root 的短路徑。"""
-    return os.path.relpath(path, REPO_ROOT)
+    """回傳相對於 repo root 的短路徑（永遠用 forward-slash）。
+
+    Windows 上 os.path.relpath 會回傳 backslash 路徑，但 CHMOD_EXEMPT 的
+    key 一律是 forward-slash（POSIX 慣例）。為了讓 `short in CHMOD_EXEMPT`
+    在所有 OS 上一致，這裡顯式 normalize 到 forward-slash。
+    """
+    return os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
 
 
 # ============================================================

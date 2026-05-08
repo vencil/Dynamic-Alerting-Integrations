@@ -17,11 +17,21 @@ import json
 import os
 import pathlib
 import stat
+import sys
 import tempfile
 from unittest.mock import patch, MagicMock
 
 import pytest
 import urllib.error
+
+# Some tests assert exact Unix mode bits (0o600). Windows NTFS doesn't
+# honor those — chmod() is a no-op and stat returns 0o666. The relevant
+# tests skip when sys.platform == "win32" so local Windows runs match
+# CI Linux on test-count, with this marker as the centralized opt-in.
+_skipif_unix_modes = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows NTFS doesn't honor Unix mode bits; chmod is a no-op",
+)
 
 import _lib_python as lib
 from factories import mock_http_response
@@ -640,6 +650,7 @@ class TestWriteTextSecure:
         lib.write_text_secure(path, "hello world")
         assert pathlib.Path(path).read_text(encoding="utf-8") == "hello world"
 
+    @_skipif_unix_modes
     def test_permissions_0o600(self, tmp_path):
         """寫入檔案權限為 0o600。"""
         path = str(tmp_path / "secure.txt")
@@ -662,6 +673,7 @@ class TestWriteTextSecure:
         lib.write_text_secure(path, "v2")
         assert pathlib.Path(path).read_text(encoding="utf-8") == "v2"
 
+    @_skipif_unix_modes
     def test_empty_string(self, tmp_path):
         """空字串寫入產生空檔案。"""
         path = str(tmp_path / "empty.txt")
@@ -684,6 +696,7 @@ class TestWriteJsonSecure:
         content = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
         assert content == {"key": "value", "count": 42}
 
+    @_skipif_unix_modes
     def test_permissions_0o600(self, tmp_path):
         """寫入檔案權限為 0o600。"""
         path = str(tmp_path / "secure.json")
