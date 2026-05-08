@@ -266,6 +266,8 @@ CI 排除的 3 支 test files（`test_property.py`, `test_benchmark.py`, `test_p
 
 ### HA-10: Flake 自動重試 CI Policy（不是盲目全域 retry）
 
+> **狀態**：tooling 已落地（`flaky-tests.yaml` registry + `scripts/ops/ci_flake_retry.py` wrapper + 27 unit tests）。CI 工作流 wiring 仍為 follow-up — wrapper 必須先在本地驗證一輪 cycle 後再啟用，避免 wrapper bug 反而掩蓋 regression。
+
 **問題來源**：v2.7.0 PR #26 CI 最終 20/20 綠，但 `TestWatchLoop_DebouncedReload_DetectsFileChange`（task #26）第一次跑 fail、第一次 rerun fail、第二次 rerun 33s 才通過。人工 `gh run rerun --failed` 重複三次，佔據 release 最後一小時。全域 retry 會掩蓋真正的新 bug，但完全不 retry 又會讓已知時間相依 test 拖住流程。
 
 **設計**：`.github/workflows/ci.yml` 加 `flaky-tests.yaml` registry，格式：
