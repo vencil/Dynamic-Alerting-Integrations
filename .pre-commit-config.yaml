@@ -329,7 +329,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
+        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
         # Promoted from manual → auto (docs/harness-hardening):
         # catches NUL bytes, browser-mode Babel incompatibilities, and
         # broken JSX syntax before they reach HEAD. Skips silently if
@@ -340,7 +340,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
         language: python
         pass_filenames: false
-        files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
+        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
         # Auto-stage (NOT manual) — runs on every commit to catch
         # line-count regressions immediately. Locks in the progress
         # from PR-2d (#153 Phase 1+2+3 / S#69-S#72): codebase had 0
@@ -403,7 +403,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_i18n_coverage.py
         language: python
         pass_filenames: false
-        files: ^(docs/(interactive/tools|getting-started)/.*\.jsx|rule-packs/.*\.yaml|scripts/tools/.*\.py|components/da-tools/app/entrypoint\.py)$
+        files: ^(tools/portal/src/(interactive/tools|getting-started)/.*\.jsx|rule-packs/.*\.yaml|scripts/tools/.*\.py|components/da-tools/app/entrypoint\.py)$
         stages: [manual]
         additional_dependencies: ['pyyaml']
 
@@ -444,7 +444,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_portal_i18n.py --ci
         language: system
         pass_filenames: false
-        files: ^docs/(interactive/tools|getting-started)/.*\.jsx$
+        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
         stages: [manual]
 
       - id: orphan-doc-check
@@ -561,7 +561,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_window_x_no_fallback.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/(interactive|getting-started)/.*\.(jsx|js)$
+        files: ^tools/portal/src/(interactive|getting-started)/.*\.(jsx|js)$
         # Auto-stage, FATAL on findings. Codebase audit at scaffold time
         # showed 0 violations (TD-033/034 cleared all instances). Per-line
         # escape via `<!-- window-x-no-fallback: ignore -->` for legitimate
