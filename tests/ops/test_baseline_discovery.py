@@ -460,6 +460,12 @@ class TestCSVOutput:
         assert "suggested_warning" in rows[0]
         assert "suggested_critical" in rows[0]
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows file ACL semantics don't honor Unix mode bits "
+               "(0o600 → 0o666 on NTFS). The production chmod is a no-op "
+               "on Windows; this test pins Unix-specific semantics.",
+    )
     def test_csv_file_permissions(self, monkeypatch, tmp_path):
         """CSV 檔案權限為 0o600。"""
         out_dir = self._run_observation(monkeypatch, tmp_path, value=50.0)
