@@ -700,6 +700,18 @@ bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0
 test: ## 執行 Python 單元測試 (pytest)
 	@python3 -m pytest tests/ -v --tb=short $(ARGS)
 
+.PHONY: test-fast
+test-fast: ## 全套 pytest 平行加速（xdist -n auto，~2-3x；CI 同設定）
+	## Local full-suite run with pytest-xdist parallelism. Matches CI's
+	## .github/workflows/ci.yml step (-n auto). Typical wall-clock on a
+	## 4-core dev box: ~50-60s vs ~130s sequential. Skip for targeted
+	## runs (single-test / single-file) — xdist startup overhead (~2s)
+	## makes those slower, not faster.
+	##
+	## Sequential default (`make test`) stays as the friendly path for
+	## debugging (works with pdb, deterministic test order).
+	@python3 -m pytest tests/ -n auto --tb=short $(ARGS)
+
 .PHONY: coverage
 coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 HTML)
 	@python3 -m pytest tests/ \
