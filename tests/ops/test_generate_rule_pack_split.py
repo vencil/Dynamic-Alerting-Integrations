@@ -432,7 +432,7 @@ class TestProcessRulePacks:
 # main — CLI
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_success_exits_zero(self, tmp_path, monkeypatch, capsys):
+    def test_success_exits_zero(self, tmp_path, monkeypatch, capsys, cli_argv):
         # Stub process_rule_packs to return clean report.
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "success",
@@ -444,12 +444,12 @@ class TestMain:
                 "metric_mismatches": [],
             },
         })
-        monkeypatch.setattr(sys, "argv", ["generate_rule_pack_split.py"])
+        cli_argv("generate_rule_pack_split.py")
         with pytest.raises(SystemExit) as exc:
             grps.main()
         assert exc.value.code == 0
 
-    def test_metric_mismatch_exits_one(self, monkeypatch):
+    def test_metric_mismatch_exits_one(self, monkeypatch, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "success",
             "errors": [],
@@ -460,12 +460,12 @@ class TestMain:
                 "metric_mismatches": [{"file": "x.yaml", "missing_in_edge": ["m"]}],
             },
         })
-        monkeypatch.setattr(sys, "argv", ["generate_rule_pack_split.py"])
+        cli_argv("generate_rule_pack_split.py")
         with pytest.raises(SystemExit) as exc:
             grps.main()
         assert exc.value.code == 1
 
-    def test_error_status_exits_two(self, monkeypatch):
+    def test_error_status_exits_two(self, monkeypatch, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "error",
             "errors": ["YAML parse failed"],
@@ -476,12 +476,12 @@ class TestMain:
                 "metric_mismatches": [],
             },
         })
-        monkeypatch.setattr(sys, "argv", ["generate_rule_pack_split.py"])
+        cli_argv("generate_rule_pack_split.py")
         with pytest.raises(SystemExit) as exc:
             grps.main()
         assert exc.value.code == 2
 
-    def test_json_flag_emits_json(self, monkeypatch, capsys):
+    def test_json_flag_emits_json(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "success",
             "errors": [],
@@ -492,8 +492,7 @@ class TestMain:
                 "metric_mismatches": [],
             },
         })
-        monkeypatch.setattr(sys, "argv",
-                            ["generate_rule_pack_split.py", "--json"])
+        cli_argv("generate_rule_pack_split.py", "--json")
         with pytest.raises(SystemExit):
             grps.main()
         out = capsys.readouterr().out
@@ -501,7 +500,7 @@ class TestMain:
         payload = json.loads(out)
         assert payload["status"] == "success"
 
-    def test_text_output_shows_warnings_and_mismatches(self, monkeypatch, capsys):
+    def test_text_output_shows_warnings_and_mismatches(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "success",
             "errors": [],
@@ -514,7 +513,7 @@ class TestMain:
                 ],
             },
         })
-        monkeypatch.setattr(sys, "argv", ["generate_rule_pack_split.py"])
+        cli_argv("generate_rule_pack_split.py")
         with pytest.raises(SystemExit):
             grps.main()
         out = capsys.readouterr().out
@@ -522,7 +521,7 @@ class TestMain:
         assert "y.yaml" in out
         assert "foo" in out
 
-    def test_text_output_error_branch(self, monkeypatch, capsys):
+    def test_text_output_error_branch(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "error",
             "errors": ["parse failed"],
@@ -533,7 +532,7 @@ class TestMain:
                 "metric_mismatches": [],
             },
         })
-        monkeypatch.setattr(sys, "argv", ["generate_rule_pack_split.py"])
+        cli_argv("generate_rule_pack_split.py")
         with pytest.raises(SystemExit):
             grps.main()
         out = capsys.readouterr().out

@@ -391,7 +391,7 @@ class TestCLI:
         assert args.window == "5m"
         assert args.min_score == 0.3
 
-    def test_main_with_input_file(self, monkeypatch, capsys, tmp_path):
+    def test_main_with_input_file(self, monkeypatch, capsys, tmp_path, cli_argv):
         data = [
             {"labels": {"alertname": "A", "tenant": "db-a", "severity": "warning",
                          "namespace": "db-a"},
@@ -404,33 +404,27 @@ class TestCLI:
         ]
         p = tmp_path / "alerts.json"
         p.write_text(json.dumps(data), encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "alert_correlate", "--input", str(p), "--json",
-        ])
+        cli_argv("alert_correlate", "--input", str(p), "--json")
         ac.main()
         out = capsys.readouterr().out
         report = json.loads(out)
         assert report["total_alerts"] == 2
 
-    def test_main_no_alerts(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", [
-            "alert_correlate", "--prometheus", "http://fake:9090",
-        ])
+    def test_main_no_alerts(self, monkeypatch, capsys, cli_argv):
+        cli_argv("alert_correlate", "--prometheus", "http://fake:9090")
         monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
                             lambda *a, **k: [])
         ac.main()
         out = capsys.readouterr().out
         assert "No correlated" in out
 
-    def test_main_invalid_window(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", [
-            "alert_correlate", "--window", "invalid",
-        ])
+    def test_main_invalid_window(self, monkeypatch, cli_argv):
+        cli_argv("alert_correlate", "--window", "invalid")
         with pytest.raises(SystemExit) as exc_info:
             ac.main()
         assert exc_info.value.code == 1
 
-    def test_main_ci_mode_critical(self, monkeypatch, tmp_path):
+    def test_main_ci_mode_critical(self, monkeypatch, tmp_path, cli_argv):
         """CI mode exits 1 when critical root cause found."""
         data = [
             {"labels": {"alertname": "A", "tenant": "db-a",
@@ -444,14 +438,12 @@ class TestCLI:
         ]
         p = tmp_path / "alerts.json"
         p.write_text(json.dumps(data), encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "alert_correlate", "--input", str(p), "--ci",
-        ])
+        cli_argv("alert_correlate", "--input", str(p), "--ci")
         with pytest.raises(SystemExit) as exc_info:
             ac.main()
         assert exc_info.value.code == 1
 
-    def test_main_markdown(self, monkeypatch, capsys, tmp_path):
+    def test_main_markdown(self, monkeypatch, capsys, tmp_path, cli_argv):
         data = [
             {"labels": {"alertname": "A", "tenant": "db-a"},
              "startsAt": "2026-03-15T10:00:00Z", "endsAt": ""},
@@ -460,9 +452,7 @@ class TestCLI:
         ]
         p = tmp_path / "alerts.json"
         p.write_text(json.dumps(data), encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", [
-            "alert_correlate", "--input", str(p), "--markdown",
-        ])
+        cli_argv("alert_correlate", "--input", str(p), "--markdown")
         ac.main()
         out = capsys.readouterr().out
         assert "# Alert Correlation Report" in out

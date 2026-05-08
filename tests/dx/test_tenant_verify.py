@@ -168,53 +168,41 @@ def test_inheritance_chain_reflected_in_output(verify_module, conf_d):
     assert len(mkt["defaults_chain"]) == 1, f"marketing tenant: {mkt['defaults_chain']}"
 
 
-def test_main_no_args_returns_usage_error(verify_module, conf_d, monkeypatch, capsys):
+def test_main_no_args_returns_usage_error(verify_module, conf_d, monkeypatch, capsys, cli_argv):
     """No tenant_id and no --all → exit 1 with error to stderr."""
     monkeypatch.chdir(conf_d.parent)  # cwd has conf.d/
-    monkeypatch.setattr(sys, "argv", ["tenant-verify"])
+    cli_argv("tenant-verify")
     code = verify_module.main()
     assert code == 1
     captured = capsys.readouterr()
     assert "tenant_id is required" in captured.err
 
 
-def test_main_all_with_expect_merged_hash_is_error(verify_module, conf_d, monkeypatch, capsys):
+def test_main_all_with_expect_merged_hash_is_error(verify_module, conf_d, monkeypatch, capsys, cli_argv):
     """--all + --expect-merged-hash makes no sense (one hash, many tenants)."""
     monkeypatch.chdir(conf_d.parent)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["tenant-verify", "--all", "--expect-merged-hash", "deadbeef", "--conf-d", str(conf_d)],
-    )
+    cli_argv("tenant-verify", "--all", "--expect-merged-hash", "deadbeef", "--conf-d", str(conf_d))
     code = verify_module.main()
     assert code == 1
     captured = capsys.readouterr()
     assert "incompatible with --all" in captured.err
 
 
-def test_main_conf_d_not_found_returns_error(verify_module, monkeypatch, capsys, tmp_path):
+def test_main_conf_d_not_found_returns_error(verify_module, monkeypatch, capsys, tmp_path, cli_argv):
     """Bogus --conf-d path → exit 1."""
     bogus = tmp_path / "nonexistent"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["tenant-verify", "db-fin-a", "--conf-d", str(bogus)],
-    )
+    cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(bogus))
     code = verify_module.main()
     assert code == 1
     captured = capsys.readouterr()
     assert "conf.d not found" in captured.err
 
 
-def test_main_json_output_is_parseable(verify_module, conf_d, monkeypatch, capsys):
+def test_main_json_output_is_parseable(verify_module, conf_d, monkeypatch, capsys, cli_argv):
     """--json must emit valid JSON (operator pipes to jq for diff)."""
     import json as _json
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["tenant-verify", "db-fin-a", "--conf-d", str(conf_d), "--json"],
-    )
+    cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(conf_d), "--json")
     code = verify_module.main()
     assert code == 0
     captured = capsys.readouterr()
@@ -224,20 +212,14 @@ def test_main_json_output_is_parseable(verify_module, conf_d, monkeypatch, capsy
     assert parsed["merged_hash"]
 
 
-def test_main_expect_mismatch_exit_code_2(verify_module, conf_d, monkeypatch):
+def test_main_expect_mismatch_exit_code_2(verify_module, conf_d, monkeypatch, cli_argv):
     """Round-trip the exit-code-2 contract that B-4 checklist depends on."""
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "tenant-verify",
+    cli_argv("tenant-verify",
             "db-fin-a",
             "--conf-d",
             str(conf_d),
             "--expect-merged-hash",
             "0000000000000000",
-            "--json",
-        ],
-    )
+            "--json")
     code = verify_module.main()
     assert code == 2
