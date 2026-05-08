@@ -47,6 +47,7 @@ from hypothesis import strategies as st
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 for _path in (
+    os.path.join(_REPO_ROOT, "scripts", "tools"),
     os.path.join(_REPO_ROOT, "scripts", "tools", "ops"),
     os.path.join(_REPO_ROOT, "scripts", "tools", "dx"),
 ):
@@ -57,6 +58,7 @@ for _path in (
 import generate_rule_pack_split as grps  # noqa: E402
 import generate_doc_map as gdm  # noqa: E402
 import generate_changelog as gc  # noqa: E402
+import _lib_validation as lv  # noqa: E402
 
 
 # Hypothesis settings: keep the example budget tight so this file runs
@@ -304,3 +306,213 @@ class TestParseCommitProperties:
         result = gc.parse_commit(subject)
         if result is not None:
             assert result["breaking"] is True
+
+
+# ---------------------------------------------------------------------------
+# parse_duration_seconds — Prometheus-style duration parser
+# ---------------------------------------------------------------------------
+# Pilot extension batch 2 (paired with mutation pilot extension): four pure
+# functions in _lib_validation.py that drive timing guardrails throughout
+# the platform. Each function gets property tests here AND mutation entries
+# in tests/shared/_mutation_pilot.py. Together they pin parse↔format
+# round-trip, monotonicity, idempotency, and clamp invariants.
+class TestParseDurationSecondsProperties:
+
+    @given(st.integers(min_value=0, max_value=10**6))
+    @PILOT_SETTINGS
+    def test_int_input_returned_as_int(self, n):
+        # Property: int input passes through as int.
+        result = lv.parse_duration_seconds(n)
+        assert result == n
+        assert isinstance(result, int)
+
+    @given(st.floats(min_value=0, max_value=1e6, allow_nan=False, allow_infinity=False))
+    @PILOT_SETTINGS
+    def test_float_input_truncated_to_int(self, x):
+        # Property: float input is converted via int() (truncation).
+        result = lv.parse_duration_seconds(x)
+        assert result == int(x)
+        assert isinstance(result, int)
+
+    @given(st.one_of(
+        st.none(),
+        st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=20),
+        st.lists(st.integers(), max_size=3),
+        st.dictionaries(st.text(), st.text(), max_size=2),
+    ))
+    @PILOT_SETTINGS
+    def test_invalid_input_returns_none(self, junk):
+        # Property: anything that isn't a duration string or numeric → None.
+        # The text strategy is constrained to alphabet only (no digits) so
+        # it can't accidentally produce a valid duration.
+        result = lv.parse_duration_seconds(junk)
+        assert result is None
+
+    @given(st.sampled_from([
+        ("5s", 5), ("30s", 30), ("60s", 60),
+        ("1m", 60), ("5m", 300),
+        ("1h", 3600), ("4h", 14400),
+        ("1d", 86400),
+    ]))
+    @PILOT_SETTINGS
+    def test_known_durations(self, kv):
+        # Property: well-known examples from the docstring.
+        s, expected = kv
+        assert lv.parse_duration_seconds(s) == expected
+
+    @given(st.integers(min_value=1, max_value=1000))
+    @PILOT_SETTINGS
+    def test_seconds_unit_monotonic(self, n):
+        # Property: more seconds (same unit) → larger output.
+        a = lv.parse_duration_seconds(f"{n}s")
+        b = lv.parse_duration_seconds(f"{n + 1}s")
+        assert a is not None and b is not None
+        assert b > a
+
+
+# ---------------------------------------------------------------------------
+# format_duration — seconds → "Ns" / "Nm" / "Nh"
+# ---------------------------------------------------------------------------
+class TestFormatDurationProperties:
+
+    @given(st.integers(min_value=0, max_value=10**6))
+    @PILOT_SETTINGS
+    def test_output_ends_in_smh(self, n):
+        # Property: output suffix is always s, m, or h (never d).
+        out = lv.format_duration(n)
+        assert out[-1] in ("s", "m", "h")
+        assert "d" not in out, f"format_duration({n}) emitted day unit: {out!r}"
+
+    @given(st.integers(min_value=0, max_value=10**6))
+    @PILOT_SETTINGS
+    def test_round_trip_via_parse(self, n):
+        # Property: format → parse round-trips.
+        formatted = lv.format_duration(n)
+        parsed = lv.parse_duration_seconds(formatted)
+        assert parsed == n, (
+            f"round-trip failed: {n} → {formatted!r} → {parsed}"
+        )
+
+    @given(st.integers(min_value=1, max_value=3599))
+    @PILOT_SETTINGS
+    def test_sub_hour_uses_minute_or_second(self, n):
+        # Property: values < 3600 never use 'h' (no whole hours present).
+        out = lv.format_duration(n)
+        assert not out.endswith("h"), (
+            f"format_duration({n}) chose hour unit despite n<3600: {out!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# is_disabled — three-state disabled detection
+# ---------------------------------------------------------------------------
+class TestIsDisabledProperties:
+
+    @given(st.sampled_from(["disable", "disabled", "off", "false"]))
+    @PILOT_SETTINGS
+    def test_canonical_values_disabled(self, val):
+        assert lv.is_disabled(val) is True
+
+    @given(st.sampled_from(["disable", "disabled", "off", "false"]))
+    @PILOT_SETTINGS
+    def test_case_insensitive(self, val):
+        # Property: case doesn't matter.
+        assert lv.is_disabled(val.upper()) is True
+        assert lv.is_disabled(val.title()) is True
+
+    @given(
+        st.sampled_from(["disable", "disabled", "off", "false"]),
+        st.text(alphabet=" \t", min_size=0, max_size=5),
+        st.text(alphabet=" \t", min_size=0, max_size=5),
+    )
+    @PILOT_SETTINGS
+    def test_whitespace_stripped(self, val, lpad, rpad):
+        # Property: leading/trailing whitespace is stripped.
+        assert lv.is_disabled(lpad + val + rpad) is True
+
+    @given(st.one_of(
+        st.none(),
+        st.integers(),
+        st.lists(st.text()),
+        st.dictionaries(st.text(), st.text()),
+    ))
+    @PILOT_SETTINGS
+    def test_non_string_returns_false(self, junk):
+        # Property: non-string input always returns False.
+        assert lv.is_disabled(junk) is False
+
+    @given(st.text(alphabet=string.ascii_letters,
+                   min_size=1, max_size=15).filter(
+                       lambda s: s.strip().lower()
+                                  not in {"disable", "disabled", "off", "false"}))
+    @PILOT_SETTINGS
+    def test_arbitrary_strings_not_disabled(self, s):
+        # Property: any string that ISN'T one of the canonical disable
+        # values returns False.
+        assert lv.is_disabled(s) is False
+
+
+# ---------------------------------------------------------------------------
+# validate_and_clamp — guardrail enforcement on timing parameters
+# ---------------------------------------------------------------------------
+class TestValidateAndClampProperties:
+
+    @given(
+        st.text(alphabet=string.ascii_letters + "_",
+                min_size=1, max_size=20).filter(
+                    lambda s: s not in
+                              {"group_wait", "group_interval", "repeat_interval"}),
+        st.integers(min_value=0, max_value=10**5),
+    )
+    @PILOT_SETTINGS
+    def test_unknown_param_passes_through_unchanged(self, param, value):
+        # Property: any param not in GUARDRAILS returns input unchanged
+        # with empty warnings.
+        clamped, warnings = lv.validate_and_clamp(param, value, "test-tenant")
+        assert clamped == value
+        assert warnings == []
+
+    @given(st.sampled_from([
+        ("group_wait", "30s"),
+        ("group_interval", "5m"),
+        ("repeat_interval", "4h"),
+    ]))
+    @PILOT_SETTINGS
+    def test_in_bounds_value_unchanged(self, kv):
+        # Property: a value within [min, max] passes through unchanged.
+        param, value = kv
+        clamped, warnings = lv.validate_and_clamp(param, value, "test-tenant")
+        assert clamped == value
+        assert warnings == []
+
+    @given(st.sampled_from([
+        ("group_wait", "1s"),       # below 5s min
+        ("group_interval", "1s"),   # below 5s min
+        ("repeat_interval", "10s"), # below 60s min
+    ]))
+    @PILOT_SETTINGS
+    def test_below_min_clamped_to_min(self, kv):
+        # Property: values below min get clamped to the min, with a warning.
+        from _lib_constants import GUARDRAILS
+        param, value = kv
+        clamped, warnings = lv.validate_and_clamp(param, value, "test-tenant")
+        min_sec = GUARDRAILS[param][0]
+        assert lv.parse_duration_seconds(clamped) == min_sec
+        assert len(warnings) == 1
+        assert "below minimum" in warnings[0]
+
+    @given(st.sampled_from([
+        ("group_wait", "10m"),       # above 300s max
+        ("group_interval", "10m"),   # above 300s max
+        ("repeat_interval", "100h"), # above 259200s max (72h)
+    ]))
+    @PILOT_SETTINGS
+    def test_above_max_clamped_to_max(self, kv):
+        # Property: values above max get clamped to the max, with a warning.
+        from _lib_constants import GUARDRAILS
+        param, value = kv
+        clamped, warnings = lv.validate_and_clamp(param, value, "test-tenant")
+        max_sec = GUARDRAILS[param][1]
+        assert lv.parse_duration_seconds(clamped) == max_sec
+        assert len(warnings) == 1
+        assert "above maximum" in warnings[0]
