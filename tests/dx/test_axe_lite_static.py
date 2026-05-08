@@ -354,3 +354,49 @@ class TestMain:
         f = tmp_path / "bad.jsx"
         f.write_text('<button></button>', encoding="utf-8")
         assert axe.main(["axe_lite_static.py", str(f)]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Portal floor — scanner reports 0 across all portal JSX (regression guard)
+# ---------------------------------------------------------------------------
+class TestPortalFloor:
+    """The whole portal must stay at 0 violations.
+
+    Codifies the WCAG cleanup finished in PRs #298 / #300 / #303 / #309 /
+    #310 / #311. The pre-commit `axe-lite-static` hook gates each commit;
+    this test gates the test suite so a bypassed hook still surfaces
+    regressions during pytest. If this fails, run
+
+        python -X utf8 scripts/tools/dx/axe_lite_static.py <files>
+
+    against the offending file(s) — the path appears in the failure
+    message — and add the appropriate non-color signal (border /
+    underline / font-bold / font-semibold / aria-hidden / role=alert).
+    """
+
+    def test_portal_floor_zero_violations(self):
+        import glob
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        pattern = os.path.join(repo_root, "tools", "portal", "src", "**", "*.jsx")
+        files = sorted(glob.glob(pattern, recursive=True))
+        assert files, f"no JSX files found under {pattern!r}"
+
+        offenders = []
+        for f in files:
+            raw = open(f, encoding="utf-8").read()
+            src = axe.strip_frontmatter(raw)
+            counts = (
+                ("A", len(axe.scan_unicode_status(src))),
+                ("B", len(axe.scan_buttons_without_name(src))),
+                ("C", len(axe.scan_unlabeled_inputs(src))),
+                ("D", len(axe.scan_color_only_severity(src))),
+            )
+            total = sum(n for _, n in counts)
+            if total > 0:
+                breakdown = ", ".join(f"{cat}={n}" for cat, n in counts if n)
+                offenders.append(f"  {os.path.relpath(f, repo_root)}: {breakdown}")
+        assert not offenders, (
+            "WCAG static floor regressed (was 0 across all portal JSX). "
+            "Offenders:\n" + "\n".join(offenders)
+        )
