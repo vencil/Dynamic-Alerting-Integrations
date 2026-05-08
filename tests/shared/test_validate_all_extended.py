@@ -113,11 +113,9 @@ class TestMainExtended:
                            project_root):
         return (short_name, "fail", 0.2, "error detail", "failure output")
 
-    def test_parallel_json(self, monkeypatch, capsys):
+    def test_parallel_json(self, monkeypatch, capsys, cli_argv):
         """--parallel --json mode."""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--parallel", "--json", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--parallel', '--json', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -126,11 +124,9 @@ class TestMainExtended:
         data = json.loads(out)
         assert data["mode"] == "parallel"
 
-    def test_parallel_text(self, monkeypatch, capsys):
+    def test_parallel_text(self, monkeypatch, capsys, cli_argv):
         """--parallel text mode."""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--parallel", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--parallel', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -138,11 +134,9 @@ class TestMainExtended:
         out = capsys.readouterr().out
         assert "PARALLEL" in out
 
-    def test_parallel_verbose(self, monkeypatch, capsys):
+    def test_parallel_verbose(self, monkeypatch, capsys, cli_argv):
         """--parallel --verbose shows full output."""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--parallel", "--verbose", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--parallel', '--verbose', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -150,13 +144,11 @@ class TestMainExtended:
         out = capsys.readouterr().out
         assert "output text" in out or "VERSIONS" in out
 
-    def test_baseline_mode(self, monkeypatch, capsys, tmp_path):
+    def test_baseline_mode(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--baseline saves JSON baseline file."""
         bf = tmp_path / ".validation-baseline.json"
         monkeypatch.setattr(va, "BASELINE_FILE", bf)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--baseline", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--baseline', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -165,7 +157,7 @@ class TestMainExtended:
         data = json.loads(bf.read_text(encoding="utf-8"))
         assert "passed" in data
 
-    def test_compare_mode(self, monkeypatch, capsys, tmp_path):
+    def test_compare_mode(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--compare against baseline."""
         bf = tmp_path / ".validation-baseline.json"
         baseline = {
@@ -174,21 +166,17 @@ class TestMainExtended:
         }
         bf.write_text(json.dumps(baseline), encoding="utf-8")
         monkeypatch.setattr(va, "BASELINE_FILE", bf)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--compare", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--compare', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 0
 
-    def test_profile_mode(self, monkeypatch, capsys, tmp_path):
+    def test_profile_mode(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--profile appends timing to CSV."""
         csv_file = tmp_path / ".validation-profile.csv"
         monkeypatch.setattr(va, "PROFILE_CSV", csv_file)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--profile", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--profile', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -198,15 +186,13 @@ class TestMainExtended:
         assert "timestamp" in content
         assert "versions" in content
 
-    def test_profile_appends(self, monkeypatch, capsys, tmp_path):
+    def test_profile_appends(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--profile appends (not overwrites) on second run."""
         csv_file = tmp_path / ".validation-profile.csv"
         monkeypatch.setattr(va, "PROFILE_CSV", csv_file)
 
         for _ in range(2):
-            monkeypatch.setattr(sys, "argv", [
-                "validate_all", "--profile", "--only", "versions",
-            ])
+            cli_argv('validate_all', '--profile', '--only', 'versions')
             monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
             with pytest.raises(SystemExit):
                 va.main()
@@ -214,14 +200,12 @@ class TestMainExtended:
         lines = csv_file.read_text(encoding="utf-8").strip().split("\n")
         assert len(lines) == 3  # header + 2 data rows
 
-    def test_notify_pass(self, monkeypatch, capsys):
+    def test_notify_pass(self, monkeypatch, capsys, cli_argv):
         """--notify on successful run."""
         calls = []
         monkeypatch.setattr(va, "_send_notification",
                             lambda t, m: calls.append((t, m)))
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--notify", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--notify', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -229,14 +213,12 @@ class TestMainExtended:
         assert len(calls) == 1
         assert "Passed" in calls[0][0]
 
-    def test_notify_fail(self, monkeypatch, capsys):
+    def test_notify_fail(self, monkeypatch, capsys, cli_argv):
         """--notify on failed run."""
         calls = []
         monkeypatch.setattr(va, "_send_notification",
                             lambda t, m: calls.append((t, m)))
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--notify", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--notify', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -244,7 +226,7 @@ class TestMainExtended:
         assert len(calls) == 1
         assert "Failed" in calls[0][0]
 
-    def test_fix_mode(self, monkeypatch, capsys):
+    def test_fix_mode(self, monkeypatch, capsys, cli_argv):
         """--fix auto-fixes failed checks."""
         fix_calls = []
 
@@ -263,16 +245,14 @@ class TestMainExtended:
 
         # Find a tool that's in FIX_COMMANDS
         fix_name = next(iter(FIX_COMMANDS.keys()))
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--fix", "--only", fix_name,
-        ])
+        cli_argv("validate_all", "--fix", "--only", fix_name)
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "Auto-fixing" in out
 
-    def test_fix_no_auto_fix_available(self, monkeypatch, capsys):
+    def test_fix_no_auto_fix_available(self, monkeypatch, capsys, cli_argv):
         """--fix with a tool that has no auto-fix."""
         def mock_run_one(short_name, script_path, tool_args, project_root):
             return (short_name, "fail", 0.1, "error", "output")
@@ -282,44 +262,38 @@ class TestMainExtended:
         # Find a tool NOT in FIX_COMMANDS
         tool_names = {t[0] for t in TOOLS}
         no_fix = next(n for n in tool_names if n not in FIX_COMMANDS)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--fix", "--only", no_fix,
-        ])
+        cli_argv("validate_all", "--fix", "--only", no_fix)
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "no auto-fix" in out
 
-    def test_smart_mode(self, monkeypatch, capsys):
+    def test_smart_mode(self, monkeypatch, capsys, cli_argv):
         """--smart mode derives checks from git diff."""
         def mock_smart(project_root):
             return ["versions"]
         monkeypatch.setattr(va, "_smart_detect", mock_smart)
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--smart",
-        ])
+        cli_argv('validate_all', '--smart')
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "Smart mode" in out
 
-    def test_smart_mode_none(self, monkeypatch, capsys):
+    def test_smart_mode_none(self, monkeypatch, capsys, cli_argv):
         """--smart with None (git unavailable) runs all."""
         def mock_smart(project_root):
             return None
         monkeypatch.setattr(va, "_smart_detect", mock_smart)
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--smart", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--smart', '--only', 'versions')
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 0
 
-    def test_diff_report_mode(self, monkeypatch, capsys):
+    def test_diff_report_mode(self, monkeypatch, capsys, cli_argv):
         """--diff-report shows diff output."""
         def mock_run_one(short_name, script_path, tool_args, project_root):
             return (short_name, "fail", 0.1, "error", "output")
@@ -332,20 +306,16 @@ class TestMainExtended:
         monkeypatch.setattr(va, "_generate_diff_report", mock_gen_diff)
 
         fix_name = next(iter(FIX_COMMANDS.keys()))
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--diff-report", "--only", fix_name,
-        ])
+        cli_argv("validate_all", "--diff-report", "--only", fix_name)
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "DIFF REPORT" in out
 
-    def test_all_skipped_text_output(self, monkeypatch, capsys):
+    def test_all_skipped_text_output(self, monkeypatch, capsys, cli_argv):
         """All tools skipped shows appropriate message."""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--only", "nonexistent_check",
-        ])
+        cli_argv('validate_all', '--only', 'nonexistent_check')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
             va.main()
@@ -353,7 +323,7 @@ class TestMainExtended:
         out = capsys.readouterr().out
         assert "skipped" in out.lower() or "0" in out
 
-    def test_fix_error_handling(self, monkeypatch, capsys):
+    def test_fix_error_handling(self, monkeypatch, capsys, cli_argv):
         """--fix handles fix command errors."""
         def mock_run_one(short_name, script_path, tool_args, project_root):
             return (short_name, "fail", 0.1, "error", "output")
@@ -365,9 +335,7 @@ class TestMainExtended:
         monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
 
         fix_name = next(iter(FIX_COMMANDS.keys()))
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--fix", "--only", fix_name,
-        ])
+        cli_argv("validate_all", "--fix", "--only", fix_name)
         with pytest.raises(SystemExit) as exc:
             va.main()
         assert exc.value.code == 1

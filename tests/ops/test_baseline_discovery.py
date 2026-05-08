@@ -286,41 +286,34 @@ class TestQueryPrometheus:
 class TestMainCLI:
     """main() CLI 整合測試。"""
 
-    def test_dry_run(self, capsys, monkeypatch):
+    def test_dry_run(self, capsys, monkeypatch, cli_argv):
         """--dry-run 模式列出指標但不實際查詢。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a", "--dry-run"])
+        cli_argv('baseline_discovery', '--tenant', 'db-a', '--dry-run')
         baseline_discovery.main()
         out = capsys.readouterr().out
         assert "Dry Run" in out
         assert "db-a" in out
         assert "connections" in out
 
-    def test_dry_run_with_specific_metrics(self, capsys, monkeypatch):
+    def test_dry_run_with_specific_metrics(self, capsys, monkeypatch, cli_argv):
         """--dry-run + --metrics 只顯示指定指標。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--metrics", "cpu,memory", "--dry-run"])
+        cli_argv('baseline_discovery', '--tenant', 'db-a', '--metrics', 'cpu,memory', '--dry-run')
         baseline_discovery.main()
         out = capsys.readouterr().out
         assert "cpu" in out
         assert "memory" in out
 
-    def test_unknown_metric_warning(self, capsys, monkeypatch):
+    def test_unknown_metric_warning(self, capsys, monkeypatch, cli_argv):
         """未知指標顯示警告到 stderr。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--metrics", "cpu,nonexistent", "--dry-run"])
+        cli_argv('baseline_discovery', '--tenant', 'db-a', '--metrics', 'cpu,nonexistent', '--dry-run')
         baseline_discovery.main()
         err = capsys.readouterr().err
         assert "未知指標" in err
         assert "nonexistent" in err
 
-    def test_all_unknown_metrics_exits(self, capsys, monkeypatch):
+    def test_all_unknown_metrics_exits(self, capsys, monkeypatch, cli_argv):
         """全部指標未知時 exit(1)。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--metrics", "bogus1,bogus2", "--dry-run"])
+        cli_argv('baseline_discovery', '--tenant', 'db-a', '--metrics', 'bogus1,bogus2', '--dry-run')
         with pytest.raises(SystemExit) as exc_info:
             baseline_discovery.main()
         assert exc_info.value.code == 1
@@ -349,15 +342,9 @@ class TestMainObservationLoop:
             return [{"metric": {}, "value": [0, "50.0"]}], None
         return _query
 
-    def test_observation_basic(self, capsys, monkeypatch, tmp_path):
+    def test_observation_basic(self, capsys, monkeypatch, tmp_path, cli_argv):
         """基本觀測迴圈：3 個採樣、1 個指標、產出 CSV。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "6", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(tmp_path / "out"),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
                             self._mock_query(75.0))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
@@ -374,16 +361,10 @@ class TestMainObservationLoop:
         assert ts_csv.exists()
         assert summary_csv.exists()
 
-    def test_observation_creates_output_dir(self, monkeypatch, tmp_path):
+    def test_observation_creates_output_dir(self, monkeypatch, tmp_path, cli_argv):
         """觀測自動建立輸出目錄。"""
         out_dir = tmp_path / "new" / "nested" / "dir"
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "2", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(out_dir),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "2", "--interval", "2", "--metrics", "cpu", "-o", str(out_dir))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
                             self._mock_query(50.0))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
@@ -391,15 +372,9 @@ class TestMainObservationLoop:
         baseline_discovery.main()
         assert out_dir.exists()
 
-    def test_observation_with_query_errors(self, capsys, monkeypatch, tmp_path):
+    def test_observation_with_query_errors(self, capsys, monkeypatch, tmp_path, cli_argv):
         """查詢失敗時記錄 None，不中斷迴圈。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "6", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(tmp_path / "out"),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
                             self._mock_query_with_errors())
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
@@ -409,16 +384,10 @@ class TestMainObservationLoop:
         out = capsys.readouterr().out
         assert "觀測完成" in out
 
-    def test_observation_sleep_called(self, monkeypatch, tmp_path):
+    def test_observation_sleep_called(self, monkeypatch, tmp_path, cli_argv):
         """sleep 應被呼叫 (total_samples - 1) 次。"""
         sleep_calls = []
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "6", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(tmp_path / "out"),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
                             self._mock_query(50.0))
         monkeypatch.setattr(baseline_discovery.time, "sleep",
@@ -437,7 +406,13 @@ class TestCSVOutput:
     """CSV 檔案輸出測試。"""
 
     def _run_observation(self, monkeypatch, tmp_path, value=42.0, samples=4):
-        """共用的觀測執行 helper。"""
+        """共用的觀測執行 helper.
+
+        Uses raw `monkeypatch.setattr(sys, "argv", ...)` rather than the
+        `cli_argv` fixture: helper methods can't receive fixtures directly,
+        and threading `cli_argv` through every caller's signature is not
+        worth the indirection here.
+        """
         out_dir = tmp_path / "csv_out"
         interval = 2
         duration = samples * interval
@@ -445,8 +420,7 @@ class TestCSVOutput:
             "baseline_discovery", "--tenant", "test-t",
             "--prometheus", "http://mock:9090",
             "--duration", str(duration), "--interval", str(interval),
-            "--metrics", "cpu,memory",
-            "-o", str(out_dir),
+            "--metrics", "cpu,memory", "-o", str(out_dir),
         ])
 
         def mock_query(prometheus_url, expr):
@@ -515,15 +489,9 @@ class TestCSVOutput:
 class TestReportOutput:
     """觀測報告輸出測試。"""
 
-    def test_report_contains_stats(self, capsys, monkeypatch, tmp_path):
+    def test_report_contains_stats(self, capsys, monkeypatch, tmp_path, cli_argv):
         """觀測報告包含統計數據。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "24", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(tmp_path / "out"),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "24", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
 
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, "65.0"]}], None
@@ -540,15 +508,9 @@ class TestReportOutput:
         assert "Percentiles:" in out
         assert "建議" in out
 
-    def test_report_no_valid_data(self, capsys, monkeypatch, tmp_path):
+    def test_report_no_valid_data(self, capsys, monkeypatch, tmp_path, cli_argv):
         """所有查詢都返回 error 時的報告。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "4", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(tmp_path / "out"),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "4", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
 
         def mock_query(prometheus_url, expr):
             return None, "connection refused"
@@ -560,15 +522,9 @@ class TestReportOutput:
         out = capsys.readouterr().out
         assert "無有效資料" in out
 
-    def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path):
+    def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path, cli_argv):
         """報告包含 patch 建議指令。"""
-        monkeypatch.setattr(sys, "argv", [
-            "baseline_discovery", "--tenant", "db-a",
-            "--prometheus", "http://mock:9090",
-            "--duration", "24", "--interval", "2",
-            "--metrics", "cpu",
-            "-o", str(tmp_path / "out"),
-        ])
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "24", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
 
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, "70.0"]}], None
