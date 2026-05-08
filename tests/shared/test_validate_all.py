@@ -533,18 +533,18 @@ class TestRunOne:
 class TestMainCLI:
     """main() CLI 整合測試。"""
 
-    def test_list_mode(self, capsys, monkeypatch):
+    def test_list_mode(self, capsys, monkeypatch, cli_argv):
         """--list 模式列出所有檢查並正常結束。"""
-        monkeypatch.setattr(sys, "argv", ["validate_all", "--list"])
+        cli_argv('validate_all', '--list')
         va.main()
         out = capsys.readouterr().out
         # 應包含至少一個 TOOLS 名稱
         assert "links" in out
         assert "versions" in out
 
-    def test_list_mode_shows_all_tools(self, capsys, monkeypatch):
+    def test_list_mode_shows_all_tools(self, capsys, monkeypatch, cli_argv):
         """--list 模式列出全部 TOOLS。"""
-        monkeypatch.setattr(sys, "argv", ["validate_all", "--list"])
+        cli_argv('validate_all', '--list')
         va.main()
         out = capsys.readouterr().out
         for name, _, _, _ in TOOLS:
@@ -632,18 +632,16 @@ class TestMainCLI:
         """Mock _run_one that always fails."""
         return (short_name, "fail", 0.2, "error", "failure output")
 
-    def test_list_flag(self, monkeypatch, capsys):
+    def test_list_flag(self, monkeypatch, capsys, cli_argv):
         """--list 列出所有 checks。"""
-        monkeypatch.setattr(sys, "argv", ["validate_all", "--list"])
+        cli_argv('validate_all', '--list')
         va.main()
         out = capsys.readouterr().out
         assert "versions" in out or "links" in out
 
-    def test_sequential_json(self, monkeypatch, capsys):
+    def test_sequential_json(self, monkeypatch, capsys, cli_argv):
         """Sequential + --json 輸出。"""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--json", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--json', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
@@ -653,11 +651,9 @@ class TestMainCLI:
         assert data["passed"] >= 1
         assert data["mode"] == "sequential"
 
-    def test_sequential_text(self, monkeypatch, capsys):
+    def test_sequential_text(self, monkeypatch, capsys, cli_argv):
         """Sequential text 輸出。"""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
@@ -665,12 +661,9 @@ class TestMainCLI:
         out = capsys.readouterr().out
         assert "Validation Report" in out
 
-    def test_skip_flag(self, monkeypatch, capsys):
+    def test_skip_flag(self, monkeypatch, capsys, cli_argv):
         """--skip 跳過指定 check。"""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--skip", "versions,links",
-            "--only", "freshness",
-        ])
+        cli_argv('validate_all', '--skip', 'versions,links', '--only', 'freshness')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
@@ -678,21 +671,17 @@ class TestMainCLI:
         out = capsys.readouterr().out
         assert len(out) > 0
 
-    def test_ci_stops_on_failure(self, monkeypatch):
+    def test_ci_stops_on_failure(self, monkeypatch, cli_argv):
         """--ci 模式遇到失敗時 exit 1。"""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--ci", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--ci', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
         with pytest.raises(SystemExit) as exc_info:
             va.main()
         assert exc_info.value.code == 1
 
-    def test_verbose_flag(self, monkeypatch, capsys):
+    def test_verbose_flag(self, monkeypatch, capsys, cli_argv):
         """--verbose 顯示完整輸出。"""
-        monkeypatch.setattr(sys, "argv", [
-            "validate_all", "--verbose", "--only", "versions",
-        ])
+        cli_argv('validate_all', '--verbose', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
             va.main()

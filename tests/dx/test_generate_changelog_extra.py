@@ -241,79 +241,79 @@ class TestLintChangelog:
 # main — CLI orchestrator
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_lint_mode_clean_returns_zero(self, monkeypatch, tmp_path, capsys):
+    def test_lint_mode_clean_returns_zero(self, monkeypatch, tmp_path, capsys, cli_argv):
         cl = tmp_path / "CHANGELOG.md"
         cl.write_text(
             "## [v2.8.0] — T (2026-05-07)\n\n### X\n- a\n",
             encoding="utf-8",
         )
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py", "--lint"])
+        cli_argv('generate_changelog.py', '--lint')
         assert gc.main() == 0
         out = capsys.readouterr().out
         assert "clean" in out.lower()
 
-    def test_lint_mode_with_issues_returns_one(self, monkeypatch, tmp_path, capsys):
+    def test_lint_mode_with_issues_returns_one(self, monkeypatch, tmp_path, capsys, cli_argv):
         cl = tmp_path / "CHANGELOG.md"
         # No subsection → lint will flag.
         cl.write_text("## [v2.8.0] — T (2026-05-07)\n\nplain text\n",
                       encoding="utf-8")
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py", "--lint"])
+        cli_argv('generate_changelog.py', '--lint')
         assert gc.main() == 1
         out = capsys.readouterr().out
         assert "format issue" in out
 
-    def test_check_mode_all_conventional_returns_zero(self, monkeypatch, capsys):
+    def test_check_mode_all_conventional_returns_zero(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gc, "get_latest_tag", lambda: None)
         monkeypatch.setattr(gc, "get_commits_since", lambda since: [
             ("abc1", "feat: a"),
             ("abc2", "fix(ci): b"),
         ])
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py", "--check"])
+        cli_argv('generate_changelog.py', '--check')
         assert gc.main() == 0
         err = capsys.readouterr().err
         assert "follow conventional" in err
 
-    def test_check_mode_with_non_conventional_returns_one(self, monkeypatch, capsys):
+    def test_check_mode_with_non_conventional_returns_one(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gc, "get_latest_tag", lambda: "v2.7.0")
         monkeypatch.setattr(gc, "get_commits_since", lambda since: [
             ("abc1", "feat: ok"),
             ("ffff", "broken commit subject"),
         ])
         monkeypatch.setattr(gc, "load_ignored_commits", lambda: [])
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py", "--check"])
+        cli_argv('generate_changelog.py', '--check')
         assert gc.main() == 1
         err = capsys.readouterr().err
         assert "non-conventional" in err
         assert "broken commit subject" in err
 
-    def test_check_mode_ignored_commit_skipped(self, monkeypatch, capsys):
+    def test_check_mode_ignored_commit_skipped(self, monkeypatch, capsys, cli_argv):
         # Non-conventional commit but its SHA prefix is in ignore list.
         monkeypatch.setattr(gc, "get_latest_tag", lambda: None)
         monkeypatch.setattr(gc, "get_commits_since", lambda since: [
             ("abc123def456", "broken legacy subject"),
         ])
         monkeypatch.setattr(gc, "load_ignored_commits", lambda: ["abc123def456"])
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py", "--check"])
+        cli_argv('generate_changelog.py', '--check')
         assert gc.main() == 0
         err = capsys.readouterr().err
         assert "skipped via .changelog-lint-ignore" in err
 
-    def test_no_commits_returns_zero(self, monkeypatch, capsys):
+    def test_no_commits_returns_zero(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gc, "get_latest_tag", lambda: "v2.7.0")
         monkeypatch.setattr(gc, "get_commits_since", lambda since: [])
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py"])
+        cli_argv('generate_changelog.py')
         assert gc.main() == 0
         err = capsys.readouterr().err
         assert "No commits" in err
 
-    def test_default_run_prints_to_stdout(self, monkeypatch, capsys):
+    def test_default_run_prints_to_stdout(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gc, "get_latest_tag", lambda: "v2.7.0")
         monkeypatch.setattr(gc, "get_commits_since", lambda since: [
             ("abc1", "feat(api): add endpoint"),
         ])
-        monkeypatch.setattr(sys, "argv", ["generate_changelog.py"])
+        cli_argv('generate_changelog.py')
         assert gc.main() == 0
         out = capsys.readouterr().out
         assert "## [UNRELEASED]" in out
@@ -321,21 +321,19 @@ class TestMain:
         # Stats footer present.
         assert "<!-- Stats:" in out
 
-    def test_output_flag_writes_file(self, monkeypatch, tmp_path):
+    def test_output_flag_writes_file(self, monkeypatch, tmp_path, cli_argv):
         out_path = tmp_path / "draft.md"
         monkeypatch.setattr(gc, "get_latest_tag", lambda: None)
         monkeypatch.setattr(gc, "get_commits_since", lambda since: [
             ("abc1", "feat: x"),
         ])
-        monkeypatch.setattr(sys, "argv", [
-            "generate_changelog.py", "-o", str(out_path),
-        ])
+        cli_argv("generate_changelog.py", "-o", str(out_path))
         assert gc.main() == 0
         assert out_path.exists()
         content = out_path.read_text(encoding="utf-8")
         assert "## [UNRELEASED]" in content
 
-    def test_since_flag_overrides_latest_tag(self, monkeypatch, capsys):
+    def test_since_flag_overrides_latest_tag(self, monkeypatch, capsys, cli_argv):
         captured = {}
 
         def fake_get_commits(since_ref):
@@ -346,8 +344,6 @@ class TestMain:
         # get_latest_tag should NOT be called when --since is provided.
         monkeypatch.setattr(gc, "get_latest_tag",
                             lambda: pytest.fail("get_latest_tag should be skipped"))
-        monkeypatch.setattr(sys, "argv", [
-            "generate_changelog.py", "--since", "v2.5.0",
-        ])
+        cli_argv('generate_changelog.py', '--since', 'v2.5.0')
         assert gc.main() == 0
         assert captured["since"] == "v2.5.0"

@@ -32,56 +32,56 @@ class TestMainCLI:
 
         return includes
 
-    def test_all_in_sync(self, tmp_path, monkeypatch, capsys):
+    def test_all_in_sync(self, tmp_path, monkeypatch, capsys, cli_argv):
         """All pairs in sync should return 0."""
         includes = self._setup_includes(tmp_path,
                                         "# Title\n\n- item 1\n",
                                         "# Title\n\n- item 1\n")
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync"])
+        cli_argv('check_includes_sync')
         result = cis.main()
         assert result == 0
         out = capsys.readouterr().out
         assert "in sync" in out
 
-    def test_missing_english_check_mode(self, tmp_path, monkeypatch, capsys):
+    def test_missing_english_check_mode(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Missing English file in --check mode should return 1."""
         includes = self._setup_includes(tmp_path, create_en=False)
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync", "--check"])
+        cli_argv('check_includes_sync', '--check')
         result = cis.main()
         assert result == 1
 
-    def test_missing_english_no_check(self, tmp_path, monkeypatch, capsys):
+    def test_missing_english_no_check(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Missing English file without --check returns 0."""
         includes = self._setup_includes(tmp_path, create_en=False)
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync"])
+        cli_argv('check_includes_sync')
         result = cis.main()
         # Without --check, returns 0 even with issues
         # Actually, the code returns 1 if total_issues > 0 or missing_en > 0
         # when --check is set, and 0 otherwise
         assert result == 0
 
-    def test_verbose_in_sync(self, tmp_path, monkeypatch, capsys):
+    def test_verbose_in_sync(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--verbose shows OK for in-sync pairs."""
         includes = self._setup_includes(tmp_path,
                                         "# Title\n\n- item 1\n",
                                         "# Title\n\n- item 1\n")
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync", "--verbose"])
+        cli_argv('check_includes_sync', '--verbose')
         result = cis.main()
         assert result == 0
         out = capsys.readouterr().out
         assert "in sync" in out.lower()
 
-    def test_fix_creates_stubs(self, tmp_path, monkeypatch, capsys):
+    def test_fix_creates_stubs(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--fix creates missing English stubs."""
         includes = self._setup_includes(tmp_path,
                                         "# 規則包\n",
                                         create_en=False)
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync", "--fix"])
+        cli_argv('check_includes_sync', '--fix')
         result = cis.main()
         assert result == 0
         en_file = includes / "snippet.en.md"
@@ -89,28 +89,28 @@ class TestMainCLI:
         content = en_file.read_text(encoding="utf-8")
         assert "Rule Pack" in content
 
-    def test_structural_mismatch(self, tmp_path, monkeypatch, capsys):
+    def test_structural_mismatch(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Structural mismatch between zh and en."""
         includes = self._setup_includes(
             tmp_path,
             "```yaml\nkey: val\n```\n",
             "no code blocks\n")
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync", "--check"])
+        cli_argv('check_includes_sync', '--check')
         result = cis.main()
         assert result == 1
         out = capsys.readouterr().out
         assert "code blocks" in out
 
-    def test_no_includes_dir(self, tmp_path, monkeypatch, capsys):
+    def test_no_includes_dir(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Nonexistent includes dir returns 1."""
         monkeypatch.setattr(cis, "INCLUDES_DIR",
                             tmp_path / "nonexistent")
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync"])
+        cli_argv('check_includes_sync')
         result = cis.main()
         assert result == 1
 
-    def test_no_zh_files(self, tmp_path, monkeypatch, capsys):
+    def test_no_zh_files(self, tmp_path, monkeypatch, capsys, cli_argv):
         """No Chinese files returns 0."""
         includes = tmp_path / "docs" / "includes"
         includes.mkdir(parents=True)
@@ -118,17 +118,17 @@ class TestMainCLI:
         (includes / "snippet.en.md").write_text("English only",
                                                  encoding="utf-8")
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync"])
+        cli_argv('check_includes_sync')
         result = cis.main()
         assert result == 0
 
-    def test_abbreviations_md_ignored(self, tmp_path, monkeypatch, capsys):
+    def test_abbreviations_md_ignored(self, tmp_path, monkeypatch, capsys, cli_argv):
         """abbreviations.md should be ignored."""
         includes = tmp_path / "docs" / "includes"
         includes.mkdir(parents=True)
         (includes / "abbreviations.md").write_text("content",
                                                     encoding="utf-8")
         monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        monkeypatch.setattr(sys, "argv", ["check_includes_sync"])
+        cli_argv('check_includes_sync')
         result = cis.main()
         assert result == 0
