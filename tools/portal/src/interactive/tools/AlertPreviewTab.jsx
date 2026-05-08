@@ -123,6 +123,7 @@ function AlertPreviewTab() {
             value={yaml}
             onChange={(e) => setYaml(e.target.value)}
             className="w-full h-48 font-mono text-xs p-2 border rounded-lg bg-gray-50"
+            aria-label={t('Tenant 配置 YAML', 'Tenant Config YAML')}
           />
         </div>
 
@@ -156,6 +157,7 @@ function AlertPreviewTab() {
                           value={val.current}
                           onChange={(e) => updateMetric(key, e.target.value)}
                           className="flex-1"
+                          aria-label={key}
                         />
                         <span className="text-xs font-mono w-20 text-right">
                           {val.current}{val.unit === '%' ? '%' : ` ${val.unit}`}

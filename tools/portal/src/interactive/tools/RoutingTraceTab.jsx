@@ -126,6 +126,7 @@ function RoutingTraceTab() {
         value={yaml}
         onChange={(e) => setYaml(e.target.value)}
         className="w-full h-40 font-mono text-xs p-2 border rounded-lg bg-gray-50"
+        aria-label={t('Routing Profile YAML', 'Routing Profile YAML')}
       />
 
       <button

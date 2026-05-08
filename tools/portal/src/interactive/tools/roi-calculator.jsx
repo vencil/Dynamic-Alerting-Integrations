@@ -372,6 +372,7 @@ function Slider({ label, value, onChange, min, max, step = 1, unit = '' }) {
         type="range" min={min} max={max} step={step} value={value}
         onChange={e => onChange(Number(e.target.value))}
         style={{...styles.sliderInput}}
+        aria-label={label}
       />
       <div style={styles.sliderRange}>
         <span>{min}{unit}</span><span>{max}{unit}</span>

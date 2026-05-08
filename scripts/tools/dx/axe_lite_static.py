@@ -249,6 +249,25 @@ def scan_unlabeled_inputs(src: str) -> list[tuple[int, str]]:
                     src,
                 ):
                     continue
+            # Implicit label wrap: <label>…<input/textarea>…</label> creates a
+            # valid label-control association in HTML, no htmlFor needed. Detect
+            # the pattern by scanning for the nearest preceding `<label` open
+            # whose matching `</label>` close comes AFTER the input. This is a
+            # coarse check that ignores intermediate <label> closes; sufficient
+            # for typical JSX structures where labels wrap a single control.
+            prev_label_open = src.rfind("<label", 0, m.start())
+            if prev_label_open >= 0:
+                # If there's an intervening </label> between the open and the
+                # input, the input isn't actually inside that label scope.
+                intervening_close = src.find(
+                    "</label>", prev_label_open, m.start()
+                )
+                if intervening_close == -1:
+                    # And there must be a </label> after the input for it to
+                    # actually close the wrapping label.
+                    next_label_close = src.find("</label>", m.start())
+                    if next_label_close >= 0:
+                        continue
             line = src.count("\n", 0, m.start()) + 1
             out.append((line, f"<{tag}> has no accessible label"))
     return out
