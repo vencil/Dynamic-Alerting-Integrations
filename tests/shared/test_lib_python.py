@@ -617,6 +617,7 @@ class TestOnboardHintsRoundTrip:
         assert os.path.isfile(path)
         assert path.endswith("onboard-hints.json")
 
+    @_skipif_unix_modes
     def test_write_file_permissions(self, config_dir):
         """寫入檔案權限為 0o600（SAST 規範）。"""
         path = lib.write_onboard_hints(str(config_dir), {"x": 1})

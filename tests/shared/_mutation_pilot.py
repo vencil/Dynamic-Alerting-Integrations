@@ -174,6 +174,74 @@ MUTATIONS: list[Mutation] = [
         old="        if m not in builtin_funcs and not m[0].isupper():",
         new="        if m not in builtin_funcs:",
     ),
+    # ── parse_duration_seconds (_lib_validation) ──────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="duration: drop float from numeric pass-through (only int)",
+        fn_name="parse_duration_seconds",
+        old="    if isinstance(value, (int, float)):\n        return int(value)",
+        new="    if isinstance(value, int):\n        return int(value)",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="duration: drop type-check (let m.match raise on non-string)",
+        fn_name="parse_duration_seconds",
+        old="    if not value or not isinstance(value, str):\n        return None",
+        new="    if not value:\n        return None",
+    ),
+    # ── format_duration (_lib_validation) ─────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="format: drop modulo check (3600s+1 wrongly emits 'h' rounded)",
+        fn_name="format_duration",
+        old="    if seconds >= 3600 and seconds % 3600 == 0:",
+        new="    if seconds >= 3600:",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="format: drop minute-modulo check (61s wrongly emits 'm')",
+        fn_name="format_duration",
+        old="    if seconds >= 60 and seconds % 60 == 0:",
+        new="    if seconds >= 60:",
+    ),
+    # ── is_disabled (_lib_validation) ─────────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="is_disabled: drop case-folding (.lower() removed)",
+        fn_name="is_disabled",
+        old="    return value.strip().lower() in _DISABLED_VALUES",
+        new="    return value.strip() in _DISABLED_VALUES",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="is_disabled: drop whitespace strip",
+        fn_name="is_disabled",
+        old="    return value.strip().lower() in _DISABLED_VALUES",
+        new="    return value.lower() in _DISABLED_VALUES",
+    ),
+    # ── validate_and_clamp (_lib_validation) ──────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="clamp: invert lower-bound check (< → <=)",
+        fn_name="validate_and_clamp",
+        old="    if seconds < min_sec:",
+        new="    if seconds <= min_sec:",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_validation.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="clamp: invert upper-bound check (> → >=)",
+        fn_name="validate_and_clamp",
+        old="    if seconds > max_sec:",
+        new="    if seconds >= max_sec:",
+    ),
 ]
 
 
