@@ -131,10 +131,12 @@ lang: en
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
+| `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TD-039). |
 | `check_doc_freshness.py` | 文件新鮮度檢查工具。 |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
+| `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
@@ -152,16 +154,19 @@ lang: en
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
+| `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
+| `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_techdebt_drift.py` | TECH-DEBT / REG registry drift checker. |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
+| `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_doc_links.py` | Auto-fix broken MkDocs cross-reference links. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |

@@ -161,6 +161,19 @@ repos:
         # pass_filenames: true (default) — only re-scans the JSX files
         # touched by the commit, keeping the hook fast (<100ms typical).
 
+      # HA-10 observability layer (PR #325/#326 follow-up): validates
+      # flaky-tests.yaml schema + expire_at lifecycle. Fires when either
+      # the registry or CHANGELOG.md changes (CHANGELOG bumps shift the
+      # current-shipped version, which can flip an entry from valid to
+      # EXPIRED — catching that at commit time avoids a CI surprise).
+      - id: flaky-registry-check
+        name: Flaky-test registry schema + expire_at lifecycle (HA-10)
+        entry: python3 -X utf8 scripts/tools/lint/check_flaky_registry.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(flaky-tests\.yaml|CHANGELOG\.md)$
+        additional_dependencies: ['pyyaml']
+
       - id: includes-sync
         name: Include snippet zh/en sync
         entry: python3 -X utf8 scripts/tools/lint/check_includes_sync.py --check
