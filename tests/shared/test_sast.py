@@ -248,10 +248,19 @@ class TestFileWritePermissions:
                         if mode_val and "w" in str(mode_val):
                             write_opens.append(child.lineno)
 
-                    # 偵測 os.chmod(...)
+                    # 偵測 os.chmod(...) 或 pathlib 等價形式 Path(p).chmod(...)
+                    # 兩者語意完全等價（都呼叫 os.chmod 底層），SAST 只在意
+                    # 「write open 後有對檔案套權限」的 intent，不限定 spelling。
                     if isinstance(func, ast.Attribute) and func.attr == "chmod":
-                        if isinstance(func.value, ast.Name) and func.value.id == "os":
+                        receiver = func.value
+                        # os.chmod(p, mode)
+                        if isinstance(receiver, ast.Name) and receiver.id == "os":
                             has_chmod = True
+                        # Path(p).chmod(mode) — pathlib idiom
+                        elif isinstance(receiver, ast.Call):
+                            inner = receiver.func
+                            if isinstance(inner, ast.Name) and inner.id == "Path":
+                                has_chmod = True
 
             if write_opens and not has_chmod:
                 for lineno in write_opens:
