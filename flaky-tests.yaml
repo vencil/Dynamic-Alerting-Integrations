@@ -34,15 +34,21 @@
 # Adding a new entry: every entry MUST have tracked_by + expire_at; the
 # expire_at gate is what prevents this list from growing unbounded.
 
-known_flakes:
-  - test: "TestWatchLoop_DebouncedReload_DetectsFileChange"
-    pattern: "^TestWatchLoop_DebouncedReload_DetectsFileChange$"
-    max_retries: 2
-    owner: "@exporter-team"
-    tracked_by: "HA-11 (fake-clock injection) in docs/internal/dx-tooling-backlog.md"
-    expire_at: "v2.9.0"
-    # Source: v2.7.0 PR #26 — first attempt fail, first rerun fail, 33s
-    # delay before second rerun passed. Real cause is real time.Sleep()
-    # waiting for 300ms debounce to fire under CI runner load. HA-11 is
-    # the root-cause fix (clockwork/clock interface injection); this entry
-    # buys time until that lands.
+known_flakes: []
+# Empty registry. The TestWatchLoop_DebouncedReload_DetectsFileChange
+# entry was removed when HA-11 landed (root-cause fix): the test no
+# longer uses real ticker / time.Sleep / poll-with-deadline. It now
+# drives the detect→reload pipeline synchronously via a tickOnce()
+# helper extracted from WatchLoop's body, with debounce=0 forcing the
+# inline-reload path. There is no real-time dependence left, so any
+# failure of that test is now a real regression — not a flake to retry.
+#
+# This is the "registry shrinks as root causes get fixed" path the
+# HA-10 design (PR #325) baked in via expire_at: an entry buys time
+# until the root-cause fix lands; once it lands, the entry leaves.
+# The wrapper still works; it just has no entries to act on, which is
+# the intended end-state.
+#
+# To add new flake entries, follow the schema documented in PR #325 /
+# scripts/ops/ci_flake_retry.py: each entry MUST have tracked_by +
+# expire_at so the list can never grow unbounded.
