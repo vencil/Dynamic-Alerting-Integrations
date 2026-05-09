@@ -23,33 +23,35 @@ Pre-check 項目:
 import sys
 import os
 import re
-import glob
 import argparse
+from pathlib import Path
 import yaml
 
 
 def find_config_file(tenant, config_dir):
     """尋找 tenant 的設定檔案。"""
     # 嘗試 <tenant>.yaml 和 <tenant>.yml
+    base = Path(config_dir)
     for ext in ('.yaml', '.yml'):
-        path = os.path.join(config_dir, f"{tenant}{ext}")
-        if os.path.exists(path):
-            return path
+        candidate = base / f"{tenant}{ext}"
+        if candidate.exists():
+            return str(candidate)
     return None
 
 
 def load_all_configs(config_dir):
     """載入 conf.d 下所有設定檔案。"""
     configs = {}
-    for path in glob.glob(os.path.join(config_dir, "*.yaml")) + \
-                glob.glob(os.path.join(config_dir, "*.yml")):
-        filename = os.path.basename(path)
+    base = Path(config_dir)
+    yaml_paths = sorted(base.glob("*.yaml")) + sorted(base.glob("*.yml"))
+    for entry in yaml_paths:
+        filename = entry.name
         if filename.startswith('.'):
             continue
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(entry, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
-            configs[filename] = {"path": path, "data": data}
+            configs[filename] = {"path": str(entry), "data": data}
         except (OSError, yaml.YAMLError) as e:
             print(f"  ⚠️  無法讀取 {filename}: {e}")
     return configs

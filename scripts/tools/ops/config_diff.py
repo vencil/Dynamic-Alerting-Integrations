@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import textwrap
+from pathlib import Path
 
 import yaml
 
@@ -44,7 +45,7 @@ def load_configs_from_dir(dir_path):
       - Wrapped: {tenants: {name: {metric: value}}}  (actual conf.d/ format)
       - Flat: {metric: value}  (simplified / legacy)
     """
-    if not os.path.isdir(dir_path):
+    if not Path(dir_path).is_dir():
         print(f"WARN: directory not found: {dir_path}", file=sys.stderr)
         return {}
 
@@ -57,9 +58,10 @@ def load_profiles_from_dir(dir_path):
 
     Returns {profile_name: {key: value, ...}} or empty dict.
     """
-    if not os.path.isdir(dir_path):
+    base = Path(dir_path)
+    if not base.is_dir():
         return {}
-    profiles_path = os.path.join(dir_path, "_profiles.yaml")
+    profiles_path = str(base / "_profiles.yaml")
     raw = load_yaml_file(profiles_path, default={})
     return raw.get("profiles", {}) if isinstance(raw, dict) else {}
 
@@ -371,10 +373,10 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    if not os.path.isdir(args.old_dir):
+    if not Path(args.old_dir).is_dir():
         print(f"ERROR: old-dir not found: {args.old_dir}", file=sys.stderr)
         sys.exit(1)
-    if not os.path.isdir(args.new_dir):
+    if not Path(args.new_dir).is_dir():
         print(f"ERROR: new-dir not found: {args.new_dir}", file=sys.stderr)
         sys.exit(1)
 

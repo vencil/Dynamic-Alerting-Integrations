@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 import yaml
@@ -26,7 +27,7 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     Returns:
         Parsed YAML data, or *default*.
     """
-    if not path or not os.path.isfile(path):
+    if not path or not Path(path).is_file():
         return default
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -48,17 +49,20 @@ def iter_yaml_files(
     Returns:
         List of ``(filename, full_path)`` tuples, sorted by filename.
     """
-    if not config_dir or not os.path.isdir(config_dir):
+    if not config_dir:
+        return []
+    base = Path(config_dir)
+    if not base.is_dir():
         return []
     result: list[tuple[str, str]] = []
-    for fname in sorted(os.listdir(config_dir)):
+    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+        fname = entry.name
         if not (fname.endswith(".yaml") or fname.endswith(".yml")):
             continue
         if skip_reserved and (fname.startswith("_") or fname.startswith(".")):
             continue
-        fpath = os.path.join(config_dir, fname)
-        if os.path.isfile(fpath):
-            result.append((fname, fpath))
+        if entry.is_file():
+            result.append((fname, str(entry)))
     return result
 
 
@@ -98,15 +102,15 @@ def write_text_secure(path: str, content: str) -> None:
 
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        os.chmod(path, 0o600)
+        Path(path).chmod(0o600)
 
     Args:
         path: Filesystem path to write.
         content: Text content.
     """
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    os.chmod(path, 0o600)
+    target = Path(path)
+    target.write_text(content, encoding="utf-8")
+    target.chmod(0o600)
 
 
 def write_json_secure(
@@ -126,7 +130,7 @@ def write_json_secure(
     """
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
-    os.chmod(path, 0o600)
+    Path(path).chmod(0o600)
 
 
 def write_onboard_hints(output_dir: str, hints: dict[str, Any]) -> str:
@@ -139,7 +143,7 @@ def write_onboard_hints(output_dir: str, hints: dict[str, Any]) -> str:
     Returns:
         Absolute path to the written file.
     """
-    path = os.path.join(output_dir, ONBOARD_HINTS_FILENAME)
+    path = str(Path(output_dir) / ONBOARD_HINTS_FILENAME)
     write_json_secure(path, hints)
     return path
 
@@ -150,7 +154,7 @@ def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
     Returns:
         Parsed dict, or ``None`` if file is missing / unreadable.
     """
-    if not path or not os.path.isfile(path):
+    if not path or not Path(path).is_file():
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)

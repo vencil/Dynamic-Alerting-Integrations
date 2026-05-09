@@ -39,6 +39,7 @@ import json
 import time
 import math
 import argparse
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -291,7 +292,7 @@ def main():
         os.chmod(path, 0o600)
 
     # 原始時間序列
-    ts_path = os.path.join(args.output_dir, f"baseline-{args.tenant}-timeseries.csv")
+    ts_path = str(Path(args.output_dir) / f"baseline-{args.tenant}-timeseries.csv")
     buf = io.StringIO()
     writer = csv.writer(buf)
     header = ["timestamp"] + list(metrics.keys())
@@ -302,7 +303,7 @@ def main():
     _write_csv_secure(ts_path, "\ufeff" + buf.getvalue())
 
     # 統計摘要 + 建議
-    summary_path = os.path.join(args.output_dir, f"baseline-{args.tenant}-summary.csv")
+    summary_path = str(Path(args.output_dir) / f"baseline-{args.tenant}-summary.csv")
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([

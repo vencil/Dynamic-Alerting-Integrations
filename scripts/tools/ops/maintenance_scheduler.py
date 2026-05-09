@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -44,7 +45,7 @@ def load_recurring_schedules(config_dir):
 
     Returns {tenant: [{"cron": ..., "duration": ..., "reason": ...}]}.
     """
-    if not os.path.isdir(config_dir):
+    if not Path(config_dir).is_dir():
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         return {}
 
@@ -414,7 +415,7 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    if not os.path.isdir(args.config_dir):
+    if not Path(args.config_dir).is_dir():
         print(f"ERROR: config directory not found: {args.config_dir}", file=sys.stderr)
         sys.exit(1)
 
