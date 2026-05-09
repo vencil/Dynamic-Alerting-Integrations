@@ -31,9 +31,21 @@ Targets
   - deepMerge         — ADR-018 inheritance, _metadata skip, nil-delete (3 muts)
   - extractDefaultsBlock — pulls `defaults:` sub-tree, falls back to root (1 mut)
 
-Total: 15 mutations across 5 functions. Existing Go tests
-(`parse_test.go`, `hierarchy_test.go`, `config_dimensional_test.go`,
-golden-parity tests) are the kill targets.
+Total: 14 mutations across 5 functions. Existing Go tests in the
+parent `package main` (e.g., config_hierarchy_test.go,
+config_dimensional_test.go, golden-parity tests) are the kill
+targets — the lowercase functions in `pkg/config` are exercised
+indirectly via the lowercase wrappers in
+`app/config_inheritance.go`. That's why the runner uses
+`go test ./...` from `app/` instead of `./pkg/config/...`: the
+in-package tests for `pkg/config` only cover scope-resolution +
+benchmarks, not the parse/merge primitives.
+
+Latest run (Dev Container, on PR #348): 12/14 caught (~86%). The
+2 survivors are real test gaps — the existing Go suite doesn't
+cover (a) negative hour values in HH:MM (`"-5:00"`) and
+(b) HH:MM with leading whitespace (`" 12:30"`). Filed as
+follow-on for a future Go test addition.
 
 Usage
 -----
@@ -98,7 +110,7 @@ MUTATIONS: list[Mutation] = [
     # ── parseHHMM (parse.go) ─────────────────────────────────────────
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parseHHMM: drop hour upper bound (h>23 accepted)",
         fn_name="parseHHMM",
         old="if err != nil || h < 0 || h > 23 {",
@@ -106,7 +118,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parseHHMM: drop minute upper bound (m>59 accepted)",
         fn_name="parseHHMM",
         old="if err != nil || m < 0 || m > 59 {",
@@ -114,7 +126,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parseHHMM: drop hour lower bound (h<0 accepted, e.g. -5)",
         fn_name="parseHHMM",
         old="if err != nil || h < 0 || h > 23 {",
@@ -122,7 +134,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parseHHMM: drop format split check (single-token input passes)",
         fn_name="parseHHMM",
         old='if len(parts) != 2 {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
@@ -130,7 +142,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parseHHMM: drop TrimSpace (leading whitespace breaks parse)",
         fn_name="parseHHMM",
         old="s = strings.TrimSpace(s)\n\tparts := strings.SplitN(s, \":\", 2)",
@@ -139,7 +151,7 @@ MUTATIONS: list[Mutation] = [
     # ── matchTimeWindow (parse.go) ───────────────────────────────────
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="matchTimeWindow: invert same-day end-bound (< → <=)",
         fn_name="matchTimeWindow",
         old="return nowMinutes >= startMinutes && nowMinutes < endMinutes",
@@ -147,7 +159,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="matchTimeWindow: invert cross-midnight branch (or → and)",
         fn_name="matchTimeWindow",
         old="return nowMinutes >= startMinutes || nowMinutes < endMinutes",
@@ -155,7 +167,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="matchTimeWindow: swap branch condition (always cross-midnight)",
         fn_name="matchTimeWindow",
         old="if startMinutes <= endMinutes {",
@@ -164,7 +176,7 @@ MUTATIONS: list[Mutation] = [
     # ── parsePromDuration (parse.go) ─────────────────────────────────
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parsePromDuration: 'd' unit returns hours instead of days",
         fn_name="parsePromDuration",
         old="return time.Duration(num * 24 * float64(time.Hour)), nil",
@@ -172,7 +184,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/parse.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="parsePromDuration: drop length check (1-char input crashes)",
         fn_name="parsePromDuration",
         old="if len(s) < 2 {\n\t\treturn 0, fmt.Errorf(\"duration too short: %q\", s)\n\t}",
@@ -181,7 +193,7 @@ MUTATIONS: list[Mutation] = [
     # ── deepMerge (hierarchy.go) ─────────────────────────────────────
     Mutation(
         target_file="pkg/config/hierarchy.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="deepMerge: drop _metadata skip (override _metadata leaks into base)",
         fn_name="deepMerge",
         old='if k == "_metadata" {\n\t\t\tcontinue\n\t\t}',
@@ -189,7 +201,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/hierarchy.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="deepMerge: drop nil-delete (override:nil overwrites with nil instead of deleting)",
         fn_name="deepMerge",
         old="if v == nil {\n\t\t\tdelete(result, k)\n\t\t\tcontinue\n\t\t}",
@@ -197,16 +209,24 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="pkg/config/hierarchy.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="deepMerge: skip recursive merge for nested maps (override replaces wholesale)",
         fn_name="deepMerge",
-        old="if overrideMap, ok := v.(map[string]any); ok {\n\t\t\tif baseMap, ok2 := result[k].(map[string]any); ok2 {\n\t\t\t\tresult[k] = deepMerge(baseMap, overrideMap)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t}",
-        new="if false {\n\t\t\tif baseMap, ok2 := result[k].(map[string]any); ok2 {\n\t\t\t\tresult[k] = deepMerge(baseMap, overrideMap)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t}",
+        # Drop the entire `if overrideMap, ok := ...` scope. Code falls
+        # through to the existing `result[k] = deepCopyValue(v)` line,
+        # which is the "always overwrite" semantic — same Go syntax,
+        # different runtime behavior. (The previous version of this
+        # mutation just stubbed the outer if to `if false`, leaving an
+        # unused `overrideMap` reference inside that triggered a Go
+        # compile error — that's a "caught for the wrong reason" false
+        # positive.)
+        old="if overrideMap, ok := v.(map[string]any); ok {\n\t\t\tif baseMap, ok2 := result[k].(map[string]any); ok2 {\n\t\t\t\tresult[k] = deepMerge(baseMap, overrideMap)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t}\n\t\tresult[k] = deepCopyValue(v)",
+        new="result[k] = deepCopyValue(v)",
     ),
     # ── extractDefaultsBlock (hierarchy.go) ──────────────────────────
     Mutation(
         target_file="pkg/config/hierarchy.go",
-        test_target="./pkg/config/...",
+        test_target="./...",
         label="extractDefaults: return nil instead of root fallback (no `defaults:` key → nil)",
         fn_name="extractDefaultsBlock",
         old='if inner, ok := m["defaults"].(map[string]any); ok {\n\t\treturn inner\n\t}\n\treturn m',
@@ -230,10 +250,13 @@ def _go_executable() -> str:
 def run_tests(test_target: str) -> tuple[int, str]:
     """Run `go test` against the package; return (returncode, output_tail)."""
     go = _go_executable()
-    cmd = [go, "test", test_target, "-count=1", "-timeout", "60s"]
+    # `./...` from app/ runs the full Go test suite (parent `package
+    # main` + nested pkg/config). The integration tests use fsnotify
+    # debounce loops so allow several minutes per mutation.
+    cmd = [go, "test", test_target, "-count=1", "-timeout", "180s"]
     proc = subprocess.run(
         cmd, capture_output=True, text=True, cwd=str(GO_APP_DIR),
-        timeout=180, encoding="utf-8", errors="replace",
+        timeout=360, encoding="utf-8", errors="replace",
     )
     tail_lines = (proc.stdout + proc.stderr).splitlines()[-3:]
     return proc.returncode, " | ".join(tail_lines)
