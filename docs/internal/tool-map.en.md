@@ -158,6 +158,7 @@ lang: en
 | `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
+| `check_property_coverage.py` | Property-pilot coverage drift detector. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |

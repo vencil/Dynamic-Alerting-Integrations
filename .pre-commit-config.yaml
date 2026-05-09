@@ -174,6 +174,20 @@ repos:
         files: ^(flaky-tests\.yaml|CHANGELOG\.md)$
         additional_dependencies: ['pyyaml']
 
+      # Property-pilot coverage drift: every top-level function in the
+      # in-scope modules must be triaged (covered with a property test
+      # OR excluded with a reason). Catches the "I added a new pure
+      # helper but forgot to property-test it" failure mode at commit
+      # time. Fires when any in-scope source, the manifest, or the
+      # property test file changes.
+      - id: property-coverage-check
+        name: Property-pilot coverage drift detector (Gap 2)
+        entry: python3 -X utf8 scripts/tools/lint/check_property_coverage.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(tests/shared/property-coverage\.yaml|tests/shared/test_property_tools\.py|scripts/tools/(_lib_.*\.py|dx/(generate_doc_map|generate_changelog|axe_lite_static)\.py|ops/(generate_rule_pack_split|_grar_merge|_grar_validate)\.py|lint/(_lint_helpers|check_flaky_registry)\.py))$
+        additional_dependencies: ['pyyaml']
+
       - id: includes-sync
         name: Include snippet zh/en sync
         entry: python3 -X utf8 scripts/tools/lint/check_includes_sync.py --check

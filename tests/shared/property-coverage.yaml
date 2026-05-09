@@ -1,0 +1,190 @@
+# property-coverage.yaml — Property + mutation pilot coverage manifest.
+#
+# Per-module declaration of which top-level functions ARE in the
+# property-pilot (`tests/shared/test_property_tools.py` +
+# `tests/shared/_mutation_pilot.py`). The companion lint
+# `scripts/tools/lint/check_property_coverage.py` enforces:
+#
+#   1. Every function listed under `covered:` must have at least one
+#      `test_*` reference in test_property_tools.py.
+#   2. Every function in the source file that's NOT in `covered:` must
+#      be in `excluded:` with a reason (so additions force triage).
+#   3. Listed-but-missing-from-source functions error (manifest stale).
+#
+# Why this exists
+# ---------------
+#
+# Gap 2 of the testing-quality memory roadmap (#327 - #345 closure):
+# the pilot landed at 31 functions, but with no enforcement, new
+# pure helpers added to these modules wouldn't get flagged for
+# property tests. This file is the ratchet — every function in scope
+# must be triaged (covered OR excluded with reason).
+#
+# Adding new functions
+# --------------------
+#
+# When you add a new top-level function to a module listed below,
+# the pre-commit lint will fail until you either:
+#
+#   - Add a property test in test_property_tools.py and a mutation
+#     entry in _mutation_pilot.py, then list the function under
+#     `covered:` here, OR
+#   - List it under `excluded:` with a one-line reason explaining
+#     why property testing isn't applicable (I/O-bound, orchestrator,
+#     argparse helper, etc.).
+#
+# Adding a new module to scope
+# ----------------------------
+#
+# To bring a new module into pilot scope, add it as a top-level key
+# under `modules:` and triage every existing function. The lint will
+# then enforce drift detection going forward.
+
+modules:
+  # ── Pure-helper libraries (high-leverage, broad-blast-radius) ────
+
+  scripts/tools/_lib_validation.py:
+    covered:
+      - parse_duration_seconds
+      - format_duration
+      - is_disabled
+      - validate_and_clamp
+      - detect_cli_lang
+      - i18n_text
+
+  scripts/tools/_lib_io.py:
+    covered:
+      - load_yaml_file
+      - iter_yaml_files
+      - format_json_report
+    excluded:
+      load_tenant_configs: "Orchestrator over iter_yaml_files + load_yaml_file (both covered); composite contract is exercised by integration tests"
+      write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
+      write_json_secure: "Side-effecting I/O; same SAST guarantee as write_text_secure"
+      write_onboard_hints: "Thin wrapper over write_json_secure"
+      read_onboard_hints: "I/O-bound; covered by integration test"
+      add_config_dir_arg: "argparse boilerplate; not a value computation"
+      add_json_arg: "argparse boilerplate"
+      add_ci_arg: "argparse boilerplate"
+      add_prometheus_arg: "argparse boilerplate"
+
+  scripts/tools/_lib_prometheus.py:
+    covered:
+      - _validate_url_scheme
+    excluded:
+      http_get_json: "I/O-bound; covered by integration via tools that consume it"
+      http_post_json: "I/O-bound; same as http_get_json"
+      http_request_with_retry: "I/O + retry policy; covered by retry-specific integration tests"
+      query_prometheus_instant: "I/O-bound; thin wrapper over http_get_json"
+
+  scripts/tools/_lib_godispatch.py:
+    # Note: members of this module are class methods on
+    # GoBinaryDispatcher, so the manifest uses dotted Class.method
+    # notation. The lint's AST walker recognises both bare-function
+    # names and Class.method names.
+    covered:
+      - GoBinaryDispatcher._resolve_binary
+    excluded:
+      GoBinaryDispatcher._msg: "Trivial bilingual selector; covered transitively by detect_cli_lang"
+      GoBinaryDispatcher._recover_explicit_attempt: "Defensive helper for error messages; structurally simpler than _resolve_binary"
+      GoBinaryDispatcher._print_binary_missing: "Side-effecting (prints to stderr); error-message templating"
+      GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/batchpr/parser shims"
+
+  # ── DX tools (doc/changelog/scaffold) ─────────────────────────────
+
+  scripts/tools/dx/generate_doc_map.py:
+    covered:
+      - _audience_str
+      - _parse_front_matter
+    excluded:
+      _extract_h1_title: "Trivial regex on first '# ' line; surface too small to property-test meaningfully"
+      _has_en_pair: "Pure path stem check; trivial enough that tests would over-specify Path API behavior"
+      _get_map_path: "Constant lookup over MAP_PATHS; would just re-state the dict"
+      gather_docs: "Walks docs/ tree; I/O-bound, covered by integration via main()"
+      generate_doc_map: "Orchestrator combining gather_docs + _audience_str + write; integration-test territory"
+      main: "CLI entry point; covered by tests/dx/test_generate_doc_map.py CLI tests"
+
+  scripts/tools/dx/generate_changelog.py:
+    covered:
+      - parse_commit
+    excluded:
+      git_cmd: "Side-effecting subprocess.run wrapper"
+      get_latest_tag: "Side-effecting (git subprocess); covered by integration"
+      get_commits_since: "Side-effecting (git subprocess); covered by integration"
+      load_ignored_commits: "I/O (reads .changelog-lint-ignore)"
+      lint_changelog: "Multi-rule walker over commit list; covered by tests/dx/test_generate_changelog* unit tests"
+      format_changelog: "Pure but template-heavy; output churn would dominate; covered by snapshot/golden tests"
+      main: "CLI entry point; covered by CLI integration tests"
+
+  scripts/tools/dx/axe_lite_static.py:
+    covered:
+      - strip_frontmatter
+      - scan_unicode_status
+      - scan_buttons_without_name
+      - scan_unlabeled_inputs
+      - scan_color_only_severity
+    excluded:
+      _find_opening_tag: "Substring-search helper; trivial bracket-balance logic, transitively covered by every scanner that uses it"
+      check_file: "Orchestrator combining all scan_* functions on a file; covered by integration"
+      main: "CLI entry point"
+
+  # ── Ops: routing pipeline + rule-pack split ──────────────────────
+
+  scripts/tools/ops/generate_rule_pack_split.py:
+    covered:
+      - extract_metrics_from_expr
+    excluded:
+      get_lang: "Trivial env-var dispatcher; covered transitively by detect_cli_lang"
+      t: "Bilingual string selector wrapper around get_lang"
+      _safe_write: "I/O wrapper around write_text_secure"
+      dump_yaml: "Serialization helper; thin wrapper over yaml.safe_dump"
+      load_rule_pack: "I/O (yaml load)"
+      extract_recording_outputs: "Pure but tightly coupled to PrometheusRule CRD shape; covered by tests/ops/test_generate_rule_pack_split.py with realistic fixtures"
+      to_prometheus_rule_crd: "Output-shape transformation; covered by snapshot tests"
+      validate_central_references_edge: "Multi-rule validator; covered by tests/ops/test_generate_rule_pack_split.py"
+      split_rule_pack: "Orchestrator combining extract_metrics_from_expr + extract_recording_outputs + to_prometheus_rule_crd"
+      process_rule_packs: "Top-level orchestrator over directory walk + split_rule_pack"
+      main: "CLI entry point"
+
+  scripts/tools/ops/_grar_merge.py:
+    covered:
+      - _substitute_tenant
+      - _contains_tenant_placeholder
+      - merge_routing_with_defaults
+      - _apply_timing_params
+    excluded:
+      build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
+
+  scripts/tools/ops/_grar_validate.py:
+    covered:
+      - _extract_host
+      - validate_receiver_domains
+      - validate_tenant_keys
+    excluded:
+      load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
+      _validate_profile_refs: "Covered by test_e2e_routing_profile.py integration"
+      check_domain_policies: "Multi-branch policy validator; covered by test_e2e_routing_profile.py + test_domain_policy.py"
+
+  # ── Lint helpers (small but load-bearing) ─────────────────────────
+
+  scripts/tools/lint/_lint_helpers.py:
+    covered:
+      - parse_command_map
+      - parse_build_sh_tools
+    excluded:
+      parse_command_map_keys: "Trivial wrapper around parse_command_map; covered transitively"
+
+  scripts/tools/lint/check_flaky_registry.py:
+    covered:
+      - parse_version
+      - latest_version_from_changelog
+    excluded:
+      validate_entry: "Multi-rule schema validator; covered by 28 unit tests in test_check_flaky_registry.py"
+      validate_registry: "Top-level dispatcher; covered by 28 unit tests"
+      main: "CLI entry point; covered by CLI tests in test_check_flaky_registry.py"
+      Issue.format: "Trivial f-string templating on dataclass; covered transitively by validate_entry/validate_registry tests"
+      # Note: dunder methods (Version.__lt__/__ge__/__str__) are
+      # filtered out by the AST walker (they're not "function-shaped"
+      # value computations worth a separate manifest entry). Coverage
+      # for these is provided indirectly via TestParseVersionProperties
+      # tests of `<` / `>=` / round-trip.
