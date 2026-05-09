@@ -17,6 +17,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
@@ -86,7 +87,7 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
 
 def load_policy(policy_path: str | None) -> list[str]:
     """Load policy YAML and return allowed_domains list (may be empty)."""
-    if not policy_path or not os.path.isfile(policy_path):
+    if not policy_path or not Path(policy_path).is_file():
         return []
     with open(policy_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}

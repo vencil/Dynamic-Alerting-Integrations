@@ -255,9 +255,9 @@ def gather_docs(lang: str = "zh", include_adr: bool = False) -> list:
         for d in dirs:
             if d in effective_skip_dirs:
                 continue
-            dp = os.path.join(root, d)
+            dp = Path(root) / d
             try:
-                if os.path.islink(dp) and not os.path.exists(dp):
+                if dp.is_symlink() and not dp.exists():
                     continue
             except OSError:
                 continue

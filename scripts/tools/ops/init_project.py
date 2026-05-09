@@ -1057,7 +1057,7 @@ def _ensure_dir(path: str) -> None:
 
 def _write_file(path: str, content: str, created_files: list[str]) -> None:
     """Write file with SAST-compliant writer, track in list."""
-    _ensure_dir(os.path.dirname(path))
+    _ensure_dir(str(Path(path).parent))
     write_text_secure(path, content)
     created_files.append(path)
 
@@ -1233,7 +1233,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     print()
 
     for f in created:
-        rel = os.path.relpath(f, output_dir)
+        rel = str(Path(f).relative_to(output_dir))
         print(f"  ✓ {rel}")
 
     # Show auto-enabled packs
@@ -1302,7 +1302,7 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
 def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser) -> None:
     """Check if directory is already initialized."""
     marker_path = str(Path(output_dir) / '.da-init.yaml')
-    if os.path.isfile(marker_path) and not force:
+    if Path(marker_path).is_file() and not force:
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
             print("   使用 --force 覆寫或手動刪除 .da-init.yaml。", file=sys.stderr)
@@ -1393,7 +1393,7 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     print()
     files = _preview_files(config, output_dir)
     for f in files:
-        print(f"  {os.path.relpath(f, output_dir)}")
+        print(f"  {Path(f).relative_to(output_dir)}")
     print(f"\n  {'總計' if is_zh else 'Total'}: {len(files)}")
     sys.exit(0)
 
@@ -1438,7 +1438,7 @@ def main():
     config = _build_config_from_args(args, parser)
     _validate_config(config)
 
-    output_dir = os.path.abspath(args.output_dir)
+    output_dir = str(Path(args.output_dir).resolve())
 
     if args.dry_run:
         _handle_dry_run(config, output_dir)

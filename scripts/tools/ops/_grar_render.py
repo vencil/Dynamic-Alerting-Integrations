@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -87,7 +88,7 @@ def load_base_config(path: str | None) -> dict:
     Returns dict with global, route, receivers, inhibit_rules.
     Falls back to _DEFAULT_BASE_CONFIG on any error.
     """
-    if not path or not os.path.isfile(path):
+    if not path or not Path(path).is_file():
         return dict(_DEFAULT_BASE_CONFIG)
     with open(path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}

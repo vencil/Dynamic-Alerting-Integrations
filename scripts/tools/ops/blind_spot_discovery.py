@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import textwrap
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -104,7 +105,7 @@ def load_monitored_db_types(config_dir):
     Returns {db_type: set(tenant_ids)}.
     """
     result = {}
-    if not os.path.isdir(config_dir):
+    if not Path(config_dir).is_dir():
         print(f"WARN: config-dir not found: {config_dir}", file=sys.stderr)
         return result
 
