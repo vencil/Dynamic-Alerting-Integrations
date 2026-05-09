@@ -81,7 +81,7 @@ RECOMMENDED_ACTIONS = {
 
 def get_rule_pack_name(yaml_file: str) -> str:
     """Extract rule pack name from filename (e.g., rule-pack-mariadb.yaml -> mariadb)."""
-    basename = os.path.basename(yaml_file)
+    basename = Path(yaml_file).name
     if basename.startswith("rule-pack-"):
         return basename.replace("rule-pack-", "").replace(".yaml", "")
     return basename.replace(".yaml", "")
@@ -352,9 +352,9 @@ def main():
     args = parser.parse_args()
 
     # Resolve to absolute path
-    rule_packs_dir = os.path.abspath(args.output_dir)
+    rule_packs_dir = str(Path(args.output_dir).resolve())
 
-    if not os.path.isdir(rule_packs_dir):
+    if not Path(rule_packs_dir).is_dir():
         print(f"Error: {rule_packs_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
 
@@ -377,15 +377,15 @@ def main():
         return
 
     # Define output paths
-    file_zh = os.path.join(rule_packs_dir, "ALERT-REFERENCE.md")
-    file_en = os.path.join(rule_packs_dir, "ALERT-REFERENCE.en.md")
+    file_zh = str(Path(rule_packs_dir) / "ALERT-REFERENCE.md")
+    file_en = str(Path(rule_packs_dir) / "ALERT-REFERENCE.en.md")
 
     if args.check:
         # Check mode: compare generated vs existing
         differences = []
 
         # Check Chinese version
-        if os.path.exists(file_zh):
+        if Path(file_zh).exists():
             with open(file_zh, "r", encoding="utf-8") as f:
                 existing_zh = f.read()
             if existing_zh != content_zh:
@@ -405,7 +405,7 @@ def main():
             )
 
         # Check English version
-        if os.path.exists(file_en):
+        if Path(file_en).exists():
             with open(file_en, "r", encoding="utf-8") as f:
                 existing_en = f.read()
             if existing_en != content_en:

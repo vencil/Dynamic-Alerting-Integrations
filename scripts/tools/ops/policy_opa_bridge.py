@@ -37,6 +37,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError
@@ -96,17 +97,18 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict]:
     """Load all tenant configs from config-dir (skip _ prefixed files)."""
     configs: dict[str, dict] = {}
 
-    if not os.path.isdir(config_dir):
+    base = Path(config_dir)
+    if not base.is_dir():
         return configs
 
-    for fname in sorted(os.listdir(config_dir)):
+    for entry in sorted(base.iterdir(), key=lambda p: p.name):
+        fname = entry.name
         if not fname.endswith((".yaml", ".yml")):
             continue
         if fname.startswith("_"):
             continue
 
-        fpath = os.path.join(config_dir, fname)
-        data = load_yaml_file(fpath)
+        data = load_yaml_file(str(entry))
         if not isinstance(data, dict):
             continue
 
@@ -117,7 +119,7 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict]:
                     configs[tenant_name] = tenant_cfg
         else:
             # Flat format — filename (sans extension) is tenant name
-            tenant_name = os.path.splitext(fname)[0]
+            tenant_name = entry.stem
             configs[tenant_name] = data
 
     return configs
@@ -125,10 +127,10 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict]:
 
 def load_defaults(config_dir: str) -> dict[str, Any]:
     """Load _defaults.yaml."""
-    defaults_path = os.path.join(config_dir, "_defaults.yaml")
-    if not os.path.isfile(defaults_path):
+    defaults_path = Path(config_dir) / "_defaults.yaml"
+    if not defaults_path.is_file():
         return {}
-    data = load_yaml_file(defaults_path)
+    data = load_yaml_file(str(defaults_path))
     if isinstance(data, dict):
         return data
     return {}
