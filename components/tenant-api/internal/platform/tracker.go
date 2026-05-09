@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/jonboulle/clockwork"
 )
 
 // Lister fetches the current open PRs/MRs from a Git hosting platform.
@@ -29,8 +31,18 @@ var _ Tracker = (*PollingTracker)(nil)
 // (which usually triggers rate limits and earns the deployment a
 // platform-side IP block).
 type PollingTracker struct {
-	lister       Lister
-	provider     string // "github" / "gitlab" — used in log lines only
+	lister   Lister
+	provider string // "github" / "gitlab" — used in log lines only
+
+	// clock abstracts time.Now() / time.NewTicker so tests can drive the
+	// WatchLoop ticker deterministically with a clockwork.FakeClock instead
+	// of waiting for real wall-clock ticks. Production constructors plug in
+	// clockwork.NewRealClock(); test code can use SetClock to swap in
+	// clockwork.NewFakeClock and then `Advance(syncInterval)` to fire ticks
+	// synchronously. Origin: HA-11 deeper (TestWatchLoop_TickerTriggersAdditionalSyncs
+	// flake on GH-hosted runners; PR #350 caught the symptom, this fix
+	// addresses the root cause).
+	clock clockwork.Clock
 
 	mu           sync.RWMutex
 	pendingPRs   []PRInfo
@@ -58,9 +70,21 @@ func NewPollingTracker(lister Lister, provider string, syncInterval time.Duratio
 	return &PollingTracker{
 		lister:       lister,
 		provider:     provider,
+		clock:        clockwork.NewRealClock(),
 		byTenant:     make(map[string]PRInfo),
 		syncInterval: syncInterval,
 	}
+}
+
+// SetClock swaps the clock used by WatchLoop's ticker + Sync's lastSync
+// stamp. Test-only — production code constructs trackers via
+// NewPollingTracker which installs a real clock. Calling this after
+// WatchLoop has started is undefined (the ticker is bound to whichever
+// clock was current at NewTicker time).
+func (t *PollingTracker) SetClock(c clockwork.Clock) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.clock = c
 }
 
 // WatchLoop runs an initial sync, then re-syncs every syncInterval.
@@ -69,12 +93,12 @@ func NewPollingTracker(lister Lister, provider string, syncInterval time.Duratio
 func (t *PollingTracker) WatchLoop(stopCh <-chan struct{}) {
 	t.Sync()
 
-	ticker := time.NewTicker(t.syncInterval)
+	ticker := t.clock.NewTicker(t.syncInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticker.Chan():
 			t.Sync()
 		case <-stopCh:
 			return
@@ -110,7 +134,7 @@ func (t *PollingTracker) Sync() {
 	t.mu.Lock()
 	t.pendingPRs = prs
 	t.byTenant = byTenant
-	t.lastSync = time.Now()
+	t.lastSync = t.clock.Now()
 	t.mu.Unlock()
 
 	slog.Info("tracker synced", "provider", t.provider, "pending", len(prs))

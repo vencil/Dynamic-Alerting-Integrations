@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jonboulle/clockwork"
 )
 
 // fixedLister returns the same PR list every call.
@@ -46,6 +48,31 @@ func countingLister(prs []PRInfo) (Lister, func() int) {
 		return count
 	}
 	return lister, snapshot
+}
+
+// signalingLister wraps a Lister with both a counter AND a signal channel
+// that emits AFTER each call. Used by deterministic ticker tests that
+// need to wait for the WatchLoop goroutine to have finished consuming a
+// fakeClock.Advance() before asserting on call count. Buffered so the
+// lister never blocks on a slow-consumer test.
+func signalingLister(prs []PRInfo) (lister Lister, snapshot func() int, done <-chan struct{}) {
+	var mu sync.Mutex
+	count := 0
+	signal := make(chan struct{}, 64) // buffer = many ticks even if test is slow
+	lister = func() ([]PRInfo, error) {
+		mu.Lock()
+		count++
+		mu.Unlock()
+		signal <- struct{}{}
+		return prs, nil
+	}
+	snapshot = func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return count
+	}
+	done = signal
+	return lister, snapshot, done
 }
 
 // ---------------------------------------------------------------------------
@@ -370,13 +397,20 @@ func TestWatchLoop_RunsInitialSync(t *testing.T) {
 
 func TestWatchLoop_TickerTriggersAdditionalSyncs(t *testing.T) {
 	t.Parallel()
-	lister, count := countingLister(nil)
-	// Bypass the constructor's clamp so we can exercise the ticker
-	// quickly without waiting 30s. This is safe because we're testing
-	// the LOOP behaviour, not the clamp logic.
+	// HA-11 deeper: this test was a documented flake on GH-hosted runners
+	// (CI run 25602108441 saw "lister call count = 1, want >= 2"). The old
+	// version slept 180ms hoping for at least one 50ms ticker fire — under
+	// CPU steal / GC pauses on shared runners, the sleep could return before
+	// any tick processed. Replaced with clockwork.FakeClock + per-call
+	// signal channel so each tick is fired AND awaited deterministically.
+	lister, count, syncDone := signalingLister(nil)
+	clock := clockwork.NewFakeClock()
+	// Bypass the constructor's interval clamp + plug in the fake clock.
+	// Safe because we're testing LOOP behaviour, not the clamp logic.
 	tk := &PollingTracker{
 		lister:       lister,
 		provider:     "github",
+		clock:        clock,
 		byTenant:     map[string]PRInfo{},
 		syncInterval: 50 * time.Millisecond,
 	}
@@ -388,8 +422,24 @@ func TestWatchLoop_TickerTriggersAdditionalSyncs(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait long enough for at least 2 ticks (initial sync + 1+ ticker).
-	time.Sleep(180 * time.Millisecond)
+	// 1. Wait for the initial Sync (called before the ticker starts).
+	waitForSync(t, syncDone, "initial sync")
+
+	// 2. Wait for the WatchLoop goroutine to register its ticker on the
+	//    fake clock. Without this, an early Advance() can fire before the
+	//    ticker exists and be swallowed.
+	clock.BlockUntil(1)
+
+	// 3. Advance the fake clock by syncInterval to fire one tick, then
+	//    wait for the goroutine to consume it (signaled by the lister
+	//    being called for the second time).
+	clock.Advance(50 * time.Millisecond)
+	waitForSync(t, syncDone, "sync after tick 1")
+
+	// 4. Advance again — proves the ticker is repeating, not single-shot.
+	clock.Advance(50 * time.Millisecond)
+	waitForSync(t, syncDone, "sync after tick 2")
+
 	close(stopCh)
 	select {
 	case <-done:
@@ -397,9 +447,23 @@ func TestWatchLoop_TickerTriggersAdditionalSyncs(t *testing.T) {
 		t.Fatal("WatchLoop did not exit after stopCh close")
 	}
 
-	// Initial sync (1) + at least one ticker fire (>=2 total).
-	if got := count(); got < 2 {
-		t.Errorf("lister call count = %d, want >= 2 (initial + ticker)", got)
+	// Initial + 2 deterministic tick-driven syncs = exactly 3.
+	if got := count(); got != 3 {
+		t.Errorf("lister call count = %d, want 3 (initial + 2 ticks)", got)
+	}
+}
+
+// waitForSync drains one signal from the signalingLister's done channel
+// or fails fast with a contextual message. The 2-second budget is generous
+// — fakeClock.Advance is synchronous and the goroutine should consume the
+// tick within microseconds; the deadline only protects against a regression
+// that breaks the signaling contract.
+func waitForSync(t *testing.T, done <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s (lister never called)", label)
 	}
 }
 
@@ -408,8 +472,9 @@ func TestWatchLoop_StopChanTerminatesPromptly(t *testing.T) {
 	tk := &PollingTracker{
 		lister:       fixedLister(nil),
 		provider:     "github",
+		clock:        clockwork.NewRealClock(), // 1h interval — clock identity doesn't matter
 		byTenant:     map[string]PRInfo{},
-		syncInterval: 1 * time.Hour, // never tick
+		syncInterval: 1 * time.Hour,            // never tick
 	}
 
 	stopCh := make(chan struct{})
