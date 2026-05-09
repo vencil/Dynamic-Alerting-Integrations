@@ -295,6 +295,65 @@ MUTATIONS: list[Mutation] = [
         old='                "font-bold",\n                "font-semibold",',
         new='                "font-semibold",',
     ),
+    # ── load_yaml_file (_lib_io) ─────────────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="load_yaml: drop isfile check (would attempt to open missing path)",
+        fn_name="load_yaml_file",
+        old="    if not path or not os.path.isfile(path):\n        return default",
+        new="    if not path:\n        return default",
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="load_yaml: drop None-coalesce (empty file returns None instead of default)",
+        fn_name="load_yaml_file",
+        old="    return data if data is not None else default",
+        new="    return data",
+    ),
+    # ── iter_yaml_files (_lib_io) ────────────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="iter_yaml: drop .yml from extension check",
+        fn_name="iter_yaml_files",
+        old='        if not (fname.endswith(".yaml") or fname.endswith(".yml")):',
+        new='        if not fname.endswith(".yaml"):',
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="iter_yaml: drop dotfile filter (.hidden.yaml leaks through)",
+        fn_name="iter_yaml_files",
+        old='        if skip_reserved and (fname.startswith("_") or fname.startswith(".")):',
+        new='        if skip_reserved and fname.startswith("_"):',
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
+        label="iter_yaml: drop isfile filter (directories ending in .yaml leak through)",
+        fn_name="iter_yaml_files",
+        old="        fpath = os.path.join(config_dir, fname)\n        if os.path.isfile(fpath):\n            result.append((fname, fpath))",
+        new="        fpath = os.path.join(config_dir, fname)\n        result.append((fname, fpath))",
+    ),
+    # ── format_json_report (_lib_io) ─────────────────────────────
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="format_json: drop pretty-print default (indent=0 → no newlines)",
+        fn_name="format_json_report",
+        old='    kwargs.setdefault("indent", 2)',
+        new='    kwargs.setdefault("indent", 0)',
+    ),
+    Mutation(
+        target_file="scripts/tools/_lib_io.py",
+        test_file="tests/shared/test_property_tools.py",
+        label="format_json: drop ensure_ascii default (Unicode gets escaped)",
+        fn_name="format_json_report",
+        old='    kwargs.setdefault("ensure_ascii", False)',
+        new='    kwargs.setdefault("ensure_ascii", True)',
+    ),
 ]
 
 

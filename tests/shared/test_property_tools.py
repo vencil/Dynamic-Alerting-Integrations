@@ -59,6 +59,7 @@ import generate_rule_pack_split as grps  # noqa: E402
 import generate_doc_map as gdm  # noqa: E402
 import generate_changelog as gc  # noqa: E402
 import _lib_validation as lv  # noqa: E402
+import _lib_io as lio  # noqa: E402
 import axe_lite_static as axe  # noqa: E402
 
 
@@ -125,19 +126,23 @@ class TestExtractMetricsFromExprProperties:
 
     def test_uppercase_label_tokens_excluded(self):
         # Mutation-pilot kill-test: dropping the `not m[0].isupper()` filter
-        # would let labels like `Tenant` (PromQL convention: uppercase =
-        # label, lowercase = metric) leak into the metrics output. The
-        # property test_no_uppercase_starting_tokens covers this in
-        # principle, but Hypothesis's random text strategy doesn't reliably
-        # generate uppercase-prefixed tokens followed by `{`/`[`/whitespace.
-        # This deterministic case pins the behavior.
-        expr = 'rate(http_requests_total{Tenant="db-a"}[5m])'
+        # would let labels like `Foo` / `Bar` (PromQL convention: uppercase =
+        # custom-named recording rule or label, lowercase = metric name)
+        # leak into the metrics output.
+        #
+        # IMPORTANT: the test expression MUST contain uppercase tokens
+        # immediately followed by `{`, `[`, or whitespace — otherwise the
+        # regex `\b([a-zA-Z_:]...)\b(?=[{\[\s])` won't even capture them
+        # in the first place, and the uppercase filter never fires (which
+        # was the bug in this test's earlier version pre-batch-4).
+        expr = 'Foo{label="x"} + Bar[5m]'
         result = grps.extract_metrics_from_expr(expr)
-        assert "Tenant" not in result, (
-            f"uppercase label `Tenant` leaked into metrics: {result!r}"
+        assert "Foo" not in result, (
+            f"uppercase token `Foo` leaked into metrics: {result!r}"
         )
-        # And confirm the lowercase metric does pass through.
-        assert "http_requests_total" in result
+        assert "Bar" not in result, (
+            f"uppercase token `Bar` leaked into metrics: {result!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -701,3 +706,159 @@ class TestScanColorOnlySeverityProperties:
         src = '<div className="text-[color:var(--da-color-error)]">err</div>'
         out = axe.scan_color_only_severity(src)
         assert len(out) == 1
+
+
+# ---------------------------------------------------------------------------
+# _lib_io — file IO + YAML helpers used by 20+ tools
+# ---------------------------------------------------------------------------
+# Pilot batch 4: the file-IO seam everything else depends on. Mutations
+# here would cascade into every tool that reads tenant config; property
+# tests pin the filtering / sorting / fallback contracts.
+
+class TestLoadYamlFileProperties:
+
+    @given(st.one_of(
+        st.none(),
+        st.just(""),
+        st.text(alphabet=string.ascii_letters, min_size=1, max_size=20).map(
+            lambda s: f"/nonexistent/{s}.yaml"
+        ),
+    ))
+    @PILOT_SETTINGS
+    def test_missing_path_returns_default(self, path):
+        # Property: None / empty string / nonexistent path → default.
+        assert lio.load_yaml_file(path) is None
+        sentinel = object()
+        assert lio.load_yaml_file(path, default=sentinel) is sentinel
+
+    @given(st.dictionaries(
+        keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
+        values=st.text(alphabet=string.ascii_letters, min_size=1, max_size=20),
+        min_size=1, max_size=5,
+    ))
+    @PILOT_SETTINGS
+    def test_round_trip(self, tmp_path_factory, kv):
+        # Hypothesis fixture-ordering rule: pytest fixtures BEFORE
+        # @given strategy params.
+        # Property: write a dict as YAML, load_yaml_file returns the same dict.
+        import yaml
+        d = tmp_path_factory.mktemp("yaml")
+        f = d / "x.yaml"
+        f.write_text(yaml.safe_dump(kv), encoding="utf-8")
+        assert lio.load_yaml_file(str(f)) == kv
+
+    def test_empty_file_returns_default(self, tmp_path):
+        # Property: empty YAML file → default (yaml.safe_load returns None).
+        f = tmp_path / "empty.yaml"
+        f.write_text("", encoding="utf-8")
+        assert lio.load_yaml_file(str(f)) is None
+        assert lio.load_yaml_file(str(f), default={}) == {}
+        assert lio.load_yaml_file(str(f), default=[]) == []
+
+
+class TestIterYamlFilesProperties:
+
+    @given(st.one_of(
+        st.none(),
+        st.just(""),
+        st.text(alphabet=string.ascii_letters, min_size=1, max_size=10).map(
+            lambda s: f"/nonexistent/{s}"
+        ),
+    ))
+    @PILOT_SETTINGS
+    def test_missing_dir_returns_empty(self, path):
+        # Property: None / empty / nonexistent dir → empty list.
+        assert lio.iter_yaml_files(path) == []
+
+    @given(st.lists(
+        st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=8),
+        min_size=1, max_size=10, unique=True,
+    ))
+    @PILOT_SETTINGS
+    def test_output_sorted_by_filename(self, tmp_path_factory, names):
+        # Property: returned list is sorted by filename ascending.
+        d = tmp_path_factory.mktemp("yaml")
+        for n in names:
+            (d / f"{n}.yaml").write_text("k: v\n", encoding="utf-8")
+        result = lio.iter_yaml_files(str(d))
+        filenames = [fn for fn, _ in result]
+        assert filenames == sorted(filenames)
+
+    def test_filters_non_yaml_extensions(self, tmp_path):
+        for fn in ["a.yaml", "b.yml", "c.txt", "d.md", "e.json"]:
+            (tmp_path / fn).write_text("x", encoding="utf-8")
+        result = lio.iter_yaml_files(str(tmp_path))
+        names = {fn for fn, _ in result}
+        assert names == {"a.yaml", "b.yml"}
+
+    def test_skip_reserved_default_excludes_underscore(self, tmp_path):
+        for fn in ["tenant.yaml", "_defaults.yaml", ".hidden.yaml"]:
+            (tmp_path / fn).write_text("x", encoding="utf-8")
+        result = lio.iter_yaml_files(str(tmp_path))
+        names = {fn for fn, _ in result}
+        assert names == {"tenant.yaml"}
+
+    def test_skip_reserved_false_includes_all(self, tmp_path):
+        for fn in ["tenant.yaml", "_defaults.yaml", ".hidden.yaml"]:
+            (tmp_path / fn).write_text("x", encoding="utf-8")
+        result = lio.iter_yaml_files(str(tmp_path), skip_reserved=False)
+        names = {fn for fn, _ in result}
+        assert names == {"tenant.yaml", "_defaults.yaml", ".hidden.yaml"}
+
+    def test_filters_directories(self, tmp_path):
+        # Property: directories with .yaml-like names don't sneak through
+        # (the os.path.isfile check matters).
+        (tmp_path / "tenant.yaml").write_text("x", encoding="utf-8")
+        (tmp_path / "subdir.yaml").mkdir()  # a DIRECTORY ending in .yaml
+        result = lio.iter_yaml_files(str(tmp_path))
+        names = {fn for fn, _ in result}
+        assert names == {"tenant.yaml"}
+
+
+class TestFormatJsonReportProperties:
+
+    @given(st.dictionaries(
+        keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
+        values=st.one_of(
+            st.text(alphabet=string.ascii_letters, max_size=20),
+            st.integers(),
+            st.booleans(),
+        ),
+        max_size=5,
+    ))
+    @PILOT_SETTINGS
+    def test_round_trip_via_json_loads(self, data):
+        # Property: format_json_report output parses back to the same data.
+        import json
+        s = lio.format_json_report(data)
+        assert json.loads(s) == data
+
+    @given(st.dictionaries(
+        keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
+        values=st.text(min_size=1, max_size=20),
+        min_size=1, max_size=3,
+    ))
+    @PILOT_SETTINGS
+    def test_pretty_printed_default(self, data):
+        # Property: default output uses indent=2 — i.e. has a newline
+        # followed by exactly 2 spaces. Just checking for `\n` is too
+        # weak (json.dumps with indent=0 ALSO emits newlines, just no
+        # spaces) — that mismatch surfaced as a surviving mutation in
+        # batch-4 mutation pilot.
+        s = lio.format_json_report(data)
+        assert "\n  " in s, (
+            f"output {s!r} has no `\\n  ` (newline + 2 spaces); "
+            f"indent=2 default not honored?"
+        )
+
+    def test_unicode_not_escaped_default(self):
+        # Property: default ensure_ascii=False keeps Unicode bytes in output.
+        s = lio.format_json_report({"k": "中文"})
+        assert "中文" in s
+        assert "\\u" not in s
+
+    def test_kwargs_override_defaults(self):
+        # ensure_ascii=True can be re-enabled via kwarg.
+        s = lio.format_json_report({"k": "中文"}, ensure_ascii=True)
+        assert "中文" not in s
+        assert "\\u" in s
