@@ -242,6 +242,59 @@ MUTATIONS: list[Mutation] = [
         old="    if seconds > max_sec:",
         new="    if seconds >= max_sec:",
     ),
+    # ── strip_frontmatter (axe_lite_static) ──────────────────────
+    Mutation(
+        target_file="scripts/tools/dx/axe_lite_static.py",
+        test_file="tests/shared/test_property_tools.py tests/dx/test_axe_lite_static.py",
+        label="frontmatter: search from index 0 (would match opening --- as separator)",
+        fn_name="strip_frontmatter",
+        old='        end = src.find("\\n---", 3)',
+        new='        end = src.find("\\n---", 0)',
+    ),
+    Mutation(
+        target_file="scripts/tools/dx/axe_lite_static.py",
+        test_file="tests/shared/test_property_tools.py tests/dx/test_axe_lite_static.py",
+        label="frontmatter: off-by-one slice end + 4 → end + 3 (loses byte)",
+        fn_name="strip_frontmatter",
+        old="            return src[end + 4 :]",
+        new="            return src[end + 3 :]",
+    ),
+    # ── scan_unicode_status (axe_lite_static) ────────────────────
+    Mutation(
+        target_file="scripts/tools/dx/axe_lite_static.py",
+        test_file="tests/shared/test_property_tools.py tests/dx/test_axe_lite_static.py",
+        label="status: drop aria-hidden escape (everything flagged)",
+        fn_name="scan_unicode_status",
+        old='if "aria-hidden" in attrs or "aria-label" in attrs or "aria-labelledby" in attrs:',
+        new='if "aria-label" in attrs or "aria-labelledby" in attrs:',
+    ),
+    # ── scan_buttons_without_name (axe_lite_static) ──────────────
+    Mutation(
+        target_file="scripts/tools/dx/axe_lite_static.py",
+        test_file="tests/shared/test_property_tools.py tests/dx/test_axe_lite_static.py",
+        label="buttons: drop title= as accessible name (title-only buttons flagged)",
+        fn_name="scan_buttons_without_name",
+        old='            "aria-label" in attrs\n            or "aria-labelledby" in attrs\n            or "title=" in attrs',
+        new='            "aria-label" in attrs\n            or "aria-labelledby" in attrs',
+    ),
+    # ── scan_unlabeled_inputs (axe_lite_static) ──────────────────
+    Mutation(
+        target_file="scripts/tools/dx/axe_lite_static.py",
+        test_file="tests/shared/test_property_tools.py tests/dx/test_axe_lite_static.py",
+        label="inputs: drop placeholder as label hint",
+        fn_name="scan_unlabeled_inputs",
+        old='                    "placeholder",\n                    "title=",',
+        new='                    "title=",',
+    ),
+    # ── scan_color_only_severity (axe_lite_static) ───────────────
+    Mutation(
+        target_file="scripts/tools/dx/axe_lite_static.py",
+        test_file="tests/shared/test_property_tools.py tests/dx/test_axe_lite_static.py",
+        label="color: drop font-bold from non-color signals",
+        fn_name="scan_color_only_severity",
+        old='                "font-bold",\n                "font-semibold",',
+        new='                "font-semibold",',
+    ),
 ]
 
 
