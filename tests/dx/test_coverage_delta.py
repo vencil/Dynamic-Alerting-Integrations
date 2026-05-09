@@ -347,6 +347,88 @@ class TestFormatTextReport:
 
 
 # ============================================================
+# format_markdown_report
+# ============================================================
+
+
+class TestFormatMarkdownReport:
+
+    def _make(self, **kwargs):
+        defaults = dict(
+            total_before=80.0, total_after=85.0, total_delta=5.0,
+            improved=[], regressed=[], added=[], removed=[],
+            unchanged_count=0,
+        )
+        defaults.update(kwargs)
+        return cd.DeltaReport(**defaults)
+
+    def test_includes_pr_comment_marker(self):
+        # Property: every markdown report starts with the stable
+        # marker so the bot can find-and-update an existing comment.
+        out = cd.format_markdown_report(self._make())
+        assert out.startswith("<!-- coverage-delta-bot -->")
+        # Sanity: the marker constant matches the literal in the output.
+        assert cd.PR_COMMENT_MARKER in out
+
+    def test_uses_markdown_heading_and_bold(self):
+        out = cd.format_markdown_report(self._make())
+        assert "## Coverage delta" in out
+        assert "**80.0%**" in out
+        assert "**85.0%**" in out
+
+    def test_direction_emoji_positive(self):
+        out = cd.format_markdown_report(self._make())
+        # +5% delta → upward emoji
+        assert "📈" in out
+
+    def test_direction_emoji_negative(self):
+        out = cd.format_markdown_report(
+            self._make(total_before=85.0, total_after=80.0, total_delta=-5.0))
+        assert "📉" in out
+
+    def test_direction_emoji_zero(self):
+        out = cd.format_markdown_report(
+            self._make(total_before=85.0, total_after=85.0, total_delta=0.0))
+        # Neutral delta → sideways arrow.
+        assert "➡️" in out
+
+    def test_table_rendered_for_non_empty_bucket(self):
+        # Property: a non-empty bucket emits a Markdown table with
+        # | File | Before | After | Δ | header.
+        items = [cd.FileDelta("a.py", 70.0, 90.0, 20.0)]
+        out = cd.format_markdown_report(self._make(improved=items))
+        assert "### ✅ Improved" in out
+        assert "| File | Before | After | Δ |" in out
+        assert "| `a.py` |" in out
+        assert "+20.0%" in out
+
+    def test_empty_buckets_no_section(self):
+        out = cd.format_markdown_report(self._make())
+        assert "Improved" not in out
+        assert "Regressed" not in out
+        # The "no changes" footer fires.
+        assert "No per-file coverage changes detected" in out
+
+    def test_top_n_truncation_in_markdown(self):
+        items = [
+            cd.FileDelta(f"f{i}.py", 50.0, 50.0 + i, float(i))
+            for i in range(1, 16)
+        ]
+        out = cd.format_markdown_report(
+            self._make(improved=items, total_delta=0.0), top_n=5)
+        assert "(top 5 of 15)" in out
+        assert "f15.py" in out
+        # Lowest-delta file should be truncated out.
+        assert "f1.py" not in out
+
+    def test_unchanged_count_footer(self):
+        items = [cd.FileDelta("a.py", 70.0, 90.0, 20.0)]
+        out = cd.format_markdown_report(
+            self._make(improved=items, unchanged_count=42))
+        assert "Unchanged: 42 files" in out
+
+
+# ============================================================
 # evaluate_thresholds
 # ============================================================
 
@@ -461,6 +543,34 @@ class TestMainCLI:
         assert rc == 1
         err = capsys.readouterr().err
         assert "Threshold violations" in err
+
+    def test_markdown_flag_emits_marker(self, tmp_path, capsys):
+        b = _write_xml(
+            tmp_path / "b.xml",
+            _make_cobertura(0.80, 80, 100, {"a.py": (0.80, 80, 100)}),
+        )
+        a = _write_xml(
+            tmp_path / "a.xml",
+            _make_cobertura(0.85, 85, 100, {"a.py": (0.85, 85, 100)}),
+        )
+        rc = cd.main([str(b), str(a), "--markdown"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert cd.PR_COMMENT_MARKER in out
+        assert "## Coverage delta" in out
+
+    def test_json_and_markdown_mutually_exclusive(self, tmp_path, capsys):
+        b = _write_xml(
+            tmp_path / "b.xml",
+            _make_cobertura(0.80, 80, 100, {"a.py": (0.80, 80, 100)}),
+        )
+        a = _write_xml(
+            tmp_path / "a.xml",
+            _make_cobertura(0.85, 85, 100, {"a.py": (0.85, 85, 100)}),
+        )
+        rc = cd.main([str(b), str(a), "--json", "--markdown"])
+        assert rc == 2
+        assert "mutually exclusive" in capsys.readouterr().err
 
     def test_json_output_shape(self, tmp_path, capsys):
         b = _write_xml(
