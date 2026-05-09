@@ -26,6 +26,7 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -121,10 +122,11 @@ _MAPPING_FILE_NAMES = ('_instance_mapping.yaml', '_instance_mapping.yml')
 
 def find_mapping_file(config_dir: str) -> str | None:
     """Find _instance_mapping.yaml in config-dir."""
+    base = Path(config_dir)
     for name in _MAPPING_FILE_NAMES:
-        path = os.path.join(config_dir, name)
-        if os.path.isfile(path):
-            return path
+        candidate = base / name
+        if candidate.is_file():
+            return str(candidate)
     return None
 
 
@@ -178,7 +180,7 @@ def collect_tenant_ids_from_config_dir(config_dir: str) -> set[str]:
             tenant_ids.update(tenants_block.keys())
         else:
             # Flat format: filename = tenant name
-            base = os.path.splitext(filename)[0]
+            base = Path(filename).stem
             tenant_ids.add(base)
     return tenant_ids
 
@@ -376,7 +378,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config_dir = args.config_dir
-    if not os.path.isdir(config_dir):
+    if not Path(config_dir).is_dir():
         print(f"ERROR: config-dir not found: {config_dir}", file=sys.stderr)
         sys.exit(1)
 
@@ -400,10 +402,12 @@ def main() -> None:
         # Auto-detect from metric-dictionary.yaml
         dict_path = args.metric_dictionary
         if not dict_path:
-            dict_path = os.path.join(_THIS_DIR, '..', 'metric-dictionary.yaml')
-            if not os.path.isfile(dict_path):
-                dict_path = os.path.join(_THIS_DIR, 'metric-dictionary.yaml')
-        if os.path.isfile(dict_path):
+            this_dir = Path(_THIS_DIR)
+            candidate = this_dir.parent / "metric-dictionary.yaml"
+            if not candidate.is_file():
+                candidate = this_dir / "metric-dictionary.yaml"
+            dict_path = str(candidate)
+        if Path(dict_path).is_file():
             metrics = load_metrics_from_dictionary(dict_path)
         else:
             print("ERROR: no --metrics specified and metric-dictionary.yaml not found",

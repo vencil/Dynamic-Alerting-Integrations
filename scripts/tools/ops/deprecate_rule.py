@@ -26,8 +26,8 @@
 
 import sys
 import os
-import glob
 import argparse
+from pathlib import Path
 import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -78,9 +78,10 @@ def scan_for_metric(metric_key, config_dir):
         f"custom_{metric_key}_critical",
     ]
 
-    for path in sorted(glob.glob(os.path.join(config_dir, "*.yaml")) +
-                       glob.glob(os.path.join(config_dir, "*.yml"))):
-        filename = os.path.basename(path)
+    config_base = Path(config_dir)
+    for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
+        filename = entry.name
+        path = str(entry)
         if filename.startswith('.'):
             continue
 
@@ -121,8 +122,8 @@ def scan_for_metric(metric_key, config_dir):
 
 def disable_in_defaults(metric_key, config_dir, execute=False):
     """在 _defaults.yaml 中將 metric 設為 "disable"。"""
-    defaults_path = os.path.join(config_dir, "_defaults.yaml")
-    if not os.path.exists(defaults_path):
+    defaults_path = str(Path(config_dir) / "_defaults.yaml")
+    if not Path(defaults_path).exists():
         return False, "_defaults.yaml 不存在"
 
     data = load_yaml_file(defaults_path)
@@ -165,9 +166,10 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
         f"custom_{metric_key}_critical",
     ]
 
-    for path in sorted(glob.glob(os.path.join(config_dir, "*.yaml")) +
-                       glob.glob(os.path.join(config_dir, "*.yml"))):
-        filename = os.path.basename(path)
+    config_base = Path(config_dir)
+    for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
+        filename = entry.name
+        path = str(entry)
         if filename.startswith('_') or filename.startswith('.'):
             continue  # Skip _defaults.yaml
 
@@ -219,7 +221,7 @@ def main():
 
     args = parser.parse_args()
 
-    if not os.path.isdir(args.config_dir):
+    if not Path(args.config_dir).is_dir():
         print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
         sys.exit(1)
 
