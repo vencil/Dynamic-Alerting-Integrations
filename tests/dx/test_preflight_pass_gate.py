@@ -17,9 +17,22 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+# Every test in this module invokes require_preflight_pass.sh via
+# `bash <script-path>`. Git Bash on Windows mangles `C:\path\file`
+# argument translation so the script can never be found. Linux CI is
+# the production target; skip cleanly on Windows instead of letting
+# every test fail with a misleading "No such file or directory" error.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="bash gate-script tests need POSIX path translation; "
+           "Git Bash on Windows mangles 'C:\\path\\file' arguments. "
+           "Verified to pass on Linux CI runners.",
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"

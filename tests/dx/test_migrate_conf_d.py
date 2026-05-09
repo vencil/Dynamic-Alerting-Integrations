@@ -218,7 +218,7 @@ class TestCLIIntegration:
             [sys.executable, "-m", "migrate_conf_d", "--help"],
             cwd=_TOOLS_DIR,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8",
         )
         assert result.returncode == 0
 
@@ -238,7 +238,7 @@ class TestCLIIntegration:
             [sys.executable, "-m", "migrate_conf_d", "--conf-d", str(conf_d), "--dry-run"],
             cwd=_TOOLS_DIR,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8",
         )
         assert result.returncode == 0
         assert "mkdir" in result.stdout or "Dry-run" in result.stdout
@@ -249,7 +249,7 @@ class TestCLIIntegration:
             [sys.executable, "-m", "migrate_conf_d", "--conf-d", str(tmp_path / "nonexistent")],
             cwd=_TOOLS_DIR,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8",
         )
         assert result.returncode != 0
 
@@ -272,7 +272,7 @@ class TestCLIIntegration:
              "--output-plan", str(plan_file)],
             cwd=_TOOLS_DIR,
             capture_output=True,
-            text=True
+            text=True, encoding="utf-8",
         )
         assert result.returncode == 0
         assert plan_file.exists()
