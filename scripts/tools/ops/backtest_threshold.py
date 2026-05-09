@@ -37,6 +37,7 @@ import subprocess
 import sys
 import urllib.parse
 from datetime import datetime, timezone
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -143,7 +144,7 @@ def extract_changes_from_git_diff():
         if line.startswith("+++ b/"):
             fname = line[6:]
             # Extract tenant from filename (conf.d/db-a.yaml → db-a)
-            basename = os.path.basename(fname)
+            basename = Path(fname).name
             if basename.endswith(".yaml") and not basename.startswith("_"):
                 current_file = basename.removesuffix(".yaml")
             else:
@@ -196,17 +197,18 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 
     Returns list of dicts: [{tenant, metric, old_value, new_value}, ...]
     """
-    import glob as glob_mod
     changes = []
 
-    for path in sorted(glob_mod.glob(os.path.join(config_dir, "*.yaml"))):
-        basename = os.path.basename(path)
+    config_base = Path(config_dir)
+    baseline_base = Path(baseline_dir)
+    for path in sorted(config_base.glob("*.yaml")):
+        basename = path.name
         if basename.startswith("_"):
             continue
 
         tenant = basename.removesuffix(".yaml")
-        new_data = load_yaml_file(path, default={})
-        baseline_path = os.path.join(baseline_dir, basename)
+        new_data = load_yaml_file(str(path), default={})
+        baseline_path = str(baseline_base / basename)
         old_data = load_yaml_file(baseline_path, default={})
 
         # Compare all metric keys
