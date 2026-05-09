@@ -9,9 +9,23 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+# Same family as the 3 modules skipped by PR #346: Git Bash on Windows mangles
+# backslash arguments — `bash C:\path\file.sh` is parsed as
+# `bash C:Usersvencs...recover_index.sh` (backslashes eaten as escape chars),
+# so the script can never be located. Linux CI runs all 4 tests cross-platform
+# unaffected.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Git Bash on Windows mangles backslash path args to bash scripts; "
+           "Linux CI exercises this module fully (see PR #346 for the same "
+           "fix applied to test_verify_release.py / test_preflight_pass_gate.py / "
+           "test_preflight_marker.py).",
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "ops" / "recover_index.sh"
