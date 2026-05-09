@@ -1,0 +1,146 @@
+name: Nightly Mutation Pilot
+
+# P1-7 (testing-quality follow-on): nightly run of the mutation pilot scripts
+# (`tests/shared/_mutation_pilot.py` for Python, `tests/shared/_go_mutation_pilot.py`
+# for Go) so the mutation score has continuous observability instead of being
+# a one-shot snapshot.
+#
+# Why nightly + advisory:
+#   - Mutation pilots are slow (each mutation = re-run a focused pytest scope
+#     or `go test`); running on every PR multiplies CI time and offers low
+#     marginal value because the pilots don't change shape between PRs.
+#   - The signal we want is *trend*: if today's run drops from 96% caught to
+#     90%, a recent code change weakened test coverage. The job posts the
+#     count + survivor list to the workflow Step Summary so it's grep-able
+#     in the Actions UI.
+#   - Workflow does NOT block any PR. Surviving mutations are surfaced as a
+#     warning + artifact for human review.
+#
+# Floor scores at the time this workflow lands (PRs #329-#349 closed):
+#   - Python:  67 / 70 mutations caught (~96%); 3 known equivalent-mutation survivors
+#   - Go:      ~13 / 15 mutations caught; small ramp expected from PR #348/#349
+# These are the BASELINE — drift below this should prompt investigation.
+
+on:
+  schedule:
+    # 17:00 UTC = 01:00 Asia/Taipei. Runs once daily, after the nightly
+    # race detector window so the two don't pile on the runner pool.
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+    # Manual trigger lets a reviewer re-run the pilot before merging
+    # a coverage-impacting PR.
+
+permissions:
+  contents: read
+
+concurrency:
+  # Multiple schedule + dispatch invocations on the same ref serialize
+  # rather than parallelize — mutation pilots are expensive and we don't
+  # need two concurrent runs.
+  group: nightly-mutation-pilot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  python-pilot:
+    name: Python Mutation Pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Python mutation pilot
+        id: pilot
+        # The pilot script exits 1 when ANY mutation survives. We capture
+        # both the exit code and the output for the summary; we DO NOT let
+        # a non-zero rc fail the workflow because survivors include known
+        # equivalent mutations (see _mutation_pilot.py docstring).
+        run: |
+          set +e
+          python tests/shared/_mutation_pilot.py 2>&1 | tee mutation-python.log
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Extract summary
+        id: summary
+        run: |
+          # Last 50 lines should include the SUMMARY block + survivor list.
+          tail -n 50 mutation-python.log > mutation-python-summary.log
+          {
+            echo "## Python Mutation Pilot — $(date -u +%Y-%m-%d)"
+            echo ""
+            echo '```'
+            tail -n 30 mutation-python.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full log
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-python-${{ github.run_id }}
+          path: mutation-python.log
+          retention-days: 30
+
+  go-pilot:
+    name: Go Mutation Pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+
+      - name: Run Go mutation pilot
+        id: pilot
+        # Same exit-code handling as the Python job — exit 1 means at least
+        # one mutation survived, but we want the workflow to remain green
+        # so the score keeps reporting in the Actions UI.
+        run: |
+          set +e
+          python tests/shared/_go_mutation_pilot.py 2>&1 | tee mutation-go.log
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Extract summary
+        run: |
+          tail -n 50 mutation-go.log > mutation-go-summary.log
+          {
+            echo "## Go Mutation Pilot — $(date -u +%Y-%m-%d)"
+            echo ""
+            echo '```'
+            tail -n 30 mutation-go.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full log
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-go-${{ github.run_id }}
+          path: mutation-go.log
+          retention-days: 30

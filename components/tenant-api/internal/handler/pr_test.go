@@ -44,6 +44,7 @@ func newTestTracker(t *testing.T, prs []platform.PRInfo) *gh.Tracker {
 }
 
 func TestListPRs_Empty(t *testing.T) {
+	t.Parallel()
 	tracker := newTestTracker(t, []platform.PRInfo{})
 
 	h := (&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")}).ListPRs()
@@ -65,6 +66,7 @@ func TestListPRs_Empty(t *testing.T) {
 }
 
 func TestListPRs_WithPRs(t *testing.T) {
+	t.Parallel()
 	tracker := newTestTracker(t, []platform.PRInfo{
 		{Number: 1, WebURL: "https://gh/1", State: "open", Title: "PR1", HeadRef: "tenant-api/db-a/20260406"},
 		{Number: 2, WebURL: "https://gh/2", State: "open", Title: "PR2", HeadRef: "tenant-api/db-b/20260406"},
@@ -86,6 +88,7 @@ func TestListPRs_WithPRs(t *testing.T) {
 }
 
 func TestListPRs_WithRegisteredPR(t *testing.T) {
+	t.Parallel()
 	tracker := newTestTracker(t, []platform.PRInfo{})
 
 	// Manually register a PR
@@ -114,6 +117,7 @@ func TestListPRs_WithRegisteredPR(t *testing.T) {
 }
 
 func TestListPRs_FilterByTenant(t *testing.T) {
+	t.Parallel()
 	tracker := newTestTracker(t, []platform.PRInfo{})
 
 	tracker.RegisterPR(platform.PRInfo{
@@ -142,6 +146,7 @@ func TestListPRs_FilterByTenant(t *testing.T) {
 }
 
 func TestListPRs_FilterByNonexistentTenant(t *testing.T) {
+	t.Parallel()
 	tracker := newTestTracker(t, []platform.PRInfo{})
 	tracker.RegisterPR(platform.PRInfo{
 		Number: 1, WebURL: "https://gh/1", State: "open", TenantID: "db-a",
@@ -163,6 +168,7 @@ func TestListPRs_FilterByNonexistentTenant(t *testing.T) {
 // --- PutTenant PR mode tests ---
 
 func TestPutTenant_DirectMode(t *testing.T) {
+	t.Parallel()
 	// In direct mode, PR params are nil — should fall through to normal behavior
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
@@ -187,6 +193,7 @@ func TestPutTenant_DirectMode(t *testing.T) {
 }
 
 func TestPutTenant_PRMode_PendingPRConflict(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 
@@ -233,6 +240,7 @@ func TestPutTenant_PRMode_PendingPRConflict(t *testing.T) {
 }
 
 func TestPutTenant_PRMode_InvalidTenantID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 
@@ -259,6 +267,7 @@ func TestPutTenant_PRMode_InvalidTenantID(t *testing.T) {
 // --- PutTenant GitLab MR mode tests ---
 
 func TestPutTenant_GitLabMode_PendingMRConflict(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 
@@ -362,6 +371,7 @@ func (m *mockPlatformTracker) LastSyncTime() time.Time { return time.Now() }
 // --- Happy-path test: PutTenant in PR mode (successful PR creation) ---
 
 func TestPutTenant_PRMode_HappyPath(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
@@ -418,6 +428,7 @@ func TestPutTenant_PRMode_HappyPath(t *testing.T) {
 // --- Happy-path test: PutTenant GitLab MR mode ---
 
 func TestPutTenant_GitLabMode_HappyPath(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
@@ -447,6 +458,7 @@ func TestPutTenant_GitLabMode_HappyPath(t *testing.T) {
 // --- Batch PR mode tests ---
 
 func TestBatchTenants_PRMode_AllInvalid(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
@@ -480,6 +492,7 @@ func TestBatchTenants_PRMode_AllInvalid(t *testing.T) {
 }
 
 func TestBatchTenants_PRMode_PendingPRRegistered(t *testing.T) {
+	t.Parallel()
 	// Verify that after batch PR, the tracker has entries for all tenants
 	mockTracker := &mockPlatformTracker{}
 
@@ -510,6 +523,7 @@ func TestBatchTenants_PRMode_PendingPRRegistered(t *testing.T) {
 // --- WriteMode constants tests ---
 
 func TestWriteModeConstants(t *testing.T) {
+	t.Parallel()
 	if WriteModeDirect != "direct" {
 		t.Errorf("WriteModeDirect = %q, want 'direct'", WriteModeDirect)
 	}
@@ -525,6 +539,7 @@ func TestWriteModeConstants(t *testing.T) {
 }
 
 func TestIsPRMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		mode WriteMode
 		want bool

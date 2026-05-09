@@ -22,6 +22,7 @@ func requestWithID(method, path, reqID string) *http.Request {
 }
 
 func TestWriteJSONError_AddsCodeAndRequestID(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	r := requestWithID("GET", "/x", "req-abc-123")
 	writeJSONError(w, r, http.StatusNotFound, "thing not found")
@@ -45,6 +46,7 @@ func TestWriteJSONError_AddsCodeAndRequestID(t *testing.T) {
 }
 
 func TestWriteJSONError_NilRequestOmitsRequestID(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	writeJSONError(w, nil, http.StatusBadRequest, "bad")
 	var resp map[string]any
@@ -55,6 +57,7 @@ func TestWriteJSONError_NilRequestOmitsRequestID(t *testing.T) {
 }
 
 func TestWriteValidationErrors_Shape(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	r := requestWithID("POST", "/x", "req-validate")
 	violations := []Violation{
@@ -89,6 +92,7 @@ func TestWriteValidationErrors_Shape(t *testing.T) {
 }
 
 func TestWritePolicyViolation_Shape(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	r := requestWithID("PUT", "/x", "req-policy")
 	violations := []policy.Violation{
@@ -122,6 +126,7 @@ func TestWritePolicyViolation_Shape(t *testing.T) {
 }
 
 func TestErrorResponse_ExtraInlinedAtTopLevel(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	r := requestWithID("POST", "/x", "req-extra")
 	writeErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
@@ -157,6 +162,7 @@ func TestErrorResponse_ExtraInlinedAtTopLevel(t *testing.T) {
 }
 
 func TestCodeFromStatus(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		status int
 		want   string
@@ -181,6 +187,7 @@ func TestCodeFromStatus(t *testing.T) {
 // envelope. Verifies that retry_after_s + Retry-After header still
 // match (RFC 6585) and code is the expected RATE_LIMITED token.
 func TestRateLimit_EnvelopeShape(t *testing.T) {
+	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
 	mw := RateLimit(cfg, make(chan struct{}))
 

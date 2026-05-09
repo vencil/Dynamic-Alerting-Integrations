@@ -24,6 +24,7 @@ import (
 // ─────────────────────────────────────────────────────────────────
 
 func TestRequestIDResponse_EchoesIDFromContext(t *testing.T) {
+	t.Parallel()
 	// Compose: chi.RequestID populates the context, our
 	// RequestIDResponse copies it to the response header.
 	handler := middleware.RequestID(RequestIDResponse(http.HandlerFunc(
@@ -42,6 +43,7 @@ func TestRequestIDResponse_EchoesIDFromContext(t *testing.T) {
 }
 
 func TestRequestIDResponse_PreservesIncomingHeader(t *testing.T) {
+	t.Parallel()
 	// chi.RequestID prefers an existing X-Request-ID header on
 	// the request — RequestIDResponse should echo that same
 	// value (so a caller's correlation ID round-trips).
@@ -63,6 +65,7 @@ func TestRequestIDResponse_PreservesIncomingHeader(t *testing.T) {
 }
 
 func TestRequestIDResponse_NoOpWhenContextEmpty(t *testing.T) {
+	t.Parallel()
 	// Defensive: if RequestIDResponse runs without chi.RequestID
 	// upstream (misconfigured chain), it should not crash and
 	// should not set a header.
@@ -86,6 +89,7 @@ func TestRequestIDResponse_NoOpWhenContextEmpty(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestRateLimit_AllowsUnderCap(t *testing.T) {
+	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 3}
 	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +108,7 @@ func TestRateLimit_AllowsUnderCap(t *testing.T) {
 }
 
 func TestRateLimit_BlocksAtCap(t *testing.T) {
+	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 2}
 	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +162,7 @@ func TestRateLimit_BlocksAtCap(t *testing.T) {
 }
 
 func TestRateLimit_PerCallerIsolation(t *testing.T) {
+	t.Parallel()
 	// Alice's bucket overflowing must NOT affect Bob's bucket.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
 	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
@@ -194,6 +200,7 @@ func TestRateLimit_PerCallerIsolation(t *testing.T) {
 }
 
 func TestRateLimit_SkipPathsExempt(t *testing.T) {
+	t.Parallel()
 	// `/health` and `/metrics` are exempt by default; even at
 	// cap=1 they should return 200 indefinitely.
 	cfg := DefaultRateLimit()
@@ -214,6 +221,7 @@ func TestRateLimit_SkipPathsExempt(t *testing.T) {
 }
 
 func TestRateLimit_DisabledWhenZero(t *testing.T) {
+	t.Parallel()
 	// requestsPerMinute=0 → middleware degrades to a no-op pass-
 	// through. The same identity can call any number of times.
 	cfg := RateLimitConfig{RequestsPerMinute: 0}
@@ -234,6 +242,7 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 }
 
 func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
+	t.Parallel()
 	// No X-Forwarded-Email → bucket by X-Real-IP.
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
 	handler := RateLimit(cfg, make(chan struct{}))(http.HandlerFunc(
@@ -268,6 +277,7 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 }
 
 func TestRateLimit_SlidingWindowEviction(t *testing.T) {
+	t.Parallel()
 	// Use the lower-level allow() to test the sliding window
 	// without sleeping — pass our own clock values. This locks
 	// the eviction semantics: a timestamp older than 60s falls
@@ -303,6 +313,7 @@ func TestRateLimit_SlidingWindowEviction(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestRateLimitConfigFromEnv_Default(t *testing.T) {
+	t.Parallel()
 	cfg, malformed := RateLimitConfigFromEnv("")
 	if cfg.RequestsPerMinute != 100 {
 		t.Errorf("empty env: RequestsPerMinute = %d, want 100", cfg.RequestsPerMinute)
@@ -316,6 +327,7 @@ func TestRateLimitConfigFromEnv_Default(t *testing.T) {
 }
 
 func TestRateLimitConfigFromEnv_PositiveOverride(t *testing.T) {
+	t.Parallel()
 	cfg, malformed := RateLimitConfigFromEnv("250")
 	if cfg.RequestsPerMinute != 250 {
 		t.Errorf("env=250: RequestsPerMinute = %d, want 250", cfg.RequestsPerMinute)
@@ -326,6 +338,7 @@ func TestRateLimitConfigFromEnv_PositiveOverride(t *testing.T) {
 }
 
 func TestRateLimitConfigFromEnv_Zero(t *testing.T) {
+	t.Parallel()
 	cfg, malformed := RateLimitConfigFromEnv("0")
 	if cfg.RequestsPerMinute != 0 {
 		t.Errorf("env=0: RequestsPerMinute = %d, want 0 (disabled)", cfg.RequestsPerMinute)
@@ -336,6 +349,7 @@ func TestRateLimitConfigFromEnv_Zero(t *testing.T) {
 }
 
 func TestRateLimitConfigFromEnv_Malformed(t *testing.T) {
+	t.Parallel()
 	// Garbage → fall back to default AND flag malformed so caller can warn.
 	cfg, malformed := RateLimitConfigFromEnv("nonsense")
 	if cfg.RequestsPerMinute != 100 {
@@ -347,6 +361,7 @@ func TestRateLimitConfigFromEnv_Malformed(t *testing.T) {
 }
 
 func TestRateLimitConfigFromEnv_Negative(t *testing.T) {
+	t.Parallel()
 	// Negative → fall back to default AND flag malformed.
 	cfg, malformed := RateLimitConfigFromEnv("-1")
 	if cfg.RequestsPerMinute != 100 {
@@ -367,6 +382,7 @@ func TestRateLimitConfigFromEnv_Negative(t *testing.T) {
 // output by swapping in a JSON handler over a bytes.Buffer for the
 // duration of the test.
 func TestSlogRequestLogger_EmitsStructuredLine(t *testing.T) {
+	t.Parallel()
 	t.Helper()
 	// Save + restore default logger.
 	origLogger := slog.Default()
@@ -420,6 +436,7 @@ func TestSlogRequestLogger_EmitsStructuredLine(t *testing.T) {
 // TestSlogRequestLogger_5xxLogsAtWarn ensures server errors get
 // elevated to WARN so log aggregators can alert on level alone.
 func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
+	t.Parallel()
 	origLogger := slog.Default()
 	defer slog.SetDefault(origLogger)
 
@@ -452,6 +469,7 @@ func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
 // rejection counter increments once per blocked request and is
 // readable via RateLimitMetrics().
 func TestRateLimit_RejectionsCounter(t *testing.T) {
+	t.Parallel()
 	cfg := RateLimitConfig{RequestsPerMinute: 1}
 	stop := make(chan struct{})
 	defer close(stop)
@@ -489,6 +507,7 @@ func TestRateLimit_RejectionsCounter(t *testing.T) {
 // then the wall-clock advances past the rolling window, then
 // sweep() with the future timestamp drops the now-empty bucket.
 func TestRateLimit_SweepEvictsExpiredBucket(t *testing.T) {
+	t.Parallel()
 	l := newRateLimiter(RateLimitConfig{RequestsPerMinute: 100})
 
 	// Caller registers an old timestamp.
@@ -512,6 +531,7 @@ func TestRateLimit_SweepEvictsExpiredBucket(t *testing.T) {
 // short interval, closes stopCh, and asserts the goroutine exits
 // promptly. Guards against the sweeper outliving server shutdown.
 func TestRateLimit_SweepLoopExitsOnStop(t *testing.T) {
+	t.Parallel()
 	stop := make(chan struct{})
 	l := newRateLimiterWithSweep(RateLimitConfig{RequestsPerMinute: 100}, stop)
 	_ = l
@@ -537,6 +557,7 @@ func TestRateLimit_SweepLoopExitsOnStop(t *testing.T) {
 // PR-11 metrics render in the /metrics text output with HELP +
 // TYPE lines.
 func TestMetricsHandler_IncludesRateLimitMetrics(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/metrics", nil)
 	MetricsHandler(w, r)

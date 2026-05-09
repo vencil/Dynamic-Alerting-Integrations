@@ -5,6 +5,7 @@ import (
 )
 
 func TestMetadataMatches(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		allowList []string
@@ -84,6 +85,7 @@ func TestMetadataMatches(t *testing.T) {
 }
 
 func TestHasMetadataAccess(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		config      *RBACConfig
@@ -362,6 +364,7 @@ func TestHasMetadataAccess(t *testing.T) {
 }
 
 func TestAccessibleEnvironments(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		config    *RBACConfig
@@ -513,6 +516,7 @@ func TestAccessibleEnvironments(t *testing.T) {
 }
 
 func TestAccessibleDomains(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		config    *RBACConfig
@@ -640,6 +644,7 @@ func TestAccessibleDomains(t *testing.T) {
 }
 
 func TestHasMetadataAccess_BackwardCompatible(t *testing.T) {
+	t.Parallel()
 	// Test that rules without Environments/Domains (old format) work as before
 	tests := []struct {
 		name      string

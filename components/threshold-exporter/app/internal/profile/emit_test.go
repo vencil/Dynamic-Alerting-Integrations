@@ -80,6 +80,7 @@ func fixtureProposalSetForEmit() (*ProposalSet, []parser.ParsedRule) {
 // --- input validation -----------------------------------------------
 
 func TestEmit_ErrorOnNilProposalSet(t *testing.T) {
+	t.Parallel()
 	_, err := EmitProposals(EmissionInput{})
 	if err == nil {
 		t.Fatal("err = nil for nil ProposalSet, want error")
@@ -87,6 +88,7 @@ func TestEmit_ErrorOnNilProposalSet(t *testing.T) {
 }
 
 func TestEmit_ErrorOnEmptyProposals(t *testing.T) {
+	t.Parallel()
 	_, err := EmitProposals(EmissionInput{ProposalSet: &ProposalSet{}})
 	if err == nil {
 		t.Fatal("err = nil for empty Proposals, want error")
@@ -94,6 +96,7 @@ func TestEmit_ErrorOnEmptyProposals(t *testing.T) {
 }
 
 func TestEmit_ErrorOnLayoutLengthMismatch(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	_, err := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -111,6 +114,7 @@ func TestEmit_ErrorOnLayoutLengthMismatch(t *testing.T) {
 // --- happy path ----------------------------------------------------
 
 func TestEmit_BasicHappyPath(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	got, err := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -149,6 +153,7 @@ func TestEmit_BasicHappyPath(t *testing.T) {
 }
 
 func TestEmit_DefaultsYAMLContents(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	got, _ := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -182,6 +187,7 @@ func TestEmit_DefaultsYAMLContents(t *testing.T) {
 }
 
 func TestEmit_TenantYAMLContents(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	got, _ := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -225,6 +231,7 @@ func TestEmit_TenantYAMLContents(t *testing.T) {
 }
 
 func TestEmit_TenantKeyHeuristic_PrefersTenantLabel(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	got, _ := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -248,6 +255,7 @@ func TestEmit_TenantKeyHeuristic_PrefersTenantLabel(t *testing.T) {
 }
 
 func TestEmit_TenantKeyHeuristic_FallsBackToFirstVaryingKey(t *testing.T) {
+	t.Parallel()
 	// A proposal whose VaryingLabelKeys doesn't contain "tenant" —
 	// emitter should fall back to the first (alphabetical) varying
 	// key. Build a minimal ProposalSet/rules that exercises this.
@@ -298,6 +306,7 @@ func TestEmit_TenantKeyHeuristic_FallsBackToFirstVaryingKey(t *testing.T) {
 // --- warning paths -------------------------------------------------
 
 func TestEmit_EmptyDirEntryGoesToWarnings(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	got, err := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -319,6 +328,7 @@ func TestEmit_EmptyDirEntryGoesToWarnings(t *testing.T) {
 }
 
 func TestEmit_MissingMemberRuleGoesToWarnings(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	// Pop one rule so a MemberRuleID can't be looked up.
 	rules = rules[1:] // drops src.yaml#groups[0].rules[0]
@@ -347,6 +357,7 @@ func TestEmit_MissingMemberRuleGoesToWarnings(t *testing.T) {
 }
 
 func TestEmit_NoVaryingLabels_OneExplanatoryWarning(t *testing.T) {
+	t.Parallel()
 	// Pathological cluster: 2 structurally-identical rules with
 	// nothing varying between them. Should emit _defaults.yaml +
 	// PROPOSAL.md but NO tenant files, with a SINGLE explanatory
@@ -391,6 +402,7 @@ func TestEmit_NoVaryingLabels_OneExplanatoryWarning(t *testing.T) {
 }
 
 func TestEmit_RuleWithoutTenantLabel_GoesToWarnings(t *testing.T) {
+	t.Parallel()
 	rules := []parser.ParsedRule{
 		{
 			SourceRuleID: "x#0",
@@ -437,6 +449,7 @@ func TestEmit_RuleWithoutTenantLabel_GoesToWarnings(t *testing.T) {
 // --- determinism + safe filenames ----------------------------------
 
 func TestEmit_DeterministicOutput(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	r1, _ := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -464,6 +477,7 @@ func TestEmit_DeterministicOutput(t *testing.T) {
 }
 
 func TestEmit_SafeFilename_Slashes(t *testing.T) {
+	t.Parallel()
 	rules := []parser.ParsedRule{
 		{SourceRuleID: "x#0", Alert: "A", Expr: "m", Labels: map[string]string{"tenant": "team/payments/db"}, Dialect: parser.DialectProm},
 		{SourceRuleID: "x#1", Alert: "A", Expr: "m", Labels: map[string]string{"tenant": "team/checkout/db"}, Dialect: parser.DialectProm},
@@ -491,6 +505,7 @@ func TestEmit_SafeFilename_Slashes(t *testing.T) {
 }
 
 func TestEmit_SafeFilename_HiddenFileGuard(t *testing.T) {
+	t.Parallel()
 	// A leading `.` in the tenant id would create a hidden file.
 	rules := []parser.ParsedRule{
 		{SourceRuleID: "x#0", Alert: "A", Expr: "m", Labels: map[string]string{"tenant": ".hidden-tenant"}, Dialect: parser.DialectProm},
@@ -519,6 +534,7 @@ func TestEmit_SafeFilename_HiddenFileGuard(t *testing.T) {
 // --- Markdown render -----------------------------------------------
 
 func TestEmit_PROPOSAL_md_ContainsKeyFields(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureProposalSetForEmit()
 	got, _ := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -597,6 +613,7 @@ func fixtureTranslatableProposalSet() (*ProposalSet, []parser.ParsedRule) {
 }
 
 func TestEmit_Translated_HappyPathProducesConfDShape(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureTranslatableProposalSet()
 	got, err := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -641,6 +658,7 @@ func TestEmit_Translated_HappyPathProducesConfDShape(t *testing.T) {
 }
 
 func TestEmit_Translated_PROPOSAL_md_HasTranslationSummary(t *testing.T) {
+	t.Parallel()
 	ps, rules := fixtureTranslatableProposalSet()
 	got, _ := EmitProposals(EmissionInput{
 		ProposalSet: ps,
@@ -668,6 +686,7 @@ func TestEmit_Translated_PROPOSAL_md_HasTranslationSummary(t *testing.T) {
 // Skipped should NOT poison the batch — emit goes back to the
 // PR-2 intermediate format for that one and surfaces a warning.
 func TestEmit_Translated_FallsBackToIntermediateOnSkip(t *testing.T) {
+	t.Parallel()
 	// Use the original fixture which has rollup_rate (no top-level
 	// comparison) — translator skips this cluster.
 	ps, rules := fixtureProposalSetForEmit()
@@ -704,6 +723,7 @@ func TestEmit_Translated_FallsBackToIntermediateOnSkip(t *testing.T) {
 }
 
 func TestEmit_Translated_DefaultsYAMLIsValidYAML(t *testing.T) {
+	t.Parallel()
 	// The translated _defaults.yaml prepends a comment header to the
 	// yaml.Marshal output. Verify the result still round-trips
 	// through yaml.Unmarshal — header comments must not break parse.
@@ -729,6 +749,7 @@ func TestEmit_Translated_DefaultsYAMLIsValidYAML(t *testing.T) {
 // formatThresholdString covers float→string conversion rules
 // matter (avoid "80.000000" creeping into tenant.yaml).
 func TestFormatThresholdString(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   float64
 		want string

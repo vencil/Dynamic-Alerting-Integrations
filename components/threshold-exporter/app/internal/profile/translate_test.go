@@ -24,6 +24,7 @@ import (
 // --- TranslateRule: happy paths --------------------------------------
 
 func TestTranslateRule_ExplicitMetricKeyLabelWins(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{
 		SourceRuleID: "rules.yaml#g[0].r[0]",
 		Alert:        "SomeAlert",
@@ -58,6 +59,7 @@ func TestTranslateRule_ExplicitMetricKeyLabelWins(t *testing.T) {
 }
 
 func TestTranslateRule_AlertNameSnakeCaseFallback(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{
 		SourceRuleID: "rules.yaml#g[0].r[1]",
 		Alert:        "MySQLHighConnections",
@@ -87,6 +89,7 @@ func TestTranslateRule_AlertNameSnakeCaseFallback(t *testing.T) {
 }
 
 func TestTranslateRule_RecordRuleNoSeverity(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{
 		SourceRuleID: "rules.yaml#g[0].r[2]",
 		Record:       "instance:cpu_usage:rate5m",
@@ -108,6 +111,7 @@ func TestTranslateRule_RecordRuleNoSeverity(t *testing.T) {
 }
 
 func TestTranslateRule_InvertedComparisonGetsFlipped(t *testing.T) {
+	t.Parallel()
 	// `0.85 < rate(...)` is semantically the same as `rate(...) > 0.85`.
 	// Translator should normalise to "metric op threshold" form.
 	r := parser.ParsedRule{
@@ -126,6 +130,7 @@ func TestTranslateRule_InvertedComparisonGetsFlipped(t *testing.T) {
 }
 
 func TestTranslateRule_AllOperators(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		op      string
 		want    string
@@ -163,6 +168,7 @@ func TestTranslateRule_AllOperators(t *testing.T) {
 // --- TranslateRule: skip paths ---------------------------------------
 
 func TestTranslateRule_NoComparisonSkipped(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{
 		SourceRuleID: "x",
 		Record:       "rec_no_comparison",
@@ -178,6 +184,7 @@ func TestTranslateRule_NoComparisonSkipped(t *testing.T) {
 }
 
 func TestTranslateRule_VectorComparisonSkipped(t *testing.T) {
+	t.Parallel()
 	// `metric_a > metric_b` — both sides are vector exprs; no
 	// numeric scalar to extract.
 	r := parser.ParsedRule{
@@ -191,6 +198,7 @@ func TestTranslateRule_VectorComparisonSkipped(t *testing.T) {
 }
 
 func TestTranslateRule_ParseErrorSkipped(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{
 		SourceRuleID: "x", Alert: "X",
 		Expr: `this is not !! valid PromQL >`,
@@ -205,6 +213,7 @@ func TestTranslateRule_ParseErrorSkipped(t *testing.T) {
 }
 
 func TestTranslateRule_EmptyExprErrors(t *testing.T) {
+	t.Parallel()
 	_, err := TranslateRule(parser.ParsedRule{SourceRuleID: "x", Alert: "X"})
 	if err == nil {
 		t.Fatal("expected error on empty Expr; got nil")
@@ -212,6 +221,7 @@ func TestTranslateRule_EmptyExprErrors(t *testing.T) {
 }
 
 func TestTranslateRule_EqualityOperatorSkipped(t *testing.T) {
+	t.Parallel()
 	// `==` is intentionally not supported (ADR-019 §non-goals).
 	r := parser.ParsedRule{
 		SourceRuleID: "x", Alert: "X",
@@ -226,6 +236,7 @@ func TestTranslateRule_EqualityOperatorSkipped(t *testing.T) {
 // --- resolveMetricKey: name resolution -------------------------------
 
 func TestResolveMetricKey_ExplicitLabelTakesPrecedence(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{
 		Alert:  "FallbackName",
 		Labels: map[string]string{"metric_key": "explicit_choice"},
@@ -237,6 +248,7 @@ func TestResolveMetricKey_ExplicitLabelTakesPrecedence(t *testing.T) {
 }
 
 func TestResolveMetricKey_AlertNameWhenNoLabel(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{Alert: "HighDiskIO"}
 	key, status, warnings := resolveMetricKey(r, nil)
 	if key != "high_disk_io" {
@@ -248,6 +260,7 @@ func TestResolveMetricKey_AlertNameWhenNoLabel(t *testing.T) {
 }
 
 func TestResolveMetricKey_RecordWhenNoAlert(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{Record: "instance:cpu:rate"}
 	key, status, _ := resolveMetricKey(r, nil)
 	if key == "" || status != TranslationPartial {
@@ -256,6 +269,7 @@ func TestResolveMetricKey_RecordWhenNoAlert(t *testing.T) {
 }
 
 func TestResolveMetricKey_AllSourcesEmptyReturnsSkipped(t *testing.T) {
+	t.Parallel()
 	r := parser.ParsedRule{}
 	key, status, warnings := resolveMetricKey(r, nil)
 	if key != "" || status != TranslationSkipped {
@@ -269,6 +283,7 @@ func TestResolveMetricKey_AllSourcesEmptyReturnsSkipped(t *testing.T) {
 // --- snakeCaseIdentifier ---------------------------------------------
 
 func TestSnakeCaseIdentifier(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{
@@ -313,6 +328,7 @@ func makeClusterMember(idx int, tenantID string, threshold float64) parser.Parse
 }
 
 func TestTranslateProposal_HappyPath_PerTenantOverridesOnDivergence(t *testing.T) {
+	t.Parallel()
 	members := []parser.ParsedRule{
 		makeClusterMember(0, "tenant-a", 80),
 		makeClusterMember(1, "tenant-b", 80), // same as default → no override
@@ -352,6 +368,7 @@ func TestTranslateProposal_HappyPath_PerTenantOverridesOnDivergence(t *testing.T
 }
 
 func TestTranslateProposal_MetricKeyDissentMajorityWins(t *testing.T) {
+	t.Parallel()
 	members := []parser.ParsedRule{
 		// Two members vote for "metric_x"
 		makeClusterMember(0, "tenant-a", 80),
@@ -394,6 +411,7 @@ func TestTranslateProposal_MetricKeyDissentMajorityWins(t *testing.T) {
 }
 
 func TestTranslateProposal_MedianResistsOutliers(t *testing.T) {
+	t.Parallel()
 	// Three members with thresholds 50, 80, 5000. Mean would be
 	// 1710 (terrible); median is 80 (right answer).
 	members := []parser.ParsedRule{
@@ -422,6 +440,7 @@ func TestTranslateProposal_MedianResistsOutliers(t *testing.T) {
 }
 
 func TestTranslateProposal_AllMembersSkippedReturnsSkipped(t *testing.T) {
+	t.Parallel()
 	members := []parser.ParsedRule{
 		{SourceRuleID: "x", Alert: "X", Expr: `rate(foo[5m])`}, // no comparison
 		{SourceRuleID: "y", Alert: "Y", Expr: `count(bar)`},    // no comparison
@@ -442,6 +461,7 @@ func TestTranslateProposal_AllMembersSkippedReturnsSkipped(t *testing.T) {
 }
 
 func TestTranslateProposal_PartialMembersDowngradeStatus(t *testing.T) {
+	t.Parallel()
 	members := []parser.ParsedRule{
 		makeClusterMember(0, "tenant-a", 80),
 		// One un-translatable member doesn't sink the proposal but
@@ -471,6 +491,7 @@ func TestTranslateProposal_PartialMembersDowngradeStatus(t *testing.T) {
 }
 
 func TestTranslateProposal_EmptyMembersErrors(t *testing.T) {
+	t.Parallel()
 	_, err := TranslateProposal(ExtractionProposal{}, nil, "tenant")
 	if err == nil {
 		t.Fatal("expected error on zero members; got nil")
@@ -480,6 +501,7 @@ func TestTranslateProposal_EmptyMembersErrors(t *testing.T) {
 // --- pickMajority + median --- one-line determinism checks -----------
 
 func TestPickMajority_TieBrokenAlphabetically(t *testing.T) {
+	t.Parallel()
 	got := pickMajority(map[string]int{"b": 2, "a": 2})
 	if got != "a" {
 		t.Errorf("got %q, want a (alphabetical tie-break)", got)
@@ -487,6 +509,7 @@ func TestPickMajority_TieBrokenAlphabetically(t *testing.T) {
 }
 
 func TestMedian_OddAndEven(t *testing.T) {
+	t.Parallel()
 	if got := median([]float64{50, 80, 5000}); got != 80 {
 		t.Errorf("odd-len median = %v, want 80", got)
 	}
@@ -501,6 +524,7 @@ func TestMedian_OddAndEven(t *testing.T) {
 // --- formatVotes is part of dissent warning message; pin output ------
 
 func TestFormatVotes_StableSortedOutput(t *testing.T) {
+	t.Parallel()
 	got := formatVotes(map[string]int{"b": 2, "a": 1, "c": 3})
 	want := `"a"=1, "b"=2, "c"=3`
 	if got != want {

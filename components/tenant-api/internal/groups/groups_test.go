@@ -22,6 +22,7 @@ const sampleGroupsYAML = `groups:
 `
 
 func TestParseConfig_Valid(t *testing.T) {
+	t.Parallel()
 	cfg, err := ParseConfig([]byte(sampleGroupsYAML))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -46,6 +47,7 @@ func TestParseConfig_Valid(t *testing.T) {
 }
 
 func TestParseConfig_Empty(t *testing.T) {
+	t.Parallel()
 	cfg, err := ParseConfig([]byte(""))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -56,6 +58,7 @@ func TestParseConfig_Empty(t *testing.T) {
 }
 
 func TestParseConfig_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	_, err := ParseConfig([]byte("{{invalid"))
 	if err == nil {
 		t.Error("expected error for invalid YAML")
@@ -63,6 +66,7 @@ func TestParseConfig_InvalidYAML(t *testing.T) {
 }
 
 func TestMarshalConfig_RoundTrip(t *testing.T) {
+	t.Parallel()
 	original, err := ParseConfig([]byte(sampleGroupsYAML))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -98,6 +102,7 @@ func TestMarshalConfig_RoundTrip(t *testing.T) {
 }
 
 func TestValidateGroupID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		id      string
 		wantErr bool
@@ -132,6 +137,7 @@ func TestValidateGroupID(t *testing.T) {
 }
 
 func TestNewManager_NoFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -147,6 +153,7 @@ func TestNewManager_NoFile(t *testing.T) {
 }
 
 func TestNewManager_WithFile(t *testing.T) {
+	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
 	mgr := NewManager(dir)
@@ -166,6 +173,7 @@ func TestNewManager_WithFile(t *testing.T) {
 }
 
 func TestManager_GetGroup(t *testing.T) {
+	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
 	mgr := NewManager(dir)
@@ -185,6 +193,7 @@ func TestManager_GetGroup(t *testing.T) {
 }
 
 func TestManager_Reload(t *testing.T) {
+	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
 	mgr := NewManager(dir)

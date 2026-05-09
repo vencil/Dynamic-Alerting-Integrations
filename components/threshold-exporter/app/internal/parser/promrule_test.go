@@ -22,6 +22,7 @@ func mustReadTestdata(t *testing.T, name string) []byte {
 }
 
 func TestParsePromRules_BasicWrappedShape(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_basic.yaml")
 	res, err := ParsePromRules(src, "promrule_basic.yaml", testGeneratedBy)
 	if err != nil {
@@ -64,6 +65,7 @@ func TestParsePromRules_BasicWrappedShape(t *testing.T) {
 }
 
 func TestParsePromRules_VMOnlyDialectClassified(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_metricsql.yaml")
 	res, err := ParsePromRules(src, "promrule_metricsql.yaml", testGeneratedBy)
 	if err != nil {
@@ -86,6 +88,7 @@ func TestParsePromRules_VMOnlyDialectClassified(t *testing.T) {
 }
 
 func TestParsePromRules_MixedDialectsPreserveIndividual(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_mixed.yaml")
 	res, err := ParsePromRules(src, "promrule_mixed.yaml", testGeneratedBy)
 	if err != nil {
@@ -109,6 +112,7 @@ func TestParsePromRules_MixedDialectsPreserveIndividual(t *testing.T) {
 }
 
 func TestParsePromRules_UnwrappedShape(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_unwrapped.yaml")
 	res, err := ParsePromRules(src, "promrule_unwrapped.yaml", testGeneratedBy)
 	if err != nil {
@@ -123,6 +127,7 @@ func TestParsePromRules_UnwrappedShape(t *testing.T) {
 }
 
 func TestParsePromRules_AmbiguousAndMissingNameWarning(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_ambiguous.yaml")
 	res, err := ParsePromRules(src, "promrule_ambiguous.yaml", testGeneratedBy)
 	if err != nil {
@@ -164,6 +169,7 @@ func TestParsePromRules_AmbiguousAndMissingNameWarning(t *testing.T) {
 }
 
 func TestParsePromRules_EmptyInputErrors(t *testing.T) {
+	t.Parallel()
 	_, err := ParsePromRules(nil, "x.yaml", testGeneratedBy)
 	if err == nil {
 		t.Error("err = nil for empty input, want error")
@@ -171,6 +177,7 @@ func TestParsePromRules_EmptyInputErrors(t *testing.T) {
 }
 
 func TestParsePromRules_MalformedYAMLErrors(t *testing.T) {
+	t.Parallel()
 	_, err := ParsePromRules([]byte("groups:\n  - [unclosed\n"), "broken.yaml", testGeneratedBy)
 	if err == nil {
 		t.Error("err = nil for malformed YAML, want fatal error")
@@ -178,6 +185,7 @@ func TestParsePromRules_MalformedYAMLErrors(t *testing.T) {
 }
 
 func TestParsePromRules_WrongCRDShapeYieldsWarningNotFatal(t *testing.T) {
+	t.Parallel()
 	// A valid YAML document with no `groups:` (operator pasted the
 	// wrong CRD shape) should surface as a warning, not a fatal
 	// error — partial-batch tolerance is a hard contract for C-10.
@@ -197,6 +205,7 @@ func TestParsePromRules_WrongCRDShapeYieldsWarningNotFatal(t *testing.T) {
 }
 
 func TestParsePromRules_LegitimateEmptyGroupReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// `groups: [{name: foo, rules: []}]` is a valid CRD shape with
 	// no rules to emit — caller may legitimately submit this between
 	// migration phases. Parser must return an empty ParseResult, not
@@ -215,6 +224,7 @@ func TestParsePromRules_LegitimateEmptyGroupReturnsEmpty(t *testing.T) {
 }
 
 func TestParsePromRules_ProvenanceStamped(t *testing.T) {
+	t.Parallel()
 	src := mustReadTestdata(t, "promrule_basic.yaml")
 	res, err := ParsePromRules(src, "promrule_basic.yaml", testGeneratedBy)
 	if err != nil {

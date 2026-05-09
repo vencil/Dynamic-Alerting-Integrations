@@ -10,6 +10,7 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		project string
@@ -30,6 +31,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestNewClientDefaultBranch(t *testing.T) {
+	t.Parallel()
 	c, err := NewClient("tok", "group/project", "")
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +42,7 @@ func TestNewClientDefaultBranch(t *testing.T) {
 }
 
 func TestProviderName(t *testing.T) {
+	t.Parallel()
 	c, _ := NewClient("tok", "group/project", "main")
 	if c.ProviderName() != "GitLab" {
 		t.Errorf("expected 'GitLab', got %q", c.ProviderName())
@@ -47,6 +50,7 @@ func TestProviderName(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("PRIVATE-TOKEN") != "good-token" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -71,6 +75,7 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestCreateBranch(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && strings.Contains(r.URL.Path, "/repository/branches") {
 			w.Header().Set("Content-Type", "application/json")
@@ -90,6 +95,7 @@ func TestCreateBranch(t *testing.T) {
 }
 
 func TestCreatePR(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/merge_requests") && r.Method == "POST" {
 			resp := map[string]interface{}{
@@ -127,6 +133,7 @@ func TestCreatePR(t *testing.T) {
 }
 
 func TestListOpenPRs(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mrs := []map[string]interface{}{
 			{
@@ -181,6 +188,7 @@ func TestListOpenPRs(t *testing.T) {
 }
 
 func TestListOpenPRs_APIError(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(w, `{"message":"500 Internal Server Error"}`)
@@ -197,6 +205,7 @@ func TestListOpenPRs_APIError(t *testing.T) {
 }
 
 func TestProjectAPIEncoding(t *testing.T) {
+	t.Parallel()
 	c, _ := NewClient("token", "group/subgroup/project", "main")
 	encoded := c.projectAPI()
 	// url.PathEscape encodes / as %2F
@@ -206,6 +215,7 @@ func TestProjectAPIEncoding(t *testing.T) {
 }
 
 func TestDeleteBranch(t *testing.T) {
+	t.Parallel()
 	var deletedRawURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" && strings.Contains(r.URL.RawPath, "/repository/branches/") {
@@ -237,6 +247,7 @@ func TestDeleteBranch(t *testing.T) {
 }
 
 func TestListOpenPRs_StateNormalization(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mrs := []map[string]interface{}{
 			{
@@ -269,6 +280,7 @@ func TestListOpenPRs_StateNormalization(t *testing.T) {
 }
 
 func TestNormalizeState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input, want string
 	}{

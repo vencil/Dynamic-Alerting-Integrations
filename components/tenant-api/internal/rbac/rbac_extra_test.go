@@ -13,6 +13,7 @@ import (
 // --- NewManager tests ---
 
 func TestNewManager_EmptyPath(t *testing.T) {
+	t.Parallel()
 	m, err := NewManager("")
 	if err != nil {
 		t.Fatalf("NewManager('') returned error: %v", err)
@@ -24,6 +25,7 @@ func TestNewManager_EmptyPath(t *testing.T) {
 }
 
 func TestNewManager_FileNotFound(t *testing.T) {
+	t.Parallel()
 	m, err := NewManager("/nonexistent/path/_rbac.yaml")
 	if err != nil {
 		t.Fatalf("NewManager(nonexistent) returned error: %v", err)
@@ -36,6 +38,7 @@ func TestNewManager_FileNotFound(t *testing.T) {
 }
 
 func TestNewManager_ValidFile(t *testing.T) {
+	t.Parallel()
 	content := `groups:
   - name: admins
     tenants: ["*"]
@@ -57,6 +60,7 @@ func TestNewManager_ValidFile(t *testing.T) {
 }
 
 func TestNewManager_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", "{{not valid yaml")
 
 	_, err := NewManager(rbacFile)
@@ -68,6 +72,7 @@ func TestNewManager_InvalidYAML(t *testing.T) {
 // --- Load / hot-reload tests ---
 
 func TestLoad_NoChangeSkipsUpdate(t *testing.T) {
+	t.Parallel()
 	content := `groups:
   - name: admins
     tenants: ["*"]
@@ -91,6 +96,7 @@ func TestLoad_NoChangeSkipsUpdate(t *testing.T) {
 }
 
 func TestLoad_DetectsChange(t *testing.T) {
+	t.Parallel()
 	content1 := `groups:
   - name: admins
     tenants: ["*"]
@@ -128,6 +134,7 @@ func TestLoad_DetectsChange(t *testing.T) {
 }
 
 func TestLoad_DeletedFile(t *testing.T) {
+	t.Parallel()
 	content := `groups:
   - name: admins
     tenants: ["*"]
@@ -157,6 +164,7 @@ func TestLoad_DeletedFile(t *testing.T) {
 // --- WatchLoop tests ---
 
 func TestWatchLoop_EmptyPath(t *testing.T) {
+	t.Parallel()
 	// NewForTest constructs a Manager with empty path → WatchLoop
 	// is a no-op (returns immediately) per the configwatcher contract.
 	m := NewForTest(&RBACConfig{})
@@ -177,6 +185,7 @@ func TestWatchLoop_EmptyPath(t *testing.T) {
 }
 
 func TestWatchLoop_StopsOnClose(t *testing.T) {
+	t.Parallel()
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", "groups: []\n")
 
 	m, err := NewManager(rbacFile)
@@ -205,6 +214,7 @@ func TestWatchLoop_StopsOnClose(t *testing.T) {
 // --- Get tests ---
 
 func TestGet_EmptyConfig(t *testing.T) {
+	t.Parallel()
 	// PR-8/11: with the configwatcher embed, a Manager constructed
 	// via NewForTest(&RBACConfig{}) is the canonical "open mode" /
 	// empty config shape. Pre-PR-8 this test exercised the
@@ -225,6 +235,7 @@ func TestGet_EmptyConfig(t *testing.T) {
 // --- HasPermission extended tests ---
 
 func TestHasPermission_MultipleGroups(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "team-a", Tenants: []string{"db-a"}, Permissions: []Permission{PermRead}},
@@ -245,6 +256,7 @@ func TestHasPermission_MultipleGroups(t *testing.T) {
 }
 
 func TestHasPermission_EmptyGroups(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
@@ -260,6 +272,7 @@ func TestHasPermission_EmptyGroups(t *testing.T) {
 }
 
 func TestPermCovers_UnknownPermission(t *testing.T) {
+	t.Parallel()
 	if permCovers(PermAdmin, Permission("unknown")) {
 		t.Error("admin should not cover unknown permission")
 	}
@@ -268,6 +281,7 @@ func TestPermCovers_UnknownPermission(t *testing.T) {
 // --- Middleware tests ---
 
 func TestMiddleware_MissingEmail(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +300,7 @@ func TestMiddleware_MissingEmail(t *testing.T) {
 }
 
 func TestMiddleware_OpenModeAllowsRead(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{}) // empty = open mode
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +323,7 @@ func TestMiddleware_OpenModeAllowsRead(t *testing.T) {
 }
 
 func TestMiddleware_OpenModeDeniesWrite(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{}) // empty = open mode
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -326,6 +342,7 @@ func TestMiddleware_OpenModeDeniesWrite(t *testing.T) {
 }
 
 func TestMiddleware_WithTenantIDFn(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "db-ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}},
@@ -350,6 +367,7 @@ func TestMiddleware_WithTenantIDFn(t *testing.T) {
 }
 
 func TestMiddleware_DeniedForWrongTenant(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "db-ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}},
@@ -374,6 +392,7 @@ func TestMiddleware_DeniedForWrongTenant(t *testing.T) {
 }
 
 func TestMiddleware_GroupsParsing(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{
 		Groups: []GroupRule{
 			{Name: "team-b", Tenants: []string{"*"}, Permissions: []Permission{PermRead}},
@@ -405,6 +424,7 @@ func TestMiddleware_GroupsParsing(t *testing.T) {
 }
 
 func TestMiddleware_EmptyGroups(t *testing.T) {
+	t.Parallel()
 	m := NewForTest(&RBACConfig{}) // open mode
 
 	var gotGroups []string
@@ -432,6 +452,7 @@ func TestMiddleware_EmptyGroups(t *testing.T) {
 // --- Context helpers tests ---
 
 func TestRequestEmail_NoContext(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	email := RequestEmail(req)
 	if email != "" {
@@ -440,6 +461,7 @@ func TestRequestEmail_NoContext(t *testing.T) {
 }
 
 func TestRequestGroups_NoContext(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	groups := RequestGroups(req)
 	if groups != nil {
@@ -450,6 +472,7 @@ func TestRequestGroups_NoContext(t *testing.T) {
 // --- writeError tests ---
 
 func TestWriteError(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	writeError(w, http.StatusForbidden, "access denied")
 

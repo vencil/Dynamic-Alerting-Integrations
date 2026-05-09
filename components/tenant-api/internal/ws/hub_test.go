@@ -34,6 +34,7 @@ func waitForClientCount(t *testing.T, h *Hub, want int, timeout time.Duration) {
 }
 
 func TestSubscribeUnsubscribe(t *testing.T) {
+	t.Parallel()
 	h := NewHub()
 
 	// Subscribe a client
@@ -61,6 +62,7 @@ func TestSubscribeUnsubscribe(t *testing.T) {
 }
 
 func TestBroadcast(t *testing.T) {
+	t.Parallel()
 	h := NewHub()
 
 	// Subscribe two clients
@@ -98,6 +100,7 @@ func TestBroadcast(t *testing.T) {
 }
 
 func TestConcurrentBroadcasts(t *testing.T) {
+	t.Parallel()
 	h := NewHub()
 
 	// Subscribe multiple clients
@@ -142,6 +145,7 @@ func TestConcurrentBroadcasts(t *testing.T) {
 }
 
 func TestSlowClientDisconnected(t *testing.T) {
+	t.Parallel()
 	h := NewHub()
 
 	// Subscribe a slow client (not reading)
@@ -190,6 +194,7 @@ func TestSlowClientDisconnected(t *testing.T) {
 }
 
 func TestSSEEndpoint(t *testing.T) {
+	t.Parallel()
 	h := NewHub()
 
 	// Use a cancelable context so we can stop the handler
@@ -285,6 +290,7 @@ func TestSSEEndpoint(t *testing.T) {
 }
 
 func TestSSEStreamingFormat(t *testing.T) {
+	t.Parallel()
 	h := NewHub()
 
 	// Use a cancelable context so we can stop the handler

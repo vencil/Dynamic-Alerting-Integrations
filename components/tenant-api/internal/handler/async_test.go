@@ -63,6 +63,7 @@ func pollUntilTerminal(t *testing.T, mgr *async.Manager, taskID string, timeout 
 // with `?async=true` returns 202 Accepted with a populated task_id and
 // poll_url, without waiting for execution.
 func TestBatchTenants_Async_ReturnsTaskID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
@@ -116,6 +117,7 @@ func TestBatchTenants_Async_ReturnsTaskID(t *testing.T) {
 // status (ok/error) depends on RBAC + git availability and is covered by
 // sync-mode tests; here we assert lifecycle, not per-op success.
 func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
@@ -166,6 +168,7 @@ func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
 // with `?async=true` returns 202 + task_id and the task is submitted to the
 // worker pool.
 func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
 		"db-b.yaml": "tenants:\n  db-b:\n    mysql_connections: \"80\"\n",

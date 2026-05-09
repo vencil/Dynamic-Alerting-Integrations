@@ -35,6 +35,7 @@ func writeFile(t *testing.T, path, content string) {
 }
 
 func TestGetTenantEffective_Success_Flat(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: \"80\"\n  mysql_cpu: \"90\"\n")
@@ -81,6 +82,7 @@ func TestGetTenantEffective_Success_Flat(t *testing.T) {
 }
 
 func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// L0 root defaults
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
@@ -133,6 +135,7 @@ func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
 }
 
 func TestGetTenantEffective_NotFound(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: \"80\"\n")
@@ -158,6 +161,7 @@ func TestGetTenantEffective_NotFound(t *testing.T) {
 }
 
 func TestGetTenantEffective_InvalidID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
@@ -171,6 +175,7 @@ func TestGetTenantEffective_InvalidID(t *testing.T) {
 }
 
 func TestGetTenantEffective_EmptyID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	h := (&Deps{ConfigDir: dir}).GetTenantEffective()
@@ -184,6 +189,7 @@ func TestGetTenantEffective_EmptyID(t *testing.T) {
 }
 
 func TestGetTenantEffective_HashStable(t *testing.T) {
+	t.Parallel()
 	// Two calls on an unchanged tree must produce identical hashes — otherwise
 	// Alertmanager would see spurious reload events on every scrape.
 	dir := t.TempDir()
@@ -220,6 +226,7 @@ func TestGetTenantEffective_HashStable(t *testing.T) {
 }
 
 func TestGetTenantEffective_HashChangesOnContentEdit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: \"80\"\n")
@@ -262,6 +269,7 @@ func TestGetTenantEffective_HashChangesOnContentEdit(t *testing.T) {
 // a tenant override deletes the inherited default — matching
 // describe_tenant.py trap #6.
 func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: \"80\"\n  mysql_cpu: \"90\"\n")
@@ -293,6 +301,7 @@ func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
 // TestGetTenantEffective_MetadataSkipped verifies that _metadata in defaults
 // is NEVER inherited — describe_tenant.py trap #4.
 func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  _metadata:\n    owner: platform\n  mysql_cpu: \"90\"\n")

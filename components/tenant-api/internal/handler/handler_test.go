@@ -72,6 +72,7 @@ func wrapWithRBACMiddleware(handler http.HandlerFunc, mgr *rbac.Manager, perm rb
 // --- Health / Ready tests ---
 
 func TestHealth(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 	Health(w, req)
@@ -89,6 +90,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestReady(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	handler := (&Deps{ConfigDir: dir}).Ready()
 
@@ -115,6 +117,7 @@ func TestReady(t *testing.T) {
 // directory is not stat-able, so K8s readinessProbe drains traffic
 // away from a pod whose ConfigMap mount failed.
 func TestReady_MissingDir(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	handler := (&Deps{ConfigDir: missing}).Ready()
 
@@ -137,6 +140,7 @@ func TestReady_MissingDir(t *testing.T) {
 // TestReady_NotADirectory asserts /ready returns 503 when the
 // configured config_dir is a file (operator misconfig).
 func TestReady_NotADirectory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "imposter")
 	if err := os.WriteFile(filePath, []byte("not a dir"), 0644); err != nil {
@@ -156,6 +160,7 @@ func TestReady_NotADirectory(t *testing.T) {
 // --- GetTenant tests ---
 
 func TestGetTenant_Success(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
@@ -181,6 +186,7 @@ func TestGetTenant_Success(t *testing.T) {
 }
 
 func TestGetTenant_NotFound(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
 	h := (&Deps{ConfigDir: configDir}).GetTenant()
@@ -194,6 +200,7 @@ func TestGetTenant_NotFound(t *testing.T) {
 }
 
 func TestGetTenant_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
 	h := (&Deps{ConfigDir: configDir}).GetTenant()
@@ -207,6 +214,7 @@ func TestGetTenant_InvalidID(t *testing.T) {
 }
 
 func TestGetTenant_WithDefaults(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 		"db-a.yaml":      "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
@@ -233,6 +241,7 @@ func TestGetTenant_WithDefaults(t *testing.T) {
 }
 
 func TestGetTenant_EmptyID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
 	h := (&Deps{ConfigDir: configDir}).GetTenant()
@@ -248,6 +257,7 @@ func TestGetTenant_EmptyID(t *testing.T) {
 // --- ListTenants tests ---
 
 func TestListTenants_Empty(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
 	h := (&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}).ListTenants()
@@ -268,6 +278,7 @@ func TestListTenants_Empty(t *testing.T) {
 }
 
 func TestListTenants_MultipleTenants(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n    _profile: \"high-perf\"\n",
 		"db-b.yaml": "tenants:\n  db-b:\n    _state_maintenance: \"enable\"\n",
@@ -307,6 +318,7 @@ func TestListTenants_MultipleTenants(t *testing.T) {
 }
 
 func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml":      "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
 		"_defaults.yaml": "defaults:\n  mysql_cpu: 90\n",
@@ -329,6 +341,7 @@ func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
 }
 
 func TestListTenants_WithYmlExtension(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-c.yml": "tenants:\n  db-c:\n    mysql_cpu: \"75\"\n",
 	})
@@ -351,6 +364,7 @@ func TestListTenants_WithYmlExtension(t *testing.T) {
 }
 
 func TestListTenants_MalformedYAML(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"bad.yaml":  "{{not valid yaml",
 		"db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
@@ -377,6 +391,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 // --- ValidateTenant tests ---
 
 func TestValidateTenant_Valid(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 	})
@@ -400,6 +415,7 @@ func TestValidateTenant_Valid(t *testing.T) {
 }
 
 func TestValidateTenant_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
 	h := (&Deps{ConfigDir: configDir}).ValidateTenant()
@@ -414,6 +430,7 @@ func TestValidateTenant_InvalidID(t *testing.T) {
 }
 
 func TestValidateTenant_WithWarnings(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil) // no defaults
 
 	h := (&Deps{ConfigDir: configDir}).ValidateTenant()
@@ -438,6 +455,7 @@ func TestValidateTenant_WithWarnings(t *testing.T) {
 // --- DiffTenant tests ---
 
 func TestDiffTenant_NewTenant_JSON(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
@@ -468,6 +486,7 @@ func TestDiffTenant_NewTenant_JSON(t *testing.T) {
 }
 
 func TestDiffTenant_NoDiff(t *testing.T) {
+	t.Parallel()
 	content := "tenants:\n  db-a:\n    cpu: \"80\"\n"
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": content,
@@ -495,6 +514,7 @@ func TestDiffTenant_NoDiff(t *testing.T) {
 }
 
 func TestDiffTenant_RawYAML(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    cpu: \"80\"\n",
 	})
@@ -520,6 +540,7 @@ func TestDiffTenant_RawYAML(t *testing.T) {
 }
 
 func TestDiffTenant_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
@@ -534,6 +555,7 @@ func TestDiffTenant_InvalidID(t *testing.T) {
 }
 
 func TestDiffTenant_JSONAutoDetect(t *testing.T) {
+	t.Parallel()
 	// Test auto-detection of JSON when Content-Type is not set but body starts with {
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
@@ -561,6 +583,7 @@ func TestDiffTenant_JSONAutoDetect(t *testing.T) {
 // --- MetricsHandler tests ---
 
 func TestMetricsHandler(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	w := httptest.NewRecorder()
 	MetricsHandler(w, req)
@@ -590,6 +613,7 @@ func TestMetricsHandler(t *testing.T) {
 // --- MetricsMiddleware tests ---
 
 func TestMetricsMiddleware_CountsRequests(t *testing.T) {
+	t.Parallel()
 	before := Metrics.requestsTotal.Load()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -608,6 +632,7 @@ func TestMetricsMiddleware_CountsRequests(t *testing.T) {
 }
 
 func TestMetricsMiddleware_CountsErrors(t *testing.T) {
+	t.Parallel()
 	before := Metrics.errorsTotal.Load()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -626,6 +651,7 @@ func TestMetricsMiddleware_CountsErrors(t *testing.T) {
 }
 
 func TestMetricsMiddleware_NoErrorFor2xx(t *testing.T) {
+	t.Parallel()
 	before := Metrics.errorsTotal.Load()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -646,6 +672,7 @@ func TestMetricsMiddleware_NoErrorFor2xx(t *testing.T) {
 // --- PutTenant tests ---
 
 func TestPutTenant_InvalidID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
@@ -661,6 +688,7 @@ func TestPutTenant_InvalidID(t *testing.T) {
 }
 
 func TestPutTenant_EmptyID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
@@ -676,6 +704,7 @@ func TestPutTenant_EmptyID(t *testing.T) {
 }
 
 func TestPutTenant_ValidationFailure(t *testing.T) {
+	t.Parallel()
 	// Writer.Write does schema validation: the YAML must contain tenants.<id> section
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
@@ -694,6 +723,7 @@ func TestPutTenant_ValidationFailure(t *testing.T) {
 }
 
 func TestPutTenant_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 
@@ -711,6 +741,7 @@ func TestPutTenant_InvalidYAML(t *testing.T) {
 // --- BatchTenants tests ---
 
 func TestBatchTenants_EmptyOperations(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
@@ -729,6 +760,7 @@ func TestBatchTenants_EmptyOperations(t *testing.T) {
 }
 
 func TestBatchTenants_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
@@ -746,6 +778,7 @@ func TestBatchTenants_InvalidJSON(t *testing.T) {
 }
 
 func TestBatchTenants_InvalidTenantID(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
@@ -775,6 +808,7 @@ func TestBatchTenants_InvalidTenantID(t *testing.T) {
 }
 
 func TestBatchTenants_PermissionDenied(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	gw := newTestWriter(configDir)
 	// RBAC with only read permissions for db-ops
@@ -820,6 +854,7 @@ func TestBatchTenants_PermissionDenied(t *testing.T) {
 // --- buildPatchYAML tests ---
 
 func TestBuildPatchYAML(t *testing.T) {
+	t.Parallel()
 	yaml := buildPatchYAML("db-a", map[string]string{
 		"_silent_mode": "warning",
 	})
@@ -835,6 +870,7 @@ func TestBuildPatchYAML(t *testing.T) {
 }
 
 func TestBuildPatchYAML_MultipleKeys(t *testing.T) {
+	t.Parallel()
 	yaml := buildPatchYAML("db-b", map[string]string{
 		"_silent_mode":        "critical",
 		"_state_maintenance":  "enable",
@@ -853,6 +889,7 @@ func TestBuildPatchYAML_MultipleKeys(t *testing.T) {
 // --- loadMergedConfig tests ---
 
 func TestLoadMergedConfig_NoDefaults(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	tenantData := []byte("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
 	merged := loadMergedConfig(configDir, "db-a", tenantData)
@@ -863,6 +900,7 @@ func TestLoadMergedConfig_NoDefaults(t *testing.T) {
 }
 
 func TestLoadMergedConfig_WithDefaults(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_cpu: 90\n",
 	})
@@ -878,6 +916,7 @@ func TestLoadMergedConfig_WithDefaults(t *testing.T) {
 }
 
 func TestLoadMergedConfig_WithStateFilters(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_cpu: 90\nstate_filters:\n  container_crashloop:\n    reasons: [CrashLoopBackOff]\n    severity: critical\n",
 	})
@@ -892,6 +931,7 @@ func TestLoadMergedConfig_WithStateFilters(t *testing.T) {
 // --- writeJSONError tests ---
 
 func TestWriteJSONError(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	writeJSONError(w, nil, http.StatusNotFound, "not found")
 
@@ -912,6 +952,7 @@ func TestWriteJSONError(t *testing.T) {
 }
 
 func TestWriteJSONError_InternalError(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	writeJSONError(w, nil, http.StatusInternalServerError, "something broke")
 
@@ -923,6 +964,7 @@ func TestWriteJSONError_InternalError(t *testing.T) {
 // --- statusWriter tests ---
 
 func TestStatusWriter(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	sw := &statusWriter{ResponseWriter: w}
 
@@ -938,6 +980,7 @@ func TestStatusWriter(t *testing.T) {
 // --- Integration test with chi router ---
 
 func TestFullRouter_GetTenant(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
@@ -964,6 +1007,7 @@ func TestFullRouter_GetTenant(t *testing.T) {
 }
 
 func TestFullRouter_GetTenant_Unauthorized(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
@@ -989,6 +1033,7 @@ func TestFullRouter_GetTenant_Unauthorized(t *testing.T) {
 }
 
 func TestFullRouter_GetTenant_Forbidden(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
@@ -1015,6 +1060,7 @@ func TestFullRouter_GetTenant_Forbidden(t *testing.T) {
 }
 
 func TestFullRouter_ListTenants(t *testing.T) {
+	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
 	})
@@ -1042,6 +1088,7 @@ func TestFullRouter_ListTenants(t *testing.T) {
 
 // TestMe tests the GET /api/v1/me endpoint
 func TestMe(t *testing.T) {
+	t.Parallel()
 	rbacYAML := `
 groups:
   - name: platform-admins
@@ -1142,6 +1189,7 @@ groups:
 // arrays; rendering as `null` violates the contract and was the original
 // TD-028 schemathesis finding (#242).
 func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
+	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
 	handler := (&Deps{RBAC: rbacMgr}).Me()
 
@@ -1176,6 +1224,7 @@ func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
 
 // TestMeMissingIdentity tests that /api/v1/me returns 401 without identity headers
 func TestMeMissingIdentity(t *testing.T) {
+	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
 
 	handler := (&Deps{RBAC: rbacMgr}).Me()
@@ -1194,6 +1243,7 @@ func TestMeMissingIdentity(t *testing.T) {
 // TestMeEmptyEmailDirect tests the handler-level guard when called without middleware
 // (e.g., if middleware is misconfigured or bypassed). The handler itself should return 401.
 func TestMeEmptyEmailDirect(t *testing.T) {
+	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
 
 	handler := (&Deps{RBAC: rbacMgr}).Me()

@@ -1,16 +1,18 @@
-"""Tests for check_bilingual_annotations.py — rule pack bilingual validation."""
+"""Tests for check_bilingual_annotations.py — rule pack bilingual validation.
+
+Merged from previous _extended split (PR test-refactor sweep): YAML-string
+based pack tests (TestFindRulePacks/TestCheckRulePack/base TestCheckAlert+
+TestRunCheck) sit alongside dict-based pack tests + print_coverage / ci_mode /
+main coverage classes appended below.
+"""
 from __future__ import annotations
 
-import os
-import sys
 import textwrap
 
 import pytest
+import yaml
 
-_TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'lint')
-sys.path.insert(0, _TOOLS_DIR)
-
-import check_bilingual_annotations as cba  # noqa: E402
+import check_bilingual_annotations as cba
 
 
 # ---------------------------------------------------------------------------
@@ -25,10 +27,42 @@ def checker(tmp_path):
 
 
 def _write_rule_pack(rp_dir, name, yaml_content):
-    """Helper to write a rule pack YAML file."""
+    """Helper to write a rule pack YAML file from a YAML string."""
     path = rp_dir / name
     path.write_text(yaml_content, encoding="utf-8")
     return path
+
+
+def _write_pack(rp_dir, name, groups):
+    """Helper to write a rule pack YAML file from a groups list (dict-built)."""
+    data = {"groups": groups}
+    path = rp_dir / name
+    path.write_text(yaml.dump(data), encoding="utf-8")
+    return path
+
+
+def _make_bilingual_alert(alert_name):
+    return {
+        "alert": alert_name,
+        "annotations": {
+            "summary": f"{alert_name} summary",
+            "summary_zh": f"{alert_name} 摘要",
+            "description": f"{alert_name} description",
+            "description_zh": f"{alert_name} 描述",
+        },
+        "expr": "up == 0",
+    }
+
+
+def _make_monolingual_alert(alert_name):
+    return {
+        "alert": alert_name,
+        "annotations": {
+            "summary": f"{alert_name} summary",
+            "description": f"{alert_name} description",
+        },
+        "expr": "up == 0",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -218,3 +252,146 @@ class TestRunCheck:
 
     def test_no_packs_returns_one(self, checker):
         assert checker.run_check() == 1
+
+    # ── unique edge cases (merged from _extended) ───────────────────────
+
+    def test_yaml_parse_error(self, checker, capsys):
+        (checker.rule_pack_dir / "rule-pack-bad.yaml").write_text(
+            "invalid: [yaml", encoding="utf-8")
+        exit_code = checker.run_check()
+        assert exit_code == 1
+
+    def test_only_packs_filter(self, checker):
+        _write_pack(checker.rule_pack_dir, "rule-pack-a.yaml", [
+            {"name": "a", "rules": [_make_bilingual_alert("AlertA")]}
+        ])
+        _write_pack(checker.rule_pack_dir, "rule-pack-b.yaml", [
+            {"name": "b", "rules": [_make_monolingual_alert("AlertB")]}
+        ])
+        exit_code = checker.run_check(only_packs=["rule-pack-a"])
+        assert exit_code == 0
+
+    def test_recording_rules_skipped(self, checker):
+        """Recording rules (no 'alert' key) should be skipped."""
+        _write_pack(checker.rule_pack_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [
+                {"record": "job:metric:rate5m", "expr": "rate(metric[5m])"},
+                _make_bilingual_alert("RealAlert"),
+            ]}
+        ])
+        exit_code = checker.run_check()
+        assert exit_code == 0
+
+    def test_alert_without_annotations(self, checker):
+        """Alert without annotations should not cause error."""
+        _write_pack(checker.rule_pack_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [
+                {"alert": "NoAnnotations", "expr": "up == 0"},
+            ]}
+        ])
+        exit_code = checker.run_check()
+        # No annotations to check, so it passes
+        assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# print_coverage / run_ci_mode / main coverage
+# (was test_check_bilingual_extended.py)
+#
+# Note: test_main_check_mode from the _extended file was DROPPED — it
+# redefined a `patched_main` inside the test instead of exercising
+# cba.main(), so it tested only the test author's reimplementation.
+# Use test_main_coverage_mode below for a real main-path smoke.
+# ---------------------------------------------------------------------------
+
+
+class TestPrintCoverage:
+    """BilingualAnnotationChecker.print_coverage() tests."""
+
+    def test_coverage_all_bilingual(self, checker, capsys):
+        _write_pack(checker.rule_pack_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [
+                _make_bilingual_alert("Alert1"),
+                _make_bilingual_alert("Alert2"),
+            ]}
+        ])
+        checker.print_coverage()
+        out = capsys.readouterr().out
+        assert "Coverage" in out
+        assert "100.0%" in out
+        assert "2/2" in out
+
+    def test_coverage_partial(self, checker, capsys):
+        _write_pack(checker.rule_pack_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [
+                _make_bilingual_alert("Alert1"),
+                _make_monolingual_alert("Alert2"),
+            ]}
+        ])
+        checker.print_coverage()
+        out = capsys.readouterr().out
+        assert "50.0%" in out
+        assert "1/2" in out
+
+    def test_coverage_no_packs(self, checker, capsys):
+        checker.print_coverage()
+        combined = capsys.readouterr()
+        assert "No rule packs" in combined.err
+
+    def test_coverage_with_error(self, checker, capsys):
+        (checker.rule_pack_dir / "rule-pack-bad.yaml").write_text(
+            "invalid: [yaml", encoding="utf-8")
+        checker.print_coverage()
+        combined = capsys.readouterr()
+        assert "ERROR" in combined.err
+
+    def test_coverage_empty_pack(self, checker, capsys):
+        _write_pack(checker.rule_pack_dir, "rule-pack-empty.yaml", [])
+        checker.print_coverage()
+        out = capsys.readouterr().out
+        assert "0/0" in out
+        assert "N/A" in out
+
+    def test_coverage_filter_only(self, checker, capsys):
+        _write_pack(checker.rule_pack_dir, "rule-pack-a.yaml", [
+            {"name": "a", "rules": [_make_bilingual_alert("A")]}
+        ])
+        _write_pack(checker.rule_pack_dir, "rule-pack-b.yaml", [
+            {"name": "b", "rules": [_make_monolingual_alert("B")]}
+        ])
+        checker.print_coverage(only_packs=["rule-pack-a"])
+        out = capsys.readouterr().out
+        assert "100.0%" in out
+
+
+class TestRunCIMode:
+    """BilingualAnnotationChecker.run_ci_mode() tests."""
+
+    def test_ci_passes(self, checker, capsys):
+        _write_pack(checker.rule_pack_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [_make_bilingual_alert("Alert1")]}
+        ])
+        exit_code = checker.run_ci_mode()
+        assert exit_code == 0
+
+    def test_ci_fails(self, checker, capsys):
+        _write_pack(checker.rule_pack_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [_make_monolingual_alert("Alert1")]}
+        ])
+        exit_code = checker.run_ci_mode()
+        assert exit_code == 1
+
+
+class TestMain:
+    """main() CLI smoke."""
+
+    def test_main_coverage_mode(self, tmp_path, capsys):
+        rp_dir = tmp_path / "rule-packs"
+        rp_dir.mkdir()
+        _write_pack(rp_dir, "rule-pack-test.yaml", [
+            {"name": "test", "rules": [_make_bilingual_alert("Alert1")]}
+        ])
+        checker = cba.BilingualAnnotationChecker(rp_dir)
+        checker.print_coverage()
+        out = capsys.readouterr().out
+        assert "Coverage" in out

@@ -13,6 +13,7 @@ import (
 // --- Validate extended tests ---
 
 func TestValidate_ValidConfig(t *testing.T) {
+	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	errs := validate("db-a", yaml)
 	if len(errs) != 0 {
@@ -21,6 +22,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 }
 
 func TestValidate_MultipleTenants(t *testing.T) {
+	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
 	errs := validate("db-a", yaml)
 	if len(errs) != 0 {
@@ -43,6 +45,7 @@ func TestValidate_InvalidYAML(t *testing.T) {
 }
 
 func TestValidate_MissingTenantSection(t *testing.T) {
+	t.Parallel()
 	yaml := "tenants:\n  db-b:\n    cpu: \"80\"\n"
 	errs := validate("db-a", yaml)
 	if len(errs) == 0 {
@@ -54,6 +57,7 @@ func TestValidate_MissingTenantSection(t *testing.T) {
 }
 
 func TestValidate_EmptyContent(t *testing.T) {
+	t.Parallel()
 	errs := validate("db-a", "")
 	if len(errs) == 0 {
 		t.Error("expected error for empty content")
@@ -61,6 +65,7 @@ func TestValidate_EmptyContent(t *testing.T) {
 }
 
 func TestValidate_NoTenantsKey(t *testing.T) {
+	t.Parallel()
 	yaml := "defaults:\n  cpu: 80\n"
 	errs := validate("db-a", yaml)
 	if len(errs) == 0 {
@@ -71,6 +76,7 @@ func TestValidate_NoTenantsKey(t *testing.T) {
 // --- NewWriter extended tests ---
 
 func TestNewWriter_BothDirs(t *testing.T) {
+	t.Parallel()
 	w := NewWriter("/config", "/git")
 	if w.configDir != "/config" {
 		t.Errorf("configDir = %q, want /config", w.configDir)
@@ -81,6 +87,7 @@ func TestNewWriter_BothDirs(t *testing.T) {
 }
 
 func TestNewWriter_EmptyGitDir(t *testing.T) {
+	t.Parallel()
 	w := NewWriter("/config", "")
 	if w.gitDir != "/config" {
 		t.Errorf("gitDir should default to configDir, got %q", w.gitDir)
@@ -123,6 +130,7 @@ func TestWrite_ValidationFailure(t *testing.T) {
 }
 
 func TestWrite_MissingTenantSection(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	w := NewWriter(dir, dir)
 
@@ -138,6 +146,7 @@ func TestWrite_MissingTenantSection(t *testing.T) {
 // --- Diff extended tests ---
 
 func TestDiff_NewFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	w := NewWriter(dir, "")
 
@@ -154,6 +163,7 @@ func TestDiff_NewFile(t *testing.T) {
 }
 
 func TestDiff_IdenticalContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := "tenants:\n  db-a:\n    cpu: \"80\"\n"
 	testutil.WriteYAML(t, dir, "db-a.yaml", content)
@@ -169,6 +179,7 @@ func TestDiff_IdenticalContent(t *testing.T) {
 }
 
 func TestDiff_ModifiedContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := "tenants:\n  db-a:\n    cpu: \"80\"\n"
 	testutil.WriteYAML(t, dir, "db-a.yaml", original)
@@ -185,6 +196,7 @@ func TestDiff_ModifiedContent(t *testing.T) {
 }
 
 func TestDiff_EmptyProposed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	w := NewWriter(dir, "")
 
@@ -218,6 +230,7 @@ func initGitRepo(t *testing.T, dir string) {
 }
 
 func TestWrite_InGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
@@ -240,6 +253,7 @@ func TestWrite_InGitRepo(t *testing.T) {
 }
 
 func TestWrite_UpdateExistingInGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
@@ -267,6 +281,7 @@ func TestWrite_UpdateExistingInGitRepo(t *testing.T) {
 }
 
 func TestWrite_DifferentTenants(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
@@ -290,6 +305,7 @@ func TestWrite_DifferentTenants(t *testing.T) {
 }
 
 func TestWrite_AuthorEmailParsing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
@@ -347,6 +363,7 @@ func TestWrite_CommitterFromEnv(t *testing.T) {
 // --- currentHEAD / commitParent tests ---
 
 func TestCurrentHEAD_InGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
@@ -361,6 +378,7 @@ func TestCurrentHEAD_InGitRepo(t *testing.T) {
 }
 
 func TestCurrentHEAD_NotGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	w := NewWriter(dir, dir)
 	_, err := w.currentHEAD()
@@ -370,6 +388,7 @@ func TestCurrentHEAD_NotGitRepo(t *testing.T) {
 }
 
 func TestCommitParent_InGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
@@ -393,6 +412,7 @@ func TestCommitParent_InGitRepo(t *testing.T) {
 // --- ErrConflict tests ---
 
 func TestErrConflict_IsError(t *testing.T) {
+	t.Parallel()
 	if ErrConflict.Error() == "" {
 		t.Error("ErrConflict should have a non-empty message")
 	}

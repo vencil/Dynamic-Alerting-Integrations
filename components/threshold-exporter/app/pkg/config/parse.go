@@ -222,9 +222,16 @@ func ParseMetricKey(key string) (string, string) { return parseMetricKey(key) }
 
 // parseMetricKey splits "mysql_connections" into ("mysql", "connections").
 // If no underscore, component defaults to "default".
+//
+// Edge case: keys starting with "_" (e.g. "_leading") have idx == 0, which
+// would split into ("", "leading") — an empty component would silently key
+// dashboards / Prometheus labels under "" instead of the expected "default".
+// Treat that the same as the no-underscore case so the invariant
+// `component != ""` always holds. Surfaced by FuzzParseMetricKey
+// (pkg/config/fuzz_test.go).
 func parseMetricKey(key string) (component, metric string) {
 	idx := strings.Index(key, "_")
-	if idx < 0 {
+	if idx <= 0 {
 		return "default", key
 	}
 	return key[:idx], key[idx+1:]

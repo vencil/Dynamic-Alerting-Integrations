@@ -25,6 +25,7 @@ const sampleViewsYAML = `views:
 
 // TestParseConfig_Valid tests parsing a valid views YAML document.
 func TestParseConfig_Valid(t *testing.T) {
+	t.Parallel()
 	cfg, err := ParseConfig([]byte(sampleViewsYAML))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -61,6 +62,7 @@ func TestParseConfig_Valid(t *testing.T) {
 
 // TestParseConfig_Empty tests parsing empty YAML (no views).
 func TestParseConfig_Empty(t *testing.T) {
+	t.Parallel()
 	cfg, err := ParseConfig([]byte(""))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -72,6 +74,7 @@ func TestParseConfig_Empty(t *testing.T) {
 
 // TestParseConfig_InvalidYAML tests parsing invalid YAML.
 func TestParseConfig_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	_, err := ParseConfig([]byte("{{invalid"))
 	if err == nil {
 		t.Error("expected error for invalid YAML")
@@ -80,6 +83,7 @@ func TestParseConfig_InvalidYAML(t *testing.T) {
 
 // TestMarshalConfig_RoundTrip tests that parsing and marshaling are symmetric.
 func TestMarshalConfig_RoundTrip(t *testing.T) {
+	t.Parallel()
 	original, err := ParseConfig([]byte(sampleViewsYAML))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -127,6 +131,7 @@ func TestMarshalConfig_RoundTrip(t *testing.T) {
 
 // TestValidateViewID tests view ID validation.
 func TestValidateViewID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		id      string
 		wantErr bool
@@ -167,6 +172,7 @@ func TestValidateViewID(t *testing.T) {
 
 // TestNewManager_NoFile tests Manager creation when no _views.yaml file exists.
 func TestNewManager_NoFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -183,6 +189,7 @@ func TestNewManager_NoFile(t *testing.T) {
 
 // TestNewManager_WithFile tests Manager creation with an existing _views.yaml file.
 func TestNewManager_WithFile(t *testing.T) {
+	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_views.yaml", sampleViewsYAML)
 
 	mgr := NewManager(dir)
@@ -203,6 +210,7 @@ func TestNewManager_WithFile(t *testing.T) {
 
 // TestManager_GetView tests retrieving a single view by ID.
 func TestManager_GetView(t *testing.T) {
+	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_views.yaml", sampleViewsYAML)
 
 	mgr := NewManager(dir)
@@ -230,6 +238,7 @@ func TestManager_GetView(t *testing.T) {
 
 // TestManager_ListViews tests listing all views in sorted order.
 func TestManager_ListViews(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Create a config with multiple views in non-alphabetical order
@@ -267,6 +276,7 @@ func TestManager_ListViews(t *testing.T) {
 
 // TestManager_Reload tests reloading the views config after file changes.
 func TestManager_Reload(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Start with initial config
@@ -327,6 +337,7 @@ func TestManager_Reload(t *testing.T) {
 
 // TestManager_Reload_NoFile tests reloading when the file is deleted.
 func TestManager_Reload_NoFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Start with a file
@@ -363,6 +374,7 @@ func TestManager_Reload_NoFile(t *testing.T) {
 
 // TestManager_Reload_HashCaching tests that Reload skips parsing if hash unchanged.
 func TestManager_Reload_HashCaching(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	yaml := `views:

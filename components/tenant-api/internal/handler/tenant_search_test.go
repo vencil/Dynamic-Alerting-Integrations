@@ -115,6 +115,7 @@ func openModeRBAC(t *testing.T) *rbac.Manager {
 // ── happy path ─────────────────────────────────────────────────────
 
 func TestSearchTenants_DefaultsReturnAllInPageSize(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 3, func(i int) (string, string) {
 		id := fmt.Sprintf("tenant-%d", i)
 		return id + ".yaml", fixtureTenantYAML(id, "prod", "tier1", "db", "mariadb", "alice")
@@ -138,6 +139,7 @@ func TestSearchTenants_DefaultsReturnAllInPageSize(t *testing.T) {
 }
 
 func TestSearchTenants_SortedByIDAscByDefault(t *testing.T) {
+	t.Parallel()
 	// Insert in scrambled order; expect alphabetical id order out.
 	dir := setupConfigDir(t, map[string]string{
 		"zeta.yaml":  fixtureTenantYAML("zeta", "prod", "tier1", "db", "mariadb", "alice"),
@@ -157,6 +159,7 @@ func TestSearchTenants_SortedByIDAscByDefault(t *testing.T) {
 // ── pagination ─────────────────────────────────────────────────────
 
 func TestSearchTenants_PaginationProducesStableSlices(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 25, func(i int) (string, string) {
 		id := fmt.Sprintf("t-%02d", i)
 		return id + ".yaml", fixtureTenantYAML(id, "prod", "tier1", "db", "mariadb", "alice")
@@ -196,6 +199,7 @@ func TestSearchTenants_PaginationProducesStableSlices(t *testing.T) {
 }
 
 func TestSearchTenants_OffsetPastEndReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 3, func(i int) (string, string) {
 		id := fmt.Sprintf("t-%d", i)
 		return id + ".yaml", fixtureTenantYAML(id, "prod", "tier1", "db", "mariadb", "alice")
@@ -218,6 +222,7 @@ func TestSearchTenants_OffsetPastEndReturnsEmpty(t *testing.T) {
 // ── 400 paths ──────────────────────────────────────────────────────
 
 func TestSearchTenants_PageSizeOverMaxReturns400(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
@@ -231,6 +236,7 @@ func TestSearchTenants_PageSizeOverMaxReturns400(t *testing.T) {
 }
 
 func TestSearchTenants_NegativePageSizeReturns400(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
@@ -241,6 +247,7 @@ func TestSearchTenants_NegativePageSizeReturns400(t *testing.T) {
 }
 
 func TestSearchTenants_NegativeOffsetReturns400(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
@@ -251,6 +258,7 @@ func TestSearchTenants_NegativeOffsetReturns400(t *testing.T) {
 }
 
 func TestSearchTenants_UnknownSortKeyReturns400(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
@@ -264,6 +272,7 @@ func TestSearchTenants_UnknownSortKeyReturns400(t *testing.T) {
 }
 
 func TestSearchTenants_NonNumericPageSizeReturns400(t *testing.T) {
+	t.Parallel()
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
@@ -276,6 +285,7 @@ func TestSearchTenants_NonNumericPageSizeReturns400(t *testing.T) {
 // ── filters ────────────────────────────────────────────────────────
 
 func TestSearchTenants_EnvironmentFilterExactMatch(t *testing.T) {
+	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"prod-1.yaml":    fixtureTenantYAML("prod-1", "prod", "tier1", "db", "mariadb", "alice"),
 		"prod-2.yaml":    fixtureTenantYAML("prod-2", "prod", "tier2", "db", "mariadb", "alice"),
@@ -293,6 +303,7 @@ func TestSearchTenants_EnvironmentFilterExactMatch(t *testing.T) {
 }
 
 func TestSearchTenants_MultipleFiltersAreANDed(t *testing.T) {
+	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "billing", "mariadb", "alice"),
 		"b.yaml": fixtureTenantYAML("b", "prod", "tier1", "ops", "mariadb", "alice"),
@@ -311,6 +322,7 @@ func TestSearchTenants_MultipleFiltersAreANDed(t *testing.T) {
 }
 
 func TestSearchTenants_TagFilterRequiresExactMatch(t *testing.T) {
+	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice", "high-traffic", "audited"),
 		"b.yaml": fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice", "audited"),
@@ -325,6 +337,7 @@ func TestSearchTenants_TagFilterRequiresExactMatch(t *testing.T) {
 // ── free-text search ───────────────────────────────────────────────
 
 func TestSearchTenants_FreeTextMatchesIDOwnerDomain(t *testing.T) {
+	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"alpha-prod.yaml": fixtureTenantYAML("alpha-prod", "prod", "tier1", "billing", "mariadb", "alice"),
 		"beta.yaml":       fixtureTenantYAML("beta", "prod", "tier1", "alpha-domain", "mariadb", "bob"),
@@ -351,6 +364,7 @@ func TestSearchTenants_FreeTextMatchesIDOwnerDomain(t *testing.T) {
 }
 
 func TestSearchTenants_FreeTextIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"Tenant-A.yaml": fixtureTenantYAML("Tenant-A", "prod", "tier1", "billing", "mariadb", "alice"),
 	})
@@ -363,6 +377,7 @@ func TestSearchTenants_FreeTextIsCaseInsensitive(t *testing.T) {
 }
 
 func TestSearchTenants_FreeTextMatchesTags(t *testing.T) {
+	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice", "kubernetes"),
 		"b.yaml": fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice", "vmware"),
@@ -376,6 +391,7 @@ func TestSearchTenants_FreeTextMatchesTags(t *testing.T) {
 // ── RBAC interaction ───────────────────────────────────────────────
 
 func TestSearchTenants_RBACFiltersBeforePagination(t *testing.T) {
+	t.Parallel()
 	// 5 tenants — 3 in env=prod, 2 in env=staging. RBAC config:
 	// caller's group sees only env=staging.
 	dir := setupConfigDir(t, map[string]string{
@@ -406,6 +422,7 @@ func TestSearchTenants_RBACFiltersBeforePagination(t *testing.T) {
 // ── snapshot cache ─────────────────────────────────────────────────
 
 func TestSnapshotCache_ReuseDuringTTL(t *testing.T) {
+	t.Parallel()
 	cache := NewTenantSnapshotCache()
 	cache.ttl = 5 * time.Second // explicit, easy to read
 	dir := setupConfigDir(t, map[string]string{
@@ -437,6 +454,7 @@ func TestSnapshotCache_ReuseDuringTTL(t *testing.T) {
 }
 
 func TestSnapshotCache_RebuildsAfterTTL(t *testing.T) {
+	t.Parallel()
 	cache := NewTenantSnapshotCache()
 	cache.ttl = 1 * time.Millisecond
 	dir := setupConfigDir(t, map[string]string{
@@ -460,6 +478,7 @@ func TestSnapshotCache_RebuildsAfterTTL(t *testing.T) {
 }
 
 func TestSnapshotCache_InvalidateForcesRebuild(t *testing.T) {
+	t.Parallel()
 	cache := NewTenantSnapshotCache()
 	dir := setupConfigDir(t, map[string]string{
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice"),

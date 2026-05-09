@@ -313,6 +313,7 @@ func runApply(t *testing.T, mutate func(in *ApplyInput, g *fakeGit, p *fakePR)) 
 // --- input validation ---
 
 func TestApply_NilPlan(t *testing.T) {
+	t.Parallel()
 	_, err := Apply(context.Background(), ApplyInput{Repo: fixtureRepo()}, newFakeGit(), newFakePR())
 	if err == nil || !strings.Contains(err.Error(), "Plan is nil") {
 		t.Errorf("err = %v, want Plan-is-nil", err)
@@ -320,6 +321,7 @@ func TestApply_NilPlan(t *testing.T) {
 }
 
 func TestApply_EmptyPlan(t *testing.T) {
+	t.Parallel()
 	_, err := Apply(context.Background(), ApplyInput{
 		Plan: &Plan{},
 		Repo: fixtureRepo(),
@@ -330,6 +332,7 @@ func TestApply_EmptyPlan(t *testing.T) {
 }
 
 func TestApply_MissingRepo(t *testing.T) {
+	t.Parallel()
 	_, err := Apply(context.Background(), ApplyInput{
 		Plan: fixtureBasePlusTwoTenants(),
 		Repo: Repo{},
@@ -340,6 +343,7 @@ func TestApply_MissingRepo(t *testing.T) {
 }
 
 func TestApply_NilGitClient(t *testing.T) {
+	t.Parallel()
 	_, err := Apply(context.Background(), ApplyInput{
 		Plan: fixtureBasePlusTwoTenants(),
 		Repo: fixtureRepo(),
@@ -350,6 +354,7 @@ func TestApply_NilGitClient(t *testing.T) {
 }
 
 func TestApply_NilPRClient(t *testing.T) {
+	t.Parallel()
 	_, err := Apply(context.Background(), ApplyInput{
 		Plan: fixtureBasePlusTwoTenants(),
 		Repo: fixtureRepo(),
@@ -362,6 +367,7 @@ func TestApply_NilPRClient(t *testing.T) {
 // --- happy path: 1 base + 2 tenant PRs, all created, base placeholder rewritten ---
 
 func TestApply_HappyPath_AllCreated_BasePlaceholderRewritten(t *testing.T) {
+	t.Parallel()
 	res, g, p := runApply(t, nil)
 
 	if len(res.Items) != 3 {
@@ -421,6 +427,7 @@ func TestApply_HappyPath_AllCreated_BasePlaceholderRewritten(t *testing.T) {
 // --- DryRun: no side effects; all items DryRun status ---
 
 func TestApply_DryRun_NoSideEffects(t *testing.T) {
+	t.Parallel()
 	res, g, p := runApply(t, func(in *ApplyInput, _ *fakeGit, _ *fakePR) {
 		in.DryRun = true
 	})
@@ -444,6 +451,7 @@ func TestApply_DryRun_NoSideEffects(t *testing.T) {
 // --- Idempotency: branch already on remote → SkippedExisting ---
 
 func TestApply_IdempotentSkipsExistingBranch(t *testing.T) {
+	t.Parallel()
 	res, g, p := runApply(t, func(in *ApplyInput, fg *fakeGit, fp *fakePR) {
 		// Pre-populate fake remote with the deterministic base
 		// branch name + an "existing" open PR.
@@ -488,6 +496,7 @@ func TestApply_IdempotentSkipsExistingBranch(t *testing.T) {
 // --- Empty files: ItemFiles[i] missing → EmptyFiles status ---
 
 func TestApply_EmptyFilesSkipsItem(t *testing.T) {
+	t.Parallel()
 	res, _, p := runApply(t, func(in *ApplyInput, _ *fakeGit, _ *fakePR) {
 		delete(in.ItemFiles, 1) // Plan.Items[1] has no files.
 	})
@@ -509,6 +518,7 @@ func TestApply_EmptyFilesSkipsItem(t *testing.T) {
 // --- Failure isolation: one tenant fails, others continue ---
 
 func TestApply_FailureIsolation_OneTenantFails(t *testing.T) {
+	t.Parallel()
 	res, _, _ := runApply(t, func(in *ApplyInput, fg *fakeGit, _ *fakePR) {
 		hash := computePlanHash(in.Plan)
 		failBranch := fmt.Sprintf("%s/tenant-db-%s", defaultBranchPrefix, hash)
@@ -534,6 +544,7 @@ func TestApply_FailureIsolation_OneTenantFails(t *testing.T) {
 // --- Per-step failure: each pipeline step ---
 
 func TestApply_PerStepFailureMessages(t *testing.T) {
+	t.Parallel()
 	type setup struct {
 		name        string
 		injectErr   func(g *fakeGit, p *fakePR, branch string)
@@ -587,6 +598,7 @@ func TestApply_PerStepFailureMessages(t *testing.T) {
 // --- <base> placeholder NOT rewritten when base PR fails ---
 
 func TestApply_BasePlaceholderNotRewrittenWhenBaseFails(t *testing.T) {
+	t.Parallel()
 	res, _, _ := runApply(t, func(in *ApplyInput, fg *fakeGit, _ *fakePR) {
 		hash := computePlanHash(in.Plan)
 		baseBranch := fmt.Sprintf("%s/base-%s", defaultBranchPrefix, hash)
@@ -612,6 +624,7 @@ func TestApply_BasePlaceholderNotRewrittenWhenBaseFails(t *testing.T) {
 // --- Custom BranchPrefix is honoured ---
 
 func TestApply_CustomBranchPrefix(t *testing.T) {
+	t.Parallel()
 	res, g, _ := runApply(t, func(in *ApplyInput, _ *fakeGit, _ *fakePR) {
 		in.BranchPrefix = "customer-fork/migration"
 	})
@@ -631,6 +644,7 @@ func TestApply_CustomBranchPrefix(t *testing.T) {
 // --- Context cancellation mid-loop ---
 
 func TestApply_ContextCancelledDuringLoop(t *testing.T) {
+	t.Parallel()
 	plan := fixtureBasePlusTwoTenants()
 	files := fixtureItemFiles()
 	g := newFakeGit()
@@ -697,6 +711,7 @@ func (c *cancelOnFirstOpenPR) CommentPR(ctx context.Context, num int, body strin
 // --- Branch hash is deterministic across runs ---
 
 func TestComputePlanHash_DeterministicAcrossRuns(t *testing.T) {
+	t.Parallel()
 	plan := fixtureBasePlusTwoTenants()
 	h1 := computePlanHash(plan)
 	h2 := computePlanHash(plan)
@@ -706,6 +721,7 @@ func TestComputePlanHash_DeterministicAcrossRuns(t *testing.T) {
 }
 
 func TestComputePlanHash_StructuralChangeFlipsHash(t *testing.T) {
+	t.Parallel()
 	a := fixtureBasePlusTwoTenants()
 	b := fixtureBasePlusTwoTenants()
 	b.Items[1].TenantIDs = append(b.Items[1].TenantIDs, "tenant-z")
@@ -715,6 +731,7 @@ func TestComputePlanHash_StructuralChangeFlipsHash(t *testing.T) {
 }
 
 func TestComputePlanHash_TitleDriftDoesNotFlipHash(t *testing.T) {
+	t.Parallel()
 	a := fixtureBasePlusTwoTenants()
 	b := fixtureBasePlusTwoTenants()
 	b.Items[0].Title = "[Base Infrastructure] Different rendering"
@@ -730,6 +747,7 @@ func TestComputePlanHash_TitleDriftDoesNotFlipHash(t *testing.T) {
 // the anomaly. Without this assertion, a regression that silently
 // re-opens orphaned branches would slip through.
 func TestApply_BranchExistsButNoPR_SkippedWithExplanation(t *testing.T) {
+	t.Parallel()
 	res, _, _ := runApply(t, func(in *ApplyInput, fg *fakeGit, fp *fakePR) {
 		hash := computePlanHash(in.Plan)
 		baseBranch := fmt.Sprintf("%s/base-%s", defaultBranchPrefix, hash)
@@ -752,6 +770,7 @@ func TestApply_BranchExistsButNoPR_SkippedWithExplanation(t *testing.T) {
 // turn into `git checkout -B --foo/...` which parses --foo as a
 // flag. Trim-leading-`-` defense kicks in inside branchNameFor.
 func TestBranchNameFor_LeadingDashesStripped(t *testing.T) {
+	t.Parallel()
 	item := PlanItem{Kind: PlanItemBase}
 	got := branchNameFor("---hostile/prefix", "abcd1234", item)
 	if strings.HasPrefix(got, "-") {
@@ -763,6 +782,7 @@ func TestBranchNameFor_LeadingDashesStripped(t *testing.T) {
 }
 
 func TestBranchNameFor_AllDashesPrefixFallsBackToDefault(t *testing.T) {
+	t.Parallel()
 	item := PlanItem{Kind: PlanItemBase}
 	got := branchNameFor("---", "abcd1234", item)
 	if !strings.HasPrefix(got, defaultBranchPrefix+"/") {
@@ -773,6 +793,7 @@ func TestBranchNameFor_AllDashesPrefixFallsBackToDefault(t *testing.T) {
 // --- safeBranchSegment ---
 
 func TestSafeBranchSegment(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{

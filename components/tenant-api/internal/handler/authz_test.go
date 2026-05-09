@@ -39,6 +39,7 @@ import (
 // ─────────────────────────────────────────────────────────────────
 
 func TestTenantsLackingPermission_EmptyInput(t *testing.T) {
+	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
 	if got := tenantsLackingPermission(rbacMgr, []string{"any"}, nil, rbac.PermWrite); len(got) != 0 {
 		t.Errorf("nil tenant list: got %v, want empty", got)
@@ -49,6 +50,7 @@ func TestTenantsLackingPermission_EmptyInput(t *testing.T) {
 }
 
 func TestTenantsLackingPermission_OpenModeRead(t *testing.T) {
+	t.Parallel()
 	// Open-mode RBAC grants PermRead to any caller. tenantsLackingPermission
 	// for PermRead in open mode returns empty (no restrictions).
 	rbacMgr := newRBACManager(t, "")
@@ -59,6 +61,7 @@ func TestTenantsLackingPermission_OpenModeRead(t *testing.T) {
 }
 
 func TestTenantsLackingPermission_OpenModeWriteRejectsAll(t *testing.T) {
+	t.Parallel()
 	// Open-mode RBAC does NOT grant PermWrite (intentional —
 	// missing _rbac.yaml is a pre-prod state, writes should fail).
 	rbacMgr := newRBACManager(t, "")
@@ -69,6 +72,7 @@ func TestTenantsLackingPermission_OpenModeWriteRejectsAll(t *testing.T) {
 }
 
 func TestTenantsLackingPermission_GrantedReadButNotWrite(t *testing.T) {
+	t.Parallel()
 	// Caller can READ db-a but cannot WRITE — ensure the helper
 	// distinguishes by `want`.
 	rbacMgr := newRBACManager(t, `groups:
@@ -89,6 +93,7 @@ func TestTenantsLackingPermission_GrantedReadButNotWrite(t *testing.T) {
 }
 
 func TestTenantsLackingPermission_PartialAccess(t *testing.T) {
+	t.Parallel()
 	// Caller can write db-a but not db-b — return ONLY db-b.
 	rbacMgr := newRBACManager(t, `groups:
   - name: dba-team-a
@@ -104,6 +109,7 @@ func TestTenantsLackingPermission_PartialAccess(t *testing.T) {
 }
 
 func TestTenantsLackingPermission_DeduplicatesInput(t *testing.T) {
+	t.Parallel()
 	// Duplicate IDs in input → no duplicates in forbidden list.
 	rbacMgr := newRBACManager(t, "")
 	got := tenantsLackingPermission(rbacMgr, []string{"any"},
@@ -123,6 +129,7 @@ func TestTenantsLackingPermission_DeduplicatesInput(t *testing.T) {
 }
 
 func TestTenantsLackingPermission_SkipsEmptyIDs(t *testing.T) {
+	t.Parallel()
 	// Empty-string IDs in input are silently skipped (defensive
 	// — shouldn't happen but caller may have stray "" entries).
 	rbacMgr := newRBACManager(t, "")
@@ -138,6 +145,7 @@ func TestTenantsLackingPermission_SkipsEmptyIDs(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestPutGroup_ForbiddenMember_Returns403(t *testing.T) {
+	t.Parallel()
 	// Caller has admin on db-a but NOT db-b. Group request includes
 	// both members → 403, with both… er, one (db-b) listed as forbidden.
 	configDir := setupConfigDir(t, nil)
@@ -175,6 +183,7 @@ func TestPutGroup_ForbiddenMember_Returns403(t *testing.T) {
 }
 
 func TestPutGroup_AllMembersForbidden_ListsAllInError(t *testing.T) {
+	t.Parallel()
 	// Caller has zero permission. Group with 3 members → all 3 in
 	// the error message so operator can fix in one round-trip
 	// (ergonomics: discover-all-failures-up-front).
@@ -208,6 +217,7 @@ func TestPutGroup_AllMembersForbidden_ListsAllInError(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestDeleteGroup_ForbiddenMember_Returns403(t *testing.T) {
+	t.Parallel()
 	// Pre-existing group with members caller can't write → DELETE
 	// fails 403. Without this check, a malicious operator could
 	// destroy a group whose members they don't own (DoS).
@@ -243,6 +253,7 @@ func TestDeleteGroup_ForbiddenMember_Returns403(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
+	t.Parallel()
 	// Task touched 3 tenants. Caller can read 2 → response omits
 	// the third (info disclosure scrubbed).
 	taskMgr := async.NewManager(2)
@@ -287,6 +298,7 @@ func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
 }
 
 func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
+	t.Parallel()
 	// Task touched a tenant the caller cannot read → 403, not 200
 	// with empty results, not 404. The task DOES exist but the
 	// caller has no business knowing about it.
@@ -345,6 +357,7 @@ func (f *fakeTracker) LastSyncTime() time.Time          { return time.Now() }
 func (f *fakeTracker) WatchLoop(stopCh <-chan struct{}) {}
 
 func TestListPRs_FiltersBulkListByTenantAccess(t *testing.T) {
+	t.Parallel()
 	tracker := &fakeTracker{pending: []platform.PRInfo{
 		{Number: 1, TenantID: "db-a"},
 		{Number: 2, TenantID: "db-secret"},
@@ -376,6 +389,7 @@ func TestListPRs_FiltersBulkListByTenantAccess(t *testing.T) {
 }
 
 func TestListPRs_TenantQueryReturnsEmptyWhenForbidden(t *testing.T) {
+	t.Parallel()
 	// `?tenant=db-secret` from a caller without read access:
 	// returns empty list, NOT 403. This is deliberate — 403 would
 	// reveal "tenant exists" via the access check, while empty

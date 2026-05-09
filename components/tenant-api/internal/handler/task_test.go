@@ -14,6 +14,7 @@ import (
 
 // TestGetTask_Found verifies that a submitted task can be polled.
 func TestGetTask_Found(t *testing.T) {
+	t.Parallel()
 	// Create task manager and handler
 	taskMgr := async.NewManager(1)
 	defer taskMgr.Close()
@@ -70,6 +71,7 @@ func TestGetTask_Found(t *testing.T) {
 
 // TestGetTask_NotFound verifies that a non-existent task returns 404 with hint.
 func TestGetTask_NotFound(t *testing.T) {
+	t.Parallel()
 	// Create task manager
 	taskMgr := async.NewManager(1)
 	defer taskMgr.Close()
@@ -117,6 +119,7 @@ func TestGetTask_NotFound(t *testing.T) {
 
 // TestGetTask_CompletedTask verifies that a completed task returns full results.
 func TestGetTask_CompletedTask(t *testing.T) {
+	t.Parallel()
 	// Create task manager
 	taskMgr := async.NewManager(1)
 	defer taskMgr.Close()
@@ -219,6 +222,7 @@ func TestGetTask_CompletedTask(t *testing.T) {
 
 // TestGetTask_OrphanedHint verifies the pod_may_have_restarted hint in 404 response.
 func TestGetTask_OrphanedHint(t *testing.T) {
+	t.Parallel()
 	// Create two task managers (simulating pod restart)
 	taskMgr1 := async.NewManager(1)
 	taskID := "task-20260406-0003"
@@ -273,6 +277,7 @@ func TestGetTask_OrphanedHint(t *testing.T) {
 
 // TestGetTask_MultiplePolls verifies task status is consistent across polls.
 func TestGetTask_MultiplePolls(t *testing.T) {
+	t.Parallel()
 	// Create task manager
 	taskMgr := async.NewManager(1)
 	defer taskMgr.Close()

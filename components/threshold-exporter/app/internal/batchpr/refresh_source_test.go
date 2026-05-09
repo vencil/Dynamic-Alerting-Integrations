@@ -47,6 +47,7 @@ func runRefreshSource(t *testing.T, mutate func(in *RefreshSourceInput, g *fakeG
 // --- Validation ---------------------------------------------------
 
 func TestRefreshSource_RejectsEmptyRepoOwner(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshSourceInput(101)
 	in.Repo.Owner = ""
 	_, err := RefreshSource(context.Background(), in, newFakeGit(), newFakePR())
@@ -56,6 +57,7 @@ func TestRefreshSource_RejectsEmptyRepoOwner(t *testing.T) {
 }
 
 func TestRefreshSource_RejectsEmptyBaseBranch(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshSourceInput(101)
 	in.Repo.BaseBranch = ""
 	_, err := RefreshSource(context.Background(), in, newFakeGit(), newFakePR())
@@ -65,6 +67,7 @@ func TestRefreshSource_RejectsEmptyBaseBranch(t *testing.T) {
 }
 
 func TestRefreshSource_RejectsNilClients(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshSourceInput(101)
 	if _, err := RefreshSource(context.Background(), in, nil, newFakePR()); err == nil {
 		t.Errorf("expected error for nil GitClient")
@@ -75,6 +78,7 @@ func TestRefreshSource_RejectsNilClients(t *testing.T) {
 }
 
 func TestRefreshSource_RejectsZeroTargetPRNumber(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshSourceInput()
 	in.Targets = []RefreshSourceTarget{{PRNumber: 0, BranchName: "x"}}
 	_, err := RefreshSource(context.Background(), in, newFakeGit(), newFakePR())
@@ -84,6 +88,7 @@ func TestRefreshSource_RejectsZeroTargetPRNumber(t *testing.T) {
 }
 
 func TestRefreshSource_RejectsEmptyTargetBranch(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshSourceInput()
 	in.Targets = []RefreshSourceTarget{{PRNumber: 5, BranchName: ""}}
 	_, err := RefreshSource(context.Background(), in, newFakeGit(), newFakePR())
@@ -95,6 +100,7 @@ func TestRefreshSource_RejectsEmptyTargetBranch(t *testing.T) {
 // --- Empty Targets is a no-op ------------------------------------
 
 func TestRefreshSource_EmptyTargetsNoOp(t *testing.T) {
+	t.Parallel()
 	in := fixtureRefreshSourceInput()
 	in.Targets = nil
 	r, err := RefreshSource(context.Background(), in, newFakeGit(), newFakePR())
@@ -112,6 +118,7 @@ func TestRefreshSource_EmptyTargetsNoOp(t *testing.T) {
 // --- Happy path: all targets updated ----------------------------
 
 func TestRefreshSource_HappyPath_AllUpdated(t *testing.T) {
+	t.Parallel()
 	r, g, p := runRefreshSource(t, nil)
 
 	if r.Summary.UpdatedCount != 2 {
@@ -150,6 +157,7 @@ func TestRefreshSource_HappyPath_AllUpdated(t *testing.T) {
 }
 
 func TestRefreshSource_FileContentReachesGitClient(t *testing.T) {
+	t.Parallel()
 	// Pin the contract: caller's Files map flows verbatim into
 	// GitClient.WriteFiles. Without this guard a future refactor
 	// could "helpfully" filter or transform the content.
@@ -175,6 +183,7 @@ func TestRefreshSource_FileContentReachesGitClient(t *testing.T) {
 // --- Empty Files → PatchSkippedNoChange -------------------------
 
 func TestRefreshSource_EmptyFilesMarksNoChange(t *testing.T) {
+	t.Parallel()
 	r, g, _ := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, _ *fakePR) {
 		in.Targets[0].Files = nil // empty diff for tenant 101
 	})
@@ -199,6 +208,7 @@ func TestRefreshSource_EmptyFilesMarksNoChange(t *testing.T) {
 // --- Closed/merged PR skipped ---------------------------------
 
 func TestRefreshSource_ClosedPRSkipped(t *testing.T) {
+	t.Parallel()
 	r, g, p := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, p *fakePR) {
 		p.prDetails[101] = &PRDetails{Number: 101, State: PRStateClosed, HeadBranch: branchFor(101)}
 	})
@@ -222,6 +232,7 @@ func TestRefreshSource_ClosedPRSkipped(t *testing.T) {
 }
 
 func TestRefreshSource_MergedPRSkipped(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, p *fakePR) {
 		p.prDetails[101] = &PRDetails{Number: 101, State: PRStateMerged, HeadBranch: branchFor(101)}
 	})
@@ -234,6 +245,7 @@ func TestRefreshSource_MergedPRSkipped(t *testing.T) {
 }
 
 func TestRefreshSource_PostCommentOnSkippedFlagPostsComment(t *testing.T) {
+	t.Parallel()
 	r, _, p := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, p *fakePR) {
 		in.PostCommentOnSkipped = true
 		p.prDetails[101] = &PRDetails{Number: 101, State: PRStateClosed, HeadBranch: branchFor(101)}
@@ -252,6 +264,7 @@ func TestRefreshSource_PostCommentOnSkippedFlagPostsComment(t *testing.T) {
 // --- Dry-run ----------------------------------------------------
 
 func TestRefreshSource_DryRunDoesNoRemoteWork(t *testing.T) {
+	t.Parallel()
 	r, g, p := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, _ *fakePR) {
 		in.DryRun = true
 	})
@@ -281,6 +294,7 @@ func TestRefreshSource_DryRunDoesNoRemoteWork(t *testing.T) {
 // --- Failure paths ---------------------------------------------
 
 func TestRefreshSource_GetPRFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, p *fakePR) {
 		p.getPRErr[101] = errors.New("API rate limited")
 	})
@@ -296,6 +310,7 @@ func TestRefreshSource_GetPRFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefreshSource_CheckoutFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, g *fakeGit, _ *fakePR) {
 		g.checkoutErr[branchFor(101)] = errors.New("branch not found")
 	})
@@ -305,6 +320,7 @@ func TestRefreshSource_CheckoutFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefreshSource_WriteFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, g *fakeGit, _ *fakePR) {
 		g.writeErr[branchFor(101)] = errors.New("disk full")
 	})
@@ -314,6 +330,7 @@ func TestRefreshSource_WriteFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefreshSource_CommitFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, g *fakeGit, _ *fakePR) {
 		g.commitErr[branchFor(101)] = errors.New("nothing to commit")
 	})
@@ -323,6 +340,7 @@ func TestRefreshSource_CommitFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefreshSource_PushFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, g *fakeGit, _ *fakePR) {
 		g.pushErr[branchFor(101)] = errors.New("remote rejected")
 	})
@@ -332,6 +350,7 @@ func TestRefreshSource_PushFailureRecordsStep(t *testing.T) {
 }
 
 func TestRefreshSource_CommentFailureRecordsStep(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, p *fakePR) {
 		p.commentErr[101] = errors.New("API timeout")
 	})
@@ -352,6 +371,7 @@ func TestRefreshSource_CommentFailureRecordsStep(t *testing.T) {
 // --- Per-target loop continues after one failure ---------------
 
 func TestRefreshSource_OneFailureDoesNotSinkBatch(t *testing.T) {
+	t.Parallel()
 	r, _, p := runRefreshSource(t, func(in *RefreshSourceInput, g *fakeGit, _ *fakePR) {
 		g.commitErr[branchFor(101)] = errors.New("hook rejected")
 	})
@@ -371,6 +391,7 @@ func TestRefreshSource_OneFailureDoesNotSinkBatch(t *testing.T) {
 // --- Custom CommitMessageOverride + CommentBody substitution ---
 
 func TestRefreshSource_CustomCommitMessageSubstitutesSourceRuleIDs(t *testing.T) {
+	t.Parallel()
 	// End-to-end assertion: the override flows through the
 	// orchestration into the actual Commit call, with
 	// `<source-rule-ids>` substituted. Earlier draft of this test
@@ -398,6 +419,7 @@ func TestRefreshSource_CustomCommitMessageSubstitutesSourceRuleIDs(t *testing.T)
 }
 
 func TestRefreshSource_DefaultCommitMessageIncludesSourceRuleIDs(t *testing.T) {
+	t.Parallel()
 	// Pin the default commit message format end-to-end (no override).
 	_, g, _ := runRefreshSource(t, nil)
 	msgs := g.commitMessages[branchFor(101)]
@@ -413,6 +435,7 @@ func TestRefreshSource_DefaultCommitMessageIncludesSourceRuleIDs(t *testing.T) {
 }
 
 func TestRefreshSource_CustomCommentBodySubstitutesSourceRuleIDs(t *testing.T) {
+	t.Parallel()
 	_, _, p := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, _ *fakePR) {
 		in.CommentBody = "Re-review please — affected: <source-rule-ids>"
 	})
@@ -428,6 +451,7 @@ func TestRefreshSource_CustomCommentBodySubstitutesSourceRuleIDs(t *testing.T) {
 // --- Empty SourceRuleIDs → graceful default messages ----------
 
 func TestRefreshSource_EmptySourceRuleIDsHandledGracefully(t *testing.T) {
+	t.Parallel()
 	_, _, p := runRefreshSource(t, func(in *RefreshSourceInput, _ *fakeGit, _ *fakePR) {
 		in.Targets[0].SourceRuleIDs = nil
 		in.Targets[1].SourceRuleIDs = nil
@@ -456,6 +480,7 @@ func TestRefreshSource_EmptySourceRuleIDsHandledGracefully(t *testing.T) {
 // --- Context cancellation -----------------------------------
 
 func TestRefreshSource_ContextCancellationStopsBatch(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	in := fixtureRefreshSourceInput(101, 102, 103)
 	cancel() // cancel immediately
@@ -477,6 +502,7 @@ func TestRefreshSource_ContextCancellationStopsBatch(t *testing.T) {
 // --- Report rendering ------------------------------------------
 
 func TestRefreshSource_ReportIncludesPerPRTableAndCrossRef(t *testing.T) {
+	t.Parallel()
 	r, _, _ := runRefreshSource(t, nil)
 	if !strings.Contains(r.ReportMarkdown, "## Per-PR outcomes") {
 		t.Errorf("report should have Per-PR outcomes section")
@@ -495,6 +521,7 @@ func TestRefreshSource_ReportIncludesPerPRTableAndCrossRef(t *testing.T) {
 }
 
 func TestRefreshSource_ReportFiltersOnSharedRuleAcrossTargets(t *testing.T) {
+	t.Parallel()
 	// Two targets share one source rule + each have one unique ID.
 	in := fixtureRefreshSourceInput(101, 102)
 	in.Targets[0].SourceRuleIDs = []string{"shared-rule", "unique-101"}
@@ -517,6 +544,7 @@ func TestRefreshSource_ReportFiltersOnSharedRuleAcrossTargets(t *testing.T) {
 // --- joinSourceRuleIDs helper -----------------------------------
 
 func TestJoinSourceRuleIDs_TruncatesLongLists(t *testing.T) {
+	t.Parallel()
 	// Empty.
 	if got := joinSourceRuleIDs(nil); got != "" {
 		t.Errorf("empty: got %q, want ''", got)
@@ -540,6 +568,7 @@ func TestJoinSourceRuleIDs_TruncatesLongLists(t *testing.T) {
 }
 
 func TestJoinSourceRuleIDs_SingleVeryLongID(t *testing.T) {
+	t.Parallel()
 	// Single ID exceeds the cap. Helper should still return it
 	// untruncated (better to surface the full ID than to chop the
 	// only piece of context the reviewer has).
@@ -554,6 +583,7 @@ func TestJoinSourceRuleIDs_SingleVeryLongID(t *testing.T) {
 }
 
 func TestJoinSourceRuleIDs_OnlyOneIDExceedingCap_NoBogusTail(t *testing.T) {
+	t.Parallel()
 	// Self-review caught: when there's exactly ONE ID and it
 	// exceeds cap, the original code returned "X ... + 0 more"
 	// — the "+ 0 more" tail is meaningless. Fix: return just
