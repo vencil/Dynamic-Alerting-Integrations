@@ -21,6 +21,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PY_SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "pr_preflight.py"
 _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"
 
+# TestGateScript invokes the require_preflight_pass.sh bash script as a
+# subprocess. Git Bash on Windows mangles `C:\path\file` argument
+# translation (similar to verify_release.sh), so the gate-script tests
+# can't run on Windows. The Python-only tests in this module
+# (TestWriteMarker / TestClearMarkers / etc.) DO run cross-platform.
+_BASH_SCRIPT_SKIP = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="bash gate-script tests need POSIX path translation; "
+           "Git Bash on Windows mangles 'C:\\path\\file' arguments. "
+           "Verified to pass on Linux CI runners.",
+)
+
 ZERO_SHA = "0" * 40
 
 
@@ -99,6 +111,7 @@ class TestMarkerPython:
         assert mod.MARKER_PREFIX in p.name
 
 
+@_BASH_SCRIPT_SKIP
 class TestGateScript:
     """End-to-end behavioural tests of require_preflight_pass.sh."""
 

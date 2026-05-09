@@ -36,6 +36,37 @@ if _DA_TOOLS_DIR not in sys.path:
 from factories import populate_routing_dir  # noqa: E402
 
 
+# ── Session-scoped subprocess UTF-8 setup ────────────────────────────
+#
+# When tests use `subprocess.run([sys.executable, ...], capture_output=True,
+# text=True, encoding='utf-8')`, the parent decodes child output as UTF-8
+# but the CHILD Python's `sys.stdout.encoding` defaults to the host
+# console codepage. On zh-TW Windows that's cp950 (Big5) and CJK
+# characters in script output (e.g., `print("中文錯誤")`) become un-
+# decodable bytes once they reach the parent's UTF-8 decoder, surfacing
+# as `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xa1 …`.
+#
+# Setting `PYTHONIOENCODING=utf-8` in the test process environment
+# propagates to every spawned child Python (since `subprocess.run` without
+# an explicit `env=` kwarg inherits the parent env). The child then
+# emits UTF-8 bytes, matching what the parent expects.
+#
+# Linux CI runners default to UTF-8 anyway so this is a no-op there;
+# the session scope means it runs once per pytest run, not per test.
+@pytest.fixture(scope="session", autouse=True)
+def _force_utf8_subprocess_io():
+    """Force UTF-8 IO for subprocess'd Python children (cross-platform parity)."""
+    old = os.environ.get("PYTHONIOENCODING")
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("PYTHONIOENCODING", None)
+        else:
+            os.environ["PYTHONIOENCODING"] = old
+
+
 # ── Session-scoped constant fixtures ──────────────────────────────────
 
 @pytest.fixture(scope="session")

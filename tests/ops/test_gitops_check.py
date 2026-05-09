@@ -1016,6 +1016,13 @@ class TestIntegration:
 class TestErrorRecovery:
     """Test error recovery and edge cases."""
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="os.symlink requires admin privileges on Windows; the "
+               "test verifies we follow symlinks correctly, which is a "
+               "Linux/macOS-relevant code path. Verified to pass on "
+               "Linux CI runners.",
+    )
     def test_local_with_symlink_directory(self, config_dir):
         """Local check with symlink directory."""
         # Create actual config dir

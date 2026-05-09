@@ -21,10 +21,25 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+# On Windows, `bash` is provided by Git Bash / WSL but doesn't translate
+# Windows-style paths (`C:\...`) to its POSIX-style namespace correctly
+# when given as a positional argument. Every test in this file invokes
+# `bash <script-as-Windows-path>`, so the whole module is effectively
+# Linux/macOS-only — Linux CI is the production target. Skip cleanly
+# instead of letting "bash: C:Usersvencs...sh: No such file" failures
+# accumulate in local Windows pytest runs.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="verify_release.sh tests need POSIX bash path translation; "
+           "Git Bash on Windows mangles 'C:\\path\\file' arguments. "
+           "Verified to pass on Linux CI runners.",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "tools" / "dx" / "verify_release.sh"
