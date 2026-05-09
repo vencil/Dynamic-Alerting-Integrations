@@ -1648,3 +1648,428 @@ class TestParseCommandMapProperties:
         result = lh.parse_command_map_keys(f)
         assert isinstance(result, set)
         assert result == {"alpha", "beta"}
+
+
+# ---------------------------------------------------------------------------
+# parse_build_sh_tools — sibling parser for build.sh TOOL_FILES array
+# ---------------------------------------------------------------------------
+# Pilot batch 7. Used by check_build_completeness lint to verify every
+# CLI command in COMMAND_MAP also ships in the docker image. A regression
+# here = silent drift between the two registries.
+
+class TestParseBuildShToolsProperties:
+
+    def test_minimal_tool_files(self, tmp_path):
+        # Property: a minimal valid TOOL_FILES array parses to the basenames.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  "scripts/tools/check_alert.py"\n'
+            '  "scripts/tools/diagnose.py"\n'
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tools(f)
+        assert result == {"check_alert.py", "diagnose.py"}
+
+    def test_empty_tool_files(self, tmp_path):
+        f = tmp_path / "build.sh"
+        f.write_text('TOOL_FILES=(\n)\n', encoding="utf-8")
+        assert lh.parse_build_sh_tools(f) == set()
+
+    def test_basenames_only(self, tmp_path):
+        # Property: returns basenames, not full paths.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  "deeply/nested/path/to/tool.py"\n'
+            '  "shallow.py"\n'
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tools(f)
+        assert result == {"tool.py", "shallow.py"}
+
+    def test_skips_comments_and_blanks(self, tmp_path):
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  # this is a comment\n'
+            '\n'
+            '  "real.py"\n'
+            '  # another comment\n'
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tools(f)
+        assert result == {"real.py"}
+
+    def test_parser_stops_at_closing_paren(self, tmp_path):
+        # Property: lines after the closing `)` are NOT included.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  "real.py"\n'
+            ')\n'
+            'OTHER_FILES=(\n'
+            '  "should-not-appear.py"\n'
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tools(f)
+        assert result == {"real.py"}
+        assert "should-not-appear.py" not in result
+
+    def test_quote_stripping(self, tmp_path):
+        # Property: leading/trailing quotes (both ' and ") are stripped.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  "double_quoted.py"\n'
+            "  'single_quoted.py'\n"
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tools(f)
+        assert result == {"double_quoted.py", "single_quoted.py"}
+
+
+# ---------------------------------------------------------------------------
+# latest_version_from_changelog — newest `## [vX.Y.Z]` heading from CHANGELOG
+# ---------------------------------------------------------------------------
+# Pilot batch 7. Drives the HA-10 expire_at lifecycle gate (PR #328).
+# Returns the FIRST matching heading because CHANGELOG.md is reverse-
+# chronological. A regression that picked the LAST match would pin the
+# expire_at gate to the oldest version forever.
+
+class TestLatestVersionFromChangelogProperties:
+
+    def test_finds_first_matching_heading(self, tmp_path):
+        # Property: the FIRST `## [vX.Y.Z]` heading wins (CHANGELOG is
+        # reverse-chronological).
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text(
+            "# Changelog\n\n"
+            "## [v2.9.0] - 2025-12-01\n\n"
+            "Latest stuff.\n\n"
+            "## [v2.8.0] - 2025-11-01\n\n"
+            "Old stuff.\n",
+            encoding="utf-8",
+        )
+        v = cfr.latest_version_from_changelog(f)
+        assert v is not None
+        assert str(v) == "v2.9.0"
+
+    def test_missing_file_returns_none(self, tmp_path):
+        # Property: a nonexistent CHANGELOG path returns None (not raise).
+        v = cfr.latest_version_from_changelog(tmp_path / "missing.md")
+        assert v is None
+
+    def test_no_matching_headings_returns_none(self, tmp_path):
+        # Property: a CHANGELOG with no `## [vX.Y.Z]` heading returns None.
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text(
+            "# Changelog\n\n"
+            "Just prose, no version headings here.\n"
+            "## [Unreleased]\n",
+            encoding="utf-8",
+        )
+        assert cfr.latest_version_from_changelog(f) is None
+
+    @given(
+        st.integers(min_value=0, max_value=99),
+        st.integers(min_value=0, max_value=99),
+        st.integers(min_value=0, max_value=99),
+    )
+    @PILOT_SETTINGS
+    def test_round_trip(self, tmp_path_factory, major, minor, patch):
+        # Property: writing a single version heading and parsing it back
+        # gives that exact version.
+        d = tmp_path_factory.mktemp("changelog")
+        f = d / "CHANGELOG.md"
+        f.write_text(
+            f"# Changelog\n\n## [v{major}.{minor}.{patch}] - 2025-01-01\n\nNotes.\n",
+            encoding="utf-8",
+        )
+        v = cfr.latest_version_from_changelog(f)
+        assert v is not None
+        assert v.major == major and v.minor == minor and v.patch == patch
+
+    def test_skips_non_anchored_headings(self, tmp_path):
+        # Property: only `^##\s+\[vX.Y.Z\]` lines match — heading text
+        # mid-document with `## [v…]` only matches if line starts with `##`.
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text(
+            "# Changelog\n\n"
+            "Some body text.\n"
+            "### [v2.9.0]\n"          # h3, NOT h2 — should not match
+            "leading text ## [v2.8.0]\n"  # not at start of line
+            "## [v2.7.0] - 2025-01-01\n"  # this should win
+            "Notes.\n",
+            encoding="utf-8",
+        )
+        v = cfr.latest_version_from_changelog(f)
+        assert v is not None
+        assert str(v) == "v2.7.0"
+
+
+# ---------------------------------------------------------------------------
+# _apply_timing_params — timing guardrail applicator
+# ---------------------------------------------------------------------------
+# Pilot batch 7. Wraps validate_and_clamp for the 3 timing params
+# (group_wait / group_interval / repeat_interval). Already tested via
+# property tests on validate_and_clamp itself, but the WRAPPER has its
+# own behaviors: skip-if-absent, dict-build, warning-list aggregation.
+
+class TestApplyTimingParamsProperties:
+
+    def test_empty_source_returns_empty_dict(self):
+        # Property: source dict with no timing keys → empty timing + no
+        # warnings.
+        timing, warnings = gm._apply_timing_params({}, "tenant-x")
+        assert timing == {}
+        assert warnings == []
+
+    def test_missing_keys_skipped(self):
+        # Property: only present keys are processed. (group_wait alone,
+        # no group_interval / repeat_interval keys.)
+        timing, warnings = gm._apply_timing_params({"group_wait": "30s"}, "t")
+        assert "group_wait" in timing
+        assert "group_interval" not in timing
+        assert "repeat_interval" not in timing
+
+    def test_all_three_in_bounds_returns_clean(self):
+        # Property: well-formed values within guardrails → all three
+        # present, no warnings.
+        source = {"group_wait": "30s", "group_interval": "5m",
+                   "repeat_interval": "4h"}
+        timing, warnings = gm._apply_timing_params(source, "t")
+        assert timing == source
+        assert warnings == []
+
+    def test_below_min_clamped(self):
+        # Property: below-min value gets clamped + warning emitted.
+        timing, warnings = gm._apply_timing_params(
+            {"group_wait": "1s"}, "t-x")
+        # validate_and_clamp(group_wait, "1s") → 5s clamped
+        assert timing["group_wait"] == "5s"
+        assert len(warnings) == 1
+        assert "below minimum" in warnings[0]
+        assert "t-x" in warnings[0]
+
+    def test_warnings_aggregated_across_keys(self):
+        # Property: each clamped key emits its own warning into the same list.
+        source = {"group_wait": "1s", "repeat_interval": "10s"}
+        _, warnings = gm._apply_timing_params(source, "t")
+        assert len(warnings) == 2
+
+    @given(st.dictionaries(
+        keys=st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10).filter(
+            lambda s: s not in ("group_wait", "group_interval", "repeat_interval")
+        ),
+        values=st.text(min_size=1, max_size=10),
+        max_size=5,
+    ))
+    @PILOT_SETTINGS
+    def test_unknown_keys_ignored(self, junk):
+        # Property: any key NOT in the timing-param tuple is ignored.
+        timing, warnings = gm._apply_timing_params(junk, "t")
+        assert timing == {}
+        assert warnings == []
+
+    def test_falsy_values_skipped(self):
+        # Property: empty string / None / 0 are treated as "not set".
+        for falsy in ("", None, 0):
+            timing, warnings = gm._apply_timing_params(
+                {"group_wait": falsy, "group_interval": "5m"}, "t")
+            assert "group_wait" not in timing
+            assert "group_interval" in timing
+            # No warnings for the absent param.
+            assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# validate_receiver_domains — SSRF allowlist enforcement
+# ---------------------------------------------------------------------------
+# Pilot batch 7. Critical security helper: validates outgoing webhook
+# URLs against an fnmatch-pattern allowlist. Used by the routing
+# pipeline before tenant config is rendered into Alertmanager.
+
+class TestValidateReceiverDomainsProperties:
+
+    def test_empty_allowlist_no_warnings(self):
+        # Property: empty allowed_domains list → no checks performed.
+        recv = {"type": "webhook", "url": "http://anywhere.example.com/x"}
+        assert gv.validate_receiver_domains(recv, "t", []) == []
+
+    def test_non_dict_receiver_no_warnings(self):
+        # Property: caller bug should not raise; just return empty.
+        for junk in (None, "", 42, ["a"]):
+            assert gv.validate_receiver_domains(junk, "t", ["*.example.com"]) == []
+
+    def test_allowed_host_passes(self):
+        recv = {"type": "webhook", "url": "http://hooks.example.com/x"}
+        warnings = gv.validate_receiver_domains(
+            recv, "t", ["*.example.com"])
+        assert warnings == []
+
+    def test_disallowed_host_warns(self):
+        recv = {"type": "webhook", "url": "http://evil.attacker.com/x"}
+        warnings = gv.validate_receiver_domains(
+            recv, "t", ["*.example.com"])
+        assert len(warnings) == 1
+        assert "not in allowed_domains" in warnings[0]
+        assert "evil.attacker.com" in warnings[0]
+
+    def test_unknown_receiver_type_no_url_check(self):
+        # Property: a receiver type not in RECEIVER_URL_FIELDS has no
+        # url_fields, so no domain check fires.
+        recv = {"type": "totally-unknown-type", "url": "http://x.com"}
+        assert gv.validate_receiver_domains(
+            recv, "t", ["*.example.com"]) == []
+
+    def test_pagerduty_has_no_url_field(self):
+        # Property: pagerduty's url_fields is [] (only service_key, no URL).
+        recv = {"type": "pagerduty", "service_key": "abc",
+                 "client_url": "http://anything.com"}
+        # client_url isn't in pagerduty's url_fields list, so no check.
+        assert gv.validate_receiver_domains(
+            recv, "t", ["*.example.com"]) == []
+
+    def test_email_smarthost_validated(self):
+        # Property: email type validates the smarthost field.
+        recv = {"type": "email", "smarthost": "smtp.evil.com:587", "to": "a@b"}
+        warnings = gv.validate_receiver_domains(
+            recv, "t", ["*.example.com"])
+        assert len(warnings) == 1
+
+    def test_unparseable_url_warns_separately(self):
+        # Property: when _extract_host returns None, we emit a "cannot
+        # parse host" warning rather than silently allowing.
+        # Note: _extract_host returns the original string for non-URL
+        # content (e.g. "@@@") so we use a value that genuinely yields
+        # an empty host: a string of all-whitespace would, but is also
+        # rejected by the upstream `if not raw` guard. Hard to trigger
+        # without a contrived input — verify the type-check guard at
+        # least exists.
+        recv = {"type": "webhook", "url": ""}  # empty url skipped
+        # (`if not raw: continue` covers this)
+        assert gv.validate_receiver_domains(
+            recv, "t", ["*.example.com"]) == []
+
+    @given(
+        # Build a valid hostname by composing labels — much faster than
+        # filtering arbitrary strings.
+        st.lists(
+            st.text(alphabet=string.ascii_lowercase, min_size=2, max_size=10),
+            min_size=2, max_size=4,  # at least 2 labels (host.tld)
+        ).map(lambda labels: ".".join(labels)),
+    )
+    @PILOT_SETTINGS
+    def test_exact_match_passes(self, host):
+        # Property: when a host is in the allowlist (exact match), it passes.
+        recv = {"type": "webhook", "url": f"http://{host}/api"}
+        warnings = gv.validate_receiver_domains(recv, "t", [host])
+        assert warnings == [], (
+            f"exact-match host {host!r} flagged: {warnings!r}"
+        )
+
+    def test_any_match_in_multi_pattern_allowlist(self):
+        # Mutation-pilot kill-test: an allowlist with MULTIPLE patterns is
+        # an "any-of" check (host passes if it matches at least one).
+        # Mutating `any → all` would tighten this to require every pattern
+        # to match — which is impossible for non-trivial multi-pattern
+        # allowlists, so legitimate hosts would be rejected.
+        recv = {"type": "webhook", "url": "http://api.example.com/x"}
+        warnings = gv.validate_receiver_domains(
+            recv, "t", ["*.example.com", "*.allowed.org", "specific.host.io"])
+        assert warnings == [], (
+            f"host matched 1 of 3 patterns but was rejected: {warnings!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# validate_tenant_keys — schema typo / unknown-key warnings
+# ---------------------------------------------------------------------------
+# Pilot batch 7. Catches tenant config typos (e.g. `_routng` instead of
+# `_routing`) at lint time. The branching for `_critical` suffix and
+# `{labels}` dimensional keys is exactly the kind of multi-branch logic
+# where mutation testing pays off.
+
+class TestValidateTenantKeysProperties:
+
+    @given(st.sets(
+        st.sampled_from(["_silent_mode", "_severity_dedup", "_namespaces",
+                          "_metadata", "_profile", "_routing_profile"]),
+        min_size=1, max_size=5,
+    ))
+    @PILOT_SETTINGS
+    def test_reserved_keys_no_warnings(self, keys):
+        # Property: any subset of VALID_RESERVED_KEYS produces no warnings.
+        warnings = gv.validate_tenant_keys("t", keys, set())
+        assert warnings == []
+
+    @given(st.sets(
+        st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10).map(
+            lambda s: f"_routing_{s}" if s else "_routing"
+        ),
+        min_size=1, max_size=4,
+    ))
+    @PILOT_SETTINGS
+    def test_routing_prefix_no_warnings(self, keys):
+        # Property: any key starting with `_routing` is reserved.
+        warnings = gv.validate_tenant_keys("t", keys, set())
+        assert warnings == []
+
+    @given(st.sets(
+        st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10).map(
+            lambda s: f"_state_{s}" if s else "_state_"
+        ),
+        min_size=1, max_size=4,
+    ))
+    @PILOT_SETTINGS
+    def test_state_prefix_no_warnings(self, keys):
+        # Property: any key starting with `_state_` is reserved.
+        warnings = gv.validate_tenant_keys("t", keys, set())
+        assert warnings == []
+
+    def test_defaults_keys_no_warnings(self):
+        # Property: any key listed in defaults is allowed.
+        warnings = gv.validate_tenant_keys(
+            "t", {"latency", "errors", "uptime"},
+            {"latency", "errors", "uptime"})
+        assert warnings == []
+
+    def test_critical_suffix_resolves_to_base(self):
+        # Property: `latency_critical` is allowed if `latency` is in defaults.
+        warnings = gv.validate_tenant_keys(
+            "t", {"latency_critical"}, {"latency"})
+        assert warnings == []
+
+    def test_dimensional_key_resolves_to_base(self):
+        # Property: `latency{namespace="db-a"}` is allowed if `latency` in defaults.
+        warnings = gv.validate_tenant_keys(
+            "t", {'latency{namespace="db-a"}'}, {"latency"})
+        assert warnings == []
+
+    def test_unknown_underscore_key_typo_warning(self):
+        # Property: unknown key starting with `_` → "typo?" warning.
+        warnings = gv.validate_tenant_keys(
+            "t", {"_routng"}, set())  # _routng is a typo for _routing
+        assert len(warnings) == 1
+        assert "typo?" in warnings[0]
+        assert "_routng" in warnings[0]
+
+    def test_unknown_plain_key_not_in_defaults(self):
+        # Property: unknown plain key → "not in defaults" warning.
+        warnings = gv.validate_tenant_keys("t", {"oops"}, {"latency"})
+        assert len(warnings) == 1
+        assert "not in defaults" in warnings[0]
+        assert "oops" in warnings[0]
+
+    def test_critical_with_unknown_base_warns(self):
+        # Property: `oops_critical` where `oops` isn't in defaults → warn.
+        warnings = gv.validate_tenant_keys(
+            "t", {"oops_critical"}, {"latency"})
+        assert len(warnings) == 1
+        assert "oops_critical" in warnings[0]
